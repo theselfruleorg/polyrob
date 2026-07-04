@@ -1,0 +1,651 @@
+/**
+ * Session Configuration Panel Styles
+ * Terminal-themed, compact design matching existing webview aesthetics
+ */
+
+/* Main Container */
+.chat-config-panel {
+    width: 100%;
+    max-width: 700px;
+    padding: 20px 0;
+    box-sizing: border-box;
+}
+
+/* Desktop: center the config panel */
+@media (min-width: 769px) {
+    .chat-config-panel {
+        align-self: center;
+        margin: 0 auto;
+    }
+}
+
+.config-panel {
+    width: 100%;
+    padding: 16px;
+    box-sizing: border-box;
+    background: var(--color-bg-terminal);
+    border: 1px solid var(--color-border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Sections */
+.config-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.config-section-header {
+    font-size: var(--font-size-sm);
+    color: var(--color-accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin: 0 0 2px 0;
+    line-height: 1.3;
+}
+
+/* Form Groups */
+.config-form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.config-label {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.config-label-hint {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
+.config-hint {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    font-style: italic;
+    margin-top: 2px;
+}
+
+/* Select Dropdown (native - hidden when custom is used) */
+.config-select {
+    width: 100%;
+    background: var(--color-bg-terminal);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    font-family: var(--code-font);
+    font-size: var(--font-size-sm);
+    padding: 8px 32px 8px 12px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url('data:image/svg+xml;charset=UTF-8,<svg width="12" height="8" viewBox="0 0 12 8" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M1 1L6 6L11 1" stroke="%2356C2FF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>');
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    background-size: 12px;
+}
+
+.config-select:hover {
+    border-color: var(--color-accent-blue);
+}
+
+.config-select:focus {
+    outline: none;
+    border-color: var(--color-accent-blue);
+}
+
+.config-select option {
+    background: var(--color-bg-terminal);
+    color: var(--color-text-primary);
+}
+
+/* Custom Model Dropdown */
+.model-dropdown {
+    position: relative;
+    width: 100%;
+}
+
+.model-dropdown-selected {
+    width: 100%;
+    background: var(--color-bg-terminal);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-primary);
+    font-family: var(--code-font);
+    font-size: var(--font-size-sm);
+    padding: 8px 32px 8px 12px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 36px;
+    box-sizing: border-box;
+}
+
+.model-dropdown-selected:hover {
+    border-color: var(--color-accent-blue);
+}
+
+.model-dropdown.open .model-dropdown-selected {
+    border-color: var(--color-accent-blue);
+}
+
+.model-dropdown-text {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    overflow: hidden;
+    min-width: 0;
+}
+
+.model-dropdown-arrow {
+    font-size: 10px;
+    color: var(--color-accent-blue);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+}
+
+.model-dropdown.open .model-dropdown-arrow {
+    transform: rotate(180deg);
+}
+
+.model-dropdown-options {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--color-bg-elevated);
+    border: 1px solid var(--color-border);
+    border-top: none;
+    max-height: 320px;
+    overflow-y: auto;
+    z-index: var(--z-dropdown);
+    display: none !important;
+}
+
+.model-dropdown.open .model-dropdown-options {
+    display: block !important;
+}
+
+/* Provider group header */
+.model-dropdown-group {
+    padding: 6px 12px 4px;
+    font-size: var(--font-size-xs);
+    color: var(--color-accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--color-bg-terminal);
+    border-bottom: 1px solid var(--color-border);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+/* Model option */
+.model-dropdown-option {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    gap: 12px;
+    min-height: 32px;
+}
+
+.model-dropdown-option:hover {
+    background: rgba(86, 194, 255, 0.08);
+}
+
+.model-dropdown-option.selected {
+    background: rgba(86, 194, 255, 0.12);
+    color: var(--color-accent-blue);
+    position: relative;
+    padding-left: 24px;
+}
+
+.model-dropdown-option.selected::before {
+    content: '✓';
+    position: absolute;
+    left: 8px;
+    font-size: 10px;
+    color: var(--color-accent-green);
+}
+
+.model-option-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.model-option-indicators {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: auto;
+}
+
+/* Model indicators (shared between option and selected) */
+.model-indicator {
+    display: inline-block;
+    font-size: 9px;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-family: var(--code-font);
+    white-space: nowrap;
+    line-height: 1;
+}
+
+.model-indicator-price {
+    color: var(--color-accent-yellow);
+    background: rgba(226, 192, 112, 0.2);
+    border: 1px solid rgba(226, 192, 112, 0.3);
+}
+
+.model-indicator-context {
+    color: var(--color-accent-purple);
+    background: rgba(213, 128, 255, 0.2);
+    border: 1px solid rgba(213, 128, 255, 0.3);
+}
+
+/* Selected model display */
+.selected-model-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.selected-model-indicators {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    margin-left: 8px;
+}
+
+/* Scrollbar styling for dropdown */
+.model-dropdown-options::-webkit-scrollbar {
+    width: 6px;
+}
+
+.model-dropdown-options::-webkit-scrollbar-track {
+    background: var(--color-bg-terminal);
+}
+
+.model-dropdown-options::-webkit-scrollbar-thumb {
+    background: var(--color-border);
+    border-radius: 3px;
+}
+
+.model-dropdown-options::-webkit-scrollbar-thumb:hover {
+    background: var(--color-text-muted);
+}
+
+/* Model Info */
+.config-model-info {
+    display: flex;
+    gap: 8px;
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    padding: 2px 0;
+}
+
+.model-info-provider {
+    color: var(--color-accent-purple);
+}
+
+.model-info-context {
+    color: var(--color-text-muted);
+}
+
+/* Tool Checkboxes */
+.tool-checkbox-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px 16px;
+}
+
+.tool-checkbox-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: var(--font-size-sm);
+    color: var(--color-text-primary);
+    line-height: 1.3;
+    transition: color 0.2s;
+}
+
+.tool-checkbox-item:hover {
+    color: var(--color-accent-blue);
+}
+
+.tool-checkbox-item input[type="checkbox"] {
+    margin: 0;
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-accent-green);
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.tool-checkbox-name {
+    margin: 0;
+    user-select: none;
+}
+
+/* Range Sliders */
+.config-range-container {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.config-range-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 2px;
+}
+
+.config-range-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.config-range-value {
+    font-family: var(--code-font);
+    font-size: var(--font-size-sm);
+    color: var(--color-accent-blue);
+    min-width: 40px;
+    text-align: right;
+    margin: 0;
+    line-height: 1.3;
+}
+
+.config-range {
+    width: 100%;
+    height: 4px;
+    background: var(--color-border);
+    outline: none;
+    -webkit-appearance: none;
+    cursor: pointer;
+}
+
+.config-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--color-accent-blue);
+    cursor: pointer;
+    border-radius: 50%;
+    transition: background 0.2s;
+}
+
+.config-range::-webkit-slider-thumb:hover {
+    background: var(--color-accent-green);
+}
+
+.config-range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--color-accent-blue);
+    cursor: pointer;
+    border: none;
+    border-radius: 50%;
+    transition: background 0.2s;
+}
+
+.config-range::-moz-range-thumb:hover {
+    background: var(--color-accent-green);
+}
+
+/* Advanced Section (Collapsible) */
+.config-advanced {
+    border: 1px solid var(--color-border);
+    background: var(--color-bg-terminal);
+}
+
+.config-advanced-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+}
+
+.config-advanced-header:hover {
+    background: rgba(86, 194, 255, 0.05);
+}
+
+.config-advanced-title {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    margin: 0;
+    line-height: 1.3;
+}
+
+.config-advanced-toggle {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-muted);
+    transition: transform 0.2s;
+    margin: 0;
+    line-height: 1.3;
+}
+
+.config-advanced.open .config-advanced-toggle {
+    transform: rotate(90deg);
+}
+
+.config-advanced-content {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out;
+}
+
+.config-advanced.open .config-advanced-content {
+    max-height: 500px;
+    border-top: 1px solid var(--color-border);
+}
+
+.config-advanced-body {
+    padding: 12px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Checkbox in Advanced Section */
+.config-advanced-body .config-checkbox-item {
+    display: flex;
+    align-items: start;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--color-border);
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.config-advanced-body .config-checkbox-item:hover {
+    border-color: var(--color-accent-blue);
+    background: rgba(86, 194, 255, 0.05);
+}
+
+.config-advanced-body .config-checkbox-item input[type="checkbox"] {
+    margin: 0;
+    width: 14px;
+    height: 14px;
+    accent-color: var(--color-accent-green);
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+/* Loading State */
+.config-loading {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 40px;
+    color: var(--color-text-muted);
+}
+
+.config-loading-spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid var(--color-border);
+    border-top-color: var(--color-accent-blue);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+/* Note: @keyframes spin is defined in components.css */
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    .chat-config-panel {
+        max-width: 100% !important;
+        width: 100% !important;
+        padding: 8px 0;
+        margin: 0 !important;
+        align-self: stretch !important;
+    }
+
+    .config-panel {
+        padding: 12px 8px;
+        gap: 10px;
+        max-height: 70vh;
+        overflow-y: auto;
+        width: 100% !important;
+        max-width: 100% !important;
+        border-left: none;
+        border-right: none;
+    }
+
+    .config-section {
+        gap: 6px;
+    }
+
+    .tool-checkbox-group {
+        gap: 8px 12px;
+    }
+
+    .tool-checkbox-item {
+        font-size: 13px;
+    }
+
+    .config-model-info {
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .model-dropdown-selected {
+        padding: 10px 12px;
+        min-height: 40px;
+    }
+}
+
+/* Error Display */
+.config-error {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid var(--color-accent-red);
+    border-radius: 4px;
+    padding: 12px;
+    color: var(--color-accent-red);
+    font-size: var(--font-size-sm);
+    line-height: 1.5;
+    display: none;
+    animation: slideIn 0.3s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Tool/MCP Server Status Indicators */
+.tool-checkbox-item.tool-disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.tool-checkbox-item.tool-disabled:hover {
+    color: var(--color-text-primary);
+}
+
+.tool-checkbox-item.tool-disabled input[type="checkbox"] {
+    cursor: not-allowed;
+}
+
+.tool-checkbox-item .tool-status-indicator {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-left: 4px;
+    flex-shrink: 0;
+}
+
+.tool-status-indicator.status-connected {
+    background: var(--color-accent-green);
+    box-shadow: 0 0 4px var(--color-accent-green);
+}
+
+.tool-status-indicator.status-error {
+    background: var(--color-accent-red);
+    box-shadow: 0 0 4px var(--color-accent-red);
+}
+
+.tool-status-indicator.status-disconnected,
+.tool-status-indicator.status-unknown {
+    background: var(--color-text-muted);
+}
+
+/* MCP Server with error tooltip */
+.tool-checkbox-item[title] {
+    position: relative;
+}
+
+.mcp-server-error {
+    font-size: var(--font-size-xs);
+    color: var(--color-accent-red);
+    display: block;
+    margin-top: 2px;
+    margin-left: 20px;
+}
+
+/* Tools count badge for MCP servers */
+.mcp-tools-count {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    margin-left: 4px;
+}

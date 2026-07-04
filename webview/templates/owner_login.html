@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}Owner Login — POLYROB{% endblock %}
+{% block content %}
+<div class="login-page" style="max-width: 40ch; margin: 4rem auto;">
+  <h1>Owner Login</h1>
+  {% if error %}<p class="error-message">{{ error }}</p>{% endif %}
+  <form method="post" action="/owner-login">
+    <input type="hidden" name="return_to" value="{{ return_to | default('/') }}">
+    <label>Username <input type="text" name="username" autofocus required></label>
+    <label>Password <input type="password" name="password" required></label>
+    <button type="submit">Log in</button>
+  </form>
+</div>
+{% endblock %}

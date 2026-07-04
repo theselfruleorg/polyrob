@@ -1,0 +1,297 @@
+/**
+ * POLYROB Settings Page - Styles
+ *
+ * Created: 2024-12-05
+ * Version: 1.0.0
+ */
+
+/* =============================================================================
+   SETTINGS SECTIONS
+   Note: Navigation uses shared .admin-nav styles from components.css
+   ============================================================================= */
+
+.settings-section {
+    display: none;
+}
+
+.settings-section.active {
+    display: block;
+}
+
+/* Note: .profile-section uses profile.css definition (margin-bottom: var(--spacing-xl))
+   Settings page may need slightly different spacing, but inherits base style */
+
+/* Settings grid */
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--spacing-lg);
+}
+
+.setting-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.setting-label {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.setting-value {
+    font-size: var(--font-size-md);
+    color: var(--color-accent-green);
+}
+
+/* =============================================================================
+   MCP SERVER LIST
+   ============================================================================= */
+
+.server-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+}
+
+.server-card {
+    background: var(--color-bg-primary);
+    border: 1px solid var(--color-border);
+    padding: var(--spacing-lg);
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--spacing-md);
+    align-items: start;
+    transition: border-color var(--transition-fast);
+}
+
+.server-card:hover {
+    border-color: var(--color-accent-blue);
+}
+
+.server-info {
+    min-width: 0;
+}
+
+.server-name {
+    font-size: var(--font-size-md);
+    color: var(--color-accent-green);
+    font-family: var(--font-family-mono);
+    margin-bottom: var(--spacing-xs);
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    flex-wrap: wrap;
+}
+
+.server-name .type-badge {
+    font-size: var(--font-size-xs);
+    padding: 2px 6px;
+    background: var(--color-accent-blue);
+    color: var(--color-bg-primary);
+    text-transform: uppercase;
+}
+
+.server-url {
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+    word-break: break-all;
+    margin-bottom: var(--spacing-sm);
+}
+
+.server-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-md);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+}
+
+.server-meta .status {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.server-meta .status.connected { color: var(--color-accent-green); }
+.server-meta .status.error { color: var(--color-accent-red); }
+.server-meta .status.configured { color: var(--color-accent-yellow); }
+
+.server-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: start;
+    flex-wrap: wrap;
+}
+
+/* Server action buttons */
+.btn-server-action {
+    padding: 6px 10px;
+    font-size: var(--font-size-xs);
+    background: transparent;
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+    cursor: pointer;
+    transition: all var(--transition-normal);
+}
+
+.btn-server-action:hover {
+    border-color: var(--color-accent-blue);
+    color: var(--color-accent-blue);
+}
+
+.btn-server-action.btn-delete:hover {
+    border-color: var(--color-accent-red);
+    color: var(--color-accent-red);
+}
+
+.btn-server-action.btn-test:hover {
+    border-color: var(--color-accent-green);
+    color: var(--color-accent-green);
+}
+
+.btn-server-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* =============================================================================
+   TOGGLE SWITCH
+   ============================================================================= */
+
+.toggle-wrapper {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.toggle-switch {
+    position: relative;
+    width: 44px;
+    height: 24px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--color-text-muted);
+    transition: var(--transition-slow);
+}
+
+.toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: var(--color-bg-primary);
+    transition: var(--transition-slow);
+}
+
+input:checked + .toggle-slider {
+    background-color: var(--color-accent-green);
+}
+
+input:checked + .toggle-slider:before {
+    transform: translateX(20px);
+}
+
+/* =============================================================================
+   INFO BOX
+   ============================================================================= */
+
+.info-box {
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--color-bg-primary);
+    border-left: var(--border-width-accent) solid var(--color-accent-blue);
+    margin-bottom: var(--spacing-lg);
+    font-size: var(--font-size-sm);
+}
+
+.info-box.warning {
+    border-left-color: var(--color-accent-yellow);
+}
+
+/* Tool ID display */
+.tool-id {
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    background: var(--color-bg-terminal);
+    padding: 2px 6px;
+    color: var(--color-accent-purple);
+}
+
+/* =============================================================================
+   ADVANCED OPTIONS (COLLAPSIBLE)
+   ============================================================================= */
+
+.advanced-options {
+    margin-top: var(--spacing-lg);
+    padding-top: var(--spacing-md);
+    border-top: 1px solid var(--color-border);
+}
+
+.advanced-options summary {
+    color: var(--color-text-secondary);
+    padding: var(--spacing-sm) 0;
+    transition: color var(--transition-fast);
+}
+
+.advanced-options summary:hover {
+    color: var(--color-accent-blue);
+}
+
+.advanced-options[open] summary {
+    color: var(--color-accent-green);
+    margin-bottom: var(--spacing-sm);
+}
+
+.advanced-options summary::marker {
+    color: var(--color-accent-blue);
+}
+
+/* =============================================================================
+   COMING SOON PLACEHOLDER
+   ============================================================================= */
+
+.coming-soon {
+    text-align: center;
+    padding: 60px var(--spacing-xl);
+    color: var(--color-text-muted);
+}
+
+.coming-soon h3 {
+    color: var(--color-text-secondary);
+    margin-bottom: var(--spacing-md);
+}
+
+/* =============================================================================
+   RESPONSIVE
+   ============================================================================= */
+
+@media (max-width: 768px) {
+    .server-card {
+        grid-template-columns: 1fr;
+    }
+
+    .server-actions {
+        justify-content: flex-start;
+    }
+
+    .settings-grid {
+        grid-template-columns: 1fr;
+    }
+}

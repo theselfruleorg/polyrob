@@ -1,0 +1,257 @@
+{
+  "person-analyzer": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["analyze person", "research person", "person intelligence", "who is", "profile analysis", "sales prospect", "contact research", "background check", "linkedin profile"],
+      "action_names": [],
+      "task_patterns": ["analyze.*person", "research.*person", "who is.*", "find.*about.*person", "profile.*analysis", "prospect.*research", "intelligence.*on"]
+    },
+    "priority": 1,
+    "auto_activate": true,
+    "description": "Person intelligence workflow using LinkedIn and web research"
+  },
+  "project-analyzer": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["analyze company", "company analysis", "analyze project", "social presence", "brand analysis", "competitor analysis", "sentiment analysis"],
+      "action_names": [],
+      "task_patterns": ["analyze.*company", "analyze.*project", "social.*presence", "brand.*analysis", "company.*research", "competitor.*", "sentiment.*analysis"]
+    },
+    "priority": 1,
+    "auto_activate": true,
+    "description": "Company/project analysis workflow with social presence and sentiment"
+  },
+  "browser-automation": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["scrape", "crawl", "login to", "fill form", "navigate to website"],
+      "action_names": [],
+      "task_patterns": ["scrape.*", "crawl.*", "login.*to", "fill.*form"]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Web scraping and automation workflow patterns"
+  },
+  "presentation-creator": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["presentation", "slides", "slideshow", "slideshows", "slide deck", "deck", "pitch deck", "powerpoint", "keynote"],
+      "action_names": [],
+      "task_patterns": ["create.*presentation", "make.*(slides|slide ?deck|slideshow)", "build.*deck", "presentation.*about", "slides.*for"]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Create reveal.js presentations with multi-file structure"
+  },
+  "web-research": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["research", "find out", "look into", "investigate", "latest on", "sources", "cite", "background on", "compare options"],
+      "action_names": [],
+      "task_patterns": ["research.*", "find out.*about", "look into.*", "investigate.*", "latest.*on", "compare.*(vs|versus|options)"]
+    },
+    "priority": 2,
+    "auto_activate": true,
+    "description": "Multi-source web research with cross-checking and cited synthesis"
+  },
+  "file-data-ops": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["read file", "csv", "json", "parse", "extract data", "convert", "organize files", "transform data", "spreadsheet"],
+      "action_names": [],
+      "task_patterns": ["(read|parse|convert|extract).*(csv|json|md|txt|file)", "organize.*files", "transform.*data"]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "Read, transform and organize local files and structured data safely"
+  },
+  "document-writing": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["write", "draft", "compose", "report", "summarize", "outline", "essay", "memo", "article"],
+      "action_names": [],
+      "task_patterns": ["write.*(report|memo|doc|article|summary)", "draft.*", "compose.*", "summari[sz]e.*", "outline.*for"]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "Draft and edit long-form documents, reports and summaries"
+  },
+  "coding-workflow": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["fix", "implement", "refactor", "add function", "bug", "write code", "run tests", "debug", "edit code"],
+      "action_names": [],
+      "task_patterns": ["fix.*bug", "implement.*", "refactor.*", "add.*function", "write.*code", "run.*tests", "debug.*"]
+    },
+    "priority": 3,
+    "auto_activate": true,
+    "description": "Edit code safely (read, plan, edit, run tests, iterate)"
+  },
+  "task-planning": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["plan", "break down", "steps", "how should i", "approach", "roadmap", "decompose", "milestones"],
+      "action_names": [],
+      "task_patterns": ["plan.*", "break.*down", "how (should|do) (i|we)", "what.*steps", "approach.*for"]
+    },
+    "priority": 4,
+    "auto_activate": true,
+    "description": "Decompose a fuzzy goal into a verifiable plan and decide when to delegate"
+  },
+  "email-comms": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["email", "send a message", "reply to", "draft email", "follow up", "compose email", "inbox"],
+      "action_names": [],
+      "task_patterns": ["(send|draft|reply|compose).*email", "follow up.*with", "reply.*to"]
+    },
+    "priority": 4,
+    "auto_activate": true,
+    "description": "Compose, triage and reply to email and short comms"
+  },
+  "skill-authoring": {
+    "name": "Skill Authoring",
+    "description": "How to write a durable, safe skill (read-before-edit, no injection, no secrets).",
+    "priority": 4,
+    "auto_activate": true,
+    "triggers": {"keywords": ["author skill", "write skill", "create skill", "edit skill"]}
+  },
+  "skill-security-review": {
+    "name": "Skill Security Review",
+    "description": "Vet a skill body and description for injection, unicode, over-broad capability, staleness.",
+    "priority": 4,
+    "auto_activate": true,
+    "triggers": {"keywords": ["review skill", "vet skill", "skill security", "audit skill"]}
+  },
+  "secret-handling": {
+    "name": "Secret Handling",
+    "description": "Never embed secrets in skills, memory, or written files; reference by env-var name.",
+    "priority": 4,
+    "auto_activate": true,
+    "triggers": {"keywords": ["secret", "api key", "credentials", "token", "password"]}
+  },
+  "web-scraping": {
+    "triggers": {
+      "tool_ids": ["anysite", "browser", "web_fetch"],
+      "keywords": ["scrape website", "extract data from", "web scraping", "crawl website", "structured data from url", "scrape page", "extract structured data"],
+      "action_names": [],
+      "task_patterns": ["web.scrap", "extract.*from.*(url|site|page|website)", "scrape.*(site|page|data|url)", "crawl.*(site|page|url)"]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Extract structured data from a URL using anysite (discover-first), web_fetch, or browser with fallback"
+  },
+  "lead-research": {
+    "triggers": {
+      "tool_ids": ["anysite"],
+      "keywords": ["find leads", "prospect list", "lead research", "find contacts", "qualify leads", "outbound list", "build lead list", "sales prospects"],
+      "action_names": [],
+      "task_patterns": ["find.*leads", "prospect.*list", "lead.*research", "build.*contact.*list", "qualify.*leads", "outbound.*campaign", "sales.*prospect"]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Find and qualify sales leads using LinkedIn and public data sources, producing a prioritized contact list"
+  },
+  "market-research-brief": {
+    "triggers": {
+      "tool_ids": ["web_fetch", "perplexity", "anysite"],
+      "keywords": ["market research", "market brief", "market analysis", "market size", "competitive landscape", "tam", "market opportunity", "industry analysis"],
+      "action_names": [],
+      "task_patterns": ["market.*research", "market.*brief", "market.*analysis", "competitive.*landscape", "tam.*analysis", "industry.*analysis", "market.*size"]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Produce a structured market brief with size, key players, trends, and strategic opportunities"
+  },
+  "crypto-trading-safety": {
+    "name": "Crypto Trading Safety",
+    "triggers": {
+      "tool_ids": ["polymarket", "hyperliquid", "polymarket_data", "hyperliquid_data"],
+      "keywords": ["trade", "trading", "place order", "buy", "sell", "polymarket", "hyperliquid", "perp", "leverage", "on-chain trade"],
+      "action_names": [],
+      "task_patterns": ["place.*(order|trade|bet)", "(buy|sell|long|short).*(token|coin|market|perp)", "trade.*on.*(polymarket|hyperliquid)"]
+    },
+    "priority": 1,
+    "auto_activate": true,
+    "description": "Grounding safety rules for any on-chain trade: wallet model, PolicyGate caps, >$500 gate, owner-only / no leaf-or-forged trading, testnet-first"
+  },
+  "polymarket-market-research": {
+    "triggers": {
+      "tool_ids": ["polymarket_data"],
+      "keywords": ["polymarket", "prediction market", "implied probability", "market odds", "event probability", "orderbook", "market spread"],
+      "action_names": [],
+      "task_patterns": ["polymarket.*(market|price|odds|research)", "implied.*probability", "prediction.*market", "(odds|probability).*of.*event"]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Polymarket markets (discover, details, price as implied probability, orderbook, spread, volume) with no wallet"
+  },
+  "polymarket-portfolio-review": {
+    "triggers": {
+      "tool_ids": ["polymarket_data"],
+      "keywords": ["polymarket positions", "polymarket portfolio", "polymarket pnl", "trade history", "wallet positions", "exposure summary"],
+      "action_names": [],
+      "task_patterns": ["polymarket.*(position|portfolio|pnl|history)", "review.*wallet.*positions", "summari[sz]e.*(exposure|pnl)"]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read a wallet's Polymarket positions and trade history from the public Data API; summarize exposure and P&L"
+  },
+  "hyperliquid-market-data": {
+    "triggers": {
+      "tool_ids": ["hyperliquid_data"],
+      "keywords": ["hyperliquid", "perpetual", "perps", "funding rate", "spot mids", "orderbook depth", "perp price"],
+      "action_names": [],
+      "task_patterns": ["hyperliquid.*(price|market|funding|perp|spot)", "funding.*rate", "perp.*(price|market)", "spot.*mids"]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Hyperliquid perp/spot markets: mids, funding rates, orderbook depth, and funding as a sentiment signal (no wallet)"
+  },
+  "hyperliquid-account-review": {
+    "triggers": {
+      "tool_ids": ["hyperliquid_data"],
+      "keywords": ["hyperliquid account", "account state", "margin", "open orders", "fills", "agent status", "spot balances"],
+      "action_names": [],
+      "task_patterns": ["hyperliquid.*(account|balance|margin|orders|fills)", "review.*(margin|account state)", "open.*orders.*hyperliquid"]
+    },
+    "priority": 5,
+    "auto_activate": true,
+    "description": "Read Hyperliquid account state, balances, open orders, and fills (always the master address); confirm agent authorization"
+  },
+  "polymarket-trading": {
+    "name": "Polymarket Trading",
+    "triggers": {
+      "tool_ids": ["polymarket"],
+      "keywords": ["place polymarket order", "buy polymarket", "sell polymarket", "polymarket limit order", "polymarket market order", "cancel polymarket order"],
+      "action_names": ["place_limit_order", "place_market_order", "cancel_order", "cancel_all_orders"],
+      "task_patterns": ["(place|buy|sell|cancel).*polymarket", "polymarket.*(limit|market).*order"]
+    },
+    "priority": 5,
+    "auto_activate": false,
+    "description": "GATED: place/cancel Polymarket orders. Owner-only, read-first, >$500 confirmation gate; references crypto-trading-safety"
+  },
+  "hyperliquid-trading": {
+    "name": "Hyperliquid Trading",
+    "triggers": {
+      "tool_ids": ["hyperliquid"],
+      "keywords": ["place hyperliquid order", "hyperliquid trade", "update leverage", "approve agent", "hyperliquid limit order", "hyperliquid market order"],
+      "action_names": ["place_limit_order", "place_market_order", "update_leverage", "cancel_order", "approve_agent"],
+      "task_patterns": ["(place|buy|sell|cancel).*hyperliquid", "update.*leverage", "approve.*agent", "hyperliquid.*(limit|market).*order"]
+    },
+    "priority": 5,
+    "auto_activate": false,
+    "description": "GATED: place/modify/cancel Hyperliquid orders and set leverage. Owner-only, read-first, testnet-first, exposure cap + >$500 gate; references crypto-trading-safety"
+  },
+  "social-discovery": {
+    "triggers": {
+      "tool_ids": ["anysite", "twitter"],
+      "keywords": ["engagement targets", "who to engage", "find accounts", "accounts to engage", "discover on x", "discover on twitter", "social discovery", "find people to engage", "find prospects on x", "who to reply to", "trending in ai"],
+      "action_names": [],
+      "task_patterns": ["(find|discover|identify).*(account|people|target|prospect|conversation).*(x|twitter|social)", "who.*(to )?(engage|reply|follow)", "(engagement|social).*(discovery|target)", "find.*(mentions|conversations).*(about|on)"]
+    },
+    "priority": 6,
+    "auto_activate": true,
+    "description": "Find engageable accounts, conversations, and mentions on X/social using anysite (preferred) over the flaky native twitter_search, with cost discipline"
+  }
+}

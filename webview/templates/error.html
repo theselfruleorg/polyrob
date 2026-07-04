@@ -1,0 +1,133 @@
+{% extends "layout.html" %}
+
+{% block title %}Error - {{ console_display_name() }}{% endblock %}
+
+{% block header_title %}SYSTEM ERROR{% endblock %}
+
+{% set ws_url = ws_url|default('') %}
+
+{% block content %}
+<div class="error-screen">
+    <div class="error-box" style="max-width: 100%; width: 90ch;">
+        <div class="error-header">SYSTEM ERROR</div>
+        <div class="error-body">
+            <div class="error-message">
+                <span class="error-prefix">!</span> ERROR: {{ error }}
+            </div>
+            {% if message %}
+            <div class="error-details">
+                <span class="error-prefix">></span> {{ message }}
+            </div>
+            {% endif %}
+            {% if metadata_paths %}
+            <div class="error-section">
+                <div class="section-title">METADATA FILES:</div>
+                <div class="section-content">
+                {% for path in metadata_paths %}> {{ path }}
+                {% endfor %}</div>
+            </div>
+            {% endif %}
+            {% if checked_dir %}
+            <div class="error-section">
+                <div class="section-title">DIRECTORY PATH:</div>
+                <div class="section-content">> {{ checked_dir }}</div>
+            </div>
+            {% endif %}
+            
+            <!-- Add troubleshooting actions section -->
+            <div class="error-section">
+                <div class="section-title">TROUBLESHOOTING:</div>
+                <div class="section-content">
+                    <button id="refresh-all-sessions" class="action-btn">
+                        <span class="action-prefix">></span> Force Refresh All Sessions
+                    </button>
+                    {% if session_id %}
+                    <button id="repair-session" class="action-btn" data-session-id="{{ session_id }}">
+                        <span class="action-prefix">></span> Attempt Repair For This Session
+                    </button>
+                    {% endif %}
+                </div>
+            </div>
+            
+            <div class="error-section">
+                <div class="section-title">HINTS:</div>
+                <div class="section-content troubleshooting-hints">
+                    {% for hint in troubleshooting %}
+                        <div class="troubleshooting-hint">{{ hint|safe }}</div>
+                    {% endfor %}
+                </div>
+            </div>
+            
+            <div class="error-actions">
+                <a href="/" class="action-link">
+                    <span class="action-prefix">></span> RETURN TO HOME
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Handle refresh all sessions button
+        document.getElementById('refresh-all-sessions').addEventListener('click', function() {
+            this.disabled = true;
+            this.innerHTML = '<span class="action-prefix">></span> Refreshing...';
+            
+            fetch('/api/refresh')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'ok') {
+                        this.innerHTML = '<span class="action-prefix">></span> Success! Sessions Refreshed';
+                        // Redirect to home after 1 second
+                        setTimeout(() => {
+                            window.location.href = '/';
+                        }, 1000);
+                    } else {
+                        this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
+                        this.disabled = false;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error refreshing sessions:', error);
+                    this.innerHTML = '<span class="action-prefix">></span> Error Refreshing';
+                    this.disabled = false;
+                });
+        });
+        
+        // Handle repair session button if it exists
+        const repairBtn = document.getElementById('repair-session');
+        if (repairBtn) {
+            repairBtn.addEventListener('click', function() {
+                const sessionId = this.getAttribute('data-session-id');
+                this.disabled = true;
+                this.innerHTML = '<span class="action-prefix">></span> Repairing...';
+                
+                fetch(`/api/repair/${sessionId}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'ok') {
+                            this.innerHTML = '<span class="action-prefix">></span> Success! Redirecting...';
+                            // Redirect to the session page
+                            setTimeout(() => {
+                                window.location.href = `/session/${sessionId}`;
+                            }, 1000);
+                        } else {
+                            this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
+                            this.disabled = false;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error repairing session:', error);
+                        this.innerHTML = '<span class="action-prefix">></span> Error Repairing';
+                        this.disabled = false;
+                    });
+            });
+        }
+    });
+</script>
+{% endblock %}
+
+{% block head %}
+<!-- Inline styles removed: styles moved to style.css -->
+{% endblock %} 

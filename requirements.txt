@@ -1,0 +1,113 @@
+# Project Requirements (consolidated)
+
+# Core configuration and settings
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Web framework (FastAPI app and WebView ASGI)
+# NOTE: Pinned because starlette 1.0.0 broke TemplateResponse signature
+# (old: TemplateResponse(name, context); new: TemplateResponse(request, name, context)).
+# Until webview/server.py is migrated, keep these on the AWS-prod-tested versions.
+fastapi==0.123.9
+starlette==0.50.0
+uvicorn[standard]==0.38.0
+Jinja2==3.1.6
+watchfiles>=1.0.0
+python-multipart>=0.0.6  # Required for file uploads
+
+# Async HTTP and file I/O utilities
+aiohttp>=3.8.0
+aiofiles>=23.0.0
+
+# Realtime UI (Socket.IO) and templating for webview
+python-socketio>=5.11.0
+
+# Note: we use FastAPI's Jinja2Templates provider; Starlette brings in Jinja2
+
+# LLM providers
+openai>=1.0.0
+anthropic>=0.20.0
+google-generativeai>=0.8.0  # FIX (Dec 2, 2025): Updated for better protobuf compatibility
+
+# Embeddings (local, no API cost) + local vector store.
+sentence-transformers>=3.0.0
+# Local vector store: sqlite-vec extension loaded via apsw (apsw ships cross-platform
+# wheels with extension loading enabled; stdlib sqlite3 is often built without it).
+# Replaces the retired Pinecone/Chroma vector backends (cross-session semantic recall
+# now lives in the local sqlite-vec memory backend, MEMORY_BACKEND=local_vector).
+apsw>=3.46
+sqlite-vec>=0.1.6
+
+# LangChain: REMOVED (2026-06). The agent loop, message types, tool-calling,
+# prompt-caching and token-counting are all native (modules/llm/). No langchain*
+# packages are required at runtime. See docs/plans/langchain-removal-review-2026-06.md
+
+# Token counting utilities
+tiktoken>=0.7.0
+
+# Data processing
+numpy>=1.24.0
+pandas>=2.0.0
+
+# HTTP clients and utilities
+requests>=2.30.0
+certifi>=2024.0.0
+
+# Security
+cryptography>=40.0.0
+pyjwt>=2.8.0  # JWT handling for Privy auth
+
+# Blockchain and Web3 (for deposit wallets and payment monitoring)
+web3>=6.0.0
+eth-account>=0.10.0
+# x402 client (agent pays for paid resources during a job)
+x402>=2.13.0
+
+# File and document processing
+python-docx>=0.8.0
+pypdf>=4.0.0
+markdown>=3.5.0
+markdownify>=0.11.0
+pillow>=11.0.0
+imageio>=2.37.0
+python-magic>=0.4.27  # MIME type detection for file upload security
+
+# NLP utilities (used in memory pipeline)
+nltk>=3.9.0
+
+# CLI and dev
+rich>=13.0.0
+prompt_toolkit>=3.0.43
+
+# Database (lightweight)
+aiosqlite>=0.19.0
+
+# Browser automation is now an OPT-IN extra (Tier-3): the default web reader is the
+# lightweight `web_fetch` tool (no Chromium). To use the Playwright `browser` tool:
+#   pip install '.[browser]' && python -m playwright install chromium
+# See pyproject.toml [project.optional-dependencies] `browser`.
+
+# Telegram bot framework (still used in logging and some components)
+aiogram>=3.17.0
+
+# Terminal colors
+colorama>=0.4.6
+
+# Twitter/X API
+tweepy>=4.14.0
+
+fastapi-x402>=0.1.8
+
+# Hyperliquid trading integration
+hyperliquid-python-sdk>=0.21.0
+
+# Polymarket CLOB trading client (maintained V2; the legacy py-clob-client is
+# ARCHIVED/non-functional and intentionally NOT a dependency)
+py-clob-client-v2>=0.1.0
+
+# CLI
+click>=8.0
+
+# AnySite data integration
+anysite-cli

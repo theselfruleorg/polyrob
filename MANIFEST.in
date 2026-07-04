@@ -1,0 +1,7 @@
+graft data/prompts
+graft webview/static
+graft webview/templates
+graft avatar
+recursive-include agents/personality/characters *.json
+include config/*.template
+include README.md LICENSE

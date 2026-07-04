@@ -1,0 +1,316 @@
+/**
+ * POLYROB Sign In
+ * Finalized.
+ */
+
+/* === RESET === */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; }
+body {
+    background: var(--color-bg-primary);
+    color: var(--color-text-primary);
+    font-family: var(--font-family-mono);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* === TICKER === */
+.ticker {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 24px;
+    overflow: hidden;
+    background: #000;
+    border-bottom: 1px solid rgba(86, 226, 194, 0.15);
+    z-index: 100;
+}
+
+.ticker-track {
+    display: flex;
+    gap: 48px;
+    white-space: nowrap;
+    animation: ticker 20s linear infinite;
+    padding: 4px 0;
+}
+
+.ticker-track span {
+    color: #555;
+    font-size: 10px;
+    letter-spacing: 1px;
+}
+
+.ticker-track a {
+    color: var(--color-accent-green);
+    text-decoration: none;
+}
+
+@keyframes ticker {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+
+/* === MAIN === */
+.signin {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 24px 24px;
+}
+
+.signin-content {
+    text-align: center;
+    width: 100%;
+}
+
+/* === HERO (Logo + Features) === */
+.hero {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 48px;
+    margin-bottom: 48px;
+}
+
+/* === LOGO === */
+.logo {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+}
+
+.logo pre {
+    font-family: var(--font-family-mono);
+    line-height: 1.15;
+    color: var(--color-accent-green);
+    margin: 0;
+    display: inline-block;
+    text-align: left;
+    white-space: pre;
+}
+
+.logo-rob {
+    font-size: 16px;
+    margin-bottom: 4px;
+}
+
+.logo-ottmachin {
+    font-size: 7px;
+}
+
+/* Character press effect */
+.char {
+    display: inline-block;
+    text-shadow: 1px 1px 0 rgba(0, 30, 25, 1);
+    transition: transform 50ms, text-shadow 50ms, opacity 50ms;
+}
+
+.char:hover {
+    transform: translate(1px, 1px);
+    text-shadow: none;
+    opacity: 0.4;
+}
+
+/* === FEATURES === */
+.features {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+}
+
+.features li {
+    font-size: 11px;
+    color: #666;
+    letter-spacing: 1px;
+    position: relative;
+    padding-left: 14px;
+    white-space: nowrap;
+}
+
+.features li::before {
+    content: '◈';
+    position: absolute;
+    left: 0;
+    color: var(--color-accent-green);
+    opacity: 0.6;
+    font-size: 6px;
+    top: 3px;
+}
+
+/* === BUTTON === */
+.btn-connect {
+    background: transparent;
+    border: 1px solid var(--color-accent-green);
+    color: var(--color-accent-green);
+    padding: 14px 48px;
+    font: 600 11px/1 var(--font-family-mono);
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 100ms;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-connect:hover:not(:disabled) {
+    background: var(--color-accent-green);
+    color: #000;
+}
+
+.btn-connect:active:not(:disabled) {
+    transform: scale(0.98);
+}
+
+.btn-connect:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Spinner */
+.spinner {
+    width: 10px;
+    height: 10px;
+    border: 2px solid rgba(86, 226, 194, 0.3);
+    border-top-color: var(--color-accent-green);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* === STATUS === */
+.status {
+    margin-top: 20px;
+    padding: 10px 16px;
+    font-size: 10px;
+    letter-spacing: 0.5px;
+    max-width: 320px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.status:empty { display: none; }
+
+.status--error {
+    background: rgba(255, 80, 80, 0.08);
+    border: 1px solid rgba(255, 80, 80, 0.25);
+    color: #f66;
+}
+
+.status--success {
+    background: rgba(86, 226, 194, 0.08);
+    border: 1px solid rgba(86, 226, 194, 0.25);
+    color: var(--color-accent-green);
+}
+
+.status--info {
+    background: rgba(86, 180, 255, 0.08);
+    border: 1px solid rgba(86, 180, 255, 0.25);
+    color: #6af;
+}
+
+/* === FOOTER === */
+.terminal-footer {
+    flex-shrink: 0;
+    background: rgba(40, 45, 50, 0.8);
+    color: var(--color-text-secondary);
+    padding: 2px 15px;
+    padding-bottom: calc(2px + env(safe-area-inset-bottom));
+    text-align: center;
+    font-size: 11px;
+    border-top: 1px solid var(--color-border);
+    line-height: 1.2;
+}
+
+.footer-content {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.footer-link {
+    color: #666;
+    text-decoration: none;
+    transition: color 150ms;
+}
+
+.footer-link:hover { color: var(--color-accent-blue); }
+
+.footer-separator { color: #444; }
+.footer-center-text { color: #555; }
+
+/* =============================================================================
+   TABLET - smaller logo
+   ============================================================================= */
+@media (max-width: 1024px) {
+    .logo-rob { font-size: 14px; }
+    .logo-ottmachin { font-size: 6px; }
+    .hero { gap: 32px; }
+}
+
+/* =============================================================================
+   MOBILE - stack everything
+   ============================================================================= */
+@media (max-width: 768px) {
+    .signin { padding: 40px 16px 16px; }
+
+    /* Stack hero vertically */
+    .hero {
+        flex-direction: column;
+        gap: 24px;
+        margin-bottom: 32px;
+    }
+
+    /* Center logo */
+    .logo {
+        align-items: center;
+    }
+
+    .logo-rob {
+        font-size: 14px;
+        margin-bottom: 8px;
+    }
+
+    .logo-ottmachin {
+        font-size: 5px;
+    }
+
+    /* Center features */
+    .features {
+        align-items: center;
+        gap: 8px;
+        padding: 0 24px;
+    }
+
+    .features li {
+        font-size: 10px;
+        text-align: left;
+    }
+
+    /* Full width button */
+    .btn-connect {
+        width: 100%;
+        max-width: 260px;
+        padding: 14px 24px;
+    }
+}
+
+/* Large phones - bigger POLYROB */
+@media (min-width: 400px) and (max-width: 768px) {
+    .logo-rob { font-size: 16px; }
+    .logo-ottmachin { font-size: 6px; }
+}
+
+/* Small phones */
+@media (max-width: 380px) {
+    .logo-rob { font-size: 12px; }
+    .logo-ottmachin { font-size: 4px; }
+    .features li { font-size: 9px; }
+}

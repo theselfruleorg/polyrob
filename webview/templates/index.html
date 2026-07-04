@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Session History{% endblock %}
+
+{% block header_title %}{{ console_display_name() }} v{{ get_version() }}{% endblock %}
+
+{% block head %}
+<!-- IRC-style session catalog -->
+<link rel="stylesheet" href="/static/css/chat.css?v=20251205">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header with title and controls -->
+        <div class="tabs-wrapper">
+            <div class="tab-buttons">
+                <button class="tab-button active">Session History</button>
+            </div>
+
+            <div class="terminal-controls">
+                <button class="btn-new-session" title="Start new chat" onclick="window.location.href='/'">
+                    + New Chat
+                </button>
+            </div>
+        </div>
+
+        <!-- Sessions list with IRC-style catalog -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <div class="sessions-container" id="sessions-container">
+                <div class="loading-state">
+                    <div class="loading-spinner"></div>
+                    <div>Loading sessions...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Load IRC-style session catalog -->
+<script src="/static/js/index.js?v=20251201-cleanup" type="module"></script>
+{% endblock %} 

@@ -1,0 +1,2 @@
+# Dev/test dependencies. Installs the package in editable mode with the dev extra.
+-e .[dev]

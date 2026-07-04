@@ -1,0 +1,10 @@
+# Publish hygiene. `export-ignore` keeps these paths OUT of `git archive` tarballs.
+#
+# NOTE: export-ignore only affects `git archive` — it does NOT prune a normal clone or
+# a fresh-squash. For the fresh-squash OSS publish, run scripts/publish_prune.sh, which
+# removes the same internal set and then fails if any infra marker (prod IP / SSH key)
+# survives in the tree. These are Rob-#1-instance operational + identity docs that
+# belong in the private instance repo, not the public framework repo.
+docs/ops/ export-ignore
+docs/plans/2026-06-30-rob-launch-and-operations-IMPLEMENTATION-PLAN.md export-ignore
+docs/plans/2026-06-30-rob-launch-and-operations-design.md export-ignore

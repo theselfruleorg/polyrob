@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+
+{% block title %}Activity Log - Admin{% endblock %}
+
+{% block header_title %}POLYROB Admin{% endblock %}
+
+{% block head %}
+<link href="/static/css/pages/admin.css?v=20251205" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header -->
+        <div class="tabs-wrapper">
+            <div class="history-page-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-sm">
+                    <path d="M22 12h-4l-3 9L9 3l-3 9H2"></path>
+                </svg>
+                ACTIVITY LOG
+            </div>
+            <div class="terminal-controls">
+                <a href="/admin" class="btn-new-session">DASHBOARD</a>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <!-- Admin Navigation -->
+            <nav class="admin-nav">
+                <a href="/admin" class="admin-nav-item">Dashboard</a>
+                <a href="/admin/users" class="admin-nav-item">Users</a>
+                <a href="/admin/activity" class="admin-nav-item active">Activity</a>
+            </nav>
+
+            <!-- Stats Bar -->
+            <div class="stats-bar" id="stats-bar">
+                <div class="stat-item">
+                    <div class="value" id="stat-total-events">-</div>
+                    <div class="label">Total Events</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="stat-auth-success">-</div>
+                    <div class="label">Auth Success</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="stat-auth-failure">-</div>
+                    <div class="label">Auth Failures</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="stat-tier-changes">-</div>
+                    <div class="label">Tier Changes</div>
+                </div>
+                <div class="stat-item">
+                    <div class="value" id="stat-credit-ops">-</div>
+                    <div class="label">Credit Ops</div>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="filters-section">
+                <div class="filters-row">
+                    <select id="filter-event-type" class="filter-select">
+                        <option value="">All Event Types</option>
+                        <option value="auth_success">Auth Success</option>
+                        <option value="auth_failure">Auth Failure</option>
+                        <option value="tier_change">Tier Change</option>
+                        <option value="role_change">Role Change</option>
+                        <option value="credit_add">Credit Add</option>
+                        <option value="credit_deduct">Credit Deduct</option>
+                        <option value="user_blocked">User Blocked</option>
+                        <option value="user_unblocked">User Unblocked</option>
+                        <option value="admin_action">Admin Action</option>
+                    </select>
+                    <input type="text" id="filter-actor" class="filter-input" placeholder="Filter by actor ID...">
+                    <input type="text" id="filter-target" class="filter-input" placeholder="Filter by target ID...">
+                    <button id="btn-apply-filter" class="btn-filter">Apply</button>
+                    <button id="btn-clear-filter" class="btn-clear">Clear</button>
+                </div>
+            </div>
+
+            <!-- Activity Table -->
+            <div id="activity-container">
+                <table class="activity-table">
+                    <thead>
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Event</th>
+                            <th>Actor</th>
+                            <th>Target</th>
+                            <th>Action</th>
+                            <th>IP</th>
+                            <th>Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activity-tbody">
+                        <tr>
+                            <td colspan="7" class="loading">Loading activity</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Pagination -->
+                <div class="pagination">
+                    <div class="pagination-info" id="pagination-info">
+                        Showing 0-0 of 0 events
+                    </div>
+                    <div class="pagination-controls">
+                        <button id="btn-prev" class="btn-page" disabled>&larr; Previous</button>
+                        <button id="btn-next" class="btn-page" disabled>Next &rarr;</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/admin/utils.js?v=20251205"></script>
+<script src="/static/js/admin/activity.js?v=20251205"></script>
+{% endblock %}

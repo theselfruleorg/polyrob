@@ -1,0 +1,11 @@
+{
+  "enabled": true,
+  "servers": {},
+  "_polymarket_note": "Polymarket uses PolymarketTool with direct API - NOT in this config (credentials stored in DB)",
+  "global_timeout": 60,
+  "max_concurrent_connections": 10,
+  "enable_resource_caching": true,
+  "cache_ttl_seconds": 300,
+  "auto_discover_tools": true,
+  "log_mcp_communications": false
+}

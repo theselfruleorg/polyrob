@@ -1,0 +1,147 @@
+/**
+ * POLYROB Design System - CSS Variables
+ * Central source of truth for all design tokens
+ *
+ * Created: 2024-12-05
+ * Version: 1.0.0
+ */
+
+:root {
+    /* ===== COLOR PALETTE ===== */
+
+    /* Backgrounds */
+    --color-bg-primary: #080808;
+    --color-bg-secondary: #0c0c0c;
+    --color-bg-terminal: #050505;
+    --color-bg-elevated: #0e0e0e;
+    --color-bg-card: rgba(18, 18, 18, 0.3);
+    --color-bg-card-hover: rgba(30, 30, 30, 0.4);
+
+    /* Borders */
+    --color-border: #1a1a1a;
+    --color-border-focus: var(--color-accent-blue);
+
+    /* Text */
+    --color-text-primary: #c0c0c0;
+    --color-text-secondary: #909090;
+    --color-text-muted: #555555;
+    --color-text-highlight: #e6e6e6;
+
+    /* Accent Colors */
+    --color-accent-blue: #56c2ff;
+    --color-accent-green: #56e2c2;
+    --color-accent-red: #ff5e5e;
+    --color-accent-yellow: #e2c070;
+    --color-accent-purple: #d580ff;
+    --color-accent-teal: #40e9d8;
+    --color-accent-orange: #ff8656;
+
+    /* Semantic Colors */
+    --color-success: var(--color-accent-green);
+    --color-error: var(--color-accent-red);
+    --color-warning: var(--color-accent-yellow);
+    --color-info: var(--color-accent-blue);
+
+    /* ===== TYPOGRAPHY ===== */
+
+    --font-family-mono: 'JetBrains Mono', 'Courier New', monospace;
+    --font-family-display: 'VT323', monospace;
+
+    --font-size-xs: 11px;
+    --font-size-sm: 12px;
+    --font-size-base: 14px;
+    --font-size-md: 15px;
+    --font-size-lg: 16px;
+    --font-size-xl: 18px;
+    --font-size-2xl: 24px;
+    --font-size-3xl: 30px;
+
+    --font-weight-normal: 400;
+    --font-weight-medium: 500;
+    --font-weight-bold: 700;
+
+    --line-height-tight: 1.3;
+    --line-height-normal: 1.5;
+    --line-height-relaxed: 1.6;
+
+    /* ===== SPACING ===== */
+
+    --spacing-xs: 4px;
+    --spacing-sm: 8px;
+    --spacing-md: 12px;
+    --spacing-lg: 16px;
+    --spacing-xl: 20px;
+    --spacing-2xl: 24px;
+
+    /* ===== LAYOUT ===== */
+    
+    /* UNIFIED CONTENT WIDTH - All pages use this max-width */
+    --content-max-width: 1120px;
+    --content-padding: var(--spacing-xl); /* 20px side padding */
+
+    /* ===== BORDERS ===== */
+
+    --border-width: 1px;
+    --border-width-thick: 2px;
+    --border-width-accent: 3px;
+    --border-radius: 0;  /* Terminal aesthetic - no rounded corners */
+    --border-radius-sm: 2px;
+
+    /* ===== SHADOWS ===== */
+
+    --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-lg: 0 4px 12px rgba(0, 0, 0, 0.4);
+
+    /* ===== TRANSITIONS ===== */
+
+    --transition-fast: 0.15s ease;
+    --transition-normal: 0.2s ease;
+    --transition-slow: 0.3s ease;
+
+    /* ===== Z-INDEX SCALE ===== */
+
+    --z-dropdown: 100;
+    --z-sticky: 200;
+    --z-overlay: 500;
+    --z-modal: 1000;
+    --z-tooltip: 1100;
+
+    /* ===== COMPONENT-SPECIFIC ===== */
+
+    --input-height: 36px;
+    --input-height-sm: 28px;
+    --input-height-lg: 44px;
+
+    --button-height: 28px;
+    --button-height-lg: 44px;
+
+    --touch-target-min: 44px;  /* Mobile accessibility */
+
+    /* ===== LEGACY ALIASES ===== */
+    /* For backwards compatibility with existing code */
+    --primary-bg: var(--color-bg-primary);
+    --secondary-bg: var(--color-bg-secondary);
+    --terminal-bg: var(--color-bg-terminal);
+    --background-secondary: var(--color-bg-elevated);
+    --border-color: var(--color-border);
+    --text-primary: var(--color-text-primary);
+    --text-secondary: var(--color-text-secondary);
+    --text-muted: var(--color-text-muted);
+    --highlight-text: var(--color-text-highlight);
+    --accent-blue: var(--color-accent-blue);
+    --accent-green: var(--color-accent-green);
+    --accent-red: var(--color-accent-red);
+    --accent-yellow: var(--color-accent-yellow);
+    --accent-purple: var(--color-accent-purple);
+    --accent-teal: var(--color-accent-teal);
+    --accent-orange: var(--color-accent-orange);
+    --code-font: var(--font-family-mono);
+
+    /* Card backgrounds */
+    --card-background: var(--color-bg-card);
+    --card-highlight: var(--color-bg-card-hover);
+
+    /* Error colors */
+    --error-bg: rgba(212, 118, 118, 0.08);
+}

@@ -1,0 +1,228 @@
+{% extends "layout.html" %}
+
+{% block title %}User Detail - Admin{% endblock %}
+
+{% block header_title %}POLYROB Admin{% endblock %}
+
+{% block head %}
+<link href="/static/css/pages/admin.css?v=20251205" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header -->
+        <div class="tabs-wrapper">
+            <div class="history-page-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                USER DETAIL
+            </div>
+            <div class="terminal-controls">
+                <a href="/admin/users" class="btn-new-session">BACK TO USERS</a>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <!-- Admin Navigation -->
+            <nav class="admin-nav">
+                <a href="/admin" class="admin-nav-item">Dashboard</a>
+                <a href="/admin/users" class="admin-nav-item active">Users</a>
+                <a href="/admin/activity" class="admin-nav-item">Activity</a>
+            </nav>
+
+            <!-- User Header -->
+            <div class="user-header" id="user-header">
+                <div class="user-identity">
+                    <h2 id="user-wallet">Loading...</h2>
+                    <div class="user-id" id="user-id-display">User ID: {{ target_user_id }}</div>
+                    <div class="user-badges" id="user-badges"></div>
+                </div>
+                <div class="user-actions">
+                    <button id="btn-verify-token" class="btn-action btn-success">Verify Token</button>
+                    <button id="btn-block" class="btn-action btn-danger">Block User</button>
+                </div>
+            </div>
+
+            <!-- Identity Section -->
+            <div class="detail-section">
+                <div class="section-header">Identity</div>
+                <div class="info-grid" id="identity-grid">
+                    <div class="info-item">
+                        <div class="info-label">Email</div>
+                        <div class="info-value" id="info-email">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Name</div>
+                        <div class="info-value" id="info-name">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Chain</div>
+                        <div class="info-value" id="info-chain">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Created</div>
+                        <div class="info-value" id="info-created">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Total Sessions</div>
+                        <div class="info-value" id="info-total-sessions">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Access Control Section -->
+            <div class="detail-section">
+                <div class="section-header">Access Control</div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Role</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="select-role" class="control-select">
+                                <option value="user">User</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                            <button id="btn-save-role" class="btn-action">Save</button>
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Tier</div>
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <select id="select-tier" class="control-select">
+                                <option value="free">Free (No Access)</option>
+                                <option value="free_access">Free Access</option>
+                                <option value="holder">Holder</option>
+                                <option value="x402">x402</option>
+                                <option value="admin">Admin</option>
+                            </select>
+                            <button id="btn-save-tier" class="btn-action">Save</button>
+                        </div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Block Status</div>
+                        <div class="block-status" id="block-status">
+                            <span>Not blocked</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Token Status Section -->
+            <div class="detail-section">
+                <div class="section-header">DEN Token Status</div>
+                <div class="token-status" id="token-status">
+                    <div style="display: flex; align-items: center;">
+                        <span class="status-icon" id="token-icon">?</span>
+                        <div class="status-text">
+                            <h4 id="token-count">Loading...</h4>
+                            <p id="token-verified">Last verified: -</p>
+                        </div>
+                    </div>
+                    <div class="token-ids" id="token-ids"></div>
+                </div>
+            </div>
+
+            <!-- Credits Section -->
+            <div class="detail-section">
+                <div class="section-header">Credits</div>
+                <div class="info-grid">
+                    <div class="info-item">
+                        <div class="info-label">Current Balance</div>
+                        <div class="info-value" id="info-balance">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Lifetime Earned</div>
+                        <div class="info-value" id="info-lifetime-earned">-</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Lifetime Spent</div>
+                        <div class="info-value" id="info-lifetime-spent">-</div>
+                    </div>
+                </div>
+                <div class="credits-actions">
+                    <div class="credits-form">
+                        <input type="number" id="credits-amount" class="form-input" placeholder="Amount" min="1">
+                        <input type="text" id="credits-reason" class="form-input" placeholder="Reason">
+                        <button id="btn-add-credits" class="btn-action btn-success">+ Add</button>
+                        <button id="btn-deduct-credits" class="btn-action btn-danger">- Deduct</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Transactions -->
+            <div class="detail-section">
+                <div class="section-header">Recent Transactions</div>
+                <table class="transactions-table">
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Amount</th>
+                            <th>Type</th>
+                            <th>Reason</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transactions-tbody">
+                        <tr><td colspan="4" class="loading">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Sessions Summary -->
+            <div class="detail-section">
+                <div class="section-header">Sessions</div>
+                <div class="sessions-summary" id="sessions-summary">
+                    <div class="sessions-stat">
+                        <div class="value" id="sessions-total">-</div>
+                        <div class="label">Total Sessions</div>
+                    </div>
+                    <div class="sessions-stat">
+                        <div class="value" id="sessions-spent">-</div>
+                        <div class="label">Total Spent</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audit Trail -->
+            <div class="detail-section">
+                <div class="section-header">Audit Trail</div>
+                <div class="audit-list" id="audit-list">
+                    <div class="loading">Loading...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Block User Modal -->
+<div id="block-modal" class="modal-overlay hidden">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Block User</h3>
+            <button class="modal-close" id="modal-close">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Reason for blocking</label>
+                <input type="text" id="block-reason" class="form-input" placeholder="Enter reason...">
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn-action" id="btn-cancel-block">Cancel</button>
+            <button class="btn-action btn-danger" id="btn-confirm-block">Block User</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Pass the target user ID to JavaScript
+    window.TARGET_USER_ID = "{{ target_user_id }}";
+</script>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/admin/utils.js?v=20251205"></script>
+<script src="/static/js/admin/user_detail.js?v=20251205"></script>
+{% endblock %}

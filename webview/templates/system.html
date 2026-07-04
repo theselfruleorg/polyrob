@@ -1,0 +1,45 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - System{% endblock %}
+{% block header_title %}{{ console_display_name() }} - System{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>System</h2>
+        <p class="text-muted text-sm">Health and configuration legibility — the same checks as <code>polyrob doctor</code>.</p>
+    </div>
+
+    <div class="webgate-meta">
+        <div><span class="meta-label">Instance:</span> <span id="sys-instance" class="meta-value">—</span></div>
+        <div><span class="meta-label">Version:</span> <span id="sys-version" class="meta-value">—</span></div>
+        <div><span class="meta-label">Provider/Model:</span> <span id="sys-pm" class="meta-value">—</span></div>
+        <div><span class="meta-label">Memory backend:</span> <span id="sys-mem" class="meta-value">—</span></div>
+    </div>
+
+    <div class="webgate-section">
+        <div class="section-header">Doctor</div>
+        <pre id="sys-checks" class="webgate-doc">Loading…</pre>
+    </div>
+</div>
+
+<script>
+(function () {
+    async function load() {
+        try {
+            const body = await (await fetch('/api/webgate/doctor')).json();
+            document.getElementById('sys-instance').textContent = body.instance_id || '—';
+            document.getElementById('sys-version').textContent = body.version || '—';
+            document.getElementById('sys-pm').textContent =
+                (body.provider || '—') + ' / ' + (body.model || '(registry default)');
+            document.getElementById('sys-mem').textContent = body.memory_backend || '—';
+            document.getElementById('sys-checks').textContent =
+                (body.checks || []).join('\n') || '(no checks)';
+        } catch (e) {
+            document.getElementById('sys-checks').textContent = '(could not load doctor report)';
+        }
+    }
+    load();
+})();
+</script>
+{% endblock %}

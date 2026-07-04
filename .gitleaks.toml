@@ -1,0 +1,29 @@
+# gitleaks config — extends the default ruleset with allowlist entries for
+# known-benign matches. Used by scripts/scrub_gate.sh and public CI alike.
+# POLICY: only add an entry here for (a) vendored minified libs, (b) obviously
+# fake test fixtures, (c) public on-chain addresses. NEVER for a real credential.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Known-benign matches"
+paths = [
+    # vendored minified library — hash-like strings are code, not secrets
+    '''webview/static/js/ethers\.min\.js''',
+    # credential-scrubbing tests: their whole point is to contain fake keys
+    '''tests/unit/cli/ui/test_scrubber\.py''',
+    '''tests/unit/cli/ui/test_nested_arg_scrub\.py''',
+    '''tests/unit/cli/ui/test_tool_transparency\.py''',
+    '''tests/unit/cli/test_quick_key_setup\.py''',
+    '''tests/unit/core/test_credential_scrub\.py''',
+    '''tests/unit/core/test_env_key_backfill\.py''',
+    '''tests/unit/core/test_redaction_predicate\.py''',
+    '''tests/config/test_agent_server_config_split\.py''',
+]
+regexes = [
+    # public on-chain token contract address (public by definition, not a secret)
+    '''0xb0d79432bb6d163d3832157cff61a918d38aab81''',
+    # documented example API key placeholder in docstrings
+    '''rob_abc123\.\.\.''',
+]

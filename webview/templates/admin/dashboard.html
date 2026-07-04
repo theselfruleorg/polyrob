@@ -1,0 +1,112 @@
+{% extends "layout.html" %}
+
+{% block title %}Admin Dashboard - POLYROB Platform{% endblock %}
+
+{% block header_title %}POLYROB Admin{% endblock %}
+
+{% block head %}
+<link href="/static/css/pages/admin.css?v=20251205" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header -->
+        <div class="tabs-wrapper">
+            <div class="history-page-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-sm">
+                    <rect x="3" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="3" width="7" height="7"></rect>
+                    <rect x="14" y="14" width="7" height="7"></rect>
+                    <rect x="3" y="14" width="7" height="7"></rect>
+                </svg>
+                ADMIN DASHBOARD
+            </div>
+            <div class="terminal-controls">
+                <a href="/sessions" class="btn-new-session">SESSIONS</a>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <!-- Admin Navigation -->
+            <nav class="admin-nav">
+                <a href="/admin" class="admin-nav-item active">Dashboard</a>
+                <a href="/admin/users" class="admin-nav-item">Users</a>
+                <a href="/admin/activity" class="admin-nav-item">Activity</a>
+            </nav>
+
+            <!-- Quick Search -->
+            <div class="quick-search">
+                <input type="text" id="quick-search-input" class="form-input" placeholder="Search users by wallet address, email, or user ID...">
+                <button id="quick-search-btn" class="btn-primary">Search</button>
+            </div>
+
+            <!-- Stats Grid -->
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total-users">-</div>
+                    <div class="stat-label">Total Users</div>
+                    <div class="stat-sublabel" id="stat-new-today">- new today</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total-credits">-</div>
+                    <div class="stat-label">Total Credits</div>
+                    <div class="stat-sublabel" id="stat-credits-spent">- spent</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-total-revenue">$-</div>
+                    <div class="stat-label">Total Revenue</div>
+                    <div class="stat-sublabel" id="stat-total-breakdown">x402: $- | crypto: $-</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-mtd-revenue">$-</div>
+                    <div class="stat-label">MTD Revenue</div>
+                    <div class="stat-sublabel" id="stat-mtd-breakdown">x402: $- | crypto: $-</div>
+                </div>
+            </div>
+
+            <!-- Dashboard Grid -->
+            <div class="dashboard-grid">
+                <!-- Left Column -->
+                <div>
+                    <!-- Users by Tier -->
+                    <h3 class="section-header">Users by Tier</h3>
+                    <div class="breakdown-list" id="tier-breakdown">
+                        <div class="loading">Loading</div>
+                    </div>
+
+                    <!-- Users by Role -->
+                    <h3 class="section-header">Users by Role</h3>
+                    <div class="breakdown-list" id="role-breakdown">
+                        <div class="loading">Loading</div>
+                    </div>
+
+                    <!-- Alerts -->
+                    <h3 class="section-header">System Alerts</h3>
+                    <div class="alerts-list" id="alerts-list">
+                        <div class="loading">Loading</div>
+                    </div>
+                </div>
+
+                <!-- Right Column -->
+                <div>
+                    <!-- Recent Activity -->
+                    <h3 class="section-header">
+                        Recent Activity
+                        <a href="/admin/activity">View All &rarr;</a>
+                    </h3>
+                    <div class="activity-feed" id="activity-feed">
+                        <div class="loading">Loading</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/admin/utils.js?v=20251205"></script>
+<script src="/static/js/admin/dashboard.js?v=20251205"></script>
+{% endblock %}

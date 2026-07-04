@@ -1,0 +1,373 @@
+<title>Mindprint v2 — versatile agent avatars</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    /* aligned to polyrob dev portal — web/portal/styles/variables.css (terminal aesthetic) */
+    --bg:#080808;--panel:#0c0c0c;--panel-2:#0e0e0e;--terminal:#050505;
+    --line:#1a1a1a;--line-2:#242424;
+    --ink:#c0c0c0;--ink-dim:#909090;--ink-faint:#555;--ink-hi:#e6e6e6;
+    --accent:#56e2c2;--accent-blue:#56c2ff;--accent-dim:#1c4a42;
+    --mono:'JetBrains Mono','Courier New',monospace;
+    --display:'VT323',monospace;
+    --sans:'JetBrains Mono','Courier New',monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  body{padding:0 clamp(16px,4vw,56px) 80px;max-width:1400px;margin:0 auto}
+  .mono{font-family:var(--mono)}
+  header{padding:40px 0 26px;border-bottom:1px solid var(--line)}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.34em;text-transform:uppercase;color:var(--accent);opacity:.9}
+  h1{font-weight:300;font-size:clamp(32px,6vw,62px);letter-spacing:-.02em;margin:.28em 0 .12em;line-height:.98}
+  h1 b{font-weight:600}
+  .lede{max-width:62ch;color:var(--ink-dim);font-size:15px;line-height:1.55;margin:0}
+  .lede em{color:var(--ink);font-style:normal}
+  .studio{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr);gap:clamp(20px,3vw,40px);margin-top:34px;align-items:start}
+  @media (max-width:900px){.studio{grid-template-columns:1fr}}
+  .stage{position:relative;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:radial-gradient(120% 120% at 50% 34%,#070c11 0%,#000 72%)}
+  .stage canvas{display:block;width:100%;height:auto;aspect-ratio:1/1}
+  .hud{position:absolute;inset:0;pointer-events:none;padding:14px 16px;display:flex;flex-direction:column;justify-content:space-between}
+  .hud .row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .hud .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-faint)}
+  .hud .seed{font-family:var(--mono);font-size:11px;color:var(--accent);opacity:.85}
+  .hud .traits{font-family:var(--mono);font-size:10.5px;color:var(--ink-dim);text-align:right;line-height:1.5;max-width:60%}
+  .panel{border:1px solid var(--line);border-radius:8px;background:var(--panel);overflow:hidden}
+  .panel+.panel{margin-top:14px}
+  .panel h2{margin:0;padding:11px 15px;font-family:var(--mono);font-size:11px;letter-spacing:.24em;text-transform:uppercase;color:var(--ink-dim);border-bottom:1px solid var(--line);background:var(--panel-2);display:flex;justify-content:space-between}
+  .panel h2 .k{color:var(--ink-faint);letter-spacing:.1em}
+  .pad{padding:15px}
+  .field{margin:0 0 14px}.field:last-child{margin-bottom:0}
+  label.cap{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:7px}
+  .val{color:var(--accent);float:right;text-transform:none;letter-spacing:0}
+  input[type=text]{width:100%;background:#05070a;border:1px solid var(--line-2);border-radius:5px;color:var(--ink);font-family:var(--mono);font-size:13px;padding:9px 11px;outline:none}
+  input[type=text]:focus{border-color:var(--accent-dim);box-shadow:0 0 0 1px var(--accent-dim)}
+  input[type=range]{-webkit-appearance:none;width:100%;height:2px;background:var(--line-2);border-radius:2px;outline:none;margin:6px 0}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--ink);border:2px solid var(--accent);cursor:pointer;box-shadow:0 0 8px rgba(67,230,255,.5)}
+  input[type=color]{width:46px;height:32px;border:1px solid var(--line-2);border-radius:6px;background:#05070a;cursor:pointer;padding:2px}
+  .colrow{display:flex;align-items:center;gap:10px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:5px;border:1px solid var(--line-2);background:#06090c;color:var(--ink-dim);cursor:pointer;transition:.14s}
+  .chip:hover{border-color:var(--ink-faint);color:var(--ink)}
+  .chip.on{border-color:var(--accent);color:var(--ink);background:rgba(67,230,255,.08)}
+  .btnrow{display:flex;gap:8px;flex-wrap:wrap}
+  button.act{flex:1;min-width:90px;font-family:var(--mono);font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;padding:11px 12px;border-radius:5px;border:1px solid var(--line-2);background:#06090c;color:var(--ink);cursor:pointer;transition:.14s}
+  button.act:hover{border-color:var(--ink-faint)}
+  button.act.primary{background:var(--accent);color:#001a20;border-color:var(--accent);font-weight:600}
+  .hint{font-size:11.5px;color:var(--ink-faint);line-height:1.5;margin:10px 0 0}
+  .section{margin-top:56px;padding-top:30px;border-top:1px solid var(--line)}
+  .section h3{font-weight:300;font-size:clamp(22px,3vw,30px);margin:6px 0 6px}
+  .section p{color:var(--ink-dim);max-width:64ch;margin:0 0 22px;line-height:1.55;font-size:14px}
+  .wall{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px}
+  .cell{border:1px solid var(--line);border-radius:8px;overflow:hidden;background:#000;cursor:pointer;transition:.16s;position:relative}
+  .cell:hover{border-color:var(--accent-dim);transform:translateY(-2px)}
+  .cell canvas{display:block;width:100%;aspect-ratio:1/1}
+  .cell .cap{position:absolute;left:0;right:0;bottom:0;padding:7px 9px;background:linear-gradient(0deg,rgba(0,0,0,.86),transparent);font-family:var(--mono);font-size:10.5px;color:var(--ink)}
+  .cell .cap small{display:block;color:var(--ink-faint);font-size:9px;letter-spacing:.1em;text-transform:uppercase;margin-top:1px}
+  footer{margin-top:60px;padding-top:20px;border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;color:var(--ink-faint);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+  textarea#cfgOut{width:100%;height:70px;background:#05070a;border:1px solid var(--line-2);border-radius:5px;color:var(--accent);font-family:var(--mono);font-size:11px;padding:8px;resize:vertical}
+
+  /* ── aligned to polyrob dev portal: sharp corners, display headings, terminal bg ── */
+  h1{font-family:var(--display);font-weight:400;letter-spacing:1px;color:var(--ink-hi)}
+  h1 b{font-family:var(--display);font-weight:400;color:var(--accent)}
+  .section h3{font-family:var(--display);letter-spacing:1px;color:var(--ink-hi)}
+  .panel,.stage,.chip,button.act,input[type=text],input[type=color],.cell,textarea#cfgOut{border-radius:0}
+  input[type=range]::-webkit-slider-thumb,input[type=range]::-moz-range-thumb{border-radius:0}
+  input[type=text],textarea#cfgOut{background:var(--terminal)}
+  .chip,button.act{background:var(--panel-2)}
+  .panel h2{background:var(--terminal)}
+  button.act.primary{color:#04140f}
+</style>
+
+<header>
+  <span class="eyebrow">POLYROB · avatar system · v2 versatile</span>
+  <h1>Mindprint<b>.</b></h1>
+  <p class="lede">Give your agent a face and a voice in four steps —
+    <em>① name it · ② shuffle a look · ③ give it a voice · ④ save</em>.
+    Deterministic from the name; face and voice shuffle independently.</p>
+</header>
+
+<div class="studio">
+  <div class="stage">
+    <canvas id="hero" width="720" height="720" aria-label="Live generated agent avatar"></canvas>
+    <div class="hud">
+      <div class="row"><span class="tag">mindprint · v2</span><span class="seed mono" id="seedOut">0x0000</span></div>
+      <div class="row" style="align-items:flex-end"><span class="tag" id="nameOut">—</span><span class="traits" id="traitsOut"></span></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <div class="panel">
+      <h2>① Name <span class="k">seed</span></h2>
+      <div class="pad">
+        <div class="field">
+          <label class="cap" for="nameIn">Agent name / id</label>
+          <input type="text" id="nameIn" value="Rob Ottmachin" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="btnrow">
+          <button class="act primary" id="shuffle">⤮ Shuffle face</button>
+        </div>
+        <p class="hint">Name → seed → face. <b>Shuffle face</b> rolls a new look (traits + color) and <b>keeps your voice</b>. Or click any face in the gallery below.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>② Look <span class="k">color · unified</span></h2>
+      <div class="pad">
+        <div class="field">
+          <label class="cap">Base color <span class="val" id="colName">auto</span></label>
+          <div class="colrow">
+            <input type="color" id="colIn" value="#43e6ff">
+            <button class="chip" id="colAuto">auto (from seed)</button>
+            <button class="chip" id="colRand">random color</button>
+          </div>
+          <p class="hint">Face, eyes &amp; mouth all share this one hue. “auto” derives it from the name.</p>
+        </div>
+        <div class="field">
+          <label class="cap">Palette mode <span class="val" id="modeName">solid</span></label>
+          <div class="chips" id="modeChips"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Mesh <span class="k">advanced · optional</span></h2>
+      <div class="pad">
+        <div class="field"><label class="cap" for="densIn">Density <span class="val" id="densVal">56</span></label>
+          <input type="range" id="densIn" min="30" max="76" value="56" step="2"></div>
+        <div class="field"><label class="cap" for="grainIn">Data grain <span class="val" id="grainVal">0.18</span></label>
+          <input type="range" id="grainIn" min="0" max="100" value="18"></div>
+        <div class="field"><label class="cap" for="shapeSel">Cell shape <span class="val" id="shapeName">dot</span></label>
+          <div class="chips" id="shapeChips"></div></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>③ Voice <span class="k">signature · separate from face</span></h2>
+      <div class="pad">
+        <div class="field">
+          <label class="cap" for="sayIn">Say something</label>
+          <input type="text" id="sayIn" value="Hi, I'm Rob — your agent. What can I help with?" spellcheck="false">
+        </div>
+        <div class="btnrow">
+          <button class="act primary" id="shuffleVoice">🎲 Shuffle voice</button>
+          <button class="act" id="speak">▶ Speak</button>
+          <button class="act" id="voiceAuto">auto</button>
+        </div>
+        <div class="field"><label class="cap" for="pitchIn">Pitch <span class="val" id="pitchVal">1.00</span></label>
+          <input type="range" id="pitchIn" min="0" max="200" value="100"></div>
+        <div class="field"><label class="cap" for="rateIn">Rate <span class="val" id="rateVal">1.00</span></label>
+          <input type="range" id="rateIn" min="50" max="160" value="100"></div>
+        <div class="field"><label class="cap" for="timbreIn">Timbre <span class="val" id="timbreVal">0.50</span></label>
+          <input type="range" id="timbreIn" min="0" max="100" value="50"></div>
+        <p class="hint" id="voiceHint">Seeded per agent and <em>saved into the config</em> — clear
+          English voices only. The face opens its mouth as it speaks; the picked voice shows here.</p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>④ Save <span class="k">freeze rob.json</span></h2>
+      <div class="pad">
+        <div class="btnrow">
+          <button class="act primary" id="copyCfg">Copy config JSON</button>
+          <button class="act" id="export">Export PNG</button>
+        </div>
+        <textarea id="cfgOut" readonly spellcheck="false"></textarea>
+        <p class="hint">This is the exact reproducible config the pipeline freezes into <span class="mono">avatar/config/rob.json</span>.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <span class="eyebrow">versatility · same engine</span>
+  <h3>One species, endless characters</h3>
+  <p>Sixteen agents, each a deterministic Mindprint from its name — different colors, eyes,
+    mouths, antennas, auras. Click any to load it. Rare rolls (cyclops, three-eyes, heart
+    antenna, halo) show up occasionally, exactly like an NFT collection.</p>
+  <div class="wall" id="wall"></div>
+</div>
+
+<footer><span>MINDPRINT v2 — versatile generative avatars</span><span>deterministic · client-side</span></footer>
+
+<script src="mindprint.js"></script>
+<script>
+"use strict";
+const clamp=(x,a,b)=>x<a?a:x>b?b:x, lerp=(a,b,t)=>a+(b-a)*t;
+/* ---------------- Studio wiring ---------------- */
+const reduceMotion=matchMedia("(prefers-reduced-motion: reduce)").matches;
+const heroCanvas=document.getElementById("hero"),hctx=heroCanvas.getContext("2d");
+let hero=new Mindprint("Rob Ottmachin");
+const nameIn=document.getElementById("nameIn");
+let variant="";
+
+const modeChips=document.getElementById("modeChips");
+["auto",...MODES].forEach((m,i)=>{const b=document.createElement("button");
+  b.className="chip"+(i===0?" on":"");b.dataset.mode=m;b.textContent=m;modeChips.appendChild(b);});
+modeChips.addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  [...modeChips.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");
+  hero.override.mode=b.dataset.mode==="auto"?null:b.dataset.mode;
+  document.getElementById("modeName").textContent=b.dataset.mode;syncCfg();});
+
+const shapeChips=document.getElementById("shapeChips");
+["auto",...SHAPES].forEach((s,i)=>{const b=document.createElement("button");
+  b.className="chip"+(i===0?" on":"");b.dataset.shape=s;b.textContent=s;shapeChips.appendChild(b);});
+shapeChips.addEventListener("click",e=>{const b=e.target.closest(".chip");if(!b)return;
+  [...shapeChips.children].forEach(c=>c.classList.remove("on"));b.classList.add("on");
+  hero.override.shape=b.dataset.shape==="auto"?null:SHAPES.indexOf(b.dataset.shape);hero.N=0;
+  document.getElementById("shapeName").textContent=b.dataset.shape;syncCfg();});
+
+const colIn=document.getElementById("colIn");
+colIn.addEventListener("input",()=>{hero.override.color=colIn.value;
+  document.getElementById("colName").textContent=colIn.value;syncCfg();});
+document.getElementById("colAuto").addEventListener("click",()=>{delete hero.override.color;
+  document.getElementById("colName").textContent="auto";syncCfg();});
+document.getElementById("colRand").addEventListener("click",()=>{
+  const h=Math.floor(Math.random()*360),rgb=hsl2rgb(h,0.85,0.55);
+  const hex="#"+rgb.map(v=>("0"+(v|0).toString(16)).slice(-2)).join("");
+  colIn.value=hex;hero.override.color=hex;document.getElementById("colName").textContent=hex;syncCfg();});
+
+function bindRange(id,valId,map,apply){const el=document.getElementById(id),out=document.getElementById(valId);
+  el.addEventListener("input",()=>{const v=map(+el.value);out.textContent=v.toString();apply(v);syncCfg();});}
+bindRange("densIn","densVal",v=>v,v=>{hero.override.dens=v;hero.N=0;});
+bindRange("grainIn","grainVal",v=>+(v/100).toFixed(2),v=>{hero.override.grain=v;});
+
+/* ---- voice ---- */
+const audio={amp:0,target:0,floor:0,speaking:false};
+const synth=window.speechSynthesis; let voices=[];
+/* Many system voices are non-English or novelty (macOS: Zarvox, Whisper, Bells, Bubbles…),
+   which sound mumbly/unintelligible. Restrict the timbre pool to CLEAR English voices so
+   every roll is understandable. (The stored timbre 0-1 is unchanged — this is preview only.) */
+const NOVELTY=/\b(albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|flo|grandma|grandpa|reed|rocko|sandy|shelley|eddy|junior|kathy|princess|ralph)\b/i;
+function loadVoices(){voices=synth?synth.getVoices():[];}
+if(synth){loadVoices();synth.onvoiceschanged=loadVoices;}
+function englishVoices(){
+  const en=voices.filter(v=>/^en(-|_|$)/i.test(v.lang||""));
+  const clear=en.filter(v=>!NOVELTY.test(v.name||""));
+  const pool=(clear.length?clear:(en.length?en:voices)).slice();
+  pool.sort((a,b)=>(a.name||"").localeCompare(b.name||""));   // stable timbre→voice mapping
+  return pool;
+}
+function setVoiceOverride(k,v){hero.override.voice=hero.override.voice||{};hero.override.voice[k]=v;syncCfg();}
+document.getElementById("pitchIn").addEventListener("input",e=>{const v=+(e.target.value/100).toFixed(2);
+  document.getElementById("pitchVal").textContent=v.toFixed(2);setVoiceOverride("pitch",v);});
+document.getElementById("rateIn").addEventListener("input",e=>{const v=+(e.target.value/100).toFixed(2);
+  document.getElementById("rateVal").textContent=v.toFixed(2);setVoiceOverride("rate",v);});
+document.getElementById("timbreIn").addEventListener("input",e=>{const v=+(e.target.value/100).toFixed(2);
+  document.getElementById("timbreVal").textContent=v.toFixed(2);setVoiceOverride("timbre",v);});
+document.getElementById("voiceAuto").addEventListener("click",()=>{delete hero.override.voice;syncVoice();syncCfg();});
+document.getElementById("shuffleVoice").addEventListener("click",()=>{   // voice ONLY — face untouched
+  hero.override.voice={
+    pitch:+(0.75+Math.random()*0.70).toFixed(2),   // 0.75–1.45
+    rate: +(0.90+Math.random()*0.35).toFixed(2),   // 0.90–1.25
+    timbre:+Math.random().toFixed(2)               // 0–1 (picks a different clear-English voice)
+  };
+  syncVoice();syncCfg();speakNow();                // hear it immediately
+});
+document.getElementById("speak").addEventListener("click",speakNow);
+function speakNow(){
+  const vc=hero.voiceCfg();
+  if(!synth){audio.speaking=true;audio.target=0.7;audio.floor=0.18;setTimeout(()=>{audio.speaking=false;audio.target=0;audio.floor=0;},1500);return;}
+  synth.cancel();
+  const u=new SpeechSynthesisUtterance(document.getElementById("sayIn").value||"Hello!");
+  const pool=englishVoices();
+  if(pool.length){
+    u.voice=pool[Math.floor(vc.timbre*pool.length)%pool.length];
+    document.getElementById("voiceHint").textContent=
+      "voice: "+u.voice.name+" ("+u.voice.lang+") · pitch "+vc.pitch.toFixed(2)+" · rate "+vc.rate.toFixed(2);
+  }
+  u.lang=(u.voice&&u.voice.lang)||"en-US";
+  u.pitch=vc.pitch;u.rate=vc.rate;
+  u.onstart=()=>{audio.speaking=true;};
+  u.onboundary=()=>{audio.target=0.55+Math.random()*0.45;audio.floor=0.18;};
+  u.onend=()=>{audio.speaking=false;audio.target=0;audio.floor=0;};
+  audio.speaking=true;audio.target=0.7;audio.floor=0.18;synth.speak(u);
+}
+function updateAmp(dt){
+  if(audio.speaking){audio.target=Math.max(audio.floor,audio.target*Math.pow(0.12,dt));
+    const fl=0.12*(Math.sin(performance.now()*0.03)+Math.sin(performance.now()*0.017))*0.5;
+    audio.amp=lerp(audio.amp,clamp(audio.target+fl*audio.target,0,1),0.35);
+  }else audio.amp=lerp(audio.amp,0,0.12);
+}
+function syncVoice(){const v=hero.voiceCfg();
+  document.getElementById("pitchIn").value=Math.round(v.pitch*100);document.getElementById("pitchVal").textContent=v.pitch.toFixed(2);
+  document.getElementById("rateIn").value=Math.round(v.rate*100);document.getElementById("rateVal").textContent=v.rate.toFixed(2);
+  document.getElementById("timbreIn").value=Math.round(v.timbre*100);document.getElementById("timbreVal").textContent=v.timbre.toFixed(2);}
+
+function reseed(keepVoice){
+  const kv = keepVoice ? hero.override.voice : undefined;   // preserve a pinned voice across a face shuffle
+  hero.setSeed(nameIn.value+variant);hero.override={};hero.N=0;
+  if(kv) hero.override.voice=kv;
+  [...modeChips.children].forEach((c,i)=>c.classList.toggle("on",i===0));
+  [...shapeChips.children].forEach((c,i)=>c.classList.toggle("on",i===0));
+  document.getElementById("colName").textContent="auto";
+  document.getElementById("modeName").textContent="auto";
+  document.getElementById("shapeName").textContent="auto";
+  refreshHud();syncDials();syncVoice();syncCfg();
+}
+function refreshHud(){
+  document.getElementById("nameOut").textContent=nameIn.value||"—";
+  document.getElementById("seedOut").textContent=hero.hex;
+  const tr=hero.traitList();
+  document.getElementById("traitsOut").innerHTML=
+    `<b style="color:var(--accent)">${tr.tier}</b> · ${tr.mode} · ${tr.head}<br>eyes ${tr.eyes} · mouth ${tr.mouth}<br>ant ${tr.antenna} · ${tr.aura}`;
+}
+function syncDials(){const p=hero.p;
+  document.getElementById("densIn").value=p.densAuto;document.getElementById("densVal").textContent=p.densAuto;
+  document.getElementById("grainIn").value=Math.round(p.grainAuto*100);document.getElementById("grainVal").textContent=p.grainAuto.toFixed(2);}
+function syncCfg(){
+  refreshHud();
+  const o=hero.override,tr=hero.traitList();
+  const cfg={seed:nameIn.value,variant,override:{},size:768,generator:"mindprint@v2",
+             traits:{tier:tr.tier,eyes:tr.eyes,brow:tr.brow,mouth:tr.mouth,antenna:tr.antenna,aura:tr.aura,head:tr.head,mode:tr.mode},
+             voice:hero.voiceCfg()};
+  if(o.color)cfg.override.color=o.color;
+  if(o.mode!=null)cfg.override.mode=o.mode;
+  if(o.dens!=null)cfg.override.dens=o.dens;
+  if(o.grain!=null)cfg.override.grain=+o.grain;
+  if(o.shape!=null)cfg.override.shape=SHAPES[o.shape];
+  if(o.voice)cfg.override.voice=o.voice;
+  document.getElementById("cfgOut").value=JSON.stringify(cfg);
+}
+nameIn.addEventListener("input",()=>{variant="";reseed(false);});   // new name = fresh everything
+document.getElementById("shuffle").addEventListener("click",()=>{     // face only; keeps a pinned voice
+  variant="#"+Math.floor(Math.random()*1e9).toString(36);reseed(true);});
+document.getElementById("copyCfg").addEventListener("click",()=>{
+  const ta=document.getElementById("cfgOut");ta.select();
+  navigator.clipboard.writeText(ta.value).catch(()=>document.execCommand("copy"));
+  const b=document.getElementById("copyCfg");b.textContent="copied ✓";setTimeout(()=>b.textContent="Copy config JSON",1200);});
+document.getElementById("export").addEventListener("click",()=>{
+  const off=document.createElement("canvas");off.width=off.height=768;
+  const octx=off.getContext("2d");hero.N=0;hero.render(octx,768,1.0,0,{still:true});hero.N=0;
+  const a=document.createElement("a");
+  a.download=(nameIn.value.replace(/[^\w]+/g,"_")||"mindprint")+".png";
+  a.href=off.toDataURL("image/png");a.click();});
+
+/* gallery */
+const AGENTS=["Rob Ottmachin","Ada Nine","Vesper Kade","Kilo Prime","Juno-7","Marrow",
+  "Echo Vane","Sable Quinn","Nyx Orbital","Orrery","Pixel","Wren Halcyon",
+  "Tycho","Bloom","Quill","Nova Pax"];
+const wall=document.getElementById("wall"),gals=[];
+AGENTS.forEach((name,k)=>{
+  const cell=document.createElement("div");cell.className="cell";
+  const cv=document.createElement("canvas");cv.width=cv.height=280;
+  const cap=document.createElement("div");cap.className="cap";
+  const mp=new Mindprint(name);const tr=mp.traitList();
+  cap.innerHTML=`${name}<small>${tr.eyes} · ${tr.antenna} · ${tr.aura}</small>`;
+  cell.appendChild(cv);cell.appendChild(cap);wall.appendChild(cell);
+  cell.addEventListener("click",()=>{variant="";nameIn.value=name;reseed(false);window.scrollTo({top:0,behavior:reduceMotion?"auto":"smooth"});});
+  gals.push({mp,ctx:cv.getContext("2d"),size:280,phase:(k*1.7)%6});
+});
+
+let last=performance.now(),galTick=0;
+function frame(now){
+  const dt=Math.min(0.05,(now-last)/1000);last=now;const t=now/1000;
+  updateAmp(dt);
+  hero.render(hctx,heroCanvas.width,t,audio.amp,{still:reduceMotion});
+  galTick+=dt;
+  if(galTick>0.05){galTick=0;for(const g of gals)g.mp.render(g.ctx,g.size,t+g.phase,0,{still:reduceMotion});}
+  requestAnimationFrame(frame);
+}
+reseed();
+requestAnimationFrame(frame);
+</script>

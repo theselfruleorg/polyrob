@@ -1,0 +1,72 @@
+name: Release
+
+# Builds, validates, and publishes a POLYROB release, and defines "latest" for the
+# `polyrob update --check` command. INERT until a version tag is pushed:
+#
+#   git tag -a v0.4.2 -m "POLYROB 0.4.2" && git push origin v0.4.2
+#
+# One-time repo setup (Settings -> Secrets and variables -> Actions):
+#   PYPI_API_TOKEN   PyPI project token (scope: polyrob). Omit to skip the PyPI
+#                    publish step (the GitHub Release + built artifacts still work).
+#
+# The tag drives everything; `polyrob update` reads the GitHub Releases API and/or
+# PyPI to discover the newest version, so cutting a tag here is what makes an update
+# discoverable to users.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write  # create the GitHub Release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Verify tag matches package version
+        run: |
+          python -m pip install --upgrade pip
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(python -c "import tomllib,pathlib;print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$TAG pkg=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match pyproject version $PKG"; exit 1
+          fi
+
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Smoke-test the wheel in a clean venv
+        run: |
+          python -m venv /tmp/relvenv
+          /tmp/relvenv/bin/pip install "$(ls dist/*.whl)"
+          /tmp/relvenv/bin/python -c "import core, cli.polyrob; print('polyrob', core.__version__)"
+
+      - name: Publish to PyPI
+        if: ${{ env.PYPI_API_TOKEN != '' }}
+        run: |
+          twine upload --non-interactive -u __token__ -p "$PYPI_API_TOKEN" dist/*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

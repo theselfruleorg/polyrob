@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
+    <meta name="theme-color" content="#080808">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>{% block title %}{{ console_display_name() }}{% endblock %}</title>
+    <meta name="ws-url" content="{{ ws_url | default('') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <!-- Design System CSS - Load in order: variables -> components -> main styles -->
+    <link href="/static/css/variables.css?v=20251230" rel="stylesheet">
+    <link href="/static/css/components.css?v=20251230" rel="stylesheet">
+    <link href="/static/css/style.css?v=20251230" rel="stylesheet">
+    <link rel="icon" href="/static/img/favicon.ico">
+    
+    <!-- Load error handler first to catch all errors -->
+    <script src="/static/js/error-handler.js" type="module"></script>
+
+    <!-- Load constants first so they're available to all scripts -->
+    <script src="/static/js/constants.js"></script>
+
+    <!-- Socket.IO setup with reliable fallback -->
+    <script>
+    // Create a promise that resolves when Socket.IO is loaded
+    window.socketIOReady = new Promise((resolve, reject) => {
+        // Function to load the local fallback
+        function loadLocalSocketIO() {
+            console.warn('Using local Socket.IO fallback');
+            const fallbackScript = document.createElement('script');
+            fallbackScript.src = "/static/js/socket.io.min.js";
+            fallbackScript.onload = () => {
+                console.log('Local Socket.IO loaded successfully');
+                resolve(window.io);
+            };
+            fallbackScript.onerror = (err) => {
+                console.error('Failed to load local Socket.IO:', err);
+                reject(new Error('Could not load Socket.IO from any source'));
+            };
+            document.head.appendChild(fallbackScript);
+        }
+        
+        // Only try to load from CDN if window.io is not already defined
+        if (!window.io) {
+            // Try to load from CDN first
+            const cdnScript = document.createElement('script');
+            cdnScript.src = "https://cdn.socket.io/4.6.0/socket.io.min.js";
+            cdnScript.onload = () => {
+                console.log('CDN Socket.IO loaded successfully');
+                resolve(window.io);
+            };
+            cdnScript.onerror = loadLocalSocketIO;
+            document.head.appendChild(cdnScript);
+        } else {
+            // Socket.IO already loaded
+            resolve(window.io);
+        }
+    });
+    </script>
+    
+    <!-- Additional styles from child templates -->
+    {% block head %}{% endblock %}
+    <!-- Add syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+</head>
+<body {% block body_attributes %}{% endblock %}>
+    <div class="global-header">
+        <a href="/" class="terminal-brand">{% block header_title %}{{ console_display_name() }}{% endblock %}</a>
+        <div class="terminal-nav">
+            <!-- Webgate v1 single-user surfaces (core, both modes) -->
+            <a href="/memory" class="nav-link">Memory</a>
+            <a href="/autonomy" class="nav-link">Autonomy</a>
+            <a href="/identity" class="nav-link">Identity</a>
+            <a href="/system" class="nav-link">System</a>
+            <a href="/settings" class="nav-link">Settings</a>
+            {# Multitenant-only links hide in single-user. `is_multitenant` is passed
+               by the webgate pages; existing pages don't pass it (undefined → shown,
+               preserving today's multitenant nav byte-equivalently). #}
+            {% set _show_tenant = (is_multitenant is not defined) or is_multitenant %}
+            {% if _show_tenant %}
+            <a href="/profile" class="nav-link">Profile</a>
+            {% if is_admin %}
+            <a href="/admin" class="nav-link nav-link--admin">Admin</a>
+            {% endif %}
+            {% if is_authenticated %}
+            <a href="/logout" class="nav-link ml-auto">Logout</a>
+            {% else %}
+            <a href="/signin" class="nav-link ml-auto">Sign In</a>
+            {% endif %}
+            {% endif %}
+        </div>
+    </div>
+    
+    <!-- Beta Warning Banner -->
+    <div class="beta-warning-banner" id="beta-banner">
+        <div class="beta-warning-content">
+            ⚠️ Beta: Access open for {{ branding().access_gate_label }}. Get full instructions at <a href="{{ branding().support_url }}" target="_blank" rel="noopener noreferrer">{{ branding().support_display }}</a>
+        </div>
+        <button class="banner-close-btn" id="banner-close-btn" aria-label="Close banner" title="Close banner">×</button>
+    </div>
+    
+    <div class="container {% block container_class %}{% endblock %}">
+        <div class="main-content">
+            {% block content %}{% endblock %}
+        </div>
+    </div>
+    
+    <div class="terminal-footer">
+        <div class="footer-content">
+            <a href="{{ branding().terms_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Terms of Use</a>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().privacy_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <span class="footer-separator">•</span>
+            <span class="footer-center-text">System ver. {{ get_version() }} (c)</span>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().brand_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">{{ branding().brand_display }}</a>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().org_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">{{ branding().org_display }}</a>
+        </div>
+    </div>
+
+    {% block scripts %}{% endblock %}
+
+    <!-- Banner close functionality -->
+    <script>
+    (function() {
+        const banner = document.getElementById('beta-banner');
+        const closeBtn = document.getElementById('banner-close-btn');
+
+        // Check if user has previously closed the banner
+        const bannerClosed = localStorage.getItem('beta-banner-closed');
+        if (bannerClosed === 'true') {
+            banner.classList.add('hidden');
+        }
+
+        // Handle close button click
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function() {
+                banner.classList.add('hidden');
+                localStorage.setItem('beta-banner-closed', 'true');
+            });
+        }
+    })();
+    </script>
+</body>
+</html> 

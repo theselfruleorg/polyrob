@@ -1,0 +1,121 @@
+{% extends "layout.html" %}
+
+{% block title %}Profile - {{ console_display_name() }}{% endblock %}
+
+{% block header_title %}{{ console_display_name() }} v{{ get_version() }}{% endblock %}
+
+{% block head %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<link href="/static/css/pages/profile.css?v=20251205" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header with title matching sessions page style -->
+        <div class="tabs-wrapper">
+            <div class="history-page-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-sm">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="12" cy="7" r="4"></circle>
+                </svg>
+                USER PROFILE
+            </div>
+            <div class="terminal-controls">
+                <a href="/sessions" class="btn-new-session">SESSION HISTORY</a>
+            </div>
+        </div>
+
+        <!-- Profile content in standard terminal container -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <!-- Wallet Address Section -->
+            <div class="profile-section">
+                <div class="profile-section-header">Connected Wallet</div>
+                <div id="wallet-address" class="wallet-address-display">Loading wallet address...</div>
+            </div>
+
+            <!-- Tier Status Section -->
+            <div class="profile-section">
+                <div class="profile-section-header">Account Tier</div>
+                <div class="tier-badge-container">
+                    <div id="tier-badge" class="tier-badge">LOADING...</div>
+                    <div id="tier-description" class="tier-description">Checking tier status...</div>
+                </div>
+            </div>
+
+            <!-- Credit Balance Section -->
+            <div class="profile-section">
+                <div class="profile-section-header">Credit Balance</div>
+                <div class="balance-stats">
+                    <div class="balance-stat-item">
+                        <div class="balance-stat-label">Current Balance</div>
+                        <div id="current-balance" class="balance-stat-value">-</div>
+                    </div>
+                    <div class="balance-stat-item">
+                        <div class="balance-stat-label">Lifetime Earned</div>
+                        <div id="lifetime-earned" class="balance-stat-value">-</div>
+                    </div>
+                    <div class="balance-stat-item">
+                        <div class="balance-stat-label">Lifetime Spent</div>
+                        <div id="lifetime-spent" class="balance-stat-value">-</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Deposit Section -->
+            <div class="profile-section">
+                <div class="profile-section-header">Top Up Credits</div>
+
+                <div class="deposit-address-box">
+                    <div id="deposit-address" class="deposit-address">Loading deposit address...</div>
+                    <button id="copy-address-btn" class="btn-new-session">COPY</button>
+                </div>
+
+                <div class="text-center">
+                    <div class="qr-code-wrapper">
+                        <div id="qr-code"></div>
+                    </div>
+                </div>
+
+                <div class="deposit-info-box">
+                    <h4>Supported Networks:</h4>
+                    <ul>
+                        <li><strong>Ethereum Mainnet:</strong> USDC, USDT, ETH</li>
+                        <li><strong>Sepolia Testnet:</strong> USDC, USDT, ETH (for testing)</li>
+                    </ul>
+                    <p><strong>Exchange Rate:</strong> $0.01 USD = 1 credit</p>
+                    <p><strong>Minimum Deposit:</strong> $5.00 USD</p>
+                    <p class="warning">⚠️ Only send USDC, USDT, or ETH to this address. Other tokens may be lost.</p>
+                </div>
+            </div>
+
+            <!-- Transactions Section -->
+            <div class="profile-section">
+                <div class="profile-section-header">Transaction History</div>
+                <div class="overflow-x-auto">
+                    <table class="actions-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Type</th>
+                                <th>Amount</th>
+                                <th>Details</th>
+                                <th>Balance After</th>
+                            </tr>
+                        </thead>
+                        <tbody id="transactions-body">
+                            <tr>
+                                <td colspan="5" class="text-center text-muted" style="padding: 40px;">Loading transactions...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+    <script src="/static/js/profile.js?v=20251205-pagination"></script>
+{% endblock %}

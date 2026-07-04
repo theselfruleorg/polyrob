@@ -1,0 +1,20 @@
+{
+  "generator": "mindprint@v2",
+  "seed": "Rob Ottmachin",
+  "seed_hex": "0x1546",
+  "traits": {
+    "tier": "basic",
+    "eyes": "square",
+    "brow": "none",
+    "mouth": "grin",
+    "antenna": "single",
+    "aura": "none",
+    "head": "orb",
+    "mode": "solid"
+  },
+  "voice": {
+    "pitch": 1.29,
+    "rate": 1.02,
+    "timbre": 0.78
+  }
+}

@@ -1,0 +1,109 @@
+/* WORKSPACE TAB - FULL WIDTH FIX
+   Proper flex-based layout for workspace components */
+
+/* Workspace tab container - flex column to fill height */
+#workspace-tab .terminal-container {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Workspace container - fills available height */
+.workspace-container {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    flex: 1;
+    min-height: 0; /* Critical for flex overflow */
+    display: flex;
+    flex-direction: column;
+}
+
+/* Workspace layout - flex row for file tree + preview */
+.workspace-layout {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    flex: 1;
+    min-height: 0; /* Critical for flex overflow */
+    display: flex;
+    flex-direction: row;
+}
+
+/* File preview - takes remaining space after file tree (220px fixed) */
+.file-preview {
+    padding: 0;
+    margin: 0;
+    flex: 1; /* Take remaining space, NOT width: 100% */
+    min-width: 0; /* Allow shrinking below content size */
+    max-width: none;
+    display: flex;
+    flex-direction: column;
+}
+
+/* File preview content - fills the preview area */
+.file-preview-content {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+/* HTML iframe - full width within flex container */
+.html-preview-container {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    flex: 1;
+    min-height: 0;
+}
+
+.html-iframe {
+    padding: 0;
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    display: block;
+    border: none;
+}
+
+/* Markdown - full width */
+.markdown-rendered {
+    width: 100%;
+    max-width: none;
+    box-sizing: border-box;
+    padding: 16px;
+}
+
+/* CSV - full width */
+.csv-table-view {
+    width: 100%;
+    max-width: none;
+    overflow: auto;
+}
+
+/* Add padding for text files */
+.file-preview-content > pre.file-content {
+    padding: 16px;
+    margin: 0;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: auto;
+}
+
+.file-preview-content > .placeholder {
+    padding: 16px;
+}

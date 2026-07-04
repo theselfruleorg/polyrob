@@ -1,0 +1,14 @@
+{% extends "layout.html" %}
+{% block title %}POLYROB — Live{% endblock %}
+{% block content %}
+<div class="status-page" style="max-width: 60ch; margin: 4rem auto; text-align: center;">
+  <h1>POLYROB is live</h1>
+  <p class="dim">Instance: {{ instance_id }} · Version {{ version }}</p>
+  <p class="dim">Uptime: <span id="uptime">—</span></p>
+</div>
+<script>
+  fetch("/api/status").then(r => r.json()).then(d => {
+    document.getElementById("uptime").textContent = d.uptime_seconds + "s";
+  });
+</script>
+{% endblock %}

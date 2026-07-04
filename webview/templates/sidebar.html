@@ -1,0 +1,112 @@
+{% if sidebar_section == 'top' %}
+<!-- Top sidebar: Vision section -->
+<div class="terminal-container">
+    <div class="vision-header">
+        <div class="vision-title">VISION</div>
+        <div class="vision-controls">
+            <button id="fullscreen-btn" title="View fullscreen">⛶</button>
+        </div>
+    </div>
+    <div class="screenshot-container">
+        <img id="session-screenshot" class="screenshot hidden" alt="Browser screenshot" />
+        <div id="screenshot-placeholder" class="placeholder">
+            {% if session_id == 'new' %}
+            <div class="when-empty">Waiting for session to start...</div>
+            <div class="text-muted text-sm when-empty">Screenshot will appear when task begins</div>
+            {% else %}
+            <div class="when-active">No screenshot available</div>
+            <div class="text-muted text-sm when-active">Waiting for browser activity...</div>
+            {% endif %}
+        </div>
+        <div id="screenshot-error" class="error-message hidden"></div>
+    </div>
+    <div class="page-domain">
+        <span class="domain-icon">🌐</span>
+        <span id="page-url">{% if session_id == 'new' %}<span class="when-empty">No URL</span>{% else %}No URL available{% endif %}</span>
+    </div>
+</div>
+{% elif sidebar_section == 'bottom' %}
+<!-- Bottom sidebar: Info panel with stats section -->
+<div class="terminal-container">
+    <div class="info-header">
+        <div class="info-title">INFO</div>
+        <div id="connection-status" class="connection-status" title="Connection status">
+            <span class="connection-dot"></span>
+            <span id="refresh-text" class="connection-text">Connecting...</span>
+        </div>
+    </div>
+    
+    <!-- Session information -->
+    <div class="meta-section compact">
+        <div class="metadata-grid compact">
+            <div class="meta-label">Session ID:</div>
+            <div id="session-id" class="meta-value">
+                {% if session_id == 'new' %}
+                <span class="when-empty">—</span>
+                {% else %}
+                {{ session_id[:8] }}...
+                {% endif %}
+            </div>
+
+            <div class="meta-label">Status:</div>
+            <div id="session-status" class="meta-value">
+                {% if session_id == 'new' %}
+                <span class="when-empty">—</span>
+                {% else %}
+                Active
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Task information -->
+    <div class="meta-section compact">
+        <div class="meta-section-title">TASK</div>
+        <div id="task-display" class="task-description compact">
+            {% if session_id == 'new' %}
+            <span class="when-empty text-muted">—</span>
+            {% endif %}
+        </div>
+        <!-- Hidden element for JS compatibility -->
+        <div style="display:none;">
+            <span id="current-task-text"></span>
+        </div>
+    </div>
+
+    <!-- Agents section -->
+    <div class="meta-section compact">
+        <div class="meta-section-title">AGENTS</div>
+        <div id="agents-container" class="compact-list">
+            {% if session_id == 'new' %}
+            <div class="when-empty placeholder-text compact">—</div>
+            {% else %}
+            <div class="loading-indicator when-active compact">...</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Tools section -->
+    <div class="meta-section compact">
+        <div class="meta-section-title">TOOLS</div>
+        <div id="services-container" class="compact-list">
+            {% if session_id == 'new' %}
+            <div class="when-empty placeholder-text compact">—</div>
+            {% else %}
+            <div class="loading-indicator when-active compact">...</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- Skills section -->
+    <div class="meta-section compact">
+        <div class="meta-section-title">SKILLS</div>
+        <div id="skills-container" class="compact-list">
+            {% if session_id == 'new' %}
+            <div class="when-empty placeholder-text compact">—</div>
+            {% else %}
+            <div class="loading-indicator when-active compact">...</div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endif %} 

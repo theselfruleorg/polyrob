@@ -1,0 +1,60 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Autonomy{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Autonomy{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Autonomy</h2>
+        <p class="text-muted text-sm">Durable goal board and scheduled cron jobs for the local owner. Read-only view.</p>
+    </div>
+
+    <div class="webgate-section">
+        <div class="section-header">Goals</div>
+        <div id="goals-list" class="webgate-list"><div class="loading">Loading…</div></div>
+    </div>
+
+    <div class="webgate-section">
+        <div class="section-header">Cron</div>
+        <div id="cron-list" class="webgate-list"><div class="loading">Loading…</div></div>
+    </div>
+</div>
+
+<script>
+(function () {
+    function esc(s) { const d = document.createElement('div'); d.textContent = (s == null ? '' : String(s)); return d.innerHTML; }
+
+    async function loadGoals() {
+        const el = document.getElementById('goals-list');
+        try {
+            const body = await (await fetch('/api/webgate/goals')).json();
+            if (body.enabled === false) { el.innerHTML = '<div class="webgate-empty">Goals disabled (set GOALS_ENABLED).</div>'; return; }
+            if (!body.goals.length) { el.innerHTML = '<div class="webgate-empty">No goals.</div>'; return; }
+            el.innerHTML = body.goals.map(function (g) {
+                return '<div class="webgate-item"><span class="badge">' + esc(g.status) +
+                    '</span> <strong>' + esc(g.title) + '</strong>' +
+                    (g.body ? '<div class="text-muted text-sm">' + esc(g.body) + '</div>' : '') + '</div>';
+            }).join('');
+        } catch (e) { el.innerHTML = '<div class="webgate-empty">Could not load goals.</div>'; }
+    }
+
+    async function loadCron() {
+        const el = document.getElementById('cron-list');
+        try {
+            const body = await (await fetch('/api/webgate/cron')).json();
+            if (body.enabled === false) { el.innerHTML = '<div class="webgate-empty">Cron disabled (set CRON_ENABLED).</div>'; return; }
+            if (!body.jobs.length) { el.innerHTML = '<div class="webgate-empty">No cron jobs.</div>'; return; }
+            el.innerHTML = body.jobs.map(function (j) {
+                return '<div class="webgate-item"><span class="badge">' + esc(j.status) +
+                    '</span> <strong>' + esc(j.task) + '</strong>' +
+                    '<div class="text-muted text-sm">' + esc(j.schedule_spec) +
+                    (j.next_run_at ? ' · next: ' + esc(j.next_run_at) : '') + '</div></div>';
+            }).join('');
+        } catch (e) { el.innerHTML = '<div class="webgate-empty">Could not load cron.</div>'; }
+    }
+
+    loadGoals(); loadCron();
+})();
+</script>
+{% endblock %}

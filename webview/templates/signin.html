@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#080808">
+    <title>Sign In - {{ console_display_name() }}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+    <link href="/static/css/variables.css?v=20251209c" rel="stylesheet">
+    <link href="/static/css/components.css?v=20251209c" rel="stylesheet">
+    <link href="/static/css/pages/signin.css?v=20251209c" rel="stylesheet">
+    <link rel="icon" href="/static/img/favicon.ico">
+</head>
+<body>
+    <!-- Ticker -->
+    <div class="ticker">
+        <div class="ticker-track">
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
+            <span>GET ACCESS /// USE <a href="{{ branding().support_url }}" target="_blank">{{ branding().support_handle }}</a> ON TELEGRAM ///</span>
+        </div>
+    </div>
+
+    <!-- Main -->
+    <main class="signin">
+        <div class="signin-content">
+
+            <!-- Hero: Logo + Features side by side on desktop -->
+            <div class="hero">
+                <!-- POLYROB logo -->
+                <div class="logo" id="logo">
+<pre class="logo-rob">██████╗   ██████╗  ██╗      ██╗   ██╗ ██████╗   ██████╗  ██████╗
+██╔══██╗ ██╔═══██╗ ██║      ╚██╗ ██╔╝ ██╔══██╗ ██╔═══██╗ ██╔══██╗
+██████╔╝ ██║   ██║ ██║       ╚████╔╝  ██████╔╝ ██║   ██║ ██████╔╝
+██╔═══╝  ██║   ██║ ██║        ╚██╔╝   ██╔══██╗ ██║   ██║ ██╔══██╗
+██║      ╚██████╔╝ ███████╗    ██║    ██║  ██║ ╚██████╔╝ ██████╔╝
+╚═╝       ╚═════╝  ╚══════╝    ╚═╝    ╚═╝  ╚═╝  ╚═════╝  ╚═════╝ </pre>
+                </div>
+
+                <!-- Features (right side on desktop) -->
+                <ul class="features">
+                    <li>UNINTERRUPTED WORKFLOWS</li>
+                    <li>MULTI-AGENT ORCHESTRATION</li>
+                    <li>HIERARCHICAL MEMORY</li>
+                    <li>A2A · X402 · ERC8004 · MCP · RAG</li>
+                </ul>
+            </div>
+
+            <!-- CTA centered below -->
+            <button id="connectBtn" class="btn-connect">CONNECT WALLET</button>
+            <div id="statusMessage" class="status"></div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="terminal-footer">
+        <div class="footer-content">
+            <a href="{{ branding().terms_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Terms of Use</a>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().privacy_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
+            <span class="footer-separator">•</span>
+            <span class="footer-center-text">System ver. {{ get_version() }} (c)</span>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().brand_url }}" class="footer-link" target="_blank">{{ branding().brand_display }}</a>
+            <span class="footer-separator">•</span>
+            <a href="{{ branding().org_url }}" class="footer-link" target="_blank">{{ branding().org_display }}</a>
+        </div>
+    </footer>
+
+    <script>
+    (function() {
+        const localScript = document.createElement('script');
+        localScript.src = '/static/js/ethers.min.js';
+        localScript.onerror = function() {
+            const cdnScript = document.createElement('script');
+            cdnScript.src = 'https://cdn.jsdelivr.net/npm/ethers@5.7.2/dist/ethers.umd.min.js';
+            document.head.appendChild(cdnScript);
+        };
+        document.head.appendChild(localScript);
+    })();
+    </script>
+    <script>
+        const API_BASE = window.location.origin;
+        const connectBtn = document.getElementById('connectBtn');
+        const statusMessage = document.getElementById('statusMessage');
+        const urlParams = new URLSearchParams(window.location.search);
+        const returnTo = urlParams.get('return_to') || '/';
+
+        function showStatus(message, type = 'info') {
+            statusMessage.textContent = message;
+            statusMessage.className = `status status--${type}`;
+        }
+
+        function showSpinner(show) {
+            if (show) {
+                connectBtn.innerHTML = '<span class="spinner"></span>CONNECTING...';
+                connectBtn.disabled = true;
+            } else {
+                connectBtn.textContent = 'CONNECT WALLET';
+                connectBtn.disabled = false;
+            }
+        }
+
+        async function connectWallet() {
+            try {
+                if (typeof ethers === 'undefined') {
+                    showStatus('Loading...', 'info');
+                    setTimeout(connectWallet, 1000);
+                    return;
+                }
+                await new Promise(r => setTimeout(r, 100));
+
+                if (typeof window.ethereum === 'undefined') {
+                    showStatus('Please install MetaMask', 'error');
+                    setTimeout(() => window.open('https://metamask.io/download/', '_blank'), 2000);
+                    return;
+                }
+
+                showSpinner(true);
+                showStatus('Requesting wallet access...', 'info');
+
+                const provider = new ethers.providers.Web3Provider(window.ethereum);
+                await provider.send("eth_requestAccounts", []);
+                const signer = provider.getSigner();
+                const walletAddress = await signer.getAddress();
+                const chainId = (await provider.getNetwork()).chainId;
+
+                showStatus('Fetching authentication...', 'info');
+
+                const nonceResponse = await fetch(`${API_BASE}/api/auth/nonce`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ wallet_address: walletAddress, chain_id: chainId })
+                });
+
+                if (!nonceResponse.ok) {
+                    const error = await nonceResponse.json().catch(() => ({}));
+                    if (nonceResponse.status === 429) {
+                        showStatus('Too many requests. Wait.', 'error');
+                        showSpinner(false);
+                        return;
+                    }
+                    throw new Error(error.detail || 'Failed to get nonce');
+                }
+
+                const { message, nonce } = await nonceResponse.json();
+
+                showStatus('Sign message in wallet...', 'info');
+                const signature = await signer.signMessage(message);
+
+                showStatus('Verifying...', 'info');
+
+                const verifyResponse = await fetch(`${API_BASE}/api/auth/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        wallet_address: walletAddress,
+                        message: message,
+                        signature: signature,
+                        nonce: nonce,
+                        chain: 'ethereum'
+                    })
+                });
+
+                if (!verifyResponse.ok) {
+                    const error = await verifyResponse.json().catch(() => ({}));
+                    if (verifyResponse.status === 403) {
+                        showStatus('ACCESS DENIED', 'error');
+                        showSpinner(false);
+                        return;
+                    }
+                    throw new Error(error.detail || 'Auth failed');
+                }
+
+                const { token, tier } = await verifyResponse.json();
+                localStorage.setItem('auth_token', token);
+                localStorage.setItem('wallet_address', walletAddress);
+                localStorage.setItem('tier', tier);
+
+                showStatus('ACCESS GRANTED', 'success');
+                setTimeout(() => { window.location.href = returnTo; }, 500);
+
+            } catch (error) {
+                console.error('Auth error:', error);
+                showStatus(error.message, 'error');
+                showSpinner(false);
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const token = localStorage.getItem('auth_token');
+            if (token && !token.startsWith('dev_bypass')) {
+                fetch(`${API_BASE}/api/auth/me`, { headers: { 'Authorization': `Bearer ${token}` }})
+                .then(res => res.ok ? window.location.href = returnTo : null)
+                .catch(() => localStorage.removeItem('auth_token'));
+            }
+        });
+
+        connectBtn.addEventListener('click', connectWallet);
+
+        // Character hover effect
+        document.querySelectorAll('#logo pre').forEach(pre => {
+            const text = pre.textContent;
+            pre.innerHTML = text.split('').map(char =>
+                char === ' ' || char === '\n' ? char : `<span class="char">${char}</span>`
+            ).join('');
+        });
+    </script>
+</body>
+</html>

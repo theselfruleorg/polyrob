@@ -1,0 +1,105 @@
+{% extends "layout.html" %}
+
+{% block title %}User Management - Admin{% endblock %}
+
+{% block header_title %}POLYROB Admin{% endblock %}
+
+{% block head %}
+<link href="/static/css/pages/admin.css?v=20251205" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="session-container history-mode">
+    <div class="main-panel">
+        <!-- Header -->
+        <div class="tabs-wrapper">
+            <div class="history-page-title">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;">
+                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                    <circle cx="9" cy="7" r="4"></circle>
+                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                </svg>
+                USER MANAGEMENT
+            </div>
+            <div class="terminal-controls">
+                <a href="/admin" class="btn-new-session">DASHBOARD</a>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="terminal-container flex-1 overflow-y-auto">
+            <!-- Admin Navigation -->
+            <nav class="admin-nav">
+                <a href="/admin" class="admin-nav-item">Dashboard</a>
+                <a href="/admin/users" class="admin-nav-item active">Users</a>
+                <a href="/admin/activity" class="admin-nav-item">Activity</a>
+            </nav>
+
+            <!-- Search Section -->
+            <div class="search-section">
+                <div class="search-row">
+                    <input type="text" id="search-input" class="search-input" placeholder="Search by wallet address, email, or user ID...">
+                    <select id="search-field" class="filter-select">
+                        <option value="all">All Fields</option>
+                        <option value="wallet">Wallet</option>
+                        <option value="email">Email</option>
+                        <option value="user_id">User ID</option>
+                    </select>
+                    <select id="filter-tier" class="filter-select">
+                        <option value="">All Tiers</option>
+                        <option value="free">Free</option>
+                        <option value="holder">Holder</option>
+                        <option value="x402">x402</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <select id="filter-role" class="filter-select">
+                        <option value="">All Roles</option>
+                        <option value="user">User</option>
+                        <option value="admin">Admin</option>
+                    </select>
+                    <button id="btn-search" class="btn-search">Search</button>
+                </div>
+            </div>
+
+            <!-- Users Table -->
+            <div id="users-container">
+                <table class="user-table">
+                    <thead>
+                        <tr>
+                            <th>Wallet</th>
+                            <th>Tier</th>
+                            <th>Role</th>
+                            <th>Credits</th>
+                            <th>Tokens</th>
+                            <th>Created</th>
+                            <th class="actions">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="users-tbody">
+                        <tr>
+                            <td colspan="7" class="loading">Loading users</td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <!-- Pagination -->
+                <div class="pagination">
+                    <div class="pagination-info" id="pagination-info">
+                        Showing 0-0 of 0 users
+                    </div>
+                    <div class="pagination-controls">
+                        <button id="btn-prev" class="btn-page" disabled>&larr; Previous</button>
+                        <button id="btn-next" class="btn-page" disabled>Next &rarr;</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/admin/utils.js?v=20251205"></script>
+<script src="/static/js/admin/users.js?v=20251205"></script>
+{% endblock %}

@@ -1,0 +1,255 @@
+# POLYROB Telegram Bot - Git Ignore File
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.production.local
+
+# Environment files with secrets (keep only sanitized templates that contain NO real values)
+config/.env.development
+config/.env.production
+config/.env.*.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs and databases
+*.log
+logs/
+*.db
+*.sqlite
+*.sqlite3
+
+# SSL certificates and keys
+ssl/
+*.pem
+*.key
+*.crt
+*.csr
+
+# Application data
+data/logs/
+data/cache/
+data/temp/
+data/telemetry/
+data/anonymous/
+data/_anonymous_/
+
+# Playwright browsers
+.cache/
+**/ms-playwright/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Node modules (if any)
+node_modules/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+.pytest_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# PEP 582
+__pypackages__/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Documentation — ship only the public guide + reference docs; internal
+# planning/review/superpowers artifacts are kept out of the published tree.
+docs/*
+!docs/CONFIGURATION.md
+!docs/SKILL_AUTHORING_STANDARD.md
+!docs/comparison.md
+!docs/examples.md
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# Backup files
+*.backup
+*.bak
+*.old
+*.orig
+*~.nib
+*.swp
+
+# Test files and outputs (root directory only, not tests/)
+/test_*.py
+*_test.py
+test_output/
+test_results/
+.tox/
+nosetests.xml
+test-results/
+
+# Data directories
+data/*
+data/auto/
+data/task/
+data/database/
+data/screenshots/
+data/history/
+data/llm_usage/
+
+# Session and workspace files
+sessions/
+workspace/
+feed/
+
+# Media files (generated)
+*.gif
+*.mp4
+*.webm
+screenshots/
+
+# Documentation (generated during debugging/sessions)
+*_ANALYSIS.md
+*_DEBUG.md
+*_FIX.md
+*_FIXES.md
+*_DEPLOYED.md
+*_COMPLETE.md
+*_SUMMARY.md
+*_INSTRUCTIONS.md
+*_INVESTIGATION.md
+*_STATUS.md
+GEMINI*.md
+AUTH_*.md
+DEPLOYMENT_*.md
+MODEL_*.md
+PRICING_*.md
+SESSION_*.md
+TOKEN_*.md
+FIXES_*.md
+
+# Migration backups
+migrations/*.backup
+
+# API keys and secrets (extra safety)
+*_API_KEY*
+*_SECRET*
+credentials.json
+secrets.json
+
+# Browser automation
+playwright-report/
+test-results/
+.xvfb-*
+
+# Misc temporary files
+*.pid
+*.seed
+*.pid.lock
+.npm
+.eslintcache
+.rob/
+
+# --- OSS hygiene (Phase 0) ---
+ssl/
+*.db
+data/database/
+data/auto/
+*.egg-info/
+._*
+.DS_Store
+config/.env.production
+
+# --- OSS: track user docs + seed data, keep internal/secrets ignored ---
+!docs/guide/
+!docs/guide/**
+!docs/assets/
+!docs/assets/**
+!data/__init__.py
+!data/prompts/
+!data/prompts/**
+!data/characters/
+!data/characters/**
+
+# Editor / scratch
+.cursor/
+.cursorignore
+.polyrob/
+
+# Superpowers / subagent-driven-development working artifacts (internal)
+.superpowers/

@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Identity{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Identity{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Identity</h2>
+        <p class="text-muted text-sm">
+            Read-only view. SOUL is operator-authored and frozen; SELF is the agent's evolving doc.
+            Editing stays owner-gated via the <code>self_context_manage</code> action — there is no web write path.
+        </p>
+    </div>
+
+    <div class="webgate-avatar" style="display:flex;justify-content:center;padding:8px 0 16px">
+        <canvas id="agent-avatar" width="240" height="240" style="display:none" aria-label="Agent avatar"></canvas>
+        <img id="agent-avatar-fallback" src="/pfp.png" alt="agent avatar" width="240" height="240"
+             onerror="this.style.display='none'">
+    </div>
+
+    <div class="webgate-meta">
+        <div><span class="meta-label">Instance:</span> <span id="id-instance" class="meta-value">—</span></div>
+        <div><span class="meta-label">Owner:</span> <span id="id-owner" class="meta-value">—</span></div>
+    </div>
+
+    <div class="webgate-section">
+        <div class="section-header">SOUL <span class="text-muted text-sm">(operator-authored, frozen)</span></div>
+        <pre id="id-soul" class="webgate-doc">Loading…</pre>
+    </div>
+
+    <div class="webgate-section">
+        <div class="section-header">SELF <span class="text-muted text-sm">(agent-writable, owner-gated)</span></div>
+        <pre id="id-self" class="webgate-doc">Loading…</pre>
+    </div>
+</div>
+
+<script>
+(function () {
+    async function load() {
+        try {
+            const body = await (await fetch('/api/webgate/identity')).json();
+            document.getElementById('id-instance').textContent = body.instance_id || '—';
+            document.getElementById('id-owner').textContent = body.owner || '—';
+            document.getElementById('id-soul').textContent = body.soul || '(no SOUL document)';
+            document.getElementById('id-self').textContent = body.self || '(no SELF document)';
+        } catch (e) {
+            document.getElementById('id-soul').textContent = '(could not load identity)';
+            document.getElementById('id-self').textContent = '';
+        }
+    }
+    load();
+})();
+</script>
+<script src="/avatar/mindprint.js"></script>
+<script src="/avatar/avatar-live.js"></script>
+{% endblock %}

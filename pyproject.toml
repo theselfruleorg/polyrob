@@ -1,0 +1,69 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyrob"
+version = "0.4.2"
+description = "POLYROB — autonomous AI agent framework"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+readme = "README.md"
+authors = [{ name = "The POLYROB Authors" }]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "pydantic>=2.0.0", "pydantic-settings>=2.0.0", "python-dotenv>=1.0.0",
+  "openai>=1.0.0", "anthropic>=0.20.0", "google-generativeai>=0.8.0",
+  "tiktoken>=0.7.0", "aiohttp>=3.8.0", "aiofiles>=23.0.0", "aiosqlite>=0.19.0",
+  "requests>=2.30.0", "certifi>=2024.0.0", "cryptography>=40.0.0", "pyjwt>=2.8.0",
+  "numpy>=1.24.0", "pandas>=2.0.0",
+  "apsw>=3.46", "sqlite-vec>=0.1.6",
+  "rich>=13.0.0", "prompt_toolkit>=3.0.43", "click>=8.0", "colorama>=0.4.6",
+  "python-docx>=0.8.0", "pypdf>=4.0.0", "markdown>=3.5.0", "markdownify>=0.11.0",
+  "pillow>=11.0.0", "imageio>=2.37.0", "python-magic>=0.4.27", "nltk>=3.9.0",
+  "anysite-cli", "pyyaml>=6",
+]
+
+[project.optional-dependencies]
+server = ["fastapi==0.123.9", "starlette==0.50.0", "uvicorn[standard]==0.38.0", "Jinja2==3.1.6", "python-socketio>=5.11.0", "python-multipart>=0.0.6", "watchfiles>=1.0.0", "argon2-cffi>=23.1.0"]
+browser = ["playwright>=1.40.0"]
+memory-vector = ["sentence-transformers>=3.0.0"]
+crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0.1.8", "hyperliquid-python-sdk>=0.21.0", "py-clob-client-v2>=0.1.0"]
+telegram = ["aiogram>=3.17.0"]
+twitter = ["tweepy>=4.14.0"]
+voice = ["faster-whisper>=1.0.0"]
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.23.0", "ruff>=0.6", "build", "twine"]
+all = ["polyrob[server,browser,memory-vector,crypto,telegram,twitter,voice]"]
+
+[project.urls]
+Homepage = "https://github.com/theselfruleorg/polyrob"
+Repository = "https://github.com/theselfruleorg/polyrob"
+Issues = "https://github.com/theselfruleorg/polyrob/issues"
+
+[project.scripts]
+polyrob = "cli.polyrob:main"
+
+[tool.setuptools.packages.find]
+include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","data"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json","*.txt","*.md"]
+"data" = ["prompts/**/*.json", "prompts/**/*.md", "prompts/**/*"]
+# Webgate dev-tree assets (doc 03, P4). Ship the raw static/ + templates/ so an
+# installed wheel can serve the webgate from the package when no built web_dist
+# bundle is present. core/assets.py::webgate_asset_dir() prefers web_dist, then
+# falls back to these.
+"webview" = ["static/**/*", "templates/**/*"]
+"webview.templates" = ["**/*"]
+# Avatar engine + brand/render assets (mindprint.js, studio.html, config/rob.json,
+# renders/rob.png, webview/avatar-live.js) — the renderer/store/webview read these by
+# path, so they MUST ship in the wheel (mirrors the webview asset handling above).
+"avatar" = ["**/*.js", "**/*.html", "**/*.json", "**/*.png"]
+# Built webgate bundle (produced by doc 03). Matches nothing until the bundle is
+# built, so it's inert today — no behavior change. core/assets.py resolves it.
+"polyrob" = ["web_dist/**/*"]

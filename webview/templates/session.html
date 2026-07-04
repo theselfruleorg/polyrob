@@ -1,0 +1,290 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Task Agent{% endblock %}
+
+{% block header_title %}{{ console_display_name() }} v{{ get_version() }}{% endblock %}
+
+{% block container_class %}container--fullwidth{% endblock %}
+
+{% block head %}
+<!-- Socket.IO specific script -->
+<script>
+    // Safely inject session ID (XSS prevention) - make it global
+    window.sessionId = {{ session_id | trim | tojson }};
+    const sessionId = window.sessionId;
+    // Check if this is a new session (empty state)
+    const isNewSession = sessionId === 'new' || sessionId === null;
+    
+    // Session ownership and authentication status
+    window.isSessionOwner = {{ 'true' if is_owner else 'false' }};
+    window.isUserAuthenticated = {{ 'true' if is_authenticated else 'false' }};
+    
+    console.log('[Session] Ownership status:', {
+        isOwner: window.isSessionOwner,
+        isAuthenticated: window.isUserAuthenticated,
+        sessionId: sessionId
+    });
+</script>
+<!-- Session-specific styles (layout.html provides variables, components, style) -->
+<link rel="stylesheet" href="/static/css/chat.css?v=20260102b">
+<link rel="stylesheet" href="/static/css/config-panel.css?v=20251230">
+<link rel="stylesheet" href="/static/css/workspace-fullwidth-fix.css?v=20251230">
+<!-- Prism.js for syntax highlighting in file previews -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/themes/prism-tomorrow.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/prism.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-javascript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-json.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-typescript.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-markdown.min.js"></script>
+<!-- Marked.js for Markdown rendering in workspace -->
+<script src="https://cdn.jsdelivr.net/npm/marked@11.1.0/marked.min.js"></script>
+<!-- Papa Parse for CSV parsing in workspace -->
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+{% endblock %}
+
+{% block body_attributes %}data-session-id="{{ session_id | trim }}" data-is-new="{{ 'true' if session_id == 'new' else 'false' }}"{% endblock %}
+
+{% block content %}
+<div class="session-container">
+    <div class="main-panel">
+        <!-- Tabs for main panel -->
+        <div class="tabs-wrapper">
+            <button id="sidebar-toggle-btn" class="btn-sidebar-toggle" title="Toggle sidebar">☰</button>
+
+            <div class="tab-buttons">
+                <button class="tab-button active" data-tab="chat">Chat</button>
+                <button class="tab-button" data-tab="workspace">Workspace</button>
+                <button class="tab-button" data-tab="stats">Stats</button>
+            </div>
+
+            <div class="terminal-controls">
+                <a href="/sessions" class="btn-history" title="Session history">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+                        <path d="M3 3v5h5"/>
+                        <path d="M12 7v5l4 2"/>
+                    </svg>
+                </a>
+                <button id="new-session-btn" class="btn-new-session" title="Start new chat">
+                    + New Chat
+                </button>
+            </div>
+        </div>
+
+        <!-- Chat tab -->
+        <div id="chat-tab" class="tab-panel active">
+            <div class="terminal-container chat-terminal">
+                <div class="chat-container" id="chat-messages">
+                    <!-- Config Panel (shown only for new sessions) -->
+                    <div class="chat-config-panel hidden" id="config-panel">
+                        <div class="config-panel">
+                            <!-- Essential Settings -->
+                            <div class="config-section">
+                                <div class="config-section-header">Model</div>
+                                <div class="config-form-group">
+                                    <label for="config-model" class="config-label">
+                                        <span>LLM Model</span>
+                                        <span class="config-label-hint">Powers agent reasoning</span>
+                                    </label>
+                                    <select id="config-model" class="config-select">
+                                        <option value="">Loading models...</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- Tools Selection (includes MCP servers) -->
+                            <div class="config-section">
+                                <div class="config-section-header">Tools</div>
+                                <div class="tool-checkbox-group" id="tools-group">
+                                    <!-- Dynamically populated with tools and MCP servers -->
+                                </div>
+                            </div>
+
+                            <!-- Advanced Settings (Collapsible) -->
+                            <div class="config-advanced" id="config-advanced">
+                                <div class="config-advanced-header">
+                                    <span class="config-advanced-title">Advanced Options</span>
+                                    <span class="config-advanced-toggle">▶</span>
+                                </div>
+                                <div class="config-advanced-content">
+                                    <div class="config-advanced-body">
+                                        <!-- Max Steps -->
+                                        <div class="config-form-group">
+                                            <div class="config-range-container">
+                                                <div class="config-range-header">
+                                                    <label class="config-range-label">Max Steps</label>
+                                                    <span class="config-range-value" id="max-steps-value">50</span>
+                                                </div>
+                                                <input
+                                                    type="range"
+                                                    id="config-max-steps"
+                                                    class="config-range"
+                                                    min="10"
+                                                    max="200"
+                                                    value="50"
+                                                    step="10"
+                                                />
+                                                <span class="config-hint">Maximum execution steps before timeout</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="chat-input-container">
+                    <div class="chat-input-wrapper">
+                        <button id="upload-btn" class="upload-btn" title="Attach files">
+                            <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+                                <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5z"/>
+                                <path d="M7.646 1.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1-.708.708L8.5 2.707V11.5a.5.5 0 0 1-1 0V2.707L5.354 4.854a.5.5 0 1 1-.708-.708l3-3z"/>
+                            </svg>
+                            <span class="file-count-badge hidden">0</span>
+                        </button>
+                        <textarea id="chat-input" placeholder="Message..."></textarea>
+                        <button id="chat-send-btn">Send</button>
+                        <input type="file" id="file-upload-input" class="hidden"
+                               accept=".pdf,.docx,.doc,.txt,.md,.csv,.json,.xml,.png,.jpg,.jpeg,.gif,.webp" multiple>
+                    </div>
+                    <div id="upload-progress" class="upload-progress hidden">
+                        <div class="progress-bar-container">
+                            <div class="progress-bar" id="upload-progress-bar" data-width="0"></div>
+                        </div>
+                        <div class="progress-text" id="upload-progress-text">Uploading...</div>
+                    </div>
+                    <!-- File attachment chips -->
+                    <div id="attached-files-container" class="attached-files-container hidden">
+                        <div class="attached-files-label">Attached files:</div>
+                        <div id="attached-files-list" class="attached-files-list">
+                            <!-- Chips will be inserted here by JavaScript -->
+                        </div>
+                    </div>
+                    <!-- Read-only notice for non-owners (overlays input) -->
+                    <div id="readonly-notice" class="readonly-notice hidden">
+                        <span id="readonly-notice-text"></span>
+                    </div>
+                </div>
+
+                <button id="scroll-to-bottom" class="hidden">
+                    ↓ Scroll to bottom
+                </button>
+            </div>
+        </div>
+
+        <!-- Feed tab -->
+        <div id="feed-tab" class="tab-panel">
+            <div class="terminal-container">
+                <div class="feed-container">
+                    <div id="feed-loading" class="loading-indicator">Loading feed entries...</div>
+                    <div id="feed-error" class="error-message hidden"></div>
+                    <div id="feed-container" class="feed-items-container"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Workspace tab -->
+        <div id="workspace-tab" class="tab-panel">
+            <div class="terminal-container workspace-container">
+                <div class="workspace-layout">
+                    <div class="file-tree">
+                        <div class="file-tree-header">
+                            <span>Files</span>
+                        </div>
+                        <div class="file-tree-content" id="file-tree-content">
+                            <div id="file-tree-loading" class="loading-indicator">
+                                <div class="loading-spinner"></div>
+                                <div>Loading workspace files...</div>
+                            </div>
+                            <div id="file-tree-error" class="error-message"></div>
+                        </div>
+                    </div>
+                    <div class="file-preview">
+                        <div class="file-preview-header">
+                            <div id="current-file-name">No file selected</div>
+                            <div class="file-preview-actions">
+                                <button id="download-file-btn" class="btn-preview-action btn-preview-action-svg" title="Download file">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                                        <polyline points="7 10 12 15 17 10"/>
+                                        <line x1="12" y1="15" x2="12" y2="3"/>
+                                    </svg>
+                                </button>
+                                <button id="expand-preview-btn" class="btn-preview-action" title="Expand preview">⛶</button>
+                            </div>
+                        </div>
+                        <div class="file-preview-content" id="file-preview-content">
+                            <div class="placeholder">Select a file to view its contents</div>
+                        </div>
+                    </div>
+
+                    <!-- Fullscreen Preview Modal -->
+                    <div id="preview-modal" class="preview-modal hidden">
+                        <div class="preview-modal-header">
+                            <div id="modal-file-name"></div>
+                            <button id="close-modal-btn" class="btn-close-modal" title="Close fullscreen">⛶</button>
+                        </div>
+                        <div id="preview-modal-content" class="preview-modal-content"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Stats tab -->
+        <div id="stats-tab" class="tab-panel">
+            <div class="terminal-container">
+                <div id="stats-loading" class="loading-indicator hidden">
+                    <div class="loading-spinner"></div>
+                    <div>Loading statistics...</div>
+                </div>
+                <div id="stats-error" class="error-message hidden"></div>
+                <div id="stats-content"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Vision panel (top sidebar) -->
+    <div class="sidebar-top">
+        {% set sidebar_section = 'top' %}
+        {% include 'sidebar.html' %}
+    </div>
+
+    <!-- Info panel (bottom sidebar) -->
+    <div class="sidebar-bottom">
+        {% set sidebar_section = 'bottom' %}
+        {% include 'sidebar.html' %}
+    </div>
+</div>
+
+<!-- Fullscreen modal for screenshot -->
+<div id="fullscreen-container" class="fullscreen-container">
+    <div class="fullscreen-content">
+        <button id="fullscreen-close" class="fullscreen-close">×</button>
+        <img id="fullscreen-img" class="fullscreen-img" alt="Fullscreen screenshot" />
+    </div>
+</div>
+
+<!-- socketReady promise is now created in session.js module -->
+
+<!-- Import and use the UI utilities module -->
+<script type="module">
+    import { eventBus, initTabs } from '/static/js/ui-utils.js?v=2';
+
+    // Initialize tabs when DOM is loaded
+    document.addEventListener('DOMContentLoaded', function() {
+        initTabs('.tabs-wrapper');
+    });
+</script>
+
+<!-- Load session-specific JavaScript -->
+<script src="/static/js/file-loader.js?v=5" type="module"></script>
+<script src="/static/js/session.js?v=8" type="module"></script>
+<script src="/static/js/workspace.js?v=5" type="module"></script>
+<script src="/static/js/chat.js?v=12" type="module"></script>
+<script src="/static/js/sidebar-toggle.js?v=5" type="module"></script>
+<!-- Config panel script -->
+<script src="/static/js/config-panel.js?v=5" type="module"></script>
+{% endblock %}

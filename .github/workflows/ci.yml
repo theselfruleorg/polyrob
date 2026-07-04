@@ -1,0 +1,37 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      # The suite imports the full package (browser/server/etc.) at collection
+      # time and uses pytest-asyncio, so install the documented dev setup
+      # (README "Contributing": pip install -e ".[dev,all]"). A bare
+      # `pip install -e .` fails collection on missing playwright/fastapi.
+      - run: pip install -e ".[dev,all]"
+      - run: pytest -q
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # Run the gitleaks CLI directly instead of gitleaks-action@v2: the action
+      # requires a paid GITLEAKS_LICENSE secret for organization-owned repos and
+      # hard-fails without it. The CLI is MIT and license-free.
+      - name: Run gitleaks (full history)
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
+          ./gitleaks git --no-banner --redact --config .gitleaks.toml .
+  # NOTE: the bundled skills are validated by POLYROB's own strict validator
+  # (agents/task/agent/skill_validation.py::validate_authored), exercised by
+  # tests/unit/agents/task/test_library_invariants.py in the `test` job above — that
+  # is what ships and gates boot/CLI/CI. A separate upstream `skills-ref` drift-oracle
+  # job was removed: it required pinning an exact agentskills commit SHA and, unpinned,
+  # reded the CI badge on every push for no runtime benefit. Re-add it (pinned to a
+  # real SHA) only if cross-checking against the upstream reference rule set is needed.

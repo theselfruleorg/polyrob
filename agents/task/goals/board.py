@@ -1,0 +1,593 @@
+"""Durable goal board (W4, Reference-parity kanban_db).
+
+A cross-session, durable backlog of agent-pursued goals — the thing POLYROB lacked
+(it had only a session-scoped TODO). A goal outlives the turn that created it: a
+dispatcher claims ``ready`` goals, runs them on the task-agent core, and records
+success/failure with a circuit breaker. Completions feed the W1 self-wake rail so
+a finished goal can forge a follow-up turn.
+
+Storage is SQLite under ``<data_dir>/goals.db`` via the shared WAL+jitter helpers
+(``core/sqlite_util``) — never a hand-rolled retry loop. Every query is
+tenant-scoped (``AND user_id = ?``); claims are an atomic compare-and-set so the
+board is safe under ``UVICORN_WORKERS>1`` + the agent-facing ``goal`` tool racing
+the dispatcher.
+
+Gated by ``GOALS_ENABLED`` at the call sites; this module is pure storage and is
+inert until a dispatcher/tool touches it.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional
+
+from core.sqlite_util import execute_retry, wal_connect
+
+# status lifecycle: triage -> ready -> running -> {done | blocked} ; cancelled is terminal
+STATUS_TRIAGE = "triage"
+STATUS_READY = "ready"
+STATUS_RUNNING = "running"
+STATUS_BLOCKED = "blocked"
+STATUS_DONE = "done"
+STATUS_CANCELLED = "cancelled"
+
+# kind: rows are either goals (dispatchable) or objectives (standing, never dispatched)
+KIND_GOAL = "goal"
+KIND_OBJECTIVE = "objective"
+
+# objective lifecycle (disjoint from goal statuses so nothing dispatches them)
+OBJ_ACTIVE = "active"
+OBJ_PAUSED = "paused"
+OBJ_DROPPED = "dropped"
+OBJ_DONE = "done"
+_OBJECTIVE_STATUSES = {OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE}
+
+
+class DuplicateGoalError(ValueError):
+    """A new goal's title is a near-duplicate of a recent goal."""
+
+    def __init__(self, match_id: str, match_title: str, similarity: float):
+        self.match_id = match_id
+        self.match_title = match_title
+        self.similarity = similarity
+        super().__init__(
+            f"near-duplicate of goal {match_id} '{match_title}' (similarity {similarity:.2f})")
+
+
+def normalize_title(title: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", title.lower()).split())
+
+
+def _trigrams(s: str) -> set:
+    padded = f"  {s} "
+    return {padded[i:i + 3] for i in range(len(padded) - 2)}
+
+
+def title_similarity(a: str, b: str) -> float:
+    ta, tb = _trigrams(normalize_title(a)), _trigrams(normalize_title(b))
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+@dataclass
+class Goal:
+    id: str
+    user_id: str
+    title: str
+    body: str = ""
+    kind: str = KIND_GOAL
+    status: str = STATUS_READY
+    priority: int = 5
+    parent_id: Optional[str] = None
+    claim_lock: Optional[str] = None
+    claim_expires: Optional[float] = None
+    consecutive_failures: int = 0
+    max_retries: int = 2
+    last_failure_error: Optional[str] = None
+    session_id: Optional[str] = None
+    result: Optional[str] = None
+    payload: Dict[str, Any] = field(default_factory=dict)
+    created_at: float = 0.0
+    started_at: Optional[float] = None
+    completed_at: Optional[float] = None
+    last_heartbeat_at: Optional[float] = None
+
+    @classmethod
+    def from_row(cls, row) -> "Goal":
+        d = dict(row)
+        d["payload"] = json.loads(d.get("payload") or "{}")
+        return cls(**d)
+
+
+class GoalBoard:
+    """SQLite-backed durable goal store with atomic claim + circuit breaker."""
+
+    PLANNER_SENTINEL = "__planner__"
+
+    def __init__(self, db_path: str, *, clock: Callable[[], float] = time.time,
+                 id_factory: Optional[Callable[[], str]] = None):
+        self.db_path = db_path
+        self._now = clock
+        self._id = id_factory or (lambda: uuid.uuid4().hex[:12])
+        parent = os.path.dirname(db_path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._init_schema()
+
+    def _init_schema(self) -> None:
+        conn = wal_connect(self.db_path)
+        try:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS goals (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL DEFAULT '',
+                    kind TEXT NOT NULL DEFAULT 'goal',
+                    status TEXT NOT NULL DEFAULT 'ready',
+                    priority INTEGER NOT NULL DEFAULT 5,
+                    parent_id TEXT,
+                    claim_lock TEXT,
+                    claim_expires REAL,
+                    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+                    max_retries INTEGER NOT NULL DEFAULT 2,
+                    last_failure_error TEXT,
+                    session_id TEXT,
+                    result TEXT,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL,
+                    started_at REAL,
+                    completed_at REAL,
+                    last_heartbeat_at REAL
+                );
+                CREATE INDEX IF NOT EXISTS idx_goals_ready
+                    ON goals(status, priority DESC, created_at);
+                CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
+                CREATE TABLE IF NOT EXISTS goal_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    goal_id TEXT NOT NULL,
+                    kind TEXT NOT NULL,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    created_at REAL NOT NULL
+                );
+                """
+            )
+            # Idempotent migration: add kind column if it doesn't exist
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(goals)").fetchall()}
+            if "kind" not in cols:
+                conn.execute("ALTER TABLE goals ADD COLUMN kind TEXT NOT NULL DEFAULT 'goal'")
+            conn.commit()
+        finally:
+            conn.close()
+
+    # --- mutations -----------------------------------------------------------
+
+    def create(self, *, user_id: str, title: str, body: str = "", priority: int = 5,
+               parent_id: Optional[str] = None, max_retries: Optional[int] = None,
+               payload: Optional[Dict[str, Any]] = None, status: str = STATUS_READY,
+               kind: str = KIND_GOAL, force: bool = False) -> Goal:
+        from core.identity import is_anonymous
+        if is_anonymous(user_id):
+            raise ValueError("goal create requires a real (non-anonymous) user_id (tenant scope)")
+        from agents.task.constants import AutonomyConfig
+
+        # Check for near-duplicates in the last 7 days
+        threshold = AutonomyConfig.goal_dedup_threshold()
+        if not force and threshold > 0:
+            since = self._now() - 7 * 86400
+            rows = execute_retry(
+                self.db_path,
+                """SELECT id, title FROM goals
+                    WHERE user_id=? AND created_at > ?
+                      AND status NOT IN ('cancelled','dropped')
+                      AND (? IS NULL OR id != ?)""",
+                (user_id, since, parent_id, parent_id), fetch="all",
+            ) or []
+            for r in rows:
+                sim = title_similarity(title, r["title"])
+                if sim >= threshold:
+                    self._event(r["id"], "dedup_rejected",
+                                {"attempted_title": title[:200], "similarity": round(sim, 3)})
+                    raise DuplicateGoalError(r["id"], r["title"], sim)
+
+        g = Goal(
+            id=self._id(), user_id=user_id, title=title, body=body, kind=kind, status=status,
+            priority=priority, parent_id=parent_id,
+            max_retries=AutonomyConfig.goal_max_retries() if max_retries is None else max_retries,
+            payload=payload or {}, created_at=self._now(),
+        )
+        execute_retry(
+            self.db_path,
+            """INSERT INTO goals (id,user_id,title,body,kind,status,priority,parent_id,
+                 consecutive_failures,max_retries,payload,created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (g.id, g.user_id, g.title, g.body, g.kind, g.status, g.priority, g.parent_id,
+             0, g.max_retries, json.dumps(g.payload), g.created_at),
+        )
+        self._event(g.id, "created", {"title": title})
+        return g
+
+    def claim(self, goal_id: str, worker: str, *, ttl_seconds: int) -> Optional[Goal]:
+        """Atomically transition a single ready goal to running (CAS).
+
+        The WHERE clause is the lock: only a row that is still ``ready`` with no live
+        claim flips, so concurrent dispatchers/workers can race and exactly one wins
+        (rowcount==1). Returns the claimed Goal, or None if another worker took it.
+        """
+        now = self._now()
+        expires = now + max(1, int(ttl_seconds))
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals
+                  SET status='running', claim_lock=?, claim_expires=?,
+                      started_at=COALESCE(started_at,?), last_heartbeat_at=?
+                WHERE id=? AND status='ready' AND claim_lock IS NULL""",
+            (worker, expires, now, now, goal_id),
+        )
+        if rc != 1:
+            return None
+        self._event(goal_id, "claimed", {"worker": worker})
+        return self.get(goal_id)
+
+    def heartbeat(self, goal_id: str, worker: str, *, ttl_seconds: int) -> bool:
+        now = self._now()
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals SET last_heartbeat_at=?, claim_expires=?
+                WHERE id=? AND claim_lock=? AND status='running'""",
+            (now, now + max(1, int(ttl_seconds)), goal_id, worker),
+        )
+        return rc == 1
+
+    def record_success(self, goal_id: str, *, session_id: Optional[str] = None,
+                       result: Optional[str] = None) -> None:
+        now = self._now()
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals
+                  SET status='done', result=?, session_id=COALESCE(?,session_id),
+                      consecutive_failures=0, claim_lock=NULL, claim_expires=NULL,
+                      completed_at=?
+                WHERE id=? AND status='running'""",
+            (result, session_id, now, goal_id),
+        )
+        if rc != 1:
+            # Owner intervened (cancel/pause) while the run was in flight — their
+            # decision wins. Keep the status; archive the late result as an event.
+            self._event(goal_id, "stale_completion",
+                        {"result": (result or "")[:500], "session_id": session_id})
+            return
+        self._event(goal_id, "succeeded", {"session_id": session_id})
+
+    def record_failure(self, goal_id: str, *, error: str,
+                       session_id: Optional[str] = None) -> Goal:
+        """Increment the failure counter; trip the circuit breaker at max_retries.
+
+        On the breaker trip the goal goes to ``blocked`` (a human/curator must
+        intervene) and a ``gave_up`` event is logged. Below the threshold it returns
+        to ``ready`` for another attempt. consecutive_failures resets only on success.
+        """
+        # Increment the counter ATOMICALLY in SQL first (a read-modify-write in Python
+        # could lose a concurrent failure and under-count the breaker), then read back
+        # the authoritative value to decide stay-ready vs trip-to-blocked.
+        now = self._now()
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE id=? AND status='running'",
+            (goal_id,),
+        )
+        if rc != 1:
+            g = self.get(goal_id)
+            if g is None:
+                raise KeyError(goal_id)
+            self._event(goal_id, "stale_completion", {"error": error[:500]})
+            return g
+        g = self.get(goal_id)
+        if g is None:
+            raise KeyError(goal_id)
+        fails = g.consecutive_failures  # already incremented above
+        # Guard these branch UPDATEs with the same 'AND status=running' CAS as the
+        # increment above: between the increment and this branch, another actor
+        # (owner cancel/pause) could have moved the row off 'running'. Without the
+        # guard the branch would silently resurrect a cancelled/blocked-by-owner
+        # goal back to 'ready' (or stomp its status to 'blocked'). If the guarded
+        # UPDATE hits 0 rows, the failure counter increment above still landed
+        # (harmless — max_retries accounting on a dead row is inert) but the status
+        # transition is skipped and logged as a stale_completion instead.
+        if fails >= g.max_retries:
+            rc2 = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='blocked', consecutive_failures=?,
+                      last_failure_error=?, session_id=COALESCE(?,session_id),
+                      claim_lock=NULL, claim_expires=NULL, completed_at=?
+                    WHERE id=? AND status='running'""",
+                (fails, error[:2000], session_id, now, goal_id),
+            )
+            if rc2 == 1:
+                self._event(goal_id, "gave_up", {"failures": fails, "error": error[:500]})
+            else:
+                self._event(goal_id, "stale_completion", {"error": error[:500]})
+        else:
+            rc2 = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='ready', consecutive_failures=?,
+                      last_failure_error=?, session_id=COALESCE(?,session_id),
+                      claim_lock=NULL, claim_expires=NULL
+                    WHERE id=? AND status='running'""",
+                (fails, error[:2000], session_id, goal_id),
+            )
+            if rc2 == 1:
+                self._event(goal_id, "failed", {"failures": fails, "error": error[:500]})
+            else:
+                self._event(goal_id, "stale_completion", {"error": error[:500]})
+        return self.get(goal_id)
+
+    def reclaim_stale(self) -> int:
+        """Reclaim goals whose claim TTL expired (a crashed worker).
+
+        H12: an expired claim means the worker died WITHOUT calling record_failure — so
+        count it as a failure and route it through the same circuit breaker. Otherwise a
+        goal that kills its worker (OOM/segfault/SIGKILL) is re-queued unchanged and
+        crash-loops forever, never reaching 'blocked' and permanently occupying a
+        concurrency slot. Below max_retries -> 'ready' (retry); at/above -> 'blocked'.
+        """
+        now = self._now()
+        stale = "status='running' AND claim_expires IS NOT NULL AND claim_expires < ?"
+        # 1) Count the crash as a failure for every expired-claim row.
+        rc = execute_retry(
+            self.db_path,
+            f"UPDATE goals SET consecutive_failures = consecutive_failures + 1 WHERE {stale}",
+            (now,),
+        )
+        if not rc:
+            return 0
+        # 2) Trip the breaker for those that reached max_retries.
+        execute_retry(
+            self.db_path,
+            f"""UPDATE goals SET status='blocked', claim_lock=NULL, claim_expires=NULL,
+                   completed_at=?, last_failure_error='reclaimed: worker crashed (stale claim)'
+                 WHERE {stale} AND consecutive_failures >= max_retries""",
+            (now, now),
+        )
+        # 3) Re-queue the rest (still 'running' with an expired claim).
+        execute_retry(
+            self.db_path,
+            f"""UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL
+                 WHERE {stale} AND consecutive_failures < max_retries""",
+            (now,),
+        )
+        return rc or 0
+
+    def count_started_since(self, seconds: float) -> int:
+        """Goal runs STARTED in the trailing window (quota accounting)."""
+        since = self._now() - max(0, seconds)
+        row = execute_retry(
+            self.db_path,
+            "SELECT COUNT(*) AS n FROM goals WHERE kind='goal' AND started_at IS NOT NULL AND started_at > ?",
+            (since,), fetch="one",
+        )
+        if not row:
+            return 0
+        try:
+            return int(row["n"])
+        except (KeyError, TypeError, IndexError):
+            return int(row[0])
+
+    def set_outcome(self, goal_id: str, outcome: str) -> bool:
+        """Attach the extracted OUTCOME note to a goal (any status, incl. done).
+
+        A direct payload write (NOT ``update_fields``, which refuses terminal rows) —
+        this runs right after a goal completes, so it must work on a ``done`` row.
+        """
+        g = self.get(goal_id)
+        if g is None:
+            return False
+        merged = dict(g.payload or {})
+        merged["outcome"] = outcome[:1000]
+        rc = execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
+                           (json.dumps(merged), goal_id))
+        return rc == 1
+
+    def count_running(self) -> int:
+        """Count goals currently claimed+running (excluding expired claims).
+
+        Authoritative CROSS-PROCESS in-flight count for enforcing
+        GOAL_MAX_CONCURRENT under workers>1 (the dispatcher's per-process
+        ``self._inflight`` set cannot see other workers' running goals, so the cap
+        would otherwise be enforced per-worker => cap x num_workers total). Call
+        under the tick lock, after reclaim_stale, so expired claims are already
+        re-queued and this count is authoritative for the tick.
+        """
+        now = self._now()
+        row = execute_retry(
+            self.db_path,
+            """SELECT COUNT(*) AS n FROM goals
+                WHERE status='running'
+                  AND (claim_expires IS NULL OR claim_expires > ?)""",
+            (now,),
+            fetch="one",
+        )
+        if not row:
+            return 0
+        try:
+            return int(row["n"])
+        except (KeyError, TypeError, IndexError):
+            return int(row[0])
+
+    def cancel(self, goal_id: str, *, user_id: Optional[str] = None) -> bool:
+        # kind guard: objectives are dropped (set_objective_status), never 'cancelled' —
+        # without it goal_cancel on an objective id writes a status outside its enum.
+        sql = ("UPDATE goals SET status='cancelled', claim_lock=NULL "
+               "WHERE id=? AND kind='goal' AND status NOT IN ('done','cancelled')")
+        params: tuple = (goal_id,)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = (goal_id, user_id)
+        rc = execute_retry(self.db_path, sql, params)
+        if rc == 1:
+            self._event(goal_id, "cancelled", {})
+        return rc == 1
+
+    def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False) -> bool:
+        """Update goal status, optionally resetting failure counters."""
+        sets = ["status=?", "claim_lock=NULL", "claim_expires=NULL"]
+        params: List[Any] = [new_status, goal_id]
+        if reset_failures:
+            sets.append("consecutive_failures=0")
+            sets.append("last_failure_error=NULL")
+        sql = f"UPDATE goals SET {', '.join(sets)} WHERE id=?"
+        rc = execute_retry(self.db_path, sql, tuple(params))
+        if rc == 1:
+            self._event(goal_id, f"status_{new_status}", {})
+        return rc == 1
+
+    # --- queries -------------------------------------------------------------
+
+    def get(self, goal_id: str) -> Optional[Goal]:
+        row = execute_retry(self.db_path, "SELECT * FROM goals WHERE id=?", (goal_id,), fetch="one")
+        return Goal.from_row(row) if row else None
+
+    def list(self, *, user_id: Optional[str] = None, status: Optional[str] = None,
+             limit: int = 100) -> List[Goal]:
+        sql = "SELECT * FROM goals"
+        clauses, params = [], []
+        if user_id is not None:
+            clauses.append("user_id=?"); params.append(user_id)
+        if status is not None:
+            clauses.append("status=?"); params.append(status)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY priority DESC, created_at LIMIT ?"
+        params.append(int(limit))
+        rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+        return [Goal.from_row(r) for r in rows]
+
+    def ready(self, *, limit: int = 10) -> List[Goal]:
+        """Ready goals across all tenants, highest priority first (dispatcher feed)."""
+        rows = execute_retry(
+            self.db_path,
+            """SELECT * FROM goals WHERE status='ready' AND claim_lock IS NULL AND kind='goal'
+                ORDER BY priority DESC, created_at LIMIT ?""",
+            (int(limit),), fetch="all",
+        ) or []
+        return [Goal.from_row(r) for r in rows]
+
+    def events(self, goal_id: str) -> List[Dict[str, Any]]:
+        rows = execute_retry(
+            self.db_path, "SELECT * FROM goal_events WHERE goal_id=? ORDER BY id",
+            (goal_id,), fetch="all",
+        ) or []
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["payload"] = json.loads(d.get("payload") or "{}")
+            out.append(d)
+        return out
+
+    def create_objective(self, *, user_id: str, title: str, body: str = "",
+                         priority: int = 5, force: bool = False,
+                         payload: Optional[Dict[str, Any]] = None) -> Goal:
+        """An objective is a standing, never-dispatched row goals attach to.
+
+        ``payload`` may carry ``success_criteria`` (§7.3) so the planner measures
+        against what the owner actually wants, not a self-set proxy.
+        """
+        return self.create(user_id=user_id, title=title, body=body, priority=priority,
+                           kind=KIND_OBJECTIVE, status=OBJ_ACTIVE, force=force,
+                           payload=payload)
+
+    def objectives(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
+        sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"
+        params: List[Any] = [KIND_OBJECTIVE, user_id]
+        if status is not None:
+            sql += " AND status=?"; params.append(status)
+        sql += " ORDER BY priority DESC, created_at"
+        rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+        return [Goal.from_row(r) for r in rows]
+
+    def set_objective_status(self, objective_id: str, status: str,
+                             *, user_id: Optional[str] = None) -> bool:
+        if status not in _OBJECTIVE_STATUSES:
+            raise ValueError(f"invalid objective status {status!r} (use {sorted(_OBJECTIVE_STATUSES)})")
+        sql = "UPDATE goals SET status=? WHERE id=? AND kind=?"
+        params: tuple = (status, objective_id, KIND_OBJECTIVE)
+        if user_id is not None:
+            sql += " AND user_id=?"; params = params + (user_id,)
+        rc = execute_retry(self.db_path, sql, params)
+        if rc == 1:
+            self._event(objective_id, f"objective_{status}", {})
+        return rc == 1
+
+    def update_fields(self, goal_id: str, *, user_id: Optional[str] = None,
+                      title: Optional[str] = None, body: Optional[str] = None,
+                      priority: Optional[int] = None,
+                      payload_patch: Optional[Dict[str, Any]] = None) -> bool:
+        """Owner-edit of a non-terminal row. payload_patch is a shallow merge."""
+        g = self.get(goal_id)
+        if g is None or (user_id is not None and g.user_id != user_id):
+            return False
+        if g.status in ("done", "cancelled", "dropped"):
+            return False
+        sets, params = [], []
+        if title is not None:
+            sets.append("title=?"); params.append(title)
+        if body is not None:
+            sets.append("body=?"); params.append(body)
+        if priority is not None:
+            sets.append("priority=?"); params.append(int(priority))
+        if payload_patch:
+            merged = dict(g.payload or {}); merged.update(payload_patch)
+            sets.append("payload=?"); params.append(json.dumps(merged))
+        if not sets:
+            return False
+        params.append(goal_id)
+        rc = execute_retry(self.db_path, f"UPDATE goals SET {', '.join(sets)} WHERE id=?",
+                           tuple(params))
+        if rc == 1:
+            self._event(goal_id, "edited", {k: True for k in
+                        ("title" if title is not None else "",
+                         "body" if body is not None else "",
+                         "priority" if priority is not None else "",
+                         "payload" if payload_patch else "") if k})
+        return rc == 1
+
+    def children(self, parent_id: str) -> List[Goal]:
+        rows = execute_retry(
+            self.db_path,
+            "SELECT * FROM goals WHERE parent_id=? ORDER BY created_at",
+            (parent_id,), fetch="all",
+        ) or []
+        return [Goal.from_row(r) for r in rows]
+
+    def last_planner_run_at(self) -> Optional[float]:
+        row = execute_retry(
+            self.db_path,
+            "SELECT MAX(created_at) AS t FROM goal_events WHERE goal_id=? AND kind='planner_run'",
+            (self.PLANNER_SENTINEL,), fetch="one",
+        )
+        try:
+            t = row["t"] if row else None
+        except (KeyError, TypeError, IndexError):
+            t = row[0] if row else None
+        return float(t) if t else None
+
+    def mark_planner_run(self) -> None:
+        self._event(self.PLANNER_SENTINEL, "planner_run", {})
+
+    # --- internal ------------------------------------------------------------
+
+    def _event(self, goal_id: str, kind: str, payload: Dict[str, Any]) -> None:
+        try:
+            execute_retry(
+                self.db_path,
+                "INSERT INTO goal_events (goal_id,kind,payload,created_at) VALUES (?,?,?,?)",
+                (goal_id, kind, json.dumps(payload), self._now()),
+            )
+        except Exception:
+            pass  # an audit-event write must never fail a state transition

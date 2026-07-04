@@ -1,0 +1,10 @@
+services:
+  polyrob:
+    build: .
+    ports: ["8000:8000"]
+    environment: ["UVICORN_PORT=8000"]
+    # Tracked example so a fresh clone's `docker compose up` resolves without error.
+    # For real secrets: cp config/.env.example config/.env.development (gitignored),
+    # add your key, then point env_file at config/.env.development.
+    env_file: [config/.env.example]
+    volumes: ["./.polyrob:/app/.polyrob"]
