@@ -1,13 +1,29 @@
+import re
 from pathlib import Path
 
-CHANGELOG = Path(__file__).resolve().parents[1] / "CHANGELOG.md"
+ROOT = Path(__file__).resolve().parents[1]
+CHANGELOG = ROOT / "CHANGELOG.md"
 
-def test_has_0_4_2_release_heading():
+
+def _pyproject_version() -> str:
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'^version = "([^"]+)"', text, flags=re.MULTILINE)
+    assert match, "pyproject.toml has no version"
+    return match.group(1)
+
+
+def test_has_current_release_heading():
+    """The version in pyproject.toml must have a dated release section."""
     text = CHANGELOG.read_text(encoding="utf-8")
-    assert "## [0.4.2] — 2026-07-01" in text
+    version = _pyproject_version()
+    assert re.search(
+        rf"^## \[{re.escape(version)}\] — \d{{4}}-\d{{2}}-\d{{2}}$", text, flags=re.MULTILINE
+    ), f"CHANGELOG.md has no dated release heading for {version}"
+
 
 def test_has_fresh_unreleased_section():
     text = CHANGELOG.read_text(encoding="utf-8")
     assert "## [Unreleased]" in text
-    # Unreleased must appear ABOVE the 0.4.2 section
-    assert text.index("## [Unreleased]") < text.index("## [0.4.2]")
+    # Unreleased must appear ABOVE the current release section
+    version = _pyproject_version()
+    assert text.index("## [Unreleased]") < text.index(f"## [{version}]")

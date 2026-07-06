@@ -23,6 +23,17 @@ class SurfaceRegistry:
     def enabled_ids(self) -> list:
         return list(self._surfaces.keys())
 
+    def capabilities(self, surface_id: str):
+        s = self._surfaces.get(surface_id)
+        return getattr(s, "capabilities", None) if s is not None else None
+
+    def config_schema(self, surface_id: str):
+        s = self._surfaces.get(surface_id)
+        if s is None:
+            return None
+        fn = getattr(s, "config_schema", None)
+        return fn() if callable(fn) else None
+
 
 def register_surface(container, surface) -> None:
     reg = container.get_service("surface_registry")

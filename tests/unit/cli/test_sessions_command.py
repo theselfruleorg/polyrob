@@ -30,7 +30,8 @@ def test_sessions_list_has_json_flag():
     # build_cli_container is a function-local import from core.bootstrap, so it must
     # be patched at its definition site (there is no module-level alias in
     # cli.commands.session to patch).
-    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build):
+    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build), \
+         patch("cli.keys.preflight_or_onboard", lambda **k: True):
         result = runner.invoke(session, ["list", "--json"])
         # Should not crash on --json flag
         assert result.exit_code == 0 or "No sessions found" in result.output
@@ -141,7 +142,8 @@ def test_session_show_uses_get_session_info():
     async def _fake_build(*args, **kwargs):
         return mock_container
 
-    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build):
+    with patch("core.bootstrap.build_cli_container", side_effect=_fake_build), \
+         patch("cli.keys.preflight_or_onboard", lambda **k: True):
         result = runner.invoke(session, ["show", "abc123", "--json"])
 
     assert result.exit_code == 0, result.output

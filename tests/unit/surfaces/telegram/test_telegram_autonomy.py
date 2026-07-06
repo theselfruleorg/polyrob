@@ -42,6 +42,7 @@ async def test_telegram_starts_and_stops_autonomy_under_local_mode():
     with patch("core.bootstrap.build_cli_container", return_value=container), \
          patch("core.bootstrap.setup_project_path"), \
          patch("core.bootstrap.setup_sqlite_compat"), \
+         patch("cli.keys.preflight_or_onboard", return_value=True), \
          patch("core.surfaces.bootstrap.install_surface_bus"), \
          patch("surfaces.telegram.harness.build_telegram_harness", return_value=harness), \
          patch("agents.task.constants.local_mode_enabled", return_value=True), \

@@ -16,7 +16,7 @@ import logging
 import os
 from typing import Any, Optional
 
-from agents.task.goals.board import GoalBoard, Goal, STATUS_DONE
+from agents.task.goals.board import GoalBoard, Goal, STATUS_DONE, STATUS_READY
 from agents.task.runtime.run_as_session import run_task_as_session as _run_task_as_session
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,12 @@ class GoalDispatcher:
         # goal that "may run minutes". Cleared via done-callback.
         self._inflight: set = set()
         self._quota_logged = False
+        # §7.2 tail: consecutive planner runs that left the ready queue empty, and
+        # whether the resulting stall was already escalated (escalate ONCE per stall;
+        # both reset the moment the board refills). In-memory: resets on restart,
+        # which at worst re-escalates one stall after a deploy — acceptable.
+        self._empty_planner_runs = 0
+        self._empty_pipeline_escalated = False
 
     async def dispatch_once(self) -> int:
         """Claim and run up to GOAL_MAX_CONCURRENT ready goals. Returns #dispatched.
@@ -293,6 +299,34 @@ class GoalDispatcher:
                 except Exception:
                     logger.warning("goal episodic write failed", exc_info=True)
                 return
+            # §3.1: an agent-declared 'OUTCOME: BLOCKED — <need>' is an honest
+            # failure exit, never a success. Checked BEFORE record_success so the
+            # goal routes through the breaker/escalation rail with its stated need.
+            from agents.task.goals.context import extract_outcome_line, parse_blocked_outcome
+            # Fail-open: a crash in the outcome PARSER must never fail a completed
+            # run (FIX3 — the success path below still records honestly).
+            try:
+                outcome = extract_outcome_line(final)
+                blocked_need = parse_blocked_outcome(outcome)
+            except Exception:
+                logger.debug("outcome parse failed for %s", goal.id, exc_info=True)
+                outcome, blocked_need = None, None
+            if blocked_need is not None:
+                await self._fail_blocked_declared(goal, session_id, outcome, blocked_need)
+                return
+            # §3.2 (fail-open — never block on uncertainty): with the judge on and
+            # an acceptance set, 'unmet' -> record_failure (normal breaker retries);
+            # 'met'/'unclear'/error -> the legacy success path.
+            import agents.task.goals.completion_judge as _cj
+            acceptance = (payload.get("acceptance") or "").strip()
+            if AutonomyConfig.goal_completion_judge() and acceptance:
+                verdict, reason = await _cj.judge_goal_completion(
+                    self.task_agent, session_id, goal, final)
+                if verdict == "unmet":
+                    await self._fail_run(goal, session_id,
+                                         error=f"completion judge: {reason}"[:2000],
+                                         outcome=outcome)
+                    return
             self.board.record_success(goal.id, session_id=session_id, result=str(final)[:4000])
             # Stale-completion skip: an owner may have cancelled/paused the goal
             # mid-run (T2 guards keep that status through record_success — see
@@ -321,8 +355,6 @@ class GoalDispatcher:
                 recorded_success = True
             except Exception:
                 logger.warning("goal episodic write failed", exc_info=True)
-            from agents.task.goals.context import extract_outcome_line
-            outcome = extract_outcome_line(final)
             if outcome:
                 try:
                     self.board.set_outcome(goal.id, outcome)
@@ -353,6 +385,50 @@ class GoalDispatcher:
             if _shared_ws:
                 from core.interactive_gate import mark_idle
                 mark_idle()
+
+    async def _fail_blocked_declared(self, goal: Goal, session_id: Optional[str],
+                                     outcome: Optional[str], need: str) -> None:
+        """§3.1: route an agent-declared BLOCKED outcome to the failure/escalation rail.
+
+        The agent already concluded retrying won't help, so after the standard
+        record_failure (whose CAS respects owner cancel/pause) a row that came back
+        'ready' is flipped straight to 'blocked' — skipping the breaker's remaining
+        retries. A non-ready row means the owner intervened; their decision wins.
+        """
+        error = f"agent declared BLOCKED: {need or 'unspecified need'}"
+        await self._fail_run(goal, session_id, error=error, block=True, outcome=outcome)
+
+    async def _fail_run(self, goal: Goal, session_id: Optional[str], *, error: str,
+                        block: bool = False, outcome: Optional[str] = None) -> None:
+        """Shared verified-failure path for a run that finished but didn't deliver.
+
+        record_failure's CAS respects owner cancel/pause; with ``block=True`` a row
+        that came back 'ready' is flipped straight to 'blocked' (skipping the
+        breaker's remaining retries — used when retrying provably won't help).
+        """
+        _g = self.board.record_failure(goal.id, error=error, session_id=session_id)
+        if block and getattr(_g, "status", None) == STATUS_READY:
+            try:
+                if self.board.block_from_ready(goal.id, error=error):
+                    _g = self.board.get(goal.id) or _g
+            except Exception:
+                logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
+        if outcome:
+            try:
+                self.board.set_outcome(goal.id, outcome)
+            except Exception:
+                logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
+        await self._maybe_escalate_blocked(_g)
+        if session_id:
+            try:
+                from modules.memory.episodic import finalize_episode
+                await finalize_episode(
+                    session_id=session_id, user_id=goal.user_id, kind="goal",
+                    task=getattr(goal, "title", None), outcome="failed",
+                    goal_id=goal.id, summary=error[:2000], meta={"source": "goal"},
+                )
+            except Exception:
+                logger.warning("goal episodic write failed", exc_info=True)
 
     def _resolve_tools(self, goal: Goal) -> list:
         """Resolve the toolset for a goal run.
@@ -386,6 +462,21 @@ class GoalDispatcher:
             await maybe_escalate_blocked(self.task_agent, goal)
         except Exception:
             logger.debug("blocker escalation skipped", exc_info=True)
+        # §7.2b: regardless of whether the push reached the owner, leave a TRACKED
+        # ask on the board so the need survives (and `owner fulfill` can unblock).
+        try:
+            from agents.task.constants import AutonomyConfig
+            from agents.task.goals.board import STATUS_BLOCKED
+            if (AutonomyConfig.goal_blocker_escalation()
+                    and getattr(goal, "status", None) == STATUS_BLOCKED):
+                self.board.create_ask(
+                    user_id=goal.user_id,
+                    what=f"Unblock goal: {goal.title}",
+                    why=(goal.last_failure_error or "repeated failures"),
+                    blocks_goal_ids=[goal.id],
+                )
+        except Exception:
+            logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
     async def _self_wake(self, goal: Goal, session_id: str, final: str) -> None:
         """Forge a follow-up turn announcing the goal result (W1 rail). Fail-open."""
@@ -491,8 +582,51 @@ class GoalDispatcher:
                 self.task_agent, user_id=user_id, request=request, autonomous=True)
             logger.info("goal planner ran (session=%s): %s",
                         session_id, (final or "no result")[:200])
+            await self._maybe_escalate_empty_pipeline(user_id, planner_summary=final)
         except Exception as e:
             logger.error("goal planner run failed: %s", e, exc_info=True)
+
+    async def _maybe_escalate_empty_pipeline(self, user_id: str, *,
+                                             planner_summary: Optional[str] = None) -> None:
+        """§7.2 tail: a planner run that STILL leaves the board empty is a stall.
+
+        After ``GOAL_EMPTY_PIPELINE_ESCALATE_AFTER`` consecutive such runs, surface
+        the stall (with the planner's own last word — usually the concrete blocker)
+        to the owner exactly once. Fail-open; both counters reset on refill.
+        """
+        try:
+            if self.board.ready(limit=1):
+                self._empty_planner_runs = 0
+                self._empty_pipeline_escalated = False
+                return
+            self._empty_planner_runs += 1
+            from agents.task.constants import AutonomyConfig
+            if self._empty_planner_runs < AutonomyConfig.goal_empty_pipeline_escalate_after():
+                return
+            if self._empty_pipeline_escalated:
+                return
+            objective_title = None
+            for o in self._active_objective_owners():
+                if o.user_id == user_id:
+                    objective_title = o.title
+                    break
+            from agents.task.goals.escalation import maybe_escalate_empty_pipeline
+            sent = await maybe_escalate_empty_pipeline(
+                self.task_agent, objective_title=objective_title,
+                planner_summary=planner_summary)
+            if sent:
+                self._empty_pipeline_escalated = True
+                # §7.2b: track the stall as an ask too, so it's fulfillable.
+                try:
+                    self.board.create_ask(
+                        user_id=user_id,
+                        what=f"Goal pipeline empty for '{objective_title or 'the objective'}'",
+                        why=(planner_summary or "")[:2000],
+                    )
+                except Exception:
+                    logger.debug("empty-pipeline ask creation skipped", exc_info=True)
+        except Exception:
+            logger.debug("empty-pipeline escalation skipped", exc_info=True)
 
 
 class GoalTicker:

@@ -27,7 +27,14 @@ from core.surfaces.session_chat_registry import build_session_key
 
 logger = logging.getLogger(__name__)
 
-_COMMANDS = ("/task", "/cancel", "/new", "/help")
+# Owner-admin verbs (§7.1/§7.2b): the phone-only headless owner's surface for the
+# self-evolution approve loop (/pending /approve /reject), open asks (/asks
+# /fulfill), and the outbound-messaging allowlist (/allow /deny /allowlist). The
+# surface handler owner-gates them by principal; routing here only classifies them
+# as COMMAND so they win over an active session.
+_COMMANDS = ("/task", "/cancel", "/new", "/help",
+             "/pending", "/approve", "/reject", "/asks", "/fulfill",
+             "/allow", "/deny", "/allowlist")
 
 ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 

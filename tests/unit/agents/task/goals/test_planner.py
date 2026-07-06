@@ -175,6 +175,65 @@ def test_planner_fires_when_ready_queue_below_min(board, monkeypatch):
     assert board.last_planner_run_at() is not None
 
 
+class _Sink:
+    def __init__(self):
+        self.sent = []
+
+    async def send_message(self, chat_id, text):
+        self.sent.append((chat_id, text))
+        return True
+
+
+class _Container:
+    def __init__(self, sink):
+        self._sink = sink
+
+    def get_service(self, name):
+        return self._sink if name in ("telegram_sink", "message_router") else None
+
+
+class _EscalatingAgent(_RecordingAgent):
+    """Recording agent with a container so push_owner_message can reach a sink."""
+
+    def __init__(self, sink):
+        super().__init__()
+        self.container = _Container(sink)
+
+
+def test_planner_stall_escalates_once(board, monkeypatch):
+    # §7.2 tail: ready==0 persisting past N planner runs must surface ONE owner
+    # escalation (the dead build_empty_pipeline_escalation finally gets a caller),
+    # and must not re-ping on every subsequent stalled run.
+    board.create_objective(user_id="rob", title="Grow the substack")
+    sink = _Sink()
+    agent = _EscalatingAgent(sink)
+    d = _dispatcher(board, agent, monkeypatch,
+                    GOAL_BLOCKER_ESCALATION="true",
+                    GOAL_EMPTY_PIPELINE_ESCALATE_AFTER="2")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    asyncio.run(d._run_planner("rob"))
+    assert sink.sent == []  # first stalled run: below threshold
+    asyncio.run(d._run_planner("rob"))
+    assert len(sink.sent) == 1  # second stalled run: escalate
+    assert "pipeline is empty" in sink.sent[0][1] or "Grow the substack" in sink.sent[0][1]
+    asyncio.run(d._run_planner("rob"))
+    assert len(sink.sent) == 1  # escalate ONCE, not every run
+
+
+def test_planner_stall_counter_resets_when_board_refills(board, monkeypatch):
+    board.create_objective(user_id="rob", title="Grow the substack")
+    sink = _Sink()
+    agent = _EscalatingAgent(sink)
+    d = _dispatcher(board, agent, monkeypatch,
+                    GOAL_BLOCKER_ESCALATION="true",
+                    GOAL_EMPTY_PIPELINE_ESCALATE_AFTER="2")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    asyncio.run(d._run_planner("rob"))
+    board.create(user_id="rob", title="A fresh ready goal appeared entirely")
+    asyncio.run(d._run_planner("rob"))  # board non-empty -> reset, no escalation
+    assert sink.sent == []
+
+
 def test_planner_disabled_by_default(board, monkeypatch):
     board.create_objective(user_id="rob", title="Grow the substack")
     agent = _RecordingAgent()

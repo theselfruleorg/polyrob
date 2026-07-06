@@ -353,6 +353,10 @@ _SAFE_LOCAL_FLAGS = frozenset({
     # single-user CLI (own tenant); multi-tenant server stays OFF by default (an
     # unsolicited push to a shared owner channel is opt-in there).
     "SELF_EVOLUTION_TRANSPARENCY",
+    # Task 5: gated `message` action (owner/allowlist -> MessageRouter send). Safe
+    # on a single-user CLI (own tenant, own owner-bound targets); multi-tenant
+    # server stays OFF by default (arbitrary outbound send is opt-in there).
+    "MESSAGE_TOOL_ENABLED",
 })
 
 
@@ -364,6 +368,14 @@ def local_mode_enabled() -> bool:
     enables local mode, so a doc that still says ``ROB_LOCAL`` isn't a silent no-op.
     """
     return _bool_env("POLYROB_LOCAL", False) or _bool_env("ROB_LOCAL", False)
+
+
+def message_tool_enabled() -> bool:
+    """Whether the gated `message` action (owner/allowlist -> MessageRouter) is
+    registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the
+    _SAFE_LOCAL_FLAGS group. An explicit MESSAGE_TOOL_ENABLED always wins.
+    """
+    return _bool_env("MESSAGE_TOOL_ENABLED", _safe_autonomy_default("MESSAGE_TOOL_ENABLED"))
 
 
 def task_personality_block_enabled() -> bool:
@@ -606,12 +618,29 @@ class AutonomyConfig:
         # Was unconditional; redundant-cost finding (grok livetest 2026-06-27).
         return _bool_env("GOAL_SELF_WAKE_ENABLED", False)
 
+    # §3.2 (goal-completion-verification, 2026-07-05) — judge a completed goal's
+    # acceptance with a cheap aux model. Default OFF (verify on prod, then flip);
+    # 'unmet' -> record_failure, 'unclear'/error/timeout -> pass (fail-open).
+    @staticmethod
+    def goal_completion_judge() -> bool:
+        return _bool_env("GOAL_COMPLETION_JUDGE", False)
+
+    @staticmethod
+    def goal_judge_timeout_sec() -> int:
+        return _int_env("GOAL_JUDGE_TIMEOUT_SEC", 60)
+
     # §7.2 — blocker → owner escalation. When a goal trips the circuit breaker
     # (status='blocked') OR the pipeline drains, surface a concrete ask to the owner
     # instead of dying silently. Default OFF (an unsolicited owner push is opt-in).
     @staticmethod
     def goal_blocker_escalation() -> bool:
         return _bool_env("GOAL_BLOCKER_ESCALATION", False)
+
+    @staticmethod
+    def goal_empty_pipeline_escalate_after() -> int:
+        """Consecutive planner runs that leave the ready queue EMPTY before the
+        stall escalates to the owner (rides GOAL_BLOCKER_ESCALATION)."""
+        return _int_env("GOAL_EMPTY_PIPELINE_ESCALATE_AFTER", 2)
 
     # §7.5 — autonomous continuity bridge. Carry a recent-activity summary INTO a
     # goal/cron tick (opposite scoping to the chat digest) so autonomous runs stop

@@ -104,7 +104,7 @@ def test_send_immediate_delivers_via_responder(tmp_path):
     wa = WhatsAppInbound(IdempotencyStore(os.path.join(tmp_path, "i.db")),
                          user_directory=_UD(), responder=_responder)
     inbound = SimpleNamespace(identity=SimpleNamespace(raw_user_id="15550001111", user_id="u_x"))
-    asyncio.get_event_loop().run_until_complete(wa._send_immediate(inbound, "voice unavailable"))
+    asyncio.run(wa._send_immediate(inbound, "voice unavailable"))
     assert sent == [("15550001111", "voice unavailable")]
 
 
@@ -114,4 +114,4 @@ def test_send_immediate_fail_open_without_responder(tmp_path):
     from types import SimpleNamespace
     wa = WhatsAppInbound(IdempotencyStore(os.path.join(tmp_path, "i.db")), user_directory=_UD())
     inbound = SimpleNamespace(identity=SimpleNamespace(raw_user_id="x", user_id="u"))
-    asyncio.get_event_loop().run_until_complete(wa._send_immediate(inbound, "hi"))  # no raise
+    asyncio.run(wa._send_immediate(inbound, "hi"))  # no raise

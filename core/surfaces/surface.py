@@ -34,6 +34,7 @@ that intermediate exposure is acceptable; OFF keeps the buffered one-send-on-fin
 import logging
 import time as _time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from core.surfaces.envelopes import (
@@ -41,6 +42,20 @@ from core.surfaces.envelopes import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SurfaceConfigField:
+    name: str
+    secret: bool = False
+    required: bool = True
+    env_alias: str | None = None
+    help: str = ""
+
+
+@dataclass
+class SurfaceConfigSchema:
+    fields: list = field(default_factory=list)
 
 
 def split_message(text: str, limit: int) -> List[str]:
@@ -117,6 +132,16 @@ class Surface(ABC):
 
     async def identify(self, raw: dict) -> Optional[Identity]:
         return None
+
+    @classmethod
+    def config_schema(cls) -> "SurfaceConfigSchema":
+        return SurfaceConfigSchema(fields=[])
+
+    @classmethod
+    def validate_config(cls, values: dict) -> tuple[bool, str]:
+        missing = [f.name for f in cls.config_schema().fields
+                   if f.required and not values.get(f.name)]
+        return (not missing, "" if not missing else f"missing: {', '.join(missing)}")
 
     def render_outbound(self, text: str) -> List[str]:
         """Escape + split outbound text per this surface's capabilities. Surfaces should

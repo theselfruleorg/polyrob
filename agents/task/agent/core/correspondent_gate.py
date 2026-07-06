@@ -48,6 +48,9 @@ _HIGH_IMPACT_NAMES = frozenset({
     "delegate_task", "subtask", "parallel_subtasks",
     # Identity / self-evolution actions (registered directly).
     "skill_manage", "self_context_manage",
+    # Gated outbound message-to-target action (registered directly, no owning
+    # tool_id) — owner/allowlist-checked send to telegram/email/whatsapp.
+    "message",
     # Aspirational coding/self-evolution action names (no tool yet; harmless tokens).
     "self_modify", "mcp_install",
     # Crypto trade verbs (hyperliquid + polymarket share these). Reads (get_*) are

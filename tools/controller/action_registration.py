@@ -457,6 +457,10 @@ class ActionRegistrationMixin:
 		# Ensure normalize_path method exists for file operations
 		self._ensure_normalize_path_exists()
 
+		# Task 5: gated `message` action (owner/allowlist -> MessageRouter send),
+		# gated MESSAGE_TOOL_ENABLED (default false; ON under POLYROB_LOCAL).
+		self._register_message_action()
+
 		# Register subtask action for sub-agent delegation
 		self._register_subtask_action()
 
@@ -822,6 +826,65 @@ class ActionRegistrationMixin:
 				extracted_content=f"Skill `{params.skill_id}` saved ({where}).",
 				include_in_memory=True,
 			)
+
+	def _register_message_action(self):
+		"""Register the gated `message` action: resolve the target's tier
+		(owner/allowlisted/denied) and route an approved send through the
+		existing MessageRouter. Gated MESSAGE_TOOL_ENABLED (default OFF; ON
+		under POLYROB_LOCAL). Registered in this module — no `from __future__
+		import annotations` (registry-closure introspection)."""
+		try:
+			from agents.task.constants import message_tool_enabled
+			if not message_tool_enabled():
+				return
+		except Exception:
+			return
+
+		from tools.controller.message_send import perform_message_send
+		from tools.controller.views import MessageTargetAction
+
+		@self.registry.action(
+			'Send a message to a specific chat/recipient on a given surface '
+			'(telegram/email/whatsapp). Only the owner and owner-allowlisted targets '
+			'are permitted; other targets are denied.',
+			param_model=MessageTargetAction,
+		)
+		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
+			import os
+			from core.instance import resolve_owner_telegram_id, resolve_owner_email
+
+			# Forged/untrusted/autonomous turns must not reach arbitrary targets
+			# (sub-agent, self-wake/delegation-result re-entry into the main agent,
+			# or an autonomous goal/cron/planner-spawned session).
+			if _is_forged_or_autonomous_turn(execution_context, self):
+				return ActionResult(
+					extracted_content=(
+						"message: not permitted for forged/autonomous turns "
+						"(owner must be in the loop)"),
+					include_in_memory=True)
+
+			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None) or ""
+			container = getattr(self, "container", None)
+			router = container.get_service("message_router") if container else None
+			allowlist = container.get_service("outbound_allowlist") if container else None
+
+			owner_targets = {}
+			tid = resolve_owner_telegram_id(os.environ)
+			if tid:
+				owner_targets["telegram"] = str(tid)
+			oem = resolve_owner_email(os.environ)
+			if oem:
+				owner_targets["email"] = oem
+
+			res = await perform_message_send(
+				router=router, allowlist=allowlist, owner_targets=owner_targets,
+				user_id=user_id, surface=params.surface, target=params.target,
+				text=params.text, action=params.action, reply_to=params.reply_to,
+				message_id=params.message_id)
+			return ActionResult(extracted_content=(
+				f"message[{res['tier']}] -> {params.surface}:{params.target} "
+				f"{'OK' if res['success'] else 'FAILED: ' + (res.get('error') or '')}"),
+				include_in_memory=True)
 
 	def _register_self_context_manage_action(self):
 		"""Register the evolving SELF-identity tool `self_context_manage`, gated

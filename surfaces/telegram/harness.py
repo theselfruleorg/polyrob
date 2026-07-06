@@ -94,9 +94,20 @@ _HELP = (
     "/task <goal> — start a new task\n"
     "/cancel — stop the current task\n"
     "/new — start a fresh conversation\n"
+    "/pending — proposals I've learned, awaiting your approval\n"
+    "/approve <id> — activate a pending proposal\n"
+    "/reject <id> — discard a pending proposal\n"
+    "/asks — what I need from you to unblock work\n"
+    "/fulfill <id> — mark an ask fulfilled (unblocks its goals)\n"
+    "/allow <surface> <target> — allow me to message that target\n"
+    "/deny <surface> <target> — revoke that permission\n"
+    "/allowlist — show who I'm allowed to message\n"
     "/help — show this help\n"
     "Or just send a message to talk to ROB."
 )
+
+_OWNER_ADMIN_COMMANDS = ("/pending", "/approve", "/reject", "/asks", "/fulfill",
+                         "/allow", "/deny", "/allowlist")
 
 
 def owner_allowed(tg_user_id) -> Optional[bool]:
@@ -206,10 +217,132 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
         _spawn(_run_and_deliver(task_agent, inbound.identity.user_id, session_id, deliver), spawn)
 
 
+def _admin_data_dir(task_agent: Any) -> str:
+    """The daemon's data home — the SAME dir the pending writers/goal board use."""
+    cfg = getattr(getattr(task_agent, "container", None), "config", None)
+    return getattr(cfg, "data_dir", "data") or "data"
+
+
+def _is_admin_owner(user_id: str) -> bool:
+    """Owner gate for the admin verbs. Telegram is a NETWORK surface, so the
+    single-user local bypass is never honored here — only the bound principal
+    (the owner alias maps the owner's telegram id onto it) qualifies."""
+    from core.instance import is_owner_local_safe, resolve_owner_principal
+    return is_owner_local_safe(user_id, owner_principal=resolve_owner_principal(),
+                               local_enabled=False)
+
+
+async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) -> str:
+    """§7.1 missing hop + §7.2b: /pending /approve /reject /asks /fulfill.
+
+    Thin plumbing over the SAME primitives the `polyrob owner` CLI uses
+    (core.self_evolution + GoalBoard.asks/fulfill_ask) so a phone-only headless
+    owner can close the approve loop.
+    """
+    user_id = result.inbound.identity.user_id
+    if not _is_admin_owner(user_id):
+        return "🔒 Owner only."
+    from core import self_evolution
+    from core.instance import resolve_instance_id
+    data_dir = _admin_data_dir(task_agent)
+    instance_id = resolve_instance_id()
+    args = result.inbound.text.strip().split()[1:]
+
+    if cmd == "/pending":
+        items = self_evolution.list_pending(user_id, home_dir=data_dir,
+                                            instance_id=instance_id)
+        if not items:
+            return "No pending proposals."
+        lines = [f"{len(items)} pending proposal(s):"]
+        for it in items:
+            preview = (it.get("preview") or "").strip()
+            if len(preview) > 160:
+                preview = preview[:157] + "…"
+            lines.append(f"• {it['kind']}:{it['id']} — {preview}")
+        lines.append("Approve with /approve <id>, discard with /reject <id>.")
+        return "\n".join(lines)
+
+    if cmd in ("/approve", "/reject"):
+        if not args:
+            return f"Usage: {cmd} <id> (see /pending)"
+        target = args[0]
+        items = self_evolution.list_pending(user_id, home_dir=data_dir,
+                                            instance_id=instance_id)
+        match = next((it for it in items if str(it["id"]) == target), None)
+        if match is None:
+            return f"No pending proposal '{target}' — see /pending."
+        fn = self_evolution.promote if cmd == "/approve" else self_evolution.reject
+        ok, msg = fn(match["kind"], match["id"], user_id=user_id,
+                     home_dir=data_dir, instance_id=instance_id)
+        return msg if ok else f"Failed: {msg}"
+
+    from agents.task.goals.board import ASK_OPEN, GoalBoard
+    board = GoalBoard(os.path.join(data_dir, "goals.db"))
+
+    if cmd == "/asks":
+        rows = board.asks(user_id=user_id, status=ASK_OPEN)
+        if not rows:
+            return "No open asks — nothing is blocked on you."
+        lines = [f"{len(rows)} open ask(s):"]
+        for a in rows:
+            blocks = (a.payload or {}).get("blocks_goal_ids", [])
+            lines.append(f"• {a.id} — {a.title}"
+                         + (f" (blocks {len(blocks)} goal(s))" if blocks else ""))
+            if a.body:
+                lines.append(f"   {a.body[:160]}")
+        lines.append("Fulfilled one? /fulfill <id> unblocks its goals.")
+        return "\n".join(lines)
+
+    if cmd == "/fulfill":
+        if not args:
+            return "Usage: /fulfill <ask-id> (see /asks)"
+        ok, unblocked = board.fulfill_ask(args[0], user_id=user_id)
+        if not ok:
+            return f"No open ask '{args[0]}' — see /asks."
+        return f"✅ Ask fulfilled — {unblocked} goal(s) unblocked."
+
+    from core.surfaces.outbound_allowlist import OutboundAllowlist
+    allowlist = OutboundAllowlist(os.path.join(data_dir, "surfaces.db"))
+
+    if cmd == "/allow":
+        if len(args) < 2:
+            return "Usage: /allow <surface> <target>"
+        surface, target = args[0], args[1]
+        allowlist.allow(user_id, surface, target)
+        return f"✅ Allowed {surface}:{target}."
+
+    if cmd == "/deny":
+        if len(args) < 2:
+            return "Usage: /deny <surface> <target>"
+        surface, target = args[0], args[1]
+        ok = allowlist.revoke(user_id, surface, target)
+        if not ok:
+            return f"No active allowlist entry {surface}:{target}."
+        return f"✅ Denied {surface}:{target}."
+
+    if cmd == "/allowlist":
+        rows = allowlist.list(user_id)
+        if not rows:
+            return "No allowlist entries."
+        lines = [f"{len(rows)} allowlist entr{'y' if len(rows) == 1 else 'ies'}:"]
+        for r in rows:
+            note = f" ({r['note']})" if r["note"] else ""
+            lines.append(f"• {r['status']} {r['surface']}:{r['target']}{note}")
+        return "\n".join(lines)
+
+    return _HELP
+
+
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None) -> Optional[str]:
     cmd = (result.decision.command or "").lower()
     if cmd == "/help":
         return _HELP
+    if cmd in _OWNER_ADMIN_COMMANDS:
+        try:
+            return await _handle_owner_admin(task_agent, result, cmd)
+        except Exception as e:
+            logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
+            return f"Command failed: {e}"
     if cmd == "/cancel":
         sid = result.decision.session_id
         if sid:

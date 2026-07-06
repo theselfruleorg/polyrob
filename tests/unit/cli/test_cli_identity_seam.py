@@ -22,7 +22,8 @@ def test_session_cancel_resolves_user_via_identity_seam():
 
     with patch("core.bootstrap.build_cli_container", _fake_build), \
          patch("core.bootstrap.setup_project_path", lambda: None), \
-         patch("core.bootstrap.setup_sqlite_compat", lambda: None):
+         patch("core.bootstrap.setup_sqlite_compat", lambda: None), \
+         patch("cli.keys.preflight_or_onboard", lambda **k: True):
         asyncio.run(sess._session_cancel("sess-1"))
 
     fake_container.get_service.assert_any_call("identity")

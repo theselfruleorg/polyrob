@@ -15,6 +15,8 @@ jobs:
       # (README "Contributing": pip install -e ".[dev,all]"). A bare
       # `pip install -e .` fails collection on missing playwright/fastapi.
       - run: pip install -e ".[dev,all]"
+      # The pfp renderer tests launch real headless chromium via playwright.
+      - run: python -m playwright install --with-deps chromium
       - run: pytest -q
   secrets:
     runs-on: ubuntu-latest
