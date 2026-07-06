@@ -65,8 +65,38 @@ async def maybe_escalate_blocked(task_agent: Any, goal: Any) -> bool:
         return False
 
 
+async def maybe_escalate_empty_pipeline(task_agent: Any, *,
+                                        objective_title: str | None = None,
+                                        planner_summary: str | None = None) -> bool:
+    """Escalate a drained goal pipeline to the owner if enabled. Fail-open.
+
+    Gated ``GOAL_BLOCKER_ESCALATION`` (same flag as the blocked-goal producer —
+    both are "the board can't advance without you"). A planner run that reported
+    "queue healthy" is a legitimate non-blocker outcome and is never escalated.
+    """
+    try:
+        from agents.task.constants import AutonomyConfig
+        if not AutonomyConfig.goal_blocker_escalation():
+            return False
+        if planner_summary and "queue healthy" in planner_summary.lower():
+            return False
+        text = build_empty_pipeline_escalation(objective_title)
+        if planner_summary:
+            text += f"\nMy planner's last word: {planner_summary.strip()[:400]}"
+        container = getattr(task_agent, "container", None)
+        from core.self_evolution import push_owner_message
+        sent = await push_owner_message(container, text)
+        if sent:
+            logger.info("empty goal pipeline → owner escalation sent")
+        return bool(sent)
+    except Exception as e:  # never let escalation break the planner path
+        logger.debug("empty-pipeline escalation skipped (fail-open): %s", e)
+        return False
+
+
 __all__ = [
     "build_blocker_escalation",
     "build_empty_pipeline_escalation",
     "maybe_escalate_blocked",
+    "maybe_escalate_empty_pipeline",
 ]

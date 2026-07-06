@@ -86,6 +86,59 @@ async def test_escalate_failopen_no_container(monkeypatch):
     assert await escalation.maybe_escalate_blocked(_Bare(), _blocked_goal()) is False
 
 
+# --- empty-pipeline escalation (§7.2 tail — the dead-code wiring) -------------
+
+@pytest.mark.asyncio
+async def test_empty_pipeline_escalates_when_enabled(monkeypatch):
+    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    sink = _FakeSink()
+    agent = _FakeAgent(_FakeContainer(sink))
+    sent = await escalation.maybe_escalate_empty_pipeline(
+        agent, objective_title="Grow the POLYROB following on X",
+        planner_summary="blocked: I need Twitter write access from you")
+    assert sent is True
+    assert sink.sent
+    msg = sink.sent[0][1]
+    assert "Grow the POLYROB following on X" in msg
+    assert "Twitter write access" in msg  # the planner's concrete ask rides along
+
+
+@pytest.mark.asyncio
+async def test_empty_pipeline_noop_when_flag_off(monkeypatch):
+    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "false")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    sink = _FakeSink()
+    agent = _FakeAgent(_FakeContainer(sink))
+    assert await escalation.maybe_escalate_empty_pipeline(
+        agent, objective_title="x") is False
+    assert sink.sent == []
+
+
+@pytest.mark.asyncio
+async def test_empty_pipeline_skips_queue_healthy(monkeypatch):
+    # "queue healthy, nothing to add" is the planner's legitimate NON-blocker
+    # outcome — it must never turn into an owner ping.
+    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    sink = _FakeSink()
+    agent = _FakeAgent(_FakeContainer(sink))
+    assert await escalation.maybe_escalate_empty_pipeline(
+        agent, objective_title="x",
+        planner_summary="Queue healthy, nothing to add.") is False
+    assert sink.sent == []
+
+
+@pytest.mark.asyncio
+async def test_empty_pipeline_failopen_no_container(monkeypatch):
+    monkeypatch.setenv("GOAL_BLOCKER_ESCALATION", "true")
+
+    class _Bare:
+        container = None
+
+    assert await escalation.maybe_escalate_empty_pipeline(_Bare(), objective_title="x") is False
+
+
 # --- flag default ------------------------------------------------------------
 
 def test_flag_default_off(monkeypatch):

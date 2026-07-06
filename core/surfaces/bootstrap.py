@@ -49,6 +49,10 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         router = MessageRouter(registry)
         container.register_service("session_chat_registry", registry)
         container.register_service("message_router", router)
+
+        from core.surfaces.outbound_allowlist import OutboundAllowlist
+        container.register_service("outbound_allowlist", OutboundAllowlist(db_path))
+
         if SurfaceConfig.outbound_queue_enabled():
             import os
             from core.surfaces.outbound_queue import OutboundDeliveryQueue

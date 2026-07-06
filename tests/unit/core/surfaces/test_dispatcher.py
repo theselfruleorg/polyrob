@@ -75,6 +75,18 @@ async def test_unknown_slash_is_not_a_command(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("verb", ["/allow", "/deny", "/allowlist"])
+async def test_outbound_allowlist_verbs_classify_as_command(tmp_path, verb):
+    """The outbound-allowlist owner-admin verbs must win over an active session,
+    like the other owner-admin verbs — else the surface handler never sees them."""
+    msg = _inbound(f"{verb} telegram 555")
+    key = build_session_key(msg.identity.source, msg.identity.user_id)
+    c = _FakeContainer(_registry_with(tmp_path, warm_key=key))
+    d = await route_inbound(c, msg)
+    assert d.kind == RouteKind.COMMAND and d.command == verb
+
+
+@pytest.mark.asyncio
 async def test_warm_session_steers(tmp_path):
     msg = _inbound("keep going please")
     key = build_session_key(msg.identity.source, msg.identity.user_id)

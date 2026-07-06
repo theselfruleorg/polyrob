@@ -35,9 +35,15 @@ STATUS_BLOCKED = "blocked"
 STATUS_DONE = "done"
 STATUS_CANCELLED = "cancelled"
 
-# kind: rows are either goals (dispatchable) or objectives (standing, never dispatched)
+# kind: rows are goals (dispatchable), objectives (standing, never dispatched),
+# or asks (owner-facing needs, never dispatched)
 KIND_GOAL = "goal"
 KIND_OBJECTIVE = "objective"
+KIND_ASK = "ask"
+
+# ask lifecycle (§7.2b) — disjoint from goal statuses so nothing dispatches them
+ASK_OPEN = "open"
+ASK_FULFILLED = "fulfilled"
 
 # objective lifecycle (disjoint from goal statuses so nothing dispatches them)
 OBJ_ACTIVE = "active"
@@ -186,6 +192,7 @@ class GoalBoard:
                 """SELECT id, title FROM goals
                     WHERE user_id=? AND created_at > ?
                       AND status NOT IN ('cancelled','dropped')
+                      AND kind != 'ask'
                       AND (? IS NULL OR id != ?)""",
                 (user_id, since, parent_id, parent_id), fetch="all",
             ) or []
@@ -327,6 +334,27 @@ class GoalBoard:
             else:
                 self._event(goal_id, "stale_completion", {"error": error[:500]})
         return self.get(goal_id)
+
+    def block_from_ready(self, goal_id: str, *, error: str) -> bool:
+        """Flip a 'ready' goal straight to 'blocked' (agent-declared BLOCKED, §3.1).
+
+        Used when the agent itself declared the goal unrunnable (OUTCOME: BLOCKED),
+        so waiting for the circuit breaker's remaining retries is pointless. The
+        CAS guard (``AND status='ready'``) means an owner intervention (cancel/
+        pause) that landed since record_failure always wins — a cancelled row is
+        never resurrected into 'blocked'.
+        """
+        now = self._now()
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals SET status='blocked', last_failure_error=?,
+                  claim_lock=NULL, claim_expires=NULL, completed_at=?
+                WHERE id=? AND kind='goal' AND status='ready'""",
+            (error[:2000], now, goal_id),
+        )
+        if rc == 1:
+            self._event(goal_id, "gave_up", {"error": error[:500], "declared": True})
+        return rc == 1
 
     def reclaim_stale(self) -> int:
         """Reclaim goals whose claim TTL expired (a crashed worker).
@@ -501,6 +529,75 @@ class GoalBoard:
         return self.create(user_id=user_id, title=title, body=body, priority=priority,
                            kind=KIND_OBJECTIVE, status=OBJ_ACTIVE, force=force,
                            payload=payload)
+
+    # --- asks (§7.2b) ---------------------------------------------------------
+
+    def create_ask(self, *, user_id: str, what: str, why: str = "",
+                   blocks_goal_ids: Optional[List[str]] = None,
+                   objective_id: Optional[str] = None) -> Goal:
+        """A durable owner-facing need ("I require X from you to proceed").
+
+        Never dispatched (``ready()`` filters ``kind='goal'``). Dedups ONLY against
+        this tenant's OPEN asks — a matching one is refreshed (its dependent-goal
+        set unioned) rather than respawned, so a recurring blocker stays ONE ask.
+        """
+        from agents.task.constants import AutonomyConfig
+        threshold = AutonomyConfig.goal_dedup_threshold()
+        blocks = list(blocks_goal_ids or [])
+        if threshold > 0:
+            for a in self.asks(user_id=user_id, status=ASK_OPEN):
+                if title_similarity(what, a.title) >= threshold:
+                    merged = sorted(set((a.payload or {}).get("blocks_goal_ids", [])) | set(blocks))
+                    payload = dict(a.payload or {})
+                    payload["blocks_goal_ids"] = merged
+                    execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
+                                  (json.dumps(payload), a.id))
+                    self._event(a.id, "ask_refreshed", {"what": what[:200]})
+                    return self.get(a.id)
+        return self.create(user_id=user_id, title=what, body=why, kind=KIND_ASK,
+                           status=ASK_OPEN, parent_id=objective_id, force=True,
+                           payload={"blocks_goal_ids": blocks})
+
+    def asks(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
+        sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"
+        params: List[Any] = [KIND_ASK, user_id]
+        if status is not None:
+            sql += " AND status=?"; params.append(status)
+        sql += " ORDER BY created_at"
+        rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
+        return [Goal.from_row(r) for r in rows]
+
+    def fulfill_ask(self, ask_id: str, *, user_id: str) -> tuple:
+        """Mark an ask fulfilled and flip its BLOCKED dependent goals back to ready.
+
+        The unblock hop: each dependent goal that is currently ``blocked`` gets a
+        clean failure counter and re-enters the dispatch queue. Tenant-scoped CAS.
+        Returns ``(ok, unblocked_count)``.
+        """
+        now = self._now()
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE goals SET status=?, completed_at=? "
+            "WHERE id=? AND kind=? AND status=? AND user_id=?",
+            (ASK_FULFILLED, now, ask_id, KIND_ASK, ASK_OPEN, user_id),
+        )
+        if rc != 1:
+            return (False, 0)
+        self._event(ask_id, "ask_fulfilled", {})
+        unblocked = 0
+        ask = self.get(ask_id)
+        for gid in (ask.payload or {}).get("blocks_goal_ids", []) if ask else []:
+            rc2 = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='ready', consecutive_failures=0,
+                      last_failure_error=NULL, claim_lock=NULL, claim_expires=NULL
+                    WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
+                (gid, user_id),
+            )
+            if rc2 == 1:
+                self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
+                unblocked += 1
+        return (True, unblocked)
 
     def objectives(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
         sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"

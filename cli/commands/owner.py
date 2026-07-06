@@ -15,6 +15,27 @@ def _registry(data_dir: str):
     return CorrespondentRegistry(os.path.join(data_dir, "correspondents.db"))
 
 
+def _allowlist(data_dir: str):
+    from core.surfaces.outbound_allowlist import OutboundAllowlist
+    return OutboundAllowlist(os.path.join(data_dir, "surfaces.db"))
+
+
+def _do_allow(allowlist, user_id, surface, target, note=""):
+    """Pure handler (unit-testable without click): grant SURFACE:TARGET for USER_ID."""
+    allowlist.allow(user_id, surface, target, note=note)
+    return True
+
+
+def _do_deny(allowlist, user_id, surface, target):
+    """Pure handler: revoke SURFACE:TARGET for USER_ID. True if an active row was revoked."""
+    return allowlist.revoke(user_id, surface, target)
+
+
+def _do_allowlist(allowlist, user_id):
+    """Pure handler: list allowlist rows for USER_ID."""
+    return allowlist.list(user_id)
+
+
 def _data_dir() -> str:
     """Resolve the SAME data home the surface daemons use (build_cli_container's
     _resolve_cli_data_home = <cwd>/.polyrob by default, or POLYROB_DATA_DIR).
@@ -115,6 +136,20 @@ def _owner_tenant(user) -> str:
     return user or resolve_owner_principal() or "local"
 
 
+def _allowlist_tenant(user) -> str:
+    """Tenant resolution for the allow/deny/allowlist commands ONLY.
+
+    These commands must write under the SAME tenant the `message` action reads at
+    runtime — a local REPL session's user_id is `core.identity.resolve_identity()`
+    (defaults to "local" when no owner is bound), NOT the instance id "rob" that
+    `_owner_tenant` defaults to via `resolve_owner_principal(default_to_instance=True)`.
+    Do not reuse `_owner_tenant` here; other owner commands intentionally keep that
+    instance-id default.
+    """
+    from core.identity import resolve_identity
+    return user or resolve_identity()
+
+
 @owner.command("pending")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def pending(user):
@@ -173,6 +208,51 @@ def reject(kind, item_id, user):
         raise SystemExit(1)
 
 
+def _goal_board():
+    from pathlib import Path
+    from agents.task.goals.board import GoalBoard
+    from core.runtime_config import get_data_root
+    return GoalBoard(str(Path(get_data_root()) / "goals.db"))
+
+
+@owner.command("asks")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def asks(user):
+    """List the agent's OPEN asks — concrete needs blocking its progress (§7.2b).
+
+    Fulfil one with `polyrob owner fulfill <id>` after providing what it asks for;
+    that flips its blocked goals back to ready so work resumes.
+    """
+    from agents.task.goals.board import ASK_OPEN
+    tenant = _owner_tenant(user)
+    rows = _goal_board().asks(user_id=tenant, status=ASK_OPEN)
+    if not rows:
+        click.echo(click.style("no open asks", dim=True))
+        return
+    click.echo(click.style(f"{len(rows)} open ask(s) for tenant {tenant}:", bold=True))
+    for a in rows:
+        blocks = (a.payload or {}).get("blocks_goal_ids", [])
+        click.echo(f"  {click.style(a.id, fg='cyan')}  {click.style(a.title, bold=True)}"
+                   + (f"  (blocks {len(blocks)} goal(s))" if blocks else ""))
+        if a.body:
+            click.echo(f"           {a.body[:200]}")
+    click.echo(click.style("\nfulfill: ", dim=True) + "polyrob owner fulfill <id>")
+
+
+@owner.command("fulfill")
+@click.argument("ask_id")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def fulfill(ask_id, user):
+    """Mark an ask FULFILLED and flip its blocked goals back to ready."""
+    tenant = _owner_tenant(user)
+    ok, unblocked = _goal_board().fulfill_ask(ask_id, user_id=tenant)
+    if not ok:
+        click.echo(click.style(f"no open ask '{ask_id}' for tenant {tenant}", fg="yellow"))
+        raise SystemExit(1)
+    click.echo(click.style(
+        f"ask {ask_id} fulfilled — {unblocked} goal(s) unblocked", fg="green"))
+
+
 @owner.command("approve")
 @click.argument("surface")
 @click.argument("address")
@@ -188,3 +268,46 @@ def approve(surface, address, thread, user):
         click.echo(click.style(
             f"no pending correspondent {surface}:{address}"
             + (f" (thread {thread})" if thread else ""), fg="yellow"))
+
+
+@owner.command("allow")
+@click.argument("surface")
+@click.argument("target")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+@click.option("--note", default="", help="Optional note (e.g. why this target is allowed)")
+def allow(surface, target, user, note):
+    """Allow the agent to send outbound messages to SURFACE:TARGET."""
+    tenant = _allowlist_tenant(user)
+    _do_allow(_allowlist(_data_dir()), tenant, surface, target, note=note)
+    click.echo(click.style(f"allowed {surface}:{target} for tenant {tenant}", fg="green"))
+
+
+@owner.command("deny")
+@click.argument("surface")
+@click.argument("target")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def deny(surface, target, user):
+    """Revoke outbound permission for SURFACE:TARGET."""
+    tenant = _allowlist_tenant(user)
+    ok = _do_deny(_allowlist(_data_dir()), tenant, surface, target)
+    if ok:
+        click.echo(click.style(f"denied {surface}:{target} for tenant {tenant}", fg="green"))
+    else:
+        click.echo(click.style(
+            f"no active allowlist entry {surface}:{target} for tenant {tenant}", fg="yellow"))
+
+
+@owner.command("allowlist")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def allowlist(user):
+    """List the outbound-send allowlist for a tenant."""
+    tenant = _allowlist_tenant(user)
+    rows = _do_allowlist(_allowlist(_data_dir()), tenant)
+    if not rows:
+        click.echo(click.style("no allowlist entries", dim=True))
+        return
+    for r in rows:
+        color = "green" if r["status"] == "active" else "red"
+        note = f"  ({r['note']})" if r["note"] else ""
+        click.echo(f"{click.style(r['status'].ljust(8), fg=color)} "
+                   f"{r['surface']}:{r['target']}{note}")

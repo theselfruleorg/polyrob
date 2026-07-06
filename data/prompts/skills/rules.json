@@ -253,5 +253,16 @@
     "priority": 6,
     "auto_activate": true,
     "description": "Find engageable accounts, conversations, and mentions on X/social using anysite (preferred) over the flaky native twitter_search, with cost discipline"
+  },
+  "x-engagement": {
+    "triggers": {
+      "tool_ids": ["twitter"],
+      "keywords": ["post on x", "post on twitter", "tweet", "reply on x", "quote tweet", "quote-tweet", "dm on x", "send a dm", "engage on x", "engage on twitter", "x thread", "twitter thread", "publish on x"],
+      "action_names": ["twitter_post", "twitter_reply", "twitter_quote", "twitter_thread", "twitter_dm"],
+      "task_patterns": ["(post|publish|tweet|thread).*(x|twitter)", "(reply|respond|quote).*(tweet|thread|conversation|x|twitter)", "(dm|direct message).*(x|twitter|account|user)", "engage.*(x|twitter|thread|conversation)"]
+    },
+    "priority": 7,
+    "auto_activate": true,
+    "description": "Write-side X/Twitter engagement — choose the right route (post, quote, reply, DM), meet the quality bar, and prove completion with live URLs, never drafts"
   }
 }

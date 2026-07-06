@@ -32,6 +32,19 @@ class SendMessageAction(BaseModel):
 	)
 
 
+class MessageTargetAction(BaseModel):
+	"""Send a message to a specific chat/recipient on a specific surface.
+	Only owner + owner-allowlisted targets are permitted (default-deny)."""
+	model_config = ConfigDict(extra='forbid')
+
+	surface: str = Field(description="Surface id, e.g. 'telegram', 'email', 'whatsapp'")
+	target: str = Field(description="Recipient/chat id on that surface (chat id, @user, or email address)")
+	text: str = Field(description="Message body to send")
+	action: str = Field(default="send", description="send | reply | edit | delete | react")
+	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
+	message_id: Optional[str] = Field(default=None, description="Target message id for edit/delete/react")
+
+
 # Twitter specific actions
 class TwitterSearchAction(BaseModel):
 	"""Model for searching tweets"""

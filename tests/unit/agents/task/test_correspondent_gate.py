@@ -56,6 +56,21 @@ def test_gate_allows_high_impact_when_not_tainted():
     assert hook("x402_pay", {}, None) is None
 
 
+def test_message_action_is_high_impact_by_name():
+    assert is_high_impact("message")
+
+
+def test_gate_blocks_message_action_when_tainted():
+    hook = make_correspondent_gate_hook(lambda: True)
+    reason = hook("message", {}, None)
+    assert reason and "correspondent" in reason.lower()
+
+
+def test_gate_allows_message_action_when_not_tainted():
+    hook = make_correspondent_gate_hook(lambda: False)
+    assert hook("message", {}, None) is None
+
+
 def test_gate_allows_low_impact_even_when_tainted():
     hook = make_correspondent_gate_hook(lambda: True)
     assert hook("filesystem", {}, None) is None
