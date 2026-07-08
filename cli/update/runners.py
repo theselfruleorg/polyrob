@@ -37,6 +37,7 @@ def _checked_capture(cmd: List[str], cwd: Optional[Path]) -> str:
 def build_runners(
     install_ctx: InstallContext,
     *,
+    target_ref: Optional[str] = None,
     python: Optional[str] = None,
     run: Optional[RunFn] = None,
     capture: Optional[CaptureFn] = None,
@@ -45,6 +46,14 @@ def build_runners(
 
     ``None`` means "no automated apply for this method" — the command falls back to the
     printed manual steps. ``run``/``capture``/``python`` are injectable for tests.
+
+    ``target_ref`` is the release ref to move to (e.g. ``"v0.5.0"``). When set (the
+    ``stable``/``pre`` channels), ``install()`` **checks out that tag** — the instance
+    runs a *pinned tag* (detached HEAD; see ``docs/ops/POLYROB-OSS-OPERATIONS.md §3``),
+    where ``git pull --ff-only`` FAILS ("not currently on a branch") and, on a branch,
+    would pull unreviewed HEAD — neither is what a release update means. ``target_ref``
+    is ``None`` only for the explicit ``--channel git`` branch-tracking mode, which keeps
+    the ``git pull --ff-only`` fast-forward.
     """
     if install_ctx.method not in (GIT, EDITABLE_GIT) or not install_ctx.repo_root:
         return None
@@ -60,7 +69,14 @@ def build_runners(
     old_sha = _capture(["git", "rev-parse", "HEAD"], repo)
 
     def install() -> None:
-        _run(["git", "pull", "--ff-only"], repo)
+        if target_ref:
+            # Tag-pinned release update: fetch the new tags and move (detached) HEAD to
+            # the released tag. Works whether HEAD was detached (prod) or on a branch.
+            _run(["git", "fetch", "--tags", "--force", "--quiet"], repo)
+            _run(["git", "checkout", "--quiet", target_ref], repo)
+        else:
+            # --channel git: track the current branch by fast-forward.
+            _run(["git", "pull", "--ff-only"], repo)
         _run(pip_install, repo)
 
     def migrate() -> None:

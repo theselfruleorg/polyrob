@@ -62,8 +62,11 @@ async def test_wallet_status_reports_addresses_not_keys():
     tool = X402PayTool(wallet=w, client=FakeX402Client(price_usd=None, pay_to=None, paid_body="X"))
     from tools.x402.service import EmptyWalletParams
     res = await tool.x402_wallet_status(EmptyWalletParams())
-    assert w.signer_for("x402").address in res.extracted_content
+    # x402 now pays from the OPERATIONAL venue (default treasury) — the surfaced
+    # address must be that spend address, and never a private key.
+    assert w.operational_signer().address in res.extracted_content
     assert raw not in res.extracted_content.lower()
+    assert w._derive_key("treasury").hex() not in res.extracted_content.lower()
 
 
 @pytest.mark.asyncio

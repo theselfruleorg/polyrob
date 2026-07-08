@@ -406,6 +406,7 @@ Browser timeouts/quality (`agents/task/constants.py:59,394-489`):
 | `AGENT_WALLET_NETWORK` | `testnet` | Wallet network (`testnet`/`mainnet`). | `core/wallet/config.py:43` |
 | `AGENT_WALLET_BACKEND` | `local_eoa` | Wallet key backend. | `core/wallet/config.py:47` |
 | `AGENT_WALLET_MAX_PER_TX_USD` | `1000000` | Per-transaction USD ceiling. | `core/wallet/config.py:50` |
+| `AGENT_WALLET_OPERATIONAL_VENUE` | `treasury` | Venue key that same-chain spend paths (x402, generic payments) SIGN with, so the funded address (`AgentWallet.address`) equals the spent-from address. "Venue" elsewhere stays a policy/accounting label; hyperliquid keeps its own delegated key. | `core/wallet/config.py::load_wallet_config` |
 | `WALLET_DAILY_CAP_USD` | unset (disabled) | Rolling 24h spend cap; unset = per-tx ceiling only. | `core/wallet/config.py:52` |
 | `CREDIT_VALUE_USD` | `0.01` | USD value of one credit. | `os.environ.get("CREDIT_VALUE_USD","0.01")` |
 | `WELCOME_BONUS` | `100` | New-user credit grant. | `os.environ.get("WELCOME_BONUS","100")` |
