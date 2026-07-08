@@ -137,11 +137,21 @@ def test_catalog_defaults_never_truncated():
 
 def test_generator_parity_with_checked_in_catalog():
     """The checked-in catalog must be exactly what the checked-in generator
-    produces (the standard generated-file contract)."""
+    produces (the standard generated-file contract).
+
+    ``scripts/`` is private-only (never shipped to the public repo — the whole
+    directory is on the publish denylist), so skip this parity check when the
+    generator is absent. The catalog itself still ships and its contract tests
+    above still run everywhere.
+    """
     import subprocess
     import sys as _sys
+    gen = REPO_ROOT / "scripts" / "gen_flags_catalog.py"
+    if not gen.exists():
+        import pytest
+        pytest.skip("flags-catalog generator is private-only (scripts/ not shipped)")
     proc = subprocess.run(
-        [_sys.executable, str(REPO_ROOT / "scripts" / "gen_flags_catalog.py"), "--check"],
+        [_sys.executable, str(gen), "--check"],
         capture_output=True, text=True,
     )
     assert proc.returncode == 0, proc.stderr

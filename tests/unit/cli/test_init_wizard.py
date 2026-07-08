@@ -110,7 +110,8 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
         "",         # model (blank)
         "research", # toolset
         "research", # template
-        "",         # (extra newline for safety)
+        "",         # owner pairing: instance id (default rob)
+        "",         # owner pairing: owner user id (default rob)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
@@ -121,9 +122,9 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
 def test_interactive_piped_default_toolset(tmp_path, monkeypatch):
     """Accepting defaults (all enter) must still write toolset."""
     home = _make_home(tmp_path)
-    # 9 prompts on the all-defaults interactive path: 6 provider keys (OpenRouter-first)
-    # + model + toolset + template. (+1 trailing for safety.)
-    piped = "\n" * 10  # all blanks / defaults
+    # 11 prompts on the all-defaults interactive path: 6 provider keys (OpenRouter-first)
+    # + model + toolset + template + owner-pairing (instance id + owner id). (+1 safety.)
+    piped = "\n" * 12  # all blanks / defaults
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
     env = (home / ".polyrob" / ".env").read_text()
@@ -181,7 +182,8 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
         "gpt-5.1",    # model → owned by openai
         "",           # toolset (default)
         "",           # template (default)
-        "",           # safety
+        "",           # owner pairing: instance id (default rob)
+        "",           # owner pairing: owner user id (default rob)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
