@@ -42,6 +42,13 @@ def _surface_gc_enabled() -> bool:
     return SurfaceConfig.surface_gc_enabled()
 
 
+def _x402_invoicing_enabled() -> bool:
+    # Read the env directly (core.env SSOT) — importing modules.x402 here would
+    # put a server-tier module on the core import graph (C3 boundary).
+    from core.env import bool_env
+    return bool_env("X402_INVOICE_ENABLED", False)
+
+
 _SURFACE_GC_INTERVAL_SEC = 3600  # hourly
 
 
@@ -89,6 +96,13 @@ def _build_curator_ticker(data_dir):
     return build_curator_ticker(data_dir=data_dir)
 
 
+def _build_settlement_watcher(task_agent):
+    # Lazy server-tier import — only executes when X402_INVOICE_ENABLED is on,
+    # so a rob-core-only environment never touches modules.x402.
+    from modules.x402.settlement_watcher import build_settlement_watcher
+    return build_settlement_watcher(task_agent)
+
+
 def _schedule_cold_start_orphan_reap() -> None:
     """P1-B review (Important #2) — reap ``polyrob.sandbox=1``-labeled persistent
     sandbox containers a previous, crashed process left running (a process that
@@ -125,6 +139,46 @@ def _schedule_cold_start_orphan_reap() -> None:
                 )
         except Exception as e:
             logger.warning("cold-start orphan sweep failed (non-fatal): %s", e)
+
+    task = asyncio.create_task(_sweep())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
+def _schedule_delegation_recovery(task_agent, data_dir: str | None = None) -> None:
+    """Cold-start-only sweep over autonomy_state.db:
+    a delegation row still 'running' at process start was crash-interrupted. Mark
+    it 'interrupted' and surface that back to its session via the self-wake rail
+    (best-effort; the durable row remains the honest record when the wake drops).
+    Never resumes the child. No-op unless AUTONOMY_STATE_DURABLE and the DB exists.
+    Fail-open: any error is logged and swallowed, never disrupts startup.
+
+    ``data_dir`` — the authoritative autonomy data dir start_autonomy already
+    threads to the cron/goal tickers; when given it overrides the store's own
+    resolution so recovery always reads the same DB the registries write.
+    """
+    import os
+
+    from agents.task.constants import AutonomyConfig
+
+    if not AutonomyConfig.autonomy_state_durable():
+        return
+
+    async def _sweep() -> None:
+        try:
+            from agents.task.agent.autonomy_state import (
+                default_autonomy_state_db,
+                recover_interrupted_delegations,
+            )
+            db_path = (os.path.join(data_dir, "autonomy_state.db")
+                       if data_dir else default_autonomy_state_db())
+            recovered = await recover_interrupted_delegations(task_agent, db_path)
+            if recovered:
+                logger.info(
+                    "delegation recovery: %d crash-interrupted delegation(s) "
+                    "marked and surfaced", recovered)
+        except Exception as e:
+            logger.warning("delegation recovery sweep failed (non-fatal): %s", e)
 
     task = asyncio.create_task(_sweep())
     _BACKGROUND_TASKS.add(task)
@@ -171,6 +225,12 @@ def start_autonomy(*, task_agent, data_dir: str = "data") -> AutonomyHandles:
         _schedule_cold_start_orphan_reap()
     except Exception as e:
         logger.warning("Could not schedule cold-start orphan reap: %s", e)
+    try:
+        # One-shot recovery: delegations still 'running' in autonomy_state.db were
+        # crash-interrupted — mark them and surface back to their sessions.
+        _schedule_delegation_recovery(task_agent, data_dir)
+    except Exception as e:
+        logger.warning("Could not schedule delegation recovery: %s", e)
     if _cron_enabled():
         try:
             handles._add("cron", _build_cron_ticker(task_agent, data_dir))
@@ -191,4 +251,9 @@ def start_autonomy(*, task_agent, data_dir: str = "data") -> AutonomyHandles:
             handles._add("surface_gc", _build_surface_gc_ticker(task_agent))
         except Exception as e:
             logger.warning("Could not start surface GC ticker: %s", e)
+    if _x402_invoicing_enabled():
+        try:
+            handles._add("settlement", _build_settlement_watcher(task_agent))
+        except Exception as e:
+            logger.warning("Could not start x402 settlement watcher: %s", e)
     return handles

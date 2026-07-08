@@ -59,6 +59,18 @@ def _check_url_ssrf(url: str) -> Optional[str]:
 	if allow_private:
 		return None
 
+	# WS-4 (compute posture): a NARROW exception for the agent's OWN sandbox server —
+	# a loopback URL on a host port the sandbox actually published is allowed, so the
+	# agent can HTTP-test what it just started. This never opens RFC1918 or cloud
+	# metadata (169.254.169.254 is not loopback); the set is empty unless the sandbox
+	# published a port (posture >= 1). Everything else still runs the strict validator.
+	try:
+		from tools.shell.loopback_allow import is_loopback_allowed
+		if is_loopback_allowed(url):
+			return None
+	except Exception:
+		pass
+
 	try:
 		from tools.mcp.security import MCPURLValidator
 		# allow_http=True: the browser uses http+https; we want only the SSRF

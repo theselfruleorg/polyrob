@@ -29,3 +29,32 @@ def register_x402_tool(force: bool = False) -> bool:
         )
     register_tool_class("x402_pay", X402PayTool)
     return True
+
+
+def x402_invoicing_enabled() -> bool:
+    from core.env import bool_env
+    return bool_env("X402_INVOICE_ENABLED", False)
+
+
+def register_x402_invoice_tool(force: bool = False) -> bool:
+    """Register 'x402_invoice' (x402_request/x402_invoices/accounting) IFF
+    X402_INVOICE_ENABLED (agent money loop). Same shape as register_x402_tool;
+    never in default tool_ids. Distinct flag from X402_CLIENT_ENABLED — invoicing
+    (receivables) needs a treasury address, not an agent wallet."""
+    if not (force or x402_invoicing_enabled()):
+        return False
+    from tools.descriptors import (
+        TOOL_DESCRIPTORS, ToolDescriptor, ToolCategory, register_tool_class,
+    )
+    from tools.x402.invoice_tool import X402InvoiceTool
+
+    if "x402_invoice" not in TOOL_DESCRIPTORS:
+        TOOL_DESCRIPTORS["x402_invoice"] = ToolDescriptor(
+            name="x402_invoice",
+            description="Create/track x402 payment requests (invoices) + the unified accounting ledger",
+            category=ToolCategory.INTEGRATION,
+            is_optional=True,
+            init_priority=80,
+        )
+    register_tool_class("x402_invoice", X402InvoiceTool)
+    return True

@@ -1,16 +1,26 @@
 """Curated MCP install catalog (P0-C / Tier-3a).
 
 A small allowlist of vetted MCP servers the agent may install at runtime, mirroring
-Hermes's ``optional-mcps/``. Only ids in the builtin allowlist (optionally extended by
-``MCP_INSTALL_ALLOWLIST``) can be installed; an arbitrary agent-supplied server config
-is never installed directly. Each entry is a NAMED, reviewed config — the agent picks an
-id, it does not hand-write the command line. No action closures — ``from __future__`` safe.
+Hermes's ``optional-mcps/``. Only ids with a NAMED, reviewed catalog entry can be
+installed; an arbitrary agent-supplied server config is never installed directly —
+the agent picks an id, it does not hand-write the command line.
+
+Operators extend the catalog with a REVIEWED JSON file via
+``MCP_INSTALL_CATALOG_FILE`` (T3-03): ``{"<id>": {"description": ..., "transport":
+"sse|http|stdio", "url": ..., "command": [...], "trust": ...}}``. (The bare
+``MCP_INSTALL_ALLOWLIST`` env can allow an id, but an id without an entry has
+nothing to install — the file is the real operator seam.)
+No action closures — ``from __future__`` safe.
 """
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,11 +53,50 @@ _BUILTIN: Dict[str, CatalogEntry] = {
 }
 
 
+def _load_file_entries() -> Dict[str, CatalogEntry]:
+    """T3-03: operator-reviewed extra entries from ``MCP_INSTALL_CATALOG_FILE``.
+
+    Fail-open to {} — a broken file must never break MCP loading; it only means
+    no extra entries. Malformed individual entries are skipped with a warning.
+    """
+    path = (os.getenv("MCP_INSTALL_CATALOG_FILE") or "").strip()
+    if not path:
+        return {}
+    try:
+        import json
+        raw = json.loads(Path(path).read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("MCP_INSTALL_CATALOG_FILE unreadable (%s): %s", path, e)
+        return {}
+    out: Dict[str, CatalogEntry] = {}
+    if not isinstance(raw, dict):
+        logger.warning("MCP_INSTALL_CATALOG_FILE must be a JSON object of id -> entry")
+        return {}
+    for sid, e in raw.items():
+        try:
+            out[str(sid)] = CatalogEntry(
+                server_id=str(sid),
+                description=str(e.get("description", "")),
+                transport=str(e.get("transport", "sse")),
+                url=e.get("url"),
+                command=list(e["command"]) if e.get("command") else None,
+                trust=str(e.get("trust", "community")),
+            )
+        except Exception as ent_err:
+            logger.warning("catalog entry %r skipped: %s", sid, ent_err)
+    return out
+
+
 class MCPCatalog:
     """Resolves catalog entries + enforces the install allowlist."""
 
     def __init__(self, entries: Optional[Dict[str, CatalogEntry]] = None) -> None:
-        self._entries = dict(entries if entries is not None else _BUILTIN)
+        if entries is not None:
+            self._entries = dict(entries)
+        else:
+            # Builtins + the operator's reviewed file entries (file wins on id clash
+            # so an operator can pin/override a builtin deliberately).
+            self._entries = {**_BUILTIN, **_load_file_entries()}
 
     def get(self, server_id: str) -> Optional[CatalogEntry]:
         return self._entries.get(server_id)

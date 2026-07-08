@@ -181,3 +181,27 @@ def test_doctor_passes_when_isolated(monkeypatch, tmp_path):
     blob = "\n".join(lines)
     assert "workspace isolation: OK" in blob
     assert "WORKSPACE UNDER CODE ROOT" not in blob
+
+
+# ---------------------------------------------------------------------------
+# owner/instance pairing + registry backend lines
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_report_shows_instance_and_registry(monkeypatch):
+    monkeypatch.delenv("POLYROB_OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("BOT_OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("SURFACE_SUPER_ADMIN_USER_IDS", raising=False)
+    out = "\n".join(doctor_report({}))
+    assert "instance id:" in out
+    assert "owner:" in out
+    assert "unpaired" in out  # no explicit owner bound
+    assert "session registry backend: memory" in out
+
+
+def test_doctor_report_shows_bound_owner(monkeypatch):
+    out = "\n".join(doctor_report({"POLYROB_OWNER_USER_ID": "alice",
+                                   "SESSION_REGISTRY_BACKEND": "sqlite"}))
+    assert "owner: alice" in out
+    assert "session registry backend: sqlite" in out
+    assert "unpaired" not in out

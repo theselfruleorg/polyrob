@@ -171,3 +171,110 @@ async def get_payment_history(
             for p in payments
         ]
     )
+
+
+def _invoice_asset_cfg(network: str):
+    """Resolve the default USDC asset config for a network (decimals + EIP-712 name)."""
+    from fastapi_x402.networks import get_default_asset_config
+    return get_default_asset_config(network)
+
+
+@router.get("/requests/{request_id}")
+async def get_invoice_challenge(request_id: str):
+    """Public: return the x402 payment challenge for an agent-created invoice.
+
+    A pending invoice yields HTTP 402 with a per-invoice ``accepts`` block (the
+    payer signs against it and POSTs to ``/pay``); a settled/expired invoice
+    returns 200 with its status. Gated by X402_INVOICE_ENABLED (404 when off)."""
+    from modules.x402.invoicing import get_payment_request, x402_invoicing_enabled
+    if not x402_invoicing_enabled():
+        raise HTTPException(status_code=404, detail="invoicing disabled")
+    row = await get_payment_request(request_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="unknown invoice")
+    if row["status"] != "pending":
+        return JSONResponse({"request_id": request_id, "status": row["status"]})
+    cfg = _invoice_asset_cfg(row["chain"])
+    atomic = int(round(float(row["amount_usd"]) * (10 ** cfg.decimals)))
+    accepts = [{
+        "scheme": "exact", "network": row["chain"], "maxAmountRequired": str(atomic),
+        "resource": f"/api/x402/requests/{request_id}/pay", "description": row["purpose"],
+        "mimeType": "application/json", "payTo": row["recipient"], "maxTimeoutSeconds": 300,
+        "asset": cfg.address, "extra": {"name": cfg.eip712_name, "version": cfg.eip712_version},
+    }]
+    return JSONResponse(
+        {"x402Version": 1, "accepts": accepts, "amount_usd": row["amount_usd"]},
+        status_code=402)
+
+
+@router.post("/requests/{request_id}/pay")
+async def pay_invoice(request_id: str, request: Request):
+    """Public: a third party settles an agent-created invoice via the facilitator.
+
+    Verifies + settles the X-PAYMENT header against a per-invoice
+    PaymentRequirements, then flips the row pending→completed. The payment_settled
+    event and originating-session wake are emitted by the settlement watcher (the
+    single wake producer), NOT here. Gated by X402_INVOICE_ENABLED."""
+    from modules.x402.invoicing import (
+        get_payment_request, settle_payment_request, claim_for_settlement,
+        revert_settlement_claim, x402_invoicing_enabled)
+    if not x402_invoicing_enabled():
+        raise HTTPException(status_code=404, detail="invoicing disabled")
+    row = await get_payment_request(request_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="unknown invoice")
+    if row["status"] != "pending":
+        raise HTTPException(status_code=409,
+                            detail=f"invoice not payable (status={row['status']})")
+    payment_header = request.headers.get("X-PAYMENT")
+    if not payment_header:
+        raise HTTPException(status_code=402, detail="X-PAYMENT header required")
+
+    # Claim the exclusive right to settle BEFORE touching the facilitator, so two
+    # concurrent distinct payers can never both settle this invoice on-chain (the
+    # loser fails the CAS and never calls the facilitator).
+    if not await claim_for_settlement(request_id):
+        raise HTTPException(status_code=409, detail="invoice already being settled")
+    try:
+        ok_verify, tx, error = await _verify_and_settle_invoice(request_id, row, payment_header)
+    except Exception:
+        await revert_settlement_claim(request_id)  # facilitator error -> payable again
+        raise
+    if not ok_verify:
+        await revert_settlement_claim(request_id)  # verify/settle rejected -> payable again
+        raise HTTPException(status_code=402, detail=error or "payment rejected")
+    ok = await settle_payment_request(request_id, transaction_hash=tx)  # settling -> completed
+    if not ok:
+        raise HTTPException(status_code=409, detail="already settled")
+    return JSONResponse({"request_id": request_id, "status": "completed", "transaction": tx})
+
+
+async def _verify_and_settle_invoice(request_id, row, payment_header):
+    """Build a per-invoice PaymentRequirements and run it through the facilitator.
+
+    Isolated so the endpoint tests can stub the facilitator (fastapi_x402 is a
+    prod-only dependency). Returns (verified_and_settled, tx_hash, error_detail).
+    A facilitator/network error raises HTTPException(502) — never settles."""
+    from fastapi_x402 import init_x402, get_facilitator_client
+    from fastapi_x402.models import PaymentRequirements
+    cfg = _invoice_asset_cfg(row["chain"])
+    atomic = int(round(float(row["amount_usd"]) * (10 ** cfg.decimals)))
+    payment_requirements = PaymentRequirements(
+        scheme="exact", network=row["chain"], maxAmountRequired=str(atomic),
+        resource=f"/api/x402/requests/{request_id}/pay", description=row["purpose"],
+        mimeType="application/json", payTo=row["recipient"], maxTimeoutSeconds=300,
+        asset=cfg.address, extra={"name": cfg.eip712_name, "version": cfg.eip712_version})
+    try:
+        init_x402(app=None, pay_to=row["recipient"], network=row["chain"],
+                  auto_add_middleware=False, load_dotenv_file=False)
+        client = get_facilitator_client()
+        verify_resp, settle_resp = await client.verify_and_settle_payment(
+            payment_header=payment_header, payment_requirements=payment_requirements)
+    except Exception as e:  # facilitator/network error — do not settle
+        logger.warning("x402 invoice %s facilitator error: %s", request_id, e)
+        raise HTTPException(status_code=502, detail="payment facilitator error")
+    if not getattr(verify_resp, "isValid", False):
+        return (False, None, getattr(verify_resp, "error", None) or "invalid payment")
+    if not getattr(settle_resp, "success", False):
+        return (False, None, getattr(settle_resp, "errorReason", None) or "settlement failed")
+    return (True, getattr(settle_resp, "transaction", None), None)

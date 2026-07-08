@@ -54,6 +54,17 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None):
 
 	results = result or []
 	have_ids = len(results) > 0 and all(getattr(r, "tool_call_id", None) for r in results)
+	# P0-2 tripwire: identity pairing is the correct path. Positional pairing with
+	# >1 result misattributes outputs whenever the executor skips/reorders/truncates
+	# actions. If ids are missing on a multi-result step, the _tool_call_id re-stamp
+	# in next_action_internal regressed — surface it loudly instead of dying silent.
+	if not have_ids and len(results) > 1:
+		logger.warning(
+			"[pair] no tool_call_id on a %d-result step; falling back to POSITIONAL "
+			"pairing (results may be misattributed if the executor skipped/reordered "
+			"actions). Check the P0-2 tool_call_id re-stamp.",
+			len(results),
+		)
 	paired = {}
 	if have_ids:
 		ids = [ar.tool_call_id for ar in results]
@@ -166,8 +177,19 @@ class ResultProcessingMixin:
 			# Step 2: Extract AI content from model_output (reuse existing pattern from line 2057)
 			try:
 				if model_output and hasattr(model_output, 'current_state'):
-					brain_dict = model_output.current_state.model_dump(exclude_unset=True)
-					ai_content = json.dumps(brain_dict, separators=(',', ':'))  # Compact JSON
+					_mem = getattr(model_output.current_state, 'memory', '') or ''
+					if _mem.startswith("Synthesis pending"):
+						# P2-16: this is the pre-synthesis PLACEHOLDER brain (a native step
+						# with tool calls but no parseable brain JSON). The synthesis that
+						# replaces it runs AFTER this atomic add, so serializing it here
+						# persisted "Synthesis pending - will be generated..." verbatim into
+						# provider-visible history. Store neutral content instead — the
+						# tool_calls carry the turn, and the real (synthesized) brain is
+						# recorded to memory downstream by _process_action_results.
+						ai_content = "Processing actions"
+					else:
+						brain_dict = model_output.current_state.model_dump(exclude_unset=True)
+						ai_content = json.dumps(brain_dict, separators=(',', ':'))  # Compact JSON
 				else:
 					ai_content = "Processing actions"
 			except Exception as e:

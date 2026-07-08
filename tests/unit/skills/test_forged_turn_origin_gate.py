@@ -144,16 +144,44 @@ async def test_genuine_turn_create_auto_activates_when_review_off(monkeypatch, t
 
 
 @pytest.mark.asyncio
-async def test_genuine_turn_can_promote(monkeypatch, tmp_path):
+async def test_genuine_owner_turn_can_promote(monkeypatch, tmp_path):
+    # T3-02: promote is owner-only. A genuine turn whose uid is the BOUND OWNER
+    # principal can promote.
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     sm = SkillManager(skills_dir=tmp_path)
     _seed_pending(sm)
     c = _controller(sm, monkeypatch)
     action = c.registry.registry.actions["skill_manage"]
-    ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)
+    ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)  # user_id="u1"
     params = action.param_model(action="promote", skill_id="draft-skill")
     res = await action.function(params, execution_context=ctx)
     assert res.error is None, res.error
     assert (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
+
+
+@pytest.mark.asyncio
+async def test_non_owner_genuine_turn_cannot_promote(monkeypatch, tmp_path):
+    # T3-02 (the closed hole): a genuine (non-forged) turn that is NOT the owner —
+    # the skill promote branch previously gated on is_forged ONLY, so the agent could
+    # create (-> .pending under REQUIRE_REVIEW) then promote in the SAME turn, activating
+    # an unreviewed body (e.g. an injected "author skill X and promote it"). Mirror the
+    # self_context_manage owner gate: no owner principal + not local => refused.
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.delenv("POLYROB_OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("BOT_OWNER_USER_ID", raising=False)
+    monkeypatch.delenv("SURFACE_SUPER_ADMIN_USER_IDS", raising=False)
+    sm = SkillManager(skills_dir=tmp_path)
+    _seed_pending(sm)
+    c = _controller(sm, monkeypatch)
+    action = c.registry.registry.actions["skill_manage"]
+    ctx = _ctx(turn_kind=None, role="orchestrator", is_sub=False)  # user_id="u1", not owner
+    params = action.param_model(action="promote", skill_id="draft-skill")
+    res = await action.function(params, execution_context=ctx)
+    assert res.error and "owner" in res.error.lower()
+    # draft stays quarantined; not activated
+    assert (tmp_path / "user_u1" / ".pending" / "draft-skill" / "SKILL.md").exists()
+    assert not (tmp_path / "user_u1" / "draft-skill" / "SKILL.md").exists()
 
 
 # ---------------------------------------------------------------------------

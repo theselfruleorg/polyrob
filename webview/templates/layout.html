@@ -73,15 +73,19 @@
         <a href="/" class="terminal-brand">{% block header_title %}{{ console_display_name() }}{% endblock %}</a>
         <div class="terminal-nav">
             <!-- Webgate v1 single-user surfaces (core, both modes) -->
+            <a href="/activity" class="nav-link">Activity</a>
             <a href="/memory" class="nav-link">Memory</a>
             <a href="/autonomy" class="nav-link">Autonomy</a>
+            <a href="/finance" class="nav-link">Finance</a>
             <a href="/identity" class="nav-link">Identity</a>
             <a href="/system" class="nav-link">System</a>
             <a href="/settings" class="nav-link">Settings</a>
-            {# Multitenant-only links hide in single-user. `is_multitenant` is passed
-               by the webgate pages; existing pages don't pass it (undefined → shown,
-               preserving today's multitenant nav byte-equivalently). #}
-            {% set _show_tenant = (is_multitenant is not defined) or is_multitenant %}
+            {# Multitenant-only links hide in single-user. An explicitly-passed
+               `is_multitenant` wins; pages that don't pass it fall back to the
+               posture SSOT via the `is_multitenant_posture` Jinja global (P0-3 —
+               undefined used to mean "shown", leaking Profile/Sign In into
+               local/own_ops on the server.py-rendered pages). #}
+            {% set _show_tenant = is_multitenant if is_multitenant is defined else is_multitenant_posture() %}
             {% if _show_tenant %}
             <a href="/profile" class="nav-link">Profile</a>
             {% if is_admin %}
@@ -94,14 +98,6 @@
             {% endif %}
             {% endif %}
         </div>
-    </div>
-    
-    <!-- Beta Warning Banner -->
-    <div class="beta-warning-banner" id="beta-banner">
-        <div class="beta-warning-content">
-            ⚠️ Beta: Access open for {{ branding().access_gate_label }}. Get full instructions at <a href="{{ branding().support_url }}" target="_blank" rel="noopener noreferrer">{{ branding().support_display }}</a>
-        </div>
-        <button class="banner-close-btn" id="banner-close-btn" aria-label="Close banner" title="Close banner">×</button>
     </div>
     
     <div class="container {% block container_class %}{% endblock %}">
@@ -125,27 +121,5 @@
     </div>
 
     {% block scripts %}{% endblock %}
-
-    <!-- Banner close functionality -->
-    <script>
-    (function() {
-        const banner = document.getElementById('beta-banner');
-        const closeBtn = document.getElementById('banner-close-btn');
-
-        // Check if user has previously closed the banner
-        const bannerClosed = localStorage.getItem('beta-banner-closed');
-        if (bannerClosed === 'true') {
-            banner.classList.add('hidden');
-        }
-
-        // Handle close button click
-        if (closeBtn) {
-            closeBtn.addEventListener('click', function() {
-                banner.classList.add('hidden');
-                localStorage.setItem('beta-banner-closed', 'true');
-            });
-        }
-    })();
-    </script>
 </body>
 </html> 

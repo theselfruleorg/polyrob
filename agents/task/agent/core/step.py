@@ -280,8 +280,13 @@ class StepMixin:
 				)
 				if steps_since >= COMPACTION_COOLDOWN_STEPS:
 					self.logger.info(f"📦 High context: {usage_pct:.1f}% - LLM compaction")
-					await self.message_manager.llm_compact_history()
-					self._last_llm_compaction_step = self.state.n_steps
+					# P2-15: only start the cooldown when compaction ACTUALLY ran. A
+					# transient abort (rate-limit/connection blip), a <15-message history,
+					# or an anti-thrash no-op returns False and is designed to retry next
+					# step — stamping the cooldown regardless delayed that retry by
+					# COMPACTION_COOLDOWN_STEPS while usage sat in the 85-95% band.
+					if await self.message_manager.llm_compact_history():
+						self._last_llm_compaction_step = self.state.n_steps
 				else:
 					self.logger.info(
 						f"📦 High context: {usage_pct:.1f}% - compacted {steps_since} step(s) ago, "
@@ -530,7 +535,21 @@ class StepMixin:
 
 	async def _call_llm(self, input_messages):
 		"""Phase 2: call the LLM and normalize its tool calls -> (model_output, tool_calls_to_pass)."""
-		model_output = await self.get_next_action(input_messages)
+		# P2-14: get_next_action consumes one-shot ephemerals (correspondent reply /
+		# RECALL) into a pending buffer. Drop them once the LLM responds; on a transient
+		# failure, re-queue them so the next step re-includes them instead of losing them.
+		try:
+			model_output = await self.get_next_action(input_messages)
+		except Exception:
+			try:
+				self.message_manager.restore_ephemeral_on_failure()
+			except Exception:
+				pass
+			raise
+		try:
+			self.message_manager.commit_ephemeral_consumption()
+		except Exception:
+			pass
 
 		# Handle tool_call_id based on native vs non-native mode
 		tool_calls_to_pass = None

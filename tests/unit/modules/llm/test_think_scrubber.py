@@ -85,3 +85,20 @@ def test_brain_state_wrapped_in_think_is_stripped():
 def test_reasoning_then_real_answer():
     content = "<think>\nlet me think\n</think>\nThe answer is 42."
     assert scrub_think_blocks(content).strip() == "The answer is 42."
+
+
+def test_p2_13_nested_same_variant_no_leak():
+    """P2-13: a nested same-variant reasoning block must be removed IN FULL (depth-
+    aware close matching), not truncated at the first inner close leaking the tail."""
+    from modules.llm.think_scrubber import scrub_think_blocks
+    assert scrub_think_blocks(
+        "<think>a<think>b</think>secret leftover</think>ok") == "ok"
+    assert scrub_think_blocks(
+        "<think>outer<think>inner</think>more</think>visible") == "visible"
+
+
+def test_p2_13_non_nested_unchanged():
+    """Regression: a simple closed pair still strips normally."""
+    from modules.llm.think_scrubber import scrub_think_blocks
+    assert scrub_think_blocks("<think>x</think>after") == "after"
+    assert scrub_think_blocks("before<think>x</think>after") == "beforeafter"

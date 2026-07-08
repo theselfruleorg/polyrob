@@ -118,17 +118,39 @@ class BackgroundReviewMixin:
             manager = self.orchestrator.get_sub_agent_manager() if self.orchestrator else None
             if manager is None:
                 return
-            aux = None
-            try:
-                aux = self._provision_aux_llm("judge")  # cheap model; None if unconfigured
-            except Exception:
-                aux = None
+            # P2-8: reuse the agent's cached judge client instead of building a fresh
+            # isolated client (with its own httpx pool) on every fire — the old code
+            # leaked one pool per background review. Cached on self._judge_llm (the same
+            # slot _validate_output uses) and closed once at session cleanup (M2).
+            aux = getattr(self, "_judge_llm", None)
+            if aux is None:
+                try:
+                    # P2-9: async provisioning — don't block the loop building the client.
+                    aux = await self._provision_aux_llm_async("judge")
+                    if aux is not None:
+                        self._judge_llm = aux
+                except Exception:
+                    aux = None
+            # P2-10: make the reviewer's model cost VISIBLE. The cheap-aux map has no
+            # openrouter/nvidia key, so on the default OpenRouter deploy `aux` is None and
+            # this PROACTIVE loop (fires every BG_REVIEW_INTERVAL turns without any user
+            # ask) runs up to bg_review_max_steps on the FLAGSHIP main model. Log at INFO
+            # which model it will use so the cost isn't silent (add an openrouter/nvidia
+            # cheap-map entry or set AUX_MODEL_JUDGE to route it cheap).
+            _review_llm = aux or self.llm
+            if aux is None:
+                logger.info(
+                    "background review running on the MAIN model %r (no cheap aux "
+                    "resolved) — set AUX_MODEL_JUDGE or add a provider cheap-map entry "
+                    "to route it to a cheaper model",
+                    getattr(self.llm, "model_name", getattr(self.llm, "model_type", "?")),
+                )
             await manager.run_subtask(
                 task=build_review_prompt(),
                 parent_agent_id=self.agent_id,
                 profile_id="executor",
                 max_steps=AutonomyConfig.bg_review_max_steps(),
-                parent_llm=aux or self.llm,
+                parent_llm=_review_llm,
                 skip_complexity_check=True,
             )
         except Exception as e:

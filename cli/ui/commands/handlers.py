@@ -1442,7 +1442,9 @@ def _h_telemetry(ctx: CommandContext) -> None:
             rt.add_column("kind"); rt.add_column("outcome/detail"); rt.add_column("session", style="dim")
             for r in recent:
                 a = r.get("attrs", {})
-                detail = a.get("outcome") or a.get("action") or a.get("reason") or ""
+                # memory_* events carry a scrubbed preview instead of an outcome (T4-02)
+                detail = (a.get("outcome") or a.get("action") or a.get("reason")
+                          or a.get("preview") or "")
                 rt.add_row(r["kind"], str(detail), (r.get("session_id") or "")[:12])
             console.print(rt)
         return
@@ -1454,6 +1456,65 @@ def _h_telemetry(ctx: CommandContext) -> None:
     lines.append(f"  total events: {agg.get('total_events', 0)}")
     lines.append(f"  wallet spend: ${agg.get('total_spend_usd', 0.0):.4f}")
     ctx.emit("\n".join(lines), title="telemetry")
+
+
+def _h_pending(ctx: CommandContext) -> None:
+    """Owner review queue for the agent's self-evolution proposals (T4-06b/T4-07).
+
+    Umbrella over `core.self_evolution` — the same pipeline `polyrob owner
+    pending/promote/reject` administers, now reachable without leaving the REPL.
+    (NOT the marketplace-install quarantine — that stays under `/skills approve`.)
+
+    Usage:
+      /pending                       — list pending proposals (skills + identity notes)
+      /pending show <kind> <id>      — full-body review of one proposal (T3-09)
+      /pending approve <kind> <id>   — promote to active (kind: skill | self_context)
+      /pending reject <kind> <id>    — reject (archive, recoverable)
+    """
+    import core.instance as _ci
+    from core import self_evolution
+
+    uid = (ctx.user_id or "").strip() or "local"
+    # The REPL is a trusted local operator surface ({cli,local,repl}); the
+    # local=True bypass is the documented owner check for it. A bound owner
+    # principal always wins; an unbound local operator IS the owner here.
+    if not _ci.is_owner(uid, local=True):
+        ctx.emit("(owner-only command — the review queue gates self-evolution)")
+        return
+
+    cfg = getattr(ctx.container, "config", None) if ctx.container else None
+    home_dir = getattr(cfg, "data_dir", "data") or "data"
+    instance_id = _ci.resolve_instance_id()
+
+    args = list(ctx.args or [])
+    if args and args[0].lower() in ("approve", "promote", "reject", "show"):
+        if len(args) < 3:
+            ctx.emit("usage: /pending show|approve|reject <kind> <id>   (kind: skill | self_context)")
+            return
+        verb, kind, item_id = args[0].lower(), args[1], " ".join(args[2:])
+        if verb == "show":
+            ok, body = self_evolution.show(kind, item_id, user_id=uid,
+                                           home_dir=home_dir, instance_id=instance_id)
+            ctx.emit(body, title=f"pending {kind}:{item_id}" if ok else "pending",
+                     style="" if ok else "yellow")
+            return
+        fn = self_evolution.reject if verb == "reject" else self_evolution.promote
+        ok, msg = fn(kind, item_id, user_id=uid, home_dir=home_dir, instance_id=instance_id)
+        ctx.emit(msg, title="pending", style="" if ok else "yellow")
+        return
+
+    items = self_evolution.list_pending(uid, home_dir=home_dir, instance_id=instance_id)
+    if not items:
+        ctx.emit("no pending proposals", title="pending")
+        return
+    lines = [f"{len(items)} pending proposal(s):"]
+    for it in items:
+        label = "identity" if it["kind"] == "self_context" else "skill"
+        lines.append(f"  [{label}] {it['kind']}:{it['id']}  ({it['chars']} chars)")
+        lines.append(f"      {it['preview']}")
+    lines.append("")
+    lines.append("approve: /pending approve <kind> <id>    reject: /pending reject <kind> <id>")
+    ctx.emit("\n".join(lines), title="pending")
 
 
 # ---------------------------------------------------------------------------
@@ -1473,6 +1534,18 @@ def build_default_registry() -> CommandRegistry:
     reg.register(
         Command("telemetry", _h_telemetry,
                 "Cross-session event counts + wallet spend (arg: window e.g. 24h)")
+    )
+    from cli.ui.commands.h_journey import h_journey as _h_journey
+    reg.register(
+        Command("journey", _h_journey,
+                "Timeline: what I did, learned, earned, changed (arg: window e.g. 24h|7d)",
+                usage="[window]")
+    )
+    from cli.ui.commands.h_learn import h_learn as _h_learn
+    reg.register(
+        Command("learn", _h_learn,
+                "Describe a procedure; distill it into a pending skill for review",
+                usage="<description>")
     )
     reg.register(Command("tools", _h_tools, "List the agent's registered tools/actions"))
     reg.register(Command(
@@ -1567,6 +1640,11 @@ def build_default_registry() -> CommandRegistry:
         "kb", h_kb,
         "List + search the local knowledge base",
         usage="[list [collection] | search <query>]",
+    ))
+    reg.register(Command(
+        "pending", _h_pending,
+        "Review the agent's pending self-evolution proposals (show/approve/reject)",
+        usage="[show|approve|reject <kind> <id>]",
     ))
     return reg
 

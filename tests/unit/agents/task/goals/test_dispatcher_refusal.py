@@ -62,3 +62,56 @@ def test_genuine_result_is_recorded_as_success():
     asyncio.run(disp._run_goal(goal))
     assert board.successes, "a genuine result must be recorded as success"
     assert not board.failures, "a genuine result must NOT be recorded as failure"
+
+
+# --- T2-01: a run that finished the loop but never called done() (max_steps
+#     exhaustion / conversational drift) returns a non-refusal STATUS string that
+#     looks like success. The board must record it as FAILURE, not success. ---
+
+class _OrchAgent:
+    """Task-agent whose run_session returns the generic success STATUS string, but
+    whose resident orchestrator reveals whether the main agent actually called done()."""
+
+    def __init__(self, done):
+        self._done = done
+
+    async def create_session(self, *, user_id, request):
+        return {"id": "s3"}
+
+    async def run_session(self, user_id, session_id):
+        return "Session completed successfully"
+
+    def get_orchestrator(self, session_id):
+        done = self._done
+
+        class _R:
+            is_done = done
+
+        class _A:
+            _last_result = [_R()]
+            _is_sub_agent = False
+
+        class _O:
+            agents = {"main": _A()}
+
+        return _O()
+
+    deliver_self_wake = None
+
+
+def test_exhausted_run_without_done_is_recorded_as_failure():
+    board = _FakeBoard()
+    disp = GoalDispatcher(board, _OrchAgent(done=False))
+    goal = Goal(id="g3", user_id="u1", title="post the announcement")
+    asyncio.run(disp._run_goal(goal))
+    assert board.failures, "a run that never called done() must be recorded as failure"
+    assert not board.successes, "an exhausted run must NOT be recorded as success"
+
+
+def test_genuine_done_run_is_recorded_as_success():
+    board = _FakeBoard()
+    disp = GoalDispatcher(board, _OrchAgent(done=True))
+    goal = Goal(id="g4", user_id="u1", title="post the announcement")
+    asyncio.run(disp._run_goal(goal))
+    assert board.successes, "a run that called done() must be recorded as success"
+    assert not board.failures

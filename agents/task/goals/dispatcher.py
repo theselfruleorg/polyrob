@@ -16,10 +16,29 @@ import logging
 import os
 from typing import Any, Optional
 
-from agents.task.goals.board import GoalBoard, Goal, STATUS_DONE, STATUS_READY
+from agents.task.goals.board import GoalBoard, Goal, STATUS_BLOCKED, STATUS_DONE, STATUS_READY
 from agents.task.runtime.run_as_session import run_task_as_session as _run_task_as_session
 
 logger = logging.getLogger(__name__)
+
+
+def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
+    """T4-03: emit a goal_run event to the durable event log (fail-open).
+
+    Goal runs previously wrote only the episodes table, never the event_log, so
+    `polyrob telemetry` — the tool built to answer "what ran?" — showed cron and
+    self-wake but not the goals that did most of the autonomous work. Mirror _cron_ev
+    so goal lifecycle rides the same uniform autonomy/governance stream."""
+    try:
+        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        if event_log_enabled():
+            get_event_log().record(
+                "goal_run", user_id=getattr(goal, "user_id", ""),
+                source="goal", goal_id=getattr(goal, "id", None),
+                outcome=outcome, reason=reason, **extra)
+    except Exception:
+        pass
+
 
 # Tools a self-decomposed CHILD goal may inherit from its parent when it set none.
 # Deliberately excludes money/social/trading tools (wallet, x402, hyperliquid,
@@ -31,6 +50,41 @@ CHILD_INHERITABLE_TOOLS = frozenset(
 
 # Safe default toolset when a goal sets no tools and has nothing inheritable.
 _DEFAULT_GOAL_TOOLS = ["filesystem", "task"]
+
+# WS-8 (compute posture): the compute tools an autonomous goal/cron run needs to
+# actually build/run/serve. Provisioned ONLY at AGENT_COMPUTE_POSTURE>=1 (and each
+# call still passes compute_posture_allows in-session — an owner-tenant autonomous
+# run does). Sandbox-contained at posture 1; never money/social. Resolved at CALL
+# time so posture 0 is byte-identical.
+_COMPUTE_GOAL_TOOLS = ["code_execution", "shell", "coding"]
+
+
+def _compute_posture_at_least_1() -> bool:
+    try:
+        from agents.task.constants import compute_posture
+        return compute_posture() >= 1
+    except Exception:
+        return False
+
+
+def default_goal_tools() -> list:
+    """Posture-aware default goal toolset. Posture 0: ['filesystem','task']
+    (byte-identical). Posture>=1: + the compute tools (code_execution/shell/coding)."""
+    tools = list(_DEFAULT_GOAL_TOOLS)
+    if _compute_posture_at_least_1():
+        for t in _COMPUTE_GOAL_TOOLS:
+            if t not in tools:
+                tools.append(t)
+    return tools
+
+
+def child_inheritable_tools() -> frozenset:
+    """Posture-aware child-inheritable set. Posture 0: the frozen module constant.
+    Posture>=1: + code_execution/shell so a self-decomposed compute goal isn't
+    tool-starved (still sandbox-contained; money/social remain excluded)."""
+    if _compute_posture_at_least_1():
+        return CHILD_INHERITABLE_TOOLS | {"code_execution", "shell"}
+    return CHILD_INHERITABLE_TOOLS
 
 
 def effective_goal_concurrency() -> int:
@@ -79,6 +133,12 @@ class GoalDispatcher:
         # which at worst re-escalates one stall after a deploy — acceptable.
         self._empty_planner_runs = 0
         self._empty_pipeline_escalated = False
+        # Budget-gate push latch: tenants for whom an owner "over budget" push has
+        # already gone out this over-budget episode. The durable ask is dedup-
+        # refreshed every tick (fine), but the owner PUSH must fire ONCE per episode,
+        # not every 60s tick per held goal. Cleared when the tenant is back under
+        # budget (a fresh episode may push again). In-memory: resets on restart.
+        self._budget_pushed: set = set()
 
     async def dispatch_once(self) -> int:
         """Claim and run up to GOAL_MAX_CONCURRENT ready goals. Returns #dispatched.
@@ -160,7 +220,10 @@ class GoalDispatcher:
             ttl = AutonomyConfig.goal_claim_ttl_sec()
             worker = f"goal-dispatch-{os.getpid()}"
             dispatched = 0
+            budget_aware = AutonomyConfig.budget_aware_autonomy()
             for g in ready:
+                if budget_aware and await self._over_budget(g):
+                    continue  # held — an owner-visible ask was raised instead of burning
                 claimed = self.board.claim(g.id, worker, ttl_seconds=ttl)
                 if claimed is None:
                     continue  # another worker won the race
@@ -232,6 +295,7 @@ class GoalDispatcher:
         if _shared_ws:
             from core.interactive_gate import mark_busy
             mark_busy()
+        _goal_ev(goal, "started")
         try:
             payload = goal.payload or {}
             from core.runtime_config import resolve_runtime_config
@@ -314,6 +378,26 @@ class GoalDispatcher:
             if blocked_need is not None:
                 await self._fail_blocked_declared(goal, session_id, outcome, blocked_need)
                 return
+            # T2-01: a run that finished the loop but never called done() (max_steps
+            # exhaustion, or a reply-only conversational exit) returns a non-refusal
+            # status string that looks identical to a genuine completion. Recording it
+            # as board success was the prod "marked done, never posted" failure. Inspect
+            # the resident orchestrator's main-agent done signal; only a POSITIVE
+            # "ran but no done()" (False) routes to the failure/escalation rail —
+            # None (undeterminable) falls through to the legacy path unchanged. The
+            # orchestrator is fetched once here and reused for provenance below.
+            orchestrator = None
+            try:
+                orchestrator = self.task_agent.get_orchestrator(session_id)
+            except Exception:
+                orchestrator = None
+            from agents.task.runtime.run_as_session import completed_via_done
+            if completed_via_done(orchestrator) is False:
+                await self._fail_run(
+                    goal, session_id,
+                    error="run ended without completing (no done() — likely ran out of steps)",
+                    outcome=outcome)
+                return
             # §3.2 (fail-open — never block on uncertainty): with the judge on and
             # an acceptance set, 'unmet' -> record_failure (normal breaker retries);
             # 'met'/'unclear'/error -> the legacy success path.
@@ -343,7 +427,7 @@ class GoalDispatcher:
                 return
             try:
                 from modules.memory.episodic import finalize_episode, collect_provenance
-                orchestrator = self.task_agent.get_orchestrator(session_id)
+                # Reuse the orchestrator fetched for the T2-01 done-check above.
                 prov = await collect_provenance(orchestrator)
                 await finalize_episode(
                     session_id=session_id, user_id=goal.user_id, kind="goal",
@@ -353,6 +437,8 @@ class GoalDispatcher:
                     artifacts=prov["artifacts"], meta={"source": "goal"},
                 )
                 recorded_success = True
+                _goal_ev(goal, "done", session_id=session_id,
+                         spend_usd=prov["spend_usd"], steps=prov["steps"])
             except Exception:
                 logger.warning("goal episodic write failed", exc_info=True)
             if outcome:
@@ -364,6 +450,7 @@ class GoalDispatcher:
                 await self._self_wake(goal, session_id, final)
         except Exception as e:
             logger.error("goal %s run failed: %s", goal.id, e, exc_info=True)
+            _goal_ev(goal, "failed", reason=str(e)[:200], session_id=session_id)
             try:
                 _g = self.board.record_failure(goal.id, error=str(e), session_id=session_id)
                 await self._maybe_escalate_blocked(_g)
@@ -413,6 +500,10 @@ class GoalDispatcher:
                     _g = self.board.get(goal.id) or _g
             except Exception:
                 logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
+        # T4-03: surface the verified-failure outcome (blocked vs failed) in the durable
+        # event log so `polyrob telemetry` reflects it, not just the episodes table.
+        _goal_ev(goal, "blocked" if getattr(_g, "status", None) == STATUS_BLOCKED else "failed",
+                 reason=str(error)[:200], session_id=session_id)
         if outcome:
             try:
                 self.board.set_outcome(goal.id, outcome)
@@ -449,10 +540,66 @@ class GoalDispatcher:
                 parent = None
             if parent is not None:
                 parent_tools = (parent.payload or {}).get("tools") or []
-                inherited = [t for t in parent_tools if t in CHILD_INHERITABLE_TOOLS]
+                inheritable = child_inheritable_tools()  # posture-aware (WS-8)
+                inherited = [t for t in parent_tools if t in inheritable]
                 if inherited:
                     return inherited
-        return list(_DEFAULT_GOAL_TOOLS)
+        return default_goal_tools()  # posture-aware (WS-8)
+
+    async def _over_budget(self, goal) -> bool:
+        """True when the goal's tenant has spent >= the trailing-window budget.
+
+        Consults the unified ledger per-goal (the ledger is per-tenant; the ready
+        set is cross-tenant). Over budget -> raise a durable owner-visible ask and
+        optionally push, then hold the goal (left 'ready'). Fail-open: any ledger
+        error returns False so a metering hiccup never stalls dispatch."""
+        try:
+            from agents.task.constants import AutonomyConfig
+            budget = AutonomyConfig.autonomy_budget_usd()
+            if budget <= 0:
+                return False
+            window = AutonomyConfig.autonomy_budget_window_days()
+            from modules.credits.unified_ledger import build_ledger
+            ledger = await build_ledger(goal.user_id, days=window)
+            spent = float(ledger.get("total_spend_usd", 0.0) or 0.0)
+            if spent < budget:
+                # Back under budget — clear the push latch so a future over-budget
+                # episode for this tenant escalates again.
+                self._budget_pushed.discard(goal.user_id)
+                return False
+        except Exception:
+            logger.debug("budget gate check failed (fail-open)", exc_info=True)
+            return False
+        # Over budget — raise a durable, dedup-refreshing ask (owner-visible) and
+        # optionally push. Never claim/run the goal.
+        try:
+            self.board.create_ask(
+                user_id=goal.user_id,
+                what="Autonomous goals paused — spend budget reached",
+                why=(f"Spent ${spent:.2f} of ${budget:.2f} over the last {window}d; "
+                     f"goal '{goal.title}' held. Raise AUTONOMY_BUDGET_USD or fulfill "
+                     "this ask to resume."),
+                blocks_goal_ids=[goal.id],
+            )
+        except Exception:
+            logger.debug("budget ask creation skipped", exc_info=True)
+        # Owner PUSH once per over-budget episode (the ask row above is the durable,
+        # dedup-refreshed record; the push must not spam every tick per held goal).
+        if goal.user_id not in self._budget_pushed:
+            try:
+                from core.self_evolution import push_owner_message
+                container = getattr(self.task_agent, "container", None)
+                if container is not None:
+                    await push_owner_message(
+                        container,
+                        f"[budget] ${spent:.2f}/${budget:.2f} spent over {window}d — autonomous "
+                        f"goals paused. Goal '{goal.title}' held.")
+                self._budget_pushed.add(goal.user_id)
+            except Exception:
+                logger.debug("budget push skipped", exc_info=True)
+        logger.info("goal %s held: tenant over budget ($%.2f >= $%.2f)",
+                    goal.id, spent, budget)
+        return True
 
     async def _maybe_escalate_blocked(self, goal) -> None:
         """§7.2: when record_failure tripped the breaker (goal now 'blocked'), surface
@@ -462,13 +609,16 @@ class GoalDispatcher:
             await maybe_escalate_blocked(self.task_agent, goal)
         except Exception:
             logger.debug("blocker escalation skipped", exc_info=True)
-        # §7.2b: regardless of whether the push reached the owner, leave a TRACKED
-        # ask on the board so the need survives (and `owner fulfill` can unblock).
+        # §7.2b / T2-03 / T4-04: ALWAYS leave a TRACKED ask for a blocked goal so the
+        # need survives even when no owner push went out. This ask creation was gated on
+        # the SAME goal_blocker_escalation() flag as the push, so with the default OFF a
+        # blocked goal left NO ask and `owner asks/fulfill` had nothing to consume — the
+        # need evaporated silently (the prod "X-write gap never escalated" shape). The
+        # ask is silent + durable + tenant-scoped and create_ask dedup-refreshes, so it
+        # is safe unconditionally; only the PUSH above stays posture-gated.
         try:
-            from agents.task.constants import AutonomyConfig
             from agents.task.goals.board import STATUS_BLOCKED
-            if (AutonomyConfig.goal_blocker_escalation()
-                    and getattr(goal, "status", None) == STATUS_BLOCKED):
+            if getattr(goal, "status", None) == STATUS_BLOCKED:
                 self.board.create_ask(
                     user_id=goal.user_id,
                     what=f"Unblock goal: {goal.title}",
@@ -479,21 +629,39 @@ class GoalDispatcher:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
     async def _self_wake(self, goal: Goal, session_id: str, final: str) -> None:
-        """Forge a follow-up turn announcing the goal result (W1 rail). Fail-open."""
+        """Surface a completed goal's result (W1 rail). Fail-open.
+
+        T2-02: ``deliver_self_wake`` re-enters the goal's OWN just-finished session — an
+        empty room the owner never watches — so a completed goal told no one. In
+        addition to the (best-effort, agent-continuation) self-wake, PUSH the result to
+        the OWNER via ``push_owner_message`` (durable: a sink-less local owner still sees
+        it via ``polyrob telemetry``, per T4-04), so the owner is reliably told
+        regardless of whether a live session is watching. (Retargeting the
+        agent-continuation wake at the owner's live chat session needs a
+        latest-session-for-user resolver on the chat registry — deferred.)
+        """
         try:
-            deliver = getattr(self.task_agent, "deliver_self_wake", None)
-            if deliver is None:
-                return
-            text = (f"Background goal '{goal.title}' completed.\n"
+            text = (f"✅ Background goal '{goal.title}' completed.\n"
                     f"Result:\n{str(final)[:1500]}")
-            delivered = await deliver(session_id, goal.user_id, text,
-                                      metadata={"source": "goal", "goal_id": goal.id})
-            if not delivered:
-                # deliver_self_wake returns False when SELF_WAKE_ENABLED is off,
-                # the session is remote/non-resident (dropped+audited), or the
-                # reentry budget is exhausted -- the owner was NOT actually told,
-                # so don't mark the episode surfaced (FIX1: that would make the
-                # session-start digest silently omit this run).
+            # T2-02: tell the OWNER (surface-independent, durable).
+            owner_told = False
+            try:
+                from core.self_evolution import push_owner_message
+                owner_told = await push_owner_message(
+                    getattr(self.task_agent, "container", None), text)
+            except Exception:
+                logger.debug("goal completion owner-push skipped for %s", goal.id,
+                             exc_info=True)
+            # Best-effort agent-continuation via the existing self-wake rail.
+            deliver = getattr(self.task_agent, "deliver_self_wake", None)
+            delivered = False
+            if deliver is not None:
+                delivered = await deliver(session_id, goal.user_id, text,
+                                          metadata={"source": "goal", "goal_id": goal.id})
+            if not (delivered or owner_told):
+                # Nobody was actually told (self-wake off/dropped/budget-exhausted AND no
+                # owner push landed) -- don't mark the episode surfaced (FIX1: that would
+                # make the session-start digest silently omit this run).
                 return
             # Task 7: the self-wake delivery IS "telling the owner" — mark this
             # goal's episode surfaced so the digest doesn't repeat it. Runs after
@@ -610,21 +778,25 @@ class GoalDispatcher:
                 if o.user_id == user_id:
                     objective_title = o.title
                     break
+            # T2-03/T4-04: mark the stall escalated once the threshold is reached,
+            # independent of whether the owner PUSH lands — the durable ask below is the
+            # owner-visible artifact and must be created even under the silent posture.
+            # (_empty_pipeline_escalated resets when the board refills, so this stays
+            # once-per-stall and never spams.)
+            self._empty_pipeline_escalated = True
             from agents.task.goals.escalation import maybe_escalate_empty_pipeline
-            sent = await maybe_escalate_empty_pipeline(
+            await maybe_escalate_empty_pipeline(
                 self.task_agent, objective_title=objective_title,
                 planner_summary=planner_summary)
-            if sent:
-                self._empty_pipeline_escalated = True
-                # §7.2b: track the stall as an ask too, so it's fulfillable.
-                try:
-                    self.board.create_ask(
-                        user_id=user_id,
-                        what=f"Goal pipeline empty for '{objective_title or 'the objective'}'",
-                        why=(planner_summary or "")[:2000],
-                    )
-                except Exception:
-                    logger.debug("empty-pipeline ask creation skipped", exc_info=True)
+            # §7.2b: track the stall as an ask so it is fulfillable regardless of push.
+            try:
+                self.board.create_ask(
+                    user_id=user_id,
+                    what=f"Goal pipeline empty for '{objective_title or 'the objective'}'",
+                    why=(planner_summary or "")[:2000],
+                )
+            except Exception:
+                logger.debug("empty-pipeline ask creation skipped", exc_info=True)
         except Exception:
             logger.debug("empty-pipeline escalation skipped", exc_info=True)
 

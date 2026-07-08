@@ -324,6 +324,76 @@ async def register_cli_tools(container) -> None:
         except Exception as e:
             logging.getLogger(__name__).debug("Could not register anysite CLI tool: %s", e)
 
+    # Git tool (SB-02) — structured git over the confined workspace. GIT_TOOLS_ENABLED
+    # is in _SAFE_LOCAL_FLAGS (ON under POLYROB_LOCAL), but the tool was registered
+    # NOWHERE (no register_cli_tools block, absent from the server init path), so an
+    # advertised, safety-engineered capability was 100% dead code. Register it here so a
+    # local `--tools git` request can actually reach it. git_push stays approval-gated +
+    # leaf-blocked (Task 9). Fail-open like the others.
+    from tools.git import git_enabled
+    if git_enabled():
+        try:
+            from tools.git import register_git_tool
+            from tools.git.tool import GitTool
+            register_git_tool()
+            if not container.has_service("git"):
+                container.register_service(
+                    "git", GitTool("git", container.config, container)
+                )
+        except Exception as e:
+            logging.getLogger(__name__).debug("Could not register git CLI tool: %s", e)
+
+    # GitHub tool (SB-02) — OFF by default even locally (GitHub writes are opt-in and
+    # separately approval-gated). Registered only when GITHUB_TOOL_ENABLED.
+    from tools.github import github_enabled
+    if github_enabled():
+        try:
+            from tools.github import register_github_tool
+            from tools.github.tool import GitHubTool
+            register_github_tool()
+            if not container.has_service("github"):
+                container.register_service(
+                    "github", GitHubTool("github", container.config, container)
+                )
+        except Exception as e:
+            logging.getLogger(__name__).debug("Could not register github CLI tool: %s", e)
+
+    # Compute-posture tools (computer-use parity WS-2/WS-3/WS-5) — the persistent
+    # `shell` + `process` tools register at AGENT_COMPUTE_POSTURE>=1, `self_env` at
+    # >=2. Like git above, they registered a descriptor/class but NO container service
+    # on this (headless/POLYROB_LOCAL) path, so a goal's `load_tools_from_container`
+    # found nothing ("✗ Tool 'shell' not found in container", live prod 2026-07-07).
+    # Every action is still compute_posture_allows-gated in-session; registering the
+    # service only makes the tool REACHABLE. Fail-open like the others.
+    try:
+        from tools.shell import shell_tools_enabled, register_shell_tools
+        if shell_tools_enabled():
+            from tools.shell.tool import ShellTool
+            from tools.shell.process_tool import ProcessTool
+            register_shell_tools()
+            if not container.has_service("shell"):
+                container.register_service(
+                    "shell", ShellTool("shell", container.config, container)
+                )
+            if not container.has_service("process"):
+                container.register_service(
+                    "process", ProcessTool("process", container.config, container)
+                )
+    except Exception as e:
+        logging.getLogger(__name__).debug("Could not register shell/process CLI tools: %s", e)
+
+    try:
+        from tools.self_env import self_env_enabled, register_self_env_tool
+        if self_env_enabled():
+            from tools.self_env.tool import SelfEnvTool
+            register_self_env_tool()
+            if not container.has_service("self_env"):
+                container.register_service(
+                    "self_env", SelfEnvTool("self_env", container.config, container)
+                )
+    except Exception as e:
+        logging.getLogger(__name__).debug("Could not register self_env CLI tool: %s", e)
+
     # Knowledge base (Task 6) — opt-in via KB_ENABLED, ON under POLYROB_LOCAL (single-user
     # CLI gets the full knowledge feature by default). Provides kb_ingest/kb_search/
     # kb_list/kb_remove over the tenant-scoped KB. Fail-open like the others.
@@ -361,7 +431,7 @@ async def register_cli_tools(container) -> None:
 # available under `rob`. coding/code_execution use the pure-subprocess code_exec
 # backend, so the lightweight container CAN provide them. knowledge uses the
 # registry routers (pure-python, no heavy deps) so the CLI CAN provide it too.
-_CLI_REGISTERABLE_TOOLS = {"filesystem", "task", "cronjob", "goal", "coding", "code_execution", "anysite", "knowledge", "web_fetch", "twitter"}
+_CLI_REGISTERABLE_TOOLS = {"filesystem", "task", "cronjob", "goal", "coding", "code_execution", "anysite", "knowledge", "web_fetch", "twitter", "git", "github", "shell", "process", "self_env"}
 
 
 def cli_unavailable_tools(requested):

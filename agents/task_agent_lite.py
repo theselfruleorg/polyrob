@@ -215,6 +215,24 @@ class TaskAgent(BaseAgent):
     def register_orchestrator(self, session_id: str, orchestrator) -> None:
         """Register (or replace) the orchestrator for ``session_id``."""
         self._registry.register(session_id, orchestrator)
+        # SA-01: give the orchestrator a bound "re-run my loop" kick so a background
+        # delegation that completes into an already-idle session can drain its result
+        # instead of parking it forever. run_session refuses concurrent execution, so
+        # the kick is a safe no-op when a loop is still active. Set here (the single
+        # registration seam) so every registration path — create + recreate-from-disk —
+        # gets it. Fail-open: a kick-wiring error must never block registration.
+        try:
+            uid = getattr(orchestrator, "user_id", None)
+
+            async def _wake_kick():
+                try:
+                    await self.run_session(uid, session_id)
+                except Exception:
+                    pass
+
+            orchestrator._wake_kick = _wake_kick
+        except Exception:
+            pass
 
     def remove_orchestrator(self, session_id: str):
         """Remove and return the orchestrator for ``session_id`` (``None`` if absent)."""
@@ -279,9 +297,17 @@ class TaskAgent(BaseAgent):
             # and fail-open (a bus error never breaks TaskAgent startup).
             if self.container:
                 try:
-                    import os
                     from core.surfaces.bootstrap import install_surface_bus
-                    install_surface_bus(self.container, os.path.join("data", "surfaces.db"))
+                    # SB-04: do NOT pass a hardcoded "data/surfaces.db". This install
+                    # runs first (during build_cli_container) and is idempotent, so a
+                    # hardcoded path pinned the live outbound-allowlist/router DB to
+                    # ./data/surfaces.db while `polyrob owner allow` writes
+                    # <data_home>/surfaces.db (cwd/.polyrob or POLYROB_DATA_DIR) — a
+                    # split-brain that left the P1 `message` allowlist un-configurable
+                    # from the CLI admin surface. Let the config-aware default
+                    # (<container.config.data_dir>/surfaces.db) resolve so both sides
+                    # share one DB under the same data-home isolation.
+                    install_surface_bus(self.container)
                 except Exception as e:
                     logger.debug(f"surface bus install skipped: {e}")
 
@@ -1360,21 +1386,12 @@ class TaskAgent(BaseAgent):
         return list(CHAT_TOOL_IDS)
 
     async def _resolve_chat_persona(self) -> str:
-        """Render the shared default character to a persona string when
-        TASK_PERSONALITY_BLOCK is ON. Fail-open to "" (off-path byte-identical)."""
+        """Resolve the persona via the surface-shared resolver (T1-07): explicit
+        POLYROB_PERSONA (template key or literal) > default character > "".
+        Fail-open to "" (off-path byte-identical)."""
         try:
-            from agents.task.constants import task_personality_block_enabled
-            if not task_personality_block_enabled():
-                return ""
-            cm = self.container.get_service('character_manager') if self.container else None
-            if not cm or not hasattr(cm, 'get_default_character'):
-                return ""
-            character = await cm.get_default_character()
-            if not character:
-                return ""
-            char_dict = character.to_dict() if hasattr(character, 'to_dict') else character
-            from agents.personality.persona_render import render_persona_block
-            return render_persona_block(char_dict)
+            from agents.personality.persona_resolver import resolve_persona
+            return await resolve_persona(container=self.container)
         except Exception as e:
             logger.debug(f"chat persona resolve skipped: {e}")
             return ""

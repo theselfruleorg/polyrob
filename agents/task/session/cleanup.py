@@ -131,17 +131,53 @@ class SessionCleanupMixin:
                                 _summary = _derive_closing_chat_summary(self)
                         except Exception:
                             _summary = None
+                        # P2-5: chat episodes were written with no task, no spend, and
+                        # no steps, so the session-start digest rendered every chat row
+                        # as `- chat:done $0.00 ""` (and under-reported total spend).
+                        # Pass the main agent's task and collect_provenance (the goal
+                        # path already does this). Fail-open — a provenance hiccup must
+                        # never block the episode write.
+                        _task = None
+                        try:
+                            for _a in (getattr(self, "agents", None) or {}).values():
+                                _t = getattr(_a, "task", None)
+                                if _t:
+                                    _task = str(_t)[:500]
+                                    break
+                        except Exception:
+                            _task = None
+                        _prov = {"spend_usd": 0.0, "steps": 0, "artifacts": []}
+                        try:
+                            from modules.memory.episodic import collect_provenance
+                            _prov = await collect_provenance(self)
+                        except Exception:
+                            pass
                         await finalize_episode(
                             session_id=_episode_session_id,
                             user_id=getattr(self, "user_id", None),
                             kind="chat",
+                            task=_task,
                             outcome=outcome,
                             summary=_summary,
+                            spend_usd=_prov.get("spend_usd", 0.0),
+                            steps=_prov.get("steps", 0),
+                            artifacts=_prov.get("artifacts", []),
                             thread_key=getattr(self, "_chat_session_key", None),
                             meta={"source": "session_end", "status": status},
                         )
             except Exception:
                 self.logger.warning("chat episodic write failed", exc_info=True)
+
+            # Computer-use posture: release this session's persistent shell sandbox
+            # container + revoke its published loopback ports (best-effort, no-op
+            # unless the shell tool was used at posture>=1). Without this the container
+            # only gets swept by reap_orphans (>1h) and its loopback ports linger in
+            # the SSRF allowlist. Import-guarded + fail-open — never block teardown.
+            try:
+                from tools.shell.backend_pool import teardown_session as _shell_teardown
+                await _shell_teardown(getattr(self, "session_id", None))
+            except Exception:
+                pass
 
         try:
             # Release browser contexts for THIS session
@@ -257,12 +293,34 @@ class SessionCleanupMixin:
                         # server / the autonomous goal-cron loop (close_session had no callers).
                         if hasattr(agent, 'task_context_manager') and agent.task_context_manager:
                             try:
-                                closed = agent.task_context_manager.close_session(
-                                    session_id=self.session_id,
-                                    user_id=self.user_id
+                                # P0-7: run close (which may fire a session-close reflection
+                                # aux-LLM call) OFF the event loop — synchronously here it
+                                # froze the loop up to ~30s (and deadlocked its own metering).
+                                # Mirrors the per-step reflection offload (memory_writer.py).
+                                import asyncio as _asyncio
+                                closed, _drained = await _asyncio.to_thread(
+                                    agent.task_context_manager.close_session_and_drain,
+                                    self.session_id,
+                                    self.user_id,
                                 )
                                 if closed:
                                     self.logger.info(f"💾 Saved + released hierarchical memory for agent {agent_id}")
+                                    # P0-7: push the consolidated summary + any unsynced
+                                    # findings to the cross-session store (same path the
+                                    # per-step loop uses). Previously discarded at close.
+                                    if _drained:
+                                        try:
+                                            from modules.memory.registry import memory_sync_turn
+                                            await memory_sync_turn(
+                                                getattr(agent, 'task', '') or '',
+                                                "\n".join(_drained),
+                                                session_id=self.session_id,
+                                                user_id=self.user_id,
+                                            )
+                                        except Exception as sync_err:
+                                            self.logger.debug(
+                                                f"close-time memory sync skipped: {sync_err}"
+                                            )
                                 else:
                                     self.logger.warning(f"⚠️ No H-MEM session to close for agent {agent_id}")
                             except Exception as hmem_error:
@@ -288,6 +346,11 @@ class SessionCleanupMixin:
                     for owner, attr in (
                         (getattr(agent, 'message_manager', None), 'aux_llm'),
                         (getattr(agent, 'task_context_manager', None), 'reflection_llm'),
+                        # P2-8: the cheap 'judge' aux client is cached on the agent by
+                        # _validate_output / background review / goal judge but was never
+                        # closed here — its httpx pool leaked per session when
+                        # AUX_MODEL_JUDGE / VALIDATE_OUTPUT / background review was active.
+                        (agent, '_judge_llm'),
                     ):
                         if owner is None:
                             continue

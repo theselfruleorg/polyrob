@@ -52,8 +52,16 @@ class MCPValidationTracker:
             return count
 
     def should_inject_schema(self, server_name: str, tool_name: str) -> bool:
-        """True once failures for this tool reach the threshold."""
+        """True once failures for this tool reach the threshold.
+
+        P2-12: TTL-clean on the READ path too. Previously only track_failure cleaned,
+        so once a (server, tool) reached the threshold it stayed there for the whole
+        session — the consumer blocks the action, so clear_failures (success-only) never
+        runs and, absent another MCP failure to trigger track_failure, the 30-min TTL
+        never fired. Cleaning here lets an expired failure record lapse.
+        """
         with self._lock:
+            self._cleanup_expired()
             return self._failures.get(self._key(server_name, tool_name), 0) >= self._threshold
 
     def clear_failures(self, server_name: str, tool_name: str) -> None:

@@ -27,17 +27,27 @@
         try {
             const params = new URLSearchParams({ q: q.value || '', limit: '20' });
             const res = await fetch('/api/webgate/memory?' + params.toString());
-            const items = await res.json();
+            const body = await res.json();
+            const items = Array.isArray(body) ? body : (body.items || []);
+            const mode = body.mode || (q.value ? 'search' : 'browse');
             if (!items.length) {
-                out.innerHTML = '<div class="webgate-empty">No memories found.</div>';
+                out.innerHTML = '<div class="webgate-empty">' +
+                    (mode === 'search' ? 'No matches.' : 'No memories yet.') + '</div>';
                 return;
             }
-            out.innerHTML = items.map(function (t) {
+            out.innerHTML = '';
+            const caption = document.createElement('div');
+            caption.className = 'text-muted text-sm webgate-caption';
+            caption.textContent = mode === 'search'
+                ? items.length + ' match' + (items.length === 1 ? '' : 'es') + ' for “' + q.value + '”'
+                : 'showing the ' + items.length + ' most recent memories';
+            out.appendChild(caption);
+            items.forEach(function (t) {
                 const div = document.createElement('div');
                 div.className = 'webgate-item';
                 div.textContent = t;
-                return div.outerHTML;
-            }).join('');
+                out.appendChild(div);
+            });
         } catch (e) {
             out.innerHTML = '<div class="webgate-empty">Could not load memory.</div>';
         }

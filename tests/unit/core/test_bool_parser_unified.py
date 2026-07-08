@@ -31,3 +31,28 @@ def test_memory_flag_behavior_preserved(monkeypatch):
     monkeypatch.setenv("HIERARCHICAL_MEMORY_ENABLED", "off")
     from core.config import BotConfig
     assert BotConfig().HIERARCHICAL_MEMORY_ENABLED is False
+
+
+# --- SA-08: the two confirmed-divergent bool parsers now use the core.env SSOT ---
+
+def test_mcp_enabled_parses_identically_in_eip8004_and_config(monkeypatch):
+    """MCP_ENABLED=1 must be True in BOTH core/config (pydantic bool) and the eip8004
+    agent-card registration — the old `== "true"` made =1 disagree (card said disabled
+    while MCP was running)."""
+    monkeypatch.setenv("MCP_ENABLED", "1")
+    assert env.bool_env("MCP_ENABLED", False) is True
+    from core.config import BotConfig
+    assert BotConfig().mcp_enabled is True
+    # the eip8004 MCP_ENABLED read must not reintroduce the ad-hoc comparison
+    import inspect
+    import modules.eip8004.registration as reg
+    src = inspect.getsource(reg)
+    assert 'os.environ.get("MCP_ENABLED", "false").lower() == "true"' not in src
+    assert 'bool_env("MCP_ENABLED"' in src
+
+def test_auto_agent_init_uses_ssot_parser():
+    import inspect
+    import agents.task.agent as agent_pkg
+    src = inspect.getsource(agent_pkg)
+    assert "('1', 'true', 'yes')" not in src  # ad-hoc truthy-set removed
+    assert "bool_env" in src

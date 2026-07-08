@@ -85,17 +85,26 @@ class SkillCurator:
                     plan["reactivated"].append(key)
                     if not self.dry_run:
                         self._set_mark(key, "active")
+                        self._self_mod_ev("reactivate", skill_id, user_id)
                 else:
                     plan["kept"].append(key)
                 continue
 
             # never reused
+            # P2-21: skip a skill already archived on a prior tick. list_authored still
+            # returns its provenance row (rows persist after archive), so without this
+            # guard the weekly curator re-archived the same skill every tick — re-calling
+            # delete_skill (which returns False, file already gone) and re-emitting a
+            # self_modification "archive" event each time.
+            if self._get_mark(key) == "archived":
+                continue
             if age_days > archive_days:
                 plan["archived"].append(key)
                 if not self.dry_run:
                     try:
                         self.sm.delete_skill(skill_id, user_id=user_id, absorbed_into=None)
                         self._set_mark(key, "archived")
+                        self._self_mod_ev("archive", skill_id, user_id)
                     except Exception as e:
                         logger.debug("curator archive failed for %s: %s", key, e)
             elif age_days > stale_days:
@@ -108,6 +117,18 @@ class SkillCurator:
         logger.info("curator phase-1: %s",
                     {k: len(v) for k, v in plan.items()})
         return plan
+
+    @staticmethod
+    def _self_mod_ev(action: str, skill_id: str, user_id: str) -> None:
+        """T4-06: curator lifecycle transitions are self-modifications too —
+        record them on the durable event log. Fail-open."""
+        try:
+            from agents.task.telemetry.self_events import emit_self_modification
+            emit_self_modification(kind="skill", action=action, item_id=skill_id,
+                                   user_id=user_id or "", created_by="curator",
+                                   source="curator")
+        except Exception as e:
+            logger.debug("curator event emit skipped: %s", e)
 
     # --- state ---------------------------------------------------------------
 

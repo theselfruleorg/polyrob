@@ -26,6 +26,7 @@ import os
 from datetime import datetime
 import time
 import hashlib
+import hmac
 from collections import defaultdict
 
 import socketio
@@ -49,15 +50,14 @@ from webview import webgate
 from utils.bounded_collections import BoundedDict
 
 # No demo mode - WebView must use the real PathManager
-
-# Force import of the real PathManager - no fallback allowed
-import sys
 import os
+import sys
 
-# Add /opt/rob to Python path for PathManager
-rob_path = '/opt/rob'
-if rob_path not in sys.path and os.path.exists(rob_path):
-    sys.path.insert(0, rob_path)
+# NOTE: a legacy `sys.path.insert(0, '/opt/rob')` used to live here (pre-rename
+# install path). On any box where the stale /opt/rob tree still exists it
+# HIJACKED every `agents`/`modules`/`core` import away from the live tree —
+# removed 2026-07-06. The webview imports from the tree it is deployed in
+# (WorkingDirectory/PYTHONPATH), never a hardcoded absolute path.
 
 # Import PathManager for session paths
 from agents.task.path import pm
@@ -77,15 +77,55 @@ logger.info(f"Feed event limits: default={FEED_DEFAULT_LIMIT}, max={FEED_MAX_LIM
 # One domain SSOT with api/auth_endpoints.py's SIWE `domain` (which already reads
 # WEBVIEW_DOMAIN) — an operator overrides one env var, not two independent hardcodes.
 _webview_domain = os.environ.get("WEBVIEW_DOMAIN", "localhost:3000").strip()
-_default_cors = f"http://localhost:3000,https://localhost:3000,https://{_webview_domain},http://{_webview_domain}"
-_cors_origins = os.environ.get("CORS_ALLOW_ORIGINS", _default_cors).split(",")
-_cors_origins = [origin.strip() for origin in _cors_origins if origin.strip()]
+
+
+def _compute_cors_origins() -> List[str]:
+    """Explicit CORS_ALLOW_ORIGINS wins verbatim; otherwise the default list:
+    legacy localhost:3000 entries + WEBVIEW_DOMAIN + the console's own serving
+    origins (bind port on localhost/127.0.0.1) — the webview serves its own UI,
+    so the serving origin must be allowed or the browser's same-origin
+    Socket.IO handshake is rejected with a 400 (P0-1, 2026-07-06)."""
+    raw = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
+    if raw:
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
+    origins = [
+        "http://localhost:3000",
+        "https://localhost:3000",
+        f"https://{_webview_domain}",
+        f"http://{_webview_domain}",
+    ]
+    port = webgate.bind_port()
+    for scheme in ("http", "https"):
+        for host in ("localhost", "127.0.0.1"):
+            origins.append(f"{scheme}://{host}:{port}")
+    return list(dict.fromkeys(origins))
+
+
+_cors_origins = _compute_cors_origins()
 logger.info(f"Socket.IO CORS allowed origins: {_cors_origins}")
+
+
+def _cors_origin_allowed(origin: Optional[str], environ: Optional[dict] = None) -> bool:
+    """engineio ``cors_allowed_origins`` callable: allow the explicit list OR a
+    TRUE same-origin request (Origin == scheme://Host).
+
+    Host is a browser-forbidden request header, so a cross-origin attacker page
+    cannot make Origin match it. X-Forwarded-Host/-Proto ARE settable from
+    cross-origin JS — they must never feed this comparison (only the scheme may
+    vary, which concedes nothing a network MITM doesn't already have).
+    """
+    if origin in _cors_origins:
+        return True
+    host = (environ or {}).get("HTTP_HOST")
+    if not origin or not host:
+        return False
+    return origin in (f"http://{host}", f"https://{host}")
+
 
 # Socket.IO instance that will be used for live updates
 _sio = socketio.AsyncServer(
     async_mode="asgi",
-    cors_allowed_origins=_cors_origins,  # SECURITY: Restrict CORS to configured origins
+    cors_allowed_origins=_cors_origin_allowed,  # SECURITY: allowlist + true same-origin only
     max_http_buffer_size=2_000_000,  # 2 MB limit to prevent memory spikes
     ping_timeout=60,  # Ping timeout to detect disconnected clients
     ping_interval=25,  # Ping interval for keep-alive
@@ -167,6 +207,24 @@ async def startup_event():
 
     logger.info("🚀 Initializing webview services...")
 
+    # 0. Install the process-global session data root BEFORE anything touches
+    # pm() (RC-1, 2026-07-07): the agent process derives its tree from
+    # POLYROB_DATA_DIR via build_cli_container; without this the webview's
+    # pm() falls back to env DATA_ROOT (./data/task) and silently browses a
+    # DIFFERENT (stale) tree. Same SSOT pattern the CLI uses. Fail-open with a
+    # loud error — a path issue must not take the console down, but it must
+    # never be silent again either.
+    try:
+        from core.runtime_paths import resolve_session_data_root
+        from agents.task.path import get_path_manager, set_path_manager
+        _session_root = resolve_session_data_root()
+        set_path_manager(get_path_manager(data_root=str(_session_root)))
+        logger.info(f"✅ Session data root: {_session_root}")
+    except Exception as e:
+        logger.error(f"❌ Failed to install session data root — pm() will use "
+                     f"its legacy default and may browse the WRONG tree: {e}",
+                     exc_info=True)
+
     # 1. Validate critical environment variables.
     # JWT is only used by the multitenant auth layer; the single-user webgate
     # (WEBGATE_MULTITENANT=OFF, the default) has no auth at all, so requiring a
@@ -206,6 +264,9 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Failed to initialize services: {e}", exc_info=True)
         raise RuntimeError(f"Cannot start webview without services: {e}")
+
+    # Auth/task/wallet half (was a second, competing startup handler).
+    await _startup_late_services()
 
 # Security headers middleware
 @_fastapi.middleware("http")
@@ -303,11 +364,6 @@ app = socketio.ASGIApp(_sio, other_asgi_app=_fastapi)
 _watch_tasks: dict[str, asyncio.Task] = {}
 _client_session: dict[str, str] = {}
 _session_clients: dict[str, int] = {}
-
-# Add these global variables after the _session_clients dictionary
-# For tracking feed file checksums to optimize cache rebuilding
-_feed_checksums: dict[str, str] = {}
-_cache_ttl = 60  # seconds before forcing cache refresh
 
 from collections import defaultdict
 
@@ -591,6 +647,9 @@ _templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 _templates.env.globals["console_display_name"] = webgate.console_display_name
 _templates.env.globals["branding"] = webgate.branding_config
 _templates.env.globals["get_version"] = get_version
+# Posture default for the layout's tenant-nav block (P0-3): pages that don't
+# pass `is_multitenant` fall back to the posture SSOT instead of "shown".
+_templates.env.globals["is_multitenant_posture"] = webgate.is_multitenant
 
 # Multitenant-only: the wallet auth router is the JWT/SIWE surface. In single-user
 # mode it is simply not mounted (no /api/auth/* — single-user has no auth).
@@ -608,9 +667,24 @@ else:
     AUTH_ROUTER_MOUNTED = False
     logger.info("webgate single-user mode: auth router not mounted (no JWT/SIWE)")
 
+async def _task_router_read_only_guard(request: Request) -> None:
+    """WS-3.2 (2026-07-07): the task router is mounted DIRECTLY in this app,
+    so its mutating routes (POST /api/task/sessions, …/messages, …/cancel)
+    would bypass the wrapper endpoints' webgate.read_only() checks. Refuse
+    mutations at the router seam in read-only consoles; reads stay allowed."""
+    if request.method not in ("GET", "HEAD", "OPTIONS") and webgate.read_only():
+        raise HTTPException(
+            status_code=403,
+            detail="Console is read-only (WEBVIEW_READ_ONLY)",
+        )
+
+
 try:
     from api.task_http_api import router as task_router
-    _fastapi.include_router(task_router, prefix="/api", tags=["task"])
+    _fastapi.include_router(
+        task_router, prefix="/api", tags=["task"],
+        dependencies=[Depends(_task_router_read_only_guard)],
+    )
     TASK_ROUTER_MOUNTED = True
     logger.info("✅ Task endpoints mounted at /api/task")
 except ImportError as e:
@@ -636,6 +710,20 @@ except Exception as e:
     PAGES_ROUTER_MOUNTED = False
     logger.error(f"❌ Failed to mount webgate pages router: {e}")
 
+# Global activity stream (/activity page + /api/activity/*). Mounted in ALL
+# postures; access is enforced at request time inside webview/activity.py
+# (_require_activity_access): local open, own_ops behind the owner cookie
+# (auth middleware — /activity is deliberately NOT a public path), multitenant
+# admin/instance-owner only. Fail-open mount: a failure never breaks boot.
+try:
+    from webview.activity import router as activity_router
+    _fastapi.include_router(activity_router)
+    ACTIVITY_ROUTER_MOUNTED = True
+    logger.info("✅ Activity stream mounted (/activity)")
+except Exception as e:
+    ACTIVITY_ROUTER_MOUNTED = False
+    logger.error(f"❌ Failed to mount activity router: {e}")
+
 def _login_redirect_path() -> str:
     """Where an unauthenticated browser request should be sent to authenticate.
 
@@ -658,6 +746,25 @@ async def auth_middleware(request: Request, call_next):
     # short-circuit. own_ops/multitenant both require SOME authenticated
     # identity (webgate.requires_owner_login()) and run the checks below.
     if not webgate.requires_owner_login():
+        # The loopback operator IS the owner (the same statement
+        # _check_session_ownership's local bypass makes). Stamp the canonical
+        # owner auth state so downstream gates that read request.state — the
+        # task router's payment admin-bypass, catalog scope, template
+        # is_authenticated branches — see the owner instead of an anonymous
+        # user; without this the local console 402s on POST /api/task/sessions
+        # (WS-3 E2E finding, 2026-07-07).
+        try:
+            from api.auth_state import set_auth_state
+            set_auth_state(
+                request.state,
+                user_id=webgate.local_owner_id(),
+                tier="admin",
+                role="owner",
+                payment_method=None,
+                authenticated=True,
+            )
+        except Exception:
+            pass
         return await call_next(request)
 
     # Check if auth is enabled (default: enabled in production, disabled in dev)
@@ -817,6 +924,101 @@ async def auth_middleware(request: Request, call_next):
     return response
 
 
+def _collect_sessions_in_dir(user_path, user_label: str) -> List[Dict[str, Any]]:
+    """Collect session rows from ONE user directory.
+
+    Rows keep the raw ``created_timestamp`` so callers can sort ACROSS user
+    dirs before stripping it; each row carries ``user`` (the directory name)
+    so the catalog can label who a session belongs to.
+    """
+    sessions: List[Dict[str, Any]] = []
+    if not user_path.exists():
+        logger.debug(f"User path does not exist: {user_path}")
+        return sessions
+
+    # Sessions are stored at: {data_root}/{user_id}/{session_id}/
+    for session_path in user_path.iterdir():
+        if not session_path.is_dir():
+            continue
+
+        feed_dir = session_path / "feed"
+        if not feed_dir.exists():
+            continue
+
+        # Read task and metadata
+        task_text = "No task description"
+        model = None
+        provider = None
+        status = "completed"
+
+        # Read task.json
+        task_file = session_path / "task.json"
+        if task_file.exists():
+            try:
+                with task_file.open('r') as f:
+                    task_data = json.load(f)
+                    task_text = task_data.get('task', task_text)
+                    model = task_data.get('model')
+                    provider = task_data.get('provider')
+            except Exception as e:
+                logger.debug(f"Failed to read task.json: {e}")
+
+        # Read status.json for current status
+        status_file = session_path / "status.json"
+        if status_file.exists():
+            try:
+                with status_file.open('r') as f:
+                    status_data = json.load(f)
+                    status = status_data.get('status', 'completed')
+            except Exception as e:
+                logger.debug(f"Failed to read status.json: {e}")
+
+        # Fallback to metadata.json
+        if task_text == "No task description":
+            metadata_file = session_path / "metadata.json"
+            if metadata_file.exists():
+                try:
+                    with metadata_file.open('r') as f:
+                        metadata = json.load(f)
+                        task_text = metadata.get('task', task_text)
+                        if not model:
+                            model = metadata.get('model')
+                        if not provider:
+                            provider = metadata.get('provider')
+                except Exception as e:
+                    logger.debug(f"Failed to read metadata.json: {e}")
+
+        # Get creation time
+        created_timestamp = session_path.stat().st_ctime
+        created = datetime.fromtimestamp(created_timestamp)
+
+        # Count steps
+        step_files = list(feed_dir.glob('step_*.json')) + list(feed_dir.glob('agent_step_*.json'))
+
+        sessions.append({
+            'id': session_path.name,
+            'user': user_label,
+            'task': task_text[:100],
+            'created': created.strftime('%Y-%m-%d %H:%M'),
+            'created_timestamp': created_timestamp,
+            'steps': len(step_files),
+            'status': status,
+            'model': model or 'unknown',
+            'provider': provider or 'unknown'
+        })
+
+    return sessions
+
+
+def _finalize_session_rows(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Sort newest-first across whatever dirs the rows came from, then strip
+    the temporary sort key."""
+    sessions.sort(key=lambda s: s['created_timestamp'], reverse=True)
+    for session in sessions:
+        session.pop('created_timestamp', None)
+    return sessions
+
+
 def _get_user_sessions(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Load sessions with rich metadata for a specific user.
 
@@ -852,98 +1054,112 @@ def _get_user_sessions(user_id: Optional[str] = None) -> List[Dict[str, Any]]:
 
         # Collect sessions from all potential user directories
         for check_user_id in potential_user_dirs:
-            user_path = data_root / check_user_id
+            sessions.extend(_collect_sessions_in_dir(data_root / check_user_id, check_user_id))
 
-            if not user_path.exists():
-                logger.debug(f"User path does not exist: {user_path}")
-                continue
+        sessions = _finalize_session_rows(sessions)
 
-            logger.info(f"Loading sessions from: {user_path}")
-
-            # PRIMARY PATH: Direct under user_id (NEW structure)
-            # Sessions are stored at: data/task/{user_id}/{session_id}/
-            for session_path in user_path.iterdir():
-                if not session_path.is_dir():
-                    continue
-
-                feed_dir = session_path / "feed"
-                if not feed_dir.exists():
-                    continue
-
-                # Read task and metadata
-                task_text = "No task description"
-                model = None
-                provider = None
-                status = "completed"
-
-                # Read task.json
-                task_file = session_path / "task.json"
-                if task_file.exists():
-                    try:
-                        with task_file.open('r') as f:
-                            task_data = json.load(f)
-                            task_text = task_data.get('task', task_text)
-                            model = task_data.get('model')
-                            provider = task_data.get('provider')
-                    except Exception as e:
-                        logger.debug(f"Failed to read task.json: {e}")
-
-                # Read status.json for current status
-                status_file = session_path / "status.json"
-                if status_file.exists():
-                    try:
-                        with status_file.open('r') as f:
-                            status_data = json.load(f)
-                            status = status_data.get('status', 'completed')
-                    except Exception as e:
-                        logger.debug(f"Failed to read status.json: {e}")
-
-                # Fallback to metadata.json
-                if task_text == "No task description":
-                    metadata_file = session_path / "metadata.json"
-                    if metadata_file.exists():
-                        try:
-                            with metadata_file.open('r') as f:
-                                metadata = json.load(f)
-                                task_text = metadata.get('task', task_text)
-                                if not model:
-                                    model = metadata.get('model')
-                                if not provider:
-                                    provider = metadata.get('provider')
-                        except Exception as e:
-                            logger.debug(f"Failed to read metadata.json: {e}")
-
-                # Get creation time
-                created_timestamp = session_path.stat().st_ctime
-                created = datetime.fromtimestamp(created_timestamp)
-
-                # Count steps
-                step_files = list(feed_dir.glob('step_*.json')) + list(feed_dir.glob('agent_step_*.json'))
-
-                sessions.append({
-                    'id': session_path.name,
-                    'task': task_text[:100],
-                    'created': created.strftime('%Y-%m-%d %H:%M'),
-                    'created_timestamp': created_timestamp,
-                    'steps': len(step_files),
-                    'status': status,
-                    'model': model or 'unknown',
-                    'provider': provider or 'unknown'
-                })
-
-        # Sort by creation timestamp (newest first)
-        sessions.sort(key=lambda s: s['created_timestamp'], reverse=True)
-
-        # Remove temporary timestamp field
-        for session in sessions:
-            session.pop('created_timestamp', None)
-        
         logger.info(f"Found {len(sessions)} sessions for user {user_id}")
 
     except Exception as exc:
         logger.error(f"Failed to list sessions: {exc}", exc_info=True)
 
     return sessions
+
+
+def _get_all_sessions() -> List[Dict[str, Any]]:
+    """Load sessions across ALL user directories under the data root.
+
+    RC-2 (2026-07-07): own_ops/local ONLY — the single owner of this instance
+    owns every session regardless of which surface/identity path tagged it
+    (CLI sessions are user_id="local", telegram principals "u_<hash>", goal/
+    cron runs the owner principal). Callers MUST gate on _catalog_scope();
+    multitenant keeps strict per-tenant listing via _get_user_sessions.
+    """
+    sessions: List[Dict[str, Any]] = []
+    try:
+        data_root = pm().data_root
+        logger.info(f"Loading ALL sessions from data_root: {data_root}")
+        for user_path in data_root.iterdir():
+            if not user_path.is_dir():
+                continue
+            sessions.extend(_collect_sessions_in_dir(user_path, user_path.name))
+        sessions = _finalize_session_rows(sessions)
+        logger.info(f"Found {len(sessions)} sessions across all users")
+    except Exception as exc:
+        logger.error(f"Failed to list all sessions: {exc}", exc_info=True)
+    return sessions
+
+
+def _catalog_scope(request: Request) -> tuple[str, Optional[str]]:
+    """Who may list WHAT in the session catalog: ('all'|'user'|'none', user_id).
+
+    Mirrors _check_session_ownership's posture logic exactly:
+      - local: the loopback operator IS the owner → 'all'.
+      - own_ops: the authenticated owner-login identity
+        (webgate.local_owner_id()) → 'all'; any other identity or no auth →
+        'none' (a non-owner in own_ops has no sessions of their own).
+      - multitenant: authenticated → 'user' (strict per-tenant, unchanged);
+        unauthenticated → 'none'.
+    """
+    if not webgate.requires_owner_login():
+        return ("all", webgate.local_owner_id())
+
+    from utils.auth_utils import is_authenticated
+    if not is_authenticated(request):
+        return ("none", None)
+    current_user_id = getattr(request.state, 'user_id', None)
+
+    if webgate.is_own_ops():
+        if current_user_id and current_user_id == webgate.local_owner_id():
+            return ("all", current_user_id)
+        return ("none", current_user_id)
+
+    return ("user", current_user_id) if current_user_id else ("none", None)
+
+
+def _annotate_runtime(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """WS-4 minimum (2026-07-07): say WHERE an active-looking session lives.
+
+    Uses the P6 routing seam (TaskAgent.route_session → SessionRoute): with
+    SESSION_REGISTRY_BACKEND=sqlite the registry mirrors liveness across
+    processes, so the console can distinguish
+      - 'agent': live in ANOTHER process (the agent service) — watch via feed,
+        steering needs that process (honest 409 on send);
+      - 'here':  resident in THIS process (console-created / resumed here);
+      - 'idle':  no live orchestrator anywhere (resumable from disk).
+    Only rows whose on-disk status looks active are queried (one registry
+    lookup each); with the default in-process registry this degrades to
+    here/idle, never lies. Fail-open: no agent → no annotation.
+    """
+    agent = _in_process_task_agent()
+    route_fn = getattr(agent, "route_session", None) if agent else None
+    if route_fn is None:
+        return sessions
+    for row in sessions:
+        if row.get('status') not in ("running", "created", "resumed"):
+            continue
+        try:
+            route = route_fn(row['id'])
+        except Exception:
+            continue
+        if route is None or getattr(route, "is_missing", False):
+            row['runtime'] = "idle"
+        elif getattr(route, "is_remote", False):
+            row['runtime'] = "agent"
+            row['owner_pid'] = route.owner_pid
+        else:
+            row['runtime'] = "here"
+    return sessions
+
+
+def _sessions_for_request(request: Request) -> List[Dict[str, Any]]:
+    """Catalog rows for this request, per _catalog_scope."""
+    scope, user_id = _catalog_scope(request)
+    if scope == "all":
+        return _annotate_runtime(_get_all_sessions())
+    if scope == "user":
+        return _annotate_runtime(_get_user_sessions(user_id=user_id))
+    return []
 
 
 @_multitenant_get("/signin", response_class=HTMLResponse)
@@ -974,6 +1190,49 @@ async def logout(request: Request) -> Response:
     return response
 
 
+# --- owner-login hardening: throttle + CSRF + return_to sanitizing ---------- #
+# In-memory per-IP sliding window. Argon2 cost alone is not brute-force
+# throttling; 5 attempts / 5 min per IP is generous for one owner.
+_LOGIN_ATTEMPT_WINDOW_SEC = 300
+_LOGIN_ATTEMPT_MAX = 5
+_login_attempts: dict = {}
+
+
+def _login_throttled(ip: str) -> bool:
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_ATTEMPT_WINDOW_SEC]
+    _login_attempts[ip] = attempts
+    return len(attempts) >= _LOGIN_ATTEMPT_MAX
+
+
+def _record_login_attempt(ip: str) -> None:
+    _login_attempts.setdefault(ip, []).append(time.time())
+    if len(_login_attempts) > 10000:  # bound memory under address churn
+        _login_attempts.clear()
+
+
+def _csrf_token_for(nonce: Optional[str]) -> Optional[str]:
+    """Stateless double-submit token: HMAC(JWT_SECRET_KEY, nonce).
+
+    None when no JWT secret is configured (local/dev without auth) — CSRF
+    enforcement is skipped there, matching the no-auth posture.
+    """
+    secret = os.environ.get("JWT_SECRET_KEY")
+    if not secret or not nonce:
+        return None
+    import hashlib
+    import hmac as _hmac
+    return _hmac.new(secret.encode(), f"owner-login:{nonce}".encode(), hashlib.sha256).hexdigest()
+
+
+def _safe_return_to(raw) -> str:
+    """Only same-origin relative paths — kills open redirects via return_to."""
+    to = str(raw or "/")
+    if not to.startswith("/") or to.startswith("//") or "\\" in to:
+        return "/"
+    return to
+
+
 @_posture_get("/owner-login", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
 async def owner_login_page(request: Request) -> Response:
     """Owner username/password login page (Posture 1, own_ops).
@@ -986,10 +1245,18 @@ async def owner_login_page(request: Request) -> Response:
     has no auth at all — no login surface needed or wanted, so it is NOT
     registered there (a request → 404).
     """
-    return_to = request.query_params.get("return_to", "/")
-    return _templates.TemplateResponse("owner_login.html", {
+    import secrets as _secrets
+    return_to = _safe_return_to(request.query_params.get("return_to", "/"))
+    nonce = _secrets.token_hex(16)
+    response = _templates.TemplateResponse("owner_login.html", {
         "request": request, "return_to": return_to, "error": None,
+        "csrf_token": _csrf_token_for(nonce),
     })
+    response.set_cookie(
+        "csrf_nonce", nonce, max_age=600, httponly=True, samesite="lax",
+        secure=(os.environ.get("ENVIRONMENT", "production") == "production"), path="/owner-login",
+    )
+    return response
 
 
 @_posture_post("/owner-login", postures=("own_ops", "multitenant"))
@@ -997,18 +1264,42 @@ async def owner_login_submit(request: Request) -> Response:
     """Verify owner credentials and, on success, issue the owner session cookie.
 
     Same error for a bad username or a bad password (no user-enumeration).
+    Hardened: per-IP attempt throttle (429), stateless double-submit CSRF
+    (403 on mismatch when a JWT secret is configured), sanitized return_to.
     """
     from webview.owner_auth import verify_owner_password, issue_owner_session_cookie
+
+    client_ip = request.client.host if request.client else "unknown"
+    if _login_throttled(client_ip):
+        return _templates.TemplateResponse(
+            "owner_login.html",
+            {"request": request, "return_to": "/",
+             "error": "Too many attempts. Try again in a few minutes.", "csrf_token": None},
+            status_code=429,
+        )
+    _record_login_attempt(client_ip)
 
     form = await request.form()
     username = form.get("username", "")
     password = form.get("password", "")
-    return_to = form.get("return_to", "/")
+    return_to = _safe_return_to(form.get("return_to", "/"))
+
+    expected_csrf = _csrf_token_for(request.cookies.get("csrf_nonce"))
+    if os.environ.get("JWT_SECRET_KEY"):
+        supplied = str(form.get("csrf_token", ""))
+        if not expected_csrf or not hmac.compare_digest(supplied, expected_csrf):
+            return _templates.TemplateResponse(
+                "owner_login.html",
+                {"request": request, "return_to": return_to,
+                 "error": "Invalid or expired form. Please try again.", "csrf_token": None},
+                status_code=403,
+            )
 
     if not verify_owner_password(username, password):
         return _templates.TemplateResponse(
             "owner_login.html",
-            {"request": request, "return_to": return_to, "error": "Invalid username or password."},
+            {"request": request, "return_to": return_to,
+             "error": "Invalid username or password.", "csrf_token": None},
             status_code=401,
         )
 
@@ -1166,7 +1457,8 @@ async def index(request: Request) -> Response:
             "version": version,
             "is_owner": is_owner,
             "is_authenticated": user_is_authenticated,
-            "is_admin": getattr(request.state, 'is_admin', False)
+            "is_admin": getattr(request.state, 'is_admin', False),
+            "read_only": webgate.read_only(),
         },
     )
 
@@ -1176,20 +1468,18 @@ async def sessions_list(request: Request) -> Response:
     """Show a list of sessions with metadata.
 
     Security:
-        - Returns only sessions for the authenticated user
-        - Unauthenticated users see empty list (no shared DEFAULT_USER_ID sessions)
+        - own_ops/local: the instance owner sees ALL sessions (RC-2)
+        - multitenant: only the authenticated tenant's own sessions
+        - anyone else sees an empty list (no shared DEFAULT_USER_ID sessions)
     """
     from utils.auth_utils import is_authenticated
 
-    # SECURITY FIX: Only show sessions for authenticated users
-    # Unauthenticated users get empty list (prevents seeing shared anonymous sessions)
-    if is_authenticated(request):
-        user_id = getattr(request.state, 'user_id', None)
-        sessions = _get_user_sessions(user_id=user_id) if user_id else []
-        logger.info(f"Sessions list (authenticated): user={user_id}, count={len(sessions)}")
-    else:
-        sessions = []
-        logger.info("Sessions list (unauthenticated): returning empty list")
+    # SECURITY: same scope rules as /api/sessions (_catalog_scope) — own_ops/
+    # local owner sees ALL user dirs (RC-2), multitenant stays per-tenant,
+    # everyone else gets an empty list.
+    scope, user_id = _catalog_scope(request)
+    sessions = _sessions_for_request(request)
+    logger.info(f"Sessions list: scope={scope} user={user_id}, count={len(sessions)}")
 
     # Get WebSocket URL from environment variable
     ws_url = os.environ.get("WEBVIEW_WS_URL", "")
@@ -1263,6 +1553,7 @@ async def session_page(request: Request, session_id: str) -> Response:
             "is_owner": is_owner,
             "is_authenticated": user_is_authenticated,
             "is_admin": getattr(request.state, 'is_admin', False),
+            "read_only": webgate.read_only(),
         },
     )
 
@@ -1697,25 +1988,12 @@ async def api_sessions(request: Request) -> Response:
     SECURITY: Only returns sessions for the authenticated user from JWT token.
     Unauthenticated users get empty list (no shared DEFAULT_USER_ID sessions).
     """
-    # SECURITY: Get user_id from JWT token (set by auth middleware)
-    from utils.auth_utils import is_authenticated
-
-    # Only show sessions for authenticated users
-    # Unauthenticated users get empty list (prevents seeing shared anonymous sessions)
-    if is_authenticated(request):
-        user_id = getattr(request.state, 'user_id', None)
-        if user_id:
-            sessions = _get_user_sessions(user_id=user_id)
-            wallet = getattr(request.state, 'wallet_address', 'unknown')
-            logger.info(f"🔍 Fetching sessions for authenticated user: {user_id} (wallet: {wallet[:10] if wallet else 'none'}...)")
-            logger.info(f"📊 Returning {len(sessions)} sessions for user {user_id}")
-        else:
-            sessions = []
-            logger.warning("⚠️ Authenticated but no user_id in request.state - returning empty list")
-    else:
-        sessions = []
-        logger.info("🔍 Unauthenticated user - returning empty session list")
-
+    # SECURITY: scope comes from the posture + authenticated identity ONLY
+    # (_catalog_scope): own_ops/local owner → ALL user dirs (RC-2); multitenant
+    # stays strictly per-tenant; anyone else → empty list.
+    scope, user_id = _catalog_scope(request)
+    sessions = _sessions_for_request(request)
+    logger.info(f"📊 Catalog scope={scope} user={user_id}: {len(sessions)} sessions")
     return JSONResponse({"sessions": sessions})
 
 
@@ -1732,10 +2010,24 @@ async def api_refresh() -> Response:
 
 @_fastapi.get("/api/repair/{session_id}", response_class=JSONResponse)
 async def api_repair(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Attempt to repair a broken session."""
+    """Repair a session's telemetry (dedup + token estimation + validation).
+
+    Wired to the REAL ``webview.repair_sessions.repair_session_telemetry``
+    (this endpoint used to return fake success without doing anything).
+    Mutates feed/llm_usage files, so it is refused in read-only mode.
+    """
+    if webgate.read_only():
+        return JSONResponse(
+            {"status": "error", "message": "Console is read-only (WEBVIEW_READ_ONLY)"},
+            status_code=403,
+        )
     try:
-        # Just return success for now - actual repair logic would go here
-        return JSONResponse({"status": "ok", "message": f"Session {clean_id} repaired"})
+        from webview.repair_sessions import repair_session_telemetry
+        session_dir = pm().get_feed_dir(clean_id).parent
+        if not session_dir.exists():
+            return JSONResponse({"status": "error", "message": "Session not found"}, status_code=404)
+        results = await asyncio.to_thread(repair_session_telemetry, session_dir)
+        return JSONResponse({"status": "ok", "repair": results})
     except Exception as exc:
         logger.error("Failed to repair session %s: %s", clean_id, exc, exc_info=True)
         return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
@@ -2733,9 +3025,12 @@ async def internal_emit(request: Request) -> Response:
     if not session_id or not event:
         raise HTTPException(400, "Missing session_id or event")
 
-    # Clean the session ID for consistent room naming
+    # Clean the session ID for consistent room naming. NOTE: clients join the
+    # room named by the BARE clean id (join_session → enter_room(sid, clean_id))
+    # and the file watcher emits there too — a "session:" prefix here would be
+    # a dead room nobody joins (the old bug that silenced this fast path).
     clean_id = pm().clean_session_id(session_id)
-    room = f"session:{clean_id}"
+    room = clean_id
 
     # Enrich LLM cost if this is an llm_request event
     _enrich_llm_event_with_cost(event)
@@ -3101,21 +3396,103 @@ async def receive_stream_chunk(session_id: str, request: Request) -> Response:
     return await _handle_stream_chunk(session_id, request)
 
 
+def _in_process_task_agent():
+    """The TaskAgent living in THIS process (single-service webview deploys),
+    or None when only the classic two-service (:9000) shape is available."""
+    try:
+        from core.container import DependencyContainer
+        container = DependencyContainer.get_instance()
+        agent = container.get_agent("task_agent")
+        if not agent:
+            agent = container.get_service("task_agent")
+        return agent or None
+    except Exception:
+        return None
+
+
+async def _send_message_in_process(request: Request, clean_id: str, agent,
+                                   text: str, kind: str, metadata: dict,
+                                   attached_files, session_owner_id,
+                                   current_user_id) -> Response:
+    """WS-3.1: deliver a session message via the in-process task router
+    handler — the same code path the :9000 service would run (file
+    verification, pre-queue race fix, resume states, guard_remote), with no
+    network hop and no phantom service dependency.
+
+    Authorization already happened in the wrapper via _check_session_ownership
+    (the posture-aware authority: the own_ops/local owner owns EVERY session).
+    The task handler's own _require_session_owner does a strict string match
+    against the session's user_id, which would false-deny the owner on
+    sessions tagged 'local'/'u_…' — so align the request identity to the
+    session's owner for this internal, already-authorized call.
+    """
+    from api.task_http_api import send_user_message as _task_send
+    from api.models import UserMessage as _UserMessage
+
+    request.state.user_id = session_owner_id or current_user_id
+
+    payload = _UserMessage(
+        text=text,
+        kind=kind or "comment",
+        metadata=metadata or {},
+        attached_files=attached_files,
+    )
+    try:
+        await _task_send(clean_id, payload, request, agent)
+    except HTTPException as e:
+        if e.status_code == 409:
+            # P6/Item 6 honest remote answer: the session is LIVE in another
+            # process (the agent service) — watchable via the feed, not
+            # steerable from here.
+            return JSONResponse(
+                {
+                    "success": False,
+                    "error": "Session is live in the agent process — watch it "
+                             "via the feed; console steering requires the "
+                             "session to be resident here.",
+                    "detail": e.detail,
+                },
+                status_code=409,
+                headers=getattr(e, "headers", None) or {},
+            )
+        if e.status_code == 404:
+            return JSONResponse(
+                {"success": False, "error": "Session not found or not active"},
+                status_code=404,
+            )
+        detail = e.detail if isinstance(e.detail, str) else json.dumps(e.detail)
+        return JSONResponse({"success": False, "error": detail},
+                            status_code=e.status_code)
+
+    logger.info(f"Message sent to session {clean_id} (in-process): '{text[:50]}...'")
+    return JSONResponse({"success": True, "message": "Message sent"})
+
+
 @_fastapi.post("/api/session/{session_id}/messages", response_class=JSONResponse)
 async def send_message_to_session(session_id: str, request: Request) -> Response:
-    """Send user message to running session via main API.
+    """Send user message to running session.
 
-    This endpoint proxies to the main API's messages endpoint with retry logic.
-    
+    Delivers via the in-process TaskAgent when the task router is mounted in
+    this process (single-service deploys, WS-3.1); otherwise proxies to the
+    main :9000 API with retry logic (classic two-service shape).
+
     Security:
         - Requires authentication
-        - Only session owner can send messages
+        - Only session owner can send messages (_check_session_ownership,
+          posture-aware: the own_ops/local owner owns every session)
     """
     clean_id = pm().clean_session_id(session_id)
-    
+
+    # Read-only console (monitoring deploys): no mutations, period.
+    if webgate.read_only():
+        return JSONResponse(
+            {"success": False, "error": "Console is read-only (WEBVIEW_READ_ONLY)"},
+            status_code=403,
+        )
+
     # SECURITY: Check authentication and ownership using centralized helper
     is_owner, current_user_id, session_owner_id = _check_session_ownership(request, clean_id)
-    
+
     # Check authentication
     if current_user_id is None:
         logger.warning(f"Unauthorized message attempt to session {clean_id} - not authenticated")
@@ -3133,13 +3510,23 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
         )
 
     try:
-        import httpx
-
         data = await request.json()
         text = data.get("text", "")
         kind = data.get("kind", "comment")
         metadata = data.get("metadata", {})
         attached_files = data.get("attached_files")  # NEW: Forward attached files for vision
+
+        # WS-3.1 (2026-07-07): single-service deploys (prod own_ops) have NO
+        # :9000 api service — but the task router + TaskAgent live in THIS
+        # process. Deliver in-process when available; the :9000 proxy below
+        # stays as the fallback for the classic two-service shape.
+        in_proc_agent = _in_process_task_agent() if TASK_ROUTER_MOUNTED else None
+        if in_proc_agent is not None:
+            return await _send_message_in_process(
+                request, clean_id, in_proc_agent, text, kind, metadata,
+                attached_files, session_owner_id, current_user_id)
+
+        import httpx
 
         # Call main API endpoint with retry logic
         api_url = "http://127.0.0.1:9000/api/task/sessions/{}/messages".format(clean_id)
@@ -3232,12 +3619,46 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
 
 
 @_fastapi.get("/api/session/{session_id}/queue-status", response_class=JSONResponse)
-async def get_queue_status(session_id: str) -> Response:
+async def get_queue_status(session_id: str, request: Request) -> Response:
     """Get message queue status for a session.
 
-    Proxies to main API to get real-time queue depth from HITLManager with retry logic.
+    In-process TaskAgent when available (single-service deploys, WS-3.1);
+    else proxies to the main :9000 API with retry logic (classic shape).
     """
     clean_id = pm().clean_session_id(session_id)
+
+    # In-process path — same read-only data the :9000 handler would return.
+    in_proc_agent = _in_process_task_agent() if TASK_ROUTER_MOUNTED else None
+    if in_proc_agent is not None:
+        from api.task_http_api import get_queue_status as _task_queue_status
+        try:
+            # The task handler gates on the session's OWN user_id; this wrapper
+            # (like the proxy it replaces) exposes only queue depth/status, so
+            # align the identity to the session owner for the internal call.
+            owner = pm().get_session_user(clean_id)
+            if owner:
+                request.state.user_id = owner
+            data = await _task_queue_status(clean_id, request, in_proc_agent)
+            return JSONResponse({
+                "queued_messages": data.get("queued_messages", 0),
+                "agent_status": data.get("agent_status", "unknown"),
+                "streaming_callbacks": data.get("streaming_callbacks", 0),
+                "callback_failures": data.get("callback_failures", 0)
+            })
+        except HTTPException as e:
+            if e.status_code == 404:
+                return JSONResponse(
+                    {"queued_messages": 0, "agent_status": "not_active"},
+                    status_code=404)
+            if e.status_code == 409:
+                # Live in the agent process — honest, not an error state.
+                return JSONResponse(
+                    {"queued_messages": 0, "agent_status": "remote"})
+            logger.warning(f"In-process queue-status failed for {clean_id}: {e.detail}")
+            return JSONResponse({"queued_messages": 0, "agent_status": "error"})
+        except Exception as e:
+            logger.error(f"Unexpected in-process queue-status error for {clean_id}: {e}")
+            return JSONResponse({"queued_messages": 0, "agent_status": "error"})
 
     try:
         import httpx
@@ -3317,78 +3738,40 @@ async def get_queue_status(session_id: str) -> Response:
         })
 
 
-@_fastapi.post("/api/webview/sessions/{session_id}/stream", response_class=JSONResponse)
-async def api_session_stream(session_id: str, payload: Dict[str, Any]) -> Response:
-    """Receive real-time streaming updates from Task Agent and broadcast to WebView clients.
-
-    This endpoint receives streaming chunks from the agent orchestrator and broadcasts
-    them to connected WebView clients via Socket.IO for live updates.
-
-    Args:
-        session_id: The session ID
-        payload: Streaming data containing:
-            - chunk: The text chunk to stream
-            - agent_id: The agent producing the output
-            - step: Current step number
-
-    Returns:
-        JSON response with status
-    """
-    clean_id = pm().clean_session_id(session_id)
-
-    try:
-        # Extract streaming data
-        chunk = payload.get("chunk", "")
-        agent_id = payload.get("agent_id", "unknown")
-        step = payload.get("step", 0)
-
-        if not chunk:
-            return JSONResponse({"status": "ignored", "message": "Empty chunk"})
-
-        # Emit to Socket.IO clients watching this session
-        await _sio.emit(
-            'stream_update',
-            {
-                "chunk": chunk,
-                "agent_id": agent_id,
-                "step": step,
-                "timestamp": time.time()
-            },
-            room=clean_id
-        )
-
-        logger.debug(f"Streamed {len(chunk)} chars to session {clean_id} (step {step})")
-
-        return JSONResponse({"status": "received", "bytes": len(chunk)})
-
-    except Exception as e:
-        logger.error(f"Error processing stream for session {clean_id}: {e}")
-        return JSONResponse(
-            {"status": "error", "message": str(e)},
-            status_code=500
-        )
+# NOTE: a second POST /api/webview/sessions/{id}/stream handler
+# (api_session_stream, emitting "stream_update") used to live here. FastAPI
+# routes first-match, so it was permanently shadowed by receive_stream_chunk
+# above — dead code, removed. "stream_chunk" is the one streaming event.
 
 
 # Socket.IO auth state: sid -> resolved user_id (None = anonymous/unauthenticated).
 _socket_user: Dict[str, Optional[str]] = {}
+# sid -> JWT tier claim ("admin" for owner-login tokens; None otherwise).
+_socket_tier: Dict[str, Optional[str]] = {}
+# sids currently in the global "activity" room (drives hub start/stop).
+_activity_clients: set = set()
 
 
-def _decode_socket_token(token: Optional[str]) -> Optional[str]:
-    """Decode a client-supplied JWT from a Socket.IO connect() auth payload.
-    Fail-open to None (anonymous) on any error — mirrors _manual_auth_check's
-    tolerance for the HTTP path."""
+def _decode_socket_payload(token: Optional[str]) -> Dict:
+    """Decode a client-supplied JWT into its full claim dict ({} on any error).
+    Fail-open to anonymous — mirrors _manual_auth_check's tolerance."""
     if not token:
-        return None
+        return {}
     try:
         import jwt as pyjwt
         jwt_secret = os.environ.get("JWT_SECRET_KEY")
         if not jwt_secret:
-            return None
-        decoded = pyjwt.decode(token, jwt_secret, algorithms=["HS256"])
-        return decoded.get("user_id")
+            return {}
+        return pyjwt.decode(token, jwt_secret, algorithms=["HS256"]) or {}
     except Exception as e:
         logger.debug(f"Socket.IO auth token decode failed: {e}")
-        return None
+        return {}
+
+
+def _decode_socket_token(token: Optional[str]) -> Optional[str]:
+    """Decode a client-supplied JWT from a Socket.IO connect() auth payload.
+    Fail-open to None (anonymous) on any error."""
+    return _decode_socket_payload(token).get("user_id")
 
 
 def _socket_cookie_token(environ: Dict) -> Optional[str]:
@@ -3424,17 +3807,35 @@ async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> None:  #
     # own_ops anonymous-socket gap (E4 follow-up) without touching Posture 0.
     if not webgate.requires_owner_login():
         _socket_user[sid] = webgate.local_owner_id()
+        _socket_tier[sid] = None
         return
     token = (auth or {}).get("token") if isinstance(auth, dict) else None
     if not token:
         token = _socket_cookie_token(environ)
-    _socket_user[sid] = _decode_socket_token(token)
+    payload = _decode_socket_payload(token)
+    _socket_user[sid] = payload.get("user_id")
+    _socket_tier[sid] = payload.get("tier")
+
+
+async def _stop_hub_if_activity_empty() -> None:
+    """Stop the activity hub's watcher/tails once nobody is watching."""
+    if _activity_clients:
+        return
+    try:
+        from webview.activity import get_hub
+        await get_hub().aclose()
+    except Exception as exc:
+        logger.debug(f"activity hub stop failed: {exc}")
 
 
 @_sio.event
 async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
     """Handle client disconnect and clean up resources."""
     _socket_user.pop(sid, None)
+    _socket_tier.pop(sid, None)
+    if sid in _activity_clients:
+        _activity_clients.discard(sid)
+        await _stop_hub_if_activity_empty()
     # Figure out which session this sid belonged to
     sess_id = _client_session.get(sid)
     if sess_id is None:
@@ -3578,6 +3979,70 @@ async def join_session(sid, data):
 
 
 @_sio.event
+async def join_activity(sid, data=None):
+    """Join the global activity room (the /activity terminal's live stream).
+
+    The stream is inherently cross-tenant, so it is gated harder than
+    join_session: local = open (loopback operator); own_ops/multitenant =
+    the instance owner or an admin-tier JWT ONLY. On the first watcher the
+    ActivityHub lazily starts its feed watcher + DB tails; it stops when the
+    room empties (leave_activity/disconnect).
+    """
+    try:
+        environ = _sio.get_environ(sid) or {}
+        client_ip = environ.get("REMOTE_ADDR", "unknown")
+        if not check_rate_limit(client_ip):
+            logger.warning(f"join_activity rate limit exceeded for IP {client_ip}")
+            await _sio.emit("error", {
+                "message": "Rate limit exceeded. Please wait before reconnecting."
+            }, room=sid)
+            await _sio.disconnect(sid)
+            return
+
+        if not webgate.activity_enabled():
+            await _sio.emit("error", {"message": "Activity stream disabled"}, room=sid)
+            return
+
+        if webgate.requires_owner_login():
+            current_user_id = _socket_user.get(sid)
+            tier = _socket_tier.get(sid)
+            allowed = bool(current_user_id) and (
+                current_user_id == webgate.local_owner_id() or tier == "admin"
+            )
+            if not allowed:
+                logger.warning(
+                    "join_activity denied: sid=%s user=%s tier=%s", sid, current_user_id, tier
+                )
+                await _sio.emit("error", {
+                    "message": "Not authorized for the activity stream"
+                }, room=sid)
+                return
+
+        from webview.activity import get_hub
+        await _sio.enter_room(sid, "activity")
+        _activity_clients.add(sid)
+        hub = get_hub()
+        hub.start(_sio)
+        await _sio.emit("activity_snapshot", hub.recent(200), room=sid)
+        logger.info("Client %s joined the activity stream (watchers=%d)",
+                    sid, len(_activity_clients))
+    except Exception as exc:
+        logger.error(f"join_activity error: {exc}", exc_info=True)
+        await _sio.emit("error", {"message": "Failed to join activity stream"}, room=sid)
+
+
+@_sio.event
+async def leave_activity(sid):
+    """Leave the global activity room; stop the hub when it empties."""
+    try:
+        await _sio.leave_room(sid, "activity")
+    except Exception:
+        pass
+    _activity_clients.discard(sid)
+    await _stop_hub_if_activity_empty()
+
+
+@_sio.event
 async def leave(sid):
     """Handle a client disconnecting from Socket.io."""
     session_id = _client_session.get(sid)
@@ -3701,9 +4166,14 @@ async def _nonce_sweep_loop(siwe_auth, interval_seconds: int = 300) -> None:
         await asyncio.sleep(interval_seconds)
 
 
-@_fastapi.on_event("startup")
-async def startup_event():
-    """Initialize services needed for authentication and task management."""
+async def _startup_late_services():
+    """Auth/task/wallet startup half — merged into the single startup_event.
+
+    Historically this was a SECOND ``@_fastapi.on_event("startup")`` handler
+    competing with the first (both ran, container init duplicated); it is now
+    invoked explicitly at the end of ``startup_event`` in the same order
+    FastAPI would have run it.
+    """
     global _container, _wallet_generator
 
     # Initialize deposit wallet generator (lazy import to avoid circular dependency)
@@ -3804,6 +4274,11 @@ async def startup_event():
 async def shutdown_event():
     """Clean up resources when the server is shutting down."""
     logger.info("Server shutting down, cancelling all watcher tasks...")
+    try:
+        from webview.activity import get_hub
+        await get_hub().aclose()
+    except Exception as exc:
+        logger.debug(f"activity hub shutdown cleanup failed: {exc}")
     for session_id, task in _watch_tasks.items():
         if not task.done():
             logger.debug(f"Cancelling watcher task for session {session_id}")
@@ -3845,16 +4320,4 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> Respon
             "version": version
         },
         status_code=status_code
-    ) 
-
-# Add this helper function to compute feed checksums
-def compute_feed_checksum(feed_dir: Path, sample_limit: int = 10) -> str:
-    """Compute a checksum of the feed directory based on the newest files.
-    
-    Args:
-        feed_dir: Path to the feed directory
-        sample_limit: Number of newest files to include in checksum
-        
-    Returns:
-        A hex digest representing the current state of the feed
-    """
+    )

@@ -558,6 +558,13 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             repl_tools.append("goal")
         if cron_enabled() and container.has_service("cronjob"):
             repl_tools.append("cronjob")
+        # SB-09: the knowledge tool is service-registered under KB_ENABLED (local-ON)
+        # but was never added to the session's loaded tool_ids, so agent-driven
+        # kb_ingest was unreachable (read-side kb_search rides session_search; ingest
+        # did not). Add it when available so "remember this doc" actually works.
+        if (AutonomyConfig.kb_enabled() and container.has_service("knowledge")
+                and "knowledge" not in repl_tools):
+            repl_tools.append("knowledge")
 
     request = {
         "task": None,            # interactive: no upfront task

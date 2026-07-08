@@ -331,10 +331,39 @@ async def send_user_message(
         if status in ["suspended", "failed", "error"]:
             logger.info(f"Session {session_id} is {status}, will be resumed by TaskAgent")
 
-        # If session is in a resumable terminal state, restart execution to process the message
+        # Crash-mid-turn recovery: a session interrupted when the process died is
+        # rewritten running->"suspended" at startup (SessionManager._load_sessions_from_disk),
+        # so it enters the resumable block below. In a FRESH process its live orchestrator
+        # is absent, and STEP 6 (which needs an orchestrator) never queued the inbound
+        # message — see the ensure_session_and_deliver block below, which recreates the
+        # session from disk and delivers the message so the resume actually processes it.
+
+        # If session is in a resumable state, restart execution to process the message
         if status in ["completed", "resumed", "suspended", "failed", "error"]:
             import asyncio
             user_id_from_session = session_info.get('user_id')
+
+            # Deliver the message into the (possibly evicted) session BEFORE running it.
+            # STEP 6 only queues when a live orchestrator exists; in a FRESH process the
+            # orchestrator is absent, so without this the resume runs with the message
+            # never queued — `_run_session_impl` recreates from disk but a completed
+            # session with no pending input short-circuits ("No new input"), silently
+            # dropping the message. `ensure_session_and_deliver` recreates-then-queues
+            # (the self-wake rail), so the recreated session actually processes it.
+            # Fail-open: on any delivery error, fall back to the bare run below.
+            if not message_queued and not orchestrator and hasattr(agent, 'ensure_session_and_deliver'):
+                try:
+                    _delivery = await agent.ensure_session_and_deliver(
+                        user_id_from_session, session_id, message_text,
+                        kind=request.kind, metadata=metadata)
+                    if _delivery == "delivered":
+                        message_queued = True
+                        logger.info(f"Session {session_id} message delivered into recreated orchestrator")
+                    elif _delivery == "busy":
+                        logger.info(f"Session {session_id} busy — message queued on resident session")
+                except Exception as e:
+                    logger.warning(f"ensure_session_and_deliver failed for {session_id} "
+                                   f"(falling back to bare resume): {e}")
 
             # NOTE: Status transition is handled by TaskAgent._run_session_impl
             # API should NOT update status to avoid race condition:

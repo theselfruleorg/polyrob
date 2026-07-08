@@ -107,6 +107,10 @@ def _write_env(env_path: Path, updates: dict) -> None:
               help="Pre-fill toolset and persona from a named template (e.g. research, coding).")
 @click.option("--toolset", "toolset_name", default=None,
               help="Toolset to activate (e.g. research, coding, full).")
+@click.option("--owner", "owner_user_id", default=None,
+              help="Owner user id to pair this instance to (defaults to the instance id).")
+@click.option("--instance-id", "instance_id", default=None,
+              help="Instance id for this deployment (default 'rob').")
 def init_cmd(
     anthropic_key,
     openai_key,
@@ -117,6 +121,8 @@ def init_cmd(
     quick,
     template_name,
     toolset_name,
+    owner_user_id,
+    instance_id,
 ):
     """Initialize POLYROB for this project (file-first: ~/.polyrob + ./.polyrob)."""
     # --non-interactive is a true alias of --no-prompt.
@@ -188,11 +194,31 @@ def init_cmd(
                 # (already set above — this branch is not reachable but kept for clarity)
                 pass
 
-            # ── Section (e): Autonomy hint ────────────────────────────────────
+            # ── Section (e): Owner pairing ────────────────────────────────────
+            # Pair this instance to an owner id so autonomy/self-evolution surfaces
+            # know who to answer to. Single-user local: the owner id and instance id
+            # are typically the same (both default "rob"). Explicit flags win.
+            click.echo("\n=== Owner pairing ===")
+            if instance_id is None:
+                instance_id = click.prompt(
+                    "Instance id", default="rob", show_default=True) or None
+            if owner_user_id is None:
+                owner_user_id = click.prompt(
+                    "Owner user id (blank = same as instance id)",
+                    default=(instance_id or "rob"), show_default=True) or None
+
+            # ── Section (f): Autonomy hint ────────────────────────────────────
             click.echo(
                 "\nTip: set POLYROB_LOCAL=1 in ~/.polyrob/.env to enable local autonomy features "
                 "(writable skills, background review, goal board, etc.)."
             )
+
+    # Owner pairing defaults: under --no-prompt (or --quick), honor explicit flags
+    # and fall back owner→instance so `--owner` alone or `--instance-id` alone works.
+    if owner_user_id and instance_id is None:
+        instance_id = owner_user_id
+    if instance_id and owner_user_id is None:
+        owner_user_id = instance_id
 
     # Pair the chosen model with its provider so the operator pin actually takes
     # effect. `core.runtime_config.resolve_runtime_config` returns the pin only when
@@ -220,6 +246,8 @@ def init_cmd(
             "DEFAULT_PROVIDER": default_provider,
             "POLYROB_AGENT_TOOLSET": effective_toolset,
             "POLYROB_PERSONA": effective_persona,
+            "POLYROB_INSTANCE_ID": instance_id,
+            "POLYROB_OWNER_USER_ID": owner_user_id,
         }
         updates.update(collected_keys)
         _write_env(home_env, updates)

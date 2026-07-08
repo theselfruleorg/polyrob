@@ -53,3 +53,17 @@ def test_no_live_skip_memory_reference():
          "agents/task/goals/dispatcher.py", "cron/runner.py", "cron/scheduler.py"],
         capture_output=True, text=True).stdout
     assert hits.strip() == "", f"dead skip_memory still referenced:\n{hits}"
+
+
+def test_p2_5_chat_episode_wires_task_and_provenance():
+    """P2-5: the chat-episode write in cleanup passes task + collect_provenance
+    (spend/steps) — previously every chat row was `- chat:done $0.00 ""`."""
+    import inspect
+    from agents.task.session import cleanup
+    src = inspect.getsource(cleanup)
+    # locate the chat finalize_episode call region
+    assert 'kind="chat"' in src
+    # the chat write must now thread task + provenance
+    assert "collect_provenance(self)" in src
+    assert "task=_task" in src
+    assert "spend_usd=_prov" in src

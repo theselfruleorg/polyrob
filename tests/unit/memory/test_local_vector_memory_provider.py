@@ -47,6 +47,10 @@ def db_path(tmp_path):
 async def test_vec_mode_active_with_embedder(db_path):
     p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
     assert p._vec_ok is True
+    # P2-6: the dim is probed LAZILY (not at construction) so the ~6-14s embedder build
+    # never blocks the event loop at first session — _dim is None until the first vec op.
+    assert p._dim is None
+    assert p._ensure_vec_schema() is True  # triggers the lazy probe + table creation
     assert p._dim == FakeEmbedder.DIM
     assert p.name == "local-vector"
 
@@ -183,3 +187,32 @@ async def test_prefetch_runs_vector_search_once(db_path, monkeypatch):
     monkeypatch.setattr(p, "_vector_contents", spy)
     await p.prefetch("postgres", session_id="s2", user_id="u1")
     assert calls["n"] == 1
+
+
+class _CountingEmbedder:
+    DIM = 8
+
+    def __init__(self):
+        self.calls = 0
+
+    def encode(self, text: str):
+        self.calls += 1
+        return [0.0] * self.DIM
+
+
+@requires_vec
+def test_p2_6_probe_deferred_until_first_vec_op(db_path):
+    """P2-6: the embedder dim-probe must NOT run at construction (it would build the
+    ~6-14s torch stack on the event loop), only lazily on the first vector op."""
+    emb = _CountingEmbedder()
+    p = LocalVectorMemoryProvider(db_path, embedding_model=emb)
+    assert emb.calls == 0, "no embedder probe at construction"
+    assert p._dim is None
+    # first vector op triggers the lazy probe
+    assert p._ensure_vec_schema() is True
+    assert emb.calls >= 1
+    assert p._dim == _CountingEmbedder.DIM
+    # idempotent: a second ensure doesn't re-probe
+    before = emb.calls
+    assert p._ensure_vec_schema() is True
+    assert emb.calls == before

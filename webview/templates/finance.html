@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Finance{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Finance{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Finance</h2>
+        <p class="text-muted text-sm">The agent's own balance sheet — earned, spent, pending — over a trailing window. Evidence-backed, read-only.</p>
+    </div>
+    <form id="finance-controls" class="webgate-search" onsubmit="return false;">
+        <label class="text-sm text-muted" for="finance-days">Window</label>
+        <select id="finance-days" class="form-control">
+            <option value="1">1 day</option>
+            <option value="7" selected>7 days</option>
+            <option value="30">30 days</option>
+            <option value="90">90 days</option>
+        </select>
+    </form>
+    <div id="finance-kpis" class="webgate-kpi-row">
+        <div class="loading">Loading…</div>
+    </div>
+    <div id="finance-breakdown" class="webgate-list"></div>
+</div>
+
+<style>
+.webgate-kpi-row { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.webgate-kpi { flex: 1 1 140px; border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 12px 14px; }
+.webgate-kpi .kpi-label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+.webgate-kpi .kpi-value { font-size: 1.5rem; font-weight: 600; margin-top: 4px; }
+.webgate-kpi .kpi-sub { font-size: 0.75rem; opacity: 0.6; margin-top: 2px; }
+.kpi-value.pos { color: #3ba55d; }
+.kpi-value.neg { color: #d83c3e; }
+.webgate-brk-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color, #2a2a2a); }
+.webgate-brk-row .brk-k { opacity: 0.8; }
+</style>
+
+<script>
+(function () {
+    const kpis = document.getElementById('finance-kpis');
+    const brk = document.getElementById('finance-breakdown');
+    const daysSel = document.getElementById('finance-days');
+
+    function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+
+    function kpi(label, value, cls, sub) {
+        return '<div class="webgate-kpi"><div class="kpi-label">' + label + '</div>' +
+            '<div class="kpi-value ' + (cls || '') + '">' + value + '</div>' +
+            (sub ? '<div class="kpi-sub">' + sub + '</div>' : '') + '</div>';
+    }
+
+    function row(k, v) {
+        return '<div class="webgate-brk-row"><span class="brk-k">' + k + '</span>' +
+            '<span class="brk-v">' + v + '</span></div>';
+    }
+
+    async function load() {
+        kpis.innerHTML = '<div class="loading">Loading…</div>';
+        brk.innerHTML = '';
+        try {
+            const res = await fetch('/api/webgate/ledger?days=' + encodeURIComponent(daysSel.value));
+            const d = await res.json();
+            const net = Number(d.net_usd) || 0;
+            kpis.innerHTML =
+                kpi('Earned', money(d.earned_usd), 'pos', (d.settled_payments || 0) + ' settled') +
+                kpi('Spent', money(d.total_spend_usd), 'neg',
+                    (d.llm_calls || 0) + ' LLM calls, ' + (d.wallet_payments || 0) + ' payments') +
+                kpi('Net', money(net), net >= 0 ? 'pos' : 'neg', 'over ' + (d.window_days || '?') + 'd') +
+                kpi('Pending', money(d.pending_invoices_usd), '',
+                    (d.pending_invoices || 0) + ' invoice(s)');
+            const caps = d.caps || {};
+            brk.innerHTML =
+                row('LLM / API cost', money(d.llm_api_cost_usd)) +
+                row('Wallet spend', money(d.wallet_spend_usd)) +
+                row('Platform credits spent', money(d.credits_spent)) +
+                row('Invoice ceiling', caps.invoice_max_usd != null ? money(caps.invoice_max_usd) : '—') +
+                row('Daily invoicing cap', caps.invoice_daily_max != null ? String(caps.invoice_daily_max) : '—') +
+                row('Wallet daily cap', caps.wallet_daily_cap_usd != null ? money(caps.wallet_daily_cap_usd) : 'unset') +
+                row('Autonomy budget', caps.autonomy_budget_usd != null ? money(caps.autonomy_budget_usd) : '—');
+        } catch (e) {
+            kpis.innerHTML = '<div class="webgate-empty">Could not load the ledger.</div>';
+        }
+    }
+
+    daysSel.addEventListener('change', load);
+    load();
+})();
+</script>
+{% endblock %}

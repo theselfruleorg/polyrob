@@ -59,6 +59,20 @@ That's it! POLYROB fetches the page, reads the content, and summarizes it — us
 lightweight `web_fetch` tool, so no browser install is needed for this first task.
 (Full browser automation is opt-in; see [Step 1 below](#step-1-install-browser-engine-optional).)
 
+### Owner-paired install
+
+`polyrob init` also pairs the instance to an **owner** — the identity autonomy and
+self-evolution answer to. Interactively it asks for an instance id and owner user id
+(both default `rob` for a single-user setup). To script it:
+
+```bash
+polyrob init --non-interactive --owner rob --instance-id rob --openai-key sk-...
+```
+
+`--owner` alone backfills the instance id (and vice-versa). The pairing is written to
+`~/.polyrob/.env` as `POLYROB_OWNER_USER_ID` / `POLYROB_INSTANCE_ID`; `polyrob doctor`
+reports it (`owner:` / `instance id:` lines).
+
 ---
 
 ## Installation Options

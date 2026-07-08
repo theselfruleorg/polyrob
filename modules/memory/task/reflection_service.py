@@ -25,6 +25,10 @@ from typing import List, Optional
 
 logger = logging.getLogger(__name__)
 
+# P0-7: strong refs to fire-and-forget metering tasks scheduled onto the loop from
+# its own thread, so they aren't garbage-collected before they run.
+_INFLIGHT_METER_TASKS: set = set()
+
 
 class ReflectionService:
     """Synthesises a phase summary from findings via an aux LLM.
@@ -77,8 +81,23 @@ class ReflectionService:
             )
             loop = mc.get("loop")
             if loop is not None and not loop.is_closed():
-                fut = asyncio.run_coroutine_threadsafe(coro, loop)
-                fut.result(timeout=30.0)
+                # P0-7: if _meter is running ON the target loop's OWN thread (e.g. a
+                # future caller that invokes consolidate() directly on the loop rather
+                # than under to_thread), run_coroutine_threadsafe(...).result() would
+                # DEADLOCK — the loop can't execute the scheduled coro while its thread
+                # is blocked in .result(). Detect that and fire-and-forget instead.
+                on_loop_thread = False
+                try:
+                    on_loop_thread = asyncio.get_running_loop() is loop
+                except RuntimeError:
+                    on_loop_thread = False  # no running loop here → we're on a worker thread
+                if on_loop_thread:
+                    task = loop.create_task(coro)
+                    _INFLIGHT_METER_TASKS.add(task)
+                    task.add_done_callback(_INFLIGHT_METER_TASKS.discard)
+                else:
+                    fut = asyncio.run_coroutine_threadsafe(coro, loop)
+                    fut.result(timeout=30.0)
             else:
                 from core.async_bridge import run_coroutine_sync
                 run_coroutine_sync(coro, timeout=30.0)

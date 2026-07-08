@@ -60,3 +60,28 @@ async def test_empty_user_warns_once(tmp_path, monkeypatch, caplog):
         await p.sync_turn("a", "b", session_id="s1", user_id="")
     warnings = [r for r in caplog.records if "anonymous/default user_id" in r.getMessage()]
     assert len(warnings) == 1  # one-time only
+
+
+@pytest.mark.asyncio
+async def test_prefetch_excludes_current_session_self_echo(tmp_path):
+    """P2-1: automatic prefetch must NOT return rows written by the CURRENT session
+    (they are already in context via the H-MEM tail); other sessions still surface."""
+    p = _provider(tmp_path)
+    await p.sync_turn("deploy plan", "current session finding about deploy",
+                      session_id="s_current", user_id="alice")
+    await p.sync_turn("deploy plan", "older session finding about deploy",
+                      session_id="s_old", user_id="alice")
+    # prefetch from s_current excludes s_current's own row, keeps s_old's
+    recall = await p.prefetch("deploy", session_id="s_current", user_id="alice")
+    assert "older session finding" in recall
+    assert "current session finding" not in recall
+
+
+@pytest.mark.asyncio
+async def test_explicit_search_still_includes_current_session(tmp_path):
+    """The explicit search action is all-sessions — only automatic prefetch excludes."""
+    p = _provider(tmp_path)
+    await p.sync_turn("deploy plan", "current session finding about deploy",
+                      session_id="s_current", user_id="alice")
+    got = await p.search("deploy", session_id="s_current", user_id="alice")
+    assert "current session finding" in got

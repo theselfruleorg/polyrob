@@ -199,3 +199,40 @@ async def test_notify_owner_pending_failopen_no_container(tmp_path, monkeypatch)
     ok = await self_evolution.maybe_notify_owner_pending(
         None, "gleb", home_dir=tmp_path, instance_id="rob")
     assert ok is False
+
+
+# --- T4-04: a push that can't be delivered live persists a durable owner_notice -----
+
+@pytest.mark.asyncio
+async def test_push_owner_message_records_notice_when_no_sink(monkeypatch):
+    import core.self_evolution as se
+    calls = []
+    monkeypatch.setattr(se, "_record_owner_notice", lambda text: calls.append(text))
+
+    class _NoSink:
+        def get_service(self, name):
+            return None  # REPL/local owner: no telegram sink registered
+
+    ok = await se.push_owner_message(_NoSink(), "I'm blocked; grant twitter access")
+    assert ok is False  # not delivered live
+    assert calls == ["I'm blocked; grant twitter access"]  # but not lost
+
+
+@pytest.mark.asyncio
+async def test_push_owner_message_no_notice_when_delivered(monkeypatch):
+    import core.self_evolution as se
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    calls = []
+    monkeypatch.setattr(se, "_record_owner_notice", lambda text: calls.append(text))
+
+    class _Sink:
+        async def send_message(self, chat_id, text):
+            return True
+
+    class _C:
+        def get_service(self, name):
+            return _Sink() if name in ("telegram_sink", "message_router") else None
+
+    ok = await se.push_owner_message(_C(), "hi owner")
+    assert ok is True
+    assert calls == []  # delivered live -> no fallback notice

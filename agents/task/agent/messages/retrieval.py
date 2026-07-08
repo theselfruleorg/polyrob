@@ -115,6 +115,20 @@ class MessageRetrievalMixin:
 		except Exception as e:
 			self.logger.debug(f"Failed to queue ephemeral message: {e}")
 
+	def commit_ephemeral_consumption(self) -> None:
+		"""P2-14: drop the pending (delivered) ephemerals. Call once the LLM has
+		responded — even a parse-failed response means they WERE delivered."""
+		self._ephemeral_pending = []
+
+	def restore_ephemeral_on_failure(self) -> None:
+		"""P2-14: re-queue ephemerals consumed for an LLM call that ultimately failed
+		(transient invoke error), so the next step re-includes them instead of losing
+		a correspondent reply / RECALL forever."""
+		pending = getattr(self, '_ephemeral_pending', None)
+		if pending:
+			self._ephemeral_messages = pending + self._ephemeral_messages
+			self._ephemeral_pending = []
+
 	def get_messages_for_llm(self, consume_ephemeral: bool = True) -> List[BaseMessage]:
 		"""Get messages ready for LLM call with all processing applied.
 
@@ -226,6 +240,14 @@ class MessageRetrievalMixin:
 			conversation.extend(self._ephemeral_messages)
 			self.logger.debug(f"Included {len(self._ephemeral_messages)} ephemeral messages")
 			if consume_ephemeral:
+				# P2-14: don't drop the one-shot ephemerals (correspondent replies,
+				# RECALL) at assembly time — the LLM call hasn't happened yet, so a
+				# transient invoke failure would lose them forever (correspondent data
+				# has no other delivery path). MOVE them to a pending buffer instead:
+				# commit_ephemeral_consumption() drops them once the LLM has responded,
+				# restore_ephemeral_on_failure() re-queues them if the call ultimately
+				# failed. Wired in the next_action wrapper (output_validation.py).
+				self._ephemeral_pending = list(self._ephemeral_messages)
 				self._ephemeral_messages.clear()
 
 		self.logger.debug(

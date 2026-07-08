@@ -191,7 +191,14 @@ async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal
             llm = getattr(agent, "_judge_llm", None)
             if llm is None:
                 try:
-                    llm = agent._provision_aux_llm("judge")
+                    # P2-9: async provisioning — don't block the loop building the client.
+                    llm = await agent._provision_aux_llm_async("judge")
+                    # P2-8: cache the freshly-provisioned judge client on the agent so a
+                    # subsequent goal judge / background review reuses it (and it gets
+                    # closed once at session cleanup) instead of leaking one httpx pool
+                    # per judged goal.
+                    if llm is not None:
+                        agent._judge_llm = llm
                 except Exception:
                     llm = None
             llm = llm or getattr(agent, "llm", None)

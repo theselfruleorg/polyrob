@@ -89,8 +89,12 @@ class TestPosture1OwnOps:
         assert c.get("/owner-login").status_code == 200
 
     def test_owner_login_unlocks_dashboard(self, monkeypatch):
+        import re as _re
         c = _client(monkeypatch, "own_ops", owner_creds=True)
-        c.post("/owner-login", data={"username": "op", "password": "s3cret"})
+        page = c.get("/owner-login")
+        m = _re.search(r'name="csrf_token" value="([0-9a-f]+)"', page.text)
+        c.post("/owner-login", data={"username": "op", "password": "s3cret",
+                                     "csrf_token": m.group(1) if m else ""})
         resp = c.get("/")
         assert "POLYROB is live" not in resp.text
 

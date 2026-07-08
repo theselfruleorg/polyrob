@@ -124,6 +124,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		mcp_servers: Optional[Dict[str, List[str]]] = None,  # MCP server info for dynamic prompts
 		persona_block: Optional[str] = None,  # S1: chat-mode persona for SystemPrompt <identity>
 		tool_ids: Optional[List[str]] = None,  # Session's loaded tool_ids for config-aware prompt gating
+		include_vision: bool = True,  # T1-06: session's use_vision → gates the vision prompt section
 	):
 		# S1 (chat consolidation): persona text forwarded to the SystemPrompt class
 		# when this manager builds the system message itself (no prebuilt profile
@@ -152,9 +153,17 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		import os
 		max_messages_override = os.getenv('TASK_MAX_MESSAGES')
 		if max_messages_override:
-			adaptive_max_messages = int(max_messages_override)
-			self.logger.info(f"Using environment override for max messages: {adaptive_max_messages}")
-		else:
+			# P3: a non-numeric TASK_MAX_MESSAGES used to crash MessageManager.__init__
+			# (and thus session creation). Ignore an invalid value with a warning.
+			try:
+				adaptive_max_messages = int(max_messages_override)
+				self.logger.info(f"Using environment override for max messages: {adaptive_max_messages}")
+			except ValueError:
+				self.logger.warning(
+					f"Ignoring non-numeric TASK_MAX_MESSAGES={max_messages_override!r}; "
+					"using adaptive default")
+				max_messages_override = None
+		if not max_messages_override:
 			# PHASE 1 FIX: Adaptive scaling based on model context window
 			# Average message size: ~160 tokens (system/user/assistant/tool messages)
 			# Target: Use 10-20% of context window for message history
@@ -247,8 +256,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		self.mcp_servers = mcp_servers or {}
 
 		# Session's loaded tool_ids — lets SystemPrompt gate config-aware sections
-		# (e.g. <anysite>) on the tools actually loaded this session, not a global flag.
-		self.tool_ids = list(tool_ids or [])
+		# (e.g. <anysite>, <browser-tools>) on the tools actually loaded this session,
+		# not a global flag. None is preserved (NOT collapsed to []): it means the
+		# caller never declared a tool set, and SystemPrompt keeps legacy sections on.
+		self.tool_ids = list(tool_ids) if tool_ids is not None else None
 
 		# Store native tools flag for message conversion
 		self.use_native_tools = use_native_tools
@@ -314,6 +325,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 				mcp_servers=self.mcp_servers,
 				persona_block=self._persona_block,
 				tool_ids=self.tool_ids,
+				include_vision=include_vision,
 			)
 
 			# SystemPrompt has get_system_message() method that returns a SystemMessage

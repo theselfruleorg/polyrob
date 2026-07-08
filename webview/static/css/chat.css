@@ -1117,6 +1117,24 @@
     font-size: var(--font-size-xs);
 }
 
+.irc-user {
+    color: var(--color-accent-green);
+    margin-right: 8px;
+    font-size: var(--font-size-xs);
+    opacity: 0.85;
+}
+
+.irc-runtime {
+    color: var(--color-accent-blue);
+    margin-right: 8px;
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+}
+
+.irc-runtime-agent {
+    color: #ffa500;
+}
+
 .irc-session-id {
     color: var(--color-accent-green);
     text-decoration: none;
@@ -1144,6 +1162,29 @@
     color: var(--color-text-muted);
     margin-left: 8px;
     font-size: var(--font-size-xs);
+}
+
+.irc-feed-link {
+    color: var(--color-accent-blue);
+    text-decoration: underline dotted;
+    font-size: var(--font-size-xs);
+    margin-right: 8px;
+}
+
+.irc-feed-link:hover {
+    color: var(--color-text-primary);
+}
+
+/* One-line orientation hint under the new-session config panel (P2-14) */
+.chat-empty-hint {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    text-align: center;
+    padding: 14px 8px;
+}
+
+.chat-empty-hint a {
+    color: var(--color-accent-green);
 }
 
 

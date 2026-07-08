@@ -34,6 +34,48 @@ def is_refusal(final: Optional[str]) -> bool:
     return any(low.startswith(p) for p in _RUN_REFUSALS)
 
 
+def completed_via_done(orchestrator: Any) -> Optional[bool]:
+    """T2-01: did the run genuinely finish via ``done()``, or just stop?
+
+    ``run_session`` returns the SAME status string ("Session completed successfully")
+    whether the agent called ``done()`` or the loop merely ran out of steps / drifted
+    into a reply-only conversational exit — so the string can't distinguish a real
+    completion from an exhausted one. A goal run that exhausts ``max_steps`` without
+    delivering was being recorded as board success (the prod "announce OSS -> marked
+    done, never posted" shape).
+
+    Inspect the resident orchestrator's MAIN-agent last-result set (the same
+    ``any(r.is_done for r in _last_result)`` signal the run loop logs at
+    ``run_loop.py:584``). Scoped to the autonomous goal/cron callers on purpose — the
+    global ``_result_session_status`` must NOT change, since a chat turn legitimately
+    ends via conversational-exit without ``done()``.
+
+    Returns:
+        ``True``  — a main agent's last result carries a genuine ``is_done``.
+        ``False`` — we read a main agent's last result and NONE were done (ran out).
+        ``None``  — undeterminable (no orchestrator / non-resident / missing attrs);
+                    callers MUST fall back to legacy behavior so an introspection
+                    miss never flips a real completion to failure.
+    """
+    if orchestrator is None:
+        return None
+    try:
+        agents = list((getattr(orchestrator, "agents", None) or {}).values())
+        mains = [a for a in agents if not getattr(a, "_is_sub_agent", False)]
+        if not mains:
+            return None
+        saw_result = False
+        for a in mains:
+            last = getattr(a, "_last_result", None)
+            if last:
+                saw_result = True
+                if any(getattr(r, "is_done", False) for r in last):
+                    return True
+        return False if saw_result else None
+    except Exception:  # pragma: no cover - defensive; unknown => legacy behavior
+        return None
+
+
 async def run_task_as_session(
     task_agent: Any,
     *,

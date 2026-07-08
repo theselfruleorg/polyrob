@@ -35,8 +35,15 @@ def is_reply_only_step(results: Iterable) -> bool:
     return all(bool(getattr(r, "metadata", None)) and r.metadata.get("conversational_reply") for r in results)
 
 
-def should_conversational_exit(consecutive_reply_steps: int, is_sub_agent: bool) -> bool:
-    """Whether the run loop should end the turn now (R1)."""
-    if is_sub_agent:
+def should_conversational_exit(consecutive_reply_steps: int, is_sub_agent: bool,
+                               is_autonomous: bool = False) -> bool:
+    """Whether the run loop should end the turn now (R1).
+
+    T2-08: an AUTONOMOUS session (goal/cron/planner-spawned) is exempt like a
+    sub-agent — there is no human chatting with it, so a run of status
+    send_messages is progress narration, not a greeting loop; cutting the turn
+    there ended missions mid-flight (and mislabeled the run's completion).
+    """
+    if is_sub_agent or is_autonomous:
         return False
     return consecutive_reply_steps >= CONVERSATIONAL_EXIT_AFTER_REPLIES

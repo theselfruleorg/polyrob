@@ -175,7 +175,7 @@ def test_judge_retries_once_when_model_narrates_instead_of_json():
     llm = _LLM()
 
     class _JudgeAgent(_FakeAgent):
-        def _provision_aux_llm(self, task):
+        async def _provision_aux_llm_async(self, task):
             return llm
 
     orch = _FakeOrch(agents={"main": _JudgeAgent([_Step([_Action("twitter_quote")],
@@ -202,7 +202,7 @@ def test_judge_double_garbage_is_unclear():
     llm = _LLM()
 
     class _JudgeAgent(_FakeAgent):
-        def _provision_aux_llm(self, task):
+        async def _provision_aux_llm_async(self, task):
             return llm
 
     orch = _FakeOrch(agents={"main": _JudgeAgent([])})
@@ -228,7 +228,7 @@ def test_judge_happy_path_unmet():
     llm = _LLM()
 
     class _JudgeAgent(_FakeAgent):
-        def _provision_aux_llm(self, task):
+        async def _provision_aux_llm_async(self, task):
             assert task == "judge"
             return llm
 

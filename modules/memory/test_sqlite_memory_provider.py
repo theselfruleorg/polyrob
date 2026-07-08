@@ -4,12 +4,14 @@ from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 
 
 @pytest.mark.asyncio
-async def test_sync_then_prefetch_same_session(tmp_path, monkeypatch):
+async def test_sync_then_prefetch_cross_session(tmp_path, monkeypatch):
     # Exercises the anon/shared-"" bucket path: allow empty-user_id recall.
+    # P2-1: automatic prefetch excludes the CURRENT session (self-echo guard), so recall
+    # is a CROSS-session operation — sync in s1, prefetch from s2.
     monkeypatch.setenv("MEMORY_REQUIRE_USER_ID", "false")
     p = SqliteMemoryProvider(str(tmp_path / "mem.db"))
     await p.sync_turn("what is the api base url?", "the base url is https://api.acme.test", session_id="s1")
-    out = await p.prefetch("api base url", session_id="s1")
+    out = await p.prefetch("api base url", session_id="s2")
     assert "api.acme.test" in out
 
 

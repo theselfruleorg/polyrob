@@ -197,3 +197,21 @@ def test_reject_pending_skill_never_touches_active(sm, monkeypatch):
     # active skill is not a pending draft → reject refuses it
     assert sm.reject_pending_skill("active-one", user_id="u1") is False
     assert (sm.skills_dir / "user_u1" / "active-one" / "SKILL.md").exists()
+
+
+def test_p2_20_promote_preserves_original_authorship(sm, monkeypatch, tmp_path):
+    """P2-20: promoting an agent-authored pending skill must PRESERVE created_by=agent
+    (not overwrite to 'user'), so it stays in curator scope + the authored-reuse metric."""
+    from modules.skills import skill_usage
+    store = skill_usage.SkillUsageStore(str(tmp_path / "usage.db"))
+    monkeypatch.setattr(skill_usage, "get_skill_usage_store", lambda: store)
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
+
+    # agent authors a skill -> lands pending, provenance created_by=agent
+    sm.create_skill("q", GOOD, user_id="u1", created_by="agent")
+    assert store.get_provenance("q", "u1")["created_by"] == "agent"
+
+    res = sm.promote_pending_skill("q", user_id="u1")
+    assert res.ok and not res.pending
+    # authorship preserved (was overwritten to 'user' before P2-20)
+    assert store.get_provenance("q", "u1")["created_by"] == "agent"

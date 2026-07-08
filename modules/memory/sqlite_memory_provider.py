@@ -261,28 +261,38 @@ class SqliteMemoryProvider(MemoryProvider):
         return "\n".join(f"- {c}" for c in contents)
 
     def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
-                          sort: str = None, allow_browse: bool = True) -> list:
+                          sort: str = None, allow_browse: bool = True,
+                          exclude_session_id: str = None) -> list:
         """FTS5 recall -> ranked list of content strings (no formatting). Subclasses
         (e.g. the hybrid vector provider) reuse this to RRF-merge with other signals
         without lossy re-parsing of a joined string. Discover when `query` has >=3-char
-        terms; otherwise browse most-recent (unless allow_browse=False -> [])."""
+        terms; otherwise browse most-recent (unless allow_browse=False -> []).
+
+        P2-1: when `exclude_session_id` is set (the automatic prefetch passes the
+        CURRENT session), rows written by that session are excluded — otherwise recall
+        re-injects the session's OWN just-written findings (already in context via the
+        H-MEM tail) as 'untrusted external' memory, wasting tokens and top-k slots.
+        """
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        _excl_sql = " AND session_id != ?" if exclude_session_id else ""
+        _excl_arg = (exclude_session_id,) if exclude_session_id else ()
         if terms:
             match = " OR ".join(f'"{t}"' for t in terms[:12])
             order = {"newest": "rowid DESC", "oldest": "rowid ASC"}.get(sort, "rank")
             rows = execute_retry(
                 self.db_path,
-                f"SELECT content FROM memories WHERE memories MATCH ? AND user_id = ? "
-                f"ORDER BY {order} LIMIT ?",
-                (match, norm_user, limit),
+                f"SELECT content FROM memories WHERE memories MATCH ? AND user_id = ?"
+                f"{_excl_sql} ORDER BY {order} LIMIT ?",
+                (match, norm_user) + _excl_arg + (limit,),
                 fetch="all",
             )
         elif allow_browse:
             order = "rowid ASC" if sort == "oldest" else "rowid DESC"
             rows = execute_retry(
                 self.db_path,
-                f"SELECT content FROM memories WHERE user_id = ? ORDER BY {order} LIMIT ?",
-                (norm_user, limit),
+                f"SELECT content FROM memories WHERE user_id = ?{_excl_sql} "
+                f"ORDER BY {order} LIMIT ?",
+                (norm_user,) + _excl_arg + (limit,),
                 fetch="all",
             )
         else:
@@ -290,16 +300,23 @@ class SqliteMemoryProvider(MemoryProvider):
         return [r["content"] for r in (rows or [])]
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
-        # Thin caller of search() preserving the exact legacy shape: rank-ordered,
-        # top_k results, "" on anon-block or no significant terms (NO browse-on-empty —
-        # automatic prefetch must not inject recent rows when the query is empty).
+        # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-
+        # empty — automatic prefetch must not inject recent rows when the query is empty).
+        # P2-1: calls _keyword_contents DIRECTLY (not search()) so it can exclude the
+        # CURRENT session — the explicit search action stays all-sessions.
         if self._anon_blocked(user_id):
             return ""
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
         if not terms:
             return ""
-        return await self.search(query, user_id=user_id, session_id=session_id,
-                                  limit=self.top_k)
+        try:
+            contents = await self._run_blocking(
+                self._keyword_contents, query, norm_user=self._norm_user(user_id),
+                limit=self.top_k, exclude_session_id=session_id)
+        except Exception as e:
+            logger.warning("sqlite memory prefetch failed: %s", e)
+            return ""
+        return "\n".join(f"- {c}" for c in contents)
 
     # ---- curated per-tenant store (UP-09 `memory` tool) ----------------------
     @staticmethod

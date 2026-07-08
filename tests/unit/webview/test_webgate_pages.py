@@ -50,7 +50,10 @@ def test_memory_endpoint_calls_provider_search(monkeypatch):
     monkeypatch.setattr(pages, "_memory_provider", lambda: FakeProvider())
     r = client.get("/api/webgate/memory", params={"q": "alpha", "limit": 7})
     assert r.status_code == 200
-    assert r.json() == ["alpha finding", "beta finding"]
+    body = r.json()
+    assert body["items"] == ["alpha finding", "beta finding"]
+    assert body["count"] == 2
+    assert body["mode"] == "search"
     # Proof of reuse: the real provider.search was called with the tenant owner + args.
     assert calls["query"] == "alpha"
     assert calls["limit"] == 7
@@ -69,7 +72,9 @@ def test_memory_endpoint_browse_when_empty_query(monkeypatch):
     monkeypatch.setattr(pages, "_memory_provider", lambda: FakeProvider())
     r = client.get("/api/webgate/memory")
     assert r.status_code == 200
-    assert r.json() == []
+    body = r.json()
+    assert body["items"] == [] and body["count"] == 0
+    assert body["mode"] == "browse"
     assert seen["query"] == ""  # browse-recent shape
 
 
@@ -78,7 +83,7 @@ def test_memory_endpoint_fail_open_no_provider(monkeypatch):
     monkeypatch.setattr(pages, "_memory_provider", lambda: None)
     r = client.get("/api/webgate/memory")
     assert r.status_code == 200
-    assert r.json() == []
+    assert r.json()["items"] == []
 
 
 # --------------------------------------------------------------------------- #
@@ -207,7 +212,7 @@ def test_identity_has_no_write_path(monkeypatch):
 def test_doctor_endpoint_reuses_doctor_report(monkeypatch):
     client, pages = _router_client()
     sentinel = ["POLYROB doctor — resolved env: development", "provider keys:"]
-    monkeypatch.setattr(pages, "doctor_report", lambda env: list(sentinel))
+    monkeypatch.setattr(pages, "doctor_report", lambda env, **kw: list(sentinel))
     r = client.get("/api/webgate/doctor")
     assert r.status_code == 200
     body = r.json()
@@ -219,13 +224,16 @@ def test_doctor_endpoint_reuses_doctor_report(monkeypatch):
 
 
 def test_doctor_endpoint_matches_real_report():
-    """Without mocking, the endpoint returns the SAME content doctor_report produces."""
+    """Without mocking, the endpoint returns the SAME content doctor_report produces.
+
+    The endpoint resolves in server-process context (POLYROB_LOCAL absent means
+    OFF — no CLI setdefault happens in the webview; P0-4)."""
     import os
     from cli.commands.doctor import doctor_report
     client, _pages = _router_client()
     r = client.get("/api/webgate/doctor")
     assert r.status_code == 200
-    assert r.json()["checks"] == doctor_report(dict(os.environ))
+    assert r.json()["checks"] == doctor_report(dict(os.environ), local_absent_means_on=False)
 
 
 # --------------------------------------------------------------------------- #

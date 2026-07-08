@@ -86,7 +86,9 @@ def test_anon_allowed_when_not_required(tmp_path, monkeypatch):
 
 
 def test_prefetch_legacy_shape_unchanged(provider):
-    _seed(provider, "alice", ["widget alpha"])
+    # P2-1: seed in a DIFFERENT session than we prefetch from — prefetch now excludes
+    # the current session (self-echo guard), so cross-session recall is the real shape.
+    _seed(provider, "alice", ["widget alpha"], session="s0")
     # prefetch: rank-ordered, returns "" on no-terms, "" on anon
     assert "widget alpha" in asyncio.run(provider.prefetch("widget", session_id="s1", user_id="alice"))
     assert asyncio.run(provider.prefetch("", session_id="s1", user_id="alice")) == ""

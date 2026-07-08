@@ -90,11 +90,58 @@ async function fetchWithAuth(url, options = {}) {
 // State
 let userServers = [];
 let globalServers = [];
+let apiServiceAvailable = true;
 let userSettings = {
     mcp_enabled: true,
     include_global_servers: true,
     max_servers: 10
 };
+
+// ========================================
+// API-SERVICE FEATURE DETECTION
+// ========================================
+// The MCP/skills/trading endpoints live on the separate POLYROB API service
+// (:9000), not on the webview process. On standalone/monitoring deployments
+// (local dev, the own_ops VPS console) they 404 — probe once and render an
+// honest state instead of console errors + "Error loading your servers".
+
+async function probeApiService() {
+    try {
+        const r = await fetch('/api/mcp/settings', { credentials: 'include' });
+        // 404 = the API surface is not mounted/routed in this deployment.
+        // Anything else (200, 401, 403...) means the surface exists.
+        return r.status !== 404;
+    } catch (_e) {
+        return false; // network error -> no API service
+    }
+}
+
+function renderApiUnavailable() {
+    const msg =
+        '<div class="empty-state">' +
+        '<p>This section needs the POLYROB API service, which is not running in this deployment.</p>' +
+        '<p style="color: var(--color-text-muted); font-size: 12px;">' +
+        'MCP servers, skills and trading tools are managed by the agent/API process ' +
+        '(this console is monitoring-only here).</p>' +
+        '</div>';
+    ['global-servers', 'user-servers', 'system-skills', 'user-skills'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = msg;
+    });
+    // The MCP toggles PATCH the same absent API — freeze them.
+    ['mcp-enabled', 'include-global'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = true;
+    });
+    ['mcp-enabled-label', 'include-global-label', 'max-servers'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = '—';
+    });
+    const addServer = document.getElementById('btn-add-server');
+    if (addServer) addServer.style.display = 'none';
+    const addSkill = document.getElementById('btn-add-skill');
+    if (addSkill) addSkill.style.display = 'none';
+}
 
 // Load user settings
 async function loadSettings() {
@@ -193,11 +240,15 @@ function renderGlobalServers() {
         </div>
     `).join('');
 
-    // Add Polymarket as configurable platform server
-    html += renderPolymarketCard();
-
-    // Add Hyperliquid as configurable platform server
-    html += renderHyperliquidCard();
+    // Crypto-trading cards render only when their status endpoint answered —
+    // a 404/error means the tool isn't available in this deployment, so no
+    // misleading "Setup Required" card.
+    if (polymarketStatus && !polymarketStatus.error) {
+        html += renderPolymarketCard();
+    }
+    if (hyperliquidStatus && !hyperliquidStatus.error) {
+        html += renderHyperliquidCard();
+    }
 
     container.innerHTML = html || '<div class="empty-state">No platform servers available</div>';
 
@@ -1183,15 +1234,22 @@ async function init() {
     // Initialize tab navigation first
     initTabNavigation();
 
-    // Load all data
-    await Promise.all([
-        loadSettings(),
-        loadAvailableServers(),
-        loadUserServers(),
-        loadSkills(),
-        loadPolymarketStatus(),
-        loadHyperliquidStatus()
-    ]);
+    // One probe decides whether the API service exists in this deployment;
+    // without it, skip every API call and render the honest state instead.
+    apiServiceAvailable = await probeApiService();
+    if (!apiServiceAvailable) {
+        renderApiUnavailable();
+    } else {
+        // Load all data
+        await Promise.all([
+            loadSettings(),
+            loadAvailableServers(),
+            loadUserServers(),
+            loadSkills(),
+            loadPolymarketStatus(),
+            loadHyperliquidStatus()
+        ]);
+    }
 
     // Setup MCP event listeners
     document.getElementById('btn-add-server').addEventListener('click', openAddModal);

@@ -47,9 +47,16 @@ def _add_findings(mgr, session_id, n):
             action_summary=f"act {i}", finding=f"finding {i}", total_steps=50)
 
 
-def test_close_triggers_reflection_below_step_threshold_when_enabled():
-    mgr = _make_manager({"REFLECTION_ON_SESSION_CLOSE": True,
-                         "REFLECTION_SESSION_CLOSE_THRESHOLD": 5})
+# T2-04: the flag is read from the ENVIRONMENT (core.env SSOT), NOT config.get —
+# BotConfig.get never reads env for the undeclared REFLECTION_ON_SESSION_CLOSE key, so
+# these tests must configure via monkeypatch.setenv to exercise the real production path.
+# (Setting it in FakeConfig was the false-confidence trap: FakeConfig.get honors any key,
+# unlike the real BotConfig.get, so the tests passed while production was dead.)
+
+def test_close_triggers_reflection_below_step_threshold_when_enabled(monkeypatch):
+    monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
+    monkeypatch.setenv("REFLECTION_SESSION_CLOSE_THRESHOLD", "5")
+    mgr = _make_manager({})
     mgr.create_session(session_id="s1", task="t")
     _add_findings(mgr, "s1", 6)  # below the per-step threshold of 25
     mgr._trigger_reflection = MagicMock()
@@ -57,9 +64,9 @@ def test_close_triggers_reflection_below_step_threshold_when_enabled():
     mgr._trigger_reflection.assert_called_once()
 
 
-def test_close_no_reflection_when_flag_off():
-    mgr = _make_manager({"REFLECTION_ON_SESSION_CLOSE": False,
-                         "REFLECTION_SESSION_CLOSE_THRESHOLD": 5})
+def test_close_no_reflection_when_flag_off(monkeypatch):
+    monkeypatch.delenv("REFLECTION_ON_SESSION_CLOSE", raising=False)
+    mgr = _make_manager({})
     mgr.create_session(session_id="s2", task="t")
     _add_findings(mgr, "s2", 6)
     mgr._trigger_reflection = MagicMock()
@@ -67,11 +74,26 @@ def test_close_no_reflection_when_flag_off():
     mgr._trigger_reflection.assert_not_called()
 
 
-def test_close_no_reflection_below_min_findings():
-    mgr = _make_manager({"REFLECTION_ON_SESSION_CLOSE": True,
-                         "REFLECTION_SESSION_CLOSE_THRESHOLD": 5})
+def test_close_no_reflection_below_min_findings(monkeypatch):
+    monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
+    monkeypatch.setenv("REFLECTION_SESSION_CLOSE_THRESHOLD", "5")
+    mgr = _make_manager({})
     mgr.create_session(session_id="s3", task="t")
     _add_findings(mgr, "s3", 2)  # fewer than the close threshold -> no cost
     mgr._trigger_reflection = MagicMock()
     mgr.close_session("s3")
     mgr._trigger_reflection.assert_not_called()
+
+
+def test_flag_reads_env_not_config_get(monkeypatch):
+    """T2-04 regression: the flag must come from the environment. A value present ONLY
+    in the config object (undeclared BotConfig field) must NOT enable it, while the env
+    var MUST. This is what the dead-gate bug got wrong."""
+    monkeypatch.delenv("REFLECTION_ON_SESSION_CLOSE", raising=False)
+    # config-only (the old, dead path) => stays OFF
+    mgr_cfg_only = _make_manager({"REFLECTION_ON_SESSION_CLOSE": True})
+    assert mgr_cfg_only.reflection_on_session_close is False
+    # env set => ON
+    monkeypatch.setenv("REFLECTION_ON_SESSION_CLOSE", "true")
+    mgr_env = _make_manager({})
+    assert mgr_env.reflection_on_session_close is True

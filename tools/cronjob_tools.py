@@ -120,8 +120,18 @@ class CronJobTool(BaseTool):
 
 
 def cron_enabled() -> bool:
-    """Whether the cron subsystem is turned on (opt-in; off in production by default)."""
-    return _bool_env("CRON_ENABLED", False)
+    """Whether the cron subsystem is turned on (opt-in; off in production by default).
+
+    W1-1: the default is governed by AUTONOMY_POSTURE — only the `full` posture turns
+    cron (time-based initiative) on by default; `silent`/`owner-visible` keep it OFF.
+    An explicit CRON_ENABLED always wins.
+    """
+    try:
+        from agents.task.constants import _posture_autonomy_default
+        default = _posture_autonomy_default("CRON_ENABLED")
+    except Exception:
+        default = False
+    return _bool_env("CRON_ENABLED", default)
 
 
 def register_cronjob_tool(force: bool = False) -> bool:

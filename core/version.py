@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 # Dev-checkout fallback. MUST equal pyproject.toml [project].version.
-_FALLBACK_VERSION = "0.4.3"
+_FALLBACK_VERSION = "0.5.0"
 
 # Project names this module is willing to claim from an adjacent pyproject.toml, so
 # a parent/monorepo pyproject can never mislabel the version.

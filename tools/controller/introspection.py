@@ -120,6 +120,17 @@ class IntrospectionMixin:
 		"""
 		return self.registry.supports_native_tools(provider)
 
+	def get_prompt_action_index(self) -> str:
+		"""Compact one-line-per-action index for NATIVE tool mode (T1-03).
+
+		The full schemas already ship to the provider in the `tools` param, so the
+		prompt only needs an at-a-glance catalog. MCP direct actions registered in
+		the registry are included automatically; the MCP server appendix that
+		get_prompt_description() adds is NOT duplicated here (the <mcp-tools>
+		prompt section already carries it).
+		"""
+		return self.registry.get_prompt_action_index()
+
 	def get_prompt_description(self) -> str:
 		"""Get a description of all actions for the prompt.
 

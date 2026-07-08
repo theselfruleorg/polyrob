@@ -79,22 +79,22 @@ def test_index_page_uses_branding_config_defaults(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
     html = client.get("/").text
-    assert "t.me/tmachinrobot" in html
-    assert "DEN holders" in html
     assert "your-polyrob-host.example" in html
     assert "theselfrule.org" in html
+    # Beta banner removed 2026-07-06 — must never come back
+    assert "beta-banner" not in html
+    assert "DEN holders" not in html
 
 
 def test_index_page_honors_branding_overrides(monkeypatch):
-    monkeypatch.setenv("POLYROB_SUPPORT_URL", "https://t.me/myinstance")
-    monkeypatch.setenv("POLYROB_ACCESS_GATE_LABEL", "beta testers")
+    monkeypatch.setenv("POLYROB_BRAND_URL", "https://brand.example")
+    monkeypatch.setenv("POLYROB_ORG_URL", "https://org.example")
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
     html = client.get("/").text
-    assert "t.me/myinstance" in html
-    assert "beta testers" in html
-    assert "t.me/tmachinrobot" not in html
-    assert "DEN holders" not in html
+    assert "brand.example" in html
+    assert "org.example" in html
+    assert "your-polyrob-host.example" not in html
 
 
 def test_footer_renders_real_version(monkeypatch):
@@ -157,6 +157,22 @@ def test_rebrand_did_not_add_new_stylesheet_links(monkeypatch):
     assert -1 < i_vars < i_comp < i_style
 
 
+def test_settings_page_has_no_coming_soon_stubs(monkeypatch):
+    """P0-2 (2026-07-06 UX handoff): the Preferences/API-Keys 'Coming soon'
+    placeholder tabs were removed entirely — dead UI must not come back."""
+    server = _reload_server(monkeypatch, multitenant=False)
+    client = TestClient(server._fastapi)
+    r = client.get("/settings")
+    assert r.status_code == 200
+    html = r.text
+    assert "Coming soon" not in html
+    assert "section-preferences" not in html
+    assert "section-api-keys" not in html
+    # The real sections stay.
+    assert "section-mcp" in html
+    assert "section-skills" in html
+
+
 def test_rebrand_left_variables_css_untouched():
     import hashlib  # noqa: F401 (kept to mirror the brief's spec; not used for a golden hash)
     from pathlib import Path
@@ -174,7 +190,6 @@ def _restore_server(monkeypatch):
     monkeypatch.delenv("POLYROB_CONSOLE_NAME", raising=False)
     monkeypatch.delenv("WEBVIEW_DOMAIN", raising=False)
     monkeypatch.delenv("POLYROB_SUPPORT_URL", raising=False)
-    monkeypatch.delenv("POLYROB_ACCESS_GATE_LABEL", raising=False)
     monkeypatch.delenv("POLYROB_SUPPORT_HANDLE", raising=False)
     monkeypatch.delenv("POLYROB_BRAND_URL", raising=False)
     monkeypatch.delenv("POLYROB_ORG_URL", raising=False)

@@ -61,6 +61,15 @@ def run_coroutine_sync(coro: "Coroutine[Any, Any, Any]", timeout: Optional[float
         running = False
 
     if not running:
+        # P2-7: on a WORKER thread (e.g. asyncio.to_thread — the reflection/aux offload)
+        # there is no running loop, but asyncio.run() spins a THROWAWAY loop PER CALL.
+        # An LLM client's httpx pool bound to a prior throwaway loop then raises
+        # "Event loop is closed" on the next call — the exact bug this bridge exists to
+        # kill. Route worker-thread calls through the persistent bridge loop so every
+        # invocation shares one live loop. The MAIN thread with no running loop is the
+        # cheap CLI case -> keep asyncio.run.
+        if threading.current_thread() is not threading.main_thread():
+            return _bridge.run(coro, timeout=timeout)
         if timeout is not None:
             return asyncio.run(asyncio.wait_for(coro, timeout))
         return asyncio.run(coro)

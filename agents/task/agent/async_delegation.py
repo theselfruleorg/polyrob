@@ -31,6 +31,25 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+
+def _frame_delegation_payload(result_text: str) -> str:
+    """Frame an untrusted delegation result as DATA (P1-3).
+
+    Wraps the child output in ``<untrusted_tool_result>`` delimiters and defangs any
+    literal ``</delegation-result>`` in the payload so it cannot close the outer
+    envelope. Fail-open: framing is defense-in-depth, never a hard dependency.
+    """
+    text = result_text if isinstance(result_text, str) else str(result_text)
+    # Defang the envelope close tag (case-insensitive) so injected output can't break out.
+    import re
+    text = re.sub(r"</\s*delegation-result\s*>", "<!-- /delegation-result -->", text,
+                  flags=re.IGNORECASE)
+    try:
+        from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+        return wrap_untrusted("async_delegation", text)
+    except Exception:
+        return text  # fail-open
+
 # Keep at most this many finished records so the dict doesn't grow unbounded.
 _MAX_RETAINED_COMPLETED = 50
 
@@ -55,13 +74,24 @@ DeliverFn = Callable[[DelegationRecord, str], Awaitable[None]]
 class AsyncDelegationRegistry:
     """Owns detached background delegations + their lifecycle for one session."""
 
-    def __init__(self, manager: Any, deliver: DeliverFn, *, clock: Callable[[], float] = time.time):
+    def __init__(self, manager: Any, deliver: DeliverFn, *,
+                 clock: Callable[[], float] = time.time,
+                 store: Any = None, session_id: str = "", user_id: str = ""):
         self._manager = manager
         self._deliver = deliver
         self._clock = clock
         self._lock = asyncio.Lock()
         self._records: Dict[str, DelegationRecord] = {}
         self._counter = 0
+        # Optional AutonomyStateStore write-through — restart-durable
+        # record of dispatched/terminal delegations (recovery in autonomy_state.py).
+        # Fail-open: any store error degrades to the legacy in-memory behavior.
+        self._store = store
+        self._session_id = session_id
+        self._user_id = user_id
+        # Counter seeding (past persisted ids) is LAZY — done under the dispatch
+        # lock on first use, so constructing an orchestrator costs zero sqlite I/O.
+        self._counter_seeded = store is None or not session_id
 
     # -- introspection (for a future delegation_status tool; out of v1 scope) --
     def active_count(self) -> int:
@@ -92,6 +122,13 @@ class AsyncDelegationRegistry:
 
         cap = TimeoutConfig.get_max_async_sub_agents()
         async with self._lock:
+            if not self._counter_seeded:
+                try:
+                    self._counter = max(self._counter,
+                                        self._store.max_counter(self._session_id))
+                except Exception:
+                    logger.warning("delegation counter seed failed", exc_info=True)
+                self._counter_seeded = True
             if self.active_count() >= cap:
                 return {
                     "status": "rejected",
@@ -109,6 +146,16 @@ class AsyncDelegationRegistry:
                 dispatched_at=self._clock(),
             )
             self._records[delegation_id] = rec
+            if self._store is not None:
+                try:
+                    self._store.record_dispatched(
+                        session_id=self._session_id, user_id=self._user_id,
+                        delegation_id=delegation_id, goal=goal, profile=profile,
+                        parent_agent_id=parent_agent_id,
+                        dispatched_at=rec.dispatched_at,
+                    )
+                except Exception:
+                    logger.warning("delegation durable write failed", exc_info=True)
             rec.task = asyncio.create_task(
                 self._run_and_deliver(
                     rec, goal=goal, profile=profile, max_steps=max_steps,
@@ -163,6 +210,14 @@ class AsyncDelegationRegistry:
         finally:
             rec.status = status
             rec.completed_at = self._clock()
+            if self._store is not None:
+                try:
+                    self._store.record_terminal(
+                        self._session_id, rec.delegation_id, status=status,
+                        completed_at=rec.completed_at, result_text=result_text,
+                    )
+                except Exception:
+                    logger.warning("delegation terminal write failed", exc_info=True)
 
         block = self._format_completion_block(rec, status, result_text)
         try:
@@ -187,15 +242,25 @@ class AsyncDelegationRegistry:
     @staticmethod
     def _format_completion_block(rec: DelegationRecord, status: str, result_text: str) -> str:
         """Self-contained block so a parent deep in unrelated context knows why this
-        arrived (mirrors Reference' task-source block)."""
+        arrived (mirrors Reference' task-source block).
+
+        P1-3: the child's ``result_text`` is UNTRUSTED — it can quote injected web/MCP
+        content verbatim (the child's tool results were wrapped, but its final output
+        is not). Frame it as DATA (mirrors the self-wake rail's ``format_self_wake``):
+        the ``<delegation-result>`` envelope + trusted footer stay outside, the payload
+        goes inside an ``<untrusted_tool_result>`` block, and a literal
+        ``</delegation-result>`` in the payload is defanged so it can't break the
+        envelope.
+        """
         emoji = {"completed": "✅", "error": "❌", "timeout": "⏱️"}.get(status, "ℹ️")
+        safe_result = _frame_delegation_payload(result_text)
         return (
             f"<delegation-result delegation_id=\"{rec.delegation_id}\" status=\"{status}\">\n"
             f"{emoji} A background task you dispatched has finished.\n\n"
             f"**delegation_id:** {rec.delegation_id}\n"
             f"**goal:** {rec.goal}\n"
             f"**status:** {status}\n\n"
-            f"**result:**\n{result_text}\n\n"
+            f"**result:**\n{safe_result}\n\n"
             "Use this result, or re-dispatch if the situation has changed.\n"
             "</delegation-result>"
         )

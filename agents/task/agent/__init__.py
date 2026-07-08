@@ -54,9 +54,11 @@ def _initialize():
             # Last resort - we can't do anything else
             print(f"CRITICAL: Agent module initialization failed: {e}")
 
-# Run initialization only if AUTO_AGENT_INIT environment variable is set
-import os
-if os.getenv('AUTO_AGENT_INIT', '').lower() in ('1', 'true', 'yes'):
+# Run initialization only if AUTO_AGENT_INIT environment variable is set.
+# SA-08: use the core.env SSOT parser (canonical falsey-set semantics) instead of an
+# ad-hoc truthy-set that silently ignored AUTO_AGENT_INIT=on.
+from core.env import bool_env as _bool_env
+if _bool_env('AUTO_AGENT_INIT', False):
     _initialize()
 else:
     # Log that we're skipping initialization 

@@ -47,6 +47,7 @@ DELEGATE_BLOCKED_TOOLS: frozenset = frozenset({
     "coding",          # str_replace/apply_patch/run_tests — leaf can't mutate/run the repo (H10-B, #4146 lesson)
     "cronjob",         # durable scheduled runs (CronJobTool)
     "x402_pay",        # agent crypto payments — never delegate to a leaf
+    "x402_invoice",    # agent invoicing (outward-facing money) — never delegate to a leaf
     "hyperliquid",     # crypto trading — never delegate to a leaf
     "polymarket",      # crypto trading — never delegate to a leaf
     # P0: coding / self-evolution container tool_ids a leaf must never wield.
@@ -55,6 +56,8 @@ DELEGATE_BLOCKED_TOOLS: frozenset = frozenset({
     "process",        # background processes (P1) — leaf can't spawn long-running jobs
     "tool_manage",    # dynamic-tool authoring (P1) — leaf can't create/promote tools
     "mcp",            # MCP install path (P0/P2) — leaf can't install servers
+    "shell",          # persistent sandbox shell (WS-2) — leaf never gets a shell
+    "self_env",       # self-maintenance verbs (WS-5) — leaf never self-manages
 })
 
 # Delegation action names (registered by Controller._register_subtask_action).

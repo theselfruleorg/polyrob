@@ -71,14 +71,17 @@ with an env change + restart, no code change — see
 | Flag | Default | What it does | Code anchor |
 |---|---|---|---|
 | `MEMORY_BACKEND` | **`sqlite`** (**`local_vector` under `POLYROB_LOCAL`**) | Cross-session memory provider: `sqlite` (FTS5), `local_vector` (hybrid kw+vec), `none/off/''` disables. | `modules/memory/backend_factory.py:40` |
+| `KB_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Tenant knowledge base: `@folder`/`@url` ingestion + KB recall via `session_search`. | `agents/task/constants.py::AutonomyConfig.kb_enabled` |
+| `KB_AUTO_PREFETCH` | OFF (**ON under POLYROB_LOCAL**) | Inject KB recall alongside memory recall at step start (T13). | `agents/task/constants.py::AutonomyConfig.kb_auto_prefetch` |
+| `CONTEXT_REFERENCES_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | `@file`/`@folder`/`@url` context references in chat input. | `agents/task/constants.py::AutonomyConfig.context_references_enabled` |
 | `MEMORY_REQUIRE_USER_ID` | **ON** (`True`) | Refuse empty/anonymous-user recall I/O (multi-tenant safety). Set false for single-user shared-`""` bucket. | `modules/memory/sqlite_memory_provider.py:34` |
 | `MEMORY_VECTOR_MAX_DISTANCE` | `0.6` | Max vector distance for `local_vector` recall hits. | `modules/memory/local_vector_memory_provider.py:47` |
 | `MEMORY_TOOL_ENABLED` | OFF | Opt-in bounded `memory` read/add/remove tool (also needs an external provider). | `tools/controller/action_registration.py:393` |
 | `MEMORY_TOOL_MAX_ENTRIES` | `50` | Per-tenant entry cap for the `memory` tool. | `modules/memory/sqlite_memory_provider.py:204` |
 | `MEMORY_TOOL_MAX_CHARS` | `2000` | Per-tenant char cap for the `memory` tool. | `modules/memory/sqlite_memory_provider.py:208` |
-| `MEMORY_PREFETCH_CADENCE` | `0` (**`3` under `POLYROB_LOCAL`**) | `0` = prefetch on first step only; `N>0` = also every N steps (inert without external provider). Resolved at access time, not import, so it sees `POLYROB_LOCAL` even if set later via `os.environ.setdefault`. | `agents/task/constants.py::memory_prefetch_cadence` |
+| `MEMORY_PREFETCH_CADENCE` | `0` (**`3` under `POLYROB_LOCAL` and for autonomous sessions**) | `0` = prefetch on first step only; `N>0` = also every N steps (inert without external provider). Autonomous (goal/cron) sessions default to `3` everywhere (SA-06). Resolved at access time, not import, so it sees `POLYROB_LOCAL` even if set later via `os.environ.setdefault`. Explicit value (incl. `0`) always wins. | `agents/task/constants.py::memory_prefetch_cadence` |
 | `HMEM_SEMANTIC` | `auto` | H-MEM cross-phase recall mode: `auto` (embeddings if an embedder exists, else lexical) / `embeddings` / `lexical` / `off`. | `modules/memory/task/task_context_manager.py:_get_semantic_retriever` |
-| `HMEM_TAIL_PLACEMENT` | OFF (**ON under POLYROB_LOCAL**) | Place in-session H-MEM as a dynamic suffix AFTER the conversation instead of in the foundation prefix, so the stable foundation + growing conversation form a cacheable prompt-cache prefix (only the small H-MEM tail is reprocessed each step). Off = legacy foundation placement (byte-identical on the server until soaked). | `agents/task/constants.py::hmem_tail_placement` |
+| `HMEM_TAIL_PLACEMENT` | ON | Place in-session H-MEM as a dynamic suffix AFTER the conversation instead of in the foundation prefix, so the stable foundation + growing conversation form a cacheable prompt-cache prefix (only the small H-MEM tail is reprocessed each step). Default flipped ON 2026-07-06 (T1-09) after the local soak; `=false` restores legacy foundation placement. | `agents/task/constants.py::hmem_tail_placement` |
 | `MEMORY_THREAT_SCAN` | OFF | Prompt-injection scan rejecting injected findings before H-MEM write. | `modules/memory/task/hierarchical_memory.py:907` |
 | `MEMORY_SEARCH_TOOL` | **ON** | Read-only cross-session `memory_search`/`session_search` tool (tenant-scoped). | `agents/task/constants.py:358` |
 | `MEMORY_STORE_ANSWER_ONLY` | OFF (**ON under POLYROB_LOCAL**) | Store the distilled ANSWER (not the echoed "User: {q}\nAssistant: {a}" transcript) as the FTS-matched/embedded recall content, so a recall query restating the question doesn't rank the question text as highly as the answer. | `modules/memory/sqlite_memory_provider.py::SqliteMemoryProvider._store_answer_only` |
@@ -126,6 +129,28 @@ with an env change + restart, no code change — see
 All read through `AutonomyConfig` (`agents/task/constants.py:250+`); safe ones flip ON
 as a group under `POLYROB_LOCAL` (see profile subsection).
 
+**`AUTONOMY_POSTURE` (W1-1)** is the single coherent switch for the group of autonomy
+flags that ship wired but default-OFF (completion judge, blocker escalation, self-wake
+delivery, continuity bridge, cron). It moves their *defaults* together — an explicit
+per-flag env still wins:
+
+| `AUTONOMY_POSTURE` | Default | What it does | Code anchor |
+|---|---|---|---|
+| `AUTONOMY_POSTURE` | `silent` | `silent` = today's defaults (autonomy runs but is unverified + owner-silent). `owner-visible` = the agent's autonomous work becomes verified + owner-visible: turns on `GOAL_COMPLETION_JUDGE`, `GOAL_BLOCKER_ESCALATION`, `GOAL_SELF_WAKE_ENABLED`, `AUTONOMOUS_CONTINUITY_BRIDGE`, `EPISODIC_MEMORY_ENABLED`, `EPISODIC_DIGEST_INJECT`, `REFLECTION_ON_SESSION_CLOSE`. `full` = owner-visible **plus** `CRON_ENABLED` (time-based initiative) + `WAKE_CHANGE_GATE` (skip no-change review ticks). Unknown value → `silent`. **Recommended: `owner-visible` for a single-user local/prod-autonomous instance.** | `agents/task/constants.py::autonomy_posture`, `_posture_autonomy_default` |
+
+**`AGENT_COMPUTE_POSTURE`** is the compute-capability ladder (computer-use parity) — a
+third axis, orthogonal to `POLYROB_LOCAL` (trust profile) and `AUTONOMY_POSTURE`
+(which loops run): how much host/compute capability the agent has. **Frozen at
+process start** (import-time snapshot) so a mid-process env mutation can never raise
+the running posture; set it in real process env (systemd `EnvironmentFile`, shell, or
+dotenv loaded at startup). Capabilities at posture ≥1 additionally require the session
+to pass `compute_posture_allows` — OWNER tenant, not a leaf/sub-agent, not a forged
+self-wake/delegation-result turn:
+
+| `AGENT_COMPUTE_POSTURE` | Default | What it does | Code anchor |
+|---|---|---|---|
+| `AGENT_COMPUTE_POSTURE` | `0` | `0` = confined (today's docker sandbox, no persistent shell). `1` = sandbox-dev: persistent networked sandbox with **importable pip installs** (`/install` + `PYTHONPATH`), the `shell` tool scoped INTO the container, loopback port-publish the browser may fetch. `2` = self-maintain: posture 1 + the approval-gated `self_env` verbs (install_dep/patch_source/restart_service/git_pull). `3` = host (Hermes-parity; requires `POLYROB_LOCAL`, single-tenant box only). Unset/garbage/out-of-range → `0` (garbage never rounds up). | `agents/task/constants.py::compute_posture`, `compute_posture_allows` |
+
 | Flag | Default | What it does | Code anchor |
 |---|---|---|---|
 | `SELF_WAKE_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | W1: re-enter an idle session as a forged continuation turn. | `agents/task/constants.py:261` |
@@ -136,6 +161,7 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `BG_REVIEW_MAX_STEPS` | `8` | Max steps for a background-review fork. | `agents/task/constants.py:302` |
 | `CRON_RUN_LOOP` | **ON** | W3 fix: cron jobs actually run `run_session` (not just create an idle session). | `agents/task/constants.py:307` |
 | `CRON_DELIVERY_ENABLED` | OFF | Deliver cron results out-of-band (telegram/email/twitter). | `agents/task/constants.py:311` |
+| `OWNER_DIGEST_ENABLED` | OFF | Owner daily digest: a cron job carrying `payload.digest` is composed deterministically ($0, no model turn) from the unified ledger + event log + open asks and pushed via the delivery rail. Requires `CRON_DELIVERY_ENABLED` for the actual send; seed with `scripts/seed_owner_digest.py`. | `agents/task/constants.py::AutonomyConfig.owner_digest_enabled`; `cron/digest.py` |
 | `CRON_DELIVERY_ALLOW_EXPLICIT_TARGET` | OFF | Allow an explicit (non-tenant-default) delivery target. | `cron/delivery.py:43` |
 | `TICKER_IDLE_BACKOFF_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Cron + goal-dispatch background tickers back off their poll interval on idle ticks (nothing due) instead of firing at a fixed cadence forever — cuts CPU wakeups/battery drain on a single-user local CLI. | `agents/task/constants.py:306` |
 | `TICKER_IDLE_BACKOFF_MAX_MULTIPLIER` | `5` | Cap on how many multiples of a ticker's base interval idle backoff may reach (e.g. 5x a 60s base = 300s worst-case staleness). | `agents/task/constants.py:327` |
@@ -152,6 +178,9 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `GOAL_DAILY_QUOTA` | `6` | Max goal runs started per trailing 24h; <=0 disables. | `agents/task/constants.py::AutonomyConfig.goal_daily_quota` |
 | `GOAL_SELF_WAKE_ENABLED` | OFF | Goal-initiated self-wake re-entry — gates whether the dispatcher *attempts* delivery (`agents/task/goals/dispatcher.py::_self_wake`). **Required combo (AU-F1.3):** this alone is not sufficient — the delivery producer (`TaskAgent.deliver_self_wake`) separately no-ops unless `SELF_WAKE_ENABLED` is ALSO on, so a goal announcing its own completion via self-wake needs **both** `GOAL_SELF_WAKE_ENABLED=true` and `SELF_WAKE_ENABLED=true` (the latter defaults ON under `POLYROB_LOCAL`, so on the CLI you typically only need to flip the former). | `agents/task/constants.py::AutonomyConfig.goal_self_wake_enabled`; `agents/task_agent_lite.py:1705` |
 | `GOAL_DEDUP_THRESHOLD` | `0.6` | Goal dedup similarity threshold (0.0–1.0). | `agents/task/constants.py::AutonomyConfig.goal_dedup_threshold` |
+| `BUDGET_AWARE_AUTONOMY` | OFF (**ON under `AUTONOMY_POSTURE=owner-visible`/`full`**) | Before claiming a goal, consult the unified ledger for the tenant's trailing spend; over budget → raise an owner-visible durable ask and hold the goal instead of burning credits. Fail-open (a ledger error never stalls dispatch). Explicit env wins. | `agents/task/constants.py::AutonomyConfig.budget_aware_autonomy`; `agents/task/goals/dispatcher.py::_over_budget` |
+| `AUTONOMY_BUDGET_USD` | `10` | Trailing-window spend ceiling (USD) for autonomous goal dispatch; `<=0` disables the ceiling. Consulted only when `BUDGET_AWARE_AUTONOMY` is on. | `agents/task/constants.py::AutonomyConfig.autonomy_budget_usd` |
+| `AUTONOMY_BUDGET_WINDOW_DAYS` | `1` | Trailing window (days) over which `AUTONOMY_BUDGET_USD` is measured against `unified_ledger.total_spend_usd`. | `agents/task/constants.py::AutonomyConfig.autonomy_budget_window_days` |
 | `CURATOR_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | W5: stale/archive unused authored skills (Phase 1, no LLM). | `agents/task/constants.py:337` |
 | `CURATOR_INTERVAL_HOURS` | `168` | Curator tick interval (hours). | `agents/task/constants.py:341` |
 | `CURATOR_STALE_DAYS` | `30` | Days unused before a skill is staled. | `agents/task/constants.py:345` |
@@ -160,8 +189,8 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `PROJECT_CONTEXT_AUTOLOAD` | OFF (**ON under POLYROB_LOCAL**) | C9: auto-load a project file as a frozen `PROJECT_CONTEXT` foundation message. Names by precedence: `polyrob.md` > `POLYROB.md` > `AGENTS.md` > `CLAUDE.md` > `.cursorrules` (highest-precedence name that exists wins; not concatenated). Local = trusted/steering. | `agents/task/constants.py::project_context_autoload`; `agents/task/agent/core/project_context.py:28-44` |
 | `PROJECT_CONTEXT_MAX_TOKENS` | `20000` | Token cap on concatenated project-context content (truncated with a notice). | `agents/task/constants.py::project_context_max_tokens` |
 | `PROJECT_CONTEXT_SERVER_MODE` | OFF (NOT a safe-local flag) | Phase 2: load project context on the **server** (not local mode) and inject it **untrusted-wrapped** (framed as DATA, not instructions). Searches the **tenant session workspace** (`pm().get_workspace_dir`), NEVER the process CWD/install dir. `POLYROB_LOCAL` does NOT flip this on. | `agents/task/constants.py::project_context_server_mode`; `agents/task/agent/core/project_context.py::build_project_context_message` |
-| `EPISODIC_MEMORY_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Episodic activity ledger: write one durable, time-ordered row per completed run (chat/goal/cron) to the `episodes` table in `memory.db`, independent of H-MEM findings. Feeds `recent_activity`, the session-start digest, and the continuity bridge. | `agents/task/constants.py::AutonomyConfig.episodic_memory_enabled` |
-| `EPISODIC_DIGEST_INJECT` | OFF (**ON under POLYROB_LOCAL**) | Inject a passive session-start digest of recent episodes (chat sessions only, `exclude_surfaced=True`) as a pinned foundation message. | `agents/task/constants.py::AutonomyConfig.episodic_digest_inject` |
+| `EPISODIC_MEMORY_ENABLED` | OFF (**ON under POLYROB_LOCAL or `AUTONOMY_POSTURE` owner-visible/full**) | Episodic activity ledger: write one durable, time-ordered row per completed run (chat/goal/cron) to the `episodes` table in `memory.db`, independent of H-MEM findings. Feeds `recent_activity`, the session-start digest, and the continuity bridge. | `agents/task/constants.py::AutonomyConfig.episodic_memory_enabled` |
+| `EPISODIC_DIGEST_INJECT` | OFF (**ON under POLYROB_LOCAL or `AUTONOMY_POSTURE` owner-visible/full**) | Inject a passive session-start digest of recent episodes (chat sessions only, `exclude_surfaced=True`) as a pinned foundation message. | `agents/task/constants.py::AutonomyConfig.episodic_digest_inject` |
 | `CONTINUITY_BRIDGE_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Idle-reset continuity bridge: write a closing episode + seed the next session's first step with a short "what happened last time" bridge message. | `agents/task/constants.py::AutonomyConfig.continuity_bridge_enabled` |
 | `AUTONOMOUS_CONTINUITY_BRIDGE` | OFF | §7.5: carry a recent-activity summary INTO an **autonomous** goal/cron tick (mirror-image of the chat digest — autonomous-only, first-step, never sub-agent) so ticks stop re-deriving "nothing new". Additive context; fail-open. | `agents/task/constants.py::AutonomyConfig.autonomous_continuity_bridge`; `agents/task/agent/core/episodic_digest.py::build_mission_continuity` |
 | `SELF_EVOLUTION_TRANSPARENCY` | OFF (**ON under POLYROB_LOCAL**) | §7.1: proactively notify the owner (Telegram) when the agent writes a pending identity/skill proposal, and back the `polyrob owner pending/promote/reject` surface. Fail-open. | `agents/task/constants.py::AutonomyConfig.self_evolution_transparency`; `core/self_evolution.py` |
@@ -169,7 +198,8 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `GOAL_EMPTY_PIPELINE_ESCALATE_AFTER` | `2` | Consecutive planner runs that leave the ready queue EMPTY before the stall is escalated to the owner (rides `GOAL_BLOCKER_ESCALATION`; a "queue healthy" planner verdict never escalates; escalates once per stall). | `agents/task/constants.py::AutonomyConfig.goal_empty_pipeline_escalate_after`; `agents/task/goals/dispatcher.py::_maybe_escalate_empty_pipeline` |
 | `GOAL_COMPLETION_JUDGE` | OFF | §3.2 (goal-completion-verification, 2026-07-05): when a goal with `payload.acceptance` finishes, a cheap aux model (the `judge` aux slot) judges the acceptance against the framework-recorded action ledger + final message. `unmet` → `record_failure` (normal breaker retries); `met`/`unclear`/error/timeout → pass (never block on uncertainty). Metered like every aux call. | `agents/task/constants.py::AutonomyConfig.goal_completion_judge`; `agents/task/goals/completion_judge.py::judge_goal_completion` |
 | `GOAL_JUDGE_TIMEOUT_SEC` | `60` | Wall-clock bound on one completion-judge LLM call; timeout fails open to pass. | `agents/task/constants.py::AutonomyConfig.goal_judge_timeout_sec` |
-| `REFLECTION_ON_SESSION_CLOSE` | OFF | §7.7: consolidate a short session's findings at session close (the per-step 25-finding trigger is unreachable for short cron/goal sessions). Extra aux-model call per closed session — opt in after verifying cost. | `modules/memory/task/task_context_manager.py::close_session` |
+| `REFLECTION_ON_SESSION_CLOSE` | OFF (**ON under `AUTONOMY_POSTURE` owner-visible/full**) | §7.7: consolidate a short session's findings at session close (the per-step 25-finding trigger is unreachable for short cron/goal sessions). Extra aux-model call per closed session. | `agents/task/constants.py::AutonomyConfig.reflection_on_session_close`; `modules/memory/task/task_context_manager.py::close_session` |
+| `AUTONOMY_STATE_DURABLE` | ON | Restart-durable autonomy state (`autonomy_state.db`): background delegations write dispatched/terminal rows (a crash-interrupted delegation is marked `interrupted` at next start and surfaced back to its session — never silently resumed), and the self-wake `ReentryBudget` depth cap survives restart. Fail-open to the legacy volatile registries. | `agents/task/agent/autonomy_state.py`; `agents/task/constants.py::AutonomyConfig.autonomy_state_durable` |
 | `REFLECTION_SESSION_CLOSE_THRESHOLD` | `5` | Minimum findings a session must accrue for the `REFLECTION_ON_SESSION_CLOSE` trigger to fire (cost gate). | `modules/memory/task/task_context_manager.py` |
 | `CONTINUITY_LLM_SUMMARY` | OFF (everywhere; NOT a safe-local flag) | Use an aux-model LLM call to summarize the closing episode for the continuity bridge instead of a mechanical summary. Off by default everywhere — adds latency at reset. | `agents/task/constants.py::AutonomyConfig.continuity_llm_summary` |
 | `EPISODIC_RETENTION_DAYS` | `90` | Episodic row retention window (days). Enforced by a global (all-tenants) prune riding the curator's own tick cadence — never the write path. | `agents/task/constants.py::AutonomyConfig.episodic_retention_days`; `agents/task/agent/core/curator.py::SkillCurator._prune_episodes` |
@@ -200,6 +230,9 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `MCP_EXEC_RATE_PER_WINDOW` | `20` | MCP exec rate-limit count per window. | `tools/mcp/mcp_tool.py:74` |
 | `MCP_EXEC_RATE_WINDOW_SEC` | `60` | MCP exec rate-limit window (s). | `tools/mcp/mcp_tool.py:75` |
 | `MCP_ENCRYPTION_KEY` | unset | Fernet key for MCP secret store. | `os.getenv("MCP_ENCRYPTION_KEY")` |
+| `MCP_SELF_INSTALL_ENABLED` | OFF (`False`) | Register the agent-callable `mcp_install` action (install a vetted catalog MCP server at runtime). Forged/autonomous turns always refused; approval is Deny-by-default unless `APPROVAL_PROVIDER` is set. NOT in the `POLYROB_LOCAL` safe group. | `tools/mcp/self_install.py::self_install_enabled` |
+| `MCP_INSTALL_CATALOG_FILE` | unset | Path to a REVIEWED JSON file of extra installable catalog entries (`{"<id>": {description, transport, url/command, trust}}`), merged over the builtins (file wins on id clash). The real operator seam for extending the install catalog. | `tools/mcp/catalog.py::_load_file_entries` |
+| `MCP_INSTALL_ALLOWLIST` | unset | Comma list of extra ids admitted to the install allowlist. An id WITHOUT a catalog entry still has nothing to install — prefer `MCP_INSTALL_CATALOG_FILE`. | `tools/mcp/catalog.py::allowlist` |
 | `ANYSITE_TOOL_ENABLED` | ON (`True`) | Register the `anysite_api` CLI tool. | `tools/anysite/__init__.py:11-13` |
 | `ANYSITE_API_KEY` | unset | AnySite API credential. | `os.getenv("ANYSITE_API_KEY")` |
 | `CODING_TOOLS_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Register the coding tools (str_replace/grep/run_tests). | `tools/coding/__init__.py:19-21` |
@@ -215,8 +248,14 @@ as a group under `POLYROB_LOCAL` (see profile subsection).
 | `CODE_EXEC_CONTAINER_CPUS` | `1.0` | Docker container CPU cap (`--cpus`). | `tools/code_exec/backends/docker.py:184` |
 | `CODE_EXEC_PIDS_LIMIT` | `256` | Docker container PID cap (`--pids-limit`). | `tools/code_exec/backends/docker.py:185` |
 | `CODE_EXEC_DOCKER_USER` | unset → invoking uid:gid, or `65534:65534` (nobody:nogroup) when the host process itself runs as root | Explicit override for the docker backend's `--user`. | `tools/code_exec/backends/docker.py:192-208` |
-| `CODE_EXEC_DOCKER_PERSISTENT` | OFF (not safe-local) | Opt-in: ONE persistent per-session `docker` container (`docker exec` per call) instead of a fresh ephemeral container per `run_code` call, so pip installs/cwd survive across calls within a session. | `tools/code_exec/__init__.py::code_exec_docker_persistent_enabled` |
+| `CODE_EXEC_DOCKER_PERSISTENT` | OFF (**ON at `AGENT_COMPUTE_POSTURE>=1`**) | Opt-in: ONE persistent per-session `docker` container (`docker exec` per call) instead of a fresh ephemeral container per `run_code` call, so pip installs/cwd survive across calls within a session. Defaults ON at posture≥1 (sandbox-dev installs must persist); explicit value wins. | `tools/code_exec/__init__.py::code_exec_docker_persistent_enabled` |
+| `CODE_EXEC_PUBLISH_PORTS` | `8000,5000,8080,3000` | Container ports a **dev** (posture≥1) persistent sandbox publishes to host **loopback** (`-p 127.0.0.1::<port>`, docker-assigned host ports) so the agent can HTTP-test a server it started. Non-dev/ephemeral runs publish nothing. | `tools/code_exec/backends/docker.py::_publish_ports` |
+| `SHELL_TOOLS_ENABLED` | OFF (**ON at `AGENT_COMPUTE_POSTURE>=1`**) | Register the persistent `shell` + `process` tools (run inside the session's sandbox container; cwd/env persist; background job manager). Every action is additionally `compute_posture_allows(ctx,1)`-gated (owner, not leaf/forged). In `DELEGATE_BLOCKED_TOOLS`; never in default tool_ids. | `tools/shell/__init__.py::shell_tools_enabled` |
+| `SELF_ENV_ENABLED` | OFF (**ON at `AGENT_COMPUTE_POSTURE>=2`**) | Register the `self_env` self-maintenance tool (install_dep/read_source/patch_source/git_pull/restart_service). Every verb is `compute_posture_allows(ctx,2)`- AND approval-gated; install-tree-confined; env/config hard-denied. In `DELEGATE_BLOCKED_TOOLS`. | `tools/self_env/__init__.py::self_env_enabled` |
+| `POLYROB_INSTALL_TREE` | repo root (2 levels up from `tools/self_env/tool.py`) | The install-tree root `self_env` read/patch/git_pull operate under (realpath-confined). Set to `/opt/polyrob` on prod. | `tools/self_env/tool.py::_install_root` |
+| `POLYROB_SUPERVISED` | OFF | Assert a supervisor (e.g. systemd `Restart=`) will respawn the process, so `self_env_restart_service` may request a restart. Unset = restart refused (never kill an unsupervised agent). | `tools/self_env/tool.py::self_env_restart_service` |
 | `CRON_ENABLED` | OFF | Register the `cronjob` tool + start the cron ticker. | `tools/cronjob_tools.py:120` |
+| `WAKE_CHANGE_GATE` | OFF (**ON under `AUTONOMY_POSTURE=full`**) | Cron wake change-gate: a job with `payload.change_gated` skips the paid model call ($0 tick, `cron_run skipped/no_change`) when the tenant's observable state fingerprint (goal board/events, other cron runs, newest episode) is unchanged since the last tick. Delivery jobs (`payload.deliver`) are never gated; fail-open on any fingerprint error. Baseline stored in `cron.db::wake_gate`. | `agents/task/constants.py::AutonomyConfig.wake_change_gate`; `cron/wake_gate.py` |
 | `MESSAGE_TOOL_ENABLED` | OFF (**ON under POLYROB_LOCAL**) | Agent-callable `message(surface, target, text, action)` send tool. Every non-owner target is default-DENIED unless owner-allowlisted (`polyrob owner allow <surface> <target>` / Telegram `/allow`). ⚠️ Owner-target resolution reads the single process-level operator env (`POLYROB_OWNER_TELEGRAM_ID`/`POLYROB_OWNER_EMAIL`), so this flag is intended for single-owner/local use — enabling it on a multi-tenant server lets EVERY tenant's agent message the operator (owner-allowlisted third-party targets stay per-tenant scoped). | `agents/task/constants.py::message_tool_enabled` + `tools/controller/message_send.py` |
 | `APPROVAL_REQUIRED_TOOLS` | `''` (no-op) | Comma list of tools requiring approval before execution. | `tools/controller/service.py:168` |
 | `APPROVAL_PROVIDER` | `auto` | Approval provider: `auto`(allow)/`deny`/custom. | `os.getenv("APPROVAL_PROVIDER","auto")` |
@@ -255,6 +294,9 @@ Browser timeouts/quality (`agents/task/constants.py:59,394-489`):
 | `WEBVIEW_DOMAIN` | the reference deployment's public host (`webview/server.py`, `api/auth_endpoints.py`); `localhost:5050` (`agents/task/utils_webview.py`) — **inconsistent default across call sites; set `WEBVIEW_DOMAIN` for your own deployment** | The public hostname this instance is served from. Feeds the Socket.IO CORS default (below) and the SIWE `domain` field (`api/auth_endpoints.py:108`). | `webview/server.py:75` |
 | `JWT_SECRET_KEY` | unset (dev) | JWT signing secret, shared by the API auth middlewares and the WebView (`webview/owner_auth.py` issues/verifies the owner session cookie with the same secret). **Required in production** — `api/app.py` raises `RuntimeError` at startup if unset and `ENVIRONMENT=production`; in dev, unset only logs a warning and disables authentication. A value under 32 chars logs a "consider a stronger secret" warning. | `core/config.py:788`, `api/app.py:531-549`, `webview/owner_auth.py:79-81` |
 | `A2A_BASE_URL` | the reference deployment's base URL (set this to your own public URL) | Base URL advertised in the A2A agent card. | `os.environ.get("A2A_BASE_URL",...)` |
+| `WEBVIEW_ACTIVITY_ENABLED` | `true` | The console's global `/activity` stream (page + `/api/activity/*` + `join_activity` socket room). Owner/admin-gated in every non-local posture, so on-by-default is safe; `false` = 404/denied everywhere. | `webview/webgate.py::activity_enabled` |
+| `WEBVIEW_ACTIVITY_TAIL_SEC` | `2.0` | Poll interval for the activity hub's SQLite id-cursor tails (`telemetry_events.db`, `goal_events`, `skill_install_audit`). Feed events are push (watchfiles), not polled. | `webview/activity.py::ActivityHub._tail_loop` |
+| `WEBVIEW_READ_ONLY` | `false` | Monitoring-only console: mutating endpoints (session messages POST, `/api/repair/{id}`) return 403 server-side and the chat input is not rendered. For deployments where the webview observes a headless agent (`deployment/polyrob-webview.service` sets it via `/etc/polyrob/webview.env`). | `webview/webgate.py::read_only` |
 | `SESSION_TTL_SECONDS` | `86400` | Session lifetime. | `core/config.py:72` |
 | `MAX_SESSIONS_IN_MEMORY` | `100` | Resident session cap. | `core/config.py:73` |
 | `MAX_SESSIONS_PER_USER` | `10` | Per-user session cap. | `core/config.py:75` |
@@ -323,6 +365,8 @@ Browser timeouts/quality (`agents/task/constants.py:59,394-489`):
 | `WHATSAPP_TEMPLATE_NAME` | `task_ready` | Approved utility template used to re-open the 24h messaging window for a proactive (agent-initiated) message. | `agents/task/surface_config.py:171` |
 | `SELF_CONTEXT_WRITABLE` | OFF (**ON under POLYROB_LOCAL**) | Agent can write its evolving SELF identity doc. | `agents/task/constants.py:286` |
 | `SELF_CONTEXT_REQUIRE_REVIEW` | ON (`True`) | SELF-context writes go to `.pending/` review. | `agents/task/constants.py:290` |
+| `OWNER_DOC_WRITABLE` | OFF (**ON under POLYROB_LOCAL**) | Agent can maintain a bounded owner-facts doc (`owner.md`, ≤1600 chars) injected on the SELF/SOUL seam — durable facts/preferences about the owner. Same quarantine-then-promote + identity-scan model as SELF-context. Agent action `owner_doc_manage`. | `agents/task/constants.py::AutonomyConfig.owner_doc_writable`; `core/owner_doc_writer.py` |
+| `OWNER_DOC_REQUIRE_REVIEW` | ON (`True`) | Owner-facts writes go to `.pending/` review (owner promotes via `/pending` or `polyrob owner`). | `agents/task/constants.py::AutonomyConfig.owner_doc_require_review` |
 | `DATA_ROOT` | `./data/task` | Server-bootstrap (`build_bot`/`main.py`) data root for sessions/dbs. Distinct from the CLI's `POLYROB_DATA_DIR`/`./.polyrob` default (see Identity/local-profile above). | `os.getenv("DATA_ROOT","./data/task")` (`core/bootstrap.py:180`) |
 | `POLYROB_CLI_CONFIG` | unset | CLI config path override (default `~/.polyrob/cli.json`). | `cli/config_store.py::_config_path` |
 | `POLYROB_GITIGNORE_DOTROB` | ON (`"1"`) | Auto-gitignore the `.polyrob/` home. | `os.environ.get("POLYROB_GITIGNORE_DOTROB","1")` (`core/bootstrap.py:506`) |
@@ -349,6 +393,10 @@ Browser timeouts/quality (`agents/task/constants.py:59,394-489`):
 | `X402_ENABLED` | OFF (`'false'`) | Enable x402 pay-per-request *receiving*. | `os.environ.get("X402_ENABLED","false")` |
 | `X402_CLIENT_ENABLED` | OFF (`'false'`) | Enable the agent-side x402 *paying* tool. | `core/wallet/config.py:46`, `os.getenv("X402_CLIENT_ENABLED","false")` |
 | `X402_PAYMENT_RECIPIENT` | `''` | Treasury/recipient address for x402 receipts. | `os.environ.get("X402_PAYMENT_RECIPIENT",...)` |
+| `X402_INVOICE_ENABLED` | OFF | Agent money loop: registers the `x402_invoice` tool (`x402_request` create-invoice + `x402_invoices` list + `accounting` unified ledger) AND starts the settlement watcher in the autonomy runtime. Needs `X402_PAYMENT_RECIPIENT`. `x402_request` is in the recommended approval set; leaf sub-agents never get the tool. Settle via `polyrob owner settle <id>`. | `tools/x402/__init__.py::register_x402_invoice_tool`; `modules/x402/invoicing.py`; `core/autonomy_runtime.py` |
+| `X402_INVOICE_MAX_USD` | `50` | Hard ceiling on a single agent-created payment request (an absurd invoice is a reputation incident). | `modules/x402/invoicing.py::invoice_max_usd` |
+| `X402_INVOICE_DAILY_MAX` | `10` | Max invoices one tenant may create per trailing 24h. | `modules/x402/invoicing.py::invoice_daily_max` |
+| `X402_SETTLEMENT_WATCH_INTERVAL_SEC` | `60` | Settlement-watcher tick interval (expire stale invoices; wake the originating session via self-wake when one settles; emits `payment_settled`/`payment_expired`). | `modules/x402/settlement_watcher.py::build_settlement_watcher` |
 | `X402_DEFAULT_CHAIN` | `base` | Default chain for x402. | `os.environ.get("X402_DEFAULT_CHAIN","base")` |
 | `X402_FACILITATOR_URL` | `''` | x402 facilitator endpoint. | `os.environ.get("X402_FACILITATOR_URL","")` |
 | `X402_PRICE_USD` | _derived_ (unset ⇒ economics-based, ~$30) | Single-source x402 per-request price (C2 SSOT) — the middleware charge, `/api/x402/pricing`, the Agent Card, and the 402 challenge all read this. **If set, it wins.** If unset (or invalid), the price is DERIVED (S6): `X402_MAX_TOKENS_PER_REQUEST × max-model-output-rate × X402_PRICE_MARKUP` — the worst-case cost of the budgeted tokens, marked up, since x402 settles before the run. | `modules/x402/x402_integration.py` `get_x402_price_usd()` |
@@ -422,7 +470,6 @@ is out of scope for Workstream C and is tracked as a B follow-up, not re-litigat
 | `POLYROB_CONSOLE_NAME` | `"POLYROB Console"` | Opt-in override of the web console's product display name. Unset keeps the framework brand even when `resolve_instance_id()` is a custom instance id — renaming the console is a deliberate, separate choice from naming the instance. | `core/instance.py::console_display_name` |
 | `POLYROB_SUPPORT_URL` | `https://t.me/tmachinrobot` | Support link shown in the console footer/help. | `webview/webgate.py::branding_config` |
 | `POLYROB_SUPPORT_HANDLE` | `@TMACHINROBOT` | Support handle text shown alongside the support link. | `webview/webgate.py::branding_config` |
-| `POLYROB_ACCESS_GATE_LABEL` | `"DEN holders"` | Label used on the own_ops/multitenant access-gate copy (e.g. "for ⟨label⟩"). | `webview/webgate.py::branding_config` |
 | `POLYROB_BRAND_URL` | `https://your-polyrob-host.example` | Instance brand URL; also the base for the derived `terms_url`/`privacy_url` defaults below. | `webview/webgate.py::branding_config` |
 | `POLYROB_ORG_URL` | `https://theselfrule.org` | Parent-org URL shown in the console footer. | `webview/webgate.py::branding_config` |
 | `POLYROB_TERMS_URL` | `{POLYROB_BRAND_URL}/terms` | Terms-of-service link (was a dead `href="#"` placeholder; now renders a real link). | `webview/webgate.py::branding_config` |
@@ -492,6 +539,7 @@ never sets `POLYROB_LOCAL`, so server defaults are unchanged. Anchor:
 - `SELF_WAKE_ENABLED`
 - `SKILLS_WRITABLE`
 - `SELF_CONTEXT_WRITABLE`
+- `OWNER_DOC_WRITABLE`
 - `BACKGROUND_REVIEW_ENABLED`
 - `GOALS_ENABLED`
 - `CURATOR_ENABLED`
@@ -523,11 +571,9 @@ The default web tool is `web_fetch` (stateless `fetch_url(url) -> markdown`, no 
 The Playwright `browser` tool is opt-in (`tool_ids=['browser']` or a browser-oriented toolset) and
 requires the extra: `pip install '.[browser]' && python -m playwright install chromium`.
 
-- `WEB_FETCH_ALLOW_PRIVATE_URLS` — default **false**. When true, `web_fetch` skips SSRF validation
-  (allows loopback/private/metadata targets). Single-user/local dev ONLY — never enable in
-  multi-tenant prod. Anchor: `tools/web_fetch/tool.py::_allow_private_urls`. When false (default),
-  every redirect hop is re-validated and the connection is pinned to the validated IP
-  (`tools/web_fetch/fetcher.py::safe_fetch`).
+| Flag | Default | What it does | Code anchor |
+|------|---------|--------------|-------------|
+| `WEB_FETCH_ALLOW_PRIVATE_URLS` | OFF | When true, `web_fetch` skips SSRF validation (allows loopback/private/metadata targets). Single-user/local dev ONLY — never enable in multi-tenant prod. When false (default), every redirect hop is re-validated and the connection is pinned to the validated IP (`tools/web_fetch/fetcher.py::safe_fetch`). | `tools/web_fetch/tool.py::_allow_private_urls` |
 
 ## Crypto trading (Polymarket / Hyperliquid)
 

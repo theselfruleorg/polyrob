@@ -49,3 +49,36 @@ async def test_exception_propagates_from_bridge():
 
     with pytest.raises(ValueError, match="kaboom"):
         run_coroutine_sync(_boom())
+
+
+def test_p2_7_worker_thread_uses_bridge_not_throwaway_loop():
+    """P2-7: from a WORKER thread with no running loop, run_coroutine_sync must route
+    through the persistent bridge loop (one live loop shared across calls), NOT a
+    throwaway asyncio.run() loop per call — the latter breaks loop-bound httpx clients.
+
+    Verified by asserting two sequential worker-thread calls run on the SAME loop.
+    """
+    import asyncio
+    import threading
+
+    seen_loops = []
+
+    async def _capture():
+        seen_loops.append(id(asyncio.get_running_loop()))
+        return True
+
+    results = []
+
+    def _worker():
+        # not the main thread, no running loop -> must use the bridge
+        run_coroutine_sync(_capture())
+        run_coroutine_sync(_capture())
+        results.append("done")
+
+    t = threading.Thread(target=_worker)
+    t.start()
+    t.join(timeout=10)
+
+    assert results == ["done"]
+    assert len(seen_loops) == 2
+    assert seen_loops[0] == seen_loops[1], "worker-thread calls must share ONE bridge loop"

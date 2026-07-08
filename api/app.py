@@ -308,7 +308,11 @@ async def fallback_auth_middleware(request: Request, call_next):
     # Skip auth for health check, root, docs, test, and auth endpoints.
     # NOTE: "/" must be matched EXACTLY — as a startswith() prefix it matches
     # every path and would short-circuit the entire fallback (auth bypass).
-    public_paths = ["/health", "/api/test-auth", "/api/auth", "/docs", "/redoc", "/openapi.json"]
+    # NOTE: "/api/x402/requests" (the payable-invoice challenge + pay routes) must be
+    # anonymous — a third-party payer has no POLYROB account. Payment authenticity is
+    # enforced cryptographically by the facilitator, not by this gate.
+    public_paths = ["/health", "/api/test-auth", "/api/auth", "/docs", "/redoc",
+                    "/openapi.json", "/api/x402/requests", "/api/x402/pricing"]
     if path == "/" or any(path.startswith(p) for p in public_paths):
         return await call_next(request)
 

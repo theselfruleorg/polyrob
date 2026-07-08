@@ -101,3 +101,34 @@ def test_provision_aux_llm_no_trying_next_on_final_candidate(monkeypatch, caplog
         assert host._provision_aux_llm("judge") is None
     assert "trying next candidate" not in caplog.text
     assert "All aux candidates for 'judge' failed" in caplog.text
+
+
+# --- P2-9: async provisioning awaits the client build (no loop-blocking) -----------
+
+class _AsyncChainHost(LLMProvisioningMixin):
+    def __init__(self, provider="anthropic"):
+        self.logger = logging.getLogger("provisioning-async-test")
+        self.provider_name = provider
+        self.calls = []
+
+    async def _create_llm_from_config_async(self, config, isolated=False):
+        self.calls.append((config, isolated))
+        return types.SimpleNamespace(sentinel=True, config=config)
+
+
+def test_provision_aux_llm_async_builds_isolated(monkeypatch):
+    import asyncio
+    monkeypatch.setenv("AUX_MODEL_JUDGE", "claude-haiku-4-5")
+    monkeypatch.setenv("AUX_PROVIDER_JUDGE", "anthropic")
+    host = _AsyncChainHost()
+    result = asyncio.run(host._provision_aux_llm_async("judge"))
+    assert result is not None and result.sentinel is True
+    assert host.calls and host.calls[0][1] is True  # isolated=True
+
+
+def test_provision_aux_llm_async_none_when_no_chain(monkeypatch):
+    import asyncio
+    for k in ("AUX_MODEL_JUDGE", "AUX_PROVIDER_JUDGE", "AUX_FALLBACK_JUDGE", "AUX_AUTO"):
+        monkeypatch.delenv(k, raising=False)
+    host = _AsyncChainHost()
+    assert asyncio.run(host._provision_aux_llm_async("judge")) is None

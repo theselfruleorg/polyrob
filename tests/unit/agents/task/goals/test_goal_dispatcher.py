@@ -452,3 +452,33 @@ def test_goal_ticker_backoff_resets_on_activity(monkeypatch):
     # The activity at index 2 resets cadence back to 0.01s, so more ticks fire
     # over 0.3s than the purely-idle case above produces over 0.2s.
     assert len(call_times) >= 6
+
+
+# --- T2-02: a completed goal must surface to the OWNER, not just self-wake the goal's
+#     own just-finished (empty-room) session ---
+
+@pytest.mark.asyncio
+async def test_completed_goal_pushes_result_to_owner(tmp_path, monkeypatch):
+    import core.self_evolution as se
+
+    pushed = []
+
+    async def _fake_push(container, text):
+        pushed.append(text)
+        return True
+
+    monkeypatch.setattr(se, "push_owner_message", _fake_push)
+
+    board = GoalBoard(str(tmp_path / "g.db"))
+
+    class _Agent:
+        container = object()
+        deliver_self_wake = None  # isolate the owner-push path
+
+    disp = GoalDispatcher(board, _Agent())
+    goal = board.create(user_id="rob", title="Post the announcement")
+    await disp._self_wake(goal, "sess-1", "Posted the thread — 3 tweets.")
+
+    assert pushed, "a completed goal must push its result to the owner"
+    assert "Post the announcement" in pushed[0]
+    assert "Posted the thread" in pushed[0]

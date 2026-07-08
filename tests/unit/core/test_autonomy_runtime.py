@@ -243,3 +243,32 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
     assert "orphan_reap" not in names and "docker_reap" not in names
 
     await handles.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_autonomy_starts_settlement_watcher_when_enabled(monkeypatch):
+    watcher = _FakeTicker()
+    monkeypatch.setattr(ar, "_build_settlement_watcher", lambda ta: watcher)
+    monkeypatch.setattr(ar, "_x402_invoicing_enabled", lambda: True)
+    monkeypatch.setattr(ar, "_cron_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_goals_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.01)
+    assert watcher.started
+    await handles.stop()
+    assert watcher.stopped
+
+
+@pytest.mark.asyncio
+async def test_start_autonomy_settlement_watcher_off_by_default(monkeypatch):
+    monkeypatch.delenv("X402_INVOICE_ENABLED", raising=False)
+    monkeypatch.setattr(ar, "_cron_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_goals_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    names = [n for n, _, _ in handles._entries]
+    assert "settlement" not in names
+    await handles.stop()

@@ -29,7 +29,7 @@ Usage:
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from core.base_component import BaseComponent
 from core.config import BotConfig
 from core.exceptions import ComponentError
@@ -41,6 +41,11 @@ from .compaction_manager import CompactionManager
 from .semantic_retriever import SemanticRetriever
 
 logger = logging.getLogger(__name__)
+
+# P2-11: hard cap on a reflection (aux-LLM) summary before it lands as a durable phase
+# summary + promoted cross-session finding — unbounded model output must not become
+# permanent recallable memory.
+_REFLECTION_SUMMARY_MAX_CHARS = 2000
 
 
 class SessionData:
@@ -173,8 +178,21 @@ class TaskContextManager(BaseComponent):
         # autonomous workload. A session-CLOSE trigger consolidates a short session's
         # handful of findings at cleanup, at a lower threshold. Default OFF (an extra
         # aux-model call per closed session — opt in after verifying cost).
-        self.reflection_on_session_close = config.get("REFLECTION_ON_SESSION_CLOSE", False)
-        self.reflection_session_close_threshold = config.get(
+        #
+        # T2-04: read the env directly (core.env SSOT), NOT config.get(...). BotConfig.get
+        # is getattr(self, key, default) and REFLECTION_ON_SESSION_CLOSE is NOT a declared
+        # field, so config.get NEVER read the environment — the flag was un-enableable dead
+        # code (a byte-for-byte repeat of the UP-09 reflection-gate bug fixed 20 lines above).
+        from core.env import bool_env as _bool_env, int_env as _int_env
+        # Posture-governed default (AUTONOMY_POSTURE owner-visible/full
+        # turn it on; explicit env still wins). Lazy import + fail-open to the
+        # direct env read so modules.memory never hard-depends on agents.task.
+        try:
+            from agents.task.constants import AutonomyConfig as _AC
+            self.reflection_on_session_close = _AC.reflection_on_session_close()
+        except Exception:
+            self.reflection_on_session_close = _bool_env("REFLECTION_ON_SESSION_CLOSE", False)
+        self.reflection_session_close_threshold = _int_env(
             "REFLECTION_SESSION_CLOSE_THRESHOLD", 5)
         self.forgetting_enabled = config.get("FORGETTING_ENABLED", True)
         # Storage cap for importance-based forgetting. Default lowered 500 -> 60 so
@@ -510,8 +528,15 @@ class TaskContextManager(BaseComponent):
                     self._memories_since_reflection[session_id] = 0
                 self._memories_since_reflection[session_id] += 1
 
-                # Get current phase
-                current_phase = brain_state.get("phase", "discovery") if brain_state else "discovery"
+                # P2-2: use the phase the PhaseManager actually RESOLVED (add_step ran
+                # just above). The old brain_state.get("phase", "discovery") returned
+                # None when the key was present-but-None (AgentBrain.phase defaults None
+                # and model_dump keeps the key), so _trigger_reflection(None) and
+                # _check_and_prune_memories(None) silently no-op'd — reflection AND the
+                # 60-finding forgetting cap never ran, while the reflection counter was
+                # still reset. phase_manager.add_step coerces None->"discovery" and may
+                # redirect an invalid transition, so the resolved phase is authoritative.
+                current_phase = getattr(session_data.memory, "current_phase", None) or "discovery"
 
                 # OPTIMIZATION: More frequent reflection (25 findings instead of 100)
                 if (self.reflection_enabled and
@@ -711,25 +736,40 @@ class TaskContextManager(BaseComponent):
     def close_session(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Close and save a session with proper cache cleanup.
 
+        Back-compat wrapper — see close_session_and_drain. Discards the drained
+        cross-session findings (the caller that wants them uses the *_and_drain form).
+        """
+        ok, _drained = self.close_session_and_drain(session_id, user_id)
+        return ok
+
+    def close_session_and_drain(
+        self, session_id: str, user_id: Optional[str] = None
+    ) -> Tuple[bool, List[str]]:
+        """Close and save a session; return (ok, cross_session_findings).
+
         FIX #14 (Nov 26, 2025): Clear caches on session end to prevent memory leaks.
 
-        Args:
-            session_id: Session identifier
-            user_id: Optional user ID for path construction
+        P0-7 (2026-07-07): session-close reflection was triple-broken — it ran AFTER
+        save_session (so the disk copy predated the consolidated summary) and the
+        pending summaries died with the session del (never reaching the cross-session
+        store), a paid aux call whose output was 100% discarded. Now: reflection runs
+        BEFORE save_session (disk gets the summary), and the promoted findings are
+        drained BEFORE del and RETURNED so the async caller (session/cleanup.py) can
+        push them cross-session via memory_sync_turn — the same path the per-step
+        loop uses. (The event-loop-blocking half of the bug is fixed at the call site
+        by running this whole method under asyncio.to_thread; the metering deadlock is
+        fixed in reflection_service._meter.)
 
         Returns:
-            True if successful, False otherwise
+            (True, drained_findings) on success; (False, []) if the session is absent
+            or an error occurred.
         """
         if session_id not in self._sessions:
-            return False
+            return False, []
 
         try:
-            # Save before closing
-            self.save_session(session_id, user_id)
-
-            # FIX #14: Clear caches to prevent memory leaks
             session_data = self._sessions[session_id]
-            
+
             # Clear semantic retriever cache if present
             if hasattr(session_data, 'context_retriever') and session_data.context_retriever:
                 if hasattr(session_data.context_retriever, 'semantic_retriever'):
@@ -737,10 +777,12 @@ class TaskContextManager(BaseComponent):
                     if sr and hasattr(sr, 'clear_cache'):
                         sr.clear_cache()
                         logger.debug(f"Cleared semantic retriever cache for session {session_id}")
-            
-            # §7.7: consolidate a short session's findings at close before we drop the
-            # counter — this is what makes reflection actually fire for the autonomous
-            # workload (short cron/goal sessions never reach the 25/step threshold).
+
+            # §7.7 / P0-7: consolidate a short session's findings at close BEFORE we
+            # save (so the persisted phase summary includes the consolidation) and
+            # before we drop the counter — this is what makes reflection actually fire
+            # for the autonomous workload (short cron/goal sessions never reach the
+            # 25/step threshold).
             n_findings = self._memories_since_reflection.get(session_id, 0)
             if (self.reflection_enabled and self.reflection_on_session_close
                     and 0 < self.reflection_session_close_threshold <= n_findings):
@@ -751,6 +793,19 @@ class TaskContextManager(BaseComponent):
                     logger.debug("session-close reflection skipped for %s", session_id,
                                  exc_info=True)
 
+            # Save AFTER reflection so the disk copy carries the consolidated summary.
+            self.save_session(session_id, user_id)
+
+            # P0-7: drain the promoted findings (incl. the just-consolidated reflection
+            # summary) BEFORE deleting the session, so the caller can sync them to the
+            # cross-session store. Fail-open — draining must never block the close.
+            drained: List[str] = []
+            try:
+                drained = self.drain_promoted_findings(session_id)
+            except Exception:
+                logger.debug("promoted-findings drain skipped for %s", session_id,
+                             exc_info=True)
+
             # Clear reflection tracking
             if session_id in self._memories_since_reflection:
                 del self._memories_since_reflection[session_id]
@@ -759,11 +814,11 @@ class TaskContextManager(BaseComponent):
             del self._sessions[session_id]
 
             logger.info(f"Closed session {session_id} with cache cleanup")
-            return True
+            return True, drained
 
         except Exception as e:
             logger.error(f"Failed to close session {session_id}: {e}")
-            return False
+            return False, []
 
     def get_session_statistics(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Get statistics for a session.
@@ -860,6 +915,37 @@ class TaskContextManager(BaseComponent):
 
             # Prefer LLM synthesis (H-MEM §3.3) when enabled; else concatenate.
             new_summary = self._llm_consolidate(recent_findings)
+            if new_summary is not None:
+                # P2-11: the aux-LLM summary is unbounded model output that lands
+                # verbatim as a durable phase summary AND a promoted cross-session
+                # finding. Cap its length (always) and, when MEMORY_THREAT_SCAN is on
+                # (parity with add_finding_to_phase), reject an injected/suspicious
+                # summary — falling back to the deterministic concat below. A runaway
+                # or injected aux response must not become permanent recallable memory.
+                new_summary = new_summary[:_REFLECTION_SUMMARY_MAX_CHARS]
+                try:
+                    from core.env import bool_env as _bool_env
+                    if _bool_env("MEMORY_THREAT_SCAN", False):
+                        from modules.memory.task.threat_scan import is_suspicious
+                        if is_suspicious(new_summary):
+                            logger.warning(
+                                "🛡️ reflection summary rejected (threat scan); "
+                                "falling back to concatenation")
+                            new_summary = None
+                except Exception:
+                    pass  # fail-open: a scanner fault must not drop the reflection
+            if new_summary is not None:
+                # SA-07: the synthesized summary used to be discarded at session
+                # end (only raw findings synced cross-session) — the aux-LLM call
+                # paid for insight the store never saw. Queue it for the SAME
+                # promoted-findings drain the memory_writer sync path consumes.
+                # The concat fallback below is NOT queued: it adds nothing over
+                # the raw findings that already sync.
+                pending = getattr(session_data, '_pending_reflection_summaries', None)
+                if pending is None:
+                    pending = []
+                    session_data._pending_reflection_summaries = pending
+                pending.append(f"[phase-summary:{phase_name}] {new_summary}")
             if new_summary is None:
                 if len(recent_findings) <= 3:
                     new_summary = "; ".join(recent_findings)
@@ -928,6 +1014,12 @@ class TaskContextManager(BaseComponent):
                 if finding not in emitted:
                     emitted.add(finding)
                     new.append(finding)
+        # SA-07: reflection's LLM-synthesized phase summaries ride the same drain
+        # (queued by _trigger_reflection, cleared here => emitted exactly once).
+        pending = getattr(session_data, '_pending_reflection_summaries', None)
+        if pending:
+            new.extend(pending)
+            session_data._pending_reflection_summaries = []
         return new
 
     def _check_and_prune_memories(self, session_id: str, phase_name: str) -> None:

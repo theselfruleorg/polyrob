@@ -326,7 +326,7 @@ class SubtaskAction(BaseModel):
 	)
 	profile: str = Field(
 		default="executor",
-		description="Sub-agent profile: 'executor' (default), 'researcher', 'coder', 'browser'"
+		description="Sub-agent profile (only 'executor' is implemented; other values fall back to it)"
 	)
 	max_steps: int = Field(
 		default=30,
@@ -403,7 +403,7 @@ class DelegateTaskAction(BaseModel):
 	)
 	profile: str = Field(
 		default="executor",
-		description="Sub-agent profile when 'goal' is used: 'executor' (default), 'researcher', 'coder', 'browser'",
+		description="Sub-agent profile when 'goal' is used (only 'executor' is implemented; other values fall back to it)",
 	)
 	max_steps: int = Field(
 		default=30,

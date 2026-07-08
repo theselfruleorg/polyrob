@@ -1,6 +1,20 @@
 import importlib
+import re
+
 import pytest
 from fastapi.testclient import TestClient
+
+
+def _login_post(client, username, password, follow_redirects=True):
+    """Legitimate login flow: GET mints the CSRF cookie+token, then POST."""
+    page = client.get("/owner-login")
+    match = re.search(r'name="csrf_token" value="([0-9a-f]+)"', page.text)
+    token = match.group(1) if match else ""
+    return client.post(
+        "/owner-login",
+        data={"username": username, "password": password, "csrf_token": token},
+        follow_redirects=follow_redirects,
+    )
 
 
 @pytest.fixture
@@ -34,17 +48,12 @@ def test_owner_login_page_reachable_unauthenticated(own_ops_owner_client):
 
 
 def test_owner_login_wrong_password_401(own_ops_owner_client):
-    resp = own_ops_owner_client.post(
-        "/owner-login", data={"username": "op", "password": "wrong"},
-    )
+    resp = _login_post(own_ops_owner_client, "op", "wrong")
     assert resp.status_code == 401
 
 
 def test_owner_login_success_sets_cookie_and_redirects(own_ops_owner_client):
-    resp = own_ops_owner_client.post(
-        "/owner-login", data={"username": "op", "password": "s3cret"},
-        follow_redirects=False,
-    )
+    resp = _login_post(own_ops_owner_client, "op", "s3cret", follow_redirects=False)
     assert resp.status_code in (302, 303)
     assert "auth_token" in resp.cookies
 
@@ -55,9 +64,7 @@ def test_owner_login_then_root_shows_dashboard(own_ops_owner_client):
     requests reach the JWT-decode branch that populates
     request.state.authenticated from the owner cookie this route mints —
     the "owner logs in -> dashboard" round-trip works end to end."""
-    login = own_ops_owner_client.post(
-        "/owner-login", data={"username": "op", "password": "s3cret"},
-    )
+    login = _login_post(own_ops_owner_client, "op", "s3cret")
     assert login.status_code == 200  # after following the redirect
     root = own_ops_owner_client.get("/")
     assert root.status_code == 200

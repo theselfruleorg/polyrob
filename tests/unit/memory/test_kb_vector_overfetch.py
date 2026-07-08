@@ -48,6 +48,10 @@ def test_overfetch_k_and_slice_to_limit(monkeypatch):
     prov = lv.LocalVectorMemoryProvider.__new__(lv.LocalVectorMemoryProvider)
     prov.db_path = ":memory:"
     prov._embed_sync = lambda q: [0.0] * 4
+    # P2-6: vec schema is lazy now; mark it ready so this unit test exercises the
+    # overfetch SQL directly without a real embedder probe.
+    prov._vec_ok = True
+    prov._vec_schema_ready = True
 
     out = prov._kb_vector_contents("some query", "user", "collB", limit=5)
 

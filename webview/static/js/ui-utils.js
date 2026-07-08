@@ -245,14 +245,18 @@ export function initTabs(containerSelector = '.tabs-wrapper') {
     // Add click handlers to tab buttons
     buttons.forEach(button => {
         const tabId = button.dataset.tab;
-        
+
         button.addEventListener('click', () => {
             activateTab(tabId);
         });
     });
-    
-    // Activate first tab by default if none is active
-    if (!container.querySelector('.tab-button.active') && buttons.length > 0) {
+
+    // Deep-link support: /session/{id}#feed lands straight on that tab.
+    const fromHash = (window.location.hash || '').replace('#', '');
+    if (fromHash && container.querySelector(`.tab-button[data-tab="${fromHash}"]`)) {
+        activateTab(fromHash);
+    } else if (!container.querySelector('.tab-button.active') && buttons.length > 0) {
+        // Activate first tab by default if none is active
         const firstTabId = buttons[0].dataset.tab;
         activateTab(firstTabId);
     }

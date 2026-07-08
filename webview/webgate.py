@@ -103,6 +103,25 @@ def requires_owner_login() -> bool:
     return posture() != "local"
 
 
+def activity_enabled() -> bool:
+    """Whether the global ``/activity`` stream (page + APIs + socket room) is on.
+
+    ``WEBVIEW_ACTIVITY_ENABLED``, default true — it is owner/admin-gated in
+    every non-local posture, so on-by-default is safe.
+    """
+    return bool_env("WEBVIEW_ACTIVITY_ENABLED", True)
+
+
+def read_only() -> bool:
+    """Monitoring-only console: mutating endpoints refuse with 403.
+
+    ``WEBVIEW_READ_ONLY``, default false. Used for deployments where the
+    webview observes an autonomous agent (e.g. the headless VPS) and the
+    interactive path (send-message → :9000 API) is not available.
+    """
+    return bool_env("WEBVIEW_READ_ONLY", False)
+
+
 def bind_host() -> str:
     """Address the webgate binds to.
 
@@ -151,8 +170,9 @@ def branding_config() -> Dict[str, str]:
     access-gate copy baked in at authoring time. Read fresh on every call (not
     memoized) so tests can monkeypatch env without a module reload.
 
-    Keys: support_url, support_display, support_handle, access_gate_label,
+    Keys: support_url, support_display, support_handle,
     brand_url, brand_display, org_url, org_display, terms_url, privacy_url.
+    (access_gate_label was removed 2026-07-06 with the beta banner.)
     """
     support_url = os.environ.get("POLYROB_SUPPORT_URL", "https://t.me/tmachinrobot").strip()
     brand_url = os.environ.get("POLYROB_BRAND_URL", "https://your-polyrob-host.example").strip()
@@ -161,7 +181,6 @@ def branding_config() -> Dict[str, str]:
         "support_url": support_url,
         "support_display": _strip_scheme(support_url),
         "support_handle": os.environ.get("POLYROB_SUPPORT_HANDLE", "@TMACHINROBOT").strip(),
-        "access_gate_label": os.environ.get("POLYROB_ACCESS_GATE_LABEL", "DEN holders").strip(),
         "brand_url": brand_url,
         "brand_display": _strip_scheme(brand_url),
         "org_url": org_url,

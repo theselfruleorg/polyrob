@@ -232,3 +232,34 @@ def test_beyond_allowance_is_error(monkeypatch):
     a._validate_and_intervene(mo)
 
     assert a._last_result and a._last_result[0].error is not None
+
+
+@pytest.mark.asyncio
+async def test_p2_15_no_cooldown_stamp_when_compaction_returns_false():
+    """P2-15: when llm_compact_history returns False (transient abort / no-op designed
+    to retry next step), the cooldown must NOT be stamped, so it re-fires next step."""
+    a = _compaction_agent(usage_pct=90.0)
+    mm = a.message_manager
+    mm.llm_compact_history = AsyncMock(return_value=False)  # aborted / no-op
+
+    a.state.n_steps = 11
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1
+    # cooldown NOT stamped -> next step retries immediately
+    a.state.n_steps = 12
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 2, "aborted compaction must retry next step"
+
+
+@pytest.mark.asyncio
+async def test_p2_15_cooldown_stamped_when_compaction_succeeds():
+    """Regression: a successful (True) compaction DOES stamp the cooldown."""
+    a = _compaction_agent(usage_pct=90.0)
+    mm = a.message_manager
+    mm.llm_compact_history = AsyncMock(return_value=True)
+
+    a.state.n_steps = 11
+    await a._prepare_step()
+    a.state.n_steps = 12
+    await a._prepare_step()
+    assert mm.llm_compact_history.await_count == 1, "successful compaction must respect cooldown"

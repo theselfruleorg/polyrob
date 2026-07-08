@@ -384,11 +384,35 @@ class SkillManager(SkillWriterMixin):
                 if tool_id in tool_ids:
                     tool_matches.append(f"tool:{tool_id}")
 
-            # Check keyword matching in task
+            # Check keyword matching in task. P2-19: WORD-BOUNDARY match, not a raw
+            # substring — a short keyword like "sell"/"buy"/"trade"/"plan"/"fix" used
+            # to fire on "counselling"/"busy"/"airplane"/"prefix" substrings, and a
+            # priority-1 false positive could evict a genuinely relevant skill under the
+            # max_skills cap. re.escape handles punctuation; a multi-word keyword is
+            # matched as a phrase bounded at each end.
             keywords = triggers.get("keywords", [])
             for kw in keywords:
-                if kw.lower() in task_lower:
-                    keyword_matches.append(f"keyword:{kw}")
+                kw_l = (kw or "").lower().strip()
+                if not kw_l:
+                    continue
+                # P2-19 (Fusion follow-up): `\b` only asserts a boundary NEXT TO a word
+                # char, so a keyword that starts or ends with a non-word char ("c++",
+                # ".net") gets NO boundary there and `\b<kw>\b` never matches — a silent
+                # false-negative the re.error fallback (zero matches, not an error) can't
+                # catch. Anchor `\b` conditionally: only at an end whose adjacent keyword
+                # char is a word char. So "sell" -> `\bsell\b` (fixes the "counselling"
+                # false positive) but "c++" -> `\bc\+\+` (still matches "use c++ here").
+                def _wordish(ch: str) -> bool:
+                    return ch.isalnum() or ch == "_"
+                left = r"\b" if _wordish(kw_l[0]) else ""
+                right = r"\b" if _wordish(kw_l[-1]) else ""
+                try:
+                    if re.search(left + re.escape(kw_l) + right, task_lower):
+                        keyword_matches.append(f"keyword:{kw}")
+                except re.error:
+                    # Degenerate keyword -> fall back to substring (never crash matching)
+                    if kw_l in task_lower:
+                        keyword_matches.append(f"keyword:{kw}")
 
             # Check action name matching
             action_names = triggers.get("action_names", [])
@@ -501,14 +525,21 @@ class SkillManager(SkillWriterMixin):
         self,
         user_id: Optional[str] = None,
         max_skills: int = 20,
+        tool_ids: Optional[List[str]] = None,
     ) -> List["MatchedSkill"]:
-        """Return ALL auto-activatable skills as catalog entries (S-1, true progressive disclosure).
+        """Return auto-activatable skills as catalog entries (S-1, true progressive disclosure).
 
         Unlike :meth:`get_skills_for_session` (which trigger-matches against the task),
         this exposes every available skill so the agent can DISCOVER and ``load_skill``
         any of them on demand — fixing the gap where a session that matched zero
         triggers got an empty catalog and could load nothing. Bodies are preloaded so
         ``load_skill`` serves without a disk re-read. Sorted by priority, capped.
+
+        P1-1: a GATED skill (``auto_activate: false`` — e.g. the money/trading
+        playbooks) is surfaced ONLY when the session has loaded its required tools
+        (``triggers.tool_ids`` all present in *tool_ids*) — that is what those triggers
+        were written for. Otherwise it stays hidden AND the load_skill fallback refuses
+        it (see :meth:`may_load_skill`), so the gate is real, not advisory.
         """
         self._ensure_rules_loaded()
         all_rules = dict(self.skill_rules)
@@ -516,10 +547,14 @@ class SkillManager(SkillWriterMixin):
             user_rules, _ = self._load_user_rules(user_id)
             all_rules.update(user_rules)
 
+        session_tool_ids = set(tool_ids or [])
         catalog = []
         for skill_id, rules in all_rules.items():
             if not rules.get("auto_activate", True):
-                continue
+                # P1-1: surface a gated skill only when its required tools are loaded.
+                gate_tool_ids = set(rules.get("triggers", {}).get("tool_ids", []))
+                if not (gate_tool_ids and gate_tool_ids.issubset(session_tool_ids)):
+                    continue
             content = self._load_skill_content(skill_id, user_id=user_id)
             if not content:
                 continue
@@ -534,16 +569,24 @@ class SkillManager(SkillWriterMixin):
 
         # Task 14: append externally-discovered (agentskills.io ecosystem) skills that
         # aren't already covered by a builtin/user rule of the same id.
+        # P1-7: external skills (from ~/.agents/skills, ~/.claude/skills) are untrusted
+        # third-party content that gets pinned into EVERY session's catalog prompt —
+        # scan the description AND body, and skip any that trips the injection scan
+        # (fail-OPEN if the scanner is unavailable, fail-CLOSED if it raises), matching
+        # the writer's P3-1 stance that a catalog description is an injection vector.
         existing_ids = {m.skill_id for m in catalog}
         for ext_id, ds in self._load_external_skills().items():
             if ext_id in existing_ids:
+                continue
+            ext_desc = ds.meta.get("description", "")
+            if self._external_content_suspicious(ext_id, ext_desc, ds.body):
                 continue
             catalog.append(MatchedSkill(
                 skill_id=ext_id,
                 priority=5,
                 match_reasons=["catalog"],
                 content=ds.body,
-                description=ds.meta.get("description", ""),
+                description=ext_desc,
                 trigger_type="catalog",
                 source=ds.scope,
             ))
@@ -551,6 +594,33 @@ class SkillManager(SkillWriterMixin):
 
         catalog.sort(key=lambda m: (m.priority, m.skill_id))
         return catalog[:max_skills]
+
+    @staticmethod
+    def _external_content_suspicious(skill_id: str, description: str, body: str) -> bool:
+        """True if an external skill's description/body trips the injection scan (P1-7).
+
+        Fail-OPEN when the scanner can't be imported (parity with the rest of the
+        codebase); fail-CLOSED (treat as suspicious) when the scanner itself raises.
+        """
+        try:
+            from modules.memory.task.threat_scan import is_suspicious
+        except Exception:
+            return False  # scanner unavailable → fail-open
+        try:
+            combined = f"{description}\n\n{body}"
+            if is_suspicious(combined):
+                logger.warning(
+                    "external skill %r excluded from catalog: content tripped the "
+                    "injection scan", skill_id,
+                )
+                return True
+            return False
+        except Exception:
+            logger.warning(
+                "external skill %r excluded from catalog: injection scan raised "
+                "(fail-closed)", skill_id,
+            )
+            return True
 
     def _user_dirs_root(self) -> Path:
         """Root under which per-tenant ``user_<uid>`` skill directories live (Task 8).
@@ -650,7 +720,37 @@ class SkillManager(SkillWriterMixin):
                 logger.warning(f"Failed to load user rules for {user_id}: {e}")
         
         return {}, user_dir
-    
+
+    def get_skill_rule(self, skill_id: str, user_id: Optional[str] = None) -> Optional[dict]:
+        """Return the merged rule dict for a skill_id (user rule shadows builtin), or None."""
+        self._ensure_rules_loaded()
+        if user_id:
+            user_rules, _ = self._load_user_rules(user_id)
+            if skill_id in user_rules:
+                return user_rules[skill_id]
+        return self.skill_rules.get(skill_id)
+
+    def may_load_skill(
+        self, skill_id: str, tool_ids: Optional[List[str]] = None,
+        user_id: Optional[str] = None,
+    ) -> bool:
+        """Gate for on-demand loading (P1-1).
+
+        An ``auto_activate: false`` skill (e.g. the money/trading playbooks) is a GATED
+        skill: it may be loaded ONLY when the session has loaded its required tools
+        (``triggers.tool_ids`` all present). Otherwise the gate would only hide the
+        skill from the catalog while the load_skill disk fallback served the full
+        playbook to any model that guessed the id. An unknown id / any auto_activate
+        skill is loadable (True) — the fallback's own tenant/path guards still apply.
+        """
+        rule = self.get_skill_rule(skill_id, user_id=user_id)
+        if rule is None:
+            return True  # unknown to rules.json — not a gated skill; other guards apply
+        if rule.get("auto_activate", True):
+            return True
+        gate_tool_ids = set(rule.get("triggers", {}).get("tool_ids", []))
+        return bool(gate_tool_ids and gate_tool_ids.issubset(set(tool_ids or [])))
+
     def _load_skill_content(self, skill_id: str, user_id: Optional[str] = None) -> str:
         """Load skill markdown content from disk, stripped of any YAML frontmatter.
 

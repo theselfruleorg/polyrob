@@ -73,14 +73,25 @@ def code_exec_docker_persistent_enabled() -> bool:
     scoped to exactly the session that created it and never leaks into another
     session's calls. Flag off, or no ``session_id`` on the context, is
     byte-identical to the pre-existing ephemeral, session-less caching.
+
+    WS-1 (compute posture): the DEFAULT flips to True at ``AGENT_COMPUTE_POSTURE
+    >= 1`` — sandbox-dev installs must survive across ``run_code`` calls, which
+    requires the persistent container. An explicit env value (either way) still
+    wins; posture 0 keeps the historical default OFF.
     """
-    return _bool_env("CODE_EXEC_DOCKER_PERSISTENT", False)
+    try:
+        from agents.task.constants import compute_posture
+        default = compute_posture() >= 1
+    except Exception:
+        default = False
+    return _bool_env("CODE_EXEC_DOCKER_PERSISTENT", default)
 
 
 def resolve_backend(
     registry: ExecutionBackendRegistry | None = None,
     *,
     session_id: str | None = None,
+    dev_mode: bool = False,
 ) -> ExecutionBackend:
     """Resolve the configured backend (``CODE_EXEC_BACKEND``) from a registry.
 
@@ -92,6 +103,12 @@ def resolve_backend(
     including every existing caller today, none of which passes ``session_id`` — is
     byte-identical to before. An explicitly-supplied ``registry`` is always honored
     as-is (never silently bypassed by this seam).
+
+    ``dev_mode`` (WS-1): carried onto the persistent ``DockerBackend`` so its
+    container mounts the writable ``/install`` at setup. Pass True ONLY for a
+    session that passed ``compute_posture_allows(ctx, 1)``. Ephemeral/registry
+    construction ignores it (the per-request ``ExecutionRequest.dev_mode`` governs
+    those runs' argv).
     """
     name = get_backend_name()
     if (
@@ -101,7 +118,7 @@ def resolve_backend(
         and code_exec_docker_persistent_enabled()
     ):
         from tools.code_exec.backends.docker import DockerBackend
-        return DockerBackend(session_id=session_id)
+        return DockerBackend(session_id=session_id, dev_mode=dev_mode)
     return (registry or default_registry).create(name)
 
 

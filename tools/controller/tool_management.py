@@ -163,9 +163,20 @@ class ToolManagementMixin:
 							)
 							param_model = getattr(action_func, '_param_model', None)
 
-						# Use Registry's wrap_function to properly register the action
-						# ALWAYS use namespaced name to prevent collisions
-						namespaced_name = f"{name}_{action_name}"
+						# Use Registry's wrap_function to properly register the action.
+						# P2-18: namespace to prevent collisions, but DON'T double-prefix a
+						# method that already carries the tool name (e.g. tool `perplexity`
+						# method `perplexity_search` -> keep `perplexity_search`, not
+						# `perplexity_perplexity_search`). The old unconditional prefix
+						# produced ugly schema names (perplexity_perplexity_search,
+						# anysite_anysite_api, goal_goal_list) that differed from the names
+						# the prompt/skills teach, leaving only the collision-prone fuzzy
+						# suffix match to rescue calls. The fuzzy match STAYS as a compat
+						# shim for sessions/histories that reference the old double name.
+						if action_name == name or action_name.startswith(f"{name}_"):
+							namespaced_name = action_name
+						else:
+							namespaced_name = f"{name}_{action_name}"
 
 						# Validate the namespaced name doesn't conflict
 						existing = self.registry.get_action(namespaced_name)

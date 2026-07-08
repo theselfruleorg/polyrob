@@ -282,14 +282,34 @@ class StreamingThinkScrubber:
             open_idx = buf_lower.find(open_lower)
             if open_idx == -1:
                 continue
-            close_idx = buf_lower.find(
-                close_lower, open_idx + len(open_lower),
-            )
-            if close_idx == -1:
+            # P2-13: DEPTH-aware close matching. A nested same-variant block
+            # (<think>a<think>b</think>c</think>) used to match the FIRST inner close
+            # (non-greedy), which ended the block early and LEAKED the outer tail
+            # ("c") plus an orphan </think>. Count nested opens/closes and extend to
+            # the OUTER close. If the outer close isn't in the buffer yet (streaming,
+            # split mid-nest), matched_end stays -1 and we skip — the open-at-boundary
+            # / in-block path then handles it, same as an unterminated block.
+            depth = 1
+            pos = open_idx + len(open_lower)
+            matched_end = -1
+            while pos < len(buf_lower):
+                next_open = buf_lower.find(open_lower, pos)
+                next_close = buf_lower.find(close_lower, pos)
+                if next_close == -1:
+                    break  # no closing tag yet
+                if next_open != -1 and next_open < next_close:
+                    depth += 1
+                    pos = next_open + len(open_lower)
+                else:
+                    depth -= 1
+                    pos = next_close + len(close_lower)
+                    if depth == 0:
+                        matched_end = pos
+                        break
+            if matched_end == -1:
                 continue
-            end_idx = close_idx + len(close_lower)
             if best is None or open_idx < best[0]:
-                best = (open_idx, end_idx)
+                best = (open_idx, matched_end)
         return best
 
     def _find_open_at_boundary(

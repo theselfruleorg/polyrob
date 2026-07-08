@@ -461,6 +461,10 @@ class Registry:
 		"""Get a description of all actions for the prompt"""
 		return self.registry.get_prompt_description()
 
+	def get_prompt_action_index(self) -> str:
+		"""Compact one-line-per-action index for native tool mode (T1-03)."""
+		return self.registry.get_prompt_action_index()
+
 	def get_action_schema(self, action_name: str) -> Dict[str, Any]:
 		"""Get the expected schema for a specific action
 
@@ -1102,9 +1106,12 @@ class Registry:
 				f"Tool calls MUST be normalized with normalize_and_correct() before validation. "
 				f"Args: {args}, Error: {validation_error}"
 			)
+			# P3: the raised message is what the LLM sees — keep it actionable (the field
+			# error + params are appended by the caller). The internal
+			# "normalize_and_correct()" hint is dev-only noise for the model, so it stays
+			# in the logger.error above, not in the model-facing error.
 			raise ValueError(
-				f"Invalid arguments for {tool_name}: {validation_error}. "
-				f"Ensure tool calls are normalized with ToolCallBuilder.normalize_and_correct() first."
+				f"Invalid arguments for {tool_name}: {validation_error}."
 			)
 
 		# 4. Create ActionModel — key by the RESOLVED registered action name, not the
