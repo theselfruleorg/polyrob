@@ -186,7 +186,10 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
                    if as_json else msg)
         sys.exit(EXIT_UP_TO_DATE)
 
-    runners = build_runners(ctx)
+    # Tag-pinned channels move HEAD to the released tag; --channel git fast-forwards a
+    # branch (target_ref=None). See cli/update/runners.py::build_runners.
+    target_ref = status.latest if channel != "git" else None
+    runners = build_runners(ctx, target_ref=target_ref)
     if runners is None:
         manual = _MANUAL_STEPS.get(ctx.method, _MANUAL_STEPS[UNKNOWN])
         click.echo(click.style(
@@ -231,7 +234,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
         sys.exit(EXIT_UP_TO_DATE)
     if as_json:
         click.echo(_json.dumps({
-            "applied": False, "failed_step": res.failed_step, "error": res.error,
+            "applied": False, "failed_step": res.failed_step, "error": str(res.error),
             "snapshot": res.snapshot.name, "rolled_back": True}))
     else:
         click.echo(click.style(

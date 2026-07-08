@@ -267,6 +267,7 @@ CATALOG: list[tuple[str, str, str]] = [
     ("AGENT_WALLET_NETWORK", "Billing / x402 / wallet", "`testnet`"),
     ("AGENT_WALLET_BACKEND", "Billing / x402 / wallet", "`local_eoa`"),
     ("AGENT_WALLET_MAX_PER_TX_USD", "Billing / x402 / wallet", "`1000000`"),
+    ("AGENT_WALLET_OPERATIONAL_VENUE", "Billing / x402 / wallet", "`treasury`"),
     ("WALLET_DAILY_CAP_USD", "Billing / x402 / wallet", "unset (disabled)"),
     ("CREDIT_VALUE_USD", "Billing / x402 / wallet", "`0.01`"),
     ("WELCOME_BONUS", "Billing / x402 / wallet", "`100`"),

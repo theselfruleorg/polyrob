@@ -26,6 +26,11 @@ class WalletConfig:
     x402_facilitator_url: str
     daily_cap_usd: Optional[float] = None
     per_venue_daily_cap_usd: Dict[str, float] = field(default_factory=dict)
+    # The venue key that same-chain spend paths (x402, generic payments) SIGN with.
+    # Default "treasury" so the address the owner funds (== AgentWallet.address) is the
+    # address actually spent from. "Venue" elsewhere (policy caps) stays an accounting
+    # label. Hyperliquid keeps its own delegated key regardless of this.
+    operational_venue: str = "treasury"
 
 
 def _opt_float(env: Mapping[str, str], key: str) -> Optional[float]:
@@ -67,4 +72,6 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None) -> WalletConfig:
         # Rolling 24h spend cap; unset = disabled = legacy behavior (per-tx ceiling only).
         daily_cap_usd=_opt_float(env, "WALLET_DAILY_CAP_USD"),
         per_venue_daily_cap_usd=_load_per_venue_caps(env),
+        operational_venue=(env.get("AGENT_WALLET_OPERATIONAL_VENUE", "treasury").strip().lower()
+                           or "treasury"),
     )

@@ -98,6 +98,7 @@ from cli.commands.todos import todos as _todos_group  # noqa: E402
 from cli.commands.update import update_cmd as _update_cmd  # noqa: E402
 from cli.commands.pfp import pfp as _pfp_group  # noqa: E402
 from cli.commands.journey import journey as _journey_cmd  # noqa: E402
+from cli.commands.wallet import wallet_cmd as _wallet_cmd  # noqa: E402
 
 cli.add_command(_run_cmd)
 cli.add_command(_session_group)
@@ -126,6 +127,7 @@ cli.add_command(_todos_group)
 cli.add_command(_update_cmd)
 cli.add_command(_pfp_group)
 cli.add_command(_journey_cmd)
+cli.add_command(_wallet_cmd)
 
 
 def main():

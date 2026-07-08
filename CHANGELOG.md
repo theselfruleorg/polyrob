@@ -6,6 +6,32 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-07-08
+
+Bug-fix release on top of 0.5.0.
+
+### Money / wallet
+- 2026-07-08: **Agent wallet spends from the address it tells you to fund (fund == spend).** The
+  agent wallet is hub-and-spoke (one seed → per-venue keys); the x402 spend path signed with the
+  `x402` venue key while `AgentWallet.address` (the owner-facing "fund me" address) returned the
+  `treasury` key — so funding the surfaced address funded an address no spend path used, stranding
+  funds. Now `AGENT_WALLET_OPERATIONAL_VENUE` (default `treasury`) is the venue same-chain spend
+  paths sign with, `AgentWallet.address` tracks it (surfaced == spent), and a regression test locks
+  the invariant. The operational venue is clamped to the fundable same-chain venues
+  (`treasury`/`x402`); hyperliquid keeps its own delegated key. New **`polyrob wallet [--json]`**
+  shows per-venue address + on-chain balance + network + caps and marks which address to fund
+  (delegated venues are labeled "not funded here" so they can't be mis-funded). "Venue" elsewhere
+  stays a policy/accounting label — per-venue caps are unchanged. Fusion-of-opuses reviewed.
+
+### CLI / update
+- 2026-07-08: **`polyrob update` apply works on a tag-pinned instance.** The git apply runner did
+  `git pull --ff-only`, which fails on the detached-HEAD pinned-tag posture the instance runs (and
+  would pull unreviewed `main` on a branch). It now fetches tags and checks out the resolved release
+  tag for the `stable`/`pre` channels (`--channel git` keeps the branch fast-forward). Also
+  `polyrob update --apply --json` no longer crashes on a failed apply (it serialized a raw
+  exception); the failure payload is now valid JSON. The full apply lifecycle
+  (snapshot → install → guarded-migrate → verify → auto-rollback) was validated end-to-end.
+
 ## [0.5.0] — 2026-07-08
 
 **0.5.0 is a large capability release** on top of 0.4.3: the compute-posture ladder (installable

@@ -83,8 +83,11 @@ class X402PayTool(BaseTool):
         wallet = self._get_wallet()
         if wallet is None:
             return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
-        cfg = wallet._config
-        signer = wallet.signer_for("x402")
+        cfg = wallet.config
+        # Sign with the OPERATIONAL venue (default 'treasury') so payment draws from the
+        # funded address (== wallet.address). The policy venue label below stays "x402"
+        # for per-venue caps/accounting. See core/wallet/agent_wallet.py::operational_signer.
+        signer = wallet.operational_signer()
         # One idempotency key per fetch, reused by both check() and record() so a
         # retried step's check() finds the prior record() (else replay-protection
         # fails to correlate and could double-pay).
@@ -125,7 +128,7 @@ class X402PayTool(BaseTool):
         wallet = self._get_wallet()
         if wallet is None:
             return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
-        addr = wallet.signer_for("x402").address
+        addr = wallet.operational_signer().address
         audit = wallet.policy.audit_log
         spent = sum(e["amount_usd"] for e in audit if e["venue"] == "x402")
-        return self._ar(content=f"x402 wallet address: {addr}\nx402 payments this process: {len(audit)} (≈${spent:.4f})")
+        return self._ar(content=f"x402 pays from ({wallet.operational_venue}) address: {addr}\nx402 payments this process: {len(audit)} (≈${spent:.4f})")

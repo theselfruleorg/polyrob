@@ -119,7 +119,7 @@ def test_apply_supported_method_runs_engine(monkeypatch, tmp_path):
     from cli.update.engine import ApplyResult
 
     _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
-    monkeypatch.setattr(up, "build_runners", lambda ctx: object(), raising=False)
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
     # No server/DB in use, and a captured apply.
     uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
     monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
@@ -143,7 +143,7 @@ def test_apply_supported_method_runs_engine(monkeypatch, tmp_path):
 def test_apply_unsupported_method_prints_manual(monkeypatch):
     import cli.commands.update as up
     _patch(monkeypatch, method="docker", current="0.4.2", latest="0.4.3")
-    monkeypatch.setattr(up, "build_runners", lambda ctx: None, raising=False)
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: None, raising=False)
     res = CliRunner().invoke(update_cmd, ["--apply", "--yes"])
     assert res.exit_code == EXIT_UP_TO_DATE
     assert "isn't supported for a docker" in res.output
@@ -159,7 +159,7 @@ def _apply_env(monkeypatch, tmp_path, *, ok=True):
     from cli.update.context import UpdateContext
 
     _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
-    monkeypatch.setattr(up, "build_runners", lambda ctx: object(), raising=False)
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
     uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
     monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
     monkeypatch.setattr(up, "active_use_reasons", lambda *a, **k: [], raising=False)
@@ -231,16 +231,21 @@ def test_apply_json_failure_emits_json(monkeypatch, tmp_path):
     class _Snap:
         name = "SNAP1"
 
+    # Real failures carry a subprocess.CalledProcessError (not a str) as res.error — the
+    # JSON path MUST stringify it or json.dumps raises TypeError and the command crashes.
+    import subprocess
+    boom = subprocess.CalledProcessError(1, ["python", "-m", "migrations.migrate", "upgrade"])
     monkeypatch.setattr(up, "apply_update",
-                        lambda **kw: ApplyResult(False, "install", "boom", _Snap(), True),
+                        lambda **kw: ApplyResult(False, "migrate", boom, _Snap(), True),
                         raising=False)
     res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--json"])
     assert res.exit_code == EXIT_ERROR, res.output
-    data = json.loads(res.output)
+    data = json.loads(res.output)  # must not raise — proves the error is serialized
     assert data["applied"] is False
-    assert data["failed_step"] == "install"
-    assert data["error"] == "boom"
+    assert data["failed_step"] == "migrate"
+    assert isinstance(data["error"], str) and "migrations.migrate" in data["error"]
     assert data["snapshot"] == "SNAP1"
+    assert data["rolled_back"] is True
 
 
 def test_apply_lock_held_is_clean_error(monkeypatch, tmp_path):

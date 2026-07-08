@@ -2,7 +2,9 @@
 
 Hub-and-spoke topology: one master seed → a treasury key + domain-separated
 per-venue keys. Hyperliquid trades via its own delegated key (the venue's
-built-in withdrawal firewall); x402 pays from its own small float.
+built-in withdrawal firewall). Same-chain spend paths (x402, generic payments)
+sign with the OPERATIONAL venue (default 'treasury') so the address the owner
+funds (`AgentWallet.address`) is exactly the address spent from.
 """
 from __future__ import annotations
 
@@ -14,6 +16,11 @@ from core.wallet.policy import PolicyGate
 from core.wallet.signer import LocalEoaSigner
 
 VENUES = frozenset({"treasury", "x402", "polymarket", "hyperliquid"})
+# Venues whose derived key holds a same-chain float the agent spends directly.
+# hyperliquid/polymarket are delegated/managed elsewhere (their derived key never
+# holds funds), so the operational venue is clamped to these to avoid making a
+# generic payment sign with — and surface for funding — a non-fundable key.
+_SPEND_VENUES = frozenset({"treasury", "x402"})
 
 _PBKDF2_ITERS = 100_000
 
@@ -51,8 +58,33 @@ class AgentWallet:
         return self.signer_for(venue).account
 
     @property
+    def operational_venue(self) -> str:
+        """The venue key same-chain spend paths sign with (default 'treasury')."""
+        venue = getattr(self._config, "operational_venue", "treasury") or "treasury"
+        # Clamp to same-chain SPEND venues — hyperliquid/polymarket keys never hold a
+        # spendable float, so pointing the operational venue at them would strand funds.
+        return venue if venue in _SPEND_VENUES else "treasury"
+
+    def operational_signer(self) -> LocalEoaSigner:
+        """Signer for the operational venue — the SINGLE source of truth for
+        'which key does the agent spend from' on same-chain paths (x402, generic).
+        Keeping this and `address` in lockstep is what prevents the fund-the-wrong-
+        address footgun (the funded address == the spent address)."""
+        return self.signer_for(self.operational_venue)
+
+    @property
     def address(self) -> str:
-        return self.signer_for("treasury").address
+        # The owner-facing "fund me" address MUST equal the address actually spent
+        # from, so it tracks the operational venue (not a hardcoded 'treasury').
+        return self.operational_signer().address
+
+    @property
+    def config(self) -> WalletConfig:
+        return self._config
+
+    @property
+    def network(self) -> str:
+        return getattr(self._config, "network", "testnet")
 
     @property
     def policy(self) -> PolicyGate:
