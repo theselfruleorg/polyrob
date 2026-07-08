@@ -157,3 +157,22 @@ async def test_run_once_prune_noop_when_provider_lacks_method(usage, monkeypatch
     c = _curator(usage, _FakeSM(), now=1_000_000.0)
     result = await c.run_once()
     assert "transitions" in result
+
+
+def test_p2_21_already_archived_not_re_archived(usage, monkeypatch):
+    """P2-21: a skill archived on one tick is NOT re-archived on the next (provenance
+    rows persist after archive, so without the guard the curator re-fired every tick)."""
+    monkeypatch.setenv("CURATOR_STALE_DAYS", "30")
+    monkeypatch.setenv("CURATOR_ARCHIVE_DAYS", "90")
+    usage.record_provenance("s", "u1", "agent")
+    sm = _FakeSM()
+    cur = _curator(usage, sm, now=1_000_000.0 + 120 * DAY)
+
+    plan1 = cur.apply_automatic_transitions()
+    assert "u1/s" in plan1["archived"]
+    assert sm.archived == [("u1", "s")]
+
+    # second tick: the row still exists in provenance, but it's marked archived
+    plan2 = cur.apply_automatic_transitions()
+    assert "u1/s" not in plan2["archived"], "must not re-archive an already-archived skill"
+    assert sm.archived == [("u1", "s")], "delete_skill must not be called again"

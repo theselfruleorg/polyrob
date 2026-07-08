@@ -39,6 +39,14 @@ _COMMANDS = ("/task", "/cancel", "/new", "/help",
 ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 
 
+# P1-6: forgeable-sender network surfaces whose senders can NEVER be the bound owner
+# in v1 (the From:/address is trivially spoofable). Such a surface must never fall
+# through to the legacy obey-path when the correspondent tier model is off — it is
+# correspondent-or-denied by construction. Kept separate from access._LOCAL_OWNER_
+# SURFACES (its inverse): local surfaces get the owner bypass, these are refused it.
+_FORGEABLE_NETWORK_SURFACES = {"email"}
+
+
 class RouteKind(str, Enum):
     COMMAND = "command"
     STEER = "steer"
@@ -127,6 +135,22 @@ async def route_inbound(
         except Exception as e:
             # Fail-CLOSED: a fault in the enabled tier path denies, never obeys.
             logger.warning("route_inbound tier model fault — failing CLOSED to DENIED: %s", e)
+            return RouteDecision(RouteKind.DENIED, session_key)
+    else:
+        # P1-6: the correspondent tier model is OFF. A forgeable-sender network surface
+        # (email) must NOT fall through to the legacy obey-path (STEER/TASK_AGENT) — its
+        # sender can never be the bound owner in v1 (owner-by-email is off; From: is
+        # forgeable), and without the tier model there is no correspondent registry to
+        # attach a reply to. Deny here, enforced at the routing boundary so a
+        # programmatic EmailHarness or an explicit CORRESPONDENT_ACCESS_ENABLED=false
+        # cannot open the obey-path (the CLI `os.environ.setdefault` was only a default).
+        surface_id = getattr(getattr(inbound.identity, "source", None), "surface_id", "") or ""
+        if surface_id in _FORGEABLE_NETWORK_SURFACES:
+            logger.info(
+                "route_inbound: %s sender denied — correspondent model off and "
+                "owner-by-%s is forgeable (v1 correspondent-or-denied invariant)",
+                surface_id, surface_id,
+            )
             return RouteDecision(RouteKind.DENIED, session_key)
 
     # Resolve the bound session row ONCE — used by both COMMAND (so /cancel & /new can

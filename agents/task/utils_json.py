@@ -184,7 +184,11 @@ def apply_action_field_corrections(action_name: str, params: Dict[str, Any]) -> 
         corrections.get(base_action_name, {})
     )
 
-    # Process parameters with case-insensitive matching
+    # Process parameters with case-insensitive matching, in TWO passes so a
+    # genuine field always wins over a synonym regardless of dict ordering
+    # (e.g. done({'text': 'real', 'summary': 'short'}) must never let the
+    # 'summary'->'text' rename clobber the real 'text').
+    renames: Dict[str, str] = {}  # original field -> target field
     for field, value in params.items():
         field_lower = field.lower()
 
@@ -195,20 +199,34 @@ def apply_action_field_corrections(action_name: str, params: Dict[str, Any]) -> 
         # TOKEN boundary, not a raw substring. A substring test against short keys
         # ('q'->'query', 'text'->'content') mis-maps unrelated fields ('quality',
         # 'context') and clobbers the real one. Require the shorter name to be a
-        # whole token of the longer, and never overwrite a field already placed.
+        # whole token of the longer.
         if correct_field == field and action_corrections:
             field_tokens = field_lower.split('_')
             for wrong_field, right_field in action_corrections.items():
                 wf = wrong_field.lower()
                 if wf in field_tokens or field_lower in wf.split('_'):
-                    if right_field in corrected:
-                        continue  # don't clobber an exact/earlier-corrected field
                     correct_field = right_field
                     break
 
-        corrected[correct_field] = value
-        if field != correct_field:
-            logger.debug(f"Corrected field: '{field}' -> '{correct_field}' for '{action_name}'")
+        if correct_field == field:
+            # Pass 1: genuine/uncorrected fields land first, so they can never
+            # be clobbered by a later (or earlier) synonym rename.
+            corrected[field] = value
+        else:
+            renames[field] = correct_field
+
+    # Pass 2: apply renames only into slots absent from BOTH the original
+    # params and what we've built so far. A redundant synonym is dropped
+    # (first rename wins if two synonyms target the same field).
+    for field, correct_field in renames.items():
+        if correct_field in corrected or correct_field in params:
+            logger.debug(
+                f"Dropped redundant field: '{field}' (target '{correct_field}' "
+                f"already supplied) for '{action_name}'"
+            )
+            continue
+        corrected[correct_field] = params[field]
+        logger.debug(f"Corrected field: '{field}' -> '{correct_field}' for '{action_name}'")
 
     return corrected
 

@@ -47,6 +47,10 @@ async def build_prefetch_message(query: str, *, session_id: str,
     else:
         recalled = ""
 
+    # T4-02: keep the RAW recall for the observability preview — the event must
+    # show what was recalled, not the untrusted-wrap envelope around it.
+    raw_recalled = recalled
+
     # Cross-session recall replays prior user/assistant turns verbatim, so an
     # instruction injected into one session could be recalled into another. Frame
     # it as DATA (same delimiter the untrusted tool-result path uses) so indirect
@@ -63,6 +67,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
 
     # --- T13: KB auto-prefetch (additive, fail-open, fully independent) -------
     kb_recalled = ""
+    raw_kb = ""
     try:
         from agents.task.constants import AutonomyConfig
         if AutonomyConfig.kb_auto_prefetch():
@@ -76,6 +81,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
                 kb_result = await kb_search(query, user_id=user_id, collection=_kb_collection)
                 if kb_result and kb_result.strip():
                     kb_recalled = kb_result.strip()
+                    raw_kb = kb_recalled
                     try:
                         from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
                         if UNTRUSTED_TOOL_RESULT_WRAP:
@@ -99,9 +105,33 @@ async def build_prefetch_message(query: str, *, session_id: str,
     else:
         return None
 
+    # T4-02: recall was invisible on every surface (ephemeral LLM message only) —
+    # record a first-class memory_recall event so the owner can reconstruct what
+    # was recalled and acted on. Raw (pre-wrap) content; fail-open.
+    _event_attrs = None
+    try:
+        from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_preview
+        _scope = ("cross_session+kb" if (raw_recalled and raw_kb)
+                  else ("kb" if raw_kb else "cross_session"))
+        _raw = "\n".join(p for p in (raw_recalled, raw_kb) if p)
+        _event_attrs = emit_memory_event(
+            "memory_recall", user_id=user_id or "", session_id=session_id,
+            source="prefetch", scope=_scope, content=_raw,
+            query=scrubbed_preview(query))
+    except Exception as e:
+        logger.debug("memory recall event skipped: %s", e)
+
     from modules.llm.messages import make_control_message, MessageOrigin
 
-    return make_control_message(combined, MessageOrigin.RECALL)
+    msg = make_control_message(combined, MessageOrigin.RECALL)
+    if _event_attrs:
+        try:
+            # Ride the attrs on the message so the caller (the prefetch mixin,
+            # which holds the orchestrator) can mirror the event to the live feed.
+            msg._memory_event = _event_attrs
+        except Exception:
+            pass
+    return msg
 
 
 class MemoryPrefetchMixin:
@@ -142,8 +172,23 @@ class MemoryPrefetchMixin:
         rides along on the next LLM call without bloating persistent history.
         """
         try:
+            # P2-4: a delegated leaf sub-agent gets no automatic cross-session recall —
+            # every other injector (episodic digest / autonomy continuity / continuity
+            # bridge) already excludes sub-agents, and sub-agents are deliberately H-MEM-
+            # isolated (NullTaskContextManager). Provider recall bypassed that on the read
+            # side, polluting a focused subtask's context with tenant-wide memory.
+            if getattr(self, "_is_sub_agent", False):
+                return
             n_steps = getattr(self.state, "n_steps", 0)
-            cadence = memory_prefetch_cadence()
+            # SA-06: an autonomous (goal/cron) session defaults to a recurring
+            # cadence — recalling once at step 1 (where the brain enrichment is
+            # empty) left long missions memory-blind. Fail-open to non-autonomous.
+            try:
+                from agents.task.goals.autonomy_marker import is_autonomous
+                _autonomous = is_autonomous(self.session_id)
+            except Exception:
+                _autonomous = False
+            cadence = memory_prefetch_cadence(autonomous=_autonomous)
             should = (n_steps == 1) or (cadence > 0 and n_steps > 0 and n_steps % cadence == 0)
             if not should:
                 return
@@ -155,6 +200,15 @@ class MemoryPrefetchMixin:
             if msg is not None:
                 self.message_manager.push_ephemeral_message(msg)
                 self.logger.debug("Injected prefetched memory block")
+                # T4-02: mirror the recall event to the live session feed so the
+                # CLI (/verbose) and webview watchers see it as it happens.
+                attrs = getattr(msg, "_memory_event", None)
+                if attrs:
+                    try:
+                        await self.orchestrator.add_to_feed(
+                            getattr(self, "agent_id", "agent"), "memory_recall", dict(attrs))
+                    except Exception as feed_err:
+                        self.logger.debug(f"memory recall feed mirror skipped: {feed_err}")
         except Exception as e:
             self.logger.debug(f"memory prefetch injection skipped: {e}")
 

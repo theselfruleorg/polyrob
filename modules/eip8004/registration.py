@@ -60,7 +60,12 @@ def build_registration_file(
     ))
     
     # MCP Endpoint (if enabled)
-    mcp_enabled = os.environ.get("MCP_ENABLED", "false").lower() == "true"
+    # SA-08: use the core.env SSOT parser so MCP_ENABLED means the SAME thing here as in
+    # core/config.py (pydantic bool). The old `== "true"` treated MCP_ENABLED=1 as False
+    # while BotConfig treated it as True — the agent card could advertise MCP as disabled
+    # while MCP was actually running.
+    from core.env import bool_env
+    mcp_enabled = bool_env("MCP_ENABLED", False)
     if mcp_enabled:
         endpoints.append(Endpoint(
             name="MCP",

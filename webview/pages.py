@@ -36,7 +36,7 @@ from webview import webgate
 # them at the ``webview.pages`` seam (the proof of reuse).
 from agents.task.constants import AutonomyConfig
 from agents.task.goals.board import GoalBoard
-from cli.commands.doctor import doctor_report
+from cli.commands.doctor import doctor_report, local_flag_on, resolve_memory_backend
 from core.instance import (
     load_pfp_meta,
     load_self_context,
@@ -46,8 +46,8 @@ from core.instance import (
 )
 from cron.jobs import CronJobStore
 from cron.service import CronService
-from core.env import bool_env
 from core.version import get_version
+from modules.credits.unified_ledger import build_ledger
 
 router = APIRouter()
 
@@ -68,6 +68,9 @@ _TEMPLATES = _templates()
 _TEMPLATES.env.globals["console_display_name"] = webgate.console_display_name
 _TEMPLATES.env.globals["branding"] = webgate.branding_config
 _TEMPLATES.env.globals["get_version"] = get_version
+# Posture default for the layout's tenant-nav block (P0-3) — same global as
+# server.py's env; the explicit `is_multitenant` context var still wins.
+_TEMPLATES.env.globals["is_multitenant_posture"] = webgate.is_multitenant
 
 
 # --- shared helpers --------------------------------------------------------- #
@@ -211,17 +214,24 @@ def _page_context(request: Request) -> dict:
 async def api_memory(request: Request, q: str = "", limit: int = 10):
     """Browse + search recall over the active MemoryProvider (tenant-scoped).
 
-    ``q`` set → discover; ``q`` empty → browse-recent. Fail-open to ``[]``.
+    ``q`` set → discover; ``q`` empty → browse-recent. Fail-open to no items.
+    Returns ``{items, count, mode, limit}`` so the page can caption results
+    honestly ("showing the N most recent" vs "N matches"). Per-hit
+    timestamp/score provenance is NOT available from the provider's search
+    surface (the ``memories`` FTS5 store has no timestamp column — the
+    episodic-memory plan tracks that); the envelope carries what exists.
     """
+    mode = "search" if (q or "").strip() else "browse"
     provider = _memory_provider()
     if provider is None:
-        return JSONResponse([])
+        return JSONResponse({"items": [], "count": 0, "mode": mode, "limit": limit})
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
         raw = await provider.search(q or "", user_id=user_id, limit=limit)
     except Exception:
-        return JSONResponse([])
-    return JSONResponse(_split_snippets(raw))
+        return JSONResponse({"items": [], "count": 0, "mode": mode, "limit": limit})
+    items = _split_snippets(raw)
+    return JSONResponse({"items": items, "count": len(items), "mode": mode, "limit": limit})
 
 
 @router.get("/api/webgate/goals")
@@ -337,24 +347,79 @@ async def avatar_live():
     return FileResponse(str(p), media_type="application/javascript")
 
 
+def _empty_ledger(user_id: str, days: int) -> dict:
+    """The all-zero ledger shape — returned when the ledger read fails so the
+    Finance page shows zeros rather than a 500 (every ledger leg fail-opens too)."""
+    return {"user_id": user_id, "window_days": days, "llm_api_cost_usd": 0.0,
+            "credits_spent": 0.0, "llm_calls": 0, "wallet_spend_usd": 0.0,
+            "wallet_payments": 0, "earned_usd": 0.0, "settled_payments": 0,
+            "pending_invoices_usd": 0.0, "pending_invoices": 0,
+            "total_spend_usd": 0.0, "net_usd": 0.0}
+
+
+def _ledger_caps() -> dict:
+    """Display-only policy caps (NOT part of the ledger read model) — the operator
+    context for the earned/spent/pending numbers. Resolved from env, fail-open."""
+    def _f(name, default):
+        try:
+            v = os.environ.get(name)
+            return float(v) if v not in (None, "") else default
+        except (TypeError, ValueError):
+            return default
+    return {
+        "wallet_daily_cap_usd": _f("WALLET_DAILY_CAP_USD", None),
+        "invoice_max_usd": _f("X402_INVOICE_MAX_USD", 50.0),
+        "invoice_daily_max": _f("X402_INVOICE_DAILY_MAX", 10.0),
+        "autonomy_budget_usd": _f("AUTONOMY_BUDGET_USD", 10.0),
+    }
+
+
+@router.get("/api/webgate/ledger")
+async def api_ledger(request: Request, days: int = 7):
+    """Unified financial ledger for the effective tenant — reuse ``build_ledger``.
+
+    earned / spent / pending / net over a trailing window. Read-only, tenant-
+    scoped (``_effective_user_id`` raises 403 outside the try — must not be
+    fail-open-swallowed). All-zero-tolerant: a ledger error degrades to zeros."""
+    days = max(1, min(int(days), 365))
+    user_id = _effective_user_id(request)  # 403 in multitenant if no tenant identity
+    try:
+        ledger = await build_ledger(user_id, days=days)
+    except Exception:
+        ledger = _empty_ledger(user_id, days)
+    ledger["caps"] = _ledger_caps()
+    return JSONResponse(ledger)
+
+
+@router.get("/finance", response_class=HTMLResponse)
+async def finance_page(request: Request):
+    return _TEMPLATES.TemplateResponse("finance.html", _page_context(request))
+
+
 @router.get("/api/webgate/doctor")
 async def api_doctor():
-    """System health — reuse ``doctor_report`` (same checks as ``polyrob doctor``)."""
+    """System health — reuse ``doctor_report`` (same checks as ``polyrob doctor``).
+
+    The webview is a SERVER process — nothing does the CLI's POLYROB_LOCAL
+    setdefault here — so both the checks and the header's ``memory_backend``
+    resolve with ``absent_means_on=False`` (matching what
+    ``modules.memory.backend_factory`` actually does at runtime). One shared
+    resolution, so the page can never contradict itself again (P0-4).
+    """
+    env = dict(os.environ)
     try:
-        checks = doctor_report(dict(os.environ))
+        checks = doctor_report(env, local_absent_means_on=False)
     except Exception:
         checks = []
     provider, model = _provider_model()
-    # Mirror modules.memory.backend_factory.maybe_register_memory_backend's default:
-    # local_vector under POLYROB_LOCAL, else sqlite (an explicit MEMORY_BACKEND wins).
-    default_memory_backend = "local_vector" if bool_env("POLYROB_LOCAL", False) else "sqlite"
+    rob_local = local_flag_on(env, absent_means_on=False)
     return JSONResponse({
         "checks": checks,
         "instance_id": resolve_instance_id(),
         "version": _version(),
         "provider": provider,
         "model": model,
-        "memory_backend": os.environ.get("MEMORY_BACKEND", default_memory_backend) or default_memory_backend,
+        "memory_backend": resolve_memory_backend(env, rob_local),
     })
 
 

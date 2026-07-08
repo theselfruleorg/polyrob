@@ -340,7 +340,24 @@ class ActionRegistrationMixin:
 						# content="" -> same "Unknown skill_id" error shape as before,
 						# no exception leaks to the model.
 						content = ""
-						if _skill_manager.resolve_skill_dir(sid, uid) is not None:
+						# P1-1: make the auto_activate gate REAL on the load path. A gated
+						# skill (auto_activate:false — the money/trading playbooks) is only
+						# loadable when the session has actually loaded its required tools;
+						# otherwise refuse (same "Unknown skill_id" shape) so a model that
+						# guesses the id cannot pull the gated playbook. A legitimately-
+						# available gated skill is preloaded into _session_skills via the
+						# catalog and never reaches this fallback.
+						_loaded_tool_ids = []
+						try:
+							_loaded_tool_ids = self.list_tools()
+						except Exception:
+							_loaded_tool_ids = []
+						_gate_ok = True
+						try:
+							_gate_ok = _skill_manager.may_load_skill(sid, tool_ids=_loaded_tool_ids, user_id=uid)
+						except Exception:
+							_gate_ok = True  # fail-open on the gate check; path/tenant guards still apply
+						if _gate_ok and _skill_manager.resolve_skill_dir(sid, uid) is not None:
 							content = _skill_manager._load_skill_content(sid, user_id=uid)
 						if content:
 							from agents.task.agent.skill_manager import MatchedSkill
@@ -350,6 +367,14 @@ class ActionRegistrationMixin:
 								match_reasons=["disk-fallback"],
 								content=content,
 							)
+							# P2-22: register the fallback-loaded skill into _session_skills
+							# so a follow-up read_skill_resource (which gates on membership
+							# there) can serve the resources this load result advertises —
+							# previously it refused "Call load_skill first" for a skill the
+							# model had JUST loaded via the disk fallback.
+							_ss = getattr(self, '_session_skills', None)
+							if isinstance(_ss, dict):
+								_ss[sid] = fallback_skill
 							result = build_load_skill_result(
 								{sid: fallback_skill}, sid,
 								activated=getattr(self, '_activated_skills', None),
@@ -450,9 +475,18 @@ class ActionRegistrationMixin:
 		# tenant-confined; SOUL tier stays operator-only.
 		self._register_self_context_manage_action()
 
+		# Bounded owner-facts doc (USER.md-equivalent), gated OWNER_DOC_WRITABLE
+		# (default false; ON under POLYROB_LOCAL). Same quarantine-then-promote model.
+		self._register_owner_doc_manage_action()
+
 		# W7: optional read-only insights tool (authored-skill reuse %), gated
 		# INSIGHTS_TOOL (default false). Tenant-scoped.
 		self._register_insights_action()
+
+		# T3-01: agent-initiated MCP install from the reviewed catalog, gated
+		# MCP_SELF_INSTALL_ENABLED (default false). Owner-in-the-loop: forged/leaf
+		# turns refused; approver is Deny-by-default unless APPROVAL_PROVIDER is set.
+		self._register_mcp_install_action()
 
 		# Ensure normalize_path method exists for file operations
 		self._ensure_normalize_path_exists()
@@ -688,13 +722,33 @@ class ActionRegistrationMixin:
 				return ActionResult(extracted_content="Memory tool unavailable.", include_in_memory=False)
 			if params.action == "read":
 				notes = await prov.curated_read(user_id)
-				return ActionResult(
-					extracted_content=(f"## Your curated memory\n{notes}" if notes.strip()
-					                    else "Your curated memory is empty."),
-					include_in_memory=True,
-				)
+				if notes.strip():
+					# P1-7: curated notes are agent-authored (possibly under injection
+					# influence) and read back in FUTURE sessions — a durable persistence-
+					# laundering channel. Frame as untrusted DATA like every other recall
+					# surface (session_search/kb_search/recent_activity).
+					from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+					content = f"## Your curated memory\n{wrap_untrusted('memory', notes)}"
+				else:
+					content = "Your curated memory is empty."
+				return ActionResult(extracted_content=content, include_in_memory=True)
+			# T4-02: curated writes shape the agent's own future recall — emit a
+			# first-class memory_write event so they are auditable (fail-open).
+			def _memory_write_ev(op: str, ok: bool, removed: int = 0):
+				try:
+					from agents.task.telemetry.memory_events import emit_memory_event
+					emit_memory_event(
+						"memory_write", user_id=user_id or "",
+						session_id=(getattr(execution_context, 'session_id', None)
+						            or getattr(self, 'session_id', '') or ""),
+						source="memory_tool", scope="curated",
+						content=params.content or "", op=op, ok=ok, removed=removed)
+				except Exception:
+					pass
+
 			if params.action == "add":
 				ok = await prov.curated_add(user_id, params.content or "")
+				_memory_write_ev("add", ok)
 				return ActionResult(
 					extracted_content=("Saved to curated memory." if ok
 					                   else "Could not save (empty, over size/entry cap, or no tenant)."),
@@ -702,6 +756,7 @@ class ActionRegistrationMixin:
 				)
 			# remove
 			n = await prov.curated_remove(user_id, params.content or "")
+			_memory_write_ev("remove", n > 0, removed=n)
 			return ActionResult(
 				extracted_content=f"Removed {n} curated memory entr{'y' if n == 1 else 'ies'}.",
 				include_in_memory=True,
@@ -740,7 +795,8 @@ class ActionRegistrationMixin:
 			"sessions). action='create' writes a new SKILL.md (markdown, starts with a "
 			"# heading); action='patch' edits one by exact-string replace; "
 			"action='delete' archives one; action='promote' activates a pending draft "
-			"(owner-only — a background/sub-agent turn cannot self-promote). New/edited "
+			"(owner-only — only the bound owner principal can promote; neither a "
+			"background/sub-agent turn nor a non-owner turn can self-promote). New/edited "
 			"skills are quarantined for review before they activate. Use to capture a "
 			"reusable procedure you just worked out.",
 			param_model=SkillManageAction,
@@ -750,6 +806,21 @@ class ActionRegistrationMixin:
 			if not user_id:
 				return ActionResult(error="skill authoring requires a user (tenant scope).",
 				                    include_in_memory=True)
+
+			# T4-06: every effected skill mutation records a first-class
+			# self_modification event (durable log → /telemetry + /activity). Fail-open.
+			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
+				try:
+					from agents.task.telemetry.self_events import emit_self_modification
+					emit_self_modification(
+						kind="skill", action=action, item_id=params.skill_id,
+						user_id=user_id or "",
+						session_id=(getattr(execution_context, 'session_id', None)
+						            or getattr(self, 'session_id', '') or ""),
+						pending=pending, created_by=created_by,
+						source="skill_manage", ok=ok)
+				except Exception:
+					pass
 			# A forged (non-user-initiated) turn must never auto-activate a skill. The
 			# RELIABLE signal is the execution context: the background-review reviewer
 			# (and any delegated worker) runs as a sub-agent / leaf role — those fields
@@ -769,9 +840,26 @@ class ActionRegistrationMixin:
 				from agents.task.agent.skill_manager import get_skill_manager
 				sm = get_skill_manager()
 				if params.action == "promote":
-					# Owner-gated: a forged (sub-agent/leaf/background/autonomous) turn
-					# must NEVER self-promote its own pending draft into active content.
-					if is_forged:
+					# Owner-gated (T3-02): promoting a pending draft into ACTIVE content
+					# is the entire security boundary of the writable-skills quarantine —
+					# an active skill auto-activates in future sessions. A forged turn is
+					# blocked, AND (mirroring self_context_manage promote, permissions
+					# audit F4) a non-owner genuine turn is blocked too: otherwise the
+					# agent could `create` (-> .pending under REQUIRE_REVIEW) then
+					# `promote` in the SAME turn, activating a body the owner never saw —
+					# e.g. an injected "author skill X and promote it" from fetched content.
+					# is_owner_local_safe is the surface-independent owner check (a
+					# forgeable network sender's uid is never the local tenant).
+					owner_ok = False
+					try:
+						from agents.task.constants import local_mode_enabled
+						from core.instance import is_owner_local_safe, resolve_owner_principal
+						owner_ok = is_owner_local_safe(
+							user_id, owner_principal=resolve_owner_principal(),
+							local_enabled=local_mode_enabled())
+					except Exception:
+						owner_ok = False
+					if is_forged or not owner_ok:
 						return ActionResult(
 							error="promote is owner-only; your pending draft awaits operator review.",
 							include_in_memory=True)
@@ -780,6 +868,7 @@ class ActionRegistrationMixin:
 					if not res.ok:
 						return ActionResult(error=f"promote failed: {'; '.join(res.errors)}",
 						                    include_in_memory=True)
+					_self_mod_ev("promote", pending=False, created_by="owner")
 					return ActionResult(
 						extracted_content=f"Skill `{params.skill_id}` promoted (active next session).",
 						include_in_memory=True)
@@ -797,6 +886,8 @@ class ActionRegistrationMixin:
 					                     replace_all=params.replace_all, created_by=created_by)
 				else:  # delete
 					ok = sm.delete_skill(params.skill_id, user_id=user_id, created_by=created_by)
+					if ok:
+						_self_mod_ev("delete", created_by=created_by)
 					return ActionResult(
 						extracted_content=(f"Archived skill `{params.skill_id}`." if ok
 						                   else f"No skill `{params.skill_id}` to archive."),
@@ -810,6 +901,7 @@ class ActionRegistrationMixin:
 				return ActionResult(error=f"Skill rejected: {'; '.join(res.errors)}",
 				                    include_in_memory=True)
 			where = "pending review" if res.pending else "active"
+			_self_mod_ev(params.action, pending=bool(res.pending), created_by=created_by)
 			# §7.1: notify the owner when a skill lands in pending (fail-open, gated).
 			if res.pending:
 				try:
@@ -930,6 +1022,21 @@ class ActionRegistrationMixin:
 			if not user_id:
 				return ActionResult(error="self-context requires a user (tenant scope).",
 				                    include_in_memory=True)
+
+			# T4-06: every effected self-context mutation records a first-class
+			# self_modification event (durable log → /telemetry + /activity). Fail-open.
+			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
+				try:
+					from agents.task.telemetry.self_events import emit_self_modification
+					emit_self_modification(
+						kind="self_context", action=action, item_id=user_id or "",
+						user_id=user_id or "",
+						session_id=(getattr(execution_context, 'session_id', None)
+						            or getattr(self, 'session_id', '') or ""),
+						pending=pending, created_by=created_by,
+						source="self_context_manage", ok=ok)
+				except Exception:
+					pass
 			# Resolve the instance home dir (same as construction).
 			_cfg = getattr(getattr(self, 'container', None), 'config', None)
 			data_dir = getattr(_cfg, 'data_dir', 'data') or 'data'
@@ -994,6 +1101,7 @@ class ActionRegistrationMixin:
 				if not res.ok:
 					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
 					                    include_in_memory=True)
+				_self_mod_ev("promote", pending=False, created_by="owner")
 				return ActionResult(extracted_content="Self-context promoted (active next session).",
 				                    include_in_memory=True)
 
@@ -1023,6 +1131,7 @@ class ActionRegistrationMixin:
 			if not res.ok:
 				return ActionResult(error=f"Self-context rejected: {'; '.join(res.errors)}",
 				                    include_in_memory=True)
+			_self_mod_ev(params.action, pending=True, created_by=created_by)
 			# §7.1: proactively tell the owner a proposal is waiting (fail-open,
 			# gated SELF_EVOLUTION_TRANSPARENCY). Closes the "owner never told" gap.
 			try:
@@ -1036,6 +1145,284 @@ class ActionRegistrationMixin:
 				extracted_content="Self-context saved (pending review; applies next session).",
 				include_in_memory=True,
 			)
+
+	def _register_owner_doc_manage_action(self):
+		"""Register the bounded owner-facts tool `owner_doc_manage`, gated
+		OWNER_DOC_WRITABLE (default OFF; ON under POLYROB_LOCAL).
+
+		Lets the agent maintain a small per-(instance,user) ``owner.md`` — durable
+		facts/preferences about the OWNER, injected each session alongside SOUL/SELF.
+		Same safety as self-context (OwnerDocWriter): tenant-confined + anon-blocked,
+		identity-scanned fail-CLOSED, over-cap ERRORS, forged turns forced .pending
+		and barred from active docs, atomic write, archive-never-delete. Writes apply
+		NEXT session. No `from __future__ import annotations` (registry-closure
+		introspection)."""
+		try:
+			from agents.task.constants import AutonomyConfig
+			if not AutonomyConfig.owner_doc_writable():
+				return
+		except Exception:
+			return
+
+		from typing import Literal as _Literal
+
+		class OwnerDocManageAction(BaseModel):
+			action: _Literal["update", "patch", "read", "promote"]
+			content: Optional[str] = None      # update: full owner.md body (≤1600 chars)
+			old_string: Optional[str] = None   # patch: exact text to replace
+			new_string: Optional[str] = None   # patch: replacement
+			replace_all: bool = False
+
+		@self.registry.action(
+			"Maintain durable facts about your OWNER — their preferences, timezone, "
+			"projects, how they like to be helped (a small owner.md, ≤1600 chars). "
+			"action='read' returns it; action='update' replaces it (consolidate, keep "
+			"only durable facts); action='patch' edits by exact-string replace; "
+			"action='promote' activates your pending draft (owner-only). Updates/patches "
+			"are QUARANTINED for review and apply next session.",
+			param_model=OwnerDocManageAction,
+		)
+		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:
+			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
+			if not user_id:
+				return ActionResult(error="owner-facts doc requires a user (tenant scope).",
+				                    include_in_memory=True)
+
+			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
+				try:
+					from agents.task.telemetry.self_events import emit_self_modification
+					emit_self_modification(
+						kind="owner_doc", action=action, item_id=user_id or "",
+						user_id=user_id or "",
+						session_id=(getattr(execution_context, 'session_id', None)
+						            or getattr(self, 'session_id', '') or ""),
+						pending=pending, created_by=created_by,
+						source="owner_doc_manage", ok=ok)
+				except Exception:
+					pass
+
+			_cfg = getattr(getattr(self, 'container', None), 'config', None)
+			data_dir = getattr(_cfg, 'data_dir', 'data') or 'data'
+			try:
+				from core.instance import resolve_instance_id
+				from core.owner_doc_writer import (
+					OwnerDocWriter, PROVENANCE_AGENT, PROVENANCE_BACKGROUND,
+				)
+				writer = OwnerDocWriter(data_dir, instance_id=resolve_instance_id())
+			except Exception as e:
+				self.logger.debug(f"owner_doc_manage init failed: {e}")
+				return ActionResult(error=f"owner_doc_manage unavailable: {e}", include_in_memory=True)
+
+			if params.action == "read":
+				body = writer.read(user_id)
+				if body:
+					try:
+						from modules.memory.task.threat_scan import is_identity_suspicious
+						if is_identity_suspicious(body):
+							body = "[BLOCKED: owner-facts doc failed the identity safety scan]"
+					except Exception:
+						body = "[BLOCKED: identity scanner unavailable]"
+				return ActionResult(
+					extracted_content=(body or "(no owner-facts doc yet)"),
+					include_in_memory=True,
+				)
+
+			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
+
+			if params.action == "promote":
+				try:
+					from agents.task.constants import local_mode_enabled
+					from core.instance import is_owner_local_safe, resolve_owner_principal
+					owner_ok = is_owner_local_safe(
+						user_id, owner_principal=resolve_owner_principal(),
+						local_enabled=local_mode_enabled())
+				except Exception:
+					owner_ok = False
+				if is_forged or not owner_ok:
+					return ActionResult(
+						error="promote is owner-only; your pending owner-facts doc awaits operator review.",
+						include_in_memory=True)
+				res = writer.promote(user_id=user_id)
+				if not res.ok:
+					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
+					                    include_in_memory=True)
+				_self_mod_ev("promote", pending=False, created_by="owner")
+				return ActionResult(extracted_content="Owner-facts doc promoted (active next session).",
+				                    include_in_memory=True)
+
+			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
+			try:
+				if params.action == "update":
+					if not params.content:
+						return ActionResult(error="update requires `content`.", include_in_memory=True)
+					res = writer.propose(params.content, user_id=user_id, created_by=created_by,
+					                     pending=True)
+				else:  # patch
+					if params.old_string is None or params.new_string is None:
+						return ActionResult(error="patch requires `old_string` and `new_string`.",
+						                    include_in_memory=True)
+					res = writer.patch(user_id=user_id, old_string=params.old_string,
+					                   new_string=params.new_string, replace_all=params.replace_all,
+					                   created_by=created_by, pending=True)
+			except Exception as e:
+				self.logger.debug(f"owner_doc_manage failed: {e}")
+				return ActionResult(error=f"owner_doc_manage failed: {e}", include_in_memory=True)
+
+			if not res.ok:
+				return ActionResult(error=f"Owner-facts doc rejected: {'; '.join(res.errors)}",
+				                    include_in_memory=True)
+			_self_mod_ev(params.action, pending=True, created_by=created_by)
+			try:
+				from core import self_evolution as _se
+				await _se.maybe_notify_owner_pending(
+					getattr(self, 'container', None), user_id,
+					home_dir=data_dir, instance_id=resolve_instance_id())
+			except Exception as _e:
+				self.logger.debug(f"self-evolution notify skipped: {_e}")
+			return ActionResult(
+				extracted_content="Owner-facts doc saved (pending review; applies next session).",
+				include_in_memory=True,
+			)
+
+	def _register_mcp_install_action(self):
+		"""Register the agent-callable `mcp_install` action (T3-01/W4-1).
+
+		Wires the previously-orphaned tools/mcp/self_install.py::perform_mcp_install
+		pipeline (gate → allowlist → screen → approve → add_server → persist).
+		Safety posture:
+		- action only registered when MCP_SELF_INSTALL_ENABLED=true (default OFF);
+		- a forged/leaf/autonomous turn can never install (owner in the loop);
+		- the approver is resolved EXPLICITLY: Deny-by-default unless the operator
+		  set APPROVAL_PROVIDER — the enable flag alone never silently auto-approves;
+		- only NAMED, reviewed catalog entries install (builtins + the operator's
+		  MCP_INSTALL_CATALOG_FILE, T3-03) — never an agent-written config;
+		- persisted via the tenant-scoped user_mcp_service row (T3-04), NEVER the
+		  global config/mcp_config.json; stdio entries stay session-only;
+		- direct {server}_{tool} actions re-registered post-install (T3-05) so the
+		  new tools are callable the SAME session;
+		- every attempt writes an event_log audit row.
+		Registered in this module — no `from __future__ import annotations`
+		(registry-closure introspection).
+		"""
+		try:
+			from tools.mcp.self_install import self_install_enabled
+			if not self_install_enabled():
+				return
+		except Exception:
+			return
+
+		from typing import Literal as _Literal
+
+		class MCPInstallAction(BaseModel):
+			action: _Literal["list", "install"] = "install"
+			server_id: Optional[str] = None
+
+		@self.registry.action(
+			"Install a vetted MCP server from the reviewed catalog to gain new tools "
+			"this session. action='list' shows the installable catalog; "
+			"action='install' with server_id installs one (owner approval required). "
+			"Only named catalog entries can be installed — never an arbitrary config.",
+			param_model=MCPInstallAction,
+		)
+		async def mcp_install(params: MCPInstallAction, execution_context=None) -> ActionResult:
+			import os as _os
+
+			from tools.mcp.catalog import MCPCatalog
+			from tools.mcp.self_install import perform_mcp_install
+
+			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None) or ""
+			session_id = (getattr(execution_context, 'session_id', None)
+			              or getattr(self, 'session_id', '') or "")
+			catalog = MCPCatalog()
+
+			def _audit(server_id: str, outcome: str, **extra):
+				try:
+					from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+					if event_log_enabled():
+						get_event_log().record(
+							"mcp_install", user_id=user_id, session_id=session_id,
+							source="mcp_install", server_id=server_id, outcome=outcome,
+							**extra)
+				except Exception:
+					pass
+
+			if params.action == "list":
+				lines = ["Installable MCP servers (reviewed catalog):"]
+				for sid in catalog.ids():
+					e = catalog.get(sid)
+					lines.append(f"- {sid} [{e.trust}] ({e.transport}): {e.description}")
+				return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
+
+			if not params.server_id:
+				return ActionResult(error="install requires `server_id` (see action='list').",
+				                    include_in_memory=True)
+
+			# Owner in the loop: a self-wake/delegated/autonomous turn never installs.
+			if _is_forged_or_autonomous_turn(execution_context, self):
+				_audit(params.server_id, "refused_forged_turn")
+				return ActionResult(
+					extracted_content=(
+						"mcp_install: not permitted for forged/autonomous turns — ask the "
+						"owner to install it (the owner must be in the loop for new tools)."),
+					include_in_memory=True)
+
+			# The MCP subsystem must be loaded this session to host the new server.
+			mcp_info = (self._tools or {}).get("mcp")
+			mcp_tool = getattr(mcp_info, "instance", None) if mcp_info else None
+			server_manager = getattr(mcp_tool, "server_manager", None) if mcp_tool else None
+			if server_manager is None:
+				_audit(params.server_id, "refused_no_mcp_tool")
+				return ActionResult(
+					error="mcp_install: the mcp tool is not loaded this session "
+					      "(tool_ids must include 'mcp').",
+					include_in_memory=True)
+
+			# Explicit approver: Deny-by-default unless the operator opted into a
+			# provider — MCP_SELF_INSTALL_ENABLED alone never silently auto-approves.
+			from tools.controller.approval import (
+				DenyByDefaultApprover, get_approval_provider_or_deny)
+			_prov_name = (_os.getenv("APPROVAL_PROVIDER") or "").strip()
+			provider = (get_approval_provider_or_deny(_prov_name)
+			            if _prov_name else DenyByDefaultApprover())
+
+			ok, msg = await perform_mcp_install(
+				params.server_id,
+				catalog=catalog,
+				server_manager=server_manager,
+				approve=provider.request,
+				persist=None,  # tenant-scoped persist handled below (T3-04)
+				context=execution_context,
+			)
+			if not ok:
+				_audit(params.server_id, "failed", reason=msg)
+				return ActionResult(error=msg, include_in_memory=True)
+
+			# T3-05: surface the new server's tools as direct actions THIS session.
+			try:
+				await self._register_mcp_tools_as_direct_actions(mcp_tool)
+			except Exception as e:
+				self.logger.debug(f"mcp_install: direct-action re-register skipped: {e}")
+
+			# T3-04: persist tenant-scoped (url transports only — user_mcp_service
+			# blocks stdio by design; a stdio entry stays session-only).
+			persisted = False
+			entry = catalog.get(params.server_id)
+			try:
+				ums = (self.container.get_service("user_mcp_service")
+				       if getattr(self, "container", None) else None)
+				if ums is not None and entry is not None and entry.url:
+					res = await ums.add_server(
+						user_id, params.server_id, entry.url,
+						server_type=entry.transport if entry.transport in ("sse", "http") else "sse",
+						display_name=entry.description or params.server_id,
+					)
+					persisted = bool(getattr(res, "success", False))
+			except Exception as e:
+				self.logger.debug(f"mcp_install: tenant persist skipped: {e}")
+
+			_audit(params.server_id, "installed", persisted=persisted)
+			tail = " Persisted for future sessions." if persisted else " Session-only (not persisted)."
+			return ActionResult(extracted_content=msg + tail, include_in_memory=True)
 
 	def _register_insights_action(self):
 		"""Register the read-only `insights` tool (W7), gated INSIGHTS_TOOL.

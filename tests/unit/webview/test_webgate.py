@@ -14,7 +14,7 @@ def webgate(monkeypatch):
         "POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
         "SURFACE_SUPER_ADMIN_USER_IDS", "POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID",
         "POLYROB_POSTURE", "POLYROB_CONSOLE_NAME", "POLYROB_SUPPORT_URL",
-        "POLYROB_SUPPORT_HANDLE", "POLYROB_ACCESS_GATE_LABEL", "POLYROB_BRAND_URL",
+        "POLYROB_SUPPORT_HANDLE", "POLYROB_BRAND_URL",
         "POLYROB_ORG_URL", "POLYROB_TERMS_URL", "POLYROB_PRIVACY_URL", "WEBVIEW_DOMAIN",
     ):
         monkeypatch.delenv(k, raising=False)
@@ -181,7 +181,6 @@ def test_branding_config_defaults(webgate):
     assert b["support_url"] == "https://t.me/tmachinrobot"
     assert b["support_display"] == "t.me/tmachinrobot"
     assert b["support_handle"] == "@TMACHINROBOT"
-    assert b["access_gate_label"] == "DEN holders"
     assert b["brand_url"] == "https://your-polyrob-host.example"
     assert b["brand_display"] == "your-polyrob-host.example"
     assert b["org_url"] == "https://theselfrule.org"
@@ -191,14 +190,12 @@ def test_branding_config_defaults(webgate):
 def test_branding_config_env_overrides(webgate, monkeypatch):
     monkeypatch.setenv("POLYROB_SUPPORT_URL", "https://t.me/myinstance")
     monkeypatch.setenv("POLYROB_SUPPORT_HANDLE", "@MYINSTANCE")
-    monkeypatch.setenv("POLYROB_ACCESS_GATE_LABEL", "beta testers")
     monkeypatch.setenv("POLYROB_BRAND_URL", "https://example.com")
     monkeypatch.setenv("POLYROB_ORG_URL", "https://org.example.com")
     b = webgate.branding_config()
     assert b["support_url"] == "https://t.me/myinstance"
     assert b["support_display"] == "t.me/myinstance"
     assert b["support_handle"] == "@MYINSTANCE"
-    assert b["access_gate_label"] == "beta testers"
     assert b["brand_url"] == "https://example.com"
     assert b["brand_display"] == "example.com"
     assert b["org_url"] == "https://org.example.com"

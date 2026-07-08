@@ -86,6 +86,46 @@ To back up your instance data, copy the `.polyrob/` directory.
 
 ---
 
+## Durability & session resume
+
+Session state is stored on disk, so a session survives a process restart. When
+the API restarts and a new message arrives for an existing session:
+
+- **Session metadata is reloaded from disk** at startup (`SessionManager`
+  rebuilds its index from each session's `metadata.json` under the data home).
+- **The orchestrator is recreated on demand.** The live in-memory orchestrator
+  does not survive a restart, so the first message to an old session recreates it
+  from that session's persisted `request`/`config` and **restores its message
+  history from disk** (`message_history.json`) plus any queued HITL messages
+  (`hitl_state.json`).
+- **A crash-interrupted session resumes.** A session left `status="running"` when
+  the process died is picked up and re-run on the next inbound message (rather
+  than the message being dropped).
+
+This is automatic — no flag. What is **not** durable across a restart today: a
+session that was mid-LLM-call resumes from its last persisted step, not from the
+exact in-flight token position.
+
+### Running with more than one worker
+
+The default is a single Uvicorn worker (`UVICORN_WORKERS=1`), which is safe
+because the live orchestrator object cannot cross processes. To run `workers>1`
+you need **both**:
+
+1. `SESSION_REGISTRY_BACKEND=sqlite` — mirrors session→owner-worker metadata
+   cross-process, so a worker that does not own a session returns an honest
+   **409 + `owner_pid` + `Retry-After`** instead of a false 404.
+2. **Sticky load-balancer routing** — route each session to the worker that owns
+   it (e.g. hash the session id at the proxy).
+
+Without sticky routing, a request can land on a worker that does not hold the
+live session and gets a 409. True cross-worker method forwarding is out of scope;
+for most deployments, one worker plus vertical scaling is simpler than sticky
+multi-worker. See [deployment-postures.md](deployment-postures.md) for the full
+recipe and rationale.
+
+---
+
 ## Updating
 
 ```bash

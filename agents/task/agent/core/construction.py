@@ -600,8 +600,15 @@ class AgentConstructionMixin:
 		# what MessageManager is given (see _reconcile_native_tools).
 		use_native_tools = self._reconcile_native_tools(provider)
 
-		# Cache action descriptions for reuse (single call to controller)
-		self.action_descriptions = self.controller.get_prompt_description()
+		# Cache action descriptions for reuse (single call to controller).
+		# T1-03: in native mode the full parameter schemas already ship to the
+		# provider in the `tools` param, so the prompt gets a compact one-line
+		# index instead of the raw schema dump (2.5-6k redundant tokens/session).
+		# The JSON-fallback path keeps the full dump — there it IS the schema.
+		if use_native_tools:
+			self.action_descriptions = self.controller.get_prompt_action_index()
+		else:
+			self.action_descriptions = self.controller.get_prompt_description()
 
 		# Get MCP server info for dynamic prompt generation (no hardcoded examples)
 		self.mcp_servers_info = self.controller.get_mcp_servers_info()
@@ -689,6 +696,18 @@ class AgentConstructionMixin:
 		except Exception as e:
 			self.logger.debug(f"memory backend registration skipped: {e}")
 
+		# P2-24: recompute the prompt action index AFTER the memory-backend
+		# registration above (registers session_search/recent_activity/memory on the
+		# FIRST session of a process). It was computed earlier, before those tools
+		# existed, so the first session's system prompt omitted them while the per-
+		# step schemas included them. action_descriptions is not consumed until the
+		# MessageManager build below, so recomputing here is safe. Native only.
+		try:
+			if use_native_tools and self.controller is not None:
+				self.action_descriptions = self.controller.get_prompt_action_index()
+		except Exception as _aidx_err:
+			self.logger.debug(f"action-index recompute skipped: {_aidx_err}")
+
 		# Load skills for this session and embed into system message
 		# Skills are per-session prompt extensions that provide context-aware guidance
 		system_message = getattr(self, '_profile_system_message', None)
@@ -733,7 +752,7 @@ class AgentConstructionMixin:
 					# SK-F1: the builtin library is 23 rules and every authored skill
 					# defaults to priority 6 (the old cap-20 cut band) — 50 is comfortably
 					# above both so the catalog actually reflects the full library.
-					_extra = [s for s in skill_manager.get_catalog_skills(user_id=user_id, max_skills=50)
+					_extra = [s for s in skill_manager.get_catalog_skills(user_id=user_id, max_skills=50, tool_ids=tool_ids)
 							  if s.skill_id not in _seen]
 					matched_skills = list(matched_skills) + _extra
 				except Exception as _cat_err:
@@ -767,19 +786,30 @@ class AgentConstructionMixin:
 				try:
 					from agents.task.path import pm
 					import json
+					# P2-25: precompute user-authored skill ids via the REAL method
+					# (_load_user_rules returns (rules, dir); the old hasattr referenced
+					# a nonexistent _load_user_skill_rules, so is_user_skill was always
+					# the startswith/endswith heuristic).
+					_user_skill_ids = set()
+					try:
+						if user_id and hasattr(skill_manager, '_load_user_rules'):
+							_ur, _ = skill_manager._load_user_rules(user_id)
+							_user_skill_ids = set((_ur or {}).keys())
+					except Exception:
+						_user_skill_ids = set()
 					skills_data = [
 						{
 							"id": s.skill_id,
 							"name": s.skill_id.replace("-", " ").title(),
 							"priority": s.priority,
 							"trigger_type": s.trigger_type,
-							"is_user_skill": s.skill_id.startswith("forked-") or s.skill_id.endswith("-custom") or user_id and hasattr(skill_manager, '_load_user_skill_rules') and s.skill_id in (skill_manager._load_user_skill_rules(user_id) if user_id else {})
+							"is_user_skill": s.skill_id.startswith("forked-") or s.skill_id.endswith("-custom") or s.skill_id in _user_skill_ids
 						}
 						for s in matched_skills
 					]
 					skills_path = pm().create_file_path(
 						session_id=self.orchestrator.session_id,
-						subdir="",
+						subdir_name="",
 						filename="skills.json",
 						user_id=user_id
 					)
@@ -822,9 +852,13 @@ class AgentConstructionMixin:
 			task_context_manager=self.task_context_manager,  # Pass hierarchical memory system
 			mcp_servers=self.mcp_servers_info,  # Pass MCP server info for dynamic prompts
 			persona_block=getattr(config, 'persona_block', None),  # S1: chat-mode persona
-			# Session's loaded tools → config-aware prompt gating (e.g. <anysite> only
-			# renders when anysite is actually loaded this session, not on a global flag).
+			# Session's loaded tools → config-aware prompt gating (e.g. <anysite> and
+			# <browser-tools> only render when the tool is actually loaded this
+			# session, not on a global flag).
 			tool_ids=self.controller.list_tools() if self.controller else [],
+			# T1-06: the vision prompt section follows the session's real use_vision
+			# instead of claiming image abilities for use_vision=False sessions.
+			include_vision=bool(self.use_vision),
 		)
 
 		# Agent-level provider label SSOT. The step-loop billing path reads
@@ -856,7 +890,8 @@ class AgentConstructionMixin:
 		# docs => set_self_context_message(None) => inert / byte-identical. Like skills,
 		# it lives in the foundation, NOT the system prompt, so the prompt stays cacheable.
 		try:
-			from core.instance import load_self_context, load_self_doc, resolve_instance_id
+			from core.instance import (load_self_context, load_self_doc,
+										load_owner_doc, resolve_instance_id)
 			_container = getattr(getattr(self, "orchestrator", None), "container", None)
 			_cfg = getattr(_container, "config", None)
 			_data_dir = getattr(_cfg, "data_dir", "data") or "data"
@@ -866,18 +901,29 @@ class AgentConstructionMixin:
 			_soul = load_self_context(_data_dir)
 			_uid = self.orchestrator.user_id if hasattr(self.orchestrator, "user_id") else None
 			_self_doc = load_self_doc(_data_dir, _uid, resolve_instance_id())
-			# WS-A: when the three-tier access model is on, prepend a principal-awareness
-			# line (who the agent serves; correspondent blocks are DATA). Inert/byte-
-			# identical when the flag is off or no owner is bound.
+			# Bounded owner-facts doc (agent-maintained, per-(instance,user)): durable
+			# facts/preferences about the OWNER, injected after SOUL and before the
+			# evolving SELF doc. Load-side [BLOCKED] guard applies; empty => omitted.
+			_owner_doc = load_owner_doc(_data_dir, _uid, resolve_instance_id())
+			if _owner_doc:
+				_owner_doc = "## Owner facts\n\n" + _owner_doc
+			# WS-A + T1-13: the owner clause ("You act on behalf of OWNER X") renders
+			# whenever a DISTINCT owner principal resolves; the correspondent-DATA frame
+			# sentence stays gated on the three-tier access model being on. With no
+			# distinct owner and the model off this is "" — byte-identical legacy.
 			_awareness = ""
 			try:
-				from agents.task.surface_config import SurfaceConfig
-				if SurfaceConfig.correspondent_access_enabled():
-					from core.instance import owner_awareness_line
-					_awareness = owner_awareness_line()
+				from core.instance import owner_awareness_line
+				_corr_on = False
+				try:
+					from agents.task.surface_config import SurfaceConfig
+					_corr_on = SurfaceConfig.correspondent_access_enabled()
+				except Exception:
+					_corr_on = False
+				_awareness = owner_awareness_line(include_correspondent_frame=_corr_on)
 			except Exception:
 				_awareness = ""
-			_combined = "\n\n".join(p for p in (_awareness, _soul, _self_doc) if p)
+			_combined = "\n\n".join(p for p in (_awareness, _soul, _owner_doc, _self_doc) if p)
 			self.message_manager.set_self_context_message(_combined)
 		except Exception as e:
 			self.logger.debug(f"Could not load self-context (non-fatal): {e}")

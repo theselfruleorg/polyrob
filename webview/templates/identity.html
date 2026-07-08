@@ -15,7 +15,7 @@
 
     <div class="webgate-avatar" style="display:flex;justify-content:center;padding:8px 0 16px">
         <canvas id="agent-avatar" width="240" height="240" style="display:none" aria-label="Agent avatar"></canvas>
-        <img id="agent-avatar-fallback" src="/pfp.png" alt="agent avatar" width="240" height="240"
+        <img id="agent-avatar-fallback" alt="agent avatar" width="240" height="240" style="display:none"
              onerror="this.style.display='none'">
     </div>
 
@@ -50,8 +50,24 @@
         }
     }
     load();
+
+    // Avatar probe (P2-12): one quiet /pfp.json check decides whether an
+    // avatar exists — without it, the page fired loud 404s for pfp.png,
+    // pfp.json AND the engine scripts on every avatar-less instance.
+    fetch('/pfp.json').then(function (r) {
+        if (!r.ok) return; // no avatar — leave canvas/img hidden, load nothing
+        var img = document.getElementById('agent-avatar-fallback');
+        img.src = '/pfp.png';
+        img.style.display = '';
+        var engine = document.createElement('script');
+        engine.src = '/avatar/mindprint.js';
+        engine.onload = function () {
+            var live = document.createElement('script');
+            live.src = '/avatar/avatar-live.js';
+            document.body.appendChild(live);
+        };
+        document.body.appendChild(engine);
+    }).catch(function () {});
 })();
 </script>
-<script src="/avatar/mindprint.js"></script>
-<script src="/avatar/avatar-live.js"></script>
 {% endblock %}

@@ -336,19 +336,37 @@ class AnthropicClient(LLMClient):
             from modules.llm.model_registry import (
                 thinking_config_enabled, get_thinking_config, get_model_config,
             )
+            # P1-9: extended thinking + tool calls requires replaying the assistant's
+            # thinking block(s) (with their signature) ahead of tool_use on the NEXT
+            # request; this client discards thinking blocks (see response processing
+            # below) and never replays them, so the follow-up tool_result request 400s
+            # at step 2 of a tool loop. Until block-replay lands, REFUSE to enable
+            # thinking when tools are present (the agent's primary path is a tool loop).
+            # A forced non-auto tool_choice is likewise invalid with thinking — moot
+            # here since we never combine them. One-time WARN so it's visible.
             if 'thinking' not in api_params and thinking_config_enabled():
-                tcfg = get_thinking_config(self.model_type)
-                budget = tcfg.get('budget_tokens')
-                if budget:
-                    # H4: clamp so max_tokens > budget AND max_tokens <= the model cap
-                    # (registry entries set budget == cap, which overran the cap -> 400).
-                    _cfg = get_model_config(self.model_type)
-                    model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
-                    budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value)
+                if tools:
+                    if not getattr(self, '_thinking_tools_warned', False):
+                        self.logger.warning(
+                            "extended thinking is disabled for tool-calling requests in "
+                            "this build (thinking blocks are not yet replayed, which would "
+                            "400 the follow-up tool_result request). Set THINKING_CONFIG_"
+                            "ENABLED=off to silence, or use thinking only on no-tool calls."
+                        )
+                        self._thinking_tools_warned = True
+                else:
+                    tcfg = get_thinking_config(self.model_type)
+                    budget = tcfg.get('budget_tokens')
                     if budget:
-                        api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
-                        api_params['temperature'] = 1  # required by the API when thinking is on
-                        api_params['max_tokens'] = max_tokens_value
+                        # H4: clamp so max_tokens > budget AND max_tokens <= the model cap
+                        # (registry entries set budget == cap, which overran the cap -> 400).
+                        _cfg = get_model_config(self.model_type)
+                        model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
+                        budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value)
+                        if budget:
+                            api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
+                            api_params['temperature'] = 1  # required by the API when thinking is on
+                            api_params['max_tokens'] = max_tokens_value
 
             # FIXED: Use streaming for high max_tokens to avoid Anthropic SDK error
             # "Streaming is required for operations that may take longer than 10 minutes"

@@ -41,3 +41,36 @@ def test_drain_exactly_once_under_pruning():
 def test_null_context_manager_drains_empty():
     from modules.memory.task.null_context_manager import NullTaskContextManager
     assert NullTaskContextManager().drain_promoted_findings("s") == []
+
+
+def test_reflection_summary_drains_cross_session(monkeypatch):
+    """SA-07 (2026-07-06 review): the aux-LLM reflection summary was written to
+    phase_memory.summary and DISCARDED at session end — only raw findings synced
+    cross-session. The synthesized summary now rides the same promoted-findings
+    drain (tagged with its phase) exactly once."""
+    tcm = _tcm()
+    tcm.create_session("sr", task="task")
+    tcm.add_step_memory("sr", 1, {"phase": "p1", "memory": "raw fact"}, "a", finding="raw fact")
+    monkeypatch.setattr(
+        TaskContextManager, "_llm_consolidate",
+        lambda self, findings: "Synthesized: the raw facts add up to X.")
+    # the phase manager keeps step-1 work in 'discovery' (premature-transition guard)
+    tcm._trigger_reflection("sr", "discovery")
+    drained = tcm.drain_promoted_findings("sr")
+    joined = "\n".join(drained)
+    assert "Synthesized: the raw facts add up to X." in joined
+    assert "discovery" in joined  # phase provenance tag
+    # exactly once — a second drain must not re-emit the summary
+    assert "Synthesized" not in "\n".join(tcm.drain_promoted_findings("sr"))
+
+
+def test_concat_fallback_summary_not_synced(monkeypatch):
+    """The concatenation fallback adds no information over the raw findings that
+    already sync — only a genuine LLM synthesis is worth a cross-session row."""
+    tcm = _tcm()
+    tcm.create_session("sc", task="task")
+    tcm.add_step_memory("sc", 1, {"phase": "p1", "memory": "raw fact"}, "a", finding="raw fact")
+    monkeypatch.setattr(TaskContextManager, "_llm_consolidate", lambda self, findings: None)
+    tcm._trigger_reflection("sc", "discovery")
+    drained = tcm.drain_promoted_findings("sc")
+    assert not any("[phase-summary" in f for f in drained)

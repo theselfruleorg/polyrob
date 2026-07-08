@@ -43,7 +43,7 @@ POLYROB is a sophisticated enterprise-grade AI automation platform with advanced
 | Doc | Role | Update policy |
 |-----|------|---------------|
 | **`AGENTS.md`** (this file) | Durable architecture, invariants, landmines, contracts | Keep present-tense ("how it works now"); don't add dated change-stories here |
-| **`docs/CONFIGURATION.md`** | Env-flag SSOT (default + meaning + code anchor) | Update when a flag/default changes; trust the code anchor over prose |
+| **`docs/CONFIGURATION.md`** | Env-flag SSOT (default + meaning + code anchor) | Update when a flag/default changes; trust the code anchor over prose. ⚠️ Adding/renaming a flag row REQUIRES `python scripts/gen_flags_catalog.py` (regenerates `core/flags_catalog.py`; the contract test in `tests/unit/core/test_flags.py` fails otherwise). Runtime view: `polyrob doctor --flags` |
 | **`CHANGELOG.md`** | Dated, point-in-time change history | Append-only |
 | **`README.md`** | Public-facing feature/setup overview | Keep accurate; avoid pinning exact model names |
 | **`docs/guide/`** | User-facing guide (getting-started, cli, api, architecture, configuration, console, skills, self-hosting, deployment-postures, instances, migration) | Keep accurate; this is the published documentation |
@@ -98,7 +98,7 @@ The advanced automation framework with:
 - **Path Management** (`path.py`): Centralized path manager for file operations
 
 **Memory Flow (Native Tools):**
-1. LLM creates response with brain state in text content (`Memory: ...\nNext: ...\nReasoning: ...`)
+1. LLM creates response with brain state as JSON in text content (`{"current_state": {"memory": ..., "next_goal": ..., "reasoning": ..., "evaluation_previous_goal": ...}}`)
 2. Agent preserves original content (NEVER synthesizes)
 3. Brain state extracted from preserved content via `utils_json.extract_brain_state_from_json()` (called from `agent/core/next_action_internal.py`)
 4. Memory flows to next step via `AgentBrain` in `add_state_message()`
@@ -314,6 +314,41 @@ naming dual (both return the same in-memory value).
 - **Coding tool** — `tools/coding/`: editor actions (`str_replace`/`apply_patch`/`run_tests`/grep) over
   the workspace. Gated `CODING_TOOLS_ENABLED` (default OFF; **ON** under `POLYROB_LOCAL` via the safe group),
   and blocked for delegated leaf children (in `DELEGATE_BLOCKED_TOOLS`).
+- **Compute posture** (`AGENT_COMPUTE_POSTURE`, 0–3, default 0, computer-use parity) — a THIRD
+  orthogonal capability axis (beside `POLYROB_LOCAL` trust and `AUTONOMY_POSTURE` loops): how much
+  host/compute capability the agent has. Resolver + the single gate predicate live in
+  `agents/task/constants.py` (`compute_posture()` frozen at import; `compute_posture_allows(ctx, N)`
+  = posture≥N AND owner tenant AND not-leaf/sub-agent AND not a forged self-wake/delegation-result
+  turn). Default (unset) is byte-identical to a plain server. Postures:
+  - **0 `confined`** — today's ephemeral docker sandbox, no persistent shell.
+  - **1 `sandbox-dev`** — an installable, stateful, HTTP-testable sandbox for an entitled session:
+    `run_code`/`run_tests` run in **dev mode** (writable `/install` bind, `python -s` +
+    `PYTHONPATH=/install` instead of the env-ignoring `python -I`, `HOME`/`PIP_TARGET` set) so
+    `pip install --target=/install` imports; `run_code` gains `env`+`packages` (declarative,
+    network-gated). A persistent **`shell`** tool (`tools/shell/` — `shell_run`, cwd/env persist
+    across calls via a pure snapshot-replay model, foreground/background discipline) and a
+    **`process`** job manager (`process_list/poll/log/kill`) run inside the session's ONE persistent
+    dev container (shared via `tools/shell/backend_pool.py` — pids are per-container). The container
+    publishes ports to host loopback (`CODE_EXEC_PUBLISH_PORTS`); a narrow allowlist
+    (`tools/shell/loopback_allow.py`) lets the browser/`web_fetch` reach exactly those ports (never
+    RFC1918/metadata) so the agent HTTP-tests its own server. Dev containers default to `bridge`
+    network. `SHELL_TOOLS_ENABLED` defaults ON at posture≥1.
+  - **2 `self-maintain`** — posture 1 + the **`self_env`** tool (`tools/self_env/`): distinct
+    approvable verbs (never raw bash) — `install_dep` (own venv, pinned), `read_source`/`patch_source`
+    (install-tree-confined, env/config hard-denied), `git_pull` (ff-only, ext:: rejected),
+    `restart_service` (supervised only). Every verb is `compute_posture_allows(ctx,2)`- AND
+    approval-gated (the Controller UNIONs `shell_run`+`self_env_*` into the gated set and defaults the
+    provider to interactive at posture≥2), and emits a `self_modification` audit event.
+    `SELF_ENV_ENABLED` defaults ON at posture≥2.
+  - **3 `host`** — Hermes-parity host access; requires `POLYROB_LOCAL`, single-tenant box only
+    (refused on network surfaces). Not yet wired as a distinct backend.
+  Security: `AGENT_COMPUTE_POSTURE` + the approval flags are frozen at import; the env/config files
+  that hold them are hard-denied to every agent-writable surface (`secret_guard`'s `is_credential_file`
+  now catches `*.env`/`polyrob.env`, plus `is_protected_config_path` for `/etc/polyrob`).
+  `shell`/`process`/`self_env` are in `DELEGATE_BLOCKED_TOOLS` and the correspondent-taint high-impact
+  set (never a leaf/forged/correspondent turn), and never in the default `tool_ids`. Autonomous
+  goal/cron runs are provisioned with the compute toolset (`code_execution`+`shell`+`coding`) only at
+  posture≥1 (`goals/dispatcher.py::default_goal_tools`, `cron/runner.py::default_cron_tools`).
 - **OAuth manager** (Item 4, library-only) — `tools/oauth/`: an `OAuthProvider` ABC + `OAuthManager`
   registry on the EXISTING Fernet store (`tools/mcp/security.py::MCPEncryption`), keyed by
   `(user_id, provider)`; `get_token` returns a cached valid token and auto-refreshes on expiry. One
@@ -478,6 +513,33 @@ mechanisms.**
   Async/background delegation was **already shipped** (UP-12) and `AUX_MODEL_PLANNER/VISION` **already
   removed** (UP-10) — those predecessor-plan items were dropped. Cron suggestions + webhook triggers
   remain deferred (additive).
+- **Wake change-gate:** a cron job with
+  `payload.change_gated` skips the paid model call when the tenant's observable
+  state fingerprint (goal board/events + other cron runs + newest episode,
+  `cron/wake_gate.py`) is unchanged since the last tick — a $0 tick emitted as
+  `cron_run skipped/no_change`, same shape as `wake_agent=false`. Baseline per
+  job in `cron.db::wake_gate`, advanced on run AND skip. Delivery jobs
+  (`payload.deliver`) are never gated; missing tables read neutral; any other
+  fingerprint error fails open (the tick runs). Gated `WAKE_CHANGE_GATE`
+  (default OFF; ON under `AUTONOMY_POSTURE=full`).
+- **Restart-durable autonomy state:**
+  `agents/task/agent/autonomy_state.py` (`autonomy_state.db`, WAL+jitter, in
+  `core/db_manifest.py`), gated `AUTONOMY_STATE_DURABLE` (default ON, fail-open
+  to the legacy volatile registries). Background delegations write dispatched/
+  terminal rows (per-session id counter seeded past persisted history); a
+  cold-start sweep in `core/autonomy_runtime.py` marks rows still `running` as
+  `interrupted` and surfaces them to their session via the self-wake rail —
+  honest recovery, NEVER a silent evaporation or a resume. The self-wake
+  `ReentryBudget` hydrates persisted per-session depth (wall-clock timestamps,
+  7-day staleness purge) so a wake storm can't reset itself by crashing.
+  ⚠️ Tests: `tests/conftest.py` forces `AUTONOMY_STATE_DURABLE=off` per-test so
+  unit runs never write the developer's real data home.
+- **Continuity trio in posture:** `EPISODIC_MEMORY_ENABLED`,
+  `EPISODIC_DIGEST_INJECT` (safe-local OR posture default) and
+  `REFLECTION_ON_SESSION_CLOSE` (posture-only, via
+  `AutonomyConfig.reflection_on_session_close`) are members of
+  `_POSTURE_OWNER_VISIBLE_FLAGS` — the server is no longer continuity-dark when
+  the operator asked for owner-visible autonomy.
 
 **Terminal-native consolidation (2026-06-17, Fusion `opus4.8-4.8`-reviewed; plan
 `docs/plans/2026-06-17-terminal-native-consolidation.md`):** closes the "built but not wired" gap so
@@ -674,6 +736,23 @@ engine; run via `polyrob email`. Admin: `polyrob owner {show,correspondents,appr
 - **Billing Failures**: Tracked in `billing_failures` table for admin reconciliation
 - **Treasury**: Configurable via `X402_PAYMENT_RECIPIENT` env var
 - See `modules/x402/README.md` for full x402 documentation
+- **Agent financial agency (money loop)** — gated
+  `X402_INVOICE_ENABLED` (default OFF): the agent creates *pending*
+  `x402_payment_requests` rows from inside a session (`modules/x402/invoicing.py`
+  — `metadata.kind=agent_invoice` + originating `session_id`; ceiling
+  `X402_INVOICE_MAX_USD`, per-tenant daily cap `X402_INVOICE_DAILY_MAX`) via the
+  `x402_invoice` tool (`x402_request` / `x402_invoices` / `accounting` —
+  `tools/x402/invoice_tool.py`; leaf-delegation-blocked, `x402_request` in the
+  recommended approval set). A settlement watcher on the autonomy-runtime ticker
+  seam (`modules/x402/settlement_watcher.py`) expires stale invoices and, on
+  settlement, re-enters the originating session via `deliver_self_wake`
+  (payment context in wake `metadata`). Settlement is an ATTESTED transition
+  (`polyrob owner settle <id>`), never inferred. The unified read-only ledger
+  (`modules/credits/unified_ledger.py`) joins usage_records costs +
+  `wallet_spend` events + x402 receipts (earned/pending/spent/net, tenant-scoped,
+  every leg fail-open). Agent finances stay separate from platform billing —
+  receivables are deliberately NOT written into the wallet PolicyGate spend
+  audit. First-class events: `payment_requested`/`payment_settled`/`payment_expired`.
 
 ## Common Commands
 
@@ -724,6 +803,13 @@ python -m playwright install --with-deps chromium
 ```
 
 ### Deployment
+
+> **Current Rob #1 prod reality (2026-07-06, verified live):** the Hetzner VPS runs
+> `polyrob.service` (headless agent, tree `/opt/polyrob`, env `/etc/polyrob/polyrob.env`,
+> data `POLYROB_DATA_DIR=/var/lib/polyrob`) + `polyrob-webview.service` (standalone
+> monitoring console, loopback :5050 behind nginx TLS — deploy via
+> `scripts/deploy_webview.sh`). There is NO `polyrob-api.service`/`polyrob-webgate.service`
+> on that box; the commands below describe the classic api+webgate shape.
 
 **PREFERRED: Selective file/directory updates (for most changes)**
 ```bash

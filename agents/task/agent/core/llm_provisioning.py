@@ -148,6 +148,45 @@ class LLMProvisioningMixin:
             self.logger.warning(f"Could not provision aux model for '{task}': {e}")
             return None
 
+    async def _provision_aux_llm_async(self, task: str) -> Optional[Any]:
+        """Async form of _provision_aux_llm (P2-9).
+
+        Awaits the isolated-client build DIRECTLY instead of blocking the loop thread
+        via run_coroutine_sync(timeout=60). Use from async call sites (output validation
+        / background review / goal judge) so a slow client construction yields the loop
+        instead of freezing every concurrent session for up to 60s. Same chain-walk +
+        fail-open semantics as the sync form.
+        """
+        from agents.task.constants import resolve_aux_chain
+
+        chain = resolve_aux_chain(task, getattr(self, "provider_name", None))
+        if not chain:
+            return None
+        try:
+            for idx, candidate in enumerate(chain):
+                model = candidate.get("model")
+                if not model:
+                    continue
+                config = {"model": model}
+                provider = candidate.get("provider")
+                if provider:
+                    config["provider"] = provider
+                aux = await self._create_llm_from_config_async(config, isolated=True)
+                if aux:
+                    self.logger.info(
+                        f"Aux model provisioned (async) for '{task}': {provider or 'auto'}/{model}"
+                    )
+                    return aux
+                suffix = "; trying next candidate" if idx < len(chain) - 1 else ""
+                self.logger.warning(
+                    f"Aux candidate for '{task}'={provider or 'auto'}/{model} could not be built{suffix}"
+                )
+            self.logger.warning(f"All aux candidates for '{task}' failed; using the main model")
+            return None
+        except Exception as e:
+            self.logger.warning(f"Could not provision aux model (async) for '{task}': {e}")
+            return None
+
     def _provision_compaction_llm(self) -> Optional[Any]:
         """A5/A1: cheap aux model used ONLY for `llm_compact_history`. Thin wrapper over
         _provision_aux_llm('compaction') — preserves the COMPACTION_MODEL / COMPACTION_AUTO_AUX

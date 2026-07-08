@@ -1,0 +1,89 @@
+/* Global activity terminal (/activity) — rides the design-system variables. */
+
+.activity-page { display: flex; flex-direction: column; gap: 8px; min-height: 70vh; }
+
+.activity-toolbar {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 6px 10px; border: 1px solid var(--border-color, #223);
+    background: var(--bg-secondary, #0b0e12);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.activity-title { color: var(--accent-color, #4be38a); text-transform: uppercase; letter-spacing: 1px; }
+.activity-conn { color: #e05555; }
+.activity-conn.on { color: #4be38a; }
+.activity-search {
+    flex: 1 1 220px; min-width: 160px; background: var(--bg-primary, #080808);
+    color: var(--text-primary, #d8e0d8); border: 1px solid var(--border-color, #223);
+    padding: 4px 8px; font: inherit;
+}
+.activity-btn {
+    background: transparent; color: var(--text-secondary, #9aa);
+    border: 1px solid var(--border-color, #223); padding: 3px 10px;
+    font: inherit; cursor: pointer; text-decoration: none;
+}
+.activity-btn:hover { color: var(--accent-color, #4be38a); border-color: var(--accent-color, #4be38a); }
+.activity-follow { display: flex; align-items: center; gap: 4px; color: var(--text-secondary, #9aa); }
+.activity-kinds { display: flex; gap: 4px; flex-wrap: wrap; max-width: 46%; }
+.activity-kinds .kind-toggle {
+    border: 1px solid var(--border-color, #223); padding: 1px 6px; cursor: pointer;
+    color: var(--text-secondary, #9aa); font-size: 11px; user-select: none;
+}
+.activity-kinds .kind-toggle.off { opacity: 0.35; text-decoration: line-through; }
+
+.activity-stream {
+    flex: 1; overflow-y: auto; padding: 8px 10px;
+    background: var(--bg-primary, #050607);
+    border: 1px solid var(--border-color, #223);
+    font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.55;
+}
+
+.activity-line { white-space: pre-wrap; word-break: break-word; cursor: pointer; }
+.activity-line:hover { background: rgba(255, 255, 255, 0.04); }
+.activity-line .t { color: #5c6a72; }
+.activity-line .badge {
+    display: inline-block; min-width: 78px; text-align: center; margin: 0 6px;
+    border: 1px solid; border-radius: 2px; padding: 0 4px; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+}
+.activity-line .badge.src-feed { color: #56c8e8; border-color: #56c8e8; }
+.activity-line .badge.src-telemetry { color: #e8b356; border-color: #e8b356; }
+.activity-line .badge.src-goal { color: #4be38a; border-color: #4be38a; }
+.activity-line .badge.src-skill { color: #b18ae8; border-color: #b18ae8; }
+.activity-line .sess { color: #56c8e8; text-decoration: underline dotted; margin-right: 6px; }
+.activity-line .sess:hover { color: #9fe3f5; }
+.activity-line .sum { color: var(--text-primary, #cfd8cf); }
+.activity-line.level-error .sum, .activity-line.level-error .badge { color: #ff6b6b; border-color: #ff6b6b; }
+
+.activity-day-sep {
+    color: #5c6a72; text-align: center; margin: 4px 0; user-select: none;
+    letter-spacing: 1px;
+}
+.activity-hint { color: #e8b356; padding: 2px 0; }
+.activity-kinds .kind-more { color: var(--accent-color, #4be38a); border-style: dashed; }
+
+.activity-payload {
+    margin: 2px 0 8px 24px; padding: 6px 8px; max-height: 320px; overflow: auto;
+    background: #0a0d10; border-left: 2px solid var(--accent-color, #4be38a);
+    color: #9fb3a8; font-size: 11px; white-space: pre;
+}
+
+.activity-session-panel {
+    position: fixed; right: 12px; bottom: 12px; width: min(560px, 92vw);
+    max-height: 60vh; display: flex; flex-direction: column;
+    background: var(--bg-secondary, #0b0e12); border: 1px solid var(--accent-color, #4be38a);
+    box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6); z-index: 60;
+    font-family: 'JetBrains Mono', monospace; font-size: 12px;
+}
+.activity-session-panel.hidden { display: none; }
+.activity-panel-head {
+    display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color, #223); color: var(--accent-color, #4be38a);
+}
+.activity-panel-head #activity-panel-title { flex: 1; overflow: hidden; text-overflow: ellipsis; }
+.activity-panel-body { overflow-y: auto; padding: 8px 10px; }
+.activity-panel-body .meta { color: #9aa; margin-bottom: 6px; }
+.activity-panel-body .meta.status-running { color: #4be38a; }
+.activity-panel-body .meta.status-error, .activity-panel-body .meta.status-failed { color: #ff6b6b; }
+.activity-panel-body .meta.status-completed { color: #56c8e8; }
+.activity-panel-body .feed-line { padding: 1px 0; border-bottom: 1px dashed rgba(255,255,255,0.05); }
+.activity-panel-body .feed-line.level-error { color: #ff6b6b; }

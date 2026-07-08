@@ -7,7 +7,7 @@ Rules for writing durable, safe system skills in this codebase. All shipped `SKI
 ## 1. Shape
 
 - **Start with a single `# Title` heading.** The heading is the skill's human-readable name.
-- **Keep the body under 12,000 characters.** Skills are injected into the system prompt; large bodies waste context and degrade agent focus. Aim for the minimum effective instruction set.
+- **Keep the body focused (hard cap 40,000 chars, warning above 20,000).** Skills are pinned as a `SKILL`-origin foundation message (not the system prompt) — with progressive disclosure ON (default), only a compact `<skill-catalog>` is injected and the full body is pulled on demand via `load_skill`. Large bodies still waste context and degrade focus; aim for the minimum effective instruction set.
 - **Write in the second person, active voice.** "Use `anysite` to query LinkedIn profiles" not "The agent should use anysite to query LinkedIn profiles."
 
 ## 2. Advisory + tool-graceful

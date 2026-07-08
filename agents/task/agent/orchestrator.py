@@ -49,6 +49,11 @@ from agents.task.session.hooks import SessionHooksMixin
 # Default tools that are always loaded for every session
 DEFAULT_TOOLS = ['filesystem', 'task']
 
+# SA-01: strong refs for fire-and-forget async-delegation wake kicks. asyncio only
+# weakly references a bare create_task result, so without this the kick task could be
+# GC'd mid-flight before it re-runs the idle session's loop.
+_ASYNC_DELEGATION_KICKS: set = set()
+
 class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoolMixin, HITLIngressMixin, SessionCleanupMixin, SessionExecutionMixin, SessionHooksMixin):
     """Orchestrates sessions with multiple agents.
     
@@ -294,8 +299,18 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
         # back into this session as a new turn via submit_user_message. Inert until a
         # background delegation is dispatched.
         from agents.task.agent.async_delegation import AsyncDelegationRegistry
+        # Durable write-through to autonomy_state.db (restart-durable record of
+        # dispatched/terminal delegations; recovery sweep in autonomy_state.py).
+        # Fail-open — a missing/broken store keeps the legacy volatile registry.
+        _deleg_store = None
+        try:
+            from agents.task.agent.autonomy_state import get_autonomy_state_store
+            _deleg_store = get_autonomy_state_store()
+        except Exception:
+            _deleg_store = None
         self.async_delegation = AsyncDelegationRegistry(
-            self.sub_agent_manager, deliver=self._deliver_async_delegation
+            self.sub_agent_manager, deliver=self._deliver_async_delegation,
+            store=_deleg_store, session_id=self.session_id, user_id=self.user_id,
         )
 
         # Track initialization status
@@ -699,22 +714,15 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
         queue is full — AsyncDelegationRegistry wraps this call, so a failure here is
         logged, not fatal.
 
-        W1: when SELF_WAKE_ENABLED, this re-entry also respects the shared
-        ReentryBudget depth cap (UP-12 alone had no depth limit → a self-triggering
-        delegation chain could ping-pong). Default OFF → byte-identical to UP-12."""
-        try:
-            from agents.task.constants import AutonomyConfig
-            if AutonomyConfig.self_wake_enabled():
-                from agents.task.agent.core.self_wake import get_reentry_budget
-                budget = get_reentry_budget()
-                if not budget.try_consume(self.session_id):
-                    self.logger.info(
-                        f"🛌 self-wake budget exhausted — dropping async-delegation "
-                        f"re-entry for session {self.session_id}"
-                    )
-                    return
-        except Exception:
-            pass  # fail-open: never block UP-12 delivery on the budget guard
+        P1-5: the RESULT is always delivered (submit_user_message parks it if no loop
+        is active, or hands it to an active loop). Only the WAKE KICK — forging a fresh
+        run to drain an idle session — is bounded by the shared ReentryBudget, because
+        that is the ping-pong risk (a self-triggering delegation chain re-forging runs
+        indefinitely). The budget is applied UNCONDITIONALLY (the kick fires regardless
+        of SELF_WAKE_ENABLED — previously it was only budgeted when self-wake was on, so
+        the server default left it unbounded) and FAIL-CLOSED (a budget-guard error
+        skips the kick rather than opening the storm rail). A genuine owner turn resets
+        the budget."""
         # A3: single-source the forged-turn kind so producer, marker-recompute, and
         # the security gate all reference one constant (see self_wake.FORGED_TURN_KINDS).
         from agents.task.agent.core.self_wake import DELEGATION_RESULT_KIND
@@ -728,6 +736,41 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
                 "status": rec.status,
             },
         )
+        # SA-01: if the parent loop already ended (the agent called done() /
+        # conversational-exit before the background child finished), submit_user_message
+        # only PARKED the result in the HITL queue — nothing would ever drain it, so the
+        # deliverable the user was promised as "a new turn" silently vanished. Kick a
+        # fresh run to drain it. Idempotent: run_session refuses concurrent execution
+        # ("session is already executing"), so this is a cheap no-op when a loop is still
+        # active. The kick is set by TaskAgent.register_orchestrator; absent (bare
+        # orchestrator / tests) => byte-identical to the parked-only UP-12 behavior.
+        kick = getattr(self, "_wake_kick", None)
+        if kick is None:
+            return
+        # P1-5: budget the kick (unconditional + fail-CLOSED). An exhausted budget parks
+        # the result without forging another run; a budget-guard error also skips the
+        # kick (never open the storm rail on an error).
+        try:
+            from agents.task.agent.core.self_wake import get_reentry_budget
+            if not get_reentry_budget().try_consume(self.session_id):
+                self.logger.info(
+                    f"🛌 re-entry budget exhausted — parking async-delegation result "
+                    f"without a wake kick for session {self.session_id}"
+                )
+                return
+        except Exception:
+            self.logger.debug(
+                "re-entry budget guard errored — skipping wake kick (fail-closed)",
+                exc_info=True,
+            )
+            return
+        try:
+            import asyncio as _asyncio
+            t = _asyncio.create_task(kick())
+            _ASYNC_DELEGATION_KICKS.add(t)
+            t.add_done_callback(_ASYNC_DELEGATION_KICKS.discard)
+        except Exception:
+            self.logger.debug("async-delegation wake kick failed (fail-open)", exc_info=True)
 
     def get_telemetry_manager(self):
         return getattr(self, 'telemetry_manager', None)

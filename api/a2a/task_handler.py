@@ -336,8 +336,10 @@ class A2ATaskHandler:
             except Exception as e:
                 self.logger.error(f"Failed to queue initial message: {e}")
 
-        # Start session execution in background (strong ref retained — see _spawn_session_task)
-        _spawn_session_task(agent.run_session(user_id, session_id))
+        # Start session execution in background (strong ref retained — see
+        # _spawn_session_task). Wrapped so the registered webhook (if any) is
+        # notified when the run settles (T4-11).
+        _spawn_session_task(self._run_session_with_push(agent, user_id, session_id))
 
         # Build A2A task response
         return A2ATask(
@@ -494,7 +496,8 @@ class A2ATaskHandler:
         status = session_info.get("status", "").lower()
         if status in ["completed", "suspended", "failed", "error"]:
             self.logger.info(f"Resuming task {task_id} from {status}")
-            _spawn_session_task(agent.run_session(
+            _spawn_session_task(self._run_session_with_push(
+                agent,
                 session_info.get("user_id"),
                 task_id
             ))
@@ -540,6 +543,13 @@ class A2ATaskHandler:
 
         if not success:
             raise ValueError(f"Failed to cancel task {task_id}")
+
+        # T4-11: the cancel outcome is known here — push CANCELED directly to the
+        # registered webhook (fail-open; a webhook failure never breaks the cancel).
+        try:
+            await self.send_push_notification(task_id, A2ATaskState.CANCELED)
+        except Exception as e:
+            self.logger.debug(f"push notify on cancel skipped: {e}")
 
         return await self.get_task(task_id)
 
@@ -685,6 +695,62 @@ class A2ATaskHandler:
             return True
         return False
 
+    def _get_push_config(
+        self,
+        task_id: str,
+        session_info: Optional[Dict[str, Any]] = None
+    ) -> Optional[PushNotificationConfig]:
+        """Resolve the push config: in-memory first, then the session-metadata
+        mirror (restart-survivable — the in-memory dict dies with the process
+        while the metadata written at registration does not). T4-11."""
+        config = self._push_configs.get(task_id)
+        if config:
+            return config
+        try:
+            meta = (session_info or {}).get("metadata") or {}
+            url = meta.get("a2a_push_url")
+            if url:
+                return PushNotificationConfig(url=url, token=meta.get("a2a_push_token"))
+        except Exception:
+            pass
+        return None
+
+    async def _notify_push_state(
+        self,
+        task_id: str,
+        message: Optional[str] = None
+    ) -> bool:
+        """Push the task's CURRENT state to its registered webhook (T4-11).
+
+        Refetches the session so the delivered state reflects the real outcome
+        (completed/failed/suspended). No-op (False) when no webhook is
+        registered. Fail-open — a webhook failure never breaks the task."""
+        try:
+            agent = self._get_task_agent()
+            session_info = await agent.get_session_by_id(task_id) if agent else None
+            if not session_info:
+                return False
+            if self._get_push_config(task_id, session_info) is None:
+                return False
+            state = self._session_status_to_a2a_state(
+                session_info.get("status", "unknown"))
+            return await self.send_push_notification(task_id, state, message)
+        except Exception as e:
+            self.logger.debug(f"push state notify skipped for {task_id}: {e}")
+            return False
+
+    async def _run_session_with_push(self, agent, user_id: str, session_id: str) -> None:
+        """Run the session and, when it settles (normally or by crash), deliver
+        the terminal state to the registered webhook (T4-11 — the agent card
+        advertises pushNotifications, so a registered client must hear back)."""
+        try:
+            await agent.run_session(user_id, session_id)
+        finally:
+            try:
+                await self._notify_push_state(session_id)
+            except Exception as e:  # never mask the run outcome
+                self.logger.debug(f"push notify after run skipped: {e}")
+
     async def send_push_notification(
         self,
         task_id: str,
@@ -702,6 +768,14 @@ class A2ATaskHandler:
             True if notification sent successfully
         """
         config = self._push_configs.get(task_id)
+        if not config:
+            # Restart-survivable fallback: rebuild from the metadata mirror.
+            try:
+                agent = self._get_task_agent()
+                session_info = await agent.get_session_by_id(task_id) if agent else None
+                config = self._get_push_config(task_id, session_info)
+            except Exception:
+                config = None
         if not config:
             return False
 

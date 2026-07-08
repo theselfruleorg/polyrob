@@ -21,7 +21,10 @@
                 SETTINGS
             </div>
             <div class="terminal-controls">
+                {% set _tenant = is_multitenant if is_multitenant is defined else is_multitenant_posture() %}
+                {% if _tenant %}
                 <a href="/profile" class="btn-new-session">PROFILE</a>
+                {% endif %}
             </div>
         </div>
 
@@ -31,8 +34,6 @@
             <nav class="admin-nav">
                 <button class="admin-nav-item active" data-section="mcp">MCP Servers</button>
                 <button class="admin-nav-item" data-section="skills">Skills</button>
-                <button class="admin-nav-item" data-section="preferences">Preferences</button>
-                <button class="admin-nav-item" data-section="api-keys">API Keys</button>
             </nav>
 
             <!-- MCP Servers Section -->
@@ -119,23 +120,6 @@
                 </div>
             </div>
 
-            <!-- Preferences Section (Placeholder) -->
-            <div id="section-preferences" class="settings-section">
-                <div class="coming-soon">
-                    <h3>Preferences</h3>
-                    <p>Configure default session settings, UI preferences, and more.</p>
-                    <p class="text-warning">Coming soon...</p>
-                </div>
-            </div>
-
-            <!-- API Keys Section (Placeholder) -->
-            <div id="section-api-keys" class="settings-section">
-                <div class="coming-soon">
-                    <h3>API Keys</h3>
-                    <p>Manage your personal API keys for LLM providers and external services.</p>
-                    <p class="text-warning">Coming soon...</p>
-                </div>
-            </div>
         </div>
     </div>
 </div>
@@ -546,5 +530,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/js/settings.js?v=20260103-proxy-wallet"></script>
+<script src="/static/js/settings.js?v=20260706-api-probe"></script>
 {% endblock %}

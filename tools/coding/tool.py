@@ -112,7 +112,7 @@ class CodingTool(BaseTool):
 
     # --- code_exec backend resolution (P1-B F7b) ------------------------------
 
-    async def _get_code_exec_backend(self, execution_context=None):
+    async def _get_code_exec_backend(self, execution_context=None, dev_mode: bool = False):
         """Resolve the code_exec backend for ``run_tests``.
 
         PERSISTENT (opt-in, P1-B F7b): when ``CODE_EXEC_DOCKER_PERSISTENT`` is on
@@ -125,6 +125,11 @@ class CodingTool(BaseTool):
         EPHEMERAL (default, byte-for-byte unchanged): flag off, or no
         session_id — one process-wide, session-less backend cached on
         ``self._backend``, exactly as before this change.
+
+        ``dev_mode`` (WS-1): a posture-entitled call caches a DEV persistent
+        backend under ``(sid, True)`` (writable ``/install`` mounted at setup) so
+        a pytest installed by ``run_code(packages=[...])`` is importable here.
+        Non-dev keeps the legacy ``resolve_backend(session_id=sid)`` call shape.
         """
         from tools.code_exec import resolve_backend, code_exec_docker_persistent_enabled
 
@@ -133,15 +138,19 @@ class CodingTool(BaseTool):
             sid = getattr(execution_context, "session_id", None) or None
 
         if sid:
-            cached = self._persistent_backends.get(sid)
+            key = (sid, bool(dev_mode))
+            cached = self._persistent_backends.get(key)
             if cached is not None:
                 return cached
             async with self._persistent_lock:
-                cached = self._persistent_backends.get(sid)  # re-check: lost the race?
+                cached = self._persistent_backends.get(key)  # re-check: lost the race?
                 if cached is None:
-                    cached = resolve_backend(session_id=sid)
+                    if dev_mode:
+                        cached = resolve_backend(session_id=sid, dev_mode=True)
+                    else:
+                        cached = resolve_backend(session_id=sid)
                     await cached.setup()
-                    self._persistent_backends[sid] = cached
+                    self._persistent_backends[key] = cached
                 return cached
 
         if self._backend is None:
@@ -254,9 +263,17 @@ class CodingTool(BaseTool):
 
             root = self._resolve_root(execution_context)
             command = params.command or "pytest -q"
-            backend = await self._get_code_exec_backend(execution_context)
+            # WS-1: an entitled session runs importable-mode (PYTHONPATH=/install)
+            # so packages installed via run_code(packages=[...]) are visible here.
+            try:
+                from agents.task.constants import compute_posture_allows
+                dev_mode = bool(compute_posture_allows(execution_context, 1))
+            except Exception:
+                dev_mode = False
+            backend = await self._get_code_exec_backend(execution_context, dev_mode=dev_mode)
             req = ExecutionRequest(
                 language="bash", code=command, timeout=params.timeout, workdir=root,
+                dev_mode=dev_mode,
             )
             result = await backend.run(req)
             parts = []

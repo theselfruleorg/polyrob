@@ -229,6 +229,7 @@ class Info:
 
 
 from cli.ui.event_registry import RegisteredEvent  # noqa: E402  (no top-level cli deps)
+import cli.ui.event_specs  # noqa: E402,F401  — registers built-in extension events (T4-02)
 
 # Union alias for type annotations
 RenderEvent = (

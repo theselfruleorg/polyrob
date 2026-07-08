@@ -263,8 +263,12 @@ class MemoryWriterMixin:
 				if result_finding:
 					finding = result_finding
 				else:
-					# Last resort: Use next_goal as finding
-					finding = brain_state.get('next_goal', 'Step in progress')
+					# P2-3: do NOT fall back to next_goal. next_goal is an IMPERATIVE
+					# ("Click the search button"), not a finding, and writing it made junk
+					# a permanent recallable cross-session memory row. A step with no real
+					# finding writes no finding — the step is still recorded via add_step;
+					# only the H-MEM finding is skipped.
+					finding = None
 
 			# Get total_steps from step_info if available
 			total_steps = step_info.max_steps if step_info and hasattr(step_info, 'max_steps') else None
@@ -285,8 +289,11 @@ class MemoryWriterMixin:
 			)
 
 			if success:
-				# INFO level so we can see H-MEM working in production
-				self.logger.info(f"💾 H-MEM saved step {step_number}: {finding[:80]}...")
+				# INFO level so we can see H-MEM working in production.
+				# P2-3: finding may be None now (no real finding + no next_goal junk
+				# fallback) — the step is still recorded, but guard the preview.
+				_preview = (finding[:80] + "...") if finding else "(no finding this step)"
+				self.logger.info(f"💾 H-MEM saved step {step_number}: {_preview}")
 				
 				# FIX #4: Track finding in AgentState for loop detection
 				self.state.track_finding()
@@ -329,6 +336,24 @@ class MemoryWriterMixin:
 				content = "\n".join(promoted)
 				await memory_sync_turn(task_str, content,
 				                       session_id=self.session_id, user_id=self.user_id)
+				# T4-02: sync_turn curates the agent's own FUTURE recall — previously a
+				# self-evolution channel with zero audit. Record a first-class
+				# memory_write event (durable log → /telemetry + /activity) and mirror
+				# it to the live session feed. Fail-open.
+				try:
+					from agents.task.telemetry.memory_events import emit_memory_event
+					ev_attrs = emit_memory_event("memory_write", user_id=self.user_id or "",
+					                             session_id=self.session_id, source="sync_turn",
+					                             scope="cross_session", content=content,
+					                             count=len(promoted))
+					if ev_attrs and getattr(self, "orchestrator", None) is not None:
+						try:
+							await self.orchestrator.add_to_feed(
+								getattr(self, "agent_id", "agent"), "memory_write", dict(ev_attrs))
+						except Exception as feed_err:
+							self.logger.debug(f"memory write feed mirror skipped: {feed_err}")
+				except Exception as ev_err:
+					self.logger.debug(f"memory write event skipped: {ev_err}")
 		except Exception as e:
 			self.logger.debug(f"memory_sync_turn skipped (backend hiccup): {e}")
 
@@ -455,6 +480,33 @@ class MemoryWriterMixin:
 			preview += "..."
 		return preview
 
+	def _result_is_untrusted(self, result) -> bool:
+		"""True if this result's content came from an untrusted tool (P1-2).
+
+		Resolves the owning tool via the same registry seam UP-06 uses; also treats a
+		URL in metadata as a fetched-from-web signal (the common offload case). Used to
+		decide whether the OFFLOADED FILE content must be framed as DATA — otherwise a
+		later filesystem read re-enters untrusted content unwrapped (the laundering the
+		pointer's own UP-06 wrap can't cover, since `filesystem` is a trusted tool).
+		"""
+		try:
+			from agents.task.agent.core.untrusted_wrap import is_untrusted_tool
+			name = getattr(result, 'action_name', None) or getattr(result, 'action_type', None)
+			tool = None
+			controller = getattr(self, 'controller', None)
+			if name and controller is not None:
+				try:
+					details = controller.get_action_details(name)
+					tool = getattr(details, 'tool', None) if details is not None else None
+				except Exception:
+					tool = None
+			if is_untrusted_tool(name, tool):
+				return True
+			md = getattr(result, 'metadata', None)
+			return bool(isinstance(md, dict) and 'url' in md)
+		except Exception:
+			return False  # fail-open: never block the offload on the provenance check
+
 	def _handle_large_action_results(self, results: List[ActionResult]) -> None:
 		"""Handle large content in ActionResults to prevent memory issues."""
 		from agents.task.robust_parse_config import RobustParseConfig
@@ -518,14 +570,27 @@ class MemoryWriterMixin:
 						user_id=self.user_id
 					)
 					
+					# P1-2: frame the FILE content as untrusted DATA when it came from an
+					# untrusted tool, so a later `read_file` (a trusted tool, hence not
+					# UP-06-wrapped on read) surfaces it as DATA, not instructions. The
+					# pointer/preview is still UP-06-wrapped downstream; this closes the
+					# file-offload laundering path. Trusted large results are unchanged.
+					content_to_write = result.extracted_content
+					if self._result_is_untrusted(result):
+						try:
+							from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+							content_to_write = wrap_untrusted(str(action_type), result.extracted_content)
+						except Exception:
+							content_to_write = result.extracted_content  # fail-open
+
 					# FIXED: Write content with proper encoding and error handling
 					try:
 						with open(content_file, 'w', encoding='utf-8', errors='replace') as f:
-							f.write(result.extracted_content)
+							f.write(content_to_write)
 					except UnicodeEncodeError:
 						# Fallback: write as bytes if UTF-8 fails
 						with open(content_file, 'wb') as f:
-							f.write(result.extracted_content.encode('utf-8', errors='replace'))
+							f.write(content_to_write.encode('utf-8', errors='replace'))
 					
 					# FIXED: Create enhanced file reference with explicit agent instructions
 					# Build metadata section

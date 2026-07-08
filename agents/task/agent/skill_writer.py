@@ -278,8 +278,29 @@ class SkillWriterMixin:
         if not pending_file.exists():
             return SkillWriteResult(skill_id, False, errors=["no pending skill with that id"])
         content = pending_file.read_text(encoding="utf-8")
+        # P2-20: read the ORIGINAL author before we re-create. Promote must ACTIVATE the
+        # skill (that's the review gate), so we still create it as PROVENANCE_USER —
+        # passing the original author (e.g. background_review) would make create_skill's
+        # quarantine logic re-quarantine it and promote would never activate. Instead we
+        # re-record the original authorship in provenance AFTER activation, so a promoted
+        # skill stays ACTIVE yet remains in the curator's authored scope AND the
+        # authored-reuse metric (where a successfully promoted agent skill should count).
+        _orig_author = None
+        try:
+            from modules.skills.skill_usage import get_skill_usage_store
+            _prior = get_skill_usage_store().get_provenance(skill_id, uid)
+            if _prior and _prior.get("created_by"):
+                _orig_author = _prior["created_by"]
+        except Exception:
+            _orig_author = None
         res = self.create_skill(skill_id, content, user_id=uid, description=description,
                                 created_by=PROVENANCE_USER, pending=False)
+        if res.ok and not res.pending and _orig_author and _orig_author != PROVENANCE_USER:
+            try:
+                from modules.skills.skill_usage import get_skill_usage_store
+                get_skill_usage_store().record_provenance(skill_id, uid, _orig_author)
+            except Exception:
+                pass
         if res.ok and not res.pending:
             try:
                 os.remove(str(pending_file))

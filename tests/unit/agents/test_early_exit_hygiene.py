@@ -164,10 +164,13 @@ async def test_placeholder_brain_never_lands_in_hmem():
     assert w.task_context_manager.add_step_memory.call_count == 1
     _, kwargs = w.task_context_manager.add_step_memory.call_args
     finding_text = kwargs.get("finding")
-    assert finding_text is not None
-    assert "Synthesis pending" not in finding_text
-    # Fell through to the next_goal fallback (results empty, memory rejected).
-    assert finding_text == "keep going"
+    # P2-3: the placeholder memory is rejected AND the old next_goal fallback was
+    # dropped (next_goal is an imperative, not a finding), so with empty results the
+    # step writes NO finding (finding=None) rather than the "keep going" junk. The step
+    # is still recorded via add_step; only the H-MEM finding is skipped.
+    assert finding_text is None
+    if finding_text is not None:
+        assert "Synthesis pending" not in finding_text
 
 
 @pytest.mark.asyncio

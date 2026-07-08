@@ -77,3 +77,16 @@ def test_system_message_first_in_both_modes(monkeypatch):
         msgs = mm.get_messages_for_llm()
         assert isinstance(msgs[0], SystemMessage)
         assert _index_of(msgs, "HMEM_MARKER") != -1  # H-MEM still present
+
+
+def test_tail_placement_defaults_on_everywhere(monkeypatch):
+    """T1-09 (2026-07-06 review): default flipped ON after the local soak — in the
+    foundation prefix the per-step H-MEM block broke the server prompt cache every
+    step. Explicit HMEM_TAIL_PLACEMENT=false still restores legacy placement."""
+    from agents.task import constants as C
+
+    monkeypatch.delenv("HMEM_TAIL_PLACEMENT", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)  # server posture
+    assert C.hmem_tail_placement() is True
+    monkeypatch.setenv("HMEM_TAIL_PLACEMENT", "false")
+    assert C.hmem_tail_placement() is False

@@ -28,7 +28,8 @@ from agents.task.constants import (
     LoopDetectionConfig,
     DEFAULT_USER_ID,
     MemoryConfig,
-    MAX_MCP_PER_STEP
+    MAX_MCP_PER_STEP,
+    format_nag_exempt,
 )
 
 # Import POLYROB exceptions
@@ -284,8 +285,12 @@ Use double quotes only. Max {self.max_actions_per_step} actions."""
 				self.logger.debug("Pushed early format hint for JSON response mode")
 			else:
 				self.logger.warning(f"Format hint too large, would exceed safe token limit")
-		elif will_use_native_tools and RobustParseConfig.INJECT_FORMAT_HINT_EARLY:
-			# For native tools, remind about JSON brain state format
+		elif will_use_native_tools and RobustParseConfig.INJECT_FORMAT_HINT_EARLY \
+				and not format_nag_exempt(self.model_name, provider):
+			# For native tools, remind about JSON brain state format — but only for
+			# families that need it (T1-10): the prompt is authored for Claude and the
+			# family-note design deliberately gives it none, so the per-step nag was
+			# one wasted uncached message per step there.
 			native_tools_hint = HumanMessage(
 				content="""REMINDER: Your text content must be valid JSON with brain state fields:
 {"memory": "...", "evaluation_previous_goal": "...", "next_goal": "...", "reasoning": "..."}
@@ -659,6 +664,7 @@ Then emit your function calls."""
 									
 									# Initialize action_list to prevent undefined variable errors
 									action_list = []
+									action_tool_call_ids = []  # P0-2: parallel to action_list; re-stamped onto parsed.action
 
 									if actions:
 										# COMPLEX SITUATION: We need BOTH behaviors!
@@ -677,7 +683,19 @@ Then emit your function calls."""
 										# Pydantic rejects subclasses in strict mode!
 										#
 										# REAL FIX: Convert to dicts for AgentOutput, validator will handle them
+										#
+										# P0-2: model_dump(exclude_unset=True) DROPS the `_tool_call_id`
+										# PrivateAttr that tool_calls_to_actions stamped onto each instance
+										# (PrivateAttrs are not serialized). AgentOutput then re-validates the
+										# dicts into FRESH instances with _tool_call_id=None — so downstream
+										# execution.py always read None, `_pair_results_to_calls.have_ids` was
+										# ALWAYS False, and result↔call pairing silently fell to POSITION every
+										# step (misattributing results whenever the executor skips a failed-
+										# validation action, MCP throttling reorders, or is_done breaks mid-list).
+										# Capture the ids here and re-stamp them onto parsed.action below.
+										action_tool_call_ids = []
 										for action in actions:
+											action_tool_call_ids.append(getattr(action, '_tool_call_id', None))
 											if hasattr(action, 'model_dump'):
 												# Convert to dict - validator accepts both dicts and instances
 												action_list.append(action.model_dump(exclude_unset=True))
@@ -779,6 +797,17 @@ Then emit your function calls."""
 										current_state=brain_state,
 										action=action_list
 									)
+
+									# P0-2: re-stamp the tool_call_id PrivateAttr that AgentOutput's
+									# re-validation dropped, so identity pairing (result_processing.
+									# _pair_results_to_calls) works instead of falling to position.
+									# parsed.action is built 1:1 in-order from action_list, so zip aligns.
+									try:
+										for _act, _tcid in zip(parsed.action, action_tool_call_ids):
+											if _tcid is not None:
+												_act._tool_call_id = _tcid
+									except Exception as _restamp_err:
+										self.logger.debug(f"tool_call_id re-stamp skipped: {_restamp_err}")
 
 								except asyncio.TimeoutError:
 									self.logger.error(f"LLM call timed out after {timeout_seconds} seconds with {len(tools)} tools", exc_info=True)
@@ -1103,8 +1132,17 @@ Then emit your function calls."""
 				if parsed is None:
 					# FIX 8: Return safe default instead of raising error after MAX_PARSE_RETRIES
 					self.logger.error('Could not parse response after all retry attempts, returning safe default', exc_info=True)
+					# P0-5: AgentBrain requires evaluation_previous_goal/memory/next_goal —
+					# a bare {"error": ...} dict raises ValidationError, so this "safe
+					# default" actually re-raised and was reclassified as a parse error
+					# (dead graceful-degradation path). Build a VALID brain instead.
 					parsed = self.AgentOutput(
-						current_state={"error": "parse_failed", "message": "Failed to parse LLM response after retries"},
+						current_state=AgentBrain(
+							evaluation_previous_goal="Failed",
+							memory="Previous LLM response could not be parsed after retries.",
+							next_goal="Retry with a valid response.",
+							reasoning="parse_failed: Failed to parse LLM response after retries",
+						),
 						action=[]
 					)
 					# Add parse failure telemetry
@@ -1121,8 +1159,14 @@ Then emit your function calls."""
 				if not isinstance(parsed, self.AgentOutput):
 					# FIX 8: Convert to safe default instead of raising
 					self.logger.error(f'Parsed response is not an AgentOutput object, got: {type(parsed)}', exc_info=True)
+					# P0-5: same fix — a valid AgentBrain, not a bare error dict.
 					parsed = self.AgentOutput(
-						current_state={"error": "invalid_type", "message": f"Expected AgentOutput, got {type(parsed).__name__}"},
+						current_state=AgentBrain(
+							evaluation_previous_goal="Failed",
+							memory=f"Parsed response had the wrong type ({type(parsed).__name__}); expected AgentOutput.",
+							next_goal="Retry with a valid response.",
+							reasoning="invalid_type: parser returned a non-AgentOutput object",
+						),
 						action=[]
 					)
 

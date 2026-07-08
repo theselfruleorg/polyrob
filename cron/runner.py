@@ -20,6 +20,18 @@ from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 
+def default_cron_tools() -> list:
+    """Posture-aware default cron toolset (WS-8). Posture 0: ['filesystem','task']
+    (byte-identical). Posture>=1: + the compute tools so a scheduled build/self-env
+    run isn't tool-starved. Mirrors ``goals.dispatcher.default_goal_tools``; resolved
+    at call time so posture 0 is unchanged."""
+    try:
+        from agents.task.goals.dispatcher import default_goal_tools
+        return default_goal_tools()
+    except Exception:
+        return ["filesystem", "task"]
+
+
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     """Emit a cron_run event to the durable event log (fail-open). Makes cron
     lifecycle queryable in the uniform autonomy/governance stream, not just the
@@ -80,7 +92,7 @@ class CronTicker:
         ).run_forever(stop_event=stop_event)
 
 
-def make_agent_runner(task_agent: Any) -> Callable[[CronJob], Awaitable[bool]]:
+def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[CronJob], Awaitable[bool]]:
     """Build a runner that executes a CronJob as an isolated agent session.
 
     LIVE PATH — reuses ``task_agent.create_session``. A cron run gets cross-session
@@ -90,13 +102,59 @@ def make_agent_runner(task_agent: Any) -> Callable[[CronJob], Awaitable[bool]]:
     ``job.max_duration_seconds`` as a hard cap.
     """
     async def runner(job: CronJob) -> bool:
-        session_id = None
-        _t0 = time.time()
         payload = dict(job.payload or {})
+        # Owner daily digest: a deterministic $0 tick composed from evidence and
+        # pushed via the delivery rail — never invokes the model. Routed here
+        # BEFORE the wake/change gates. Fail-open (a compose/deliver error is a
+        # $0 no-op, not a job failure) so a persistent hiccup can't spin.
+        if payload.get("digest"):
+            try:
+                from agents.task.constants import AutonomyConfig
+                if not AutonomyConfig.owner_digest_enabled():
+                    _cron_ev(job, "skipped", "digest_disabled")
+                    return True
+                from cron.digest import run_digest
+                ok = await run_digest(task_agent, job)
+                _cron_ev(job, "done" if ok else "skipped", "digest")
+            except Exception:
+                logger.warning("cron job %s: digest tick failed", job.id, exc_info=True)
+            return True
         if not payload.get("wake_agent", True):
             logger.info("cron job %s: wake_agent=False — $0 tick, agent not invoked", job.id)
             _cron_ev(job, "skipped", "wake_agent_false")
             return True
+        # Wake change-gate: a change-gated review tick whose state fingerprint is
+        # unchanged since the last SUCCESSFUL run is a $0 tick — same shape as
+        # wake_agent=False. Fail-open (any gate error runs the tick); delivery
+        # jobs are never gated. The outcome-tagged baseline is recorded AFTER the
+        # run (finally below): a failed run never establishes a skippable
+        # baseline, so a persistently-failing job always retries.
+        _gate_active = False
+        try:
+            from cron.wake_gate import gate_applies, should_skip_wake
+            _gate_active = gate_applies(job)
+            if _gate_active and should_skip_wake(job, data_dir=data_dir):
+                logger.info("cron job %s: no observable change — $0 tick, agent not invoked", job.id)
+                _cron_ev(job, "skipped", "no_change")
+                return True
+        except Exception:
+            logger.warning("cron job %s: wake gate error — running tick", job.id, exc_info=True)
+        ok = False
+        try:
+            ok = await _execute(job, payload)
+            return ok
+        finally:
+            if _gate_active:
+                try:
+                    from cron.wake_gate import record_wake_outcome
+                    record_wake_outcome(job, data_dir=data_dir, ok=bool(ok))
+                except Exception:
+                    logger.warning("cron job %s: wake gate outcome record failed", job.id,
+                                   exc_info=True)
+
+    async def _execute(job: CronJob, payload: dict) -> bool:
+        session_id = None
+        _t0 = time.time()
         _cron_ev(job, "started")
         from core.runtime_config import resolve_runtime_config
         provider = payload.get("provider") or resolve_runtime_config(None, None)[0]
@@ -114,7 +172,7 @@ def make_agent_runner(task_agent: Any) -> Callable[[CronJob], Awaitable[bool]]:
             "task": job.task,
             "provider": provider,
             "model": model,
-            "tools": payload.get("tools", ["filesystem", "task"]),
+            "tools": payload.get("tools", default_cron_tools()),
             "max_steps": payload.get("max_steps", 20),
             "temperature": 0.0,
             "cron": True,
@@ -232,7 +290,7 @@ def build_cron_ticker(
     from cron.scheduler import CronScheduler
 
     store = CronJobStore(os.path.join(data_dir, "cron.db"))
-    runner = make_agent_runner(task_agent)
+    runner = make_agent_runner(task_agent, data_dir=data_dir)
     scheduler = CronScheduler(
         store, runner, lock_path=os.path.join(data_dir, "cron.tick.lock")
     )

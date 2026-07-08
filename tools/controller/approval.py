@@ -39,6 +39,68 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_APPROVAL_TIMEOUT_SEC = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
 
+
+# WS-7: the approval-gating flags are FROZEN at import — snapshotted once so a
+# prompt-injected mid-process env mutation can never widen/narrow the gated set or
+# swap the provider mid-session. Operators set these in real process env at startup.
+# (Mirrors the AGENT_COMPUTE_POSTURE freeze in agents/task/constants.py.)
+def _snapshot_required_tools() -> frozenset:
+    raw = (os.getenv("APPROVAL_REQUIRED_TOOLS", "") or "").strip()
+    return frozenset(t.strip() for t in raw.split(",") if t.strip())
+
+
+_FROZEN_APPROVAL_REQUIRED_TOOLS = _snapshot_required_tools()
+_FROZEN_APPROVAL_PROVIDER = (os.getenv("APPROVAL_PROVIDER", "auto") or "auto").strip() or "auto"
+
+
+def frozen_approval_required_tools() -> frozenset:
+    """Import-time snapshot of ``APPROVAL_REQUIRED_TOOLS`` (WS-7 — mutation-proof)."""
+    return _FROZEN_APPROVAL_REQUIRED_TOOLS
+
+
+def frozen_approval_provider() -> str:
+    """Import-time snapshot of ``APPROVAL_PROVIDER`` (WS-7 — mutation-proof)."""
+    return _FROZEN_APPROVAL_PROVIDER
+
+
+def resolve_gated_actions() -> tuple:
+    """WS-6: the effective ``(gated_action_names: set, provider_name: str)`` for a
+    Controller, given the frozen operator config and the (frozen) compute posture.
+
+    Posture < 2: exactly the operator's ``APPROVAL_REQUIRED_TOOLS`` + their provider
+    (byte-identical to pre-WS-6). Posture >= 2 (self-maintenance tier): UNION the
+    recommended coding/self-evolution set (:data:`DEFAULT_APPROVAL_REQUIRED_TOOLS`)
+    with the compute verbs (:data:`POSTURE2_APPROVAL_REQUIRED_TOOLS` — shell_run +
+    self_env_*), and default the provider to ``interactive_cli`` when the operator
+    left it ``auto``/empty (an explicit provider still wins; the interactive one
+    fail-closes to deny when it can't prompt, e.g. headless). Pure — resolution only,
+    no hook registration.
+    """
+    required = set(frozen_approval_required_tools())
+    provider = frozen_approval_provider()
+    try:
+        from agents.task.constants import compute_posture
+        if compute_posture() >= 2:
+            required |= set(DEFAULT_APPROVAL_REQUIRED_TOOLS)
+            required |= set(POSTURE2_APPROVAL_REQUIRED_TOOLS)
+            if provider in ("", "auto"):
+                provider = "interactive_cli"
+    except Exception as e:
+        # Don't silently drop the posture-2 approval tightening — log it. (The
+        # per-tool compute_posture_allows(ctx,2) guard is the primary control; this
+        # union is defense-in-depth, so we still fail-open on the union rather than
+        # break Controller construction.)
+        logger.error("resolve_gated_actions: posture-2 union failed (%s); "
+                     "posture-2 approval tightening NOT applied", e)
+    return required, provider
+
+
+def _refreeze_approval_flags_for_tests() -> None:
+    """TEST-ONLY: re-snapshot from the current env. Production never calls this."""
+    global _FROZEN_APPROVAL_REQUIRED_TOOLS, _FROZEN_APPROVAL_PROVIDER
+    _FROZEN_APPROVAL_REQUIRED_TOOLS = _snapshot_required_tools()
+    _FROZEN_APPROVAL_PROVIDER = (os.getenv("APPROVAL_PROVIDER", "auto") or "auto").strip() or "auto"
+
 # The RECOMMENDED set of mutating coding / self-evolution ops to gate behind approval.
 # ⚠️ NOT auto-applied. `Controller.__init__` reads `APPROVAL_REQUIRED_TOOLS` (default
 # empty → the hook is never registered) and defaults `APPROVAL_PROVIDER` to `auto`
@@ -51,6 +113,19 @@ DEFAULT_APPROVAL_TIMEOUT_SEC = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
 DEFAULT_APPROVAL_REQUIRED_TOOLS = (
     "git_push", "github_open_pr", "github_merge_pr",
     "mcp_install", "tool_manage", "self_modify",
+    "x402_request",  # outward-facing invoicing — recommend owner approval
+)
+
+# WS-6: the compute-tier action names auto-gated at AGENT_COMPUTE_POSTURE >= 2 (the
+# self-maintenance tier). The persistent shell and every self_env verb require an
+# owner approval decision before they run. UNIONed with DEFAULT_APPROVAL_REQUIRED_TOOLS
+# in Controller.__init__ when posture >= 2.
+POSTURE2_APPROVAL_REQUIRED_TOOLS = (
+    "shell_run",
+    "self_env_install_dep",
+    "self_env_patch_source",
+    "self_env_restart_service",
+    "self_env_git_pull",
 )
 
 

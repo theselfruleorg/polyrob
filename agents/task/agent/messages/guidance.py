@@ -20,6 +20,22 @@ _FORGED_KIND_ORIGINS = {
 }
 
 
+def _elide_middle(text: str, keep_head: int, keep_tail: int) -> str:
+	"""Head+tail middle-elision (P0-1).
+
+	Keeps the first ``keep_head`` and last ``keep_tail`` characters with an explicit
+	marker between them. Unlike a plain ``text[:n]`` cut this preserves BOTH the
+	opening context and the trailing content — critical for pre-wrapped forged bodies
+	whose closing ``</untrusted_tool_result>`` / ``</delegation-result>`` delimiter
+	lives at the end (a head-only cut would leave the tag open).
+	"""
+	limit = keep_head + keep_tail
+	if not isinstance(text, str) or len(text) <= limit:
+		return text
+	elided = len(text) - limit
+	return f"{text[:keep_head]}\n[... {elided} chars elided ...]\n{text[-keep_tail:]}"
+
+
 class GuidanceMixin:
 	"""User/continuation guidance injection for MessageManager."""
 
@@ -41,13 +57,38 @@ class GuidanceMixin:
 		from agents.task.robust_parse_config import RobustParseConfig
 		config = RobustParseConfig()
 
-		# Extract message texts
+		# Extract message texts. P0-1: forged (self-wake / delegation-result) bodies are
+		# pre-wrapped and bounded at their source — truncating them here would strip the
+		# closing delimiter and leave an open <untrusted_tool_result> tag, and the old
+		# 500-char cut delivered ZERO payload (preamble+boilerplate alone exceed 500).
+		# Genuine messages get head+tail elision so a long paste keeps both its ask and
+		# its trailing detail instead of a hard [:500] cut.
+		drained = messages[:config.MAX_USER_MESSAGES_PER_STEP]
 		message_texts = []
-		for msg in messages[:config.MAX_USER_MESSAGES_PER_STEP]:
+		for msg in drained:
 			text = msg.get('text', '')
-			if len(text) > config.USER_MESSAGE_TRUNCATE_LENGTH:
-				text = text[:config.USER_MESSAGE_TRUNCATE_LENGTH] + "..."
+			kind = msg.get('kind', 'comment')
+			if kind in _FORGED_KIND_ORIGINS:
+				# Bounded, delimiter-preserving ceiling only (no per-message cut).
+				text = _elide_middle(
+					text,
+					keep_head=config.FORGED_MESSAGE_MAX_CHARS - config.FORGED_MESSAGE_KEEP_TAIL,
+					keep_tail=config.FORGED_MESSAGE_KEEP_TAIL,
+				)
+			elif len(text) > config.USER_MESSAGE_TRUNCATE_LENGTH:
+				text = _elide_middle(
+					text,
+					keep_head=config.USER_MESSAGE_TRUNCATE_LENGTH - config.USER_MESSAGE_KEEP_TAIL,
+					keep_tail=config.USER_MESSAGE_KEEP_TAIL,
+				)
 			message_texts.append(text)
+
+		# P0-1: never silently drop queued messages beyond the per-step cap — the HITL
+		# drain already caps at MAX_USER_MESSAGES_PER_STEP and leaves the rest queued,
+		# but make it visible if a producer ever hands us more.
+		_overflow = len(messages) - len(drained)
+		if _overflow > 0:
+			message_texts.append(f"[... {_overflow} more message(s) queued for the next step ...]")
 
 		# Get session context (defaults if not provided)
 		ctx = session_context or {}
@@ -144,10 +185,19 @@ INSTRUCTIONS:
 Incorporate this guidance while maintaining brain state format (JSON + tool calls).
 """.strip()
 
-		# Apply overall token limit
-		max_chars = config.MAX_USER_GUIDANCE_TOKENS * 3  # ~3 chars per token
+		# Apply overall token limit. P0-1: for a forged frame the closing
+		# </untrusted_tool_result> delimiter sits near the END (before the trusted
+		# footer), so a head-only `frame[:max_chars]` cut would strip it and leave the
+		# tag open. Use head+tail elision and, for forged frames, a budget large enough
+		# that a source-bounded wake payload passes intact.
+		if guidance_origin != MessageOrigin.USER:
+			max_chars = config.FORGED_MESSAGE_MAX_CHARS + 4000  # payload ceiling + frame overhead
+			keep_tail = config.FORGED_MESSAGE_KEEP_TAIL
+		else:
+			max_chars = config.MAX_USER_GUIDANCE_TOKENS * 3  # ~3 chars per token
+			keep_tail = config.USER_MESSAGE_KEEP_TAIL
 		if len(frame) > max_chars:
-			frame = frame[:max_chars] + "\n[Truncated]"
+			frame = _elide_middle(frame, keep_head=max_chars - keep_tail, keep_tail=keep_tail)
 
 		# NEW: Check for image attachments and create multimodal message if present
 		# FIXED: Collect images from ALL messages, not just first

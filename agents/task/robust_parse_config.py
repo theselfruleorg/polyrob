@@ -44,9 +44,21 @@ class RobustParseConfig:
     PAGE_CONTENT_TRUNCATE_LENGTH: int = int(os.getenv("PAGE_CONTENT_TRUNCATE_LENGTH", "10000000"))  # DISABLED - no truncation
     
     # CONTINUOUS CHAT: User guidance configuration
-    MAX_USER_GUIDANCE_TOKENS: int = int(os.getenv("MAX_USER_GUIDANCE_TOKENS", "1000"))
+    # P0-1: the old 500-char per-message cut mangled pasted owner instructions AND
+    # destroyed forged-turn (self-wake / delegation-result) payloads — those are
+    # pre-wrapped (~700 chars of preamble+delimiters before any payload), so [:500]
+    # delivered ZERO payload and left an UNCLOSED <untrusted_tool_result> tag in
+    # history. Genuine messages now use head+tail middle-elision (keep the ask AND
+    # its closing detail) at a defensible default; forged messages skip the per-
+    # message cut entirely (they are bounded at their source, e.g. format_self_wake).
+    MAX_USER_GUIDANCE_TOKENS: int = int(os.getenv("MAX_USER_GUIDANCE_TOKENS", "3000"))
     MAX_USER_MESSAGES_PER_STEP: int = int(os.getenv("MAX_USER_MESSAGES_PER_STEP", "3"))
-    USER_MESSAGE_TRUNCATE_LENGTH: int = int(os.getenv("USER_MESSAGE_TRUNCATE_LENGTH", "500"))
+    USER_MESSAGE_TRUNCATE_LENGTH: int = int(os.getenv("USER_MESSAGE_TRUNCATE_LENGTH", "4000"))
+    USER_MESSAGE_KEEP_TAIL: int = int(os.getenv("USER_MESSAGE_KEEP_TAIL", "500"))
+    # Ceiling for a forged (pre-wrapped) message body; large enough that a bounded
+    # self-wake / delegation payload passes untouched, with its closing delimiter intact.
+    FORGED_MESSAGE_MAX_CHARS: int = int(os.getenv("FORGED_MESSAGE_MAX_CHARS", "16000"))
+    FORGED_MESSAGE_KEEP_TAIL: int = int(os.getenv("FORGED_MESSAGE_KEEP_TAIL", "3000"))
     
     # ActionResult content limits - Coordinated with tool limits
     # MAX_EXTRACTED_CONTENT_LENGTH: Target limit for tool outputs (browser, etc) - not currently enforced

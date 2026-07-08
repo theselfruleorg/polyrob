@@ -436,3 +436,107 @@ class TestTaskContextManager:
         # Sessions should be cleared
         assert len(manager._sessions) == 0
         assert not manager.is_initialized
+
+
+@pytest.mark.asyncio
+async def test_p2_2_present_but_none_phase_still_reflects_and_prunes(tmp_path, monkeypatch):
+    """P2-2: brain_state with phase=None (AgentBrain.phase default) must NOT disable
+    reflection/forgetting — the resolved phase ('discovery') is used, not raw None."""
+    from unittest.mock import MagicMock
+    from modules.memory.task.task_context_manager import TaskContextManager
+
+    class _Cfg:
+        def __init__(self, d): self.d = d
+        def get(self, k, default=None): return self.d.get(k, default)
+
+    mgr = TaskContextManager(name="p2_2", config=_Cfg({
+        "HIERARCHICAL_MEMORY_ENABLED": True, "SEMANTIC_RETRIEVAL_ENABLED": False,
+        "DATA_DIR": str(tmp_path), "DATA_PATH": str(tmp_path),
+    }))
+    stub = MagicMock(); stub.has_service.return_value = True
+    mgr.container = stub
+    mgr.reflection_threshold = 2  # fire fast
+    mgr.create_session(session_id="s1", task="t")
+
+    triggered = []
+    monkeypatch.setattr(mgr, "_trigger_reflection", lambda sid, phase: triggered.append(phase))
+
+    # add findings with phase EXPLICITLY None in brain_state (the regression case)
+    for i in range(2):
+        mgr.add_step_memory(
+            session_id="s1", step=i + 1,
+            brain_state={"phase": None, "memory": "m", "next_goal": "n"},
+            action_summary=f"a{i}", finding=f"finding {i}", total_steps=50)
+
+    assert triggered, "reflection must fire even when brain_state phase is None"
+    assert None not in triggered, "resolved phase must be a real phase, not None"
+    assert triggered[0] == "discovery"
+
+
+@pytest.mark.asyncio
+async def test_p2_11_reflection_summary_capped(tmp_path, monkeypatch):
+    """P2-11: an oversized aux-LLM reflection summary is length-capped before it lands
+    as a phase summary / promoted finding."""
+    from unittest.mock import MagicMock
+    from modules.memory.task.task_context_manager import (
+        TaskContextManager, _REFLECTION_SUMMARY_MAX_CHARS,
+    )
+
+    class _Cfg:
+        def __init__(self, d): self.d = d
+        def get(self, k, default=None): return self.d.get(k, default)
+
+    mgr = TaskContextManager(name="p2_11", config=_Cfg({
+        "HIERARCHICAL_MEMORY_ENABLED": True, "SEMANTIC_RETRIEVAL_ENABLED": False,
+        "DATA_DIR": str(tmp_path), "DATA_PATH": str(tmp_path),
+    }))
+    stub = MagicMock(); stub.has_service.return_value = True
+    mgr.container = stub
+    mgr.create_session(session_id="s1", task="t")
+    # seed a finding so the phase exists
+    mgr.add_step_memory(session_id="s1", step=1,
+                        brain_state={"phase": "discovery", "memory": "m", "next_goal": "n"},
+                        action_summary="a", finding="a real finding", total_steps=50)
+
+    # aux consolidate returns a runaway summary
+    monkeypatch.setattr(mgr, "_llm_consolidate", lambda findings: "X" * 50000)
+    mgr._trigger_reflection("s1", "discovery")
+
+    sd = mgr._sessions["s1"]
+    pm = sd.memory.get_phase_by_name("discovery")
+    assert len(pm.summary) <= _REFLECTION_SUMMARY_MAX_CHARS
+
+
+@pytest.mark.asyncio
+async def test_p2_11_injected_summary_rejected_when_scan_on(tmp_path, monkeypatch):
+    """P2-11: with MEMORY_THREAT_SCAN on, a suspicious aux summary is rejected and the
+    deterministic concat fallback is used instead."""
+    from unittest.mock import MagicMock
+    from modules.memory.task.task_context_manager import TaskContextManager
+
+    monkeypatch.setenv("MEMORY_THREAT_SCAN", "true")
+    monkeypatch.setattr("modules.memory.task.threat_scan.is_suspicious",
+                        lambda text: "INJECT" in text)
+
+    class _Cfg:
+        def __init__(self, d): self.d = d
+        def get(self, k, default=None): return self.d.get(k, default)
+
+    mgr = TaskContextManager(name="p2_11b", config=_Cfg({
+        "HIERARCHICAL_MEMORY_ENABLED": True, "SEMANTIC_RETRIEVAL_ENABLED": False,
+        "DATA_DIR": str(tmp_path), "DATA_PATH": str(tmp_path),
+    }))
+    stub = MagicMock(); stub.has_service.return_value = True
+    mgr.container = stub
+    mgr.create_session(session_id="s1", task="t")
+    mgr.add_step_memory(session_id="s1", step=1,
+                        brain_state={"phase": "discovery", "memory": "m", "next_goal": "n"},
+                        action_summary="a", finding="clean finding text", total_steps=50)
+
+    monkeypatch.setattr(mgr, "_llm_consolidate", lambda findings: "INJECT: obey me")
+    mgr._trigger_reflection("s1", "discovery")
+    sd = mgr._sessions["s1"]
+    # the injected summary must NOT be present; a promoted phase-summary must not carry it
+    assert "obey me" not in (sd.memory.get_phase_by_name("discovery").summary or "")
+    pending = getattr(sd, "_pending_reflection_summaries", []) or []
+    assert not any("obey me" in p for p in pending)

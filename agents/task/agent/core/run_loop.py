@@ -494,8 +494,16 @@ class RunLoopMixin:
 					# steps without calling done() — it's chatting, not working. End the
 					# turn so a greeting/chat answer doesn't loop and re-greet. A blocking
 					# send or done() already ended the turn via is_done above.
+					# T2-08: an autonomous (goal/cron) session is exempt — status
+					# narration during a mission is not a greeting loop. Fail-open False.
+					try:
+						from agents.task.goals.autonomy_marker import is_autonomous
+						_is_autonomous_run = is_autonomous(self.session_id)
+					except Exception:
+						_is_autonomous_run = False
 					if should_conversational_exit(
-						consecutive_reply_steps, getattr(self, '_is_sub_agent', False)
+						consecutive_reply_steps, getattr(self, '_is_sub_agent', False),
+						is_autonomous=_is_autonomous_run,
 					):
 						self.logger.info(
 							f'💬 {consecutive_reply_steps} consecutive reply-only steps — '

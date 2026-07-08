@@ -26,6 +26,7 @@ SIDECAR_DB_NAMES = (
     "skill_usage.db",
     "users.db",
     "tg_dedup.db",
+    "autonomy_state.db",
 )
 
 _PathLike = Union[str, Path]

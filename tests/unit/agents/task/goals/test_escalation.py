@@ -144,5 +144,38 @@ async def test_empty_pipeline_failopen_no_container(monkeypatch):
 def test_flag_default_off(monkeypatch):
     monkeypatch.delenv("GOAL_BLOCKER_ESCALATION", raising=False)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
     from agents.task.constants import AutonomyConfig
     assert AutonomyConfig.goal_blocker_escalation() is False
+
+
+# --- T2-03/T4-04: the durable ask is created regardless of the push flag ------
+
+@pytest.mark.asyncio
+async def test_blocked_goal_creates_ask_even_when_push_flag_off(tmp_path, monkeypatch):
+    """The ask-row creation was gated on the same flag as the owner PUSH, so with the
+    default OFF a blocked goal left NO ask and `owner fulfill` had nothing to consume.
+    Now the ask is always created (silent + durable); only the push stays gated."""
+    monkeypatch.delenv("GOAL_BLOCKER_ESCALATION", raising=False)  # push OFF
+    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)         # silent posture
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    from agents.task.goals.board import GoalBoard, ASK_OPEN, STATUS_BLOCKED
+    from agents.task.goals.dispatcher import GoalDispatcher
+
+    board = GoalBoard(str(tmp_path / "g.db"))
+    g = board.create(user_id="rob", title="Post the announcement")
+    board.claim(g.id, "w", ttl_seconds=60)
+    board.record_failure(g.id, error="needs twitter write access")
+    board.claim(g.id, "w", ttl_seconds=60)
+    board.record_failure(g.id, error="needs twitter write access")  # trips breaker
+    assert board.get(g.id).status == STATUS_BLOCKED
+
+    class _Agent:
+        container = None  # no push target; the ask must still be created
+
+    disp = GoalDispatcher(board, _Agent())
+    await disp._maybe_escalate_blocked(board.get(g.id))
+
+    asks = board.asks(user_id="rob", status=ASK_OPEN)
+    assert asks, "a blocked goal must leave a durable ask even with the push flag off"
+    assert any("Unblock goal" in a.title for a in asks)

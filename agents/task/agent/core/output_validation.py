@@ -15,6 +15,56 @@ from agents.task.agent.prompts import AgentMessagePrompt
 from agents.task.utils import time_execution_async
 from modules.llm.messages import BaseMessage, HumanMessage, SystemMessage
 
+# P0-6: hard bound on the judge call so a slow/hung judge can never stall the run
+# loop past this (fail-open on timeout). Overridable for tests via monkeypatch.
+VALIDATION_JUDGE_TIMEOUT_SEC: float = 60.0
+
+
+class _Verdict:
+	"""Minimal is_valid/reason carrier for the tolerant judge parser (P0-6).
+
+	The judge's structured path returns a Pydantic ``ValidationResult`` (defined
+	locally in ``_validate_output``); the manual path routes through this instead
+	so the tolerant parser can live at module scope and be unit-tested directly.
+	"""
+
+	__slots__ = ("is_valid", "reason")
+
+	def __init__(self, is_valid: bool, reason: str):
+		self.is_valid = is_valid
+		self.reason = reason
+
+
+def _parse_validation_verdict(text: str) -> "_Verdict":
+	"""Tolerantly extract an is_valid/reason verdict from a judge reply.
+
+	Mirrors the ladder in ``agents/task/goals/completion_judge.py``: try the
+	shared JSON extractor first; on a miss (a judge that narrates prose instead
+	of JSON — the documented prod failure mode) fall back to a keyword scan for
+	an explicit ``is_valid: false``. Defaults to VALID (pass) when the reply
+	carries no clear negative verdict, keeping the judge fail-open: it only
+	fails a turn on a verdict it can actually read as ``false``.
+	"""
+	import re
+	from agents.task.utils_json import extract_json_from_model_output
+
+	try:
+		data = extract_json_from_model_output(text) or {}
+		if isinstance(data, dict) and 'is_valid' in data:
+			return _Verdict(
+				is_valid=bool(data.get('is_valid', True)),
+				reason=str(data.get('reason') or 'No reason provided'),
+			)
+	except Exception:
+		pass
+
+	# Keyword fallback: an explicit false verdict anywhere in the prose fails;
+	# anything else passes (fail-open). Match `"is_valid": false`, `is_valid=false`,
+	# `is_valid false`, tolerant of quotes/whitespace/casing.
+	if re.search(r'is_valid["\']?\s*[:=]?\s*false', text, re.IGNORECASE):
+		return _Verdict(is_valid=False, reason=text.strip()[:300] or 'Judge returned an invalid verdict')
+	return _Verdict(is_valid=True, reason='No clear negative verdict; passing (fail-open)')
+
 
 class OutputValidationMixin:
 	"""LLM output validation + next_action wrapper for Agent."""
@@ -90,7 +140,9 @@ class OutputValidationMixin:
 		# repeated validations in the same session don't re-resolve it.
 		if getattr(self, "validate_output", False) and getattr(self, "_judge_llm", None) is None:
 			try:
-				self._judge_llm = self._provision_aux_llm("judge")
+				# P2-9: await the async provisioning so building the judge client yields
+				# the loop instead of blocking it (run_coroutine_sync) for up to 60s.
+				self._judge_llm = await self._provision_aux_llm_async("judge")
 			except Exception as e:
 				self.logger.debug(f"judge aux model provisioning skipped: {e}")
 				self._judge_llm = None
@@ -111,23 +163,55 @@ class OutputValidationMixin:
 				self.logger.debug(f"Structured output unavailable for ValidationResult, using manual parse: {schema_error}")
 				validator = None
 
+		# P0-6: the judge is fail-OPEN end-to-end. An unparseable / erroring /
+		# hanging judge reply must NOT raise out of the run loop and kill the turn
+		# after the agent already called done() (the previous behaviour: a prose
+		# judge reply let extract_json_from_model_output raise ValueError straight
+		# through the bare `await self._validate_output()` at run_loop.py:459).
+		# Fail-open covers judge FAILURES only — a well-formed {"is_valid": false}
+		# verdict still fails validation (that's the feature). Mirrors the tolerant
+		# ladder the goal judge already uses (agents/task/goals/completion_judge.py).
+		import asyncio
 		import time as _time
 		_t0 = _time.time()
-		if validator is not None:
-			response: dict[str, Any] = await validator.ainvoke(msg)  # type: ignore
-			_resp_for_meter = response  # extract_token_usage unwraps {'raw': ...} structured output
-			parsed: ValidationResult = response['parsed']
-		else:
-			from agents.task.utils_json import extract_json_from_model_output
-			raw = await judge_llm.ainvoke(msg)
-			_resp_for_meter = raw
-			content = getattr(raw, 'content', raw)
-			data = extract_json_from_model_output(content if isinstance(content, str) else str(content)) or {}
-			parsed = ValidationResult(
-				is_valid=bool(data.get('is_valid', True)),
-				reason=str(data.get('reason') or 'No reason provided'),
+		_resp_for_meter = None
+		try:
+			if validator is not None:
+				response: dict[str, Any] = await asyncio.wait_for(
+					validator.ainvoke(msg), timeout=VALIDATION_JUDGE_TIMEOUT_SEC,
+				)  # type: ignore
+				_resp_for_meter = response  # extract_token_usage unwraps {'raw': ...}
+				raw_parsed = response.get('parsed') if isinstance(response, dict) else None
+				if raw_parsed is None:
+					# LOW-1: structured output can yield {'parsed': None, 'raw': ...}
+					# on a schema-mismatch — treat as a parse failure → fail-open.
+					self.logger.warning(
+						'⚠️ Judge structured output returned no parsed verdict; '
+						'passing (fail-open).'
+					)
+					return True
+				parsed = raw_parsed
+			else:
+				raw = await asyncio.wait_for(
+					judge_llm.ainvoke(msg), timeout=VALIDATION_JUDGE_TIMEOUT_SEC,
+				)
+				_resp_for_meter = raw
+				content = getattr(raw, 'content', raw)
+				parsed = _parse_validation_verdict(
+					content if isinstance(content, str) else str(content)
+				)
+		except asyncio.TimeoutError:
+			self.logger.warning(
+				f'⚠️ Judge validation timed out after {VALIDATION_JUDGE_TIMEOUT_SEC}s; '
+				'passing (fail-open).'
 			)
+			return True
+		except Exception as e:  # noqa: BLE001 — any judge failure is fail-open
+			self.logger.warning(f'⚠️ Judge validation errored ({e!r}); passing (fail-open).')
+			return True
+
 		# A3: meter this aux LLM call through the single deduction path (fail-open).
+		# Only reached on a successful invoke — a failed/timed-out call is never metered.
 		from agents.task.agent.core.aux_metering import meter_aux_llm
 		await meter_aux_llm(
 			usage_tracker=getattr(self, "usage_tracker", None),
@@ -188,18 +272,31 @@ class OutputValidationMixin:
 				# Call the main next action method - this will handle its own telemetry
 				# so we don't send duplicate telemetry from this wrapper method
 				agent_output = await self.get_next_action(input_messages)
-				
+
+				# P2-14: the LLM responded (even a parse-failed safe-default means the
+				# request was delivered) — drop the one-shot ephemerals now.
+				try:
+					self.message_manager.commit_ephemeral_consumption()
+				except Exception:
+					pass
+
 				duration = time.time() - start_time
-				
+
 				# Only log timing since get_next_action already sent telemetry
 				self.logger.debug(f"next_action wrapper completed in {duration:.2f}s")
-				
+
 				return agent_output
-				
+
 			except Exception as e:
 				duration = time.time() - start_time
-				
-				# Log error but don't send duplicate telemetry 
+				# P2-14: the LLM call ultimately failed — re-queue the ephemerals
+				# (correspondent reply / RECALL) so the next step re-includes them
+				# instead of losing them forever.
+				try:
+					self.message_manager.restore_ephemeral_on_failure()
+				except Exception:
+					pass
+				# Log error but don't send duplicate telemetry
 				self.logger.error(f"next_action failed after {duration:.2f}s: {e}", exc_info=True)
 				raise
 

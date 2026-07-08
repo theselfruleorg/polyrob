@@ -65,9 +65,6 @@ class ErrorHandler {
 
         // Show user-friendly error notification
         this.showErrorNotification(errorInfo);
-
-        // Send to server for logging (if needed)
-        this.reportToServer(errorInfo);
     }
 
     showErrorNotification(errorInfo) {
@@ -108,12 +105,6 @@ class ErrorHandler {
         document.body.appendChild(overlay);
 
         console.error('[ErrorHandler] Critical error threshold reached - blocking further errors');
-    }
-
-    reportToServer(errorInfo) {
-        // Disabled - endpoint doesn't exist
-        // TODO: Implement /api/errors/log endpoint if server-side error logging is needed
-        return;
     }
 }
 

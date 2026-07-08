@@ -114,3 +114,39 @@ class TestRegisterOptionalTool:
 
         # Cleanup
         TOOL_DESCRIPTORS.pop(tool_name, None)
+
+
+class TestOptionalToolInitOrderVisibility:
+    """SB-01: a tool registered via register_optional_tool AFTER descriptors import
+    must be visible to get_tool_init_order() (what initialize_tools now iterates),
+    even though the frozen TOOL_INIT_ORDER constant snapshotted before it existed."""
+
+    def test_post_import_optional_tool_appears_in_recomputed_init_order(self):
+        tool_name = "_test_dummy_sb01"
+        TOOL_DESCRIPTORS.pop(tool_name, None)
+        desc = _make_desc(tool_name)
+
+        # Frozen constant reflects import-time state and must NOT be relied on.
+        frozen = list(descriptors.TOOL_INIT_ORDER)
+        assert tool_name not in frozen
+
+        with patch.object(descriptors, "register_tool_class", lambda name, cls: None):
+            descriptors.register_optional_tool(tool_name, DummyTool, desc, lambda: True)
+
+        try:
+            # The frozen constant still omits it (the bug the fix routes around)...
+            assert tool_name not in descriptors.TOOL_INIT_ORDER
+            # ...but the recomputed order (used by initialize_tools) includes it.
+            assert tool_name in descriptors.get_tool_init_order()
+        finally:
+            TOOL_DESCRIPTORS.pop(tool_name, None)
+
+    def test_initialize_tools_iterates_recomputed_order(self):
+        """Guard against a regression back to the frozen constant: the source of
+        initialize_tools must call get_tool_init_order(), not iterate TOOL_INIT_ORDER."""
+        import inspect
+        import core.initialization as init_mod
+
+        src = inspect.getsource(init_mod.initialize_tools)
+        assert "get_tool_init_order()" in src
+        assert "for tool_name in TOOL_INIT_ORDER" not in src

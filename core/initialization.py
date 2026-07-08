@@ -208,6 +208,7 @@ from tools.descriptors import (
     TOOL_METADATA,
     OPTIONAL_TOOLS as TOOL_OPTIONAL_TOOLS,
     get_tool_class,
+    get_tool_init_order,
 )
 
 # Re-export for backward compatibility (but prefer importing from tools directly)
@@ -478,8 +479,15 @@ async def initialize_tools(container: DependencyContainer) -> None:
     
     results = {'success': [], 'failed': []}
 
-    # Follow TOOL_INIT_ORDER instead of TOOL_COMPONENTS to respect dependencies
-    for tool_name in TOOL_INIT_ORDER:
+    # Follow init order (sorted by dependency priority) instead of TOOL_COMPONENTS.
+    # SB-01: recompute from the LIVE TOOL_DESCRIPTORS via get_tool_init_order() rather
+    # than the module-level TOOL_INIT_ORDER constant. That constant is frozen at
+    # descriptors.py import — BEFORE tools/__init__.py runs the gated
+    # register_optional_tool() inserts (goal/cronjob/coding/knowledge/git/github/
+    # x402_pay) — so the frozen snapshot omits every flag-gated tool, and the server
+    # container (build_server_bot → initialize_tools) could never register them even
+    # with their flags on. Recomputing here picks up the optional descriptors.
+    for tool_name in get_tool_init_order():
         tool_class = None
         # Find the tool class in TOOL_COMPONENTS (lazy loaded to avoid circular imports)
         tool_components = _get_tool_components()

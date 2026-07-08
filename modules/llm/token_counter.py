@@ -90,20 +90,21 @@ class EncoderCache:
                 try:
                     return tiktoken.encoding_for_model(model_name)
                 except KeyError:
-                    # Try different encodings based on model type
-                    if any(x in model_name.lower() for x in ["gpt-4", "gpt-3.5"]):
-                        return tiktoken.get_encoding("cl100k_base")
-                    else:
-                        return tiktoken.get_encoding("cl100k_base")  # Default
-            
-            # Anthropic models — import the SDK lazily so token_counter stays import-light
-            elif config.provider.value == "anthropic":
-                try:
-                    from anthropic import Anthropic
-                    return Anthropic()
-                except ImportError:
-                    return None
-            
+                    # P2-17: modern OpenAI models (gpt-4o, gpt-4.1, gpt-5.x, o-series)
+                    # use the o200k_base encoding, NOT cl100k_base — the old code
+                    # defaulted everything unknown to cl100k, over/under-counting the
+                    # current model line. Legacy gpt-4/gpt-3.5 keep cl100k.
+                    ml = model_name.lower()
+                    if any(x in ml for x in ("gpt-4o", "gpt-4.1", "gpt-5", "o1", "o3", "o4", "gpt-oss", "chatgpt-4o")):
+                        return tiktoken.get_encoding("o200k_base")
+                    return tiktoken.get_encoding("cl100k_base")
+
+            # P2-17: Anthropic has no usable synchronous tokenizer here (the SDK's
+            # count_tokens is not present/usable on the installed version, and building
+            # an Anthropic() client per model just to hold it was dead weight). Return
+            # None so _count_text_tokens falls to the config.chars_per_token estimate —
+            # which is exactly what happened anyway, minus the wasted client construction.
+
             return None
             
         except Exception as e:

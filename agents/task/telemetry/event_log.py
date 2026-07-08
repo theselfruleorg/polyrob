@@ -61,12 +61,24 @@ class TelemetryEventLog:
             logger.debug(f"event_log init failed ({db_path}): {e}")
 
     def record(self, kind: str, *, user_id: str = "", session_id: str = "",
-               source: str = "", ts: Optional[float] = None, **attrs: Any) -> None:
-        """Append one event. Extra kwargs are JSON-encoded into `attrs`."""
+               source: str = "", ts: Optional[float] = None,
+               attrs: Optional[Dict[str, Any]] = None, **kw: Any) -> None:
+        """Append one event. Extra kwargs are JSON-encoded into `attrs`.
+
+        ``attrs`` also accepts an explicit dict — the escape hatch for attribute
+        names that collide with this signature (e.g. a `kind` attribute on a
+        self_modification event, T4-06). Explicit-dict keys win over kwargs.
+        """
         if not self._ready:
             return
+        merged = dict(kw)
+        if attrs:
+            try:
+                merged.update(attrs)
+            except Exception:
+                pass
         try:
-            payload = json.dumps(attrs, default=str)
+            payload = json.dumps(merged, default=str)
         except Exception:
             payload = "{}"
         try:

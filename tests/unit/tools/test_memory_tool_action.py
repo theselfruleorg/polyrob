@@ -62,6 +62,8 @@ async def test_add_read_remove_roundtrip(provider, monkeypatch):
     await action.function(M(action="add", content="deploy on fridays"), execution_context=None)
     read = await action.function(M(action="read"), execution_context=None)
     assert "deploy on fridays" in read.extracted_content
+    # P1-7: curated notes are read back as untrusted DATA (persistence-laundering guard)
+    assert "untrusted_tool_result" in read.extracted_content
     await action.function(M(action="remove", content="deploy on fridays"), execution_context=None)
     read2 = await action.function(M(action="read"), execution_context=None)
     assert "deploy on fridays" not in read2.extracted_content

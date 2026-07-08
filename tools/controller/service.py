@@ -169,10 +169,15 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 				fail_mode="closed",  # a crashing guardrail must DENY, not silently allow
 			)
 
-		# Approval seam (Item 7E): gate APPROVAL_REQUIRED_TOOLS through an
-		# ApprovalProvider (default AutoApprover = allow). Empty list => no-op.
-		_approval_tools = os.getenv("APPROVAL_REQUIRED_TOOLS", "").strip()
-		if _approval_tools:
+		# Approval seam (Item 7E): gate the resolved action set through an
+		# ApprovalProvider (default AutoApprover = allow). Empty set => no-op.
+		# WS-6/WS-7: `resolve_gated_actions` reads the FROZEN import-time snapshot of
+		# APPROVAL_REQUIRED_TOOLS + APPROVAL_PROVIDER (so a mid-process env mutation
+		# can't flip gating) and, at compute posture >= 2, UNIONs the compute-tool
+		# gated set (shell_run + self_env_*) and defaults the provider to interactive.
+		from tools.controller.approval import resolve_gated_actions
+		_required, _provider_name = resolve_gated_actions()
+		if _required:
 			# H9: importing this module registers the 'interactive_cli' provider so an
 			# operator can actually select it via APPROVAL_PROVIDER.
 			try:
@@ -183,8 +188,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			# H9: fail-CLOSED. An unknown APPROVAL_PROVIDER resolves to deny-by-default
 			# (not skip-registration), so a misconfigured provider can never silently
 			# leave the requested tools UNGATED.
-			_provider = get_approval_provider_or_deny(os.getenv("APPROVAL_PROVIDER", "auto"))
-			_required = {t.strip() for t in _approval_tools.split(",") if t.strip()}
+			_provider = get_approval_provider_or_deny(_provider_name)
 			try:
 				self.register_pre_tool_call_hook(
 					make_approval_hook(_provider, _required),

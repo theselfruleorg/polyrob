@@ -56,3 +56,37 @@ def test_extract_intelligent_preview_truncates_plaintext():
     preview = h._extract_intelligent_preview(content, max_length=100)
     assert len(preview) <= len(content)
     assert isinstance(preview, str)
+
+
+def test_p2_3_no_next_goal_junk_finding():
+    """P2-3: when brain memory is empty and no result finding exists, the step writes
+    finding=None (not the imperative next_goal) so junk doesn't become durable memory."""
+    import asyncio
+
+    captured = {}
+
+    class _TCM:
+        def add_step_memory(self, **kw):
+            captured.update(kw)
+            return True
+
+    class _Host(MemoryWriterMixin):
+        def __init__(self):
+            import logging
+            self.task_context_manager = _TCM()
+            self.session_id = "s1"
+            self.user_id = "u1"
+            self.logger = logging.getLogger("p2_3")
+            self.task = ""
+
+        def _extract_finding_from_results(self, results):
+            return None  # no secondary finding
+
+    h = _Host()
+    # brain memory empty + next_goal set: must NOT write next_goal as the finding
+    asyncio.run(h._save_step_to_memory(
+        step_number=1,
+        brain_state={"memory": "", "next_goal": "Click the search button", "phase": "discovery"},
+        actions=[], results=[],
+    ))
+    assert captured.get("finding") is None, "next_goal must not become a finding"

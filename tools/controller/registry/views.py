@@ -114,5 +114,38 @@ class ActionRegistry(BaseModel):
             for action in actions:
                 descriptions.append(action.prompt_description())
             descriptions.append("")  # Empty line for separation
-        
+
         return '\n'.join(descriptions)
+
+    def get_prompt_action_index(self) -> str:
+        """Compact one-line-per-action index for NATIVE tool mode (T1-03).
+
+        In native mode the full parameter schemas already ship to the provider in
+        the `tools` param, so get_prompt_description()'s raw schema dump is pure
+        duplication (2.5-6k redundant tokens/session). This index keeps the
+        at-a-glance catalog (name + summary, grouped by tool) without the schemas.
+        The JSON-fallback path must keep using get_prompt_description() — there
+        the dump is the only schema the model ever sees.
+        """
+        def _summary(action: "RegisteredAction") -> str:
+            first_line = (action.description or "").strip().splitlines()[0] if (action.description or "").strip() else ""
+            if len(first_line) > 200:
+                first_line = first_line[:197] + "..."
+            return f"- {action.name}: {first_line}"
+
+        tools: Dict[str, list] = {}
+        for action in self.actions.values():
+            tools.setdefault(action.tool or "default", []).append(action)
+
+        lines = []
+        if "default" in tools:
+            lines.append("General Actions:")
+            lines.extend(_summary(a) for a in tools["default"])
+            lines.append("")
+        for tool_name, actions in sorted(tools.items()):
+            if tool_name == "default":
+                continue
+            lines.append(f"{tool_name.capitalize()} Tool Actions:")
+            lines.extend(_summary(a) for a in actions)
+            lines.append("")
+        return "\n".join(lines)

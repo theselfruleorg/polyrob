@@ -53,6 +53,30 @@ _HIGH_IMPACT_NAMES = frozenset({
     "message",
     # Aspirational coding/self-evolution action names (no tool yet; harmless tokens).
     "self_modify", "mcp_install",
+    # WS-5: self_env self-maintenance verbs (posture 2). Owner-only via the posture
+    # gate already, but a tainted session must never reach them either.
+    "self_env_install_dep", "self_env_patch_source", "self_env_restart_service",
+    "self_env_git_pull", "self_env_read_source", "shell_run",
+    # WS-2/3: process job-manager verbs — enumerated by NAME (parity with shell_run)
+    # so a tool-id-resolver fault can't let a tainted session kill/inspect the owner's
+    # background shell jobs.
+    "process_kill", "process_log", "process_poll", "process_list",
+    # P1-4: code-exec verb enumerated by NAME (parity with shell_run) so a resolver
+    # fault can't open arbitrary code execution to a tainted session (the code_execution
+    # tool_id below only helps when resolution succeeds).
+    "run_code",
+    # P1-4: the agent money verb — x402_invoice tool, verb x402_request — mints a
+    # payment request. The canonical forged-email social-engineering target; must be
+    # unreachable while correspondent-tainted (x402_fetch/x402_pay already are).
+    "x402_request",
+    # P1-4: outbound-egress verbs whose query params are an exfil channel (parity with
+    # web_fetch/browser, which are already blocked). anysite/perplexity reach the
+    # outside world with attacker-influenced arguments.
+    "anysite_api", "perplexity_search",
+    # P1-4: curated-memory write persists into FUTURE sessions' prompts — a durable
+    # injection-persistence channel if written while tainted. Gate the whole action
+    # (read too) — fail-closed; the owner clears taint by replying.
+    "memory",
     # Crypto trade verbs (hyperliquid + polymarket share these). Reads (get_*) are
     # intentionally excluded so a tainted session can still fetch prices/history.
     "place_limit_order", "place_market_order", "cancel_order", "cancel_all_orders",
@@ -69,6 +93,7 @@ _HIGH_IMPACT_NAMES = frozenset({
     "code_execution", "coding", "cronjob", "goal", "x402_pay",
     "hyperliquid", "polymarket", "email", "twitter", "browser", "web_fetch",
     "git", "github", "process", "tool_manage", "mcp",
+    "x402_invoice", "anysite", "perplexity",  # P1-4 legacy tool_id tokens
 })
 
 # Back-compat public name (tests / other callers import HIGH_IMPACT_TOOLS).
@@ -96,6 +121,12 @@ HIGH_IMPACT_TOOL_IDS = frozenset({
     "mcp",             # execute_tool + dynamic {server}_{tool} — outbound / exec
     "process",         # background processes (aspirational)
     "tool_manage",     # dynamic-tool authoring (aspirational)
+    "shell",           # WS-2: persistent sandbox shell — arbitrary command exec
+    "self_env",        # WS-5: self-maintenance verbs — install/patch/restart/pull
+    # P1-4:
+    "x402_invoice",    # x402_request / accounting — mint agent payment requests (money)
+    "anysite",         # anysite_api — outbound structured-data egress (exfil channel)
+    "perplexity",      # perplexity_search — outbound search egress (exfil channel)
 })
 
 # Substrings that mark a high-impact action even if the exact name isn't enumerated

@@ -29,6 +29,7 @@ import asyncio
 import logging
 import os
 import re
+import threading
 from typing import List, Optional
 
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
@@ -99,12 +100,14 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         self._embedder = embedding_model
         self._dim: Optional[int] = None
         self._vec_ok = embedding_model is not None and _vec_available()
-        if self._vec_ok:
-            try:
-                self._dim = len(self._embed_sync("dimension probe"))
-            except Exception as e:  # bad/incompatible embedder -> degrade
-                logger.warning("local-vector: embedder probe failed, FTS5-only: %s", e)
-                self._vec_ok = False
+        # P2-6: DON'T probe the embedding dimension here. The probe's first call builds
+        # the full SentenceTransformer/torch stack (~6-14s cold), and this provider is
+        # constructed on the EVENT LOOP during the first create_session — freezing every
+        # concurrent session for the build. Defer the probe + vec-table creation to
+        # _ensure_vec_schema(), called lazily by the vector write/read paths (which all
+        # run in executor threads), so the loop is never blocked.
+        self._vec_schema_ready = False
+        self._vec_lock = threading.Lock()
         super().__init__(db_path, top_k=top_k)
 
     @property
@@ -113,9 +116,37 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- schema -------------------------------------------------------------
     def _init_schema(self) -> None:
+        # P2-6: only the base FTS5/stdlib tables at construction time — no embedder
+        # probe, no vec tables (those need the probed dim). The vector schema is created
+        # lazily by _ensure_vec_schema() on the first vector op (in an executor thread).
         super()._init_schema()  # FTS5 `memories` + `curated_memory` + `kb_chunks`/`kb_sources` (stdlib path)
+
+    def _ensure_vec_schema(self) -> bool:
+        """Lazily probe the embedding dim and create the vec tables (P2-6).
+
+        Idempotent + thread-safe. Runs on whatever thread first performs a vector op —
+        the write/read paths route through run_in_executor, so the ~6-14s cold embedder
+        build happens on a worker thread, never the event loop. Degrades to FTS5-only
+        (returns False, sets _vec_ok False) on a probe or DDL failure.
+        """
         if not self._vec_ok:
-            return
+            return False
+        if self._vec_schema_ready:
+            return True
+        with self._vec_lock:
+            if self._vec_schema_ready:
+                return True
+            try:
+                self._dim = len(self._embed_sync("dimension probe"))
+            except Exception as e:  # bad/incompatible embedder -> degrade
+                logger.warning("local-vector: embedder probe failed, FTS5-only: %s", e)
+                self._vec_ok = False
+                return False
+            ok = self._create_vec_tables()
+            self._vec_schema_ready = ok
+            return ok
+
+    def _create_vec_tables(self) -> bool:
         try:
             con = vec_connect(self.db_path)
             try:
@@ -192,9 +223,11 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                     )
             finally:
                 con.close()
+            return True
         except Exception as e:  # extension load / DDL failure -> degrade to FTS5-only
             logger.warning("local-vector: vector schema init failed, FTS5-only: %s", e)
             self._vec_ok = False
+            return False
 
     # ---- embedding ----------------------------------------------------------
     def _embed_sync(self, text: str) -> List[float]:
@@ -234,6 +267,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     def _vec_write(self, norm_user: str, session_id: str, content: str,
                    emb: List[float]) -> None:
+        if not self._ensure_vec_schema():  # P2-6: lazy probe + table creation
+            return
         import sqlite_vec
         con = vec_connect(self.db_path)
         try:
@@ -250,18 +285,30 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             con.close()
 
     # ---- read ---------------------------------------------------------------
-    def _vector_contents(self, query: str, norm_user: str, limit: int) -> List[str]:
-        """Tenant-scoped semantic KNN -> ranked list of content strings (best first)."""
+    def _vector_contents(self, query: str, norm_user: str, limit: int,
+                         exclude_session_id: str = None) -> List[str]:
+        """Tenant-scoped semantic KNN -> ranked list of content strings (best first).
+
+        P2-1: `exclude_session_id` (set by the automatic prefetch) drops rows from the
+        current session so recall doesn't self-echo content already in context. Over-
+        fetch k so the post-join session filter still returns up to `limit` rows.
+        """
+        if not self._ensure_vec_schema():  # P2-6: lazy probe + table creation
+            return []
         import sqlite_vec
         emb = self._embed_sync(query)
         con = vec_connect(self.db_path)
         try:
+            _k = limit * 2 if exclude_session_id else limit
+            _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
+            _excl_arg = (exclude_session_id,) if exclude_session_id else ()
             rows = con.cursor().execute(
                 "SELECT m.content, v.distance FROM mem_vec v "
                 "JOIN mem_meta m ON m.rowid = v.rowid "
-                "WHERE v.user_id = ? AND v.embedding MATCH ? AND k = ? "
+                f"WHERE v.user_id = ? AND v.embedding MATCH ? AND k = ?{_excl_sql} "
                 "ORDER BY v.distance",
-                (norm_user, sqlite_vec.serialize_float32(emb), limit)).fetchall()
+                (norm_user, sqlite_vec.serialize_float32(emb), _k) + _excl_arg).fetchall()
+            rows = rows[:limit]
             cutoff = _max_distance()
             # Require a numeric distance within the cutoff. A None distance must NOT
             # pass (the old `r[1] is None or ...` admitted unranked rows, defeating
@@ -311,8 +358,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             return ""
         norm = self._norm_user(user_id)
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        # P2-1: exclude the CURRENT session from automatic prefetch (self-echo guard).
         kw_list = (
-            self._keyword_contents(query, norm_user=norm, limit=self.top_k, allow_browse=False)
+            self._keyword_contents(query, norm_user=norm, limit=self.top_k,
+                                   allow_browse=False, exclude_session_id=session_id)
             if terms else []
         )
         kw = "\n".join(f"- {c}" for c in kw_list)
@@ -322,7 +371,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # finds no >=3-char terms — this is where semantic beats keyword.
         try:
             vec = await asyncio.get_event_loop().run_in_executor(
-                None, self._vector_contents, query, norm, self.top_k)
+                None, self._vector_contents, query, norm, self.top_k, session_id)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: prefetch vector skipped: %s", e)
             return kw
@@ -364,6 +413,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     def _kb_vec_write(self, norm_user: str, collection: str, source_path: str,
                       chunk_idx: str, content: str, emb: List[float]) -> None:
+        if not self._ensure_vec_schema():  # P2-6: lazy probe + table creation
+            return
         import sqlite_vec
         con = vec_connect(self.db_path)
         try:
@@ -389,6 +440,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
         Returns list of (content, source_path, chunk_idx) tuples, best first.
         """
+        if not self._ensure_vec_schema():  # P2-6: lazy probe + table creation
+            return []
         import sqlite_vec
         emb = self._embed_sync(query)
         con = vec_connect(self.db_path)

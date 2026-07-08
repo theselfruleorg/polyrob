@@ -14,6 +14,7 @@ import re
 import time
 import json
 from typing import List, Dict, Any, Optional, Union, Tuple
+from uuid import uuid4
 from openai import AsyncOpenAI
 
 from modules.llm.llm_client import LLMClient, translate_llm_error
@@ -49,6 +50,27 @@ _KIMI_TOOL_CALL_HEADER_RE = re.compile(
 _KIMI_TOKEN_MARKER = "<|tool_call"
 
 
+def _new_recovered_call_id(tag: str, i: int) -> str:
+    """Mint a GLOBALLY unique id for a recovered tool call (P0-4).
+
+    Recovered ids used to be deterministic per-response (``call_{i}_{idx}`` /
+    ``call_txt_{i}``), so two recovery turns in one session produced DUPLICATE
+    ids across history. Downstream, ``tool_message_repair.repair_tool_message_pairs``
+    keys its ``tool_msg_map`` by id over the WHOLE history (last write wins) and
+    ``del``s the id on first use — so step 1's AIMessage got paired with step 2's
+    tool result and step 2 got a fabricated "[ERROR: No response recorded...]"
+    placeholder. Textual leaks fire on ~20-25% of Kimi/NIM turns, making the
+    collision routine.
+
+    Mirrors the ``tool_call_builder.normalize_tool_call`` reference pattern
+    (uuid4 for missing ids), kept short/provider-safe: ``call_{tag}_{hex8}_{i}``.
+    The trailing enumeration index ``i`` keeps ids distinct within one response
+    even in the astronomically-unlikely event of a hex collision, and preserves
+    call ordering for debuggability.
+    """
+    return f"call_{tag}_{uuid4().hex[:8]}_{i}"
+
+
 def parse_kimi_tool_calls(content: str) -> List[Dict[str, Any]]:
     """Extract OpenAI-shape tool calls from Kimi's leaked delimiter tokens.
 
@@ -56,12 +78,13 @@ def parse_kimi_tool_calls(content: str) -> List[Dict[str, Any]]:
     is a safe no-op for every other model/provider. Args that don't parse as JSON
     are skipped (with a distinct WARN) rather than guessed.
 
-    Recovered ids are **unique per response** (``call_{i}_{idx}``): Kimi's ``idx``
-    is a per-function counter that restarts at 0 for each function name, so two
-    parallel calls (e.g. ``functions.read:0`` + ``functions.write:0``) would both
-    get ``call_0`` and collide downstream (ToolCallTracker overwrite +
-    identity-pairing collapse → a dropped result). The enumeration index ``i``
-    guarantees distinctness (Bug 1).
+    Recovered ids are **globally unique** via ``_new_recovered_call_id`` (uuid4
+    suffix). This subsumes the earlier per-response uniqueness fix (Bug 1: Kimi's
+    ``idx`` restarts at 0 per function name, so two parallel calls could collide
+    within one response) AND the cross-response collision (P0-4: deterministic
+    ids repeated across recovery turns, corrupting ``tool_message_repair``'s
+    id-keyed history map). The enumeration index ``i`` is retained for ordering
+    and intra-response distinctness.
     """
     text = content or ""
     out: List[Dict[str, Any]] = []
@@ -89,7 +112,7 @@ def parse_kimi_tool_calls(content: str) -> List[Dict[str, Any]]:
             )
             continue
         out.append({
-            "id": f"call_{i}_{idx}",
+            "id": _new_recovered_call_id("kimi", i),
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(obj)},
         })
@@ -332,7 +355,7 @@ def recover_textual_tool_calls(
     found.sort(key=lambda f: f[0])
     calls = [
         {
-            "id": f"call_txt_{i}",
+            "id": _new_recovered_call_id("txt", i),
             "type": "function",
             "function": {"name": name, "arguments": json.dumps(args)},
         }

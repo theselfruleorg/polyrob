@@ -55,6 +55,7 @@
 
             <div class="tab-buttons">
                 <button class="tab-button active" data-tab="chat">Chat</button>
+                <button class="tab-button" data-tab="feed">Feed</button>
                 <button class="tab-button" data-tab="workspace">Workspace</button>
                 <button class="tab-button" data-tab="stats">Stats</button>
             </div>
@@ -77,8 +78,17 @@
         <div id="chat-tab" class="tab-panel active">
             <div class="terminal-container chat-terminal">
                 <div class="chat-container" id="chat-messages">
-                    <!-- Config Panel (shown only for new sessions) -->
+                    <!-- Config Panel (shown only for new sessions; in read-only
+                         monitoring mode the pickers can't start sessions, so an
+                         honest hint renders instead — P2-15) -->
                     <div class="chat-config-panel hidden" id="config-panel">
+                        {% if read_only %}
+                        <div class="chat-empty-hint">
+                            This console is in read-only monitoring mode — watch the live
+                            <a href="/activity">activity stream</a> or browse
+                            <a href="/sessions">session history</a>.
+                        </div>
+                        {% else %}
                         <div class="config-panel">
                             <!-- Essential Settings -->
                             <div class="config-section">
@@ -133,10 +143,21 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="chat-empty-hint">
+                            Pick a model and send a message — or watch the live
+                            <a href="/activity">activity stream</a>.
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
 
                 <div class="chat-input-container">
+                    {% if read_only %}
+                    <div class="readonly-notice">
+                        <span>Console is in read-only monitoring mode — interact with the agent via its chat surface.</span>
+                    </div>
+                    {% endif %}
+                    {% if not read_only %}
                     <div class="chat-input-wrapper">
                         <button id="upload-btn" class="upload-btn" title="Attach files">
                             <svg width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
@@ -150,6 +171,7 @@
                         <input type="file" id="file-upload-input" class="hidden"
                                accept=".pdf,.docx,.doc,.txt,.md,.csv,.json,.xml,.png,.jpg,.jpeg,.gif,.webp" multiple>
                     </div>
+                    {% endif %}
                     <div id="upload-progress" class="upload-progress hidden">
                         <div class="progress-bar-container">
                             <div class="progress-bar" id="upload-progress-bar" data-width="0"></div>

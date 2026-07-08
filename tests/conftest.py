@@ -87,6 +87,34 @@ def _isolate_path_manager():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_autonomy_state_store():
+    """Keep restart-durable autonomy state OUT of the developer's real data home.
+
+    ``get_autonomy_state_store()`` resolves ``autonomy_state.db`` under
+    ``get_data_root()`` — on a dev machine that is the repo's ``.polyrob``. Any test
+    touching the ReentryBudget singleton or an orchestrator would persist budget/
+    delegation rows there and leak them into later test runs (this bit
+    test_self_wake's singleton test on its second run). Durability tests inject an
+    explicit store/tmp path, so forcing the flag off here doesn't reduce coverage.
+    A test may still opt in by setting AUTONOMY_STATE_DURABLE inside its own body.
+    """
+    prev = os.environ.get("AUTONOMY_STATE_DURABLE")
+    os.environ["AUTONOMY_STATE_DURABLE"] = "off"
+    try:
+        from agents.task.agent.core.self_wake import reset_reentry_budget
+        reset_reentry_budget()
+    except Exception:
+        pass
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("AUTONOMY_STATE_DURABLE", None)
+        else:
+            os.environ["AUTONOMY_STATE_DURABLE"] = prev
+
+
+@pytest.fixture(autouse=True)
 def _isolate_external_skill_roots(monkeypatch):
     """Default external (agentskills.io ecosystem) skill discovery to zero roots for
     every test (Task 14, ``skill_discovery.user_external_roots``).

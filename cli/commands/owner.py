@@ -178,6 +178,27 @@ def pending(user):
                + "polyrob owner reject <kind> <id>")
 
 
+@owner.command("show-pending")
+@click.argument("kind")
+@click.argument("item_id")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def show_pending(kind, item_id, user):
+    """Show the FULL body of one pending proposal before deciding (T3-09).
+
+    KIND is 'self_context' or 'skill'. `owner pending` shows only a ~160-char
+    preview — review the whole quarantined body here, then promote/reject.
+    """
+    from core import self_evolution
+    tenant = _owner_tenant(user)
+    ok, body = self_evolution.show(kind, item_id, user_id=tenant,
+                                   home_dir=_data_dir(), instance_id=_instance_id())
+    if not ok:
+        click.echo(click.style(body, fg="yellow"))
+        raise SystemExit(1)
+    click.echo(click.style(f"--- pending {kind}:{item_id} ---", bold=True))
+    click.echo(body)
+
+
 @owner.command("promote")
 @click.argument("kind")
 @click.argument("item_id")
@@ -311,3 +332,100 @@ def allowlist(user):
         note = f"  ({r['note']})" if r["note"] else ""
         click.echo(f"{click.style(r['status'].ljust(8), fg=color)} "
                    f"{r['surface']}:{r['target']}{note}")
+
+
+# --- Money loop: invoice admin ----------------------------------------------
+
+def _bot_db_path():
+    """Resolve the live bot.db (x402_payment_requests home): DB_PATH env wins,
+    else the first existing candidate layout under the CLI data home."""
+    db_path_env = os.getenv("DB_PATH")
+    if db_path_env and os.path.isfile(db_path_env):
+        return db_path_env
+    from core.bootstrap import _resolve_cli_data_home
+    from core.db_manifest import candidate_sqlite_dbs
+    data_home, _, _ = _resolve_cli_data_home()
+    for p in candidate_sqlite_dbs(data_home):
+        if p.name == "bot.db" and p.is_file():
+            return str(p)
+    return None
+
+
+async def _with_bot_db(coro_factory):
+    """Open the bot DB, run coro_factory(db), close. Returns (ok, result_or_msg)."""
+    from pathlib import Path
+    path = _bot_db_path()
+    if not path:
+        return False, "no bot.db found (is this instance initialized?)"
+    from modules.database.connection import DatabaseConnection
+    db = DatabaseConnection(Path(path))
+    await db.connect()
+    try:
+        return True, await coro_factory(db)
+    finally:
+        await db.close()
+
+
+@owner.command("invoices")
+@click.option("--user", default=None, help="Tenant user_id (default: all invoice rows)")
+@click.option("--status", default=None, help="Filter: pending|completed|expired")
+def invoices(user, status):
+    """List agent-created x402 payment requests (invoices)."""
+    import asyncio
+
+    async def run(db):
+        from modules.x402.invoicing import list_payment_requests
+        if user:
+            return await list_payment_requests(user_id=user, status=status, db=db)
+        rows = await db.fetch_all(
+            "SELECT * FROM x402_payment_requests WHERE metadata LIKE ? "
+            "ORDER BY created_at DESC LIMIT 50",
+            ('%"kind": "agent_invoice"%',))
+        import json as _json
+        out = []
+        for r in rows or []:
+            try:
+                meta = _json.loads(r.get("metadata") or "{}")
+            except Exception:
+                meta = {}
+            if status and r.get("status") != status:
+                continue
+            out.append({"request_id": r["id"], "amount_usd": r.get("amount_usd"),
+                        "status": r.get("status"), "purpose": meta.get("purpose"),
+                        "created_at": r.get("created_at")})
+        return out
+
+    ok, rows = asyncio.run(_with_bot_db(run))
+    if not ok:
+        click.echo(click.style(str(rows), fg="yellow"))
+        return
+    if not rows:
+        click.echo(click.style("no invoices", dim=True))
+        return
+    for r in rows:
+        color = {"pending": "yellow", "completed": "green", "expired": "red"}.get(r["status"], "white")
+        click.echo(f"{click.style(str(r['status']).ljust(10), fg=color)} "
+                   f"{r['request_id']}  ${float(r['amount_usd'] or 0):.2f}  "
+                   f"{r.get('purpose') or '(no purpose)'}  ({r.get('created_at')})")
+
+
+@owner.command("settle")
+@click.argument("request_id")
+@click.option("--tx-hash", default=None, help="On-chain tx hash, if any")
+def settle(request_id, tx_hash):
+    """Attest an invoice as PAID (pending -> completed). The settlement watcher
+    then wakes the originating session and emits payment_settled."""
+    import asyncio
+
+    async def run(db):
+        from modules.x402.invoicing import settle_payment_request
+        return await settle_payment_request(request_id, transaction_hash=tx_hash, db=db)
+
+    ok, settled = asyncio.run(_with_bot_db(run))
+    if not ok:
+        click.echo(click.style(str(settled), fg="yellow"))
+    elif settled:
+        click.echo(click.style(f"settled {request_id}", fg="green"))
+    else:
+        click.echo(click.style(
+            f"{request_id} not settled (unknown id or not pending)", fg="yellow"))

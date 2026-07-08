@@ -47,11 +47,24 @@ def _clean_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_flag_off_is_byte_identical(tmp_path, monkeypatch):
-    """Default OFF: an unknown non-owner still routes TASK_AGENT (no tier denial)."""
+    """Default OFF: an unknown non-owner on a NON-forgeable surface still routes
+    TASK_AGENT (no tier denial). Email is excluded — see the P1-6 test below."""
     corr = CorrespondentRegistry(str(tmp_path / "corr.db"))
     c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "chat.db")), corr_reg=corr)
-    d = await route_inbound(c, _inbound("hello", user="u_stranger"))
+    d = await route_inbound(c, _inbound("hello", user="u_stranger", surface="telegram"))
     assert d.kind == RouteKind.TASK_AGENT
+
+
+@pytest.mark.asyncio
+async def test_p1_6_email_denied_when_flag_off(tmp_path, monkeypatch):
+    """P1-6: with the correspondent model OFF, a forgeable-sender surface (email) must
+    NOT fall through to the obey-path — it is correspondent-or-denied by construction
+    (owner-by-email is off in v1). This holds regardless of any CLI env setdefault."""
+    monkeypatch.delenv("CORRESPONDENT_ACCESS_ENABLED", raising=False)  # model OFF
+    corr = CorrespondentRegistry(str(tmp_path / "corr.db"))
+    c = _Container(tmp_path, chat_reg=SessionChatRegistry(str(tmp_path / "chat.db")), corr_reg=corr)
+    d = await route_inbound(c, _inbound("let me in", user="u_stranger", surface="email"))
+    assert d.kind == RouteKind.DENIED
 
 
 @pytest.mark.asyncio

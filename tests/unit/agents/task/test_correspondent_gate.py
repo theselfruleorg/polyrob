@@ -20,9 +20,38 @@ def test_high_impact_set_covers_the_dangerous_tools():
         assert is_high_impact(name), name
 
 
+def test_compute_posture_verbs_are_name_high_impact():
+    # shell + self_env + process verbs enumerated by NAME (not just tool-id), so a
+    # tainted session can't reach them even if the tool-id resolver faults.
+    for name in ("shell_run", "self_env_install_dep", "self_env_patch_source",
+                 "self_env_restart_service", "self_env_git_pull", "self_env_read_source",
+                 "process_kill", "process_log", "process_poll", "process_list"):
+        assert is_high_impact(name), name
+
+
 def test_low_impact_tools_pass():
-    for name in ("filesystem", "task", "perplexity", "session_search", "send_message"):
+    # P1-4: perplexity/anysite were moved to HIGH-impact (outbound egress = exfil
+    # channel, parity with web_fetch/browser), so they are no longer in this list.
+    for name in ("filesystem", "task", "session_search", "send_message"):
         assert not is_high_impact(name)
+
+
+def test_egress_and_money_verbs_are_high_impact():
+    # P1-4: money (x402_request) + outbound-egress (anysite/perplexity) + code-exec
+    # (run_code, name-parity with shell_run) + curated-memory write must be gated so a
+    # correspondent-tainted session can't mint payments, exfil via query params, run
+    # code, or persist injection into future prompts.
+    for name in ("x402_request", "anysite_api", "perplexity_search", "run_code",
+                 "memory", "anysite", "perplexity", "x402_invoice"):
+        assert is_high_impact(name), name
+
+
+def test_egress_money_verbs_blocked_via_tool_id_resolution():
+    # Same coverage through the full is_high_impact_call path (name + owning tool_id).
+    assert is_high_impact_call("x402_request", "x402_invoice")
+    assert is_high_impact_call("anysite_api", "anysite")
+    assert is_high_impact_call("perplexity_search", "perplexity")
+    assert is_high_impact_call("run_code", "code_execution")
 
 
 def test_crypto_read_actions_are_not_high_impact():
@@ -155,7 +184,9 @@ def test_high_impact_call_without_tool_id_falls_back_to_name():
     # Backward-compatible: with no resolver, decision matches the name-only path.
     assert is_high_impact_call("delegate_task", None)
     assert is_high_impact_call("place_limit_order", None)
-    assert not is_high_impact_call("run_code", None)  # name-only can't know its tool
+    # P1-4: run_code is now name-enumerated (parity with shell_run), so a tool-id
+    # resolver fault can no longer open code execution to a tainted session.
+    assert is_high_impact_call("run_code", None)
 
 
 def test_gate_hook_uses_resolver_to_block_dead_denylist_verbs():

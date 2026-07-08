@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Activity{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Activity{% endblock %}
+
+{% block head %}
+<link href="/static/css/activity.css?v=20260706-p1" rel="stylesheet">
+{% endblock %}
+
+{% block content %}
+<div class="terminal-container activity-page" {% if read_only %}data-read-only="1"{% endif %}>
+    <div class="activity-toolbar">
+        <span class="activity-title">live activity</span>
+        <span id="activity-conn" class="activity-conn" title="stream status">●</span>
+        <input id="activity-search" class="activity-search" type="text"
+               placeholder="filter text… (kind, session, summary)" autocomplete="off">
+        <div id="activity-kinds" class="activity-kinds" title="toggle kinds"></div>
+        <label class="activity-follow"><input type="checkbox" id="activity-follow" checked> follow</label>
+        <button id="activity-pause" class="activity-btn" type="button">pause</button>
+        <button id="activity-clear" class="activity-btn" type="button">clear</button>
+    </div>
+    <div id="activity-stream" class="activity-stream" aria-live="polite"></div>
+    <div id="activity-session-panel" class="activity-session-panel hidden">
+        <div class="activity-panel-head">
+            <span id="activity-panel-title">session</span>
+            <a id="activity-panel-open" href="/sessions" class="activity-btn">open session →</a>
+            <button id="activity-panel-close" class="activity-btn" type="button">×</button>
+        </div>
+        <div id="activity-panel-body" class="activity-panel-body"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/activity.js?v=20260706-p1"></script>
+{% endblock %}

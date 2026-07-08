@@ -51,20 +51,20 @@ async def _fires_on(n_steps) -> bool:
 
 @pytest.mark.asyncio
 async def test_first_step_always_fires(monkeypatch, _stub_build):
-    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda: 0)
+    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda **kw: 0)
     assert await _fires_on(1) is True
 
 
 @pytest.mark.asyncio
 async def test_cadence_zero_is_first_step_only(monkeypatch, _stub_build):
-    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda: 0)
+    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda **kw: 0)
     assert await _fires_on(2) is False
     assert await _fires_on(3) is False
 
 
 @pytest.mark.asyncio
 async def test_cadence_two_fires_on_even_steps(monkeypatch, _stub_build):
-    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda: 2)
+    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda **kw: 2)
     assert await _fires_on(1) is True   # first step always
     assert await _fires_on(2) is True   # 2 % 2 == 0
     assert await _fires_on(3) is False  # 3 % 2 == 1
@@ -73,7 +73,7 @@ async def test_cadence_two_fires_on_even_steps(monkeypatch, _stub_build):
 
 @pytest.mark.asyncio
 async def test_no_provider_message_never_raises(monkeypatch):
-    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda: 2)
+    monkeypatch.setattr(mp, "memory_prefetch_cadence", lambda **kw: 2)
 
     async def _none(query, *, session_id, user_id=None):
         return None

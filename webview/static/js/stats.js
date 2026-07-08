@@ -205,6 +205,15 @@ function updateDetailedStatsTab(stats) {
                     <div class="stats-label">Credits Used:</div>
                     <div class="stats-value">${credits.toLocaleString()}</div>
                 </div>
+                ${stats.cost_breakdown ? `
+                <div class="stats-item">
+                    <div class="stats-label">Provider (API) Cost:</div>
+                    <div class="stats-value">${formatCost(stats.cost_breakdown.api_cost_usd || stats.api_cost_usd || 0)}</div>
+                </div>
+                <div class="stats-item">
+                    <div class="stats-label">Markup:</div>
+                    <div class="stats-value">${formatCost(stats.cost_breakdown.markup_usd || 0)}</div>
+                </div>` : ''}
 
                 <div class="stats-divider"></div>
 
@@ -239,6 +248,11 @@ function updateDetailedStatsTab(stats) {
                                 <span class="label">Cost:</span>
                                 <span class="value highlight">${formatCost(model.cost)}</span>
                             </div>
+                            ${model.api_cost ? `
+                            <div class="model-stat">
+                                <span class="label">API cost:</span>
+                                <span class="value">${formatCost(model.api_cost)}</span>
+                            </div>` : ''}
                         </div>
                     </div>
                 `).join('') : '<div class="empty-state">No model usage data available</div>'}

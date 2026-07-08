@@ -159,6 +159,26 @@ try:
 except Exception as _e:  # never block tool import on the optional coding seam
     logging.getLogger(__name__).debug(f"coding registration skipped: {_e}")
 
+# Shell + process tools (computer-use parity WS-2/WS-3): registers the 'shell' +
+# 'process' descriptors + classes only when reachable (AGENT_COMPUTE_POSTURE>=1).
+# OFF by default; never in the default tool_ids; delegation-blocked. The per-call
+# compute_posture_allows gate still applies on every action.
+try:
+    from .shell import register_shell_tools
+    register_shell_tools()
+except Exception as _e:  # never block tool import on the optional shell seam
+    logging.getLogger(__name__).debug(f"shell registration skipped: {_e}")
+
+# self_env self-maintenance tool (computer-use parity WS-5): registers the 'self_env'
+# descriptor + class only at AGENT_COMPUTE_POSTURE>=2. OFF by default; never in the
+# default tool_ids; delegation-blocked. Every verb is compute_posture_allows(ctx,2)-
+# AND approval-gated (the Controller's posture-2 wiring).
+try:
+    from .self_env import register_self_env_tool
+    register_self_env_tool()
+except Exception as _e:  # never block tool import on the optional self_env seam
+    logging.getLogger(__name__).debug(f"self_env registration skipped: {_e}")
+
 # Git tool (P0-D): registers the 'git' descriptor + class only when GIT_TOOLS_ENABLED
 # is on (or under POLYROB_LOCAL via _SAFE_LOCAL_FLAGS). Never in the default tool_ids.
 try:
@@ -211,6 +231,14 @@ try:
     register_x402_tool()
 except Exception as _e:  # never block tool import on the optional x402 seam
     logging.getLogger(__name__).debug(f"x402 registration skipped: {_e}")
+
+# Agent x402 invoicing + accounting (money loop): registers 'x402_invoice'
+# only when X402_INVOICE_ENABLED=true. OFF by default; never in the default tool_ids.
+try:
+    from .x402 import register_x402_invoice_tool
+    register_x402_invoice_tool()
+except Exception as _e:  # never block tool import on the optional invoicing seam
+    logging.getLogger(__name__).debug(f"x402 invoice registration skipped: {_e}")
 
 # Build TOOL_COMPONENTS for backward compatibility
 TOOL_COMPONENTS: List[Tuple[str, Type[BaseTool]]] = [

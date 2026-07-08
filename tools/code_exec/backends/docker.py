@@ -178,6 +178,7 @@ class DockerBackend(ExecutionBackend):
         *,
         docker_runner: Optional[DockerRunner] = None,
         session_id: Optional[str] = None,
+        dev_mode: bool = False,
     ) -> None:
         self.image = os.getenv("CODE_EXEC_DOCKER_IMAGE", "python:3.12-slim")
         self.memory_mb = int(os.getenv("CODE_EXEC_CONTAINER_MEMORY_MB", "1024"))
@@ -219,6 +220,12 @@ class DockerBackend(ExecutionBackend):
         self._container: Optional[str] = None  # persistent container name, once created
         self._workdir: Optional[str] = None  # persistent container's host bind-mount dir
         self._setup_lock = asyncio.Lock()  # guards persistent-mode create-once-under-races
+        # WS-1 (compute posture): sandbox-dev entitlement for THIS backend instance.
+        # Only affects the PERSISTENT container's mounts (a writable /install bind is
+        # fixed at `docker run -d` time); the per-request python/-I-vs-/-s + env choice
+        # rides on ExecutionRequest.dev_mode. Callers construct dev backends only for
+        # sessions that passed compute_posture_allows(ctx, 1).
+        self._dev_mode = bool(dev_mode)
 
     # -- lifecycle ------------------------------------------------------------
 
@@ -238,14 +245,17 @@ class DockerBackend(ExecutionBackend):
             if self._container is not None:  # lost a setup() race to another waiter
                 return
             workdir = self._resolve_persistent_workdir()
-            network = self._resolve_network(ExecutionRequest(language="bash", code="true"))
+            network = self._resolve_setup_network()
             container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
+            install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
             argv = [
                 "run", "-d",
                 "--label", _SANDBOX_LABEL,
                 "--label", f"polyrob.session={self._session_id}",
                 "--name", container_name,
-            ] + self._hardening_flags(network=network, workdir_host=workdir) + [
+            ] + self._hardening_flags(
+                network=network, workdir_host=workdir, install_host=install_host
+            ) + self._publish_flags() + [
                 self.image, "sleep", "infinity",
             ]
             try:
@@ -307,6 +317,20 @@ class DockerBackend(ExecutionBackend):
             return text[: self.max_output] + f"\n...[truncated {len(text) - self.max_output} chars]", True
         return text, False
 
+    def _resolve_setup_network(self) -> str:
+        """Network for the persistent CONTAINER at ``docker run -d`` time.
+
+        A dev sandbox (posture>=1) is a NETWORKED dev environment by the posture-1
+        contract: importable pip installs AND port-publish (WS-4) both require egress,
+        and docker SILENTLY IGNORES ``-p`` under ``--network none``. So a dev container
+        defaults to ``bridge`` when ``CODE_EXEC_NETWORK`` is unset; an explicit value
+        (incl. ``none``) still wins. A non-dev persistent container is unchanged (uses
+        the plain policy, default ``none``).
+        """
+        if self._dev_mode and os.getenv("CODE_EXEC_NETWORK") is None:
+            return "bridge"
+        return self._resolve_network(ExecutionRequest(language="bash", code="true"))
+
     def _resolve_network(self, request: ExecutionRequest) -> str:
         """Map policy -> docker --network value. Never silently fall back to host."""
         policy = (request.network or os.getenv("CODE_EXEC_NETWORK", "none") or "none").lower()
@@ -314,18 +338,31 @@ class DockerBackend(ExecutionBackend):
             return "none"
         if policy == "host":
             return "host"
-        if policy == "egress":
+        if policy in ("egress", "bridge"):
+            # 'bridge' (the docker network name) aliases 'egress' — an operator who
+            # sets it means outbound-allowed, and silently degrading to no-network
+            # strands agent pip installs with confusing DNS errors (prod 2026-07-06).
             return "bridge"  # outbound allowed, no host namespace; operator adds egress proxy
+        logger.warning("CODE_EXEC_NETWORK policy %r unknown — denying network (use none|egress|host)",
+                       policy)
         return "none"
 
-    def _hardening_flags(self, *, network: str, workdir_host: str) -> List[str]:
+    def _hardening_flags(
+        self, *, network: str, workdir_host: str, install_host: Optional[str] = None
+    ) -> List[str]:
         """PURE: the ONE hardening-flag list shared by the ephemeral ``docker run
         --rm`` and the persistent container's ``docker run -d`` — kept in exactly one
         place so the two paths can never drift apart. Order matches the pre-P1-B
         ephemeral argv exactly (existing tests locate flags via ``.index()``, not
         position, but keep this stable regardless).
+
+        ``install_host`` (WS-1, sandbox-dev ONLY — callers pass it only for a
+        posture-entitled dev run): bind an additional writable ``/install`` dir for
+        importable pip installs. This is the ONLY mount relaxation dev mode gets —
+        the rootfs stays ``--read-only`` and every cap/pid/memory/user flag is
+        unchanged. ``None`` (the default) is byte-identical to the pre-WS-1 argv.
         """
-        return [
+        flags = [
             "--network", network,
             "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges",
@@ -337,19 +374,119 @@ class DockerBackend(ExecutionBackend):
             "--cpus", str(self.cpus),
             "--user", self.user,
             "-v", f"{workdir_host}:/workspace",
-            "-w", "/workspace",
         ]
+        if install_host:
+            flags += ["-v", f"{install_host}:/install"]
+        flags += ["-w", "/workspace"]
+        return flags
+
+    #: Env a sandbox-dev run gets by default: a writable HOME (pip cache/config),
+    #: PYTHONPATH so /install packages import under `python -s`, and PIP_TARGET so a
+    #: bare `pip install X` lands in /install without the agent spelling --target.
+    _DEV_ENV_DEFAULTS = {
+        "HOME": "/workspace",
+        "PYTHONPATH": "/install",
+        "PIP_TARGET": "/install",
+    }
 
     def _container_env_flags(self, request: ExecutionRequest) -> List[str]:
         """PURE: ``-e KEY=VALUE`` flags for the caller-supplied, secret-scrubbed env.
         Shared by the ephemeral ``docker run`` and persistent ``docker exec`` argv
-        builders so the scrub logic can't drift between the two paths."""
+        builders so the scrub logic can't drift between the two paths.
+
+        WS-1: a ``dev_mode`` request additionally gets :data:`_DEV_ENV_DEFAULTS`
+        (caller env wins on key collision). The secret-name scrub applies to the
+        MERGED map, and a non-dev request is byte-identical to before.
+        """
+        merged: dict = {}
+        if request.dev_mode:
+            merged.update(self._DEV_ENV_DEFAULTS)
+        merged.update(request.env or {})
         flags: List[str] = []
-        for k, v in (request.env or {}).items():
+        for k, v in merged.items():
             if SECRET_PAT.search(k):
                 continue  # never let a caller smuggle a secret-named var in
             flags += ["-e", f"{k}={v}"]
         return flags
+
+    def _publish_ports(self) -> List[int]:
+        """Container ports to publish to host loopback in dev persistent mode (WS-4).
+
+        Configured via ``CODE_EXEC_PUBLISH_PORTS`` (comma list; default the common dev
+        server ports). Only consulted for a dev persistent container — an ephemeral
+        ``--rm`` run is not a server and never publishes.
+        """
+        raw = os.getenv("CODE_EXEC_PUBLISH_PORTS", "8000,5000,8080,3000")
+        ports: List[int] = []
+        for part in raw.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            try:
+                p = int(part)
+            except ValueError:
+                continue
+            if 1 <= p <= 65535 and p not in ports:
+                ports.append(p)
+        return ports
+
+    def _publish_flags(self) -> List[str]:
+        """``-p 127.0.0.1::<cport>`` for each dev-published port (host port
+        docker-assigned/ephemeral, bound to LOOPBACK only — never 0.0.0.0). Empty for
+        a non-dev backend, so posture-0 / non-dev setup is byte-identical."""
+        if not self._dev_mode:
+            return []
+        flags: List[str] = []
+        for cport in self._publish_ports():
+            flags += ["-p", f"127.0.0.1::{cport}"]
+        return flags
+
+    async def published_ports(self) -> dict:
+        """Map ``{container_port: host_port}`` for this dev container's published
+        loopback ports (via ``docker port``). Empty for a non-dev / not-yet-setup
+        container. Never raises — a lookup failure degrades to ``{}``."""
+        if not self._dev_mode or self._container is None:
+            return {}
+        try:
+            code, out, _err = await self._docker(["port", self._container], timeout=self.max_timeout)
+        except Exception:
+            return {}
+        if code != 0:
+            return {}
+        mapping: dict = {}
+        for line in (out or "").splitlines():
+            # "8000/tcp -> 127.0.0.1:49153"
+            line = line.strip()
+            if "->" not in line or "/" not in line:
+                continue
+            left, _, right = line.partition("->")
+            cport_s = left.strip().split("/")[0].strip()
+            hostpart = right.strip().rsplit(":", 1)
+            if len(hostpart) != 2:
+                continue
+            try:
+                mapping[int(cport_s)] = int(hostpart[1].strip())
+            except ValueError:
+                continue
+        return mapping
+
+    @staticmethod
+    def _ensure_install_dir(workdir_host: str) -> str:
+        """Ensure + return the host dir bind-mounted at ``/install`` for dev mode.
+
+        Lives under the session workspace (``<workspace>/.pylibs``) so installs
+        survive container reaps/restarts with the session. Mode 0o777 (best-effort)
+        because the container user (e.g. forced 65534:65534 when the host process is
+        root) is generally NOT the host owner of the workspace tree — without it,
+        pip inside the container can't write and dev mode dies with EACCES.
+        """
+        path = os.path.join(workdir_host, ".pylibs")
+        try:
+            os.makedirs(path, exist_ok=True)
+            os.chmod(path, 0o777)
+        except Exception:
+            logger.warning("dev-mode: could not prepare install dir %s", path, exc_info=True)
+        return path
 
     def _resolve_persistent_workdir(self) -> str:
         """Ensure + return the host dir bind-mounted into the persistent container.
@@ -388,14 +525,20 @@ class DockerBackend(ExecutionBackend):
         """
         lang = (request.language or "").lower()
         argv = ["docker", "run", "--rm"] + self._hardening_flags(
-            network=self._resolve_network(request), workdir_host=workdir
+            network=self._resolve_network(request), workdir_host=workdir,
+            # dev run: bind <workdir>/.pylibs as the writable /install (path built
+            # here purely; _run_ephemeral pre-creates the dir before invoking).
+            install_host=os.path.join(workdir, ".pylibs") if request.dev_mode else None,
         )
         if request.stdin is not None:
             argv.append("-i")  # keep stdin open
         argv += self._container_env_flags(request)
         argv.append(self.image)
         if lang in _PY:
-            argv += ["python", "-I", "-c", request.code]
+            # dev mode: `-s` (no user-site) instead of `-I` — `-I` implies -E and
+            # would ignore the PYTHONPATH=/install that makes installs importable.
+            # Posture-0 keeps `-I` byte-identical (load-bearing isolation).
+            argv += ["python", "-s" if request.dev_mode else "-I", "-c", request.code]
         elif lang in _SH:
             argv += ["bash", "-c", request.code]
         else:
@@ -422,6 +565,8 @@ class DockerBackend(ExecutionBackend):
         workdir = request.workdir or tempfile.mkdtemp(prefix="rob_docker_")
         created_tmp = request.workdir is None
         os.makedirs(workdir, exist_ok=True)
+        if request.dev_mode:
+            self._ensure_install_dir(workdir)  # pre-create so docker doesn't root-own it
         argv = self._build_run_argv(request, workdir)
         env = build_child_env({})  # env for the docker CLI process itself (PATH/HOME only)
         stdin_bytes = (request.stdin or "").encode() if request.stdin else None
@@ -518,7 +663,9 @@ class DockerBackend(ExecutionBackend):
         # and kills that whole group, catching any children it spawns too.
         argv += ["timeout", "--signal=KILL", str(clamped_sec)]
         if lang in _PY:
-            argv += ["python", "-I", "-c", request.code]
+            # Same dev-vs-isolated choice as the ephemeral builder (see
+            # _build_run_argv): `-s` + PYTHONPATH=/install only for a dev request.
+            argv += ["python", "-s" if request.dev_mode else "-I", "-c", request.code]
         else:
             argv += ["bash", "-c", request.code]
 
@@ -539,6 +686,33 @@ class DockerBackend(ExecutionBackend):
             stdout=out_text, stderr=err_text, exit_code=code, timed_out=timed_out,
             truncated=t1 or t2, duration_sec=time.monotonic() - start, backend=self.name,
         )
+
+    async def exec_detached(self, script: str) -> int:
+        """PERSISTENT-only: launch ``script`` DETACHED in the session container
+        (``docker exec -d``) so a background job (e.g. a server) survives the call.
+
+        Used by the `shell` tool's background path (WS-2). Unlike ``run()`` there is
+        NO in-container ``timeout`` wrapper — a background job is meant to outlive the
+        call; its lifetime is bounded instead by the `process` tool's kill and by the
+        container's own reaping. Raises if this backend isn't persistent (a detached
+        job in an ephemeral ``--rm`` container would vanish immediately).
+        """
+        if self._session_id is None:
+            raise ExecutionBackendError(
+                "exec_detached requires a persistent (session-scoped) docker backend"
+            )
+        if self._container is None:
+            await self.setup()
+        argv = ["exec", "-d", "-w", "/workspace", self._container, "bash", "-c", script]
+        try:
+            code, _out, err = await self._docker(argv, timeout=self.max_timeout)
+        except _DockerExecTimeout as e:
+            raise ExecutionBackendError(f"docker exec -d (background) timed out: {e}") from e
+        if code != 0:
+            raise ExecutionBackendError(
+                f"docker exec -d (background) failed (exit {code}): {err}"
+            )
+        return code
 
     # -- crash-safety sweep -----------------------------------------------------
 

@@ -77,3 +77,17 @@ def test_router_wired_to_registry(tmp_path, monkeypatch):
     reg.bind("k1", "sess_1", "u1", "telegram", "555")
     # router holds the same registry instance -> resolve works
     assert router._registry.resolve("k1")["session_id"] == "sess_1"
+
+
+def test_task_agent_lite_does_not_hardcode_surfaces_db_path():
+    """SB-04 regression guard: the TaskAgent._initialize install must NOT pass a
+    hardcoded 'data/surfaces.db' (that made the idempotent bus pin the outbound
+    allowlist DB to ./data while `polyrob owner allow` writes <data_home>/surfaces.db).
+    It must call install_surface_bus with no explicit path so the config-aware default
+    resolves to container.config.data_dir."""
+    import inspect
+    import agents.task_agent_lite as tal
+
+    src = inspect.getsource(tal)
+    assert 'os.path.join("data", "surfaces.db")' not in src
+    assert "install_surface_bus(self.container)" in src

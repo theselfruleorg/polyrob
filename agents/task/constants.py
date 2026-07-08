@@ -307,6 +307,9 @@ _SAFE_LOCAL_FLAGS = frozenset({
     "SELF_WAKE_ENABLED",
     "SKILLS_WRITABLE",
     "SELF_CONTEXT_WRITABLE",
+    # Bounded owner-facts doc (USER.md-equivalent): safe on a single-user CLI
+    # (own tenant, quarantine-then-promote); multi-tenant server stays OFF.
+    "OWNER_DOC_WRITABLE",
     "BACKGROUND_REVIEW_ENABLED",
     "GOALS_ENABLED",
     "CURATOR_ENABLED",
@@ -401,7 +404,7 @@ def task_personality_block_enabled() -> bool:
     return _bool_env("TASK_PERSONALITY_BLOCK", False)
 
 
-def memory_prefetch_cadence() -> int:
+def memory_prefetch_cadence(autonomous: bool = False) -> int:
     """Steps between automatic memory re-prefetch (Phase 1.3).
 
     0 = prefetch on the FIRST step only (legacy, prod-safe). N>0 = ALSO prefetch
@@ -410,10 +413,13 @@ def memory_prefetch_cadence() -> int:
 
     Resolved at ACCESS time (not import) so it sees POLYROB_LOCAL even though that is
     set via os.environ.setdefault in bootstrap, which may run after this module is
-    first imported. Defaults to 3 under local mode, 0 on the multi-tenant server; an
-    explicit ``MEMORY_PREFETCH_CADENCE`` (incl. ``0``) always wins.
+    first imported. Defaults to 3 under local mode AND for an autonomous session
+    (SA-06 — a server goal/cron run otherwise recalled once at step 1, where the
+    brain enrichment is dead, and never again); 0 for server chat. An explicit
+    ``MEMORY_PREFETCH_CADENCE`` (incl. ``0``) always wins.
     """
-    return _int_env("MEMORY_PREFETCH_CADENCE", 3 if local_mode_enabled() else 0)
+    return _int_env("MEMORY_PREFETCH_CADENCE",
+                    3 if (local_mode_enabled() or autonomous) else 0)
 
 
 def hmem_tail_placement() -> bool:
@@ -425,11 +431,12 @@ def hmem_tail_placement() -> bool:
     step. As a tail suffix, the stable foundation + growing conversation form a
     cacheable prefix and only the small H-MEM suffix is reprocessed.
 
-    Resolved at access time. Defaults ON under POLYROB_LOCAL (where the owner soaks
-    it) and OFF on the multi-tenant server (byte-identical legacy) until soaked.
-    Explicit ``HMEM_TAIL_PLACEMENT`` wins.
+    Resolved at access time. Default ON everywhere (T1-09, 2026-07-06): it soaked
+    locally since 2026-06 with no regressions, while the OFF server default broke the
+    server prompt cache every step. Explicit ``HMEM_TAIL_PLACEMENT=false`` restores
+    the legacy foundation placement.
     """
-    return _bool_env("HMEM_TAIL_PLACEMENT", local_mode_enabled())
+    return _bool_env("HMEM_TAIL_PLACEMENT", True)
 
 
 def ticker_idle_backoff_enabled() -> bool:
@@ -482,6 +489,169 @@ def _safe_autonomy_default(flag_name: str) -> bool:
     return local_mode_enabled() if flag_name in _SAFE_LOCAL_FLAGS else False
 
 
+# --- W1-1: AUTONOMY_POSTURE — one coherent switch for the shipped-but-dark loops ----
+#
+# Five autonomy flags shipped wired but default-OFF in BOTH modes, each behind its own
+# env var, so making an instance actually verify + report its autonomous work meant
+# flipping five independent flags with no single lever (the "activation, not machinery"
+# gap). AUTONOMY_POSTURE is a second axis (orthogonal to _SAFE_LOCAL_FLAGS) that moves
+# the DEFAULTS of that group together. An explicit per-flag env ALWAYS wins (only the
+# default moves), and the unset/`silent` posture is byte-identical to today.
+#
+#   silent        (default) — today's behavior: autonomy runs but is unverified + silent.
+#   owner-visible — the agent's autonomous work becomes VERIFIED + owner-visible:
+#                   completion judge, blocker->owner escalation (+ ask), self-wake
+#                   delivery, continuity bridge. Safe for single-user local; on a
+#                   multi-tenant server it is an opt-in (unsolicited pushes / aux cost).
+#   full          — owner-visible PLUS time-based initiative (cron ticker).
+_POSTURE_OWNER_VISIBLE_FLAGS = frozenset({
+    "GOAL_COMPLETION_JUDGE",
+    "GOAL_BLOCKER_ESCALATION",
+    "GOAL_SELF_WAKE_ENABLED",
+    "AUTONOMOUS_CONTINUITY_BRIDGE",
+    # Continuity/learning trio: ON under the local profile, and an owner-visible
+    # posture also turns it on server-side (memory + verification, no
+    # unsolicited-cost initiative). Explicit env wins.
+    "EPISODIC_MEMORY_ENABLED",
+    "EPISODIC_DIGEST_INJECT",
+    "REFLECTION_ON_SESSION_CLOSE",
+    # Budget-aware dispatch: protective + owner-legible (raises an ask, holds spend).
+    "BUDGET_AWARE_AUTONOMY",
+})
+_POSTURE_FULL_FLAGS = _POSTURE_OWNER_VISIBLE_FLAGS | {"CRON_ENABLED", "WAKE_CHANGE_GATE"}
+_AUTONOMY_POSTURES = ("silent", "owner-visible", "full")
+
+
+def autonomy_posture() -> str:
+    """Resolved AUTONOMY_POSTURE (silent|owner-visible|full).
+
+    Default `silent` in BOTH modes (byte-identical to pre-W1-1). An unknown value
+    degrades to `silent` so a typo never silently activates autonomy. Access-time so
+    tests/bootstrap env changes are seen.
+    """
+    raw = (os.getenv("AUTONOMY_POSTURE") or "").strip().lower()
+    return raw if raw in _AUTONOMY_POSTURES else "silent"
+
+
+def _posture_autonomy_default(flag_name: str) -> bool:
+    """Default for a posture-governed autonomy flag, given the resolved posture."""
+    posture = autonomy_posture()
+    if posture == "full":
+        return flag_name in _POSTURE_FULL_FLAGS
+    if posture == "owner-visible":
+        return flag_name in _POSTURE_OWNER_VISIBLE_FLAGS
+    return False  # silent: today's defaults
+
+
+# --- AGENT_COMPUTE_POSTURE — the compute-capability ladder (computer-use parity) ----
+#
+# A THIRD capability axis, orthogonal to POLYROB_LOCAL (single-user trust profile)
+# and AUTONOMY_POSTURE (which autonomy loops run): how much host/compute capability
+# the agent has.
+#
+#   0  confined      (default) — today's docker sandbox, no persistent shell.
+#   1  sandbox-dev   — persistent networked sandbox + importable pip installs +
+#                      `shell` scoped INTO the container + loopback port-publish.
+#   2  self-maintain — posture 1 + the approval-gated `self_env` verbs.
+#   3  host          — Hermes-parity host access; requires POLYROB_LOCAL and a
+#                      single-tenant box (refused on network-facing surfaces).
+#
+# SECURITY CONTRACT:
+# - Default CLOSED: unset/garbage/out-of-range -> 0. Garbage NEVER rounds up —
+#   only the literal values 0|1|2|3 are accepted (a typo'd "9" must not grant the
+#   host tier).
+# - FROZEN AT IMPORT: the value is snapshotted once at module import so a
+#   mid-process env mutation (e.g. a prompt-injected write that reached an
+#   env-mutating surface) can never raise the running posture. Operators set it
+#   in real process env (systemd EnvironmentFile / shell / dotenv loaded at
+#   process start, see main.py) — never at runtime.
+# - The posture is the "may" side only; the existing correspondent-taint gate and
+#   delegation blocklist stay the "never" side. `compute_posture_allows` is the
+#   ONE predicate every posture-gated capability must call.
+
+def _resolve_compute_posture(raw) -> int:
+    """PURE: parse one env value -> posture int. Only literal 0|1|2|3 accepted;
+    anything else (unset/garbage/out-of-range) degrades CLOSED to 0."""
+    try:
+        val = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 0
+    return val if val in (0, 1, 2, 3) else 0
+
+
+_COMPUTE_POSTURE_FROZEN = _resolve_compute_posture(os.getenv("AGENT_COMPUTE_POSTURE"))
+
+
+def compute_posture() -> int:
+    """Resolved AGENT_COMPUTE_POSTURE (0-3), FROZEN at import (see block comment)."""
+    return _COMPUTE_POSTURE_FROZEN
+
+
+def _refreeze_compute_posture_for_tests() -> int:
+    """TEST-ONLY seam: re-snapshot the frozen posture from the current env.
+
+    Production code must never call this — the freeze is the security property.
+    """
+    global _COMPUTE_POSTURE_FROZEN
+    _COMPUTE_POSTURE_FROZEN = _resolve_compute_posture(os.getenv("AGENT_COMPUTE_POSTURE"))
+    return _COMPUTE_POSTURE_FROZEN
+
+
+# Turn kinds that mark a forged (non-user) re-entry — kept in sync lazily with
+# agents.task.agent.core.self_wake.FORGED_TURN_KINDS (the SSOT, stdlib-only module);
+# this literal fallback only serves if that import ever fails, and failing CLOSED
+# here means "treat as forged", never "let it through".
+_FORGED_TURN_KINDS_FALLBACK = ("self_wake", "delegation_result")
+
+
+def compute_posture_allows(execution_context, min_posture: int) -> bool:
+    """THE single gate predicate for posture-gated compute capabilities.
+
+    True only when ALL hold:
+      (a) frozen ``compute_posture() >= min_posture``;
+      (b) the session tenant is the OWNER — ``is_owner_local_safe`` (principal
+          match always wins; the POLYROB_LOCAL bypass is honored ONLY for the
+          CLI's ``local`` operator tenant, so a forgeable network sender under
+          POLYROB_LOCAL=1 on a public surface is never auto-owned);
+      (c) not a leaf/sub-agent context;
+      (d) not a forged self-wake/delegation-result re-entry turn (the
+          ``metadata["turn_kind"]`` stamp, SK-F10).
+
+    An autonomous goal/cron session of the owner tenant PASSES (no forged stamp;
+    role is orchestrator) — deliberate: WS-8 provisions those runs with the
+    compute toolset, and the correspondent-taint gate + delegation blocklist
+    remain the independent "never" side. ``min_posture <= 0`` is the
+    unconditional baseline (posture-0 capabilities keep their own gates).
+    Fail-CLOSED: any fault in resolution denies.
+    """
+    if min_posture <= 0:
+        return True
+    try:
+        if compute_posture() < min_posture:
+            return False
+        if execution_context is None:
+            return False
+        if getattr(execution_context, "is_sub_agent", False):
+            return False
+        if getattr(execution_context, "role", "leaf") != "orchestrator":
+            return False
+        metadata = getattr(execution_context, "metadata", None) or {}
+        try:
+            from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as _kinds
+        except Exception:
+            _kinds = _FORGED_TURN_KINDS_FALLBACK
+        if metadata.get("turn_kind") in _kinds:
+            return False
+        from core.instance import is_owner_local_safe, resolve_owner_principal
+        return is_owner_local_safe(
+            getattr(execution_context, "user_id", None),
+            owner_principal=resolve_owner_principal(),
+            local_enabled=local_mode_enabled(),
+        )
+    except Exception:
+        return False  # fail-closed: can't prove entitlement -> deny
+
+
 class AutonomyConfig:
     """Feature flags + caps for the autonomy/continuous-learning loops.
 
@@ -530,6 +700,17 @@ class AutonomyConfig:
     def self_context_require_review() -> bool:
         return _bool_env("SELF_CONTEXT_REQUIRE_REVIEW", True)
 
+    # Bounded owner-facts doc (USER.md-equivalent) — agent-maintained per-(instance,
+    # user) document of durable owner facts/preferences, injected on the SELF/SOUL
+    # seam. Same quarantine-then-promote model as SELF; ON under the local profile.
+    @staticmethod
+    def owner_doc_writable() -> bool:
+        return _bool_env("OWNER_DOC_WRITABLE", _safe_autonomy_default("OWNER_DOC_WRITABLE"))
+
+    @staticmethod
+    def owner_doc_require_review() -> bool:
+        return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
+
     # §7.1 — self-evolution transparency + owner control loop
     @staticmethod
     def self_evolution_transparency() -> bool:
@@ -556,6 +737,13 @@ class AutonomyConfig:
     @staticmethod
     def cron_delivery_enabled() -> bool:
         return _bool_env("CRON_DELIVERY_ENABLED", False)
+
+    # Owner daily digest: a cron job carrying payload.digest is composed
+    # deterministically ($0, no model turn) from the ledger + event log + open
+    # asks and pushed via the cron delivery rail. Default OFF.
+    @staticmethod
+    def owner_digest_enabled() -> bool:
+        return _bool_env("OWNER_DIGEST_ENABLED", False)
 
     # W4 — durable goal board
     @staticmethod
@@ -616,25 +804,62 @@ class AutonomyConfig:
     @staticmethod
     def goal_self_wake_enabled() -> bool:
         # Was unconditional; redundant-cost finding (grok livetest 2026-06-27).
-        return _bool_env("GOAL_SELF_WAKE_ENABLED", False)
+        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
+        return _bool_env("GOAL_SELF_WAKE_ENABLED",
+                         _posture_autonomy_default("GOAL_SELF_WAKE_ENABLED"))
+
+    # Budget-aware dispatch: before claiming a goal, consult the unified ledger for
+    # the tenant's trailing spend; over budget -> raise an owner-visible ask and
+    # hold the goal instead of burning credits. Default governed by AUTONOMY_POSTURE
+    # (owner-visible/full) — a protective, owner-legible behavior. Explicit env wins.
+    @staticmethod
+    def budget_aware_autonomy() -> bool:
+        return _bool_env("BUDGET_AWARE_AUTONOMY",
+                         _posture_autonomy_default("BUDGET_AWARE_AUTONOMY"))
+
+    @staticmethod
+    def autonomy_budget_usd() -> float:
+        """Trailing-window spend ceiling for autonomous goal dispatch (USD).
+        <=0 disables the ceiling (never over budget)."""
+        try:
+            return float(os.getenv("AUTONOMY_BUDGET_USD", "10"))
+        except (TypeError, ValueError):
+            return 10.0
+
+    @staticmethod
+    def autonomy_budget_window_days() -> int:
+        return _int_env("AUTONOMY_BUDGET_WINDOW_DAYS", 1)
 
     # §3.2 (goal-completion-verification, 2026-07-05) — judge a completed goal's
-    # acceptance with a cheap aux model. Default OFF (verify on prod, then flip);
-    # 'unmet' -> record_failure, 'unclear'/error/timeout -> pass (fail-open).
+    # acceptance with a cheap aux model. 'unmet' -> record_failure, 'unclear'/error/
+    # timeout -> pass (fail-open). W1-1: default governed by AUTONOMY_POSTURE.
     @staticmethod
     def goal_completion_judge() -> bool:
-        return _bool_env("GOAL_COMPLETION_JUDGE", False)
+        return _bool_env("GOAL_COMPLETION_JUDGE",
+                         _posture_autonomy_default("GOAL_COMPLETION_JUDGE"))
 
     @staticmethod
     def goal_judge_timeout_sec() -> int:
         return _int_env("GOAL_JUDGE_TIMEOUT_SEC", 60)
+
+    # Wake change-gate: a change-gated cron review
+    # tick skips the paid model call when the tenant's observable state hasn't
+    # moved since the last tick (cron/wake_gate.py). Posture `full` turns it on
+    # by default — it pairs with CRON_ENABLED; per-job opt-in via
+    # payload.change_gated, delivery jobs never gated.
+    @staticmethod
+    def wake_change_gate() -> bool:
+        return _bool_env("WAKE_CHANGE_GATE",
+                         _posture_autonomy_default("WAKE_CHANGE_GATE"))
 
     # §7.2 — blocker → owner escalation. When a goal trips the circuit breaker
     # (status='blocked') OR the pipeline drains, surface a concrete ask to the owner
     # instead of dying silently. Default OFF (an unsolicited owner push is opt-in).
     @staticmethod
     def goal_blocker_escalation() -> bool:
-        return _bool_env("GOAL_BLOCKER_ESCALATION", False)
+        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
+        return _bool_env("GOAL_BLOCKER_ESCALATION",
+                         _posture_autonomy_default("GOAL_BLOCKER_ESCALATION"))
 
     @staticmethod
     def goal_empty_pipeline_escalate_after() -> int:
@@ -648,7 +873,9 @@ class AutonomyConfig:
     # token cost before flipping on).
     @staticmethod
     def autonomous_continuity_bridge() -> bool:
-        return _bool_env("AUTONOMOUS_CONTINUITY_BRIDGE", False)
+        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
+        return _bool_env("AUTONOMOUS_CONTINUITY_BRIDGE",
+                         _posture_autonomy_default("AUTONOMOUS_CONTINUITY_BRIDGE"))
 
     # W5 — curator
     @staticmethod
@@ -724,15 +951,36 @@ class AutonomyConfig:
         return _bool_env("KB_AUTO_PREFETCH", _safe_autonomy_default("KB_AUTO_PREFETCH"))
 
     # Task 2 — episodic activity ledger (durable per-run provenance rows).
-    # Default ON under POLYROB_LOCAL (single-user CLI), OFF on the server.
+    # Default ON under POLYROB_LOCAL (single-user CLI) OR AUTONOMY_POSTURE
+    # owner-visible/full (verified + owner-visible autonomy implies a durable
+    # activity ledger, so episodic is part of the posture group).
     @staticmethod
     def episodic_memory_enabled() -> bool:
-        return _bool_env("EPISODIC_MEMORY_ENABLED", _safe_autonomy_default("EPISODIC_MEMORY_ENABLED"))
+        return _bool_env("EPISODIC_MEMORY_ENABLED",
+                         _safe_autonomy_default("EPISODIC_MEMORY_ENABLED")
+                         or _posture_autonomy_default("EPISODIC_MEMORY_ENABLED"))
 
     # Task 3 — inject a recent-episodes digest into the session.
     @staticmethod
     def episodic_digest_inject() -> bool:
-        return _bool_env("EPISODIC_DIGEST_INJECT", _safe_autonomy_default("EPISODIC_DIGEST_INJECT"))
+        return _bool_env("EPISODIC_DIGEST_INJECT",
+                         _safe_autonomy_default("EPISODIC_DIGEST_INJECT")
+                         or _posture_autonomy_default("EPISODIC_DIGEST_INJECT"))
+
+    # Session-close reflection (consolidate a short session's findings
+    # at close; one extra aux call per closed session). Posture-governed so an
+    # owner-visible instance actually learns from its autonomous runs. Consumer:
+    # modules/memory/task/task_context_manager.py (reads this resolver lazily).
+    @staticmethod
+    def reflection_on_session_close() -> bool:
+        return _bool_env("REFLECTION_ON_SESSION_CLOSE",
+                         _posture_autonomy_default("REFLECTION_ON_SESSION_CLOSE"))
+
+    # Restart-durable autonomy state (background delegations + reentry
+    # budgets in autonomy_state.db). Default ON; off restores volatile registries.
+    @staticmethod
+    def autonomy_state_durable() -> bool:
+        return _bool_env("AUTONOMY_STATE_DURABLE", True)
 
     # Task 4 — cross-session continuity bridge (thread_key stitching).
     @staticmethod
@@ -961,11 +1209,10 @@ COMPACTION_AUX_MODEL = os.getenv('COMPACTION_AUX_MODEL', '')
 # escalation remains the hard backstop, so the loop bound is unchanged.
 ALLOWED_REASONING_TURNS = int(os.getenv('ALLOWED_REASONING_TURNS', '1'))
 
-# S-1: progressive skill disclosure. When OFF (default) skills are eager-injected
-# full-body as a pinned user message every step (~3.2k tok). When ON, only a compact
-# <skill-catalog> (ids + one-line descriptions, ~0.15k) is injected and the agent
-# pulls a skill's full body on demand via the load_skill(skill_id) tool. Off keeps
-# production behavior byte-identical.
+# S-1: progressive skill disclosure. When ON (the DEFAULT — see the function below),
+# only a compact <skill-catalog> (ids + one-line descriptions, ~0.15k) is injected and
+# the agent pulls a skill's full body on demand via the load_skill(skill_id) tool. When
+# OFF, skills are eager-injected full-body as a pinned user message (~3.2k tok).
 def skill_progressive_disclosure() -> bool:
     """Access-time gate (mirrors skill_catalog_include_all). Default ON.
 
@@ -1083,11 +1330,12 @@ MODELS_NEEDING_TOOL_INSTRUCTIONS = [
 # block (MODELS_NEEDING_TOOL_INSTRUCTIONS) above and is not duplicated here.
 # ---------------------------------------------------------------------------
 GEMINI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (Gemini)
-- Call exactly one function per step unless several are truly independent; do not
-  narrate a plan instead of calling a function — a step with no function call is rejected.
+- Call exactly one function per step unless several are truly independent; after an
+  optional brief planning turn, include at least one function call each step.
 - Use the exact tool names from the schema; do not invent wrapper names.
-- To reply to the user and finish, call done(text=...). A non-blocking send_message
-  does not end your turn.
+- To reply to the user and finish, call done(text=...). A single non-blocking
+  send_message does not end your turn; if you only reply without acting for a couple of
+  steps the runtime ends the turn for you.
 """
 
 OPENAI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (GPT)
@@ -1101,8 +1349,9 @@ KIMI_FAMILY_INSTRUCTIONS = """## MODEL NOTE (Kimi)
 - Return tool calls as structured function calls only — never write tool-call
   delimiter tokens (e.g. <|tool_call_begin|>) into your text content.
 - One function call per step is enough; don't repeat the same message across steps.
-- To greet/answer and finish, call done(text=...). A non-blocking send_message does
-  not end your turn and will make you repeat yourself.
+- To greet/answer and finish, call done(text=...). A single non-blocking send_message
+  does not end your turn; if you only reply without acting for a couple of steps the
+  runtime ends the turn for you, so prefer done() to finish deliberately.
 """
 
 # Substring → guidance. First match on the lowercased model name wins.
@@ -1111,6 +1360,21 @@ MODEL_FAMILY_INSTRUCTIONS = [
     ('gemini', GEMINI_FAMILY_INSTRUCTIONS),
     ('gpt', OPENAI_FAMILY_INSTRUCTIONS),
 ]
+
+# T1-10: families that reliably emit the brain-state JSON without a per-step
+# reminder. The prompt is authored for Claude (MODEL_FAMILY_INSTRUCTIONS gives it
+# no family note), so the INJECT_FORMAT_HINT_EARLY native-mode nag is pure noise
+# there — one wasted uncached message per step. Same needle mechanism as the
+# family notes: matched on the model name (plus the resolved provider).
+FORMAT_NAG_EXEMPT_FAMILIES = ('claude',)
+
+
+def format_nag_exempt(model_name: str, provider: str = "") -> bool:
+    """Whether the per-step brain-state format reminder should be skipped."""
+    name = (model_name or "").lower()
+    if any(needle in name for needle in FORMAT_NAG_EXEMPT_FAMILIES):
+        return True
+    return (provider or "").lower() == "anthropic"
 
 # OpenRouter models that may need extra help
 OPENROUTER_MODELS_NEEDING_HELP = [

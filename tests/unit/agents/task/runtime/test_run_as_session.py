@@ -135,3 +135,59 @@ def test_genuine_completion_is_not_refusal():
     # a real success must still be recorded as success
     assert is_refusal("Session completed successfully") is False
     assert is_refusal("Done — wrote report.md") is False
+
+
+# --- T2-01: completed_via_done — distinguish a genuine done() from a stopped run ---
+
+from agents.task.runtime.run_as_session import completed_via_done
+
+
+class _Res:
+    def __init__(self, is_done):
+        self.is_done = is_done
+
+
+class _AgentStub:
+    def __init__(self, last_result, is_sub=False):
+        self._last_result = last_result
+        self._is_sub_agent = is_sub
+
+
+class _Orch:
+    def __init__(self, agents):
+        # agents: dict id -> agent stub
+        self.agents = agents
+
+
+def test_completed_via_done_true_when_last_result_is_done():
+    orch = _Orch({"main": _AgentStub([_Res(False), _Res(True)])})
+    assert completed_via_done(orch) is True
+
+
+def test_completed_via_done_false_when_ran_but_no_done():
+    # last result exists (the loop ran) but nothing is_done -> exhausted / drifted
+    orch = _Orch({"main": _AgentStub([_Res(False), _Res(False)])})
+    assert completed_via_done(orch) is False
+
+
+def test_completed_via_done_none_when_undeterminable():
+    assert completed_via_done(None) is None                    # no orchestrator
+    assert completed_via_done(_Orch({})) is None               # no agents
+    assert completed_via_done(_Orch({"m": _AgentStub(None)})) is None  # no last_result read
+
+
+def test_completed_via_done_ignores_sub_agents():
+    # a done sub-agent must NOT count as the main run completing
+    orch = _Orch({
+        "sub": _AgentStub([_Res(True)], is_sub=True),
+        "main": _AgentStub([_Res(False)]),
+    })
+    assert completed_via_done(orch) is False
+
+
+def test_completed_via_done_true_if_any_main_agent_done():
+    orch = _Orch({
+        "a": _AgentStub([_Res(False)]),
+        "b": _AgentStub([_Res(True)]),
+    })
+    assert completed_via_done(orch) is True

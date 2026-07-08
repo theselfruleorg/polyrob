@@ -239,13 +239,14 @@ async def test_validate_output_flag_on_lazily_provisions_judge_once():
         return _V()
 
     provisioned_judge.with_structured_output = _judge_structured
-    spy = MagicMock(return_value=provisioned_judge)
-    agent._provision_aux_llm = spy
+    # P2-9: _validate_output provisions the judge via the ASYNC form now.
+    spy = AsyncMock(return_value=provisioned_judge)
+    agent._provision_aux_llm_async = spy
 
     await agent._validate_output()
     await agent._validate_output()
 
-    spy.assert_called_once_with("judge")
+    spy.assert_awaited_once_with("judge")
     assert agent._judge_llm is provisioned_judge
 
 

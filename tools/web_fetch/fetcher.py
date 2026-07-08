@@ -97,7 +97,19 @@ async def safe_fetch(
 	current = url
 	for _hop in range(max_redirects + 1):
 		pinned_ip: Optional[str] = None
-		if validate:
+		# WS-4 (compute posture): a NARROW exception for the agent's OWN sandbox server —
+		# a loopback URL on a host port the sandbox actually published skips SSRF
+		# validation and pins to 127.0.0.1. Empty unless the sandbox published a port
+		# (posture >= 1); never matches RFC1918 or cloud metadata (not loopback).
+		_loopback_ok = False
+		try:
+			from tools.shell.loopback_allow import is_loopback_allowed
+			_loopback_ok = is_loopback_allowed(current)
+		except Exception:
+			_loopback_ok = False
+		if validate and _loopback_ok:
+			pinned_ip = "127.0.0.1"
+		elif validate:
 			# validate_and_resolve does a BLOCKING socket.getaddrinfo; offload it to a
 			# thread so a slow/sinkhole DNS can't freeze the whole event loop (every
 			# other session/request on this worker) for the resolver timeout.

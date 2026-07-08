@@ -54,6 +54,10 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
 # so ordinary project files stay editable. See is_credential_file().
 CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     ".env*",
+    "*.env",   # WS-7: catch `polyrob.env`, `prod.env` etc — the prod env file's
+               # basename does NOT start with `.env`, so `.env*` alone missed it,
+               # leaving the file that holds AGENT_COMPUTE_POSTURE + approval flags
+               # writable by an agent surface (a self-posture-escalation path).
     "*.pem",
     "*.key",
     "*.p12",
@@ -72,6 +76,34 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     ".polyrob/.env",
     ".rob/.env",
 )
+
+# WS-7: absolute system config directories whose contents are HARD-DENIED for any
+# agent-writable surface (esp. the posture-2 `self_env` patch_source, which reaches
+# the install tree). These hold the frozen security flags / secrets; the agent must
+# never edit them. Source files elsewhere under the install tree stay patchable.
+PROTECTED_CONFIG_DIRS: tuple[str, ...] = (
+    "/etc/polyrob",
+    "/etc/rob",
+)
+
+
+def is_protected_config_path(path: Path) -> bool:
+    """True if *path* is inside a protected system-config dir (WS-7).
+
+    Realpath-free NAME/prefix check on the given path (callers that need traversal
+    safety realpath first). Complements :func:`is_credential_file` (name-shaped
+    secrets anywhere) with a location rule for absolute system config the self_env
+    tool could otherwise reach.
+    """
+    try:
+        s = str(path)
+    except Exception:
+        return False
+    norm = s.replace("\\", "/")
+    for d in PROTECTED_CONFIG_DIRS:
+        if norm == d or norm.startswith(d + "/"):
+            return True
+    return False
 
 
 def is_credential_file(path: Path) -> bool:

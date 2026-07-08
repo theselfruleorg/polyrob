@@ -741,20 +741,6 @@ select {
         font-size: 11px;
     }
 
-    .beta-warning-banner {
-        padding: 3px max(10px, env(safe-area-inset-right)) 3px max(10px, env(safe-area-inset-left));
-        padding-right: max(35px, calc(25px + env(safe-area-inset-right))); /* Space for close button on mobile */
-        font-size: 11px; /* Increased from 9px for mobile readability */
-        line-height: 1.3; /* Slightly increased for better readability */
-    }
-    
-    .beta-warning-content {
-        display: block;
-        text-align: center;
-        line-height: 1.3;
-        word-wrap: break-word;
-        overflow-wrap: break-word;
-    }
 
     /* Hide footer on mobile - conflicts with keyboard and input */
     .terminal-footer {
@@ -3203,91 +3189,6 @@ pre a.content-url,
 .param-value.url-value a:hover {
     color: var(--color-accent-green);
     text-decoration: underline;
-}
-
-/* Beta Warning Banner */
-.beta-warning-banner {
-    flex-shrink: 0;
-    background: rgba(40, 45, 50, 0.8);
-    color: var(--color-text-secondary);
-    padding: 4px 20px;
-    padding-right: 40px;
-    text-align: center;
-    font-size: 10px;
-    font-weight: 400;
-    border-bottom: 1px solid var(--color-border);
-    line-height: 1.3;
-    position: relative;
-    transition: opacity 0.3s ease, max-height 0.3s ease;
-    overflow: hidden;
-}
-
-.beta-warning-banner.hidden {
-    opacity: 0;
-    max-height: 0;
-    padding: 0 20px;
-    border-bottom: none;
-}
-
-.beta-warning-content {
-    max-width: var(--content-max-width, 1400px);
-    margin: 0 auto;
-    display: block;
-    text-align: center;
-    line-height: 1.3;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-}
-
-.beta-warning-content a {
-    color: var(--color-accent-blue);
-    text-decoration: none;
-    font-weight: 400;
-    transition: color 0.2s ease;
-}
-
-.beta-warning-content a:hover {
-    color: var(--color-accent-green);
-    text-decoration: underline;
-}
-
-/* Banner Close Button */
-.banner-close-btn {
-    position: absolute;
-    right: 8px;
-    top: 50%;
-    transform: translateY(-50%);
-    background: transparent;
-    border: 1px solid rgba(123, 195, 201, 0.3);
-    color: var(--color-text-secondary);
-    width: 20px;
-    height: 20px;
-    border-radius: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    font-size: 16px;
-    line-height: 1;
-    padding: 0;
-    transition: all 0.2s ease;
-    font-family: monospace;
-    outline: none;
-}
-
-.banner-close-btn:hover {
-    background: rgba(123, 195, 201, 0.1);
-    border-color: var(--color-accent-teal);
-    color: var(--color-accent-teal);
-}
-
-.banner-close-btn:focus {
-    outline: none;
-    border-color: var(--color-accent-teal);
-}
-
-.banner-close-btn:active {
-    transform: translateY(-50%) scale(0.95);
 }
 
 /* Terminal Footer - Static positioning at bottom of flex body */

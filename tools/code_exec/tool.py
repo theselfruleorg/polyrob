@@ -8,13 +8,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
+import os
+import re
+import shlex
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
 from tools.code_exec import resolve_backend
 from tools.code_exec.result import ExecutionRequest
+
+# Conservative pip requirement-spec shape (name, extras, version pins) — NOT a shell
+# escape hatch. Everything is additionally shlex-quoted; this just rejects obvious
+# junk early with a clear message instead of a confusing in-sandbox pip error.
+_PKG_SPEC_RE = re.compile(r"^[A-Za-z0-9._+\-\[\],]+(?:[=<>!~]=?[A-Za-z0-9._*+!,<>=]*)?$")
+_MAX_PACKAGES = 20
 
 
 class RunCodeParams(BaseModel):
@@ -25,6 +34,17 @@ class RunCodeParams(BaseModel):
     stdin: Optional[str] = Field(None, description="Optional stdin fed to the program")
     timeout: Optional[float] = Field(
         None, description="Wall-clock seconds (clamped to CODE_EXEC_MAX_TIMEOUT_SEC)"
+    )
+    env: Optional[Dict[str, str]] = Field(
+        None,
+        description="Extra environment variables for the sandboxed process "
+                    "(secret-named keys are stripped)",
+    )
+    packages: Optional[List[str]] = Field(
+        None,
+        description="pip packages to install into the sandbox's /install dir before "
+                    "running (e.g. ['flask==3.0.0', 'pytest']). Requires the "
+                    "sandbox-dev compute posture and sandbox network.",
     )
 
 
@@ -42,7 +62,7 @@ class CodeExecutionTool(BaseTool):
         self._persistent_backends: dict = {}
         self._persistent_lock = asyncio.Lock()
 
-    async def _get_backend(self, execution_context=None):
+    async def _get_backend(self, execution_context=None, dev_mode: bool = False):
         """Resolve the backend to run on.
 
         PERSISTENT (opt-in, P1-B F7b): when ``CODE_EXEC_DOCKER_PERSISTENT`` is on
@@ -54,6 +74,12 @@ class CodeExecutionTool(BaseTool):
         EPHEMERAL (default, byte-for-byte unchanged): flag off, or no
         session_id — one process-wide, session-less backend cached on
         ``self._backend``, exactly as before this change.
+
+        ``dev_mode`` (WS-1): a posture-entitled call resolves/caches a DEV
+        persistent backend (writable ``/install`` mounted at setup). The cache is
+        keyed ``(sid, dev_mode)`` so a dev and a non-dev container for the same
+        session never share mounts; non-dev keeps the legacy
+        ``resolve_backend(session_id=sid)`` call shape byte-identically.
         """
         from tools.code_exec import code_exec_docker_persistent_enabled
 
@@ -62,15 +88,19 @@ class CodeExecutionTool(BaseTool):
             sid = getattr(execution_context, "session_id", None) or None
 
         if sid:
-            cached = self._persistent_backends.get(sid)
+            key = (sid, bool(dev_mode))
+            cached = self._persistent_backends.get(key)
             if cached is not None:
                 return cached
             async with self._persistent_lock:
-                cached = self._persistent_backends.get(sid)  # re-check: lost the race?
+                cached = self._persistent_backends.get(key)  # re-check: lost the race?
                 if cached is None:
-                    cached = resolve_backend(session_id=sid)
+                    if dev_mode:
+                        cached = resolve_backend(session_id=sid, dev_mode=True)
+                    else:
+                        cached = resolve_backend(session_id=sid)
                     await cached.setup()
-                    self._persistent_backends[sid] = cached
+                    self._persistent_backends[key] = cached
                 return cached
 
         if self._backend is None:
@@ -109,6 +139,19 @@ class CodeExecutionTool(BaseTool):
             return ActionResult(error=f"code exited with status {result.exit_code}\n{content}")
         return ActionResult(extracted_content=content)
 
+    @staticmethod
+    def _dev_mode_allowed(execution_context) -> bool:
+        """True iff this call is entitled to sandbox-dev mode (WS-1).
+
+        Rides the single posture predicate (posture >= 1 AND owner tenant AND
+        not leaf/sub-agent AND not a forged turn). Fail-closed on any fault.
+        """
+        try:
+            from agents.task.constants import compute_posture_allows
+            return bool(compute_posture_allows(execution_context, 1))
+        except Exception:
+            return False
+
     @BaseTool.action(
         "Execute python or bash code in a local subprocess (timeout + output cap + env allowlist)",
         param_model=RunCodeParams,
@@ -116,22 +159,69 @@ class CodeExecutionTool(BaseTool):
     async def run_code(self, params: RunCodeParams, execution_context=None):
         """Execute ``params.code`` via the configured backend; return an ActionResult."""
         from tools.code_exec.sandbox_guard import code_exec_execution_blocked_reason
+        from tools.controller.types import ActionResult
         blocked = code_exec_execution_blocked_reason()
         if blocked:
-            from tools.controller.types import ActionResult
             return ActionResult(error=blocked)
+
+        dev_mode = self._dev_mode_allowed(execution_context)
+        packages = [str(p).strip() for p in (params.packages or []) if str(p).strip()]
+        if packages:
+            if not dev_mode:
+                return ActionResult(error=(
+                    "packages requires the sandbox-dev compute posture "
+                    "(AGENT_COMPUTE_POSTURE>=1) and an owner-steered session. "
+                    "Write code that needs no extra dependencies, or ask the "
+                    "operator to raise the posture."
+                ))
+            if len(packages) > _MAX_PACKAGES:
+                return ActionResult(error=f"too many packages (max {_MAX_PACKAGES})")
+            # A leading '-' is a pip FLAG (e.g. '-rreq.txt' requirements-file install,
+            # '-e' editable, '--index-url' override), NOT a package — reject it even
+            # though shlex.quote wouldn't (a dash isn't a shell metachar, so pip still
+            # parses it as a flag and escapes the per-package-spec intent).
+            bad = [p for p in packages if p.startswith("-") or not _PKG_SPEC_RE.fullmatch(p)]
+            if bad:
+                return ActionResult(error=f"invalid package spec(s) (package names, not pip flags): {bad!r}")
+            net = (os.getenv("CODE_EXEC_NETWORK", "none") or "none").lower()
+            if net in ("none", ""):
+                return ActionResult(error=(
+                    "packages needs sandbox network egress, but CODE_EXEC_NETWORK "
+                    "is 'none'. The operator must set CODE_EXEC_NETWORK=egress."
+                ))
+
         try:
-            backend = await self._get_backend(execution_context)
+            backend = await self._get_backend(execution_context, dev_mode=dev_mode)
+            workdir = self._resolve_workdir(execution_context)
+
+            if packages:
+                quoted = " ".join(shlex.quote(p) for p in packages)
+                install_req = ExecutionRequest(
+                    language="bash",
+                    code=f"python -m pip install --no-input --target=/install {quoted}",
+                    timeout=None,  # backend clamps to CODE_EXEC_MAX_TIMEOUT_SEC
+                    workdir=workdir,
+                    dev_mode=True,
+                )
+                inst = await backend.run(install_req)
+                if inst.timed_out or inst.exit_code not in (0, None):
+                    tail = (inst.stderr or inst.stdout or "")[-1500:]
+                    return ActionResult(error=(
+                        f"package install failed (exit {inst.exit_code}"
+                        f"{', timed out' if inst.timed_out else ''}):\n{tail}"
+                    ))
+
             req = ExecutionRequest(
                 language=params.language,
                 code=params.code,
                 stdin=params.stdin,
                 timeout=params.timeout,
-                workdir=self._resolve_workdir(execution_context),
+                workdir=workdir,
+                env=dict(params.env or {}),
+                dev_mode=dev_mode,
             )
             result = await backend.run(req)
             return self._to_action_result(result)
         except Exception as e:
             getattr(self, "logger", logging.getLogger(__name__)).error(f"run_code failed: {e}")
-            from tools.controller.types import ActionResult
             return ActionResult(error=f"run_code failed: {e}")
