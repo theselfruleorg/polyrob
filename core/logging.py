@@ -16,13 +16,26 @@ from core.security_logging_filter import SecretScrubbingFilter
 colorama_init()
 
 # Constants
-# Anchor to the install/repo root (this file is core/logging.py -> parent.parent),
-# NOT the process CWD. setup_logging() runs at import time of `core`, before any
-# config/bootstrap, so a relative Path('logs') would drop a ./logs tree into
-# whatever directory the user launched from (e.g. the `rob` CLI in their repo).
-DEFAULT_LOG_DIR = Path(__file__).resolve().parent.parent / 'logs'
 MAX_BYTES = 10 * 1024 * 1024  # 10MB
 BACKUP_COUNT = 5
+
+
+def resolve_log_dir() -> Path:
+    """Runtime log directory: ``POLYROB_LOG_DIR`` → ``<data_home>/logs``.
+
+    Resolved at CALL time (never at import — logging configures at import-of-
+    ``core`` time, before config/bootstrap, and a module-level constant would
+    freeze the pre-bootstrap environment). Until T11 (2026-07-16) this was
+    ``<install_root>/logs`` — a runtime write into the code tree, which breaks
+    under a pip/site-packages install and is exactly what core/runtime_paths
+    isolation exists to prevent. Never CWD-relative (the N1 pollution class).
+    """
+    import os
+    env = os.getenv("POLYROB_LOG_DIR")
+    if env and env.strip():
+        return Path(env).expanduser()
+    from core.runtime_paths import resolve_data_home
+    return resolve_data_home() / "logs"
 
 # ---------------------------------------------------------------------------
 # Internal state flag to ensure we only configure the *root* logger once.
@@ -171,17 +184,36 @@ class ComfyFormatter(logging.Formatter):
     def _format_message(self, record, level_color: str) -> str:
         """Format the message with appropriate styling."""
         msg = str(record.msg)
-        
+
         # Handle special message types
         if record.levelname in ('WARNING', 'ERROR', 'CRITICAL'):
             return f"{level_color}{msg}"
-        
+
         # Add highlighting for important keywords
         for keyword in ['success', 'failed', 'error', 'warning']:
             if keyword in msg.lower():
                 msg = msg.replace(keyword, f"{level_color}{keyword}{self.reset}")
-                
+
         return msg
+
+
+# Third-party loggers that chatter at INFO (httpx logs EVERY request). Pinned to
+# WARNING at setup so a root-level change can never re-surface them on an
+# interactive terminal. Single source of truth — agents/task/logging_config's
+# configure_library_loggers delegates here.
+_NOISY_LIBRARY_LOGGERS = (
+    'urllib3', 'httpx', 'httpcore', 'selenium', 'PIL', 'matplotlib',
+    'asyncio', 'filelock', 'fontTools', 'pinecone', 'google.auth',
+    'google.api_core', 'google.cloud', 'googleapiclient', 'openai', 'anthropic',
+)
+
+
+def quiet_noisy_libraries() -> None:
+    """Pin noisy third-party loggers to WARNING (httpx._client/httpcore._trace to ERROR)."""
+    for name in _NOISY_LIBRARY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger('httpx._client').setLevel(logging.ERROR)
+    logging.getLogger('httpcore._trace').setLevel(logging.ERROR)
 
 # Add this new formatter class after ComfyFormatter
 class HTTPFormatter(logging.Formatter):
@@ -202,15 +234,41 @@ class HTTPFormatter(logging.Formatter):
         except Exception:
             return super().format(record)
 
-def ensure_log_directory(log_dir: Path = DEFAULT_LOG_DIR) -> Path:
+class DynamicStderrHandler(logging.StreamHandler):
+    """A StreamHandler that resolves ``sys.stderr`` at EMIT time.
+
+    The stdlib handler captures the stream OBJECT at construction — ours is
+    constructed at ``import core``, before the CLI REPL wraps stdio with
+    prompt_toolkit's ``patch_stdout``. A captured reference writes straight
+    past the REPL's screen coordination and corrupts the pinned prompt region
+    (ghost frames / stranded status rows). Resolving dynamically routes any
+    record through the active proxy, which prints cleanly ABOVE the prompt.
+    """
+
+    def __init__(self) -> None:
+        logging.Handler.__init__(self)
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value) -> None:
+        # Identity is dynamic by design — setStream()/rebinding is a no-op.
+        pass
+
+
+def ensure_log_directory(log_dir: Optional[Path] = None) -> Path:
     """Ensure log directory exists.
-    
+
     Args:
-        log_dir: Path to log directory
-        
+        log_dir: Path to log directory (default: :func:`resolve_log_dir`)
+
     Returns:
         Path to log directory
     """
+    if log_dir is None:
+        log_dir = resolve_log_dir()
     try:
         # Ensure we don't have nested logs directories
         if 'logs' in str(log_dir.parent):
@@ -229,11 +287,35 @@ def setup_logging(
     log_level: str = 'INFO',
     log_file: Optional[str] = None,
     logger: Optional[logging.Logger] = None,
-    component_name: Optional[str] = None
+    component_name: Optional[str] = None,
+    *,
+    console_level: Optional[str] = None,
+    configure_root: bool = True,
 ) -> None:
-    """Set up logging with enhanced formatter."""
+    """Set up logging with enhanced formatter.
+
+    configure_root=False (used by get_component_logger) configures ONLY the
+    named component logger: it must never touch the root logger's or the root
+    handlers' levels. Historically it did — every first-seen per-session task
+    logger bounced the CLI's ERROR console back to INFO, leaking raw httpx
+    lines into the REPL and corrupting the prompt region.
+
+    ``console_level`` (default: ``log_level``) governs the console and httpx
+    stderr sinks only; the file sink (``bot.log``) always follows
+    ``log_level``. The root logger itself is set to the MOST VERBOSE of the
+    two (min numeric level) so neither sink is starved of records it should
+    receive — e.g. ``log_level="INFO", console_level="ERROR"`` keeps
+    ``bot.log`` at INFO while the terminal only shows ERROR+.
+    """
     try:
         numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+        console_numeric = (
+            getattr(logging, console_level.upper(), numeric_level)
+            if console_level is not None else numeric_level
+        )
+        # Root must sit at the MOST VERBOSE sink (min numeric) or records are
+        # dropped before any handler can see them.
+        root_numeric = min(numeric_level, console_numeric)
         
         # Create our formatters
         standard_formatter = ComfyFormatter(
@@ -255,7 +337,8 @@ def setup_logging(
         # observed in bot.log.
         # -------------------------------------------------------------------
         root_logger = logging.getLogger()
-        root_logger.setLevel(numeric_level)
+        if configure_root:
+            root_logger.setLevel(root_numeric)
 
         global _ROOT_LOGGER_CONFIGURED
         
@@ -277,32 +360,46 @@ def setup_logging(
             )
             file_handler.setFormatter(standard_formatter)
             file_handler.setLevel(numeric_level)
+            file_handler._polyrob_sink = 'file'
             root_logger.addHandler(file_handler)
 
-            # Console handler with standard formatter
-            console_handler = logging.StreamHandler()
+            # Console handler with standard formatter (late-binding stderr)
+            console_handler = DynamicStderrHandler()
             console_handler.setFormatter(standard_formatter)
-            console_handler.setLevel(numeric_level)
+            console_handler.setLevel(console_numeric)
+            console_handler._polyrob_sink = 'console'
+            # httpx records have a dedicated handler below — without this filter
+            # every visible request line was emitted twice (F7).
+            console_handler.addFilter(lambda record: record.name != 'httpx')
             root_logger.addHandler(console_handler)
 
-            # Special handler for httpx logs
-            httpx_handler = logging.StreamHandler()
+            # Special handler for httpx logs (late-binding stderr)
+            httpx_handler = DynamicStderrHandler()
             httpx_handler.setFormatter(http_formatter)
             httpx_handler.addFilter(lambda record: record.name == 'httpx')
-            httpx_handler.setLevel(numeric_level)
+            httpx_handler.setLevel(console_numeric)
+            httpx_handler._polyrob_sink = 'httpx'
             root_logger.addHandler(httpx_handler)
 
             # Add security filter to root logger to scrub secrets
             security_filter = SecretScrubbingFilter()
             root_logger.addFilter(security_filter)
 
+            # Pin noisy libraries at first config — the CLI never runs the
+            # server's initialize_agents path, so this is its only pin point.
+            quiet_noisy_libraries()
+
             # Mark root logger as configured so we don't duplicate handlers
             _ROOT_LOGGER_CONFIGURED = True
         else:
-            # Root logger already configured – simply update its level to the
-            # latest requested level (if it changed) but DO NOT add handlers.
-            for handler in root_logger.handlers:
-                handler.setLevel(numeric_level)
+            # Root logger already configured. Only an EXPLICIT setup call may
+            # re-level its handlers; component-logger creation must not.
+            if configure_root:
+                for handler in root_logger.handlers:
+                    sink = getattr(handler, '_polyrob_sink', 'console')
+                    handler.setLevel(
+                        numeric_level if sink == 'file' else console_numeric
+                    )
          
         # Configure component logger if specified
         if logger and logger != root_logger:
@@ -323,19 +420,11 @@ def setup_logging(
                 component_file_handler.setFormatter(standard_formatter)
                 component_file_handler.setLevel(numeric_level)
                 logger.addHandler(component_file_handler)
-                
-        # Only print the initialization banner once per application lifetime.
-        # Use global flag to ensure it's only printed when root logger is first configured
-        global _LOGGING_BANNER_PRINTED
-        if not _LOGGING_BANNER_PRINTED and not _ROOT_LOGGER_CONFIGURED:
-            print(f"Logging initialized with level {log_level}")
-            root_logger.info(f"Logging system initialized with level {log_level}")
-            _LOGGING_BANNER_PRINTED = True
-            
+
     except Exception as e:
         print(f"Error setting up logging: {e}")
         if logger:
-            basic_handler = logging.StreamHandler()
+            basic_handler = DynamicStderrHandler()
             basic_formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
             basic_handler.setFormatter(basic_formatter)
             logger.addHandler(basic_handler)
@@ -365,7 +454,8 @@ def get_component_logger(
             log_level=log_level,
             log_file=log_file,
             logger=logger,
-            component_name=component_name
+            component_name=component_name,
+            configure_root=False,
         )
     
     # Ensure propagation is set correctly - this is crucial for AutoV2 loggers
@@ -392,45 +482,3 @@ def get_component_logger(
             logger._task_configured = True
     
     return logger
-
-def initialize_task_logging() -> bool:
-    """Initialize AutoV2 logging integration with core logging system.
-    
-    Returns:
-        bool: True if integration was successful, False otherwise
-    """
-    try:
-        # Try to import AutoV2 logging
-        from agents.task.logging_config import ensure_core_logging_integration, configure_library_loggers
-        
-        # Ensure integration
-        if ensure_core_logging_integration():
-            # Configure library loggers to reduce noise
-            configure_library_loggers()
-            
-            # Get the task logger and ensure it propagates
-            task_logger = logging.getLogger('task')
-            task_logger.propagate = True
-            task_logger.setLevel(logging.INFO)
-            
-            # Log success
-            root_logger = logging.getLogger()
-            if root_logger.handlers:
-                root_logger.info("AutoV2 logging system integrated with core logging")
-            
-            return True
-        else:
-            return False
-            
-    except ImportError:
-        # AutoV2 module not available
-        return False
-    except Exception as e:
-        # Log error if root logger is available
-        try:
-            root_logger = logging.getLogger()
-            if root_logger.handlers:
-                root_logger.warning(f"Failed to initialize AutoV2 logging integration: {e}")
-        except:
-            pass
-        return False

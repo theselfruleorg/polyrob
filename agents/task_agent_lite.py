@@ -20,6 +20,7 @@ from dataclasses import dataclass
 
 from agents.base_agent import BaseAgent
 from agents.task.session_registry import SessionRegistry
+from agents.task.tool_defaults import default_session_tools
 from core.exceptions import AgentError, SessionOwnershipError
 from core.exceptions import InsufficientCreditsError
 from core.exceptions import MessageQueueFullError
@@ -41,6 +42,21 @@ MAX_SESSIONS_PER_USER = 10
 #: ``add_done_callback``.
 _SELF_WAKE_TASKS: set = set()
 
+#: Strong refs to other fire-and-forget tasks (background run_session resumes,
+#: orchestrator cleanup). Same asyncio weak-ref footgun as _SELF_WAKE_TASKS
+#: (P1 finalization: several bare ``asyncio.create_task(...)`` sites held no ref,
+#: so the task could be GC'd mid-run and silently dropped).
+_DETACHED_TASKS: set = set()
+
+
+def _spawn_detached(coro):
+    """Schedule ``coro`` as a fire-and-forget task WITH a strong reference held
+    until it finishes, so the event loop can't GC it mid-run."""
+    t = asyncio.create_task(coro)
+    _DETACHED_TASKS.add(t)
+    t.add_done_callback(_DETACHED_TASKS.discard)
+    return t
+
 
 @dataclass
 class SessionRequest:
@@ -56,7 +72,7 @@ class SessionRequest:
     
     def __post_init__(self):
         if self.tools is None:
-            self.tools = ["browser", "filesystem", "task"]
+            self.tools = default_session_tools()
 
 
 def _resolve_chat_runtime(env=None):
@@ -192,7 +208,8 @@ class TaskAgent(BaseAgent):
         backend = os.getenv("SESSION_REGISTRY_BACKEND", "memory").strip().lower()
         if backend == "sqlite":
             from agents.task.sqlite_session_registry import SqliteSessionRegistry
-            data_dir = getattr(config, "data_dir", "data") if config else "data"
+            from core.runtime_paths import data_dir_or_home
+            data_dir = data_dir_or_home(getattr(config, "data_dir", None) if config else None)
             return SqliteSessionRegistry(os.path.join(data_dir, "session_registry.db"))
         return SessionRegistry()
 
@@ -406,7 +423,7 @@ class TaskAgent(BaseAgent):
                 task=request.get('task', ''),
                 model=request.get('model', 'gpt-5'),
                 provider=request.get('provider', 'openai'),
-                tools=request.get('tools', ['browser', 'filesystem', 'task']),
+                tools=request.get('tools') or default_session_tools(),
                 max_steps=request.get('max_steps', 50),
                 temperature=request.get('temperature', 0.0),
                 use_vision=request.get('use_vision', True),
@@ -688,6 +705,14 @@ class TaskAgent(BaseAgent):
                 hitl = getattr(agent, 'hitl_manager', None)
                 if hitl is not None and hitl.get_queue_size() > 0:
                     return True
+                # B1 (2026-07-13 correspondent review): a queued one-shot ephemeral
+                # (correspondent reply / recall) IS pending input — without this, a
+                # reply into a resident+completed session never wakes the loop and
+                # sits unconsumed until the owner's next genuine turn.
+                mm = getattr(agent, 'message_manager', None)
+                if mm is not None and (getattr(mm, '_ephemeral_messages', None)
+                                       or getattr(mm, '_ephemeral_pending', None)):
+                    return True
         except Exception as e:
             logger.debug(f"_session_has_pending_input({session_id}) failed: {e}")
             return True  # when in doubt, run (legacy behaviour)
@@ -949,6 +974,26 @@ class TaskAgent(BaseAgent):
                 error_msg = agent_result.get('error', 'Unknown error')
                 self.session_manager.update_session_status(session_id, final_status)
                 return f"Session failed: {error_msg}"
+
+        except asyncio.CancelledError:
+            # P1 finalization: a hard wall-clock timeout (cron/goal budget) or an
+            # explicit cancel raises CancelledError, which is a BaseException — the
+            # `except Exception` below NEVER catches it, so final_status stayed None
+            # and the finally defaulted it to 'completed', mislabeling a forcibly-
+            # timed-out run as a clean success. Mark it cancelled, then re-raise to
+            # honor the cancellation.
+            final_status = 'cancelled'
+            self._session_last_activity[session_id] = time.time()
+            try:
+                self.session_manager.update_session_status(session_id, final_status)
+                self.session_manager.update_session_metadata(session_id, {
+                    'error': 'session cancelled (timeout or explicit cancel)',
+                    'error_time': datetime.now().isoformat(),
+                    'error_type': 'CancelledError',
+                })
+            except Exception:
+                pass
+            raise
 
         except InsufficientCreditsError as e:
             # Special handling for billing errors - suspend rather than fail
@@ -1334,7 +1379,7 @@ class TaskAgent(BaseAgent):
                             logger.error(f"Failed to queue message: {e}")
 
                         # Resume session execution
-                        asyncio.create_task(self.run_session(user_id, existing_session_id))
+                        _spawn_detached(self.run_session(user_id, existing_session_id))
 
                         return f"💬 Message sent to existing session\nSession: {existing_session_id}"
                     else:
@@ -1359,7 +1404,7 @@ class TaskAgent(BaseAgent):
             session = await self.create_session(user_id, text)
 
             # Run in background
-            asyncio.create_task(self.run_session(user_id, session['id']))
+            _spawn_detached(self.run_session(user_id, session['id']))
 
             if resume_failed_id:
                 return (
@@ -1452,12 +1497,19 @@ class TaskAgent(BaseAgent):
             if agent is None:
                 return ""
 
+            # The ledger lives on agent.history (AgentHistoryList) — AgentState has
+            # NO history field, so the old `agent.state.history` read ALWAYS raised
+            # and this path silently never ran (the goal-58a1385d18bf corruption:
+            # priority-2 then returned the P2-16 placeholder AIMessage).
+            hist = getattr(agent, 'history', None)
+            from agents.task.runtime.run_outcome import FRAMEWORK_PLACEHOLDER_TEXTS
+
             # 1) clean done() output
             try:
-                hist = agent.state.history
-                if hist.is_done():
+                if hist is not None and hist.is_done():
                     fr = hist.final_result()
-                    if fr and not self._looks_like_brain_state(fr):
+                    if fr and not self._looks_like_brain_state(fr) \
+                            and str(fr).strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
                         return str(fr).strip()
             except Exception:
                 # Fail-open: done() output extraction failure is non-critical
@@ -1473,6 +1525,10 @@ class TaskAgent(BaseAgent):
                         content = getattr(msg, 'content', None)
                         if isinstance(msg, AIMessage) and isinstance(content, str) and content.strip():
                             text = content.strip()
+                            # Framework placeholders ("Processing actions", …) are
+                            # display scaffolding, never the agent's reply — skip.
+                            if text in FRAMEWORK_PLACEHOLDER_TEXTS:
+                                continue
                             prefix = "✅ Task Complete\n\n"
                             if text.startswith(prefix):
                                 text = text[len(prefix):].strip()
@@ -1483,8 +1539,9 @@ class TaskAgent(BaseAgent):
 
             # 3) last-resort fallback
             try:
-                fr = agent.state.history.final_result()
-                if fr and not self._looks_like_brain_state(fr):
+                fr = hist.final_result() if hist is not None else None
+                if fr and not self._looks_like_brain_state(fr) \
+                        and str(fr).strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
                     return str(fr).strip()
             except Exception:
                 # Fail-open: history scan failure is non-critical, try next fallback
@@ -1718,13 +1775,14 @@ class TaskAgent(BaseAgent):
 
         Returns True iff a forged turn was dispatched.
         """
-        from agents.task.constants import AutonomyConfig
-        if not AutonomyConfig.self_wake_enabled():
-            return False
-
         from agents.task.agent.core.self_wake import (
-            get_reentry_budget, format_self_wake, SELF_WAKE_KIND,
+            effective_self_wake_enabled, get_reentry_budget, format_self_wake,
+            SELF_WAKE_KIND,
         )
+        from core.runtime_paths import data_dir_or_home
+        _data_dir = getattr(getattr(self, "config", None), "data_dir", None)
+        if not effective_self_wake_enabled(user_id, data_dir_or_home(_data_dir)):
+            return False
         def _wake_ev(outcome: str, reason: Optional[str] = None) -> None:
             # Self-wake was entirely invisible (no log/telemetry): fired vs
             # skipped vs dropped collapsed to a silent return. Emit each outcome
@@ -1794,6 +1852,8 @@ class TaskAgent(BaseAgent):
         source: str,
         text: str,
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        surface: Optional[str] = None,
     ) -> bool:
         """WS-A: deliver a third-party correspondent reply as DATA into ``session_id``.
 
@@ -1809,30 +1869,147 @@ class TaskAgent(BaseAgent):
         if not SurfaceConfig.correspondent_access_enabled():
             return False
         try:
+            store = None
+            try:
+                container = getattr(self, "container", None)
+                store = container.get_service("conversation_store") if container else None
+            except Exception:
+                store = None
             session_info = self.session_manager.get_session_info(session_id)
-            if not session_info:
-                logger.warning(
-                    f"correspondent delivery: session {session_id} not found — dropping (audit)")
-                return False
-            orchestrator = await self._resolve_or_recreate(session_id, session_info)
+            orchestrator = None
+            if session_info:
+                orchestrator = await self._resolve_or_recreate(session_id, session_info)
             if not orchestrator:
+                # E6/A6 (2026-07-13 review): the originating session is dead. Try to
+                # RESUME the conversation into a replacement session instead of the
+                # legacy silent drop (the third party's message just vanished).
+                if await self._try_conversation_resume(
+                        session_id, source, text, metadata, surface=surface, store=store):
+                    return True
                 logger.warning(
                     f"correspondent delivery: session {session_id} not resident/recreatable "
                     f"— dropping (audit)")
                 return False
-            delivered = orchestrator.inject_correspondent_message(text, source, metadata)
+            owner_user_id = (session_info.get("user_id")
+                             if isinstance(session_info, dict)
+                             else getattr(session_info, "user_id", None))
+            # E2: prepend the durable conversation context (derived from correspondent
+            # content, so it stays INSIDE the untrusted frame the injection applies).
+            text_to_inject = text
+            if store is not None and surface and owner_user_id:
+                try:
+                    ctx = store.format_context(owner_user_id, surface, source)
+                    if ctx:
+                        text_to_inject = f"{ctx}\n\n[new message]\n{text}"
+                except Exception:
+                    pass
+            delivered = orchestrator.inject_correspondent_message(
+                text_to_inject, source, metadata, surface=surface, address=source)
             if not delivered:
                 logger.warning(
                     f"correspondent delivery: no resident agent for {session_id} — dropping (audit)")
                 return False
-            owner_user_id = (session_info.get("user_id")
-                             if isinstance(session_info, dict)
-                             else getattr(session_info, "user_id", None))
-            asyncio.create_task(self.run_session(owner_user_id, session_id))
+            if store is not None and surface and owner_user_id:
+                try:
+                    store.record_inbound(owner_user_id, surface, source, text,
+                                         mid=(metadata or {}).get("message_id"),
+                                         session_id=session_id)
+                except Exception:
+                    pass
+            _spawn_detached(self.run_session(owner_user_id, session_id))
             logger.info(f"📨 correspondent DATA from {source} delivered to session {session_id}")
             return True
         except Exception as e:
             logger.error(f"correspondent delivery failed for {session_id}: {e}", exc_info=True)
+            return False
+
+    async def _try_conversation_resume(
+        self,
+        dead_session_id: str,
+        source: str,
+        text: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        *,
+        surface: Optional[str] = None,
+        store: Optional[Any] = None,
+    ) -> bool:
+        """E6/A6: replace a dead originating session instead of dropping the reply.
+
+        Creates a fresh session for the binding's TENANT (never the correspondent),
+        re-points the correspondent registry + conversation store at it, injects the
+        reply as correspondent DATA (with the durable conversation context), and
+        spawns the run. Gated ``CONVERSATION_RESUME_ENABLED`` (default ON). Returns
+        True iff the reply was delivered into the replacement session.
+        """
+        from agents.task.surface_config import SurfaceConfig
+        if not SurfaceConfig.conversation_resume_enabled() or not surface:
+            return False
+        try:
+            container = getattr(self, "container", None)
+            registry = (container.get_service("correspondent_registry")
+                        if container else None)
+            if registry is None:
+                return False
+            row = registry.resolve(surface=surface, address=source)
+            user_id = (row or {}).get("user_id")
+            if not user_id:
+                return False
+            ctx = ""
+            if store is not None:
+                try:
+                    ctx = store.format_context(user_id, surface, source)
+                except Exception:
+                    ctx = ""
+            task_text = (
+                f"[conversation-resume] {surface}:{source} sent a message to a "
+                f"conversation whose original session ({dead_session_id}) is no longer "
+                "available. Their message arrives as correspondent DATA in this "
+                "session; review the conversation context and respond appropriately.")
+            info = await self.create_session(user_id, task_text)
+            new_sid = (info or {}).get("session_id")
+            if not new_sid:
+                return False
+            orch = self._registry.get(new_sid)
+            if orch is None:
+                orch = await self._resolve_or_recreate(
+                    new_sid, self.session_manager.get_session_info(new_sid) or {})
+            if orch is None:
+                return False
+            text_to_inject = f"{ctx}\n\n[new message]\n{text}" if ctx else text
+            delivered = orch.inject_correspondent_message(
+                text_to_inject, source, metadata, surface=surface, address=source)
+            if not delivered:
+                return False
+            try:
+                registry.rebind_session(surface=surface, address=source,
+                                        user_id=user_id, new_session_id=new_sid)
+            except Exception:
+                pass
+            if store is not None:
+                try:
+                    store.rebind_session(user_id, surface, source, new_sid)
+                    store.record_inbound(user_id, surface, source, text,
+                                         mid=(metadata or {}).get("message_id"),
+                                         session_id=new_sid)
+                except Exception:
+                    pass
+            _spawn_detached(self.run_session(user_id, new_sid))
+            logger.warning(
+                f"correspondent conversation resumed: {surface}:{source} re-pointed "
+                f"from dead session {dead_session_id} to new session {new_sid}")
+            try:
+                from agents.task.telemetry.event_log import (event_log_enabled,
+                                                             get_event_log)
+                if event_log_enabled():
+                    get_event_log().record(
+                        "correspondent_resumed", user_id=user_id, session_id=new_sid,
+                        source=surface,
+                        attrs={"address": source, "dead_session": dead_session_id})
+            except Exception:
+                pass
+            return True
+        except Exception as e:
+            logger.error(f"conversation resume failed for {source}: {e}", exc_info=True)
             return False
 
     async def _recreate_orchestrator(
@@ -1894,7 +2071,7 @@ class TaskAgent(BaseAgent):
                 request.get('tools') or
                 config.get('tools') or
                 session_info.get('tools') or
-                ['browser', 'filesystem', 'task']
+                default_session_tools()
             )
 
             # Get tools_config from multiple sources
@@ -2118,6 +2295,24 @@ class TaskAgent(BaseAgent):
                 logger.info(f"Evicting session {session_id} (max sessions limit: {self.max_sessions_in_memory})")
                 await self._evict_session(session_id, reason='lru')
 
+    def _prune_chat_mappings(self, session_id: str) -> None:
+        """Drop any _chat_sessions / _chat_locks entries pointing at an evicted session.
+
+        P7/F2 finalization: these process-global dicts (chat-key → session_id, and its
+        per-key lock) grew UNBOUNDED because eviction pruned the registry + activity/
+        execution/recreate-lock maps but never these two — a long-lived multi-user
+        process accumulated a stale entry per (user, chat) forever.
+        """
+        chat_sessions = getattr(self, "_chat_sessions", None)
+        if not chat_sessions:
+            return
+        stale = [k for k, sid in list(chat_sessions.items()) if sid == session_id]
+        locks = getattr(self, "_chat_locks", None)
+        for k in stale:
+            chat_sessions.pop(k, None)
+            if locks is not None:
+                locks.pop(k, None)
+
     async def _evict_session(self, session_id: str, reason: str = 'unknown'):
         """Fully evict a session from memory with state persistence.
 
@@ -2197,6 +2392,7 @@ class TaskAgent(BaseAgent):
                 self._session_last_activity.pop(session_id, None)
                 self._session_execution_locks.pop(session_id, None)  # Remove execution lock
                 self._recreate_locks.pop(session_id, None)  # a3: don't leak recreate locks
+                self._prune_chat_mappings(session_id)  # P7/F2: don't leak chat-key → session maps
 
                 logger.info(f"Evicted session {session_id} from memory (reason: {reason}) with persistence")
         except Exception as e:
@@ -2362,7 +2558,7 @@ class TaskAgent(BaseAgent):
         """Remove a session and cleanup."""
         orchestrator = self._registry.remove(session_id)
         if orchestrator:
-            asyncio.create_task(orchestrator.cleanup())
+            _spawn_detached(orchestrator.cleanup())
 
         # NOTE: Don't call cleanup_session - keep completed sessions in memory
         # for continuous chat feature. They remain accessible via get_session_by_id()

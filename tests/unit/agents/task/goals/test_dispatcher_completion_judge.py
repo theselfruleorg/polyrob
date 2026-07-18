@@ -72,7 +72,7 @@ def _run(monkeypatch, *, judge_flag, verdict=None, acceptance="a live tweet URL"
         return (verdict or "unclear", "test reason")
 
     import agents.task.goals.completion_judge as cj
-    monkeypatch.setattr(cj, "judge_goal_completion", _fake_judge)
+    monkeypatch.setattr(cj, "judge_run_outcome", _fake_judge)
 
     asyncio.run(disp._run_goal(_goal(acceptance)))
     return board, calls
@@ -84,10 +84,12 @@ def test_judge_off_is_zero_behavior_change(monkeypatch):
     assert calls["judge"] == 0
 
 
-def test_no_acceptance_skips_judge_even_when_on(monkeypatch):
+def test_no_acceptance_still_judges_when_on(monkeypatch):
+    """§4.3 re-basing: the evidence judge runs for every autonomous completion —
+    acceptance prose is an optional sharpener, no longer the gate."""
     board, calls = _run(monkeypatch, judge_flag=True, verdict="unmet", acceptance=None)
-    assert board.successes == ["g1"]
-    assert calls["judge"] == 0
+    assert not board.successes
+    assert calls["judge"] == 1
 
 
 def test_unmet_verdict_records_failure_with_reason(monkeypatch):

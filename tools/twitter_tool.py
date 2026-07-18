@@ -113,6 +113,21 @@ class TwitterMentionsAction(BaseModel):
     max_results: int = Field(10, ge=5, le=100, description="Max mentions to fetch.")
 
 
+class TwitterGetDMsAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    participant: Optional[str] = Field(
+        None, description="Filter to the 1:1 conversation with this username or "
+                          "numeric user id (default: all recent DM events).")
+    max_results: int = Field(20, ge=1, le=100, description="Max DM events to fetch.")
+
+
+class TwitterTimelineAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    user: str = Field(..., description="Username or numeric user id whose recent "
+                                       "tweets to fetch.")
+    max_results: int = Field(10, ge=5, le=100, description="Max tweets to fetch.")
+
+
 class TwitterWhoamiAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -122,15 +137,21 @@ _TWITTER_WRITE_ACTIONS = frozenset({
     "twitter_post", "twitter_reply", "twitter_quote", "twitter_thread",
     "twitter_delete_tweet", "twitter_like", "twitter_unlike", "twitter_retweet",
     "twitter_unretweet", "twitter_follow", "twitter_unfollow", "twitter_mute",
-    "twitter_block", "twitter_dm",
+    "twitter_unmute", "twitter_block", "twitter_dm",
 })
 
 _FALSEY = {"0", "false", "no", "off", ""}
 
 
 def twitter_write_enabled() -> bool:
-    """Gate for the Twitter WRITE surface (default OFF)."""
-    return os.getenv("TWITTER_ENABLED", "false").strip().lower() not in _FALSEY
+    """Gate for the Twitter WRITE surface (default OFF; ON under effective
+    AUTONOMY_MODE=autonomous via _mode_capability_default). Explicit
+    TWITTER_ENABLED always wins over the mode default."""
+    raw = os.getenv("TWITTER_ENABLED")
+    if raw is not None:
+        return raw.strip().lower() not in _FALSEY
+    from core.config_policy import _mode_capability_default
+    return _mode_capability_default("TWITTER_ENABLED")
 
 
 class TwitterTool(BaseTool):
@@ -509,7 +530,8 @@ class TwitterTool(BaseTool):
                     {
                         'id': str(tweet.id),
                         'text': tweet.text,
-                        'created_at': tweet.created_at.isoformat() if hasattr(tweet, 'created_at') else None,
+                        'created_at': tweet.created_at.isoformat()
+                        if getattr(tweet, 'created_at', None) else None,
                         'metrics': getattr(tweet, 'public_metrics', {})
                     }
                     for tweet in response.data
@@ -1495,10 +1517,8 @@ class TwitterTool(BaseTool):
 
     @staticmethod
     def _env_int(name: str, default: int) -> int:
-        try:
-            return int(os.getenv(name, str(default)))
-        except (TypeError, ValueError):
-            return default
+        from core.env import int_env
+        return int_env(name, default)
 
     def _write_cap(self) -> int:
         return self._env_int("TWITTER_WRITE_MAX_PER_HOUR", 15)
@@ -1867,7 +1887,13 @@ class TwitterTool(BaseTool):
     async def twitter_mute(self, params: TwitterUserAction, execution_context=None):
         return await self._relate("twitter_mute", "mute", params.user, params, execution_context)
 
-    @BaseTool.action("Block a user.", param_model=TwitterUserAction)
+    @BaseTool.action("Unmute a previously muted user.", param_model=TwitterUserAction)
+    async def twitter_unmute(self, params: TwitterUserAction, execution_context=None):
+        return await self._relate("twitter_unmute", "unmute", params.user, params, execution_context)
+
+    @BaseTool.action("Block a user. NOTE: X API v2 blocking is Enterprise-only — "
+                     "on the pay-per-use/basic tiers this returns 403 (mute instead).",
+                     param_model=TwitterUserAction)
     async def twitter_block(self, params: TwitterUserAction, execution_context=None):
         return await self._relate("twitter_block", "block", params.user, params, execution_context)
 
@@ -1910,6 +1936,58 @@ class TwitterTool(BaseTool):
             return self._ok(f"🐦 Mentions:\n{json.dumps(items, indent=2)}")
         except Exception as e:
             return self._err(f"Error getting mentions: {e}")
+
+    @BaseTool.action("Read your recent X direct messages (newest first; optionally "
+                     "only the 1:1 conversation with one participant). DM reads are "
+                     "rate-limited to 15/15min by X — don't poll.",
+                     param_model=TwitterGetDMsAction)
+    async def twitter_get_dms(self, params: TwitterGetDMsAction, execution_context=None):
+        if not self._enabled:
+            return self._err("Twitter service not available - missing credentials")
+        try:
+            kwargs: Dict[str, Any] = dict(
+                dm_event_fields=["id", "event_type", "text", "sender_id",
+                                 "dm_conversation_id", "created_at"],
+                event_types="MessageCreate",
+                max_results=params.max_results,
+            )
+            if params.participant:
+                uid = await self._resolve_user_id(params.participant)
+                if not uid:
+                    return self._err(
+                        f"Could not resolve participant '{params.participant}'")
+                kwargs["participant_id"] = uid
+            resp = await self._make_request(
+                func=self.client.get_direct_message_events, endpoint_type="dm",
+                **kwargs)
+            items = []
+            for ev in (getattr(resp, "data", None) or []):
+                data = dict(getattr(ev, "data", None) or {})
+                items.append({
+                    "id": str(data.get("id") or getattr(ev, "id", "") or ""),
+                    "text": data.get("text"),
+                    "sender_id": str(data.get("sender_id") or ""),
+                    "dm_conversation_id": data.get("dm_conversation_id"),
+                    "created_at": data.get("created_at"),
+                })
+            return self._ok(f"🐦 DM events ({len(items)}):\n{json.dumps(items, indent=2)}")
+        except Exception as e:
+            return self._err(f"Error reading DMs: {e}")
+
+    @BaseTool.action("Get a user's recent tweets (their timeline).",
+                     param_model=TwitterTimelineAction)
+    async def twitter_get_timeline(self, params: TwitterTimelineAction, execution_context=None):
+        if not self._enabled:
+            return self._err("Twitter service not available - missing credentials")
+        try:
+            tweets = await self.get_user_timeline(params.user,
+                                                  max_results=params.max_results)
+            if tweets is None:
+                return self._err(f"Could not fetch timeline for '{params.user}'")
+            return self._ok(f"🐦 Timeline for {params.user} ({len(tweets)}):\n"
+                            f"{json.dumps(tweets, indent=2)}")
+        except Exception as e:
+            return self._err(f"Error getting timeline: {e}")
 
     @BaseTool.action("Show your own authenticated Twitter profile.", param_model=TwitterWhoamiAction)
     async def twitter_whoami(self, params: TwitterWhoamiAction, execution_context=None):

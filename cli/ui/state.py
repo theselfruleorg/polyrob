@@ -28,14 +28,18 @@ from typing import Any, Optional
 from cli.ui.events import (
     AgentEnd,
     AgentRegistration,
+    ApprovalDecision,
+    ApprovalPending,
     ErrorEvent,
     IterationDone,
     LLMCall,
+    LLMStarted,
     RenderEvent,
     SessionDone,
     SessionStart,
     Step,
     ToolExec,
+    ToolStarted,
 )
 from cli.ui.lifecycle import TurnLifecycle
 
@@ -119,6 +123,14 @@ class SessionState:
         # of the most-recent tool action (the in-flight tool for the status line).
         self.subagents_active: int = 0
         self.last_tool: str = ""
+        # 019 current-activity: what the agent is doing RIGHT NOW, driven by the
+        # span/wait events (tool_started/llm_started/awaiting_approval) and
+        # cleared by their completion counterparts. kind ∈ {"", "tool", "llm",
+        # "approval"}; the status bar renders label + a ticking clock from
+        # ``activity_elapsed()``. Falls back to ``last_tool`` when empty.
+        self.current_activity_kind: str = ""
+        self.current_activity: str = ""
+        self._current_activity_since: float = 0.0
         # Slow-polled, cached autonomy snapshot for the 2nd status line (D4).
         # {"goals": int, "cron": int, "review": bool}. None/empty → line hidden.
         # NEVER read the goal/cron SQLite stores on the hot repaint path.
@@ -127,6 +139,10 @@ class SessionState:
         # poll_usage() bookkeeping: filenames already aggregated so each poll
         # only reads NEW llm_usage files (cheap, incremental).
         self._seen_usage_files: set[str] = set()
+
+        # Monotonic time (self._clock) of the last usage-dir scan; poll_usage's
+        # min_interval rate-limits the glob on the hot feed-event path.
+        self._last_usage_scan_t: float = float("-inf")
 
     # ------------------------------------------------------------------
     # Live sub-agent counter (fed by the REPL's orchestrator hooks)
@@ -139,6 +155,28 @@ class SessionState:
     def note_subagent_end(self) -> None:
         """A delegate_task sub-agent finished (orchestrator end hook). Floored at 0."""
         self.subagents_active = max(0, self.subagents_active - 1)
+
+    # ------------------------------------------------------------------
+    # 019 current-activity helpers
+    # ------------------------------------------------------------------
+
+    def _set_activity(self, kind: str, label: str) -> None:
+        self.current_activity_kind = kind
+        self.current_activity = label
+        self._current_activity_since = self._clock()
+
+    def _clear_activity(self, *kinds: str) -> None:
+        """Clear the current activity (optionally only for the given kinds)."""
+        if kinds and self.current_activity_kind not in kinds:
+            return
+        self.current_activity_kind = ""
+        self.current_activity = ""
+
+    def activity_elapsed(self) -> float:
+        """Seconds the current activity has been in flight (0.0 when idle)."""
+        if not self.current_activity_kind:
+            return 0.0
+        return max(0.0, self._clock() - self._current_activity_since)
 
     # ------------------------------------------------------------------
     # Push: event accumulation
@@ -189,11 +227,36 @@ class SessionState:
                 or ""
             )
             self.last_step_sub_agent = self.is_sub_agent(identity)
+            # A step boundary means its LLM call + actions finished; only an
+            # approval wait survives it (it blocks mid-step).
+            self._clear_activity("tool", "llm")
 
         elif isinstance(event, ToolExec):
             self.tool_calls += 1
             if event.action_name:
                 self.last_tool = event.action_name
+            # The in-flight tool returned; drop the live-activity segment
+            # (an llm/approval activity that started after is left alone).
+            self._clear_activity("tool")
+
+        elif isinstance(event, ToolStarted):
+            # 019: the live current-activity — shown with a ticking clock in
+            # the status bar the moment the tool is dispatched.
+            if event.action_name:
+                self.last_tool = event.action_name
+            self._set_activity("tool", event.action_name or event.tool_name or "tool")
+
+        elif isinstance(event, LLMStarted):
+            self._set_activity("llm", "thinking")
+
+        elif isinstance(event, ApprovalPending):
+            label = "approval /pending"
+            if event.action_name:
+                label = f"approval: {event.action_name} /pending"
+            self._set_activity("approval", label)
+
+        elif isinstance(event, ApprovalDecision):
+            self._clear_activity("approval")
 
         elif isinstance(event, ErrorEvent):
             self.errors += 1
@@ -206,7 +269,7 @@ class SessionState:
         elif isinstance(event, SessionDone):
             # Success/failure colors the turn-summary residue via the renderer's
             # event buffer (turn_failed()), not a status write here.
-            pass
+            self._clear_activity()
 
         elif isinstance(event, AgentRegistration):
             # First registration = main agent (used for sub-agent grouping).
@@ -308,7 +371,7 @@ class SessionState:
     # Pull: authoritative live tokens/cost from the session's llm_usage dir
     # ------------------------------------------------------------------
 
-    def poll_usage(self, session_dir: Path) -> None:
+    def poll_usage(self, session_dir: Path, *, min_interval: float = 0.0) -> None:
         """Aggregate tokens + cost from new ``data/llm_usage/*.json`` files.
 
         This is the LIVE source of tokens/cost in the local CLI path:
@@ -322,10 +385,19 @@ class SessionState:
         to call every turn (and on the toolbar timer).  Best-effort: malformed
         or partially-written files are skipped silently.
 
+        Pass ``min_interval`` (seconds) from per-event hot paths to rate-limit
+        the directory scan; the default 0.0 always scans (turn-end correctness).
+
         Args:
             session_dir: The session root (containing ``data/llm_usage/``).
+            min_interval: Minimum seconds between directory scans; 0.0 (default)
+                disables throttling.
         """
         try:
+            now = self._clock()
+            if min_interval > 0.0 and (now - self._last_usage_scan_t) < min_interval:
+                return
+            self._last_usage_scan_t = now
             usage_dir = Path(session_dir) / "data" / "llm_usage"
             if not usage_dir.is_dir():
                 return

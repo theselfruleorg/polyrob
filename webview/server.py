@@ -27,7 +27,6 @@ from datetime import datetime
 import time
 import hashlib
 import hmac
-from collections import defaultdict
 
 import socketio
 from fastapi import FastAPI, HTTPException, Request, Response, Depends
@@ -39,15 +38,15 @@ from watchfiles import awatch, Change
 # Local utility that aggregates session statistics from feed files
 from webview.stats_service import compute_session_stats
 
+# Shared read-service: reconstruct the multi-agent roster from the session feed
+from agents.task.telemetry.agent_graph import build_session_agents
+from agents.task.telemetry.feed_reads import build_session_services, build_session_task, build_session_skills
+
 # Webgate config object — single source of truth for single-user (default) vs
 # multitenant mode. Consulted at the four seam points below (middleware, ownership,
 # page/router mount-gate). Read at IMPORT time for the mount-gate; at REQUEST time
 # for the middleware/ownership short-circuits.
 from webview import webgate
-
-# Bounded-collection utility (LRU eviction) — reused for _event_emissions (E5-Minor)
-# so the rate-limiter's per-session key space can't grow without bound.
-from utils.bounded_collections import BoundedDict
 
 # No demo mode - WebView must use the real PathManager
 import os
@@ -176,10 +175,17 @@ def _multitenant_get(path: str, **kwargs):
 
 # Global references for services
 _container = None
-_wallet_generator: Optional[Any] = None
 
 # Process start time, for the public /api/status uptime figure (B2).
 _START_TIME = time.monotonic()
+
+
+def _api_base() -> str:
+    """Base URL of the main task API this webview proxies to (chat delivery,
+    queue-status, health) in the classic two-service shape. ``POLYROB_API_BASE``
+    overrides the default loopback :9000 for non-default ports/hosts
+    (2026-07-12 UI-surface review W5 — this was hardcoded at three sites)."""
+    return (os.environ.get("POLYROB_API_BASE") or "http://127.0.0.1:9000").rstrip("/")
 
 
 @_fastapi.get("/api/status")
@@ -203,7 +209,7 @@ async def api_status(request: Request) -> Response:
 @_fastapi.on_event("startup")
 async def startup_event():
     """Initialize all services before accepting requests."""
-    global _container, _wallet_generator
+    global _container
 
     logger.info("🚀 Initializing webview services...")
 
@@ -365,22 +371,28 @@ _watch_tasks: dict[str, asyncio.Task] = {}
 _client_session: dict[str, str] = {}
 _session_clients: dict[str, int] = {}
 
-from collections import defaultdict
-
 # Rate limiting configuration (hardcoded for webview - not business logic)
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_CONNECTIONS = 10  # max connections per IP per window
 RATE_LIMIT_MAX_EVENTS = 100  # max events per session per window
-# Cap on distinct sessions tracked by the event-rate limiter (E5-Minor): without
-# this, _event_emissions grew one key per session forever (a slow leak) since
-# nothing ever popped a finished session's entry. LRU eviction bounds the key
-# space without changing rate-limit semantics for any session still active.
+# Cap on distinct keys tracked per limiter: without a bound the per-session
+# event limiter grew one key per session forever (E5-Minor), and the per-IP
+# connection limiter one key per client IP. LRU eviction (max_keys) bounds the
+# key space without changing rate-limit semantics for any key still active.
 EVENT_EMISSIONS_MAX_SESSIONS = 5000
+CONNECTION_ATTEMPTS_MAX_IPS = 5000
 
-# Track connection attempts by IP
-_connection_attempts: dict[str, list[float]] = defaultdict(list)
-# Track event emissions by session (bounded — LRU-evicted past EVENT_EMISSIONS_MAX_SESSIONS)
-_event_emissions: "BoundedDict[str, list[float]]" = BoundedDict(max_size=EVENT_EMISSIONS_MAX_SESSIONS)
+# Both throttles are configured instances of the canonical sliding-window
+# primitive (F-1, 2026-07-17) — semantics pinned by
+# tests/unit/webview/test_webview_rate_limits.py.
+from core.rate_limit import SlidingWindowLimiter
+
+_connection_limiter = SlidingWindowLimiter(
+    RATE_LIMIT_MAX_CONNECTIONS, RATE_LIMIT_WINDOW, max_keys=CONNECTION_ATTEMPTS_MAX_IPS
+)
+_event_limiter = SlidingWindowLimiter(
+    RATE_LIMIT_MAX_EVENTS, RATE_LIMIT_WINDOW, max_keys=EVENT_EMISSIONS_MAX_SESSIONS
+)
 
 def check_rate_limit(ip: str) -> bool:
     """Check if IP has exceeded connection rate limit.
@@ -391,21 +403,12 @@ def check_rate_limit(ip: str) -> bool:
     Returns:
         True if within limit, False if exceeded
     """
-    now = time.time()
-
-    # Clean old attempts
-    _connection_attempts[ip] = [
-        t for t in _connection_attempts[ip]
-        if now - t < RATE_LIMIT_WINDOW
-    ]
-
-    # Check limit
-    if len(_connection_attempts[ip]) >= RATE_LIMIT_MAX_CONNECTIONS:
-        logger.warning(f"Rate limit exceeded for IP {ip}: {len(_connection_attempts[ip])} connections in {RATE_LIMIT_WINDOW}s")
+    # Limits are passed per call so the module-level constants stay the live
+    # config seam (tests monkeypatch them).
+    if not _connection_limiter.check(ip, max_calls=RATE_LIMIT_MAX_CONNECTIONS,
+                                     window=RATE_LIMIT_WINDOW):
+        logger.warning(f"Rate limit exceeded for IP {ip}: {RATE_LIMIT_MAX_CONNECTIONS} connections in {RATE_LIMIT_WINDOW}s")
         return False
-
-    # Record this attempt
-    _connection_attempts[ip].append(now)
     return True
 
 def check_event_rate_limit(session_id: str) -> bool:
@@ -417,24 +420,10 @@ def check_event_rate_limit(session_id: str) -> bool:
     Returns:
         True if within limit, False if exceeded
     """
-    now = time.time()
-
-    # Clean old events. _event_emissions is a bounded (LRU-evicted) dict — read
-    # via .get(default=[]) rather than defaultdict auto-vivification, then write
-    # back explicitly so the write also refreshes the key's LRU position.
-    events = [
-        t for t in _event_emissions.get(session_id, [])
-        if now - t < RATE_LIMIT_WINDOW
-    ]
-    _event_emissions[session_id] = events
-
-    # Check limit
-    if len(events) >= RATE_LIMIT_MAX_EVENTS:
-        logger.warning(f"Event rate limit exceeded for session {session_id}: {len(events)} events in {RATE_LIMIT_WINDOW}s")
+    if not _event_limiter.check(session_id, max_calls=RATE_LIMIT_MAX_EVENTS,
+                                window=RATE_LIMIT_WINDOW):
+        logger.warning(f"Event rate limit exceeded for session {session_id}: {RATE_LIMIT_MAX_EVENTS} events in {RATE_LIMIT_WINDOW}s")
         return False
-
-    # Record this event
-    events.append(now)
     return True
 
 
@@ -710,6 +699,17 @@ except Exception as e:
     PAGES_ROUTER_MOUNTED = False
     logger.error(f"❌ Failed to mount webgate pages router: {e}")
 
+# /knowledge — the owner-facing knowledge wiki (C2, read-only v1: notes/episodes/
+# skills/KB/changes). Same contract + tenancy as the pages router; fail-open mount.
+try:
+    from webview.knowledge import router as knowledge_router
+    _fastapi.include_router(knowledge_router)
+    KNOWLEDGE_ROUTER_MOUNTED = True
+    logger.info("✅ Knowledge pages mounted (/knowledge)")
+except Exception as e:
+    KNOWLEDGE_ROUTER_MOUNTED = False
+    logger.error(f"❌ Failed to mount knowledge router: {e}")
+
 # Global activity stream (/activity page + /api/activity/*). Mounted in ALL
 # postures; access is enforced at request time inside webview/activity.py
 # (_require_activity_access): local open, own_ops behind the owner cookie
@@ -767,10 +767,13 @@ async def auth_middleware(request: Request, call_next):
             pass
         return await call_next(request)
 
-    # Check if auth is enabled (default: enabled in production, disabled in dev)
-    env = os.environ.get("ENV", "production")
-    auth_enabled_default = "false" if env == "development" else "true"
-    auth_enabled = os.environ.get("WEBVIEW_AUTH_ENABLED", auth_enabled_default).lower() == "true"
+    # We only reach here for own_ops/multitenant (local posture returned above via
+    # requires_owner_login()), and BOTH require an authenticated identity — so auth
+    # defaults ON, regardless of ENV. P1 finalization: the default was previously
+    # keyed on ENV=development, silently disabling auth on a multitenant/own_ops
+    # console running with ENV=development. An explicit WEBVIEW_AUTH_ENABLED=false
+    # operator override still wins (deliberate opt-out).
+    auth_enabled = os.environ.get("WEBVIEW_AUTH_ENABLED", "true").lower() == "true"
 
     # If auth is disabled, skip all checks
     if not auth_enabled:
@@ -1149,6 +1152,20 @@ def _annotate_runtime(sessions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             row['owner_pid'] = route.owner_pid
         else:
             row['runtime'] = "here"
+        # 019 P3: live activity badge (in-process RunActivity snapshot —
+        # present only when THIS process runs the session; honest absence
+        # otherwise). phase ∈ thinking|tool|awaiting_approval|compacting|
+        # retrying|delegating; idle/done are omitted (no badge).
+        try:
+            from agents.task.telemetry.run_activity import get_activity
+            activity = get_activity(row['id'])
+            if activity and activity.get('phase') not in (None, '', 'idle', 'done'):
+                row['activity'] = {
+                    'phase': activity.get('phase'),
+                    'detail': activity.get('detail') or '',
+                }
+        except Exception:
+            pass
     return sessions
 
 
@@ -2009,16 +2026,24 @@ async def api_refresh() -> Response:
 
 
 @_fastapi.get("/api/repair/{session_id}", response_class=JSONResponse)
-async def api_repair(clean_id: str = Depends(get_clean_session_id)) -> Response:
+async def api_repair(request: Request, clean_id: str = Depends(get_clean_session_id)) -> Response:
     """Repair a session's telemetry (dedup + token estimation + validation).
 
     Wired to the REAL ``webview.repair_sessions.repair_session_telemetry``
     (this endpoint used to return fake success without doing anything).
-    Mutates feed/llm_usage files, so it is refused in read-only mode.
+    Mutates feed/llm_usage files, so it is refused in read-only mode AND
+    requires session ownership (SECURITY: previously unguarded — any
+    authenticated tenant could mutate another tenant's telemetry).
     """
     if webgate.read_only():
         return JSONResponse(
             {"status": "error", "message": "Console is read-only (WEBVIEW_READ_ONLY)"},
+            status_code=403,
+        )
+    is_owner, _current, _owner = _check_session_ownership(request, clean_id)
+    if not is_owner:
+        return JSONResponse(
+            {"status": "error", "message": "Forbidden: not the session owner"},
             status_code=403,
         )
     try:
@@ -2212,343 +2237,8 @@ async def api_screenshot_file(request: Request, clean_id: str = Depends(get_clea
 async def api_agents(clean_id: str = Depends(get_clean_session_id)) -> Response:
     """Return the agents information for a session."""
     logger.debug(f"API agents request for cleaned ID: {clean_id}")
-    
     try:
-        # Look for an agents.json file in the session directory
-        feed_dir = pm().get_feed_dir(clean_id)
-        session_dir = feed_dir.parent
-        agents_file = session_dir / "agents.json"
-        
-        # If agents.json exists, read it directly
-        if agents_file.exists():
-            try:
-                with agents_file.open("r") as f:
-                    cached_data = f.read()
-                    if cached_data and len(cached_data) >= 10:
-                        cached_agents = json.loads(cached_data)
-                        
-                        if cached_agents and isinstance(cached_agents, list) and len(cached_agents) > 0:
-                            # Normalize the cached data
-                            normalized_agents = []
-                            for agent in cached_agents:
-                                normalized_agent = {
-                                    'id': agent.get('id', agent.get('agent_id', 'Unknown')),
-                                    'name': agent.get('name', agent.get('agent_name', 'Unknown')),
-                                    'type': agent.get('type', agent.get('agent_type', 'Unknown')),
-                                    'model': agent.get('model', agent.get('model_name', ''))
-                                }
-                                normalized_agents.append(normalized_agent)
-                                
-                            logger.debug(f"Using cached agents data with {len(normalized_agents)} agents")
-                            
-                            return JSONResponse(
-                                {"status": "ok", "agents": normalized_agents},
-                                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                            )
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON in agents file for session {clean_id}")
-            except Exception as e:
-                logger.warning(f"Error reading agents file: {e}")
-        
-        # If no agents.json or it's invalid, extract from feed files (READ-ONLY)
-        agents = []
-        agent_ids = set()
-        agent_models = {}
-        execution_sequence = []
-        
-        logger.debug(f"Extracting agents data from feed for session {clean_id}")
-        
-        if feed_dir.exists():
-            # Check for multi_agent_relationship entries - they have the most complete agent info
-            relationship_files = sorted(feed_dir.glob("*multi_agent_relationship*.json"), reverse=True)
-            
-            # Limit to latest 5 relationship files for efficiency
-            for file in relationship_files[:5]:
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") in ["multi_agent_relationship", "multi_agent_relationship_detailed"] and "data" in entry:
-                            data = entry["data"]
-                            # Look for agent_models first - this is the most reliable source
-                            if "agent_models" in data and isinstance(data["agent_models"], dict):
-                                for agent_id, model in data["agent_models"].items():
-                                    if model:
-                                        agent_models[agent_id] = model
-                                        logger.debug(f"Found model info from relationship: {agent_id} -> {model}")
-                            
-                            # Store execution sequence if available
-                            if "execution_sequence" in data and isinstance(data["execution_sequence"], list) and data["execution_sequence"]:
-                                execution_sequence = data["execution_sequence"]
-                                logger.debug(f"Found execution sequence with {len(execution_sequence)} agents")
-                            elif "agent_ids" in data and isinstance(data["agent_ids"], list) and data["agent_ids"]:
-                                execution_sequence = data["agent_ids"]
-                                logger.debug(f"Using agent_ids as execution sequence with {len(execution_sequence)} agents")
-                                                
-                            # Process agent details
-                            if "agent_details" in data and isinstance(data["agent_details"], list):
-                                for agent_detail in data["agent_details"]:
-                                    agent_id = agent_detail.get("id") or agent_detail.get("agent_id")
-                                    if not agent_id:
-                                        continue
-                                        
-                                    # Extract model info directly from agent_detail if available
-                                    model_from_detail = agent_detail.get("model")
-                                    if model_from_detail:
-                                        agent_models[agent_id] = model_from_detail
-                                        logger.debug(f"Found agent model in detail: {agent_id} -> {model_from_detail}")
-                                    
-                                    # Use the best available model info for this agent
-                                    best_model = model_from_detail or agent_models.get(agent_id, '')
-                                                        
-                                    if agent_id not in agent_ids:
-                                        agent = {
-                                            'id': agent_id,
-                                            'name': agent_detail.get("name") or agent_detail.get("agent_name") or agent_id,
-                                            'type': agent_detail.get("type") or agent_detail.get("agent_type") or "Unknown",
-                                            'model': best_model
-                                        }
-                                        agents.append(agent)
-                                        agent_ids.add(agent_id)
-                                        logger.debug(f"Added agent from relationship detail: {agent_id} with model {best_model}")
-                                    # Update model for existing agents
-                                    else:
-                                        for agent in agents:
-                                            if agent.get("id") == agent_id:
-                                                if not agent.get("model") and best_model:
-                                                    agent["model"] = best_model
-                                                    logger.debug(f"Updated agent model: {agent_id} -> {best_model}")
-                                                break
-                except Exception as e:
-                    logger.debug(f"Error processing relationship file {file}: {e}")
-                    continue
-            
-            # Look for agent_registration entries to find more agents
-            registration_files = sorted(feed_dir.glob("agent_registration_*.json"), reverse=True)
-            
-            # Limit to 20 most recent registration files
-            for file in registration_files[:20]:
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "agent_registration" and "data" in entry:
-                            agent_data = entry["data"]
-                            agent_id = agent_data.get("id") or agent_data.get("agent_id")
-                            
-                            if not agent_id:
-                                # Try to extract agent_id from filename if not in data
-                                filename = file.name
-                                if "_" in filename:
-                                    parts = filename.split("_")
-                                    if len(parts) >= 3:  # agent_registration_AGENT_ID_TIMESTAMP.json
-                                        possible_id = "_".join(parts[2:-1])
-                                        if possible_id:
-                                            agent_id = possible_id
-                                            logger.debug(f"Extracted agent_id from filename: {agent_id}")
-                            
-                            if not agent_id:
-                                continue
-                            
-                            # Extract model information from registration
-                            model = None
-                            if "model_name" in agent_data and agent_data["model_name"]:
-                                model = agent_data["model_name"]
-                            elif "model" in agent_data and agent_data["model"]:
-                                model = agent_data["model"]
-                            elif "llm_model" in agent_data and agent_data["llm_model"]:
-                                model = agent_data["llm_model"]
-                            
-                            # Handle "Unknown" or "None" values
-                            if model and (model == "Unknown" or model == "None"):
-                                model = None
-                            
-                            # Store the model in our models dictionary for later use
-                            if model:
-                                agent_models[agent_id] = model
-                                logger.debug(f"Stored model for agent {agent_id}: {model}")
-                            
-                            # Use the best available model
-                            best_model = model or agent_models.get(agent_id, '')
-
-                            if agent_id not in agent_ids:
-                                agent = {
-                                    'id': agent_id,
-                                    'name': agent_data.get("name") or agent_data.get("agent_name") or agent_id,
-                                    'type': agent_data.get("type") or agent_data.get("agent_type") or "Unknown",
-                                    'model': best_model
-                                }
-                                agents.append(agent)
-                                agent_ids.add(agent_id)
-                                logger.debug(f"Added agent from registration: {agent_id} with model {best_model}")
-                            # Update existing agents with better model info if needed
-                            else:
-                                for agent in agents:
-                                    if agent.get("id") == agent_id:
-                                        if not agent.get("model") or (best_model and len(best_model) > len(agent.get("model", ""))):
-                                            agent["model"] = best_model
-                                            logger.debug(f"Updated existing agent model: {agent_id} -> {best_model}")
-                                        if agent.get("name") in [agent_id, "Unknown", "Agent"] and agent_data.get("name"):
-                                            agent["name"] = agent_data.get("name") or agent_data.get("agent_name")
-                                        if agent.get("type") == "Unknown" and agent_data.get("type"):
-                                            agent["type"] = agent_data.get("type") or agent_data.get("agent_type")
-                                        break
-                except Exception as e:
-                    logger.debug(f"Error processing agent registration file {file}: {e}")
-                    continue
-            
-            # Look for LLM request data to capture model information
-            llm_request_files = sorted(feed_dir.glob("llm_request_*.json"), reverse=True)
-            
-            # Limit to 30 most recent LLM requests
-            for file in llm_request_files[:30]:
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "llm_request" and "data" in entry:
-                            data = entry["data"]
-                            agent_id = data.get("agent_id")
-                            
-                            if not agent_id:
-                                continue
-                            
-                            # Extract model information
-                            model_name = None
-                            if "model_name" in data and data["model_name"]:
-                                model_name = data["model_name"]
-                            elif "model" in data and data["model"]:
-                                model_name = data["model"]
-                            
-                            # Update agent models if we found a model name
-                            if agent_id and model_name:
-                                agent_models[agent_id] = model_name
-                                logger.debug(f"Updated agent model: {agent_id} -> {model_name}")
-                                
-                                # Update existing agents' model info if needed
-                                for agent in agents:
-                                    if agent.get("id") == agent_id and (not agent.get("model") or agent.get("model") == ''):
-                                        agent["model"] = model_name
-                                        logger.debug(f"Applied model to existing agent: {agent_id} -> {model_name}")
-                except Exception as e:
-                    logger.debug(f"Error processing LLM request file {file}: {e}")
-                    continue
-            
-            # If we still don't have agent data, search in step files
-            if not agents:
-                step_files = sorted(feed_dir.glob("step_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
-                for file in step_files:
-                    try:
-                        with file.open("r") as f:
-                            entry = json.load(f)
-                            if entry.get("type") == "step" and "data" in entry:
-                                data = entry["data"]
-                                agent_id_val = (
-                                    data.get("agent_id")
-                                    or data.get("id")
-                                    or data.get("agent_name")
-                                )
-                                agent_name_val = data.get("agent_name") or data.get("name")
-                                agent_type_val = data.get("agent_type") or data.get("type") or "Unknown"
-
-                                if agent_id_val and agent_id_val not in agent_ids:
-                                    agents.append({
-                                        'id': agent_id_val,
-                                        'name': agent_name_val or agent_id_val,
-                                        'type': agent_type_val,
-                                        'model': agent_models.get(agent_id_val, '')
-                                    })
-                                    agent_ids.add(agent_id_val)
-                    except Exception as e:
-                        logger.debug(f"Error processing step file {file}: {e}")
-                        continue
-        
-        # Check metadata.json as a fallback for all agents
-        try:
-            metadata_file = session_dir / "metadata.json"
-            if metadata_file.exists():
-                with metadata_file.open("r") as f:
-                    metadata_payload = json.load(f)
-                    meta_agents = metadata_payload.get("agents", []) if isinstance(metadata_payload, dict) else []
-                    for meta_agent in meta_agents:
-                        meta_id = meta_agent.get("id") or meta_agent.get("agent_id")
-                        if not meta_id:
-                            continue
-                        if meta_id not in agent_ids:
-                            agents.append({
-                                'id': meta_id,
-                                'name': meta_agent.get('name') or meta_agent.get('agent_name') or meta_id,
-                                'type': meta_agent.get('type') or meta_agent.get('agent_type') or 'Unknown',
-                                'model': meta_agent.get('model') or meta_agent.get('model_name') or ''
-                            })
-                            agent_ids.add(meta_id)
-                        else:
-                            # Update existing agent entry with any missing details
-                            for ag in agents:
-                                if ag.get('id') == meta_id:
-                                    if (not ag.get('name') or ag['name'] == 'Unknown') and (meta_agent.get('name') or meta_agent.get('agent_name')):
-                                        ag['name'] = meta_agent.get('name') or meta_agent.get('agent_name')
-                                    if (not ag.get('type') or ag['type'] == 'Unknown') and (meta_agent.get('type') or meta_agent.get('agent_type')):
-                                        ag['type'] = meta_agent.get('type') or meta_agent.get('agent_type')
-                                    if not ag.get('model') and (meta_agent.get('model') or meta_agent.get('model_name')):
-                                        ag['model'] = meta_agent.get('model') or meta_agent.get('model_name')
-                                    break
-        except Exception as e:
-            logger.debug(f"Error merging agents from metadata.json: {e}")
-        
-        # Ensure we're getting all unique agents with complete information
-        unique_agents = {}
-        for agent in agents:
-            agent_id = agent.get('id')
-            if agent_id:
-                # If this agent ID already exists, merge information (favor non-empty values)
-                if agent_id in unique_agents:
-                    existing = unique_agents[agent_id]
-                    # For each field, use the new value only if the existing one is empty
-                    for field in ['name', 'type', 'model']:
-                        if not existing.get(field) and agent.get(field):
-                            existing[field] = agent.get(field)
-                        # If the new value is longer or more specific, prefer it
-                        elif existing.get(field) and agent.get(field) and len(agent.get(field)) > len(existing.get(field)):
-                            # Only replace if it's a more informative value (longer and not just "Unknown")
-                            field_value = agent.get(field)
-                            if field_value and field_value.lower() != "unknown":
-                                existing[field] = agent.get(field)
-                else:
-                    unique_agents[agent_id] = agent
-        
-        # Convert back to list
-        agents = list(unique_agents.values())
-        
-        # Sort agents by execution order if possible, otherwise by ID
-        try:
-            if execution_sequence:
-                # First sort by natural execution order using known sequence
-                ordered_agents = []
-                remaining_agents = []
-                
-                # First add agents in the execution sequence order
-                for exec_id in execution_sequence:
-                    for agent in agents:
-                        if agent['id'] == exec_id:
-                            ordered_agents.append(agent)
-                            break
-                
-                # Then add any remaining agents not in the sequence
-                for agent in agents:
-                    if agent['id'] not in execution_sequence:
-                        remaining_agents.append(agent)
-                
-                # Sort remaining agents by ID
-                remaining_agents.sort(key=lambda a: a['id'])
-                
-                # Combine ordered and remaining agents
-                agents = ordered_agents + remaining_agents
-            else:
-                # Fall back to sorting by agent ID
-                agents.sort(key=lambda a: a['id'])
-        except Exception as e:
-            logger.debug(f"Error sorting agents: {e}")
-            # If sorting fails, ensure we still return agents in some order
-            agents.sort(key=lambda a: a.get('id', ''))
-        
+        agents = build_session_agents(clean_id)
         # Return with Cache-Control header to prevent stale responses
         return JSONResponse(
             {"status": "ok", "agents": agents},
@@ -2557,7 +2247,7 @@ async def api_agents(clean_id: str = Depends(get_clean_session_id)) -> Response:
     except Exception as exc:
         logger.error("Failed to get agents for %s: %s", clean_id, exc, exc_info=True)
         return JSONResponse(
-            {"status": "error", "message": str(exc)}, 
+            {"status": "error", "message": str(exc)},
             status_code=500,
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
@@ -2588,108 +2278,10 @@ async def api_stats(clean_id: str = Depends(get_clean_session_id)) -> Response:
 async def api_services(clean_id: str = Depends(get_clean_session_id)) -> Response:
     """Return the services information for a session."""
     logger.debug(f"API services request for cleaned ID: {clean_id}")
-    
     try:
-        # Look for a services.json file in the session directory
-        feed_dir = pm().get_feed_dir(clean_id)
-        services_file = feed_dir.parent / "services.json"
-        
-        # If services.json exists, read it directly
-        if services_file.exists():
-            try:
-                with services_file.open("r") as f:
-                    services_data = json.load(f)
-                    
-                return JSONResponse(
-                    {"status": "ok", "services": services_data},
-                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                )
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON in services file for session {clean_id}")
-            except Exception as e:
-                logger.warning(f"Error reading services file: {e}")
-        
-        # If no services.json, extract service info from feed entries (READ-ONLY)
-        services = {}
-        
-        if feed_dir.exists():
-            # First, look for available_actions entries which have service grouping
-            for file in sorted(feed_dir.glob("available_actions_*.json"), reverse=True):
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "available_actions" and "data" in entry:
-                            data = entry["data"]
-                            if "by_service" in data and isinstance(data["by_service"], dict):
-                                service_info = []
-                                for service_name, actions in data["by_service"].items():
-                                    service_info.append({
-                                        "name": service_name,
-                                        "type": "controller",
-                                        "actions": actions,
-                                        "action_count": len(actions)
-                                    })
-                                
-                                if service_info:
-                                    return JSONResponse(
-                                        {"status": "ok", "services": service_info},
-                                        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                                    )
-                except Exception as e:
-                    logger.debug(f"Error processing services file {file}: {e}")
-                    continue
-            
-            # If we didn't find service data, look at service_actions entries
-            for file in sorted(feed_dir.glob("service_actions_*.json")):
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "service_actions" and "data" in entry:
-                            data = entry["data"]
-                            service_name = data.get("service_name", "Unknown")
-                            if service_name not in services:
-                                services[service_name] = {
-                                    "name": service_name,
-                                    "type": data.get("service_type", "Unknown"),
-                                    "actions": data.get("available_actions", []),
-                                    "action_count": data.get("action_count", 0)
-                                }
-                except Exception as e:
-                    logger.debug(f"Error processing {file}: {e}")
-                    continue
-            
-            # If still no service data, extract from step actions
-            if not services:
-                for file in sorted(feed_dir.glob("step_*.json")):
-                    try:
-                        with file.open("r") as f:
-                            entry = json.load(f)
-                            if entry.get("type") == "step" and "data" in entry:
-                                data = entry["data"]
-                                if "actions" in data and isinstance(data["actions"], list):
-                                    for action in data["actions"]:
-                                        if "service" in action:
-                                            service_name = action["service"]
-                                            if service_name not in services:
-                                                services[service_name] = {
-                                                    "name": service_name,
-                                                    "count": 0,
-                                                    "actions": set()
-                                                }
-                                            services[service_name]["count"] += 1
-                                            if "name" in action:
-                                                services[service_name]["actions"].add(action["name"])
-                    except Exception as e:
-                        logger.debug(f"Error processing {file}: {e}")
-                        continue
-                
-                # Convert sets to lists for JSON serialization
-                for service in services.values():
-                    if "actions" in service and isinstance(service["actions"], set):
-                        service["actions"] = list(service["actions"])
-        
+        services = build_session_services(clean_id)
         return JSONResponse(
-            {"status": "ok", "services": list(services.values())},
+            {"status": "ok", "services": services},
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
     except Exception as exc:
@@ -2703,108 +2295,19 @@ async def api_services(clean_id: str = Depends(get_clean_session_id)) -> Respons
 
 @_fastapi.get("/api/session/{session_id}/task", response_class=JSONResponse)
 async def api_task(clean_id: str = Depends(get_clean_session_id)) -> Response:
-    """Return the current task for a session.
-    
-    This function prioritizes returning the initial user-inputted task,
-    not subsequent task updates or derived goals.
-    """
+    """Return the current task for a session (the initial user task, not later goals)."""
     logger.debug(f"API task request for cleaned ID: {clean_id}")
-    
     try:
-        # First look for a dedicated task.json file in the session directory
-        session_dir = pm().get_feed_dir(clean_id).parent
-        task_file = session_dir / "task.json"
-        
-        # If task.json exists, use it directly
-        if task_file.exists():
-            try:
-                with task_file.open("r") as f:
-                    task_data = json.load(f)
-                    
-                # Check if the task data is valid and contains the task
-                if isinstance(task_data, dict) and "task" in task_data and task_data["task"]:
-                    logger.info(f"Found task in task.json: '{task_data['task']}'")
-                    # Include timestamp if available, or use file mtime
-                    timestamp = task_data.get("timestamp") or task_file.stat().st_mtime
-                    return JSONResponse(
-                        {"status": "ok", "task": task_data["task"], "timestamp": timestamp},
-                        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                    )
-            except Exception as e:
-                logger.warning(f"Error reading task.json for {clean_id}: {e}")
-        
-        # Next check for metadata.json as it often contains the original task
-        metadata_file = session_dir / "metadata.json"
-        if metadata_file.exists():
-            try:
-                with metadata_file.open("r") as f:
-                    metadata = json.load(f)
-                    if "task" in metadata and metadata["task"]:
-                        task = metadata["task"]
-                        logger.info(f"Found initial task in metadata.json: '{task}'")
-                        # Use metadata timestamp or file mtime
-                        timestamp = metadata.get("created_at") or metadata.get("timestamp") or metadata_file.stat().st_mtime
-                        return JSONResponse(
-                            {"status": "ok", "task": task, "timestamp": timestamp},
-                            headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                        )
-            except Exception as e:
-                logger.debug(f"Error reading metadata.json: {e}")
-        
-        # Look in the feed directory for session_start events which have the initial task
-        feed_dir = pm().get_feed_dir(clean_id)
-        if feed_dir.exists():
-            # First check for session_start events (most reliable source for initial task)
-            for file in sorted(feed_dir.glob("session_start_*.json"), reverse=True):
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "session_start" and "data" in entry:
-                            data = entry["data"]
-                            if "task" in data and data["task"]:
-                                task = data["task"]
-                                # Use event timestamp or file mtime
-                                timestamp = entry.get("timestamp") or file.stat().st_mtime
-                                logger.info(f"Found initial task in session_start event: '{task}'")
-                                
-                                return JSONResponse(
-                                    {"status": "ok", "task": task, "timestamp": timestamp},
-                                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                                )
-                except Exception as e:
-                    logger.debug(f"Error processing session start file {file}: {e}")
-                    continue
-            
-            # Then check for task_update events (but only the first/earliest one which is likely initial)
-            task_update_files = sorted(feed_dir.glob("task_update_*.json"))
-            if task_update_files:
-                # Only look at the first task_update file (chronologically) to get initial task
-                try:
-                    first_file = task_update_files[0]
-                    with first_file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "task_update" and "data" in entry:
-                            data = entry["data"]
-                            if "task" in data and data["task"]:
-                                task = data["task"]
-                                # Use event timestamp or file mtime
-                                timestamp = entry.get("timestamp") or first_file.stat().st_mtime
-                                logger.info(f"Found initial task in first task_update event: '{task}'")
-                                
-                                return JSONResponse(
-                                    {"status": "ok", "task": task, "timestamp": timestamp},
-                                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                                )
-                except Exception as e:
-                    logger.debug(f"Error processing task update file: {e}")
-        
-        # No task was found anywhere
-        logger.warning(f"No task information found for session {clean_id}")
+        result = build_session_task(clean_id)
+        if result is not None:
+            return JSONResponse(
+                {"status": "ok", "task": result["task"], "timestamp": result["timestamp"]},
+                headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
+            )
         return JSONResponse(
             {"status": "not_found", "message": "No task information available"},
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
-    
     except Exception as exc:
         logger.error("Failed to get task for %s: %s", clean_id, exc, exc_info=True)
         return JSONResponse(
@@ -2818,52 +2321,12 @@ async def api_task(clean_id: str = Depends(get_clean_session_id)) -> Response:
 async def api_skills(clean_id: str = Depends(get_clean_session_id)) -> Response:
     """Return the skills loaded for a session."""
     logger.debug(f"API skills request for cleaned ID: {clean_id}")
-    
     try:
-        # Look for a skills.json file in the session directory
-        feed_dir = pm().get_feed_dir(clean_id)
-        session_dir = feed_dir.parent
-        skills_file = session_dir / "skills.json"
-        
-        # If skills.json exists, read it directly
-        if skills_file.exists():
-            try:
-                with skills_file.open("r") as f:
-                    skills_data = json.load(f)
-                    
-                return JSONResponse(
-                    {"status": "ok", "skills": skills_data},
-                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                )
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON in skills file for session {clean_id}")
-            except Exception as e:
-                logger.warning(f"Error reading skills file: {e}")
-        
-        # If no skills.json, try to extract from session_start event
-        if feed_dir.exists():
-            for file in sorted(feed_dir.glob("session_start_*.json"), reverse=True):
-                try:
-                    with file.open("r") as f:
-                        entry = json.load(f)
-                        if entry.get("type") == "session_start" and "data" in entry:
-                            data = entry["data"]
-                            if "skills" in data and isinstance(data["skills"], list):
-                                skills = data["skills"]
-                                return JSONResponse(
-                                    {"status": "ok", "skills": skills},
-                                    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
-                                )
-                except Exception as e:
-                    logger.debug(f"Error processing session start file {file}: {e}")
-                    continue
-        
-        # No skills data found - return empty list
+        skills = build_session_skills(clean_id)
         return JSONResponse(
-            {"status": "ok", "skills": []},
+            {"status": "ok", "skills": skills},
             headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"}
         )
-    
     except Exception as exc:
         logger.error("Failed to get skills for %s: %s", clean_id, exc, exc_info=True)
         return JSONResponse(
@@ -3251,7 +2714,7 @@ async def api_session_debug(session_id: str) -> Response:
         try:
             import httpx
             async with httpx.AsyncClient() as client:
-                api_resp = await client.get("http://127.0.0.1:9000/health", timeout=2.0)
+                api_resp = await client.get(_api_base() + "/health", timeout=2.0)
                 debug_info["services"]["main_api"] = "running" if api_resp.status_code == 200 else "error"
         except Exception:
             debug_info["services"]["main_api"] = "not_reachable"
@@ -3529,7 +2992,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
         import httpx
 
         # Call main API endpoint with retry logic
-        api_url = "http://127.0.0.1:9000/api/task/sessions/{}/messages".format(clean_id)
+        api_url = "{}/api/task/sessions/{}/messages".format(_api_base(), clean_id)
 
         max_retries = 3
         retry_delay = 1.0  # seconds
@@ -3664,7 +3127,7 @@ async def get_queue_status(session_id: str, request: Request) -> Response:
         import httpx
 
         # Call main API queue-status endpoint with retry logic
-        api_url = f"http://127.0.0.1:9000/api/task/sessions/{clean_id}/queue-status"
+        api_url = f"{_api_base()}/api/task/sessions/{clean_id}/queue-status"
 
         max_retries = 2  # Fewer retries for polling endpoint
         retry_delay = 0.5  # Shorter delay for polling
@@ -4174,20 +3637,7 @@ async def _startup_late_services():
     invoked explicitly at the end of ``startup_event`` in the same order
     FastAPI would have run it.
     """
-    global _container, _wallet_generator
-
-    # Initialize deposit wallet generator (lazy import to avoid circular dependency)
-    from core.payment_config import resolve_master_seed
-    master_seed = resolve_master_seed()
-    if master_seed:
-        try:
-            from modules.payments.wallet_generator import DepositWalletGenerator
-            _wallet_generator = DepositWalletGenerator(master_seed)
-            logger.info("✅ Deposit wallet generator initialized")
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize wallet generator: {e}", exc_info=True)
-    else:
-        logger.warning("⚠️ PAYMENT_MASTER_SEED not configured - deposit address generation disabled")
+    global _container
 
     if not AUTH_ROUTER_MOUNTED and not TASK_ROUTER_MOUNTED:
         logger.warning("⚠️ No routers mounted, skipping container initialization")

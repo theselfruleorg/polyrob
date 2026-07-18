@@ -1,6 +1,7 @@
 """Database manager module."""
 
 import logging
+import os
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 import json
@@ -8,6 +9,34 @@ import json
 from core.config import BotConfig
 from core.exceptions import DatabaseError
 from modules.base_module import BaseModule
+
+
+def resolve_bot_db_path(config) -> Path:
+    """THE bot.db resolution rule (R-2 B2, 2026-07-17).
+
+    - ``DB_PATH`` env unset (the default): derive ``<data_dir>/database/bot.db``
+      at open time — byte-identical to the historical behavior, and it follows a
+      post-construction ``data_dir`` reassignment (the CLI container does this).
+    - ``DB_PATH`` env set: honor ``config.db_path`` (config anchors it absolute),
+      with a refuse-to-guess guard — if the configured path diverges from the
+      derived one while the REAL database still sits at the derived location,
+      raise instead of silently opening a fresh empty DB (phantom "data loss")
+      or silently relocating a live one. The operator moves the file, we don't.
+    """
+    legacy = Path(config.data_dir) / "database" / "bot.db"
+    configured_raw = os.getenv("DB_PATH")
+    if not configured_raw:
+        return legacy
+    configured = Path(getattr(config, "db_path", configured_raw))
+    if not configured.is_absolute():
+        configured = Path(configured_raw)
+    if (configured.resolve() != legacy.resolve()
+            and legacy.is_file() and not configured.is_file()):
+        raise RuntimeError(
+            f"DB_PATH={configured} but the existing database is at {legacy}. "
+            "Refusing to guess: stop the services, move bot.db (with its -wal/-shm "
+            "siblings) to the configured path, then restart — or unset DB_PATH.")
+    return configured
 
 from .connection import DatabaseConnection
 from .conversation_contexts import ConversationContexts
@@ -62,7 +91,7 @@ class DatabaseManager(BaseModule):
     async def _init_connection(self) -> None:
         """Initialize database connection."""
         try:
-            db_path = Path(self.config.data_dir) / "database" / "bot.db"
+            db_path = resolve_bot_db_path(self.config)
             db_path.parent.mkdir(parents=True, exist_ok=True)
             
             self.connection = DatabaseConnection(str(db_path))

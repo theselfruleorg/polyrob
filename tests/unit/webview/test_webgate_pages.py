@@ -194,6 +194,31 @@ def test_identity_endpoint_null_when_absent(monkeypatch):
     assert body["self"] is None
 
 
+def test_identity_page_shows_avatar_by_default(monkeypatch, tmp_path):
+    """No preferences.toml at all -> fail-open default True -> avatar block renders."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(pages, "_effective_user_id", lambda request: "u1")
+    r = client.get("/identity")
+    assert r.status_code == 200
+    assert 'id="agent-avatar"' in r.text
+
+
+def test_identity_page_hides_avatar_when_pref_false(monkeypatch, tmp_path):
+    """Task 8: ui.show_avatar=false (owner-UX prefs) removes the avatar block
+    (and its probe script) from the rendered identity page entirely."""
+    from core import prefs
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(pages, "_effective_user_id", lambda request: "u1")
+    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "rob")
+    assert ok, err
+    r = client.get("/identity")
+    assert r.status_code == 200
+    assert 'id="agent-avatar"' not in r.text
+    assert "/pfp.json" not in r.text
+
+
 def test_identity_has_no_write_path(monkeypatch):
     """Read-only in v1: no POST/PUT/DELETE/PATCH on /api/webgate/identity."""
     _, pages = _router_client()

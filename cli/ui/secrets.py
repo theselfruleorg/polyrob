@@ -27,36 +27,19 @@ REDACTED = "«redacted»"
 # Patterns (ordered: structural blocks first, then key=value, then bare tokens)
 # ---------------------------------------------------------------------------
 
-#: PEM private-key blocks (multi-line). Redact the whole block.
-_PEM_RE = re.compile(
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-    re.DOTALL,
+# P4 finalization: the six high-confidence credential-shape patterns are shared with
+# core/secret_scrub.py via core.secret_patterns so the two scrubbers can't diverge (the
+# _KV_RE <PREFIX>_API_KEY= fix was a divergence bug). NOTE: this display scrubber keeps
+# its OWN REDACTED marker ("«redacted»", above) — only the regexes are shared. The
+# cli-only patterns (Google/Slack/GitHub/hex/base64 catch-alls) stay local below.
+from core.secret_patterns import (  # noqa: E402
+    PEM_RE as _PEM_RE,
+    BEARER_RE as _BEARER_RE,
+    KV_RE as _KV_RE,
+    PROVIDER_KEY_RE as _PROVIDER_KEY_RE,
+    POLYROB_KEY_RE as _ROB_KEY_RE,
+    AWS_RE as _AWS_RE,
 )
-
-#: ``key = value`` / ``key: value`` where the key NAME signals a credential.
-#: The key is preserved (so the line stays readable); only the value is redacted.
-#: Value must be >=6 chars to avoid mangling trivial values (e.g. ``limit=20``).
-#: The optional ``IDENT_`` prefix segments capture real env-var names such as
-#: ``GEMINI_API_KEY`` / ``OPENAI_ACCESS_TOKEN`` (a leading ``\b`` used to fail
-#: because ``_`` is a word char, so ``..._API_KEY=`` leaked — the module's own
-#: motivating .env case). The credential word must still sit at the END of the key
-#: name (so ``MAX_TOKENS=``/``SESSION_TOKEN_LIMIT=`` are NOT redacted).
-_KV_RE = re.compile(
-    r"(?i)(?<![A-Za-z0-9])"
-    r"((?:[A-Za-z0-9]+[_-])*"
-    r"(?:api[_-]?key|apikey|secret|client_secret|password|passwd|"
-    r"access[_-]?token|auth[_-]?token|token|authorization|bearer))"
-    r"(\s*[=:]\s*)"
-    r"(['\"]?)([^\s'\"]{6,})\3"
-)
-
-#: Provider-style opaque keys: ``sk-…``/``pk-…``/``rk-…`` (OpenAI/Anthropic/Stripe)
-#: and ``rob_…`` (POLYROB API keys). 16+ token chars.
-_PROVIDER_KEY_RE = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}")
-_ROB_KEY_RE = re.compile(r"\brob_[A-Za-z0-9]{16,}")
-
-#: AWS access key id.
-_AWS_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 
 #: Google API key (e.g. Gemini ``AIza…`` — 39 chars, under the base64 rule).
 _GOOGLE_RE = re.compile(r"\bAIza[0-9A-Za-z_\-]{35}")
@@ -68,8 +51,8 @@ _SLACK_RE = re.compile(r"\bxox[baprs]-[0-9A-Za-z-]{10,}")
 _GITHUB_RE = re.compile(r"\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}\b")
 _GITHUB_PAT_RE = re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}")
 
-#: ``Bearer <token>`` (when not already caught by the kv rule).
-_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{8,}")
+# (_BEARER_RE is imported from core.secret_patterns above — shared with the
+# persisted-content scrubber so it can't diverge. P4 finalization.)
 
 #: Long opaque hex / base64 blobs (>=40 base64 chars, >=32 hex chars). Catches
 #: hashes/JWT-ish blobs; a redacted git SHA is harmless collateral.

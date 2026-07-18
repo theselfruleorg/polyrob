@@ -11,7 +11,6 @@ from .models import (
 
 # Import managers
 from .cache_manager import CacheManager
-from .user_profile_manager import UserProfileManager
 
 # Import task memory system (Phase 1 - PRIMARY)
 from .task.task_context_manager import TaskContextManager
@@ -23,7 +22,6 @@ __all__ = [
     # Managers
     'MemoryManager',
     'CacheManager',
-    'UserProfileManager',
     'TaskContextManager',
 
     # Models

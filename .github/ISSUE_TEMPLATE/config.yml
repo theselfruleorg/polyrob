@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation & self-hosting guide
+    url: https://github.com/theselfruleorg/polyrob/tree/main/docs/guide
+    about: Setup, configuration, CLI, self-hosting, and payments reference — check here before filing.

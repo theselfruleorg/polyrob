@@ -15,8 +15,9 @@ parse_mode="MarkdownV2" for rich formatting. Fail-open: a bot error returns
 SendResult(success=False) / is logged and swallowed.
 """
 import logging
+import os
 import time as _time
-from typing import Any
+from typing import Any, Optional
 
 from core.surfaces.surface import Surface, split_message
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
@@ -25,6 +26,7 @@ from surfaces.telegram.markdown import escape_markdown_v2
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX = 4096
+_TELEGRAM_CAPTION_MAX = 1024  # Bot API cap for photo/document captions (< the 4096 message cap)
 
 
 def _markdown_v2_chunks(text: str, limit: int) -> list[str]:
@@ -77,6 +79,7 @@ class TelegramSurface(Surface):
             is_multi_tenant=True,
             max_message_bytes=_TELEGRAM_MAX,
             markdown_flavor="markdownv2",  # MarkdownV2 with proper escaping via escape_markdown_v2
+            media_out=True,                # can render OutboundMessage.media as photo/document
         )
 
     def _parse_mode(self) -> str | None:
@@ -99,10 +102,50 @@ class TelegramSurface(Surface):
             for chunk in self._render_chunks(msg.text or ""):
                 sent = await self._bot.send_message(chat_id, chunk, parse_mode=parse_mode)
                 last_id = getattr(sent, "message_id", None)
+            # Media is best-effort ON TOP of the text: a media send failure (missing
+            # file, bot rejection, ...) never takes the text down with it — the text
+            # above has already landed. See _send_media.
+            if msg.media:
+                await self._send_media(chat_id, msg.media, parse_mode, msg.text or "")
             return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
             return SendResult(success=False, error=str(e))
+
+    def _caption_for(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+        if self._parse_mode() == "MarkdownV2":
+            return _markdown_v2_chunks(text, _TELEGRAM_CAPTION_MAX)[0]
+        return split_message(text, _TELEGRAM_CAPTION_MAX)[0]
+
+    async def _send_media(self, chat_id: str, media: list, parse_mode, fallback_text: str) -> None:
+        """Send each renderable media entry (path + kind) as a photo/document, alongside
+        the text already delivered by send(). Fail-open per entry: a missing/unreadable
+        file or a raising bot call is logged at WARN and the next entry is tried — the
+        text above is never affected (this runs after the text send succeeds)."""
+        # Lazy import — surfaces/telegram avoids a hard aiogram import at module load
+        # (mirrors harness.py/voice.py); only paid when there is media to send.
+        from aiogram.types import FSInputFile
+
+        for entry in media:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if not path:
+                continue  # not a renderable entry (e.g. the legacy email-subject shape)
+            if not (os.path.isfile(path) and os.access(path, os.R_OK)):
+                logger.warning("TelegramSurface: media path missing/unreadable, skipping: %s", path)
+                continue
+            caption = self._caption_for(entry.get("caption") or fallback_text)
+            try:
+                file = FSInputFile(path, filename=os.path.basename(path))
+                if entry.get("kind") == "image":
+                    await self._bot.send_photo(chat_id, file, caption=caption, parse_mode=parse_mode)
+                else:
+                    await self._bot.send_document(chat_id, file, caption=caption, parse_mode=parse_mode)
+            except Exception as e:
+                logger.warning("TelegramSurface: failed to send media %s: %s", path, e)
 
     # --- #8 incremental streaming: the engine lives in the base Surface; Telegram only
     #     supplies the transport primitives (send/edit/overflow) + its policy hooks. ---

@@ -22,7 +22,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
+from core.runtime_paths import data_dir_or_home
 
 # How much of each identity doc to show inline before truncating. The docs are
 # already char-capped at load time (SELF_CONTEXT_TOTAL_MAX_CHARS ~60k / the SELF
@@ -48,9 +50,9 @@ def _resolve_home_dir(ctx: CommandContext) -> Any:
     """
     try:
         cfg = getattr(ctx.container, "config", None)
-        return getattr(cfg, "data_dir", "data") or "data"
+        return data_dir_or_home(getattr(cfg, "data_dir", None))
     except Exception:
-        return "data"
+        return data_dir_or_home(None)
 
 
 def h_self(ctx: CommandContext) -> None:
@@ -88,25 +90,27 @@ def h_self(ctx: CommandContext) -> None:
             self_doc = ""
 
         lines = [
-            f"framework: {FRAMEWORK_NAME}",
-            f"instance:  {instance_id}",
-            f"owner:     {owner}",
-            f"user:      {user_id}",
+            candy.kv_lines([
+                ("framework", FRAMEWORK_NAME),
+                ("instance", instance_id),
+                ("owner", owner),
+                ("user", user_id),
+            ]),
             "",
         ]
 
-        lines.append("SOUL (operator-authored, frozen):")
+        lines.append(candy.section("SOUL (operator-authored, frozen)"))
         if soul:
             lines.append(_preview(soul))
         else:
-            lines.append("  No SOUL/identity doc authored.")
+            lines.append(candy.empty("SOUL/identity doc authored", yet=False))
 
         lines.append("")
-        lines.append("SELF (agent-writable identity doc):")
+        lines.append(candy.section("SELF (agent-writable identity doc)"))
         if self_doc:
             lines.append(_preview(self_doc))
         else:
-            lines.append("  No SELF/identity doc authored.")
+            lines.append(candy.empty("SELF/identity doc authored", yet=False))
 
         ctx.emit("\n".join(lines), title="self")
     except Exception as exc:

@@ -14,10 +14,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from pathlib import Path
 from typing import Any, Optional
 
 from agents.task.goals.board import GoalBoard, Goal, STATUS_BLOCKED, STATUS_DONE, STATUS_READY
-from agents.task.runtime.run_as_session import run_task_as_session as _run_task_as_session
+from agents.task.runtime.run_as_session import (
+    run_task_as_session as _run_task_as_session,  # noqa: F401 — legacy seam, kept for planner
+    run_task_to_outcome as _run_task_to_outcome,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,59 @@ def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
         pass
 
 
+# 015 #3: greppable marker for "this run failed because the LLM/provider is
+# down" (billing/402/exhausted-fallback family) — written as a prefix into
+# goals.last_failure_error so a provider outage is distinguishable from
+# "run did not complete (refusal or empty)" without grepping journald.
+LLM_EXHAUSTED_MARKER = "llm_provider_exhausted"
+
+# Provider-exhaustion phrasings the credit-death markers don't cover: the
+# LLMProviderExhaustedError halt strings ("ALL LLM PROVIDERS EXHAUSTED" /
+# "All LLM providers failed. Tried: [...]") carry no 402/billing text.
+_PROVIDER_EXHAUSTED_TEXT_MARKERS = ("all llm providers", "providers exhausted")
+
+
+def _is_llm_provider_exhausted(err: Any) -> bool:
+    """015 #3: classify a goal-run failure as a permanent LLM/provider error.
+
+    Accepts an exception (walks the ``__cause__``/``__context__`` chain for the
+    ``LLMPermanentError`` family) or a status string (the refusal path's
+    "Session failed: PERMANENT ERROR: … 402 …"). The string check reuses the
+    credit-death classifier the sentinel already owns
+    (``core.credit_sentinel.looks_like_credit_death`` — 402/quota/billing
+    markers) plus the ALL-PROVIDERS-EXHAUSTED phrasing, which carries no
+    billing text. Fail-open to False — a broken classifier must never change
+    what gets recorded, only how it is labeled.
+    """
+    try:
+        from core.credit_sentinel import looks_like_credit_death
+
+        def _text_matches(text: str) -> bool:
+            low = text.lower()
+            return looks_like_credit_death(low) or any(
+                m in low for m in _PROVIDER_EXHAUSTED_TEXT_MARKERS)
+
+        if isinstance(err, BaseException):
+            try:
+                from core.exceptions import LLMPermanentError, LLMProviderExhaustedError
+                permanent: tuple = (LLMPermanentError, LLMProviderExhaustedError)
+            except Exception:
+                permanent = ()
+            seen: set = set()
+            e: Optional[BaseException] = err
+            while e is not None and id(e) not in seen:
+                seen.add(id(e))
+                if permanent and isinstance(e, permanent):
+                    return True
+                if _text_matches(str(e)):
+                    return True
+                e = e.__cause__ or e.__context__
+            return False
+        return bool(err) and _text_matches(str(err))
+    except Exception:
+        return False
+
+
 # Tools a self-decomposed CHILD goal may inherit from its parent when it set none.
 # Deliberately excludes money/social/trading tools (wallet, x402, hyperliquid,
 # polymarket, twitter) so the agent can't self-grant spend/post capability by
@@ -48,15 +105,14 @@ CHILD_INHERITABLE_TOOLS = frozenset(
     {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"}
 )
 
-# Safe default toolset when a goal sets no tools and has nothing inheritable.
-_DEFAULT_GOAL_TOOLS = ["filesystem", "task"]
+# Safe default toolset when a goal sets no tools and has nothing inheritable (SSOT).
+from agents.task.constants import BASE_DEFAULT_TOOLS as _BASE_DEFAULT_TOOLS
+_DEFAULT_GOAL_TOOLS = list(_BASE_DEFAULT_TOOLS)
 
 # WS-8 (compute posture): the compute tools an autonomous goal/cron run needs to
-# actually build/run/serve. Provisioned ONLY at AGENT_COMPUTE_POSTURE>=1 (and each
-# call still passes compute_posture_allows in-session — an owner-tenant autonomous
-# run does). Sandbox-contained at posture 1; never money/social. Resolved at CALL
-# time so posture 0 is byte-identical.
-_COMPUTE_GOAL_TOOLS = ["code_execution", "shell", "coding"]
+# actually build/run/serve are provisioned ONLY at AGENT_COMPUTE_POSTURE>=1 (and
+# each call still passes compute_posture_allows in-session). The list itself is
+# the SSOT in agents.task.tool_defaults.with_compute_tools (014 A2).
 
 
 def _compute_posture_at_least_1() -> bool:
@@ -67,14 +123,40 @@ def _compute_posture_at_least_1() -> bool:
         return False
 
 
+def _compute_posture_at_least_2() -> bool:
+    try:
+        from agents.task.constants import compute_posture
+        return compute_posture() >= 2
+    except Exception:
+        return False
+
+
+def _hf_deploy_goal_tool_enabled() -> bool:
+    """hf_deploy is a self-maintenance-tier (posture>=2) capability AND stays
+    gated on its own flag — attaching an unregistered tool_id to a goal's
+    toolset would be a dead entry when HF_DEPLOY_ENABLED is off."""
+    if not _compute_posture_at_least_2():
+        return False
+    try:
+        from tools.hf_deploy import hf_deploy_enabled
+        return hf_deploy_enabled()
+    except Exception:
+        return False
+
+
 def default_goal_tools() -> list:
-    """Posture-aware default goal toolset. Posture 0: ['filesystem','task']
-    (byte-identical). Posture>=1: + the compute tools (code_execution/shell/coding)."""
-    tools = list(_DEFAULT_GOAL_TOOLS)
-    if _compute_posture_at_least_1():
-        for t in _COMPUTE_GOAL_TOOLS:
-            if t not in tools:
-                tools.append(t)
+    """Posture-aware, mode-aware default goal toolset. Supervised (default):
+    posture 0 = ['filesystem','task'] (byte-identical); posture>=1: + the compute
+    tools (code_execution/shell/coding); posture>=2 (+HF_DEPLOY_ENABLED): + hf_deploy
+    (self-maintenance tier). Under effective AUTONOMY_MODE=autonomous the base
+    switches to the full AUTONOMOUS_MODE_TOOLS grant (never money/host — those
+    still ride compute posture, unaffected by mode)."""
+    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
+    from agents.task.tool_defaults import with_compute_tools
+    tools = list(AUTONOMOUS_MODE_TOOLS) if full_autonomy_enabled() else list(_DEFAULT_GOAL_TOOLS)
+    with_compute_tools(tools)  # SSOT for the posture>=1 additions (014 A2)
+    if _hf_deploy_goal_tool_enabled() and "hf_deploy" not in tools:
+        tools.append("hf_deploy")
     return tools
 
 
@@ -87,7 +169,95 @@ def child_inheritable_tools() -> frozenset:
     return CHILD_INHERITABLE_TOOLS
 
 
-def effective_goal_concurrency() -> int:
+def effective_goal_max_concurrent(user_id: Optional[str], home_dir) -> int:
+    """Owner's in-flight goal cap: pref (min-merged, spec ``goals.max_concurrent``)
+    over the ``GOAL_MAX_CONCURRENT`` env default. No pref file present =>
+    byte-identical to ``AutonomyConfig.goal_max_concurrent()`` (owner-UX P1 T4).
+
+    Sentinel fix (owner-UX P1 final review): ``<=0`` is the env accessor's
+    "disabled" sentinel, NOT a real ceiling of 0 — feeding it straight into the
+    min-merge let ``env<=0`` silently win over ANY pref (``min(pref, 0) == 0``),
+    so an owner pref could never actually tighten an unset/disabled env cap.
+    Mirrors ``core.wallet.config.effective_daily_cap_usd``: a non-positive raw
+    value is passed to the resolver as ``env_value=None`` (no floor), so a pref
+    ALONE can still set a cap; with no pref file present this still returns the
+    raw (possibly ``<=0``) legacy value unchanged."""
+    from agents.task.constants import AutonomyConfig
+    from core import prefs
+    raw = AutonomyConfig.goal_max_concurrent()
+    env_value = raw if raw > 0 else None
+    out = prefs.resolve("goals.max_concurrent", user_id, home_dir,
+                        env_value=env_value, default=None)
+    return out if out is not None else raw
+
+
+def effective_goal_quota(user_id: Optional[str], home_dir) -> int:
+    """Owner's per-day autonomous-goal-run cap: pref (min-merged, spec
+    ``goals.daily_quota``) over the ``GOAL_DAILY_QUOTA`` env default. No pref
+    file present => byte-identical to ``AutonomyConfig.goal_daily_quota()``
+    (owner-UX P1 T4).
+
+    Sentinel fix (owner-UX P1 final review): ``GOAL_DAILY_QUOTA<=0`` means
+    "disabled" (unlimited runs/day) per ``AutonomyConfig.goal_daily_quota()``'s
+    own docstring — NOT a ceiling of 0, so it must not be fed into the
+    min-merge as a real floor (env=0 + pref=5 previously resolved to
+    ``min(5, 0) == 0``, which callers then read as "unlimited", silently
+    discarding the owner's requested cap of 5). See
+    ``core.wallet.config.effective_daily_cap_usd`` for the same pattern."""
+    from agents.task.constants import AutonomyConfig
+    from core import prefs
+    raw = AutonomyConfig.goal_daily_quota()
+    env_value = raw if raw > 0 else None
+    out = prefs.resolve("goals.daily_quota", user_id, home_dir,
+                        env_value=env_value, default=None)
+    return out if out is not None else raw
+
+
+def effective_goal_notify_on_done(user_id: Optional[str], home_dir) -> bool:
+    """Owner's goal-completion push switch: pref (override, spec
+    ``goals.notify_on_done``) over the ``GOAL_NOTIFY_ON_DONE`` env default.
+    No pref file present => byte-identical to
+    ``AutonomyConfig.goal_notify_on_done()`` (018 P0.2 — this key was DEAD:
+    settable/displayed but the run-completion path read the env directly)."""
+    from agents.task.constants import AutonomyConfig
+    from core import prefs
+    env_value = AutonomyConfig.goal_notify_on_done()
+    return bool(prefs.resolve("goals.notify_on_done", user_id, home_dir,
+                              env_value=env_value, default=env_value))
+
+
+def _tick_owner_user_id() -> Optional[str]:
+    """Representative tenant for TICK-level (pre-claim, cross-tenant) autonomy
+    knobs — the in-flight cap and daily quota are read ONCE per dispatch tick
+    (design constraint: resolve once per tick, not per item), before the ready
+    set (which may span tenants) is even fetched. v1 is single-owner (mirrors
+    ``_maybe_plan``'s ``sorted(users)[0]`` convention elsewhere in this file),
+    so the resolved owner principal is the sound representative tenant.
+    Fail-open to None (=> legacy env-only value; see ``core.prefs.resolve``)."""
+    try:
+        from core.instance import resolve_owner_principal
+        return resolve_owner_principal()
+    except Exception:
+        return None
+
+
+def _deliverables_root() -> Optional[Path]:
+    """The shared-workspace root, or None — one resolution shared by the planner's
+    EXISTING DELIVERABLES listing AND the T9 artifact-existence stamping (goal task
+    + planner BLOCKED list). Per-session server workspaces have no single root pm()
+    can name (each session is its own sandbox), so this is scoped to the shared
+    project-root workspace (CLI/headless project mode) exactly like
+    ``effective_goal_concurrency``'s clamp above. Fail-open to None."""
+    try:
+        from agents.task.path import pm
+        if pm().is_project_root_workspace:
+            return pm().project_root
+    except Exception:
+        pass
+    return None
+
+
+def effective_goal_concurrency(user_id: Optional[str] = None, home_dir=None) -> int:
     """Goal in-flight cap, clamped to single-flight on a SHARED project folder.
 
     When the installed pm() serves one project-root workspace (CLI/headless project
@@ -96,9 +266,13 @@ def effective_goal_concurrency() -> int:
     Keyed off the installed pm() — NOT an env var — so the multi-tenant server (whose
     global pm() is per-session) keeps its full GOAL_MAX_CONCURRENT (MT-5). Fail-open
     to the unclamped cap on any pm() error.
+
+    ``user_id``/``home_dir`` (owner-UX P1 T4, both optional, default None) thread
+    an owner preference (spec ``goals.max_concurrent``) over the env cap via
+    :func:`effective_goal_max_concurrent`; the legacy zero-arg call resolves to
+    the env-only value unchanged (``user_id=None`` => no pref file can match).
     """
-    from agents.task.constants import AutonomyConfig
-    cap = AutonomyConfig.goal_max_concurrent()
+    cap = effective_goal_max_concurrent(user_id, home_dir)
     try:
         from agents.task.path import pm
         if pm().is_project_root_workspace:
@@ -133,12 +307,18 @@ class GoalDispatcher:
         # which at worst re-escalates one stall after a deploy — acceptable.
         self._empty_planner_runs = 0
         self._empty_pipeline_escalated = False
-        # Budget-gate push latch: tenants for whom an owner "over budget" push has
-        # already gone out this over-budget episode. The durable ask is dedup-
-        # refreshed every tick (fine), but the owner PUSH must fire ONCE per episode,
-        # not every 60s tick per held goal. Cleared when the tenant is back under
-        # budget (a fresh episode may push again). In-memory: resets on restart.
-        self._budget_pushed: set = set()
+
+    def _home_dir(self) -> str:
+        """Data-home for pref resolution (owner-UX P1 T4), derived from the
+        board's OWN db path — reuses the data_dir the ticker/board were built
+        with (``build_goal_ticker(data_dir=...)``) rather than inventing a new
+        global default. Fail-open to "data" (the same default `data_dir` takes)."""
+        try:
+            import os
+            from core.runtime_paths import data_dir_or_home
+            return data_dir_or_home(os.path.dirname(self.board.db_path))
+        except Exception:
+            return data_dir_or_home(None)
 
     async def dispatch_once(self) -> int:
         """Claim and run up to GOAL_MAX_CONCURRENT ready goals. Returns #dispatched.
@@ -159,9 +339,40 @@ class GoalDispatcher:
             self.board.reclaim_stale()
         except Exception:
             logger.warning("goal dispatch: reclaim_stale failed", exc_info=True)
+        # §5.3: age ancient blocked goals out VISIBLY (-> cancelled, logged)
+        # instead of letting them rot as permanent planner context.
+        try:
+            max_age = AutonomyConfig.goal_blocked_max_age_days()
+            if max_age > 0:
+                aged = self.board.age_out_blocked(max_age_days=max_age)
+                if aged:
+                    logger.info("goal dispatch: aged out %d ancient blocked goal(s)", aged)
+        except Exception:
+            logger.debug("blocked-goal aging skipped", exc_info=True)
 
         if not AutonomyConfig.goals_enabled():
             return 0
+
+        # Owner kill-switch: halt ALL autonomous dispatch (togglable without restart).
+        if AutonomyConfig.autonomy_halted():
+            if not getattr(self, "_halt_logged", False):
+                logger.warning("goal dispatch HALTED (AUTONOMY_HALT / halt-file) — no autonomous runs")
+                self._halt_logged = True
+            return 0
+        self._halt_logged = False
+
+        # §6.3 provider-credit sentinel: while tripped (recent 402/credit-death),
+        # burning more paid runs is pointless — pause dispatch until auto-release.
+        try:
+            from core.credit_sentinel import credit_sentinel_active
+            if credit_sentinel_active():
+                if not getattr(self, "_sentinel_logged", False):
+                    logger.warning("goal dispatch paused: provider-credit sentinel active")
+                    self._sentinel_logged = True
+                return 0
+            self._sentinel_logged = False
+        except Exception:
+            pass
 
         from core.interactive_gate import is_interactive_busy
         if is_interactive_busy():
@@ -187,7 +398,12 @@ class GoalDispatcher:
             return 0
         try:
             # (reclaim_stale already ran above, before the enabled-gate — AU-F4.3)
-            limit = effective_goal_concurrency()
+            # owner-UX P1 T4: resolve the tick's home_dir/representative-tenant ONCE
+            # (design constraint: not per ready-goal item) so the in-flight cap and
+            # daily quota below can respect an owner preference that tightens them.
+            _home_dir = self._home_dir()
+            _owner_uid = _tick_owner_user_id()
+            limit = effective_goal_concurrency(_owner_uid, _home_dir)
             # GOAL_MAX_CONCURRENT is a global in-flight cap, NOT a per-tick claim
             # quota. Subtract goals ALREADY RUNNING from the cross-process DB count
             # (not the per-process self._inflight, which can't see other workers'
@@ -198,7 +414,7 @@ class GoalDispatcher:
             except Exception:
                 running = len(self._inflight)  # fail-open to per-process count
             slots = max(0, limit - running)
-            quota = AutonomyConfig.goal_daily_quota()
+            quota = effective_goal_quota(_owner_uid, _home_dir)
             if quota > 0:
                 try:
                     used = self.board.count_started_since(86400)
@@ -211,6 +427,14 @@ class GoalDispatcher:
                             "goal daily quota exhausted (%d started/24h >= %d) — pausing dispatch",
                             used, quota)
                         self._quota_logged = True
+                    # §5.4: quota exhaustion pauses RUNS, not curation — the
+                    # planner may still top up the board (its own cooldown +
+                    # min-ready gates bound the cost); queued goals run when
+                    # the quota window rolls over.
+                    try:
+                        await self._maybe_plan(headroom_after=0)
+                    except Exception:
+                        logger.debug("quota-paused planning skipped", exc_info=True)
                     return 0
                 self._quota_logged = False
                 slots = min(slots, headroom)
@@ -220,10 +444,7 @@ class GoalDispatcher:
             ttl = AutonomyConfig.goal_claim_ttl_sec()
             worker = f"goal-dispatch-{os.getpid()}"
             dispatched = 0
-            budget_aware = AutonomyConfig.budget_aware_autonomy()
             for g in ready:
-                if budget_aware and await self._over_budget(g):
-                    continue  # held — an owner-visible ask was raised instead of burning
                 claimed = self.board.claim(g.id, worker, ttl_seconds=ttl)
                 if claimed is None:
                     continue  # another worker won the race
@@ -268,6 +489,9 @@ class GoalDispatcher:
     async def _run_goal(self, goal: Goal) -> None:
         """Run one claimed goal on the task-agent core, then record + self-wake."""
         session_id = None
+        # 012 #1: keep the run envelope reachable from the outer exception handler
+        # so a failure AFTER real work still records honest steps/spend/artifacts.
+        run = None
         # FIX3 (T3-M1): once the success episode row is durably recorded, a LATER
         # incidental raise in this same try block (e.g. extract_outcome_line,
         # self-wake) must not let the outer except's failed-write flip that row's
@@ -296,6 +520,18 @@ class GoalDispatcher:
             from core.interactive_gate import mark_busy
             mark_busy()
         _goal_ev(goal, "started")
+        # 019 P2: tell the owner an autonomous run STARTED (not just completed/
+        # digest). Rides the one delivery rail (dedup + caps); posture-gated
+        # default (ON under full/autonomous), fail-open.
+        if AutonomyConfig.autonomy_start_notice():
+            try:
+                from core.self_evolution import push_owner_message
+                _title = (goal.title or goal.body or "")[:120]
+                await push_owner_message(
+                    getattr(self.task_agent, "container", None),
+                    f"▶ goal started: {_title} ({goal.id[:8]})")
+            except Exception:
+                logger.debug("goal start notice failed for %s", goal.id, exc_info=True)
         try:
             payload = goal.payload or {}
             from core.runtime_config import resolve_runtime_config
@@ -321,7 +557,7 @@ class GoalDispatcher:
                 except Exception:
                     objective = None
             request = {
-                "task": build_goal_run_task(goal, objective),
+                "task": build_goal_run_task(goal, objective, workspace_root=_deliverables_root()),
                 "provider": provider,
                 "model": model,
                 "tools": self._resolve_tools(goal),
@@ -329,89 +565,158 @@ class GoalDispatcher:
                 "temperature": 0.0,
                 "goal_id": goal.id,
             }
-            # Route through the shared helper: create_session → run_session → refusal-check.
+            # §6.2 fail-closed: a money-enabled run must not START unmetered —
+            # without a database_manager, spend tracking is blind on a live
+            # wallet. Clear recorded error, never a silent spend loop.
+            from agents.task.runtime.metering_gate import unmetered_money_gate
+            _gate_err = unmetered_money_gate(self.task_agent, request.get("tools"))
+            if _gate_err is not None:
+                _g = self.board.record_failure(goal.id, error=_gate_err)
+                await self._maybe_escalate_blocked(_g)
+                return
+            # Route through the shared helper: create_session → run_session → RunOutcome.
             # H11: hard wall-clock cap (mirrors cron's per-job wait_for). max_steps alone
             # doesn't bound wall time — a single hung step would occupy a slot forever. On
             # timeout the TimeoutError is handled by the except below (record_failure) and
             # the finally cancels the claim heartbeat, so reclaim_stale can recover the slot.
             _max_run = AutonomyConfig.goal_max_run_seconds()
-            session_id, final = await asyncio.wait_for(
-                _run_task_as_session(
+            run = await asyncio.wait_for(
+                _run_task_to_outcome(
                     self.task_agent, user_id=goal.user_id, request=request, autonomous=True
                 ),
                 timeout=_max_run,
             )
-            # Back-half: goal-specific record calls (no is_refusal needed — helper normalised).
+            session_id = run.session_id
             if session_id is None:
                 _g = self.board.record_failure(goal.id, error="create_session returned no id")
                 await self._maybe_escalate_blocked(_g)
                 return
-            if final is None:
+            if run.refusal:
+                # Task 10: the sentinel trip moved to error_recovery.py (the
+                # universal LLM-error path) — a credit-death refusal is already
+                # tripped upstream, inside the real Agent step loop, before this
+                # status string is ever formed. This site now only CHECKS the
+                # latch (see credit_sentinel_active() above).
+                # 015 #3: a refusal whose status carries the provider-death
+                # signature ("Session failed: PERMANENT ERROR: … 402 …" /
+                # "ALL LLM PROVIDERS EXHAUSTED") gets the distinct marker so
+                # a provider outage never hides inside the generic refusal.
+                error = "run did not complete (refusal or empty)"
+                if _is_llm_provider_exhausted(run.status):
+                    error = f"{LLM_EXHAUSTED_MARKER}: {str(run.status)[:400]}"
                 _g = self.board.record_failure(
-                    goal.id,
-                    error="run did not complete (refusal or empty)",
-                    session_id=session_id,
-                )
+                    goal.id, error=error, session_id=session_id)
                 await self._maybe_escalate_blocked(_g)
                 try:
                     from modules.memory.episodic import finalize_episode
+                    # 012 #1: thread the envelope's real provenance (zeros for a
+                    # pre-loop refusal, honest values when work preceded it).
                     await finalize_episode(
                         session_id=session_id, user_id=goal.user_id, kind="goal",
                         task=getattr(goal, "title", None), outcome="failed",
-                        goal_id=goal.id, meta={"source": "goal"},
+                        goal_id=goal.id, summary=error[:2000],
+                        spend_usd=run.spend_usd, steps=run.steps,
+                        artifacts=run.artifacts,
+                        meta={"source": "goal"},
                     )
                 except Exception:
                     logger.warning("goal episodic write failed", exc_info=True)
                 return
+            # §2: every downstream read comes from the envelope — the done() ledger
+            # text, the BLOCKED declaration, provenance — never from re-extracted
+            # message-history strings (the goal-58a1385d18bf corruption).
+            final = run.result_text()
+            outcome = run.outcome_line
             # §3.1: an agent-declared 'OUTCOME: BLOCKED — <need>' is an honest
             # failure exit, never a success. Checked BEFORE record_success so the
             # goal routes through the breaker/escalation rail with its stated need.
-            from agents.task.goals.context import extract_outcome_line, parse_blocked_outcome
-            # Fail-open: a crash in the outcome PARSER must never fail a completed
-            # run (FIX3 — the success path below still records honestly).
-            try:
-                outcome = extract_outcome_line(final)
-                blocked_need = parse_blocked_outcome(outcome)
-            except Exception:
-                logger.debug("outcome parse failed for %s", goal.id, exc_info=True)
-                outcome, blocked_need = None, None
-            if blocked_need is not None:
-                await self._fail_blocked_declared(goal, session_id, outcome, blocked_need)
+            if run.blocked:
+                await self._fail_blocked_declared(
+                    goal, session_id, outcome, run.blocked_need,
+                    agent_reported=bool(run.user_messages),
+                    steps=run.steps, spend_usd=run.spend_usd,
+                    artifacts=run.artifacts)
                 return
             # T2-01: a run that finished the loop but never called done() (max_steps
             # exhaustion, or a reply-only conversational exit) returns a non-refusal
             # status string that looks identical to a genuine completion. Recording it
-            # as board success was the prod "marked done, never posted" failure. Inspect
-            # the resident orchestrator's main-agent done signal; only a POSITIVE
-            # "ran but no done()" (False) routes to the failure/escalation rail —
-            # None (undeterminable) falls through to the legacy path unchanged. The
-            # orchestrator is fetched once here and reused for provenance below.
-            orchestrator = None
-            try:
-                orchestrator = self.task_agent.get_orchestrator(session_id)
-            except Exception:
-                orchestrator = None
-            from agents.task.runtime.run_as_session import completed_via_done
-            if completed_via_done(orchestrator) is False:
+            # as board success was the prod "marked done, never posted" failure. Only a
+            # POSITIVE "ran but no done()" (False) routes to the failure/escalation
+            # rail — None (undeterminable) falls through to the legacy path unchanged.
+            if run.done_called is False:
                 await self._fail_run(
                     goal, session_id,
                     error="run ended without completing (no done() — likely ran out of steps)",
-                    outcome=outcome)
+                    outcome=outcome,
+                    steps=run.steps, spend_usd=run.spend_usd,
+                    artifacts=run.artifacts)
                 return
-            # §3.2 (fail-open — never block on uncertainty): with the judge on and
-            # an acceptance set, 'unmet' -> record_failure (normal breaker retries);
-            # 'met'/'unclear'/error -> the legacy success path.
-            import agents.task.goals.completion_judge as _cj
-            acceptance = (payload.get("acceptance") or "").strip()
-            if AutonomyConfig.goal_completion_judge() and acceptance:
-                verdict, reason = await _cj.judge_goal_completion(
-                    self.task_agent, session_id, goal, final)
-                if verdict == "unmet":
-                    await self._fail_run(goal, session_id,
-                                         error=f"completion judge: {reason}"[:2000],
-                                         outcome=outcome)
+            # §4.2 NEW invariant: a done() where EVERY substantive action errored
+            # is not a judgment call — nothing executed successfully, so the claim
+            # has no basis. Deterministic, needs no goal semantics.
+            if run.all_actions_errored:
+                await self._fail_run(
+                    goal, session_id,
+                    error="done() after every action errored — nothing executed successfully",
+                    outcome=outcome,
+                    steps=run.steps, spend_usd=run.spend_usd,
+                    artifacts=run.artifacts)
+                return
+            # §4.4: typed acceptance checks — optional sharpener. When a producer
+            # set them they run fail-CLOSED and their results join the evidence
+            # pack; nothing rejects a goal without them.
+            checks = payload.get("acceptance_checks") or []
+            if checks:
+                from agents.task.runtime.acceptance_checks import (
+                    run_acceptance_checks, failed_checks)
+                _ws = None
+                try:
+                    from agents.task.runtime.evidence import _resolve_workspace_dir
+                    _ws = _resolve_workspace_dir(self.task_agent.get_orchestrator(session_id))
+                except Exception:
+                    _ws = None
+                check_results = await run_acceptance_checks(checks, workspace_dir=_ws)
+                if run.evidence is not None:
+                    try:
+                        run.evidence.checks = check_results
+                    except Exception:
+                        pass
+                _failed = failed_checks(check_results)
+                if _failed:
+                    await self._fail_run(
+                        goal, session_id,
+                        error=("acceptance checks failed: " + "; ".join(
+                            f"{c.get('type')}: {c.get('detail')}" for c in _failed))[:2000],
+                        outcome=outcome,
+                        steps=run.steps, spend_usd=run.spend_usd,
+                        artifacts=run.artifacts)
                     return
-            self.board.record_success(goal.id, session_id=session_id, result=str(final)[:4000])
+            # §4.3 evidence-grounded completion review (autonomous runs): the
+            # CLAIM read against the evidence pack — no acceptance required.
+            # unmet (claim contradicted by evidence) -> failure with the gap;
+            # met -> verified; unclear/error/timeout -> done (UNVERIFIED) — the
+            # run completes (a framework for arbitrary goals must not hard-block
+            # fuzzy work) but the label is honest everywhere and learning loops
+            # do not consume it.
+            import agents.task.goals.completion_judge as _cj
+            judge_on = AutonomyConfig.goal_completion_judge()
+            if judge_on:
+                verdict, reason = await _cj.judge_run_outcome(
+                    self.task_agent, session_id, goal, run)
+                if verdict == _cj.VERDICT_UNMET:
+                    await self._fail_run(
+                        goal, session_id,
+                        error=f"completion judge: {reason} (claim contradicted by evidence)"[:2000],
+                        outcome=outcome,
+                        steps=run.steps, spend_usd=run.spend_usd,
+                        artifacts=run.artifacts)
+                    return
+                run.verified = "verified" if verdict == _cj.VERDICT_MET else "unverified"
+            # Honest result recording: the envelope filters placeholders/status
+            # strings, so an empty result_text means the run genuinely produced no
+            # recoverable text — say THAT instead of shipping a placeholder.
+            result_record = final or "(completed via done() — no textual output captured)"
+            self.board.record_success(goal.id, session_id=session_id, result=result_record[:4000])
             # Stale-completion skip: an owner may have cancelled/paused the goal
             # mid-run (T2 guards keep that status through record_success — see
             # test_intervention_guards.py). Re-read the row; if it isn't 'done'
@@ -426,19 +731,23 @@ class GoalDispatcher:
             if refreshed is not None and refreshed.status != STATUS_DONE:
                 return
             try:
-                from modules.memory.episodic import finalize_episode, collect_provenance
-                # Reuse the orchestrator fetched for the T2-01 done-check above.
-                prov = await collect_provenance(orchestrator)
+                from modules.memory.episodic import finalize_episode
+                # Provenance was collected into the envelope while the
+                # orchestrator was resident (run_task_to_outcome).
                 await finalize_episode(
                     session_id=session_id, user_id=goal.user_id, kind="goal",
                     task=getattr(goal, "title", None), outcome="done", goal_id=goal.id,
-                    summary=str(final)[:2000] if final is not None else None,
-                    spend_usd=prov["spend_usd"], steps=prov["steps"],
-                    artifacts=prov["artifacts"], meta={"source": "goal"},
+                    summary=result_record[:2000],
+                    spend_usd=run.spend_usd, steps=run.steps,
+                    artifacts=run.artifacts,
+                    meta={"source": "goal", "verified": run.verified},
                 )
                 recorded_success = True
                 _goal_ev(goal, "done", session_id=session_id,
-                         spend_usd=prov["spend_usd"], steps=prov["steps"])
+                         spend_usd=run.spend_usd, steps=run.steps,
+                         artifacts=len(run.artifacts),
+                         user_messages=len(run.user_messages),
+                         verified=run.verified)
             except Exception:
                 logger.warning("goal episodic write failed", exc_info=True)
             if outcome:
@@ -446,23 +755,51 @@ class GoalDispatcher:
                     self.board.set_outcome(goal.id, outcome)
                 except Exception:
                     logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
-            if AutonomyConfig.goal_self_wake_enabled():
-                await self._self_wake(goal, session_id, final)
+            # Tell the OWNER a background goal COMPLETED — decoupled from the
+            # (posture-gated, server-default-OFF) self-wake re-entry so completions are
+            # reported even when self-wake is off. The owner-push previously lived ONLY
+            # inside _self_wake, so on the server completed goals told no one (the
+            # "goals never report completions" gap). Cheap ($0), controllable.
+            # §3.4: the completion push is a SAFETY NET, not the voice — the
+            # agent's own send_message (delivered live via the §3.1 rail) is the
+            # primary channel. The framework only speaks when the agent said
+            # nothing to its user during the run.
+            if effective_goal_notify_on_done(goal.user_id, self._home_dir()) \
+                    and not run.user_messages:
+                await self._notify_owner_done(goal, session_id, result_record,
+                                              verified=run.verified if judge_on else "verified")
+            # §4.3: an UNVERIFIED completion earns nothing downstream — no
+            # self-wake re-entry. With the judge disabled, legacy behavior holds.
+            if AutonomyConfig.goal_self_wake_enabled() and \
+                    (not judge_on or run.verified == "verified"):
+                await self._self_wake(goal, session_id, result_record)
         except Exception as e:
             logger.error("goal %s run failed: %s", goal.id, e, exc_info=True)
-            _goal_ev(goal, "failed", reason=str(e)[:200], session_id=session_id)
+            # 015 #3: a permanent LLM/provider death (OpenRouter 402 →
+            # LLMPermanentError → "ALL LLM PROVIDERS EXHAUSTED") gets the
+            # distinct greppable marker in goals.last_failure_error.
+            error_text = str(e)
+            if _is_llm_provider_exhausted(e):
+                error_text = f"{LLM_EXHAUSTED_MARKER}: {error_text}"[:2000]
+            _goal_ev(goal, "failed", reason=error_text[:200], session_id=session_id)
             try:
-                _g = self.board.record_failure(goal.id, error=str(e), session_id=session_id)
+                _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id)
                 await self._maybe_escalate_blocked(_g)
             except Exception:
                 pass
             if session_id and not recorded_success:
                 try:
                     from modules.memory.episodic import finalize_episode
+                    # 012 #1: thread whatever provenance the run envelope already
+                    # computed (run stays None when the raise preceded run_session,
+                    # in which case the safe zeros are the honest values).
                     await finalize_episode(
                         session_id=session_id, user_id=goal.user_id, kind="goal",
                         task=getattr(goal, "title", None), outcome="failed",
-                        goal_id=goal.id, summary=str(e)[:2000],
+                        goal_id=goal.id, summary=error_text[:2000],
+                        spend_usd=float(getattr(run, "spend_usd", 0.0) or 0.0),
+                        steps=int(getattr(run, "steps", 0) or 0),
+                        artifacts=list(getattr(run, "artifacts", None) or []),
                         meta={"source": "goal"},
                     )
                 except Exception:
@@ -474,24 +811,39 @@ class GoalDispatcher:
                 mark_idle()
 
     async def _fail_blocked_declared(self, goal: Goal, session_id: Optional[str],
-                                     outcome: Optional[str], need: str) -> None:
+                                     outcome: Optional[str], need: str,
+                                     agent_reported: bool = False,
+                                     steps: int = 0, spend_usd: float = 0.0,
+                                     artifacts: Optional[list] = None) -> None:
         """§3.1: route an agent-declared BLOCKED outcome to the failure/escalation rail.
 
         The agent already concluded retrying won't help, so after the standard
         record_failure (whose CAS respects owner cancel/pause) a row that came back
         'ready' is flipped straight to 'blocked' — skipping the breaker's remaining
         retries. A non-ready row means the owner intervened; their decision wins.
+        ``steps``/``spend_usd``/``artifacts`` thread the run's real provenance
+        through to the episodes row (012 #1).
         """
         error = f"agent declared BLOCKED: {need or 'unspecified need'}"
-        await self._fail_run(goal, session_id, error=error, block=True, outcome=outcome)
+        await self._fail_run(goal, session_id, error=error, block=True, outcome=outcome,
+                             agent_reported=agent_reported,
+                             steps=steps, spend_usd=spend_usd, artifacts=artifacts)
 
     async def _fail_run(self, goal: Goal, session_id: Optional[str], *, error: str,
-                        block: bool = False, outcome: Optional[str] = None) -> None:
+                        block: bool = False, outcome: Optional[str] = None,
+                        agent_reported: bool = False,
+                        steps: int = 0, spend_usd: float = 0.0,
+                        artifacts: Optional[list] = None) -> None:
         """Shared verified-failure path for a run that finished but didn't deliver.
 
         record_failure's CAS respects owner cancel/pause; with ``block=True`` a row
         that came back 'ready' is flipped straight to 'blocked' (skipping the
         breaker's remaining retries — used when retrying provably won't help).
+
+        012 #1: ``steps``/``spend_usd``/``artifacts`` carry the RunOutcome's real
+        provenance into the episodes row — a run that did real work before being
+        classified failed must not be recorded steps=0/spend=0. Optional with safe
+        zero defaults so a call site without an envelope still works.
         """
         _g = self.board.record_failure(goal.id, error=error, session_id=session_id)
         if block and getattr(_g, "status", None) == STATUS_READY:
@@ -509,14 +861,17 @@ class GoalDispatcher:
                 self.board.set_outcome(goal.id, outcome)
             except Exception:
                 logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
-        await self._maybe_escalate_blocked(_g)
+        await self._maybe_escalate_blocked(_g, agent_reported=agent_reported)
         if session_id:
             try:
                 from modules.memory.episodic import finalize_episode
                 await finalize_episode(
                     session_id=session_id, user_id=goal.user_id, kind="goal",
                     task=getattr(goal, "title", None), outcome="failed",
-                    goal_id=goal.id, summary=error[:2000], meta={"source": "goal"},
+                    goal_id=goal.id, summary=error[:2000],
+                    spend_usd=spend_usd, steps=steps,
+                    artifacts=list(artifacts or []),
+                    meta={"source": "goal"},
                 )
             except Exception:
                 logger.warning("goal episodic write failed", exc_info=True)
@@ -544,71 +899,37 @@ class GoalDispatcher:
                 inherited = [t for t in parent_tools if t in inheritable]
                 if inherited:
                     return inherited
-        return default_goal_tools()  # posture-aware (WS-8)
-
-    async def _over_budget(self, goal) -> bool:
-        """True when the goal's tenant has spent >= the trailing-window budget.
-
-        Consults the unified ledger per-goal (the ledger is per-tenant; the ready
-        set is cross-tenant). Over budget -> raise a durable owner-visible ask and
-        optionally push, then hold the goal (left 'ready'). Fail-open: any ledger
-        error returns False so a metering hiccup never stalls dispatch."""
+        base = default_goal_tools()  # posture-aware (WS-8)
+        # Proposal 009 (2026-07-14): a goal with no tools payload whose own text names a
+        # capability ("Publish ... X thread" → twitter) resolves it at dispatch time instead
+        # of starving — the night-1 battle-test failure mode for legacy/self-created rows.
+        # Same allowlisted inference goal_create applies at create time; a goal whose text
+        # names no known tool resolves byte-identically to the plain default.
         try:
-            from agents.task.constants import AutonomyConfig
-            budget = AutonomyConfig.autonomy_budget_usd()
-            if budget <= 0:
-                return False
-            window = AutonomyConfig.autonomy_budget_window_days()
-            from modules.credits.unified_ledger import build_ledger
-            ledger = await build_ledger(goal.user_id, days=window)
-            spent = float(ledger.get("total_spend_usd", 0.0) or 0.0)
-            if spent < budget:
-                # Back under budget — clear the push latch so a future over-budget
-                # episode for this tenant escalates again.
-                self._budget_pushed.discard(goal.user_id)
-                return False
+            from tools.goal_tools import _infer_tools_from_text
+            inferred = _infer_tools_from_text(getattr(goal, "title", None),
+                                              getattr(goal, "body", None),
+                                              payload.get("acceptance"))
         except Exception:
-            logger.debug("budget gate check failed (fail-open)", exc_info=True)
-            return False
-        # Over budget — raise a durable, dedup-refreshing ask (owner-visible) and
-        # optionally push. Never claim/run the goal.
-        try:
-            self.board.create_ask(
-                user_id=goal.user_id,
-                what="Autonomous goals paused — spend budget reached",
-                why=(f"Spent ${spent:.2f} of ${budget:.2f} over the last {window}d; "
-                     f"goal '{goal.title}' held. Raise AUTONOMY_BUDGET_USD or fulfill "
-                     "this ask to resume."),
-                blocks_goal_ids=[goal.id],
-            )
-        except Exception:
-            logger.debug("budget ask creation skipped", exc_info=True)
-        # Owner PUSH once per over-budget episode (the ask row above is the durable,
-        # dedup-refreshed record; the push must not spam every tick per held goal).
-        if goal.user_id not in self._budget_pushed:
-            try:
-                from core.self_evolution import push_owner_message
-                container = getattr(self.task_agent, "container", None)
-                if container is not None:
-                    await push_owner_message(
-                        container,
-                        f"[budget] ${spent:.2f}/${budget:.2f} spent over {window}d — autonomous "
-                        f"goals paused. Goal '{goal.title}' held.")
-                self._budget_pushed.add(goal.user_id)
-            except Exception:
-                logger.debug("budget push skipped", exc_info=True)
-        logger.info("goal %s held: tenant over budget ($%.2f >= $%.2f)",
-                    goal.id, spent, budget)
-        return True
+            inferred = set()
+        if inferred:
+            return sorted(set(base) | inferred)
+        return base
 
-    async def _maybe_escalate_blocked(self, goal) -> None:
+    async def _maybe_escalate_blocked(self, goal, *, agent_reported: bool = False) -> None:
         """§7.2: when record_failure tripped the breaker (goal now 'blocked'), surface
-        a concrete ask to the owner instead of letting it die silently. Fail-open."""
-        try:
-            from agents.task.goals.escalation import maybe_escalate_blocked
-            await maybe_escalate_blocked(self.task_agent, goal)
-        except Exception:
-            logger.debug("blocker escalation skipped", exc_info=True)
+        a concrete ask to the owner instead of letting it die silently. Fail-open.
+
+        §3.4: the escalation PUSH is a safety net — when the agent itself already
+        reported the block to its user during the run (``agent_reported``, from
+        RunOutcome.user_messages), the push is skipped; the durable ask below is
+        ALWAYS left either way."""
+        if not agent_reported:
+            try:
+                from agents.task.goals import escalation as _escalation
+                await _escalation.maybe_escalate_blocked(self.task_agent, goal)
+            except Exception:
+                logger.debug("blocker escalation skipped", exc_info=True)
         # §7.2b / T2-03 / T4-04: ALWAYS leave a TRACKED ask for a blocked goal so the
         # need survives even when no owner push went out. This ask creation was gated on
         # the SAME goal_blocker_escalation() flag as the push, so with the default OFF a
@@ -628,56 +949,66 @@ class GoalDispatcher:
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
-    async def _self_wake(self, goal: Goal, session_id: str, final: str) -> None:
-        """Surface a completed goal's result (W1 rail). Fail-open.
+    def _completion_text(self, goal: Goal, final: str, verified: str = "verified") -> str:
+        # §4.3: the ✅ is EARNED — an unverified completion is labeled honestly,
+        # never pushed as a green checkmark on an unchecked claim.
+        if verified == "verified":
+            head = f"✅ Background goal '{goal.title}' completed."
+        else:
+            head = f"Background goal '{goal.title}' finished — done (unverified)."
+        return f"{head}\nResult:\n{str(final)[:1500]}"
 
-        T2-02: ``deliver_self_wake`` re-enters the goal's OWN just-finished session — an
-        empty room the owner never watches — so a completed goal told no one. In
-        addition to the (best-effort, agent-continuation) self-wake, PUSH the result to
-        the OWNER via ``push_owner_message`` (durable: a sink-less local owner still sees
-        it via ``polyrob telemetry``, per T4-04), so the owner is reliably told
-        regardless of whether a live session is watching. (Retargeting the
-        agent-continuation wake at the owner's live chat session needs a
-        latest-session-for-user resolver on the chat registry — deferred.)
-        """
+    def _mark_episode_surfaced(self, goal: Goal, session_id: str) -> None:
+        """Mark this goal's episode surfaced so the session-start digest doesn't repeat
+        it. Scoped to the goal's own user_id (FIX2 — episodes key on the composite
+        (user_id, session_id); a bare session_id UPDATE could flip another tenant's row
+        on a collision). Fail-open."""
         try:
-            text = (f"✅ Background goal '{goal.title}' completed.\n"
-                    f"Result:\n{str(final)[:1500]}")
-            # T2-02: tell the OWNER (surface-independent, durable).
-            owner_told = False
-            try:
-                from core.self_evolution import push_owner_message
-                owner_told = await push_owner_message(
-                    getattr(self.task_agent, "container", None), text)
-            except Exception:
-                logger.debug("goal completion owner-push skipped for %s", goal.id,
-                             exc_info=True)
-            # Best-effort agent-continuation via the existing self-wake rail.
+            from modules.memory.registry import get_memory_registry
+            prov = get_memory_registry().active()
+            if prov is not None and hasattr(prov, "mark_episode_surfaced"):
+                prov.mark_episode_surfaced(session_id=session_id, user_id=goal.user_id)
+        except Exception:
+            logger.debug("goal surfaced-mark skipped for %s", goal.id, exc_info=True)
+
+    async def _notify_owner_done(self, goal: Goal, session_id: str, final: str,
+                                 verified: str = "verified") -> bool:
+        """Tell the OWNER a background goal COMPLETED — surface-independent + durable.
+
+        This is the completion-communication rail, DECOUPLED from the self-wake
+        agent-re-entry (which is posture-gated OFF on the server). The push used to
+        live only inside ``_self_wake``, so with self-wake off, completed goals told
+        no one — the observed "goals never report completions" gap. ``push_owner_message``
+        delivers to the owner's Telegram if a sink+chat exist, else persists a durable
+        ``owner_notice`` (visible via ``polyrob telemetry`` / the digest, per T4-04), so
+        the owner is reliably informed either way. Fail-open. Returns whether told."""
+        owner_told = False
+        try:
+            from core.self_evolution import push_owner_message
+            owner_told = await push_owner_message(
+                getattr(self.task_agent, "container", None),
+                self._completion_text(goal, final, verified=verified))
+        except Exception:
+            logger.debug("goal completion owner-push skipped for %s", goal.id, exc_info=True)
+        if owner_told:
+            self._mark_episode_surfaced(goal, session_id)
+        return owner_told
+
+    async def _self_wake(self, goal: Goal, session_id: str, final: str) -> None:
+        """Agent-continuation: re-enter the goal's OWN just-finished session as a forged
+        turn (W1 rail), so the agent can act on its own completion. OWNER notification is
+        handled separately by ``_notify_owner_done`` (always-on). Fail-open.
+        (Retargeting the wake at the owner's live chat session needs a
+        latest-session-for-user resolver on the chat registry — deferred.)"""
+        try:
             deliver = getattr(self.task_agent, "deliver_self_wake", None)
-            delivered = False
-            if deliver is not None:
-                delivered = await deliver(session_id, goal.user_id, text,
-                                          metadata={"source": "goal", "goal_id": goal.id})
-            if not (delivered or owner_told):
-                # Nobody was actually told (self-wake off/dropped/budget-exhausted AND no
-                # owner push landed) -- don't mark the episode surfaced (FIX1: that would
-                # make the session-start digest silently omit this run).
+            if deliver is None:
                 return
-            # Task 7: the self-wake delivery IS "telling the owner" — mark this
-            # goal's episode surfaced so the digest doesn't repeat it. Runs after
-            # finalize_episode (already written earlier in _run_goal), so the row
-            # exists for the UPDATE to find. Scoped to the goal's own user_id
-            # (FIX2) since episodes are keyed on the composite (user_id,
-            # session_id) and a bare session_id UPDATE could flip another
-            # tenant's row on a collision.
-            try:
-                from modules.memory.registry import get_memory_registry
-                prov = get_memory_registry().active()
-                if prov is not None and hasattr(prov, "mark_episode_surfaced"):
-                    prov.mark_episode_surfaced(session_id=session_id, user_id=goal.user_id)
-            except Exception:
-                logger.debug("goal self-wake surfaced-mark skipped for %s", goal.id,
-                            exc_info=True)
+            delivered = await deliver(session_id, goal.user_id,
+                                      self._completion_text(goal, final),
+                                      metadata={"source": "goal", "goal_id": goal.id})
+            if delivered:
+                self._mark_episode_surfaced(goal, session_id)
         except Exception as e:
             logger.debug("goal self-wake skipped for %s: %s", goal.id, e)
 
@@ -685,8 +1016,6 @@ class GoalDispatcher:
         """Fire ONE planning session when the queue is thin. All gates mechanical."""
         from agents.task.constants import AutonomyConfig
         if not AutonomyConfig.goal_planner_enabled():
-            return
-        if headroom_after <= 0 and AutonomyConfig.goal_daily_quota() > 0:
             return
         min_ready = AutonomyConfig.goal_planner_min_ready()
         if len(self.board.ready(limit=min_ready)) >= min_ready:
@@ -719,14 +1048,9 @@ class GoalDispatcher:
             from agents.task.constants import AutonomyConfig
             from agents.task.goals.planner import (
                 PLANNER_MAX_STEPS, PLANNER_TOOLS, build_planner_prompt,
+                planner_session_tools,
             )
-            deliverables_root = None
-            try:
-                from agents.task.path import pm
-                if pm().is_project_root_workspace:
-                    deliverables_root = pm().project_root
-            except Exception:
-                deliverables_root = None
+            deliverables_root = _deliverables_root()
             prompt = build_planner_prompt(
                 self.board, user_id, deliverables_root,
                 history_n=AutonomyConfig.goal_planner_history_n())
@@ -742,17 +1066,33 @@ class GoalDispatcher:
                 "task": prompt,
                 "provider": provider,
                 "model": model,
-                "tools": list(PLANNER_TOOLS),
+                "tools": planner_session_tools(),
                 "max_steps": PLANNER_MAX_STEPS,
                 "temperature": 0.0,
             }
             session_id, final = await _run_task_as_session(
                 self.task_agent, user_id=user_id, request=request, autonomous=True)
+            # 015 #3 (planner leg): a planner run killed by provider exhaustion
+            # must not read as "planner correctly found nothing to do" — that
+            # ambiguity hid a 13h board-dark outage from two intel reviews.
+            from core.credit_sentinel import credit_sentinel_active
+            if _is_llm_provider_exhausted(final or "") or \
+                    (not final and credit_sentinel_active()):
+                logger.error(
+                    "%s: goal planner run died on provider outage, NOT an "
+                    "empty pipeline (session=%s): %s",
+                    LLM_EXHAUSTED_MARKER, session_id,
+                    (final or "no output")[:200])
+                return
             logger.info("goal planner ran (session=%s): %s",
                         session_id, (final or "no result")[:200])
             await self._maybe_escalate_empty_pipeline(user_id, planner_summary=final)
         except Exception as e:
-            logger.error("goal planner run failed: %s", e, exc_info=True)
+            if _is_llm_provider_exhausted(e):
+                logger.error("%s: goal planner run failed on provider outage: %s",
+                             LLM_EXHAUSTED_MARKER, e)
+            else:
+                logger.error("goal planner run failed: %s", e, exc_info=True)
 
     async def _maybe_escalate_empty_pipeline(self, user_id: str, *,
                                              planner_summary: Optional[str] = None) -> None:

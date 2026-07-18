@@ -1,4 +1,4 @@
-"""Foreground/background discipline for the shell tool (WS-2, Hermes parity).
+"""Foreground/background discipline for the shell tool (WS-2).
 
 A foreground command that never returns (a server, a follow, a long sleep, or an
 explicit `&`/`nohup`) would hang the turn. `background_nudge` detects those and

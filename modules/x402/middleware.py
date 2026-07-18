@@ -29,13 +29,29 @@ from .x402_integration import (
 logger = logging.getLogger(__name__)
 
 
+def to_atomic_amount(amount_usd: float, decimals: int) -> int:
+    """H9: the ONE atomic-amount conversion used at the challenge, the
+    verification requirement, and the recorded ``amount_atomic``.
+
+    Uses ``round`` (banker's-safe here since all three sites pass the same USD
+    value) — NOT truncation. The 402 challenge already rounded
+    (``maxAmountRequired``) while verification used to TRUNCATE
+    (``int(amount * 1e6)``), so at a price whose ``*1e6`` lands epsilon below an
+    integer (e.g. ``0.29 -> 289999.99999999994``) the two disagreed by 1 atomic
+    unit: the client signs the challenge amount (``290000``) but verification
+    required ``289999`` — every anonymous payment at that price bricked. One
+    helper, one value, no drift."""
+    return int(round(amount_usd * (10 ** decimals)))
+
+
 def build_x402_challenge(request_path: str, cost_usd: Optional[float] = None) -> dict:
     """Build the standard x402 402-challenge body (the 'accepts' array).
 
     Single source of price (C2/F12): reads get_x402_price_usd() unless
-    overridden. Used by the middleware's own early challenge (C7); a future
-    pass may also route api/payment_verification.py::payment_required_response
-    through this same builder for full byte-for-byte shape parity.
+    overridden. Used by the middleware's own early challenge (C7), and (G-16)
+    by api/payment_verification.py::payment_required_response so the
+    endpoint-layer 402 emits the same byte-for-byte challenge shape instead of
+    an empty payment_details dict from a never-assigned app.state.x402_handler.
     """
     price_usd = cost_usd if cost_usd is not None else get_x402_price_usd()
     config = get_x402_config()
@@ -58,7 +74,7 @@ def build_x402_challenge(request_path: str, cost_usd: Optional[float] = None) ->
             "for the 402 challenge body"
         )
 
-    amount_atomic = int(round(price_usd * (10 ** decimals)))
+    amount_atomic = to_atomic_amount(price_usd, decimals)
 
     return {
         "x402Version": 1,
@@ -76,6 +92,19 @@ def build_x402_challenge(request_path: str, cost_usd: Optional[float] = None) ->
         }],
         "amount_usd": price_usd,
     }
+
+
+# R-4 layering inversion: modules/ must not import api/. The api tier installs the
+# canonical request-state writer (api.auth_state.set_auth_state) here at mount time
+# (api/app.py). Fail LOUDLY if a successful settlement lands with no writer — that
+# means the middleware was mounted outside the api app, which is unsupported.
+_AUTH_STATE_WRITER = None
+
+
+def install_auth_state_writer(writer) -> None:
+    """Install the C4 auth-state writer callable (api.auth_state.set_auth_state)."""
+    global _AUTH_STATE_WRITER
+    _AUTH_STATE_WRITER = writer
 
 
 class X402PaymentMiddleware(BaseHTTPMiddleware):
@@ -106,14 +135,27 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
     # 401 for anonymous callers by design (the REST API requires an account; we do not want
     # to punch an anonymity hole in it). So a `/task/sessions` entry here would be dead code —
     # mis-prefixed (the real mount is /api/task/sessions) AND pre-empted by fallback_auth even
-    # if fixed. The 4 prefixes below are exactly the paths where the 402 challenge can
-    # genuinely fire: each is a real mounted route that calls verify_payment_for_request()
-    # and sits OUTSIDE fallback_auth_middleware's /api/ + /task/ gate. Anonymous callers who
-    # want pay-per-request access should use A2A or /v1, not the REST API.
-    X402_GATED_PATH_PREFIXES = ("/a2a/rpc", "/a2a/message/stream", "/a2a/tasks", "/v1/chat/completions")
+    # if fixed. Anonymous callers who want pay-per-request access should use A2A or /v1, not
+    # the REST API.
+    #
+    # G-18: gate by exact (METHOD, path) pairs, not a `path.startswith(prefix)` match. The
+    # old prefix match on "/a2a/tasks" also matched every read/continuation sub-route under
+    # it — `GET /a2a/tasks/{id}` (status read), `GET /a2a/tasks` (list), `POST
+    # /a2a/tasks/{id}/send` (continuation, "already paid"), `POST /a2a/tasks/{id}/cancel`,
+    # and `POST /a2a/tasks/resubscribe` — none of which `verify_payment_for_request` ever
+    # bills at the endpoint layer (see api/a2a/endpoints.py, api/a2a/streaming.py). An
+    # anonymous read was getting 402-challenged for something that was always free. Only the
+    # exact routes below actually charge (new-task creation with no taskId): keep this set in
+    # sync with the billed call sites if new gated routes are added.
+    X402_GATED_ROUTES = frozenset({
+        ("POST", "/a2a/rpc"),
+        ("POST", "/a2a/message/stream"),
+        ("POST", "/a2a/tasks"),
+        ("POST", "/v1/chat/completions"),
+    })
 
-    def _is_x402_gated(self, path: str) -> bool:
-        return any(path.startswith(p) for p in self.X402_GATED_PATH_PREFIXES)
+    def _is_x402_gated(self, path: str, method: str = "POST") -> bool:
+        return (method.upper(), path) in self.X402_GATED_ROUTES
 
     def _init_facilitator(self):
         """Initialize the fastapi-x402 facilitator client."""
@@ -174,8 +216,56 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         # Check for X-PAYMENT header (standard x402 format, base64 encoded)
         payment_header = request.headers.get("X-PAYMENT")
 
-        if payment_header and self._facilitator_client:
-            return await self._handle_x402_payment(request, call_next, payment_header)
+        # Computed once, used by both the G-17 503 branch and the C7 402-challenge
+        # branch below: does this caller carry a non-x402 auth signal (API key /
+        # bearer JWT / session cookie)? If so, x402 was never their only path in —
+        # they are a normal authenticated caller who happens to also be carrying an
+        # (incidental, defensive, or stray) X-PAYMENT header, and must fall through
+        # to call_next exactly as they did before x402 existed.
+        has_other_auth = bool(
+            request.headers.get("Authorization")
+            or request.headers.get("X-API-KEY")
+            or request.cookies.get("auth_token")
+        )
+
+        if payment_header:
+            if self._facilitator_client:
+                return await self._handle_x402_payment(request, call_next, payment_header)
+
+            # G-17: a real payment attempt landed on a gated path but the facilitator
+            # SDK never initialized (fastapi-x402 not installed, or init failed —
+            # see _init_facilitator). Previously this silently fell through to
+            # call_next: the payment was dropped uncharged, request.state never got
+            # payment_method="x402", and the payer got a bare 401 downstream with no
+            # indication their payment was ever seen. Surface the misconfiguration
+            # loudly instead of pretending nothing happened.
+            #
+            # BUT: only when x402 was this caller's ONLY auth signal. A caller who
+            # ALSO carries a valid API key / bearer JWT is an already-authenticated
+            # request that happens to carry a stray X-PAYMENT header — x402 being
+            # unconfigured must not turn that into a hard 503 (regression: X402_ENABLED
+            # defaults to false, so `_facilitator_client` is None on any deployment
+            # that hasn't turned x402 on — the default/common case — and this branch
+            # used to fire for every such request regardless of other auth).
+            if self._is_x402_gated(request.url.path, request.method) and not has_other_auth:
+                self.logger.error(
+                    "x402 payment header present on %s %s but the facilitator client "
+                    "is unavailable (fastapi-x402 missing or failed to initialize) — "
+                    "refusing to silently drop the payment attempt",
+                    request.method, request.url.path,
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": "Payment settlement unavailable",
+                        "details": (
+                            "x402 facilitator is not configured on this server; "
+                            "the payment could not be verified or settled."
+                        ),
+                    },
+                )
+            # Not a gated path, or the caller has other auth — fall through to
+            # normal auth exactly as before.
 
         # C7: issue the standard 402 challenge for a genuinely-anonymous request
         # (no X-PAYMENT AND no other auth signal at all) hitting a gated path.
@@ -183,13 +273,8 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
         # X-API-KEY header and are NOT touched here — they fall through to
         # call_next exactly as before, authorized downstream by
         # verify_payment_for_request.
-        if not payment_header and self._is_x402_gated(request.url.path):
+        if not payment_header and self._is_x402_gated(request.url.path, request.method):
             config = get_x402_config()
-            has_other_auth = bool(
-                request.headers.get("Authorization")
-                or request.headers.get("X-API-KEY")
-                or request.cookies.get("auth_token")
-            )
             if not has_other_auth and config.get("pay_to"):
                 return JSONResponse(
                     status_code=402,
@@ -252,8 +337,10 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
 
             # Create payment requirements for verification.
             # Single source of truth for price (F12) — see get_x402_price_usd.
+            # H9: the SAME rounding helper the challenge uses — verification used
+            # to truncate, bricking anonymous payments at specific price points.
             amount_usd = get_x402_price_usd()
-            amount_atomic = int(amount_usd * (10 ** asset_config.decimals))
+            amount_atomic = to_atomic_amount(amount_usd, asset_config.decimals)
 
             payment_requirements = PaymentRequirements(
                 scheme="exact",
@@ -302,9 +389,13 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
             # Payment successful! Create user and proceed
             user_id = generate_user_id_from_wallet(payer_address)
 
-            # Set request state via the canonical C4 contract.
-            from api.auth_state import set_auth_state
-            set_auth_state(
+            # Set request state via the canonical C4 contract (writer installed
+            # by api/app.py at mount time — R-4 inversion, no api import here).
+            if _AUTH_STATE_WRITER is None:
+                raise RuntimeError(
+                    "x402 auth-state writer not installed — api/app.py must call "
+                    "install_auth_state_writer(set_auth_state) when mounting the middleware")
+            _AUTH_STATE_WRITER(
                 request.state,
                 user_id=user_id,
                 tier="x402",

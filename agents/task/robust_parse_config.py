@@ -155,13 +155,13 @@ class RobustParseConfig:
 
     @classmethod
     def get_exponential_backoff_delay(cls, consecutive_failures: int) -> float:
-        """Calculate exponential backoff delay with cap and jitter"""
-        import random
-        base_delay = cls.BASE_RETRY_DELAY * (cls.BACKOFF_MULTIPLIER ** consecutive_failures)
-        capped_delay = min(base_delay, cls.MAX_RETRY_DELAY)
-        # Add jitter to prevent thundering herd
-        jitter = random.uniform(0.8, 1.2)
-        return capped_delay * jitter
+        """Calculate exponential backoff delay with cap and jitter (P4: shared formula)."""
+        from core.backoff import jittered_exponential_delay
+        return jittered_exponential_delay(
+            cls.BASE_RETRY_DELAY, consecutive_failures,
+            multiplier=cls.BACKOFF_MULTIPLIER, cap=cls.MAX_RETRY_DELAY,
+            cap_after_jitter=False,  # cap BEFORE jitter (may slightly exceed cap)
+        )
     
     @classmethod
     def should_retry_parse_error(cls, consecutive_failures: int) -> bool:

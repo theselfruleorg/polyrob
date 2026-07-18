@@ -28,6 +28,13 @@ class MessageRouter:
     def subscribe(self, surface_id: str, surface) -> None:
         self._surfaces[surface_id] = surface
 
+    def capabilities(self, surface_id: str):
+        """Capabilities of a subscribed surface, or None if unknown (mirrors
+        SurfaceRegistry.capabilities). Used by callers (e.g. the `message` action)
+        that need to know ahead of a send whether a surface can render media."""
+        surface = self._surfaces.get(surface_id)
+        return getattr(surface, "capabilities", None) if surface is not None else None
+
     async def publish(self, msg: OutboundMessage) -> None:
         try:
             scrubbed = scrub_brain_blocks(msg.text)
@@ -75,8 +82,11 @@ class MessageRouter:
         except Exception as e:  # fail-open
             logger.error("message_router: surface %s raised: %s", row.get("surface_id"), e, exc_info=True)
 
-    async def send_message(self, chat_id: str, text: str, surface_id: str = "telegram") -> bool:
-        """Back-compat shim for cron/delivery.py. Returns True only on a completed send."""
+    async def send_message(self, chat_id: str, text: str, surface_id: str = "telegram",
+                            media: list | None = None) -> bool:
+        """Back-compat shim for cron/delivery.py + the `message` tool. Returns True only
+        on a completed send. `media` defaults to None -> OutboundMessage(media=[]),
+        keeping today's shape byte-identical when no media is given."""
         surface = self._surfaces.get(surface_id)
         if surface is None:
             logger.warning("send_message: no surface %s registered — delivery failed", surface_id)
@@ -84,6 +94,7 @@ class MessageRouter:
         try:
             await surface.send(OutboundMessage(
                 session_key=f"direct:{surface_id}:{chat_id}", text=text,
+                media=media or [],
             ))
             return True
         except Exception as e:

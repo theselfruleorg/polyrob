@@ -58,9 +58,19 @@ def test_toolsets_keys():
     m = _import_tool_defaults()
     expected = {
         "minimal", "safe", "default", "research", "trading_research", "coding",
-        "development", "browser", "social", "full",
+        "development", "browser", "social", "full", "earn", "owner_interactive",
     }
     assert set(m.TOOLSETS.keys()) == expected
+
+
+def test_earn_and_owner_interactive_toolsets(monkeypatch):
+    """WS-7: the flagship-earn and owner-interactive tool lists are now named TOOLSETS
+    entries (SSOT), consumed by scripts/seed_goal.py and surfaces/telegram/interactive_tools.py."""
+    m = _import_tool_defaults()
+    assert m.resolve_toolset("earn") == [
+        "filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding"]
+    assert m.resolve_toolset("owner_interactive") == [
+        "goal", "twitter", "web_fetch", "filesystem", "task"]
 
 
 def test_social_toolset_exists_with_valid_ids():
@@ -177,6 +187,54 @@ def test_polyrob_agent_toolset_unset_legacy_path():
     # Legacy path with coding=False and anysite=False → [filesystem, task, web_fetch].
     # web_fetch is the lightweight default web reader (zero-dep, always CLI-registerable).
     assert result == ["filesystem", "task", "web_fetch"]
+
+
+def test_default_toolset_is_behavior_identical_to_unset(monkeypatch):
+    """O1 (2026-07-14 review): POLYROB_AGENT_TOOLSET=default must equal the unset path.
+
+    `polyrob init` writes POLYROB_AGENT_TOOLSET=default when the user accepts the
+    wizard default; that must never degrade the session (it used to drop web_fetch
+    and the dynamic coding/anysite additions).
+    """
+    import unittest.mock as mock
+    import agents.task.tool_defaults as m
+    importlib.reload(m)
+
+    env_without = {k: v for k, v in os.environ.items() if k != "POLYROB_AGENT_TOOLSET"}
+    with mock.patch("tools.coding.coding_tools_enabled", return_value=False), \
+         mock.patch("tools.anysite.anysite_cli_enabled", return_value=False), \
+         mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
+        with mock.patch.dict(os.environ, env_without, clear=True):
+            importlib.reload(m)
+            unset_result = m.cli_default_tools()
+        with mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "default"}):
+            importlib.reload(m)
+            default_result = m.cli_default_tools()
+
+    assert default_result == unset_result
+    assert "web_fetch" in default_result
+
+
+def test_default_toolset_gets_dynamic_additions():
+    """'default' picks up the dynamic coding/anysite additions like the unset path."""
+    import unittest.mock as mock
+    import agents.task.tool_defaults as m
+    importlib.reload(m)
+
+    with mock.patch("tools.coding.coding_tools_enabled", return_value=True), \
+         mock.patch("tools.anysite.anysite_cli_enabled", return_value=True), \
+         mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]), \
+         mock.patch.dict(os.environ, {"POLYROB_AGENT_TOOLSET": "default"}):
+        importlib.reload(m)
+        result = m.cli_default_tools()
+
+    assert result == ["filesystem", "task", "web_fetch", "coding", "anysite"]
+
+
+def test_resolve_toolset_default_includes_web_fetch():
+    """resolve_toolset('default') must include the default web reader."""
+    m = _import_tool_defaults()
+    assert "web_fetch" in m.resolve_toolset("default")
 
 
 def test_polyrob_agent_toolset_pruned_via_cli_unavailable():

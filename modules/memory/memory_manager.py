@@ -10,7 +10,6 @@ from modules.base_module import BaseModule
 
 # Import managers
 from .cache_manager import CacheManager
-from .user_profile_manager import UserProfileManager
 from .task.task_context_manager import TaskContextManager
 
 
@@ -37,7 +36,6 @@ class MemoryManager(BaseModule):
         """Initialize memory manager."""
         super().__init__(name=name, config=config, container=container)
         self.cache = None
-        self.user_profile_manager = None
         self.task_context_manager = None
         self._knowledge_base = None
         self._database = None
@@ -81,16 +79,6 @@ class MemoryManager(BaseModule):
             # stays None; callers (e.g. ChatAgent) already guard for it.
             self._knowledge_base = None
 
-            # Initialize user profile manager
-            self.user_profile_manager = UserProfileManager(
-                name="user_profile_manager",
-                config=self.config,
-                database=self._database,
-                cache=self.cache
-            )
-            await self.user_profile_manager.initialize()
-            self.logger.info("User Profile Manager initialized")
-
             # Initialize task context manager (Phase 1 hierarchical memory - PRIMARY)
             self.task_context_manager = TaskContextManager(
                 name="task_context_manager",
@@ -117,10 +105,6 @@ class MemoryManager(BaseModule):
             if self.cache:
                 await self.cache.cleanup()
                 self.logger.info("Cache Manager cleaned up")
-
-            if self.user_profile_manager:
-                await self.user_profile_manager.cleanup()
-                self.logger.info("User Profile Manager cleaned up")
 
             if self.task_context_manager:
                 await self.task_context_manager.cleanup()
@@ -211,9 +195,6 @@ class MemoryManager(BaseModule):
             if self.cache:
                 await self.cache.clear_user_data(user_id)
 
-            # Clear user profile cache
-            if self.user_profile_manager:
-                await self.user_profile_manager.clear_cache(user_id)
             
             # Note: Skipping knowledge base context clearing as it's not critical
             # and requires additional implementation

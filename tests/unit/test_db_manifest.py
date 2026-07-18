@@ -22,7 +22,11 @@ def test_candidates_include_bot_and_sidecars(tmp_path):
     names = {p.name for p in cands}
     assert "bot.db" in names
     for sidecar in ("memory.db", "goals.db", "cron.db", "skill_usage.db",
-                    "users.db", "tg_dedup.db"):
+                    "users.db", "tg_dedup.db",
+                    # D11 (2026-07-11): stores the manifest silently missed —
+                    # backup/rollback skipped the durable event log among others.
+                    "telemetry_events.db", "surfaces.db", "pairing.db",
+                    "messages.db", "wa_dedup.db", "email_dedup.db"):
         assert sidecar in names
     # bot.db lives under database/, sidecars directly under data_home.
     bot = next(p for p in cands if p.name == "bot.db")

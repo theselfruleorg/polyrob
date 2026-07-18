@@ -8,6 +8,7 @@ from pathlib import Path
 from enum import Enum, auto
 from dataclasses import dataclass
 
+from core.config_policy import embedder_needed
 from core.config import BotConfig
 from core.exceptions import (
     ConfigurationError, 
@@ -97,10 +98,6 @@ AGENT_COMPONENTS = _get_agent_components()
 # gated on get_embedding_config()) — never at module load. A top-level import here would
 # drag torch+transformers (~2.5s) into every process that imports core.initialization
 # (every uvicorn worker boot). See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md.
-
-# New imports
-from agents.personality.character_manager import CharacterManager
-from agents.personality.character import Character
 
 from tools.base_tool import ToolStatus
 
@@ -398,16 +395,11 @@ async def initialize_core(container: DependencyContainer) -> None:
             scope=ServiceScope.SINGLETON
         )
         logger.info("  ✓ Permissions manager initialized")
-        
-        # Link permissions with user profile manager
-        try:
-            user_profile_manager = memory_manager.user_profile_manager
-            if user_profile_manager:
-                permissions.set_user_profile_manager(user_profile_manager)
-                logger.info("  ✓ Permissions linked with user profile manager")
-        except Exception as e:
-            logger.warning(f"  ⚠ Failed to link permissions with user profile manager: {e}")
-        
+
+        # (Dead UserProfileManager link removed 2026-07-11: Permissions never had
+        # a set_user_profile_manager method — the call always raised and was
+        # swallowed. Real RBAC reads roles via direct SQL in core/permissions.py.)
+
         logger.info("✓ Core initialization complete")
         return
     except Exception as e:
@@ -436,7 +428,6 @@ async def initialize_modules(container: DependencyContainer) -> None:
         # mode). get_embedding_config() always returns a default dict, so gating on it built
         # the torch-backed embedder on EVERY startup even for MEMORY_BACKEND=sqlite (FTS5,
         # no embeddings). embedder_needed() is the shared SSOT with the CLI path. (P1-EMB)
-        from agents.task.constants import embedder_needed
         if embedder_needed():
             try:
                 # LAZY embedder: defer the torch/model load (and HF Hub network validation)
@@ -568,6 +559,17 @@ async def initialize_tools(container: DependencyContainer) -> None:
     if results['failed']:
         logger.warning(f"  ⚠ Failed tools: {', '.join(results['failed'])}")
 
+def _treasury_sweeper_enabled() -> bool:
+    """M20: ``TreasurySweeper`` signs and broadcasts real fund-moving
+    transactions — it must never start on config presence (``TREASURY_ADDRESS``
+    + a resolved master seed) alone. Default OFF; explicit opt-in only, parsed
+    via the canonical falsey-set bool parser (core/env.py) so this flag means
+    the same thing every other gate in the repo does.
+    """
+    from core.env import bool_env
+    return bool_env("TREASURY_SWEEPER_ENABLED", False)
+
+
 async def initialize_auth_services(container: DependencyContainer) -> None:
     """Initialize authentication and payment services."""
     logger.info("➤ Auth services initialization started")
@@ -631,6 +633,10 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         logger.info("  ✓ API key manager initialized")
 
         # Credit Balance Manager
+        # P1 finalization: bind to None first so the deposit-monitor branch below
+        # (`if balance_manager:`) can't raise UnboundLocalError when the credit
+        # system is OFF but the deposit monitor is ON with an RPC URL configured.
+        balance_manager = None
         if container.config.enable_credit_system:
             from modules.credits.balance_manager import CreditBalanceManager
             balance_manager = CreditBalanceManager(
@@ -677,8 +683,11 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         else:
             logger.info("  ⏩ Deposit monitor disabled (set DEPOSIT_MONITOR_ENABLED=true to enable)")
 
-        # Treasury Sweeper (if treasury address configured and wallet generator available)
-        if container.config.treasury_address and wallet_generator:
+        # Treasury Sweeper (M20: config presence alone must NEVER start a
+        # fund-moving component — TREASURY_SWEEPER_ENABLED must also be explicitly
+        # set true. Default OFF.)
+        treasury_sweeper_enabled = _treasury_sweeper_enabled()
+        if container.config.treasury_address and wallet_generator and treasury_sweeper_enabled:
             try:
                 from modules.payments.treasury_sweeper import TreasurySweeper
 
@@ -694,6 +703,12 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
                 logger.info(f"  ✓ Treasury sweeper started (interval: {container.config.sweep_interval}s)")
             except Exception as e:
                 logger.error(f"  ❌ Failed to start treasury sweeper: {e}")
+        elif container.config.treasury_address and wallet_generator:
+            logger.info(
+                "  ⏩ Treasury sweeper disabled (TREASURY_ADDRESS + wallet generator are "
+                "configured, but TREASURY_SWEEPER_ENABLED is not true — set "
+                "TREASURY_SWEEPER_ENABLED=true to enable fund sweeping)"
+            )
         elif container.config.treasury_address:
             logger.warning("  ⚠ Treasury sweeper requires wallet_generator - skipping")
         else:
@@ -794,19 +809,7 @@ async def initialize_agents(container: DependencyContainer) -> None:
     
     results = {'success': [], 'failed': []}
 
-    # Initialize AutoV2 logging integration first
-    try:
-        from agents.task.logging_config import ensure_core_logging_integration, configure_library_loggers
-        if ensure_core_logging_integration():
-            logger.info("  ✓ AutoV2 logging integrated with core logging system")
-            # Configure library loggers to reduce noise
-            configure_library_loggers()
-        else:
-            logger.warning("  ⚠ AutoV2 logging integration not available")
-    except ImportError:
-        logger.debug("  ⏩ AutoV2 logging module not available")
-    except Exception as e:
-        logger.warning(f"  ⚠ Failed to initialize AutoV2 logging integration: {e}")
+    # Library-logger pinning happens in core.logging.setup_logging (quiet_noisy_libraries).
 
     # Initialize shared components (character_manager, system_prompt_manager) first
     try:

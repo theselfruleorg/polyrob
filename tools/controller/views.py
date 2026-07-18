@@ -32,6 +32,22 @@ class SendMessageAction(BaseModel):
 	)
 
 
+class ContactHistoryAction(BaseModel):
+	"""Read the durable conversation history with an external correspondent —
+	what we sent and what they replied, across sessions (survives compaction).
+	Omit surface+address to LIST all conversations (who was contacted, who
+	replied, who hasn't answered yet)."""
+	model_config = ConfigDict(extra='forbid')
+
+	surface: Optional[str] = Field(
+		default=None, description="Surface id, e.g. 'email', 'telegram', 'x' "
+		"(omit together with address to list all conversations)")
+	address: Optional[str] = Field(
+		default=None, description="Correspondent address (email address / chat id); "
+		"omit to list all conversations")
+	limit: Optional[int] = Field(default=10, description="Max messages/rows to show (<=50)")
+
+
 class MessageTargetAction(BaseModel):
 	"""Send a message to a specific chat/recipient on a specific surface.
 	Only owner + owner-allowlisted targets are permitted (default-deny)."""
@@ -43,6 +59,14 @@ class MessageTargetAction(BaseModel):
 	action: str = Field(default="send", description="send | reply | edit | delete | react")
 	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")
 	message_id: Optional[str] = Field(default=None, description="Target message id for edit/delete/react")
+	media_paths: Optional[List[str]] = Field(
+		default=None,
+		description=(
+			"Optional file paths (MUST resolve inside THIS session's workspace) to send "
+			"as media alongside the text — images go as photos, other files as document "
+			"attachments. Paths outside the workspace are rejected (the whole call fails). "
+			"Only delivered on surfaces that support media (currently telegram, email); "
+			"other surfaces still get the text, plus an honest note that media wasn't sent."))
 
 
 # Twitter specific actions

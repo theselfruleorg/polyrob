@@ -38,36 +38,40 @@ async def test_emit_feed_event_allows_under_limit(monkeypatch):
     assert emitted == [("feed_update", "fresh-session-xyz")]
 
 
-# ── H2c (E5-Minor): _event_emissions is bounded, so tracking one entry per
-# session forever (a slow key-space leak) can't grow the dict without bound. ──
+# ── H2c (E5-Minor): the event limiter's key space is bounded, so tracking one
+# entry per session forever (a slow key-space leak) can't grow it without bound.
+# F-1 (2026-07-17): the tracking dict is now inside the canonical
+# core.rate_limit.SlidingWindowLimiter (max_keys LRU bound) — same invariants,
+# asserted through the limiter instance. ──
 
-def test_event_emissions_is_bounded_dict():
-    from utils.bounded_collections import BoundedDict
+def test_event_limiter_is_bounded():
+    from core.rate_limit import SlidingWindowLimiter
     import webview.server as server
 
-    assert isinstance(server._event_emissions, BoundedDict)
+    assert isinstance(server._event_limiter, SlidingWindowLimiter)
+    assert server._event_limiter._max_keys == server.EVENT_EMISSIONS_MAX_SESSIONS
 
 
-def test_event_emissions_evicts_past_cap(monkeypatch):
+def test_event_limiter_evicts_past_cap(monkeypatch):
     import webview.server as server
 
-    server._event_emissions.clear()
-    monkeypatch.setattr(server._event_emissions, "max_size", 5)
+    server._event_limiter._calls.clear()
+    monkeypatch.setattr(server._event_limiter, "_max_keys", 5)
 
     for i in range(20):
         server.check_event_rate_limit(f"session-{i}")
 
     # Never grows past the cap, even after tracking 20 distinct sessions.
-    assert len(server._event_emissions) <= 5
+    assert len(server._event_limiter._calls) <= 5
     # The oldest sessions were evicted; the most recent survive.
-    assert "session-19" in server._event_emissions
-    assert "session-0" not in server._event_emissions
+    assert "session-19" in server._event_limiter.keys()
+    assert "session-0" not in server._event_limiter.keys()
 
 
 def test_event_rate_limit_still_enforced_for_active_session_after_bounding(monkeypatch):
     import webview.server as server
 
-    server._event_emissions.clear()
+    server._event_limiter._calls.clear()
     monkeypatch.setattr(server, "RATE_LIMIT_MAX_EVENTS", 3)
     session = "active-session-under-cap"
 

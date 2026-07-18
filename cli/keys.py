@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 from modules.llm.profiles import (  # noqa: F401  (no_key_message re-exported)
     no_key_message,
@@ -42,9 +43,12 @@ def first_run_no_config(env=None, home=None) -> bool:
     if usable_providers_with_keys(env):
         return False
     if home is None:
-        from core.paths import polyrob_home
-        home = polyrob_home()
-    return not (home / ".env").exists()
+        from core.paths import env_file_candidates
+        home_env = next(c.path for c in env_file_candidates(local_mode=True)
+                        if c.tier == "home")
+    else:
+        home_env = Path(home) / ".env"
+    return not home_env.exists()
 
 
 def _can_prompt() -> bool:

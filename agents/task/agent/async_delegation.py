@@ -163,7 +163,45 @@ class AsyncDelegationRegistry:
                 )
             )
             self._prune_completed()
+        self._emit_delegation_event('dispatched', delegation_id, goal=goal)
         return {"status": "dispatched", "delegation_id": delegation_id}
+
+    def _emit_delegation_event(
+        self, phase: str, delegation_id: str, *, goal: str = '',
+        status: str = '', duration: float = 0.0,
+    ) -> None:
+        """019 P1: emit delegation_dispatched/delegation_completed feed events.
+
+        Uses the manager-free ``emit_feed_event`` seam (the registry holds no
+        telemetry handle). Fail-open, flag-gated.
+        """
+        try:
+            from core.config_policy import AutonomyConfig
+            if not AutonomyConfig.run_events_enabled():
+                return
+            from agents.task.telemetry.service import emit_feed_event
+            from agents.task.telemetry.views import (
+                DelegationCompletedEvent,
+                DelegationDispatchedEvent,
+            )
+            preview = (goal or '')[:120]
+            if phase == 'dispatched':
+                event = DelegationDispatchedEvent(
+                    session_id=self._session_id,
+                    delegation_id=delegation_id,
+                    goal_preview=preview,
+                )
+            else:
+                event = DelegationCompletedEvent(
+                    session_id=self._session_id,
+                    delegation_id=delegation_id,
+                    status=status,
+                    duration_seconds=duration,
+                    goal_preview=preview,
+                )
+            emit_feed_event(event)
+        except Exception:
+            logger.debug("delegation run-event emit failed", exc_info=True)
 
     async def _run_and_deliver(
         self,
@@ -218,6 +256,10 @@ class AsyncDelegationRegistry:
                     )
                 except Exception:
                     logger.warning("delegation terminal write failed", exc_info=True)
+            self._emit_delegation_event(
+                'completed', rec.delegation_id, goal=goal, status=status,
+                duration=max(0.0, rec.completed_at - rec.dispatched_at),
+            )
 
         block = self._format_completion_block(rec, status, result_text)
         try:

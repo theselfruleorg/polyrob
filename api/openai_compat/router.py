@@ -1,6 +1,7 @@
 """OpenAI-compatible /v1 router. Gated; mounted by app.py only
 when OPENAI_COMPAT_API_ENABLED is on. Reuses POLYROB auth (request.state.user_id),
 per-request billing, and the tool-light chat agent (chat_once)."""
+import asyncio
 import json
 import logging
 import time
@@ -50,6 +51,12 @@ def _last_user_text(req: ChatCompletionRequest) -> str:
 
 def _sse_data(payload: dict) -> str:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n"
+
+
+#: 019 P4: seconds between SSE keep-alive comments while chat_once runs.
+#: Comment frames (": ...") are SSE-spec-legal and ignored by OpenAI SDK
+#: parsers; they stop client/proxy idle timeouts on long agent turns.
+STREAM_KEEPALIVE_SEC = 15.0
 
 
 async def _stream_chat_completion(*, chat_id: str, created: int, model: str, reply: str):
@@ -104,23 +111,51 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # model with no provider slug/prefix falls back to the env-resolved
     # default provider (model string kept verbatim) — so this never 400s.
     provider, model = map_model(body.model) if body.model else (None, None)
-    reply = await agent.chat_once(
-        user_id=user_id, text=text, chat_id=chat_id, provider=provider, model=model,
-    )
-    reply = str(reply or "")
     response_id = f"chatcmpl-{int(time.time()*1000)}"
     created = int(time.time())
+
+    async def _run_chat() -> str:
+        reply = await agent.chat_once(
+            user_id=user_id, text=text, chat_id=chat_id, provider=provider, model=model,
+        )
+        return str(reply or "")
+
     if body.stream:
+        # 019 P4: chat_once buffers the WHOLE reply (true token streaming is
+        # deferred to 019 P5), so the SSE body used to start only after the
+        # turn finished — a multi-minute agent turn hit client/proxy idle
+        # timeouts. Run chat_once concurrently and emit keep-alive comments
+        # while it works; an error after headers surfaces as a final content
+        # chunk (the stream already committed a 200).
+        async def _stream_with_keepalive():
+            chat_task = asyncio.create_task(_run_chat())
+            try:
+                while True:
+                    try:
+                        reply = await asyncio.wait_for(
+                            asyncio.shield(chat_task), timeout=STREAM_KEEPALIVE_SEC
+                        )
+                        break
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+            except asyncio.CancelledError:
+                chat_task.cancel()
+                raise
+            except Exception as e:
+                logger.error(f"openai-compat streamed chat failed: {e}", exc_info=True)
+                reply = f"[error] agent turn failed: {type(e).__name__}"
+            async for chunk in _stream_chat_completion(
+                chat_id=response_id, created=created, model=body.model, reply=reply,
+            ):
+                yield chunk
+
         return StreamingResponse(
-            _stream_chat_completion(
-                chat_id=response_id,
-                created=created,
-                model=body.model,
-                reply=reply,
-            ),
+            _stream_with_keepalive(),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    reply = await _run_chat()
     # Use actual token counts when available, with fallback to estimation
     prompt_tokens = _estimate_tokens(text, model=body.model)
     completion_tokens = _estimate_tokens(reply, model=body.model)

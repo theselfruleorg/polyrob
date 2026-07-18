@@ -9,9 +9,11 @@ can construct a fully initialized container without spinning up uvicorn.
 
 import os
 import sys
+import importlib
 import logging
 from typing import Optional
 
+from core.config_policy import embedder_needed
 from dotenv import load_dotenv
 
 
@@ -80,9 +82,12 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
 
     Environment resolution priority: CONFIG_ENV > env parameter > ENV var > 'development'
     Returns the resolved environment name.
+
+    The candidate list + order is the SSOT ``core.paths.env_file_candidates`` (R-1);
+    this function only applies the per-mode override semantics described above.
     """
     resolved = os.environ.get("CONFIG_ENV") or env or os.environ.get("ENV", "development")
-    from pathlib import Path
+    from core.paths import env_file_candidates
 
     if local_mode:
         # One-time ~/.rob -> ~/.polyrob home migration BEFORE any ~/.polyrob read
@@ -92,38 +97,18 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
             migrate_rob_home_once()
         except Exception:
             pass
-
-        # Load with override=False, HIGHEST priority first, so an explicit process
-        # env var always wins and project (./.polyrob) beats home (~/.polyrob). With
-        # override=False the first file to set a key keeps it, so the load order
-        # IS the precedence order.
-        from core.paths import polyrob_home
-        proj_env = Path.cwd() / ".polyrob" / ".env"
-        if proj_env.exists():
-            load_dotenv(str(proj_env), override=False)  # project beats home
-        home_env = polyrob_home() / ".env"
-        if home_env.exists():
-            load_dotenv(str(home_env), override=False)
-        # Transition fallback (read-only): always read the legacy ~/.rob/.env at the
-        # LOWEST precedence so an operator's live keys survive a fail-open migration.
-        # override=False means it can never clobber the new home or process env.
-        legacy_home_env = Path.home() / ".rob" / ".env"
-        if legacy_home_env.exists():
-            load_dotenv(str(legacy_home_env), override=False)
-
-    # Layer 1: root .env (base defaults)
-    if os.path.exists(".env"):
-        load_dotenv(".env", override=False if local_mode else True)
-
-    # Layer 2: environment-specific
-    env_file = os.path.join(config_dir, f".env.{resolved}")
-    if os.path.exists(env_file):
-        load_dotenv(env_file, override=False if local_mode else True)
-
-    # Layer 3: local overrides (not committed to git)
-    local_file = os.path.join(config_dir, f".env.{resolved}.local")
-    if os.path.exists(local_file):
-        load_dotenv(local_file, override=False if local_mode else True)
+        # override=False, HIGHEST precedence first: the first file to set a key
+        # keeps it, so the helper's order IS the precedence order (and an explicit
+        # process env var always wins).
+        for cand in env_file_candidates(resolved, local_mode=True, config_dir=config_dir):
+            if cand.path.exists():
+                load_dotenv(str(cand.path), override=False)
+    else:
+        # Server: lowest first with override=True — later loads win, so the
+        # REVERSED helper list keeps config/.env.{env}.local as the top layer.
+        for cand in reversed(env_file_candidates(resolved, local_mode=False, config_dir=config_dir)):
+            if cand.path.exists():
+                load_dotenv(str(cand.path), override=True)
 
     # Local-mode key backfill (Seam 3): if the CLI still has zero provider keys
     # after layering, source ONLY secret keys from config/.env.{production,development}
@@ -199,220 +184,187 @@ async def build_container(
     return bot.container
 
 
+# =============================================================================
+# CLI tool registrar (I-1) — one generic loop over the tool descriptors, NOT a
+# growing stack of hand-written per-tool blocks. Each block added here was a distinct
+# prod incident (a tool registered a global descriptor but no CLI container service,
+# so a session's `load_tools_from_container` logged "✗ Tool 'x' not found in
+# container" and the agent silently ran without it — e.g. a FUNDED money goal that
+# reasoned it had no wallet, 2026-07-08). The server path (core/initialization.py::
+# initialize_tools) is already generic over get_tool_init_order(); this makes the CLI
+# path generic the same way. Adding a new optional CLI tool is now a single row in
+# _CLI_OPTIONAL_REGISTRARS — no new if-block, and the parity test
+# (tests/unit/core/test_tool_registration_parity.py) fails loudly on any drift.
+# =============================================================================
+
+# Tools the lightweight CLI container CANNOT provide — they need the heavy server
+# container (browser/Chromium, MCP clients, or paid-API creds baked into server
+# config). This is the SSOT of CLI exclusions: the generic registrar skips exactly
+# these; everything else in the tool descriptors is CLI-registerable. ("browser" is
+# the runtime alias BrowserManager registers on the server path; it never appears in
+# get_tool_init_order(), but is listed here defensively.)
+# NOTE (2026-07-14): "email" was removed from this set — EmailTool's __init__ only
+# touches config attrs (no network I/O; SMTP is tested lazily in the async
+# _initialize(), which the CLI already defers until a session first loads the tool),
+# so it needs no heavy server-only dependency. Leaving it excluded meant the `email`
+# TOOL (agent-callable send action) never registered a container service on EITHER
+# CLI-built process (`polyrob telegram` or `polyrob email`) even though creds were
+# configured and the email SURFACE (harness, built separately in
+# `cli/commands/email.py`) worked fine — every goal requesting `tools=["email"]` hit
+# "✗ Tool 'email' not found in container" and reported a false "no credential"
+# blocker (see docs/ops/rob-backlog.md 2026-07-14 ~07:1x tick).
+_CLI_INCOMPATIBLE = {
+    "browser_manager", "browser", "mcp", "perplexity",
+    "collabland", "alchemy",
+    "polymarket", "polymarket_data", "hyperliquid", "hyperliquid_data",
+}
+
+# Optional (flag/posture/creds-gated) tools the CLI can register. Each row is the
+# module + the ``register_optional_tool()`` wrapper that MATERIALIZES the descriptor
+# under the CURRENT env (self-gating — a no-op when its flag/posture is off), plus the
+# container service name(s) it produces. This ONE table drives BOTH descriptor
+# materialization (so the generic loop below sees the enabled optionals even when
+# tools/__init__ was first imported with the flags off) AND the derived
+# _CLI_REGISTERABLE_TOOLS capability set. `shell` registers two services (shell +
+# process); `tools.x402` hosts two independent registrars.
+_CLI_OPTIONAL_REGISTRARS = (
+    ("tools.code_exec",        "register_code_exec_tool",    ("code_execution",)),
+    ("tools.coding",           "register_coding_tool",       ("coding",)),
+    ("tools.shell",            "register_shell_tools",       ("shell", "process")),
+    ("tools.self_env",         "register_self_env_tool",     ("self_env",)),
+    ("tools.git",              "register_git_tool",          ("git",)),
+    ("tools.github",           "register_github_tool",       ("github",)),
+    ("tools.cronjob_tools",    "register_cronjob_tool",      ("cronjob",)),
+    ("tools.goal_tools",       "register_goal_tool",         ("goal",)),
+    ("tools.knowledge_ingest", "register_knowledge_tool",    ("knowledge",)),
+    ("tools.x402",             "register_x402_tool",         ("x402_pay",)),
+    ("tools.x402",             "register_x402_invoice_tool", ("x402_invoice",)),
+    ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
+)
+
+# Static (always-present) descriptors the CLI serves — the lightweight, dependency-free
+# tools that are in tools/descriptors.py unconditionally. Kept explicit to avoid
+# importing the heavy tools package at bootstrap import; the parity test asserts this
+# stays == get_tool_init_order() - _CLI_INCOMPATIBLE once all descriptors materialize.
+_CLI_STATIC_TOOLS = {"filesystem", "task", "web_fetch", "twitter", "anysite", "email"}
+
+# Service names produced by the optional registrars (derived from the one table above).
+_CLI_OPTIONAL_TOOLS = {svc for _mod, _fn, services in _CLI_OPTIONAL_REGISTRARS for svc in services}
+
+# The CLI capability set — what `rob` CAN register when the relevant flag is on. Derived
+# from the two sources above (no independently-maintained flat list). Used by
+# cli_unavailable_tools() for honest "tool not available on the CLI" feedback and by the
+# startup self-check. Flag-INDEPENDENT (lists a tool even when its flag is currently off,
+# so the user gets "enable the flag" rather than "not available").
+_CLI_REGISTERABLE_TOOLS = set(_CLI_STATIC_TOOLS) | set(_CLI_OPTIONAL_TOOLS)
+
+
+def _materialize_cli_optional_descriptors() -> set:
+    """Call every optional-tool registrar and return the service names that are CURRENTLY
+    enabled (registrar returned True).
+
+    Two jobs: (1) materialize each enabled tool's descriptor under the CURRENT env so the
+    generic loop can see it via get_tool_init_order(); (2) return the freshly-evaluated
+    enabled set so the loop honours the per-call gate instead of a descriptor's mere
+    presence. Presence alone is insufficient because ``TOOL_DESCRIPTORS`` inserts are
+    STICKY (never removed) — once posture-1 materialized ``shell``, a later posture-0 run
+    in the same process would still see the descriptor. Gating on the registrar's return
+    value re-checks the flag/posture gate exactly like the old per-block ``if enabled():``.
+
+    Each registrar self-gates (``register_optional_tool`` returns False when the tool's
+    ``enabled_fn`` is falsy). Fail-open per registrar: a broken optional seam must never
+    break CLI startup. Deterministic regardless of when tools/__init__ was first imported.
+    """
+    log = logging.getLogger(__name__)
+    enabled: set = set()
+    for module_path, fn_name, services in _CLI_OPTIONAL_REGISTRARS:
+        try:
+            module = importlib.import_module(module_path)
+            if getattr(module, fn_name)():
+                enabled.update(services)
+        except Exception as e:
+            log.debug("CLI optional-tool registrar %s.%s skipped: %s", module_path, fn_name, e)
+    return enabled
+
+
+def _cli_extra_gate(name: str) -> bool:
+    """Extra per-tool enablement for STATICALLY-present descriptors whose gate is NOT a
+    ``register_optional_tool()`` insert (their descriptor is always in the init order):
+
+      - twitter: registered only when X API credentials are configured. Reads work with
+        valid creds; writes stay TWITTER_ENABLED-gated per-action. Without creds the tool
+        is dead weight, so we don't register a useless service (matches the pre-I-1 block).
+      - anysite: gated by ``anysite_cli_enabled()`` (ANYSITE_TOOL_ENABLED, default on).
+
+    Every other tool returns True — its presence in the init order already IS its gate
+    (the optional ones are only inserted when enabled; the remaining static ones are
+    unconditional CLI tools).
+    """
+    if name == "twitter":
+        return bool(os.getenv("TWITTER_API_KEY") and os.getenv("TWITTER_ACCESS_TOKEN"))
+    if name == "anysite":
+        try:
+            from tools.anysite import anysite_cli_enabled
+            return anysite_cli_enabled()
+        except Exception:
+            return False
+    return True
+
+
 async def register_cli_tools(container) -> None:
-    """Register the dependency-free tools a CLI session can actually load.
+    """Register the tools a lightweight CLI session can actually load — generically.
 
     A session's controller pulls tools via ``load_tools_from_container(tool_ids)``;
     anything not registered here is silently absent, leaving only the core
     ``done``/``send_message`` actions. ``build_cli_container`` skips heavy init
-    (embeddings/RAG/browser), but ``filesystem`` and ``task`` are pure-python
-    (no torch/pinecone/browser), so they fit the CLI's fast-startup contract and
-    make ``polyrob run --tools filesystem`` actually able to do file operations.
-
-    These tools declare ``rate_limit_manager`` as a required dependency and raise
-    on ``initialize()`` without it, so we register (and initialize) that first.
+    (embeddings/RAG/browser), so this registers every tool descriptor that is NOT in
+    ``_CLI_INCOMPATIBLE`` — mirroring the server path (``initialize_tools``) but WITHOUT
+    calling ``initialize()`` (the CLI defers tool init for fast startup; a tool inits
+    lazily when a session first loads it). Per-tool fail-open: a broken optional tool
+    must never break CLI startup.
     """
     from utils.rate_limit_manager import RateLimitManager
-    from tools.filesystem import FileSystem
-    from tools.task_tool import TaskTool
+    from tools.descriptors import get_tool_init_order, get_tool_class
 
+    log = logging.getLogger(__name__)
+
+    # rate_limit_manager first: filesystem/task/twitter/... declare it a required
+    # dependency and raise on initialize() without it. It's a util (not a tool
+    # descriptor), so it's registered AND initialized here, outside the generic loop.
     if not container.has_service("rate_limit_manager"):
         rlm = RateLimitManager(name="rate_limit_manager", config=container.config)
         await rlm.initialize()
         container.register_service("rate_limit_manager", rlm)
-    if not container.has_service("filesystem"):
-        container.register_service("filesystem", FileSystem("filesystem", container.config, container))
-    if not container.has_service("task"):
-        container.register_service("task", TaskTool("task", container.config, container))
 
-    # web_fetch — lightweight stateless web retrieval (aiohttp + markdownify), no creds / heavy
-    # deps. It's in _CLI_REGISTERABLE_TOOLS but was never actually registered as a service, so a
-    # session that requested `--tools web_fetch` (or an autonomous goal) silently got no web_fetch
-    # action. Register it unconditionally so headless/goal sessions can fetch public pages. Fail-open.
-    try:
-        from tools.web_fetch import WebFetchTool
-        if not container.has_service("web_fetch"):
-            container.register_service(
-                "web_fetch", WebFetchTool("web_fetch", container.config, container)
-            )
-    except Exception as e:
-        logging.getLogger(__name__).debug("Could not register web_fetch CLI tool: %s", e)
+    # Materialize the enabled optional descriptors (self-gating) so the loop below can
+    # see them via get_tool_init_order(), and capture the freshly-evaluated enabled set.
+    # This replaces the ~13 per-tool `register_*()` + `if enabled():` the old blocks did.
+    enabled_optional = _materialize_cli_optional_descriptors()
 
-    # Autonomy tools (cronjob / goal) — opt-in via CRON_ENABLED / GOALS_ENABLED,
-    # off by default. Register the descriptor+class globally (mirrors the server
-    # path) AND a per-session service instance so a CLI session that does
-    # `--tools cronjob`/`--tools goal` can actually reach them. Each is wrapped
-    # fail-open: a missing/broken autonomy tool must never break CLI startup.
-    from tools.cronjob_tools import cron_enabled
-    if cron_enabled():
+    # THE generic registrar: one loop over the tool descriptors (the SSOT).
+    for name in get_tool_init_order():
+        if name in _CLI_INCOMPATIBLE or container.has_service(name):
+            continue
+        # Optional (flag/posture-gated) tools register only when their gate is CURRENTLY
+        # on — not merely because a sticky descriptor exists. Static tools skip this check.
+        if name in _CLI_OPTIONAL_TOOLS and name not in enabled_optional:
+            continue
+        # Extra gate for statically-present, non-register_optional_tool descriptors
+        # (twitter creds / anysite flag).
+        if not _cli_extra_gate(name):
+            continue
+        cls = get_tool_class(name)
+        if cls is None:
+            continue
         try:
-            from tools.cronjob_tools import CronJobTool, register_cronjob_tool
-            register_cronjob_tool()
-            if not container.has_service("cronjob"):
-                container.register_service(
-                    "cronjob", CronJobTool("cronjob", container.config, container)
-                )
+            container.register_service(name, cls(name, container.config, container))
         except Exception as e:
-            logging.getLogger(__name__).debug("Could not register cronjob CLI tool: %s", e)
+            log.debug("Could not register CLI tool %s: %s", name, e)
 
-    from agents.task.constants import AutonomyConfig
-    if AutonomyConfig.goals_enabled():
-        try:
-            from tools.goal_tools import GoalTool, register_goal_tool
-            register_goal_tool()
-            if not container.has_service("goal"):
-                container.register_service(
-                    "goal", GoalTool("goal", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register goal CLI tool: %s", e)
-
-    # Twitter / X — register when credentials are configured so a headless/CLI
-    # session (e.g. an autonomous goal with `--tools twitter`) can actually reach
-    # the X surface. TwitterTool only needs `rate_limit_manager` (registered above)
-    # + tweepy + creds; it does NOT need the heavy server container. Write actions
-    # stay gated behind TWITTER_ENABLED per-action; reads need only valid creds.
-    # Fail-open: a missing dep / bad creds must never break startup.
-    if os.getenv("TWITTER_API_KEY") and os.getenv("TWITTER_ACCESS_TOKEN"):
-        try:
-            from tools.twitter_tool import TwitterTool
-            if not container.has_service("twitter"):
-                container.register_service(
-                    "twitter", TwitterTool("twitter", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register twitter CLI tool: %s", e)
-
-    # Coding + code execution (H10-B) — opt-in via CODING_TOOLS_ENABLED /
-    # CODE_EXEC_ENABLED, off by default. The LocalSubprocessBackend is pure
-    # subprocess (no heavy server container needed), so these CAN run under `rob` —
-    # this is what makes POLYROB a coding agent from the CLI. Fail-open like the others.
-    from tools.code_exec import code_exec_enabled
-    if code_exec_enabled():
-        try:
-            from tools.code_exec import register_code_exec_tool
-            from tools.code_exec.tool import CodeExecutionTool
-            register_code_exec_tool()
-            if not container.has_service("code_execution"):
-                container.register_service(
-                    "code_execution", CodeExecutionTool("code_execution", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register code_execution CLI tool: %s", e)
-
-    from tools.coding import coding_tools_enabled
-    if coding_tools_enabled():
-        try:
-            from tools.coding import register_coding_tool
-            from tools.coding.tool import CodingTool
-            register_coding_tool()
-            if not container.has_service("coding"):
-                container.register_service(
-                    "coding", CodingTool("coding", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register coding CLI tool: %s", e)
-
-    from tools.anysite import anysite_cli_enabled
-    if anysite_cli_enabled():
-        try:
-            from tools.anysite.tool import AnysiteTool
-            if not container.has_service("anysite"):
-                container.register_service(
-                    "anysite", AnysiteTool("anysite", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register anysite CLI tool: %s", e)
-
-    # Git tool (SB-02) — structured git over the confined workspace. GIT_TOOLS_ENABLED
-    # is in _SAFE_LOCAL_FLAGS (ON under POLYROB_LOCAL), but the tool was registered
-    # NOWHERE (no register_cli_tools block, absent from the server init path), so an
-    # advertised, safety-engineered capability was 100% dead code. Register it here so a
-    # local `--tools git` request can actually reach it. git_push stays approval-gated +
-    # leaf-blocked (Task 9). Fail-open like the others.
-    from tools.git import git_enabled
-    if git_enabled():
-        try:
-            from tools.git import register_git_tool
-            from tools.git.tool import GitTool
-            register_git_tool()
-            if not container.has_service("git"):
-                container.register_service(
-                    "git", GitTool("git", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register git CLI tool: %s", e)
-
-    # GitHub tool (SB-02) — OFF by default even locally (GitHub writes are opt-in and
-    # separately approval-gated). Registered only when GITHUB_TOOL_ENABLED.
-    from tools.github import github_enabled
-    if github_enabled():
-        try:
-            from tools.github import register_github_tool
-            from tools.github.tool import GitHubTool
-            register_github_tool()
-            if not container.has_service("github"):
-                container.register_service(
-                    "github", GitHubTool("github", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register github CLI tool: %s", e)
-
-    # Compute-posture tools (computer-use parity WS-2/WS-3/WS-5) — the persistent
-    # `shell` + `process` tools register at AGENT_COMPUTE_POSTURE>=1, `self_env` at
-    # >=2. Like git above, they registered a descriptor/class but NO container service
-    # on this (headless/POLYROB_LOCAL) path, so a goal's `load_tools_from_container`
-    # found nothing ("✗ Tool 'shell' not found in container", live prod 2026-07-07).
-    # Every action is still compute_posture_allows-gated in-session; registering the
-    # service only makes the tool REACHABLE. Fail-open like the others.
-    try:
-        from tools.shell import shell_tools_enabled, register_shell_tools
-        if shell_tools_enabled():
-            from tools.shell.tool import ShellTool
-            from tools.shell.process_tool import ProcessTool
-            register_shell_tools()
-            if not container.has_service("shell"):
-                container.register_service(
-                    "shell", ShellTool("shell", container.config, container)
-                )
-            if not container.has_service("process"):
-                container.register_service(
-                    "process", ProcessTool("process", container.config, container)
-                )
-    except Exception as e:
-        logging.getLogger(__name__).debug("Could not register shell/process CLI tools: %s", e)
-
-    try:
-        from tools.self_env import self_env_enabled, register_self_env_tool
-        if self_env_enabled():
-            from tools.self_env.tool import SelfEnvTool
-            register_self_env_tool()
-            if not container.has_service("self_env"):
-                container.register_service(
-                    "self_env", SelfEnvTool("self_env", container.config, container)
-                )
-    except Exception as e:
-        logging.getLogger(__name__).debug("Could not register self_env CLI tool: %s", e)
-
-    # Knowledge base (Task 6) — opt-in via KB_ENABLED, ON under POLYROB_LOCAL (single-user
-    # CLI gets the full knowledge feature by default). Provides kb_ingest/kb_search/
-    # kb_list/kb_remove over the tenant-scoped KB. Fail-open like the others.
-    from agents.task.constants import AutonomyConfig as _AutonomyConfig
-    if _AutonomyConfig.kb_enabled():
-        try:
-            from tools.knowledge_ingest import KnowledgeTool, register_knowledge_tool
-            register_knowledge_tool()
-            if not container.has_service("knowledge"):
-                container.register_service(
-                    "knowledge", KnowledgeTool("knowledge", container.config, container)
-                )
-        except Exception as e:
-            logging.getLogger(__name__).debug("Could not register knowledge CLI tool: %s", e)
-
-    # Startup capability self-check (structural review #1): surface which registerable tools
-    # actually resolved to a container service vs. which didn't. Tonight's twitter + web_fetch
-    # outages were exactly this drift — a tool in the allowlist that was never service-registered
-    # is silently unavailable to the agent. Log-only, fail-open — no behaviour change.
+    # Startup capability self-check (structural review #1): surface which registerable
+    # tools actually resolved to a container service vs. which didn't. The twitter +
+    # web_fetch outages (2026-07-01) were exactly this drift — a tool in the allowlist
+    # that was never service-registered is silently unavailable. Log-only, fail-open.
     try:
         _resolved = sorted(t for t in _CLI_REGISTERABLE_TOOLS if container.has_service(t))
         _missing = sorted(t for t in _CLI_REGISTERABLE_TOOLS if not container.has_service(t))
@@ -423,15 +375,6 @@ async def register_cli_tools(container) -> None:
         )
     except Exception as e:
         logging.getLogger(__name__).debug("tool self-check skipped: %s", e)
-
-
-# Tools the lightweight CLI container can actually register. cronjob/goal/coding/
-# code_execution are added conditionally in register_cli_tools (behind their flags);
-# browser/mcp/perplexity/email need the heavy server container and are never
-# available under `rob`. coding/code_execution use the pure-subprocess code_exec
-# backend, so the lightweight container CAN provide them. knowledge uses the
-# registry routers (pure-python, no heavy deps) so the CLI CAN provide it too.
-_CLI_REGISTERABLE_TOOLS = {"filesystem", "task", "cronjob", "goal", "coding", "code_execution", "anysite", "knowledge", "web_fetch", "twitter", "git", "github", "shell", "process", "self_env"}
 
 
 def cli_unavailable_tools(requested):
@@ -452,8 +395,6 @@ def maybe_register_cli_embedder(container, config) -> None:
     rather than warning — the server warns because it has embedding config; the CLI
     treats absence as a graceful degradation.
     """
-    from agents.task.constants import embedder_needed
-
     if not embedder_needed() or container.has_service("embedding_model"):
         return
 
@@ -493,19 +434,23 @@ def _resolve_cli_data_home():
     Read via os.environ only (BotConfig.get is a getattr trap).
     """
     from pathlib import Path
-    env_data = os.environ.get("POLYROB_DATA_DIR")
+
+    from core.runtime_paths import resolve_data_home
+
+    # The data-home VALUE has ONE rule — core.runtime_paths.resolve_data_home
+    # (POLYROB_DATA_DIR wins, else cwd/.polyrob). POLYROB_PROJECT_DIR never moves
+    # the data home; it only picks the WORKSPACE placement below. That splits the
+    # two concerns the old binary switch conflated — "data outside the code tree?"
+    # (POLYROB_DATA_DIR) vs "sessions share one workspace?" (POLYROB_PROJECT_DIR).
+    # This is the headless multi-session case the battle test needed
+    # (docs/plans/2026-06-29-agent-working-directory-model-ANALYSIS.md).
+    data_home = resolve_data_home()
     env_project = os.environ.get("POLYROB_PROJECT_DIR")
-    # Explicit project dir: persistent shared workspace, INDEPENDENT of where runtime
-    # data lives. Splits the two concerns the old binary switch conflated — "data
-    # outside the code tree?" (POLYROB_DATA_DIR) vs "sessions share one workspace?"
-    # (POLYROB_PROJECT_DIR). This is the headless multi-session case the battle test
-    # needed (docs/plans/2026-06-29-agent-working-directory-model-ANALYSIS.md).
     if env_project:
-        data_home = Path(env_data).resolve() if env_data else (Path.cwd() / ".polyrob")
         return data_home, True, str(Path(env_project).resolve())
-    if env_data:
-        return Path(env_data).resolve(), False, None
-    return Path.cwd() / ".polyrob", True, str(Path.cwd())
+    if os.environ.get("POLYROB_DATA_DIR"):
+        return data_home, False, None
+    return data_home, True, str(Path.cwd())
 
 
 def _resolve_workspace_lock_dir(data_home, ws_is_project_root: bool, project_root) -> str:
@@ -546,11 +491,17 @@ async def build_cli_container(
 
     load_env(env, local_mode=True)
     # Terminal-native, single-user: mark the process local so the SAFE autonomy/
-    # learning flags default ON as a group (agents.task.constants._SAFE_LOCAL_FLAGS).
+    # learning flags default ON as a group (core.config_policy._SAFE_LOCAL_FLAGS).
     # setdefault so an explicit `POLYROB_LOCAL=0 rob ...` can still opt out.
     os.environ.setdefault("POLYROB_LOCAL", "1")
-    level = log_level or os.environ.get("LOG_LEVEL", "ERROR")
-    setup_logging(log_level=level)
+    console_level = log_level or os.environ.get("LOG_LEVEL", "ERROR")
+    # The terminal is a UI surface, not a log sink: console stays at
+    # console_level (ERROR unless --verbose) while bot.log keeps LOG_LEVEL
+    # (default INFO) diagnostics.
+    setup_logging(
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        console_level=console_level,
+    )
 
     config = BotConfig()
     # local CLI is single-user ('local'); the multi-tenant per-user session cap
@@ -577,7 +528,7 @@ async def build_cli_container(
     # Gated (default on), git-repo-guarded, fail-open.
     if os.environ.get("POLYROB_GITIGNORE_DOTROB", "1").strip().lower() not in ("0", "false", "off", "no"):
         try:
-            from cli.gitignore import ensure_polyrob_gitignored
+            from core.gitignore import ensure_polyrob_gitignored
             ensure_polyrob_gitignored(Path.cwd())
         except Exception:
             pass
@@ -651,6 +602,26 @@ async def build_cli_container(
 
     # Lazily register the embedding model when KB / local_vector / local-mode is active.
     maybe_register_cli_embedder(container, config)
+
+    # §6.1/§6.2 (intelligence-stack finalization): register the database manager
+    # so headless/CLI autonomous runs have (a) the x402 payment-request store —
+    # modules/x402/invoicing._resolve_db raised "payment-request store
+    # unavailable (no database service)" on the FIRST real invoice attempt — and
+    # (b) metering truth: with a db present the orchestrator builds a
+    # metering-only usage tracker (records real api_cost_usd into usage_records,
+    # which the $-per-day autonomy budget gate reads; no credit deduction
+    # without a balance_manager). Fail-open: a db init failure must never kill
+    # CLI startup — those subsystems then degrade exactly as before.
+    try:
+        from core.initialization import MODULE_COMPONENTS
+        database = MODULE_COMPONENTS['database_manager'](
+            name='database_manager', config=config, container=container)
+        await database.initialize()
+        container.register_service('database_manager', database)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "CLI database_manager init failed — x402 invoicing/metering degraded",
+            exc_info=True)
 
     # Register the dependency-free tools a CLI session can load (filesystem, task).
     # Without these, `polyrob run --tools filesystem` has only core done/send_message.

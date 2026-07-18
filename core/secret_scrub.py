@@ -22,34 +22,20 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-#: Replacement marker. Matches the ``<secret>…</secret>`` convention the history
-#: filter already uses for registered sensitive values, so the model sees one shape.
-REDACTED = "<secret>redacted</secret>"
-
-#: PEM private-key blocks (multi-line) — redact the whole block.
-_PEM_RE = re.compile(
-    r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
-    re.DOTALL,
+# P4 finalization: the high-confidence credential-shape patterns + the REDACTED
+# marker live in ONE place (core.secret_patterns) so this persisted-content scrubber
+# and the cli/ui/secrets.py display scrubber can NEVER diverge again (the _KV_RE fix
+# that leaked <PREFIX>_API_KEY= was a divergence bug). This module layers no extra
+# patterns — it deliberately omits the aggressive hex/base64 catch-alls (see docstring).
+from core.secret_patterns import (  # noqa: E402
+    REDACTED,
+    PEM_RE as _PEM_RE,
+    BEARER_RE as _BEARER_RE,
+    KV_RE as _KV_RE,
+    PROVIDER_KEY_RE as _PROVIDER_KEY_RE,
+    POLYROB_KEY_RE as _ROB_KEY_RE,
+    AWS_RE as _AWS_RE,
 )
-
-#: ``Bearer <token>`` — run before the kv rule (kv value would stop at the space
-#: and leave the token). 8+ token chars.
-_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._\-]{8,}")
-
-#: ``key = value`` / ``key: value`` where the key NAME signals a credential.
-#: Key is preserved (line stays readable); only the value (>=6 chars) is redacted.
-_KV_RE = re.compile(
-    r"(?i)\b(api[_-]?key|apikey|secret|client_secret|password|passwd|"
-    r"access[_-]?token|auth[_-]?token|token|authorization|bearer)"
-    r"(\s*[=:]\s*)"
-    r"(['\"]?)([^\s'\"]{6,})\3"
-)
-
-#: Provider-style opaque keys: ``sk-``/``pk-``/``rk-`` (OpenAI/Anthropic/Stripe),
-#: ``rob_`` (POLYROB API keys), and AWS ``AKIA…`` access-key ids.
-_PROVIDER_KEY_RE = re.compile(r"\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}")
-_ROB_KEY_RE = re.compile(r"\brob_[A-Za-z0-9]{16,}")
-_AWS_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 
 
 def scrub_secret_shapes(text: Optional[str]) -> str:

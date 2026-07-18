@@ -19,10 +19,13 @@ def _tool(monkeypatch, price_result, captured):
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _async(None))
     monkeypatch.setattr(tool, "get_current_price", lambda *a, **k: _async(price_result))
 
-    async def _fake_limit(params):
+    async def _fake_limit(params, execution_context=None):
+        # H11: place_market_order forwards its execution_context so the delegated
+        # place_limit_order re-checks turn origin (defense-in-depth).
         captured["price"] = params.price
         captured["side"] = params.side
         captured["size_usd"] = params.size_usd
+        captured["execution_context"] = execution_context
         return {"success": True, "order_id": "o1"}
     monkeypatch.setattr(tool, "place_limit_order", _fake_limit)
     return tool

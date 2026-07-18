@@ -22,9 +22,13 @@ from typing import Any, Callable, Optional
 
 from core.surfaces.dispatcher import RouteKind
 from core.surfaces import voice_guard as _core_vg
+from core.surfaces.serialize import KeyedLock
 from surfaces.telegram.inbound import InboundResult
 
 logger = logging.getLogger(__name__)
+
+# B6: per-chat inbound serialization (see act_on_inbound docstring).
+_INBOUND_LOCK = KeyedLock()
 
 # Back-off when getUpdates returns a CONFLICT (another instance polling the same
 # token). Long enough that we don't spam, short enough to recover quickly once the
@@ -102,12 +106,19 @@ _HELP = (
     "/allow <surface> <target> — allow me to message that target\n"
     "/deny <surface> <target> — revoke that permission\n"
     "/allowlist — show who I'm allowed to message\n"
+    "/status — session + autonomy snapshot\n"
+    "/recap [window] — what I've done (default 24h, e.g. 30m/24h/7d; alias /journey)\n"
+    "/goals — goal board summary\n"
+    "/prefs — your effective preferences (read-only)\n"
+    "/config — read or set preferences (safe keys write immediately; "
+    "guarded keys queue for /pending review)\n"
     "/help — show this help\n"
     "Or just send a message to talk to ROB."
 )
 
 _OWNER_ADMIN_COMMANDS = ("/pending", "/approve", "/reject", "/asks", "/fulfill",
-                         "/allow", "/deny", "/allowlist")
+                         "/allow", "/deny", "/allowlist",
+                         "/status", "/recap", "/journey", "/goals", "/prefs", "/config")
 
 
 def owner_allowed(tg_user_id) -> Optional[bool]:
@@ -146,7 +157,32 @@ def _spawn(coro, spawn: Optional[Callable[[Any], Any]]) -> None:
         asyncio.create_task(coro)
 
 
-async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliver) -> None:
+def _last_error_text(task_agent: Any, session_id: str) -> str:
+    """Best-effort terminal ActionResult error for a finished session.
+
+    The in-loop halt path (error_recovery sets ``stopped`` + returns an error
+    ActionResult) surfaces through run_session as a bare "Session failed:
+    Unknown error" — the agent-result dict carries no 'error' key — so LLM-outage
+    classification needs the ledger's terminal error text ("PERMANENT ERROR: …
+    402 …" / "All LLM providers failed. Tried: …"). Fail-open: any shape
+    mismatch returns ""."""
+    try:
+        get_orch = getattr(task_agent, "get_orchestrator", None)
+        orch = get_orch(session_id) if get_orch is not None else None
+        agents = getattr(orch, "agents", None) if orch is not None else None
+        agent = next(iter(agents.values()), None) if agents else None
+        items = getattr(getattr(agent, "history", None), "history", None)
+        if items:
+            results = getattr(items[-1], "result", None) or []
+            if results:
+                return str(getattr(results[-1], "error", "") or "")
+    except Exception:  # pragma: no cover - fail-open probe
+        pass
+    return ""
+
+
+async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliver,
+                           notice_key: Optional[str] = None) -> None:
     """Run a session to completion, then deliver the agent's REAL reply to the chat.
 
     ``run_session`` returns a generic STATUS string ('Session completed successfully'),
@@ -160,26 +196,46 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
     Delivery happens in exactly ONE place (here), and the immediate-reply branch in
     ``handle_update`` only fires for COMMAND/DENIED/busy (which never spawn) — so there
     is no double-send. Fail-open: a delivery error never escapes the spawned turn.
+
+    Two silence bugs this closes (2026-07-16): the C10 bound-session skip below
+    assumed the router "already delivered live" UNCONDITIONALLY — false for an
+    errored run, where the agent never reaches send_message/done, so nothing was
+    delivered live AND the fallback was skipped. And an empty reply on a failed
+    run returned silently. A failed run now always says something.
     """
-    await task_agent.run_session(user_id, session_id)
+    status = await task_agent.run_session(user_id, session_id)
     if deliver is None:
         return
-    # C10: when Singular Chat is bound, the send_message / done router mirror already
-    # delivered the reply LIVE (MarkdownV2). Delivering again here would double-send (raw
-    # plain text). Skip for bound sessions; keep the post-run deliver for unbound/legacy
-    # paths (cron, `polyrob run`, raw API) that have no router.
-    try:
-        get_orch = getattr(task_agent, "get_orchestrator", None)
-        orch = get_orch(session_id) if get_orch is not None else None
-        if orch is not None and getattr(orch, "_message_router", None) is not None \
-                and getattr(orch, "_chat_session_key", None):
-            logger.debug(
-                "telegram: session %s bound to chat router; skipping post-run deliver "
-                "(already delivered live)", session_id,
-            )
-            return
-    except Exception as e:  # pragma: no cover - fail-open
-        logger.debug("telegram bound-session check failed: %s", e)
+    # run_session returns a human-readable string, not a status enum. The
+    # "Session failed: ..." prefix (generic exception) and "Session suspended: ..."
+    # prefix (agents/task_agent_lite.py's `except InsufficientCreditsError` path —
+    # the OTHER credit-death shape, distinct from a mid-step LLM 402) are both real
+    # failures; the canonical list lives in run_as_session._RUN_REFUSALS
+    # (comment "live-test F7"). "Session is already executing" and "No new
+    # input; ..." are no-ops that must stay silent — do NOT swap in
+    # run_as_session.is_refusal() here, it also matches those and would break
+    # the deliberate busy-session silence.
+    failed = str(status or "").startswith(("Session failed:", "Session suspended:"))
+
+    if not failed:
+        # C10: when Singular Chat is bound, the send_message / done router mirror
+        # already delivered the reply LIVE (MarkdownV2) for a SUCCESSFUL run.
+        # Delivering again here would double-send (raw plain text). Skip for bound
+        # sessions; keep the post-run deliver for unbound/legacy paths (cron,
+        # `polyrob run`, raw API) that have no router.
+        try:
+            get_orch = getattr(task_agent, "get_orchestrator", None)
+            orch = get_orch(session_id) if get_orch is not None else None
+            if orch is not None and getattr(orch, "_message_router", None) is not None \
+                    and getattr(orch, "_chat_session_key", None):
+                logger.debug(
+                    "telegram: session %s bound to chat router; skipping post-run deliver "
+                    "(already delivered live)", session_id,
+                )
+                return
+        except Exception as e:  # pragma: no cover - fail-open
+            logger.debug("telegram bound-session check failed: %s", e)
+
     reply = ""
     try:
         extract = getattr(task_agent, "_extract_chat_reply", None)
@@ -188,9 +244,53 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
     except Exception as e:  # pragma: no cover - fail-open
         logger.debug("telegram extract chat reply failed: %s", e)
     reply = (reply or "").strip()
+
     if not reply:
-        logger.info("telegram: session %s produced no deliverable reply", session_id)
-        return
+        if not failed:
+            # A successful run with nothing to say is legitimately silent.
+            logger.info("telegram: session %s produced no deliverable reply", session_id)
+            return
+        # A FAILED run must never be silent — that is the outage (2026-07-16: the
+        # owner asked a question, OpenRouter 402'd, and got absolute silence). The
+        # raw error_msg is deliberately NOT forwarded here — it's provider/stack
+        # text (a 402 body can be ~2KB of JSON); it goes to the log. The credit
+        # sentinel is what delivers the actionable "credits are out" notice.
+        logger.warning(
+            "telegram: session %s failed with no reply; sending error notice (status=%s)",
+            session_id, status,
+        )
+        # Proposal 015 #2: an LLM-provider outage (ALL providers exhausted /
+        # 402 cascade) gets a specific, static, LLM-independent notice —
+        # kill-switch LLM_OUTAGE_NOTICE (default ON) + a 30-min per-surface+chat
+        # cooldown so a 402 storm can't spam the chat. This runs ONLY here, on
+        # the chat-surface post-run deliver seam (act_on_inbound → spawned
+        # _run_and_deliver), so goal/cron/self-wake runs can never trigger it.
+        # Fail-open: any error in classification falls through to the legacy
+        # generic notice below, never into the error path.
+        try:
+            from core.surfaces.llm_outage_notice import (
+                OUTAGE_NOTICE_TEXT,
+                looks_like_llm_outage,
+                should_send_llm_outage_notice,
+            )
+            if looks_like_llm_outage(status, _last_error_text(task_agent, session_id)):
+                if not should_send_llm_outage_notice(notice_key or session_id):
+                    # Flag off, or within the cooldown window: deliberately
+                    # silent (the failure itself is logged above; the first
+                    # notice of the window already told this chat).
+                    logger.info(
+                        "telegram: LLM-outage notice suppressed for session %s "
+                        "(flag off or cooldown)", session_id,
+                    )
+                    return
+                reply = OUTAGE_NOTICE_TEXT
+        except Exception:
+            logger.debug("llm outage notice classification failed (fail-open)",
+                         exc_info=True)
+        if not reply:
+            reply = ("⚠️ I couldn't answer that — my run failed before I could reply. "
+                     "If this keeps happening, my API credits may be out.")
+
     try:
         await deliver(reply)
     except Exception as e:
@@ -214,13 +314,15 @@ async def _start_task_session(task_agent: Any, result: InboundResult, spawn, del
     )
     session_id = info.get("id") if isinstance(info, dict) else getattr(info, "id", None)
     if session_id:
-        _spawn(_run_and_deliver(task_agent, inbound.identity.user_id, session_id, deliver), spawn)
+        _spawn(_run_and_deliver(task_agent, inbound.identity.user_id, session_id, deliver,
+                                notice_key=result.decision.session_key), spawn)
 
 
 def _admin_data_dir(task_agent: Any) -> str:
     """The daemon's data home — the SAME dir the pending writers/goal board use."""
     cfg = getattr(getattr(task_agent, "container", None), "config", None)
-    return getattr(cfg, "data_dir", "data") or "data"
+    from core.runtime_paths import data_dir_or_home
+    return data_dir_or_home(getattr(cfg, "data_dir", None))
 
 
 def _is_admin_owner(user_id: str) -> bool:
@@ -232,8 +334,205 @@ def _is_admin_owner(user_id: str) -> bool:
                                local_enabled=False)
 
 
+async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str],
+                        data_dir: str, board: Optional[Any] = None) -> str:
+    """owner-UX P4 T2: one-message snapshot — bound-session state + an autonomy
+    one-liner. Degrades gracefully: model/ctx% are only shown for a RESIDENT
+    session (no new plumbing — reused from what `orch.agents`/`message_manager`
+    already expose); a missing goal board / cron store / ledger never raises,
+    it's just omitted from the line.
+
+    ``board`` lets a caller that already opened a ``GoalBoard`` for this
+    request (e.g. ``_handle_owner_admin``) share that connection instead of
+    this function opening a second one against the same ``goals.db`` (owner-UX
+    P4 T4 review hardening); a bare call without one still opens its own.
+    """
+    lines = ["Status:"]
+    if not session_id:
+        lines.append("• Session: no active session.")
+    else:
+        short = session_id[:12] + ("…" if len(session_id) > 12 else "")
+        session_line = f"• Session: bound ({short})"
+        try:
+            get_orch = getattr(task_agent, "get_orchestrator", None)
+            orch = get_orch(session_id) if get_orch is not None else None
+            if orch is None:
+                session_line += " — idle (not resident)."
+            else:
+                has_pending = getattr(task_agent, "_session_has_pending_input", None)
+                busy = bool(has_pending(session_id)) if has_pending is not None else False
+                session_line += " — running." if busy else " — idle."
+                try:
+                    agent_obj = next(iter((getattr(orch, "agents", None) or {}).values()), None)
+                    if agent_obj is not None:
+                        model = getattr(agent_obj, "model_name", None)
+                        mm = getattr(agent_obj, "message_manager", None)
+                        ctx_pct = mm.get_context_usage_percent() if mm is not None else None
+                        extra = []
+                        if model:
+                            extra.append(f"model={model}")
+                        if ctx_pct is not None:
+                            extra.append(f"ctx={ctx_pct:.0f}%")
+                        if extra:
+                            session_line += " " + " ".join(extra)
+                except Exception as e:
+                    logger.debug("telegram /status agent detail skipped: %s", e)
+        except Exception as e:
+            logger.debug("telegram /status session check failed: %s", e)
+            session_line += " — unknown."
+        lines.append(session_line)
+
+    try:
+        from agents.task.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING
+        gb = board if board is not None else GoalBoard(os.path.join(data_dir, "goals.db"))
+        open_n = len(gb.list(user_id=user_id, status=STATUS_READY, limit=1000))
+        running_n = len(gb.list(user_id=user_id, status=STATUS_RUNNING, limit=1000))
+        autonomy = f"• Goals: {open_n} open, {running_n} running."
+    except Exception as e:
+        logger.debug("telegram /status goal counts failed: %s", e)
+        autonomy = "• Goals: unavailable."
+    try:
+        from cron.jobs import CronJobStore
+        from cron.service import CronService
+        svc = CronService(CronJobStore(os.path.join(data_dir, "cron.db")))
+        upcoming = [j.next_run_at for j in svc.list_jobs(user_id=user_id)
+                   if j.enabled and j.next_run_at]
+        if upcoming:
+            autonomy += f" Next cron: {min(upcoming).isoformat(timespec='minutes')}."
+    except Exception as e:
+        # Not cheaply reachable (or no cron for this tenant) — omit, no error.
+        logger.debug("telegram /status cron lookup omitted: %s", e)
+    lines.append(autonomy)
+
+    try:
+        from agents.task.constants import autonomy_mode_display
+        lines.append(f"• Autonomy mode: {autonomy_mode_display()}")
+    except Exception as e:
+        logger.debug("telegram /status autonomy mode line failed: %s", e)
+
+    try:
+        from modules.credits.unified_ledger import build_ledger
+        ledger = await build_ledger(user_id, days=1, include_balances=True)
+        r = ledger.get("runtime") or {}
+        t = ledger.get("treasury") or {}
+        spend = float(r.get("spend_window_usd") or 0.0)
+        total = float(r.get("spend_total_usd") or 0.0)
+        lines.append(f"• Runtime cost (24h): ${spend:.2f} · ${total:.2f} total.")
+        lines.append(f"• Treasury: net ${float(t.get('net_usd') or 0.0):.2f}.")
+    except Exception as e:
+        logger.debug("telegram /status ledger lookup failed: %s", e)
+    return "\n".join(lines)
+
+
+def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
+    """owner-UX P4 T2: `/recap [window]` (default 24h) over core.recap (T1)."""
+    from core.recap import build_recap, format_recap_markdown
+    window = args[0] if args else "24h"
+    try:
+        entries = build_recap(user_id, data_dir, window=window)
+    except ValueError:
+        return (f"Invalid recap window {window!r} — expected e.g. '30m' / '24h' / '7d' "
+                "(a bare number of seconds also works).")
+    return format_recap_markdown(entries, window)
+
+
+def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:
+    """owner-UX P4 T2: goal board summary — counts by status + up to 5 most
+    recent open/running goals.
+
+    ``board`` lets a caller share an already-open ``GoalBoard`` (see
+    ``_status_reply``'s docstring); a bare call without one opens its own.
+    """
+    from agents.task.goals.board import (
+        KIND_GOAL, STATUS_READY, STATUS_RUNNING, STATUS_TRIAGE, GoalBoard)
+    gb = board if board is not None else GoalBoard(os.path.join(data_dir, "goals.db"))
+    goals = [g for g in gb.list(user_id=user_id, limit=1000) if g.kind == KIND_GOAL]
+    if not goals:
+        return "No goals yet."
+    counts: dict = {}
+    for g in goals:
+        counts[g.status] = counts.get(g.status, 0) + 1
+    lines = [f"{len(goals)} goal(s): " +
+            ", ".join(f"{status}={n}" for status, n in sorted(counts.items()))]
+    open_states = (STATUS_TRIAGE, STATUS_READY, STATUS_RUNNING)
+    recent = sorted((g for g in goals if g.status in open_states),
+                    key=lambda g: g.created_at, reverse=True)[:5]
+    if recent:
+        lines.append("Recent open/running:")
+        for g in recent:
+            lines.append(f"• {g.id[:8]} [{g.status}] {g.title}")
+    return "\n".join(lines)
+
+
+def _prefs_reply(user_id: str, data_dir: str, instance_id: str) -> str:
+    """owner-UX P4 T2: read-only resolved-preferences summary via the display
+    SSOT (`core.prefs.display_effective`) — never the raw file, always the
+    effective (pref/env/merged) value + source."""
+    from core.prefs import PREF_SCHEMA, display_effective
+    by_group: dict = {}
+    for key in sorted(PREF_SCHEMA):
+        by_group.setdefault(key.split(".", 1)[0], []).append(key)
+    lines = ["Your preferences (read-only):"]
+    for group in sorted(by_group):
+        lines.append(f"[{group}]")
+        for key in by_group[group]:
+            value, source = display_effective(key, user_id, data_dir, instance_id=instance_id)
+            lines.append(f"  {key} = {value} ({source})")
+    lines.append("")
+    lines.append("tell me what to change — guarded changes arrive as /pending proposals")
+    return "\n".join(lines)
+
+
+def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> str:
+    """owner-UX T10: `/config` — the read/write control-plane counterpart to
+    the read-only `/prefs`.
+
+    No args (or `list`) renders the SAME PREF_SCHEMA listing `/prefs` does —
+    reuses :func:`_prefs_reply`, never a second PREF_SCHEMA loop.
+
+    `set <key> <value>`:
+      - unknown key -> names the valid PREF_SCHEMA groups (a closest-match hint
+        across every namespace is the CLI/REPL's job — this stays terse);
+      - SAFE key -> writes immediately via `core.prefs.write_preference` and
+        confirms;
+      - GUARDED key -> NEVER written directly from a bare Telegram message —
+        queues a `core.prefs.propose_pref_change` proposal and points at
+        /pending -> /approve (the same trust ladder the webview `confirm:true`
+        PATCH uses; mirrors `cli/ui/commands/h_config.py`'s `--confirm` gate,
+        except the confirm bypass itself — Telegram has no `--confirm` here).
+    """
+    if not args or args[0].lower() == "list":
+        return _prefs_reply(user_id, data_dir, instance_id)
+    sub = args[0].lower()
+    if sub != "set":
+        return ("Usage: /config [list] | /config set <key> <value>\n"
+                "See /prefs for the full read-only listing.")
+    rest = args[1:]
+    if len(rest) < 2:
+        return "Usage: /config set <key> <value>"
+    key = rest[0]
+    value = " ".join(rest[1:]).strip()
+    from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, propose_pref_change, write_preference
+    spec = PREF_SCHEMA.get(key)
+    if spec is None:
+        groups = sorted({k.split(".", 1)[0] for k in PREF_SCHEMA})
+        return (f"Unknown preference key: {key!r} — valid groups: "
+                f"{', '.join(groups)}. See /config for the full key list.")
+    if spec.sensitivity == SENSITIVITY_GUARDED:
+        ok, msg = propose_pref_change(user_id, key, value, data_dir, instance_id=instance_id)
+        if not ok:
+            return f"Failed: {msg}"
+        return (f"'{key}' is guarded — queued for review (not written yet).\n"
+                "See /pending, approve with /approve <id> (or /reject <id>).")
+    ok, err = write_preference(data_dir, user_id, key, value, instance_id=instance_id)
+    if not ok:
+        return f"error: {err}"
+    return f"Set {key} = {value} (applies: {spec.applies})."
+
+
 async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) -> str:
     """§7.1 missing hop + §7.2b: /pending /approve /reject /asks /fulfill.
+    owner-UX P4 T2 adds the read-only /status /recap /goals /prefs verbs.
 
     Thin plumbing over the SAME primitives the `polyrob owner` CLI uses
     (core.self_evolution + GoalBoard.asks/fulfill_ask) so a phone-only headless
@@ -244,13 +543,33 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return "🔒 Owner only."
     from core import self_evolution
     from core.instance import resolve_instance_id
+    from agents.task.goals.board import ASK_OPEN, GoalBoard
     data_dir = _admin_data_dir(task_agent)
     instance_id = resolve_instance_id()
     args = result.inbound.text.strip().split()[1:]
+    board = GoalBoard(os.path.join(data_dir, "goals.db"))
+
+    if cmd == "/status":
+        return await _status_reply(task_agent, user_id, result.decision.session_id,
+                                   data_dir, board=board)
+
+    if cmd in ("/recap", "/journey"):  # one recap vocabulary across surfaces
+        return _recap_reply(user_id, data_dir, args)
+
+    if cmd == "/goals":
+        return _goals_reply(user_id, data_dir, board=board)
+
+    if cmd == "/prefs":
+        return _prefs_reply(user_id, data_dir, instance_id)
+
+    if cmd == "/config":
+        return _config_reply(user_id, data_dir, instance_id, args)
 
     if cmd == "/pending":
+        from tools.controller.approval_queue import list_pending_tool_approvals
         items = self_evolution.list_pending(user_id, home_dir=data_dir,
                                             instance_id=instance_id)
+        items = items + list_pending_tool_approvals(board, user_id)
         if not items:
             return "No pending proposals."
         lines = [f"{len(items)} pending proposal(s):"]
@@ -266,6 +585,14 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         if not args:
             return f"Usage: {cmd} <id> (see /pending)"
         target = args[0]
+        # Tool-approval asks (Task 9 / G-2) are namespaced `tap-<id>` so a bare
+        # `/approve <id>` can dispatch WITHOUT an explicit kind — never confused
+        # with a self-evolution proposal id.
+        from tools.controller.approval_queue import decide_tool_approval, strip_tap_prefix
+        if strip_tap_prefix(target) is not None:
+            ok, msg = decide_tool_approval(board, target, user_id=user_id,
+                                           approved=(cmd == "/approve"))
+            return msg if ok else f"Failed: {msg}"
         items = self_evolution.list_pending(user_id, home_dir=data_dir,
                                             instance_id=instance_id)
         match = next((it for it in items if str(it["id"]) == target), None)
@@ -276,11 +603,12 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
                      home_dir=data_dir, instance_id=instance_id)
         return msg if ok else f"Failed: {msg}"
 
-    from agents.task.goals.board import ASK_OPEN, GoalBoard
-    board = GoalBoard(os.path.join(data_dir, "goals.db"))
-
     if cmd == "/asks":
-        rows = board.asks(user_id=user_id, status=ASK_OPEN)
+        # Tool-approval asks have their OWN dedicated surface (/pending +
+        # /approve /reject, tap-<id>) — excluded here so a payment request
+        # doesn't show twice under two different id shapes.
+        rows = [a for a in board.asks(user_id=user_id, status=ASK_OPEN)
+                if (a.payload or {}).get("ask_kind") != "tool_approval"]
         if not rows:
             return "No open asks — nothing is blocked on you."
         lines = [f"{len(rows)} open ask(s):"]
@@ -391,7 +719,28 @@ async def act_on_inbound(
     ``deliver`` is an async ``send(text)`` callable that delivers an agent turn's final
     reply to the chat (proposal 004). It is threaded into the spawned run so a STEER
     resume / fresh session actually answers the owner instead of discarding the reply.
+
+    B6 (2026-07-13 review): execution is serialized per ``decision.session_key`` —
+    the polling surfaces (telegram/discord/slack/signal/x/email share this handler)
+    had no per-chat lock, so two rapid messages to a cold chat both routed
+    TASK_AGENT and raced create_session for the single session_chat binding,
+    orphaning one session. Distinct chats still run concurrently. (The webhook
+    surface holds its own KeyedLock upstream; nesting is safe — consistent order,
+    per-key granularity.)
     """
+    key = getattr(result.decision, "session_key", "") or ""
+    async with _INBOUND_LOCK.for_key(key):
+        return await _act_on_inbound_locked(task_agent, result, spawn=spawn,
+                                            deliver=deliver)
+
+
+async def _act_on_inbound_locked(
+    task_agent: Any,
+    result: InboundResult,
+    *,
+    spawn: Optional[Callable[[Any], Any]] = None,
+    deliver: Optional[Callable[[str], Any]] = None,
+) -> Optional[str]:
     decision = result.decision
     kind = decision.kind
 
@@ -399,6 +748,9 @@ async def act_on_inbound(
         # Ingress blocked (pairing required / not paired). NEVER run the agent on a
         # denied message — return a user-facing message (with the pairing code, if any)
         # instead of falling through to _start_task_session.
+        if getattr(decision, "silent", False):
+            # W3 group denials are silent: never spam a channel with auth notices.
+            return None
         if decision.pairing_code:
             return (
                 "🔒 You're not authorized to use this bot yet.\n"
@@ -413,8 +765,12 @@ async def act_on_inbound(
         # sender's external address as the untrusted source label.
         src = result.inbound.identity.raw_user_id or result.inbound.identity.user_id
         try:
+            # message_id (email: RFC Message-ID = idempotency key) feeds the durable
+            # conversation log so OUR reply can set In-Reply-To (E1/A3).
             await task_agent.deliver_correspondent_data(
                 decision.session_id, src, result.inbound.text,
+                metadata={"message_id": result.inbound.idempotency_key or ""},
+                surface=getattr(result.inbound.identity.source, "surface_id", None),
             )
         except Exception as e:
             logger.debug("correspondent delivery failed: %s", e)
@@ -454,7 +810,8 @@ async def act_on_inbound(
 
         if status == "delivered":
             _spawn(_run_and_deliver(task_agent, result.inbound.identity.user_id,
-                                    decision.session_id, deliver), spawn)
+                                    decision.session_id, deliver,
+                                    notice_key=decision.session_key), spawn)
             return None
         if status == "busy":
             # The queue is full, so THIS message was rejected (not enqueued) — be honest
@@ -648,6 +1005,61 @@ class TelegramHarness:
 
         return EditingProgressReporter(_send, _edit, _delete, supports_edit=True)
 
+    def _progress_edits_enabled(self, user_id: str) -> bool:
+        """TELEGRAM_PROGRESS_EDITS env default, per-owner progress.telegram pref."""
+        try:
+            from core.config_policy import AutonomyConfig
+            env_value = AutonomyConfig.telegram_progress_edits()
+            from core import prefs
+            from core.runtime_paths import data_dir_or_home
+            return bool(prefs.resolve(
+                "progress.telegram", user_id, data_dir_or_home(None),
+                env_value=env_value, default=env_value,
+            ))
+        except Exception:
+            return True  # fail-open to the fix (flag default is ON)
+
+    def _maybe_start_progress_tracker(self, reporter: Any, result: Any) -> Optional[Any]:
+        """019 P2: attach a live TurnProgressTracker for this turn (or None).
+
+        The tracker drives the existing progress bubble from the session's feed
+        events. For a STEER turn the session id is known up front; a fresh chat
+        turn binds lazily via the session_chat_registry reverse lookup once the
+        new session starts emitting. Fail-open: any error → legacy static bubble.
+        """
+        try:
+            user_id = result.inbound.identity.user_id or ""
+            if not self._progress_edits_enabled(user_id):
+                return None
+            from agents.task.telemetry.live_progress import (
+                TurnProgressTracker,
+                attach_tracker,
+            )
+
+            def _resolver(sid: str) -> Optional[str]:
+                try:
+                    container = getattr(self.task_agent, "container", None)
+                    registry = container.get_service("session_chat_registry") if container else None
+                    if registry is None or not hasattr(registry, "resolve_by_session_id"):
+                        return None
+                    row = registry.resolve_by_session_id(sid)
+                    return (row or {}).get("session_key")
+                except Exception:
+                    return None
+
+            decision = result.decision
+            tracker = TurnProgressTracker(
+                reporter,
+                session_key=getattr(decision, "session_key", "") or "",
+                session_id=getattr(decision, "session_id", None),
+                key_resolver=_resolver,
+            )
+            attach_tracker(tracker)
+            return tracker
+        except Exception as e:
+            logger.debug("progress tracker start failed: %s", e)
+            return None
+
     async def handle_update(self, update: dict) -> dict:
         """Process one raw Telegram update. Always returns {"ok": True} so a webhook
         gets a fast 200; errors are swallowed (fail-open)."""
@@ -694,6 +1106,7 @@ class TelegramHarness:
                 self.container, update,
                 dedup=self.dedup, user_directory=self.user_directory,
                 transcribe_voice=self._transcribe_voice,
+                bot_username=getattr(self, "bot_username", None),
             )
             if result is None:
                 await reporter.finish()   # clear a TRANSCRIBING that slipped through
@@ -762,6 +1175,12 @@ class TelegramHarness:
             # Transcript good (or a text turn) -> '⚙️ Working…' for the turn's duration.
             await reporter.stage(ProgressStage.WORKING)
 
+            # 019 P2: upgrade the static bubble to a live feed-driven status
+            # line (current tool / step / wait state, throttled edits). Gated
+            # by TELEGRAM_PROGRESS_EDITS + the progress.telegram pref;
+            # fail-open to the legacy static bubble.
+            tracker = self._maybe_start_progress_tracker(reporter, result)
+
             # Spawn agent turns with a 'typing…' keep-alive AND delete the status bubble
             # when the turn completes (run_session finishes after the answer is sent).
             # Commands that return an immediate reply don't spawn (handled below).
@@ -788,6 +1207,8 @@ class TelegramHarness:
                     finally:
                         if typing is not None:
                             typing.cancel()
+                        if tracker is not None:
+                            tracker.close()
                         await reporter.finish()   # delete '⚙️ Working…' when the turn ends
                     if errored and chat_id:
                         # Don't leave the user with a silent void (status gone, no answer).
@@ -810,19 +1231,42 @@ class TelegramHarness:
                 if _deliver_chat_id:
                     await _send_telegram_text(self.bot, _deliver_chat_id, text)
 
-            reply = await act_on_inbound(
-                self.task_agent, result, spawn=_spawn_with_typing, deliver=_deliver,
-            )
+            try:
+                reply = await act_on_inbound(
+                    self.task_agent, result, spawn=_spawn_with_typing, deliver=_deliver,
+                )
+            except Exception as e:
+                # 019 review fix: an act_on_inbound raise (e.g. create_session
+                # on exhausted credits) previously unwound past every cleanup —
+                # leaking the progress tracker in the module registry forever
+                # and orphaning the '⚙️ Working…' bubble, with no user feedback.
+                logger.error("telegram act_on_inbound failed: %s", e, exc_info=True)
+                if tracker is not None:
+                    tracker.close()
+                await reporter.finish()
+                if chat_id:
+                    try:
+                        await self.bot.send_message(
+                            chat_id,
+                            "⚠️ Something went wrong handling that — please try again.",
+                        )
+                    except Exception as send_err:
+                        logger.debug("telegram error-breadcrumb send failed: %s", send_err)
+                return {"ok": True}
             if reply:
                 # Immediate-reply branches (DENIED / COMMAND / busy) never spawn, so the
                 # _wrapped finally never runs -> delete the status bubble here, BEFORE the
                 # reply (so the user never sees status + answer stacked).
+                if tracker is not None:
+                    tracker.close()
                 await reporter.finish()
                 reply_chat_id = chat_id_from_session_key(result.decision.session_key)
                 await _send_telegram_text(self.bot, reply_chat_id, reply)
             elif not spawned["v"]:
                 # No reply AND nothing spawned (e.g. create_session yielded no id) -> the
                 # finally will never run; clear the status bubble so it never orphans.
+                if tracker is not None:
+                    tracker.close()
                 await reporter.finish()
         except Exception as e:  # fail-open: never raise into the transport
             logger.error("telegram handle_update failed: %s", e, exc_info=True)
@@ -853,12 +1297,16 @@ class TelegramBotSink:
 
 
 def build_telegram_harness(container, task_agent, *, token, webhook_base=None, bot=None,
-                           data_dir="data", poll_timeout: int = 30):
+                           data_dir=None, poll_timeout: int = 30):
     """Assemble a TelegramHarness. Lazy-imports aiogram for the real Bot (tests inject
     a fake). Ensures a UserDirectory + UpdateDedup exist on the shared data dir.
 
     webhook_base=None -> polling mode (local). Pass a base URL for webhook mode.
+
+    WS-3: an omitted data_dir resolves to the data home, never a relative "data".
     """
+    from core.runtime_paths import data_dir_or_home
+    data_dir = data_dir_or_home(data_dir)
     from surfaces.telegram.dedup import UpdateDedup
     from tools.user_directory import UserDirectory
 
@@ -884,3 +1332,10 @@ def build_telegram_harness(container, task_agent, *, token, webhook_base=None, b
         webhook_base=webhook_base, dedup=dedup, user_directory=user_directory,
         poll_timeout=poll_timeout,
     )
+
+
+# R-4: register THE shared inbound dispatch with the core-owned contract so
+# core.surfaces.inbound_webhook can delegate without importing the surface tier.
+from core.surfaces.act import register_inbound_actor  # noqa: E402
+
+register_inbound_actor(act_on_inbound)

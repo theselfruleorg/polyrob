@@ -203,6 +203,12 @@ POST /a2a/message/stream
 
 Same request body as `/a2a/rpc`; returns an SSE stream of task progress events in A2A format.
 
+While a task is blocked on owner approval the stream emits a status update with
+the native A2A `input-required` state (and returns to `working` when the
+approval resolves). `tasks/get` responses carry a `metadata.current_activity`
+snapshot (`{phase, detail, seconds_in_state, step, call_id}`, `null` when
+unknown) describing what the agent is doing right now.
+
 ---
 
 ## MCP server management
@@ -235,6 +241,12 @@ An OpenAI model string (e.g. `gpt-4o`) is mapped to a polyrob `(provider, model)
 (a `provider/model` slug wins outright, else known prefixes like `gpt-`/`claude-`/`gemini-` route to
 that provider, else your default provider is used). Point any OpenAI SDK at
 `http://localhost:9000/v1` with your polyrob API key.
+
+**Streaming honesty:** `stream: true` is *buffered* SSE — the agent turn runs to
+completion and the full reply arrives as one content chunk (true token streaming
+is a planned upgrade). During long turns the stream emits SSE comment frames
+(`: keep-alive`) every ~15s so clients and proxies don't idle-timeout; OpenAI
+SDK parsers ignore comment frames per the SSE spec.
 
 ---
 

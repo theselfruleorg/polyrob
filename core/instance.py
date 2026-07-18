@@ -4,7 +4,7 @@ polyrob is the *framework*; a named bot like ``rob`` is one *instance* of it. Th
 module is the inert skeleton for that distinction:
 
 - ``AgentIdentity`` / ``BotInstance`` — frozen config objects resolved once at
-  construction (analogous to one ``HERMES_HOME`` profile / one OpenClaw workspace).
+  construction (one profile / workspace per instance).
 - ``resolve_instance_id`` — ``instance_id`` defaults to ``"rob"`` so a
   single-instance deploy is byte-equivalent until an operator authors a second one.
 - ``load_self_context`` — reads operator-authored SOUL/IDENTITY docs from the
@@ -34,13 +34,13 @@ FRAMEWORK_NAME = "polyrob"
 
 DEFAULT_INSTANCE_ID = "rob"
 
-# Char caps borrowed from the references (Hermes per-doc caps, OpenClaw total cap):
-# bound the frozen self-context so a runaway doc can't dominate the prompt.
+# Char caps that bound the frozen self-context so a runaway doc can't dominate
+# the prompt.
 SELF_CONTEXT_PER_DOC_MAX_CHARS = 8000
 SELF_CONTEXT_TOTAL_MAX_CHARS = 60000
 
 # The evolving SELF doc (agent-writable, per-(instance,user)). Capped tighter
-# (Hermes MEMORY.md parity ~2200c) so it stays consolidatable; over-cap is an
+# (~2200c) so it stays consolidatable; over-cap is an
 # ERROR on write (forces consolidation), never a silent truncate.
 SELF_DOC_MAX_CHARS = 2200
 
@@ -55,8 +55,18 @@ _SELF_CONTEXT_DOCS = ("identity.md", "operating.md")
 _SELF_CONTEXT_SUBDIR = "identity"
 _SELF_DOC_NAME = "self.md"
 _OWNER_DOC_NAME = "owner.md"
+_CONTRACT_DOC_NAME = "contract.md"
 _BLOCKED_PLACEHOLDER = "[BLOCKED: self-context failed the identity safety scan]"
 _OWNER_BLOCKED_PLACEHOLDER = "[BLOCKED: owner-facts doc failed the identity safety scan]"
+_CONTRACT_BLOCKED_PLACEHOLDER = "[BLOCKED: operating contract failed the identity safety scan]"
+
+# The owner-authored operating-contract doc (agent-maintained via ContractWriter,
+# owner-review-gated), a prose set of operating rules/constraints injected on the
+# SELF/SOUL seam (owner-UX Phase 2). Terser cap than SELF_CONTEXT_PER_DOC_MAX_CHARS
+# so it stays a focused set of rules; over-cap is an ERROR on write, never a silent
+# truncate. Rides the same identity seam + quarantine-then-promote flow as
+# OWNER_DOC_MAX_CHARS / SELF_DOC_MAX_CHARS.
+CONTRACT_DOC_MAX_CHARS = 4000
 
 
 _SAFE_TENANT_RE = re.compile(r"[A-Za-z0-9_-]+")
@@ -80,6 +90,17 @@ def self_tier_root(home_dir: Path | str, user_id: str, instance_id: str = DEFAUL
     Layout: ``<home>/identity/{instance_id}/user_{uid}/`` (+ ``.pending/``,
     ``.archived/``). The instance axis is baked into the path now (cheap, no
     migration) so a future second instance is isolated by construction.
+
+    TENANT-DIR CONVENTIONS (WS-3, deliberate, do NOT unify on disk): the repo has
+    exactly TWO tenant-directory grammars, one per path axis —
+      - identity axis (this function): ``user_{uid}/`` prefixed, guarded by the
+        raising :func:`is_safe_tenant_id` (reject, never rewrite);
+      - session axis (``agents/task/path.py::PathManager.get_user_root``): the BARE
+        ``clean_user_id(uid)`` under ``{data_home}/sessions/`` (regex-sanitize +
+        hash, rewrite-never-reject).
+    Renaming either would orphan every existing on-disk tree; new code picks the
+    axis (identity docs vs session artifacts) and uses that axis's function —
+    never hand-builds a tenant dir.
 
     Callers MUST pass ids that pass :func:`is_safe_tenant_id`; the public entry
     points (``load_self_doc`` / ``SelfContextWriter``) enforce this. As
@@ -158,6 +179,38 @@ def load_owner_doc(home_dir: Path | str, user_id: Optional[str],
         return _OWNER_BLOCKED_PLACEHOLDER
     if len(text) > OWNER_DOC_MAX_CHARS:
         return _OWNER_BLOCKED_PLACEHOLDER
+    return text
+
+
+def load_contract_doc(home_dir: Path | str, user_id: Optional[str],
+                      instance_id: str = DEFAULT_INSTANCE_ID) -> str:
+    """Read the ACTIVE bounded operating-contract doc for ``(instance_id, user_id)``.
+
+    Mirrors :func:`load_owner_doc` — anonymous/blank user or no doc → ``""`` (inert
+    default); the on-disk doc is identity-scanned (fail-closed to a ``[BLOCKED…]``
+    placeholder) and any doc larger than the writer's cap (only possible via a
+    direct-FS write, since the writer ERRORS over-cap) is blocked. Never raises.
+    """
+    uid = (str(user_id).strip() if user_id is not None else "")
+    if not uid or not is_safe_tenant_id(uid):
+        return ""
+    path = self_tier_root(home_dir, uid, instance_id) / _CONTRACT_DOC_NAME
+    try:
+        if not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8").strip()
+    except Exception:
+        return ""
+    if not text:
+        return ""
+    try:
+        from modules.memory.task.threat_scan import is_identity_suspicious
+        if is_identity_suspicious(text):
+            return _CONTRACT_BLOCKED_PLACEHOLDER
+    except Exception:
+        return _CONTRACT_BLOCKED_PLACEHOLDER
+    if len(text) > CONTRACT_DOC_MAX_CHARS:
+        return _CONTRACT_BLOCKED_PLACEHOLDER
     return text
 
 
@@ -528,6 +581,7 @@ __all__ = [
     "is_owner_local_safe",
     "load_self_context",
     "load_self_doc",
+    "load_contract_doc",
     "self_tier_root",
     "is_safe_tenant_id",
     "pfp_dir",

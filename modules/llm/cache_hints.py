@@ -28,8 +28,11 @@ def prompt_cache_enabled() -> bool:
     Honors the legacy ``ANTHROPIC_PROMPT_CACHE`` for backward compatibility and the
     provider-agnostic ``LLM_PROMPT_CACHE``; either set to a falsey value disables.
     """
+    # Use the SSOT bool parser (already imported) so the falsey set matches the rest
+    # of the codebase — the old inline check missed "none" (LLM_PROMPT_CACHE=none read
+    # as DISABLED everywhere else but NOT here). P4 finalization.
     for var in ("LLM_PROMPT_CACHE", "ANTHROPIC_PROMPT_CACHE"):
-        if os.getenv(var, "1").lower() in ("0", "false", "no", "off"):
+        if not _bool_env(var, True):
             return False
     return True
 

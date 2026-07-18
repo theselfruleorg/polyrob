@@ -47,34 +47,32 @@ def test_memory_flag_true_string():
     assert cfg.get("FORGETTING_ENABLED", False) is True
 
 
-def test_coerce_memory_flag_validator_off():
-    """Validator coerces 'off' string to False before field assignment."""
-    result = BotConfig._coerce_mem("off")
-    assert result is False
+# These formerly poked the private _coerce_mem classmethod directly. That per-field
+# validator was superseded (P0 finalization) by AgentConfig._coerce_bool_env_fields,
+# a model_validator(mode="before") that coerces EVERY bool field. Test the behavior
+# through construction (a falsey/truthy STRING lands on the field correctly) instead
+# of the now-removed implementation detail.
 
 
-def test_coerce_memory_flag_validator_none_str():
-    """Validator coerces 'none' string to False before field assignment."""
-    result = BotConfig._coerce_mem("none")
-    assert result is False
+def test_coerce_memory_flag_off_string():
+    assert BotConfig(COMPACTION_ENABLED="off").get("COMPACTION_ENABLED", True) is False
 
 
-def test_coerce_memory_flag_validator_false_str():
-    """Validator coerces 'false' string to False before field assignment."""
-    result = BotConfig._coerce_mem("false")
-    assert result is False
+def test_coerce_memory_flag_none_string():
+    assert BotConfig(SEMANTIC_RETRIEVAL_ENABLED="none").get("SEMANTIC_RETRIEVAL_ENABLED", True) is False
 
 
-def test_coerce_memory_flag_validator_true_str():
-    """Validator coerces 'true' string to True before field assignment."""
-    result = BotConfig._coerce_mem("true")
-    assert result is True
+def test_coerce_memory_flag_false_string():
+    assert BotConfig(REFLECTION_ENABLED="false").get("REFLECTION_ENABLED", True) is False
 
 
-def test_coerce_memory_flag_validator_bool_passthrough():
-    """Validator passes bool values through unchanged."""
-    assert BotConfig._coerce_mem(True) is True
-    assert BotConfig._coerce_mem(False) is False
+def test_coerce_memory_flag_true_string():
+    assert BotConfig(FORGETTING_ENABLED="true").get("FORGETTING_ENABLED", False) is True
+
+
+def test_coerce_memory_flag_bool_passthrough():
+    assert BotConfig(HIERARCHICAL_MEMORY_ENABLED=True).get("HIERARCHICAL_MEMORY_ENABLED", False) is True
+    assert BotConfig(HIERARCHICAL_MEMORY_ENABLED=False).get("HIERARCHICAL_MEMORY_ENABLED", True) is False
 
 
 def test_get_unknown_key_returns_default():

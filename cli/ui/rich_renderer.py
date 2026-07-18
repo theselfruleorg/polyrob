@@ -38,16 +38,18 @@ from cli.ui.events import (
     Info,
     IterationDone,
     LLMCall,
+    LLMStarted,
     RenderEvent,
     SessionDone,
     SessionStart,
     Step,
     ToolExec,
+    ToolStarted,
 )
 from cli.ui.renderer import Renderer
 from cli.ui.state import SessionState
 from cli.ui.streaming import ResponseBox
-from cli.ui.theme import no_color, style
+from cli.ui.theme import ICONS, no_color, style
 
 
 class RichRenderer(Renderer):
@@ -143,14 +145,43 @@ class RichRenderer(Renderer):
         if self.verbose:
             self._handle_trace_event(event)
             return
+        # 019 span pairing: when the `→ name(args)` line already printed at
+        # tool_started (matched by call_id), print ONLY the result line — and
+        # print it even if `_should_show_tool` now says no (e.g. a synchronous
+        # delegate_task flips `last_step_sub_agent` mid-flight): a printed `→`
+        # line must never be left unclosed. Unpaired completions (old feeds /
+        # RUN_EVENTS_ENABLED=off / replay) keep the legacy two-line form.
+        paired = self._consume_start_printed(event.call_id)
+        if not paired and not self._should_show_tool(event.action_name or event.tool_name):
+            return
+        if not paired:
+            self._console.print(blocks.tool_call_line_from_exec(event))
+        self._console.print(blocks.tool_result_line(event))
+
+    def _handle_tool_started(self, event: ToolStarted) -> None:
+        """Print the ``→ name(args)`` call line the moment the tool dispatches
+        (019 — a long tool is visible while it runs, not just after), and feed
+        the live activity line. Same gates as the completion line."""
+        if self._activity is not None and event.action_name:
+            self._activity.note_activity(f"{ICONS.arrow} {event.action_name}")
+        if self.verbose:
+            self._console.print(
+                f"  [tool] start {event.tool_name}/{event.action_name}",
+                style=style("meta"),
+            )
+            return
         if not self._should_show_tool(event.action_name or event.tool_name):
             return
-        # Emit the `→ name(args)` call line HERE (from the tool_execution event, which
-        # carries both parameters AND result) immediately before the `✓` result — the
-        # terminal Step event fires AFTER execution, so emitting the call line from it
-        # printed the pair inverted (✓ before →). See blocks.tool_call_line_from_exec.
-        self._console.print(blocks.tool_call_line_from_exec(event))
-        self._console.print(blocks.tool_result_line(event))
+        self._console.print(blocks.tool_call_line_from_started(event))
+        self._note_start_printed(event.call_id)
+
+    def _handle_llm_started(self, event: LLMStarted) -> None:
+        """Feed the live activity line ("thinking"); trace line under verbose."""
+        if self._activity is not None:
+            self._activity.note_activity("thinking")
+        if self.verbose:
+            model = event.model_name or event.provider or "llm"
+            self._console.print(f"  [llm] start {model}", style=style("meta"))
 
     def _handle_session_done(self, event: SessionDone) -> None:
         # Dialog layer: a failed session's error explains itself or it's noise.

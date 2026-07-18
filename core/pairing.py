@@ -1,14 +1,13 @@
 """Ingress access-control via owner-allowlist + DM pairing (polyrob Phase D3).
 
-Both reference agents gate ingress (Hermes ``TELEGRAM_ALLOWED_USERS`` +
-``hermes pairing approve``; OpenClaw gateway pairing) — POLYROB lacked it. This adds a
+Ingress is gated by an owner allowlist plus DM pairing, in a
 multi-tenant-shaped version:
 
 - the **owner** (local single-user OR the bound owner principal) is always allowed;
 - a **paired** user is allowed;
 - an **unknown** user is denied and issued a one-time pairing code, which the
-  operator approves out-of-band (``rob pair approve <code>`` / admin surface), at
-  which point the user becomes paired;
+  operator approves out-of-band (``polyrob owner pair approve <code>``; list codes
+  with ``polyrob owner pair pending``), at which point the user becomes paired;
 - an **anonymous** (empty user_id) request is denied with no code (unidentifiable).
 
 Gated ``POLYROB_REQUIRE_PAIRING`` (default OFF → ``evaluate_access`` allows everyone
@@ -169,7 +168,8 @@ def guard_inbound(
         return None
     try:
         cfg = getattr(container, "config", None) if container else None
-        data_dir = getattr(cfg, "data_dir", "data") or "data"
+        from core.runtime_paths import data_dir_or_home
+        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
         store = PairingStore(os.path.join(data_dir, "pairing.db"))
         from core.instance import resolve_owner_principal
         local = (

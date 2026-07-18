@@ -785,10 +785,16 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         project. This is the content guard that stops secret exfiltration (read) and
         secret tampering (write); it mirrors the coding tool's ``_confine`` guard so
         both file surfaces are symmetric. Raises ServiceError on a match.
+
+        Also denies protected identity files (owner-UX P1 T6):
+        ``preferences.toml``/``contract.md`` under an ``identity/`` segment are
+        only writable through the gated action/CLI/webview seams, never here.
         """
-        from agents.task.agent.core.secret_guard import is_credential_file
+        from core.security.secret_guard import is_credential_file, is_protected_config_path
         if is_credential_file(Path(normalized_path)):
             raise ServiceError(f"Refusing to access a credential/secret file: {display_path}")
+        if is_protected_config_path(Path(normalized_path)):
+            raise ServiceError(f"Refusing to access a protected config/identity file: {display_path}")
 
     def _normalize_path(self, file_path: str) -> str:
         """Normalize a file path to be within the workspace directory."""

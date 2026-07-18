@@ -81,8 +81,11 @@ def test_narrow_blocklist_wins_over_request():
 
 def test_leaf_excludes_delegation_actions():
     assert delegation_exclusions_for_child(LEAF) == DELEGATION_ACTION_NAMES
+    # owner-UX P2 T2: `preferences` rides the same exclusion set (a leaf must
+    # never change tenant config / propose contract rules) even though it is
+    # not a delegation verb — see the DELEGATION_ACTION_NAMES docstring.
     assert delegation_exclusions_for_child(LEAF) == frozenset(
-        {"subtask", "parallel_subtasks", "delegate_task"}
+        {"subtask", "parallel_subtasks", "delegate_task", "preferences"}
     )
 
 
@@ -168,5 +171,7 @@ async def test_build_child_controller_narrows_and_excludes(monkeypatch):
     assert child is not None
     # code_execution + cronjob stripped from tool_ids; browser/filesystem kept
     assert set(captured["tool_ids"]) == {"filesystem", "browser"}
-    # delegation actions excluded for the leaf child
-    assert set(captured["exclude_actions"]) == {"subtask", "parallel_subtasks", "delegate_task"}
+    # delegation actions (+ `preferences`, owner-UX P2 T2) excluded for the leaf child
+    assert set(captured["exclude_actions"]) == {
+        "subtask", "parallel_subtasks", "delegate_task", "preferences"
+    }

@@ -316,8 +316,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			# SystemPrompt accepts action_descriptions, max_actions_per_step, use_native_tools, model_name, provider, and mcp_servers
 			# Pass model_name and provider so SystemPrompt can inject model-specific instructions (e.g., for Grok)
 			# Pass mcp_servers so SystemPrompt can generate dynamic examples using actual server/tool names
-			prompt_instance = self.system_prompt_class(
-				self.action_descriptions,
+			_prompt_kwargs = dict(
 				max_actions_per_step=self.max_actions_per_step,
 				use_native_tools=use_native_tools,
 				model_name=self._model_name,
@@ -326,6 +325,20 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 				persona_block=self._persona_block,
 				tool_ids=self.tool_ids,
 				include_vision=include_vision,
+			)
+			# §3.3: an AUTONOMOUS session (goal/cron — pre-marked by
+			# run_task_to_outcome before construction) carries the communication
+			# contract. Only passed when true, so custom system_prompt_class
+			# implementations and interactive sessions stay byte-identical.
+			try:
+				from agents.task.goals.autonomy_marker import is_autonomous
+				if self.session_id and is_autonomous(self.session_id):
+					_prompt_kwargs["autonomous"] = True
+			except Exception:
+				pass
+			prompt_instance = self.system_prompt_class(
+				self.action_descriptions,
+				**_prompt_kwargs,
 			)
 
 			# SystemPrompt has get_system_message() method that returns a SystemMessage
@@ -469,14 +482,21 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		if config is None:
 			raise ValueError("config is required - no defaults, explicit configuration only")
 
+		# P1 finalization: from_config was doubly broken. (1) max_input_tokens/
+		# max_actions_per_step were passed explicitly AND via **config.to_dict()
+		# ("got multiple values for keyword argument"); (2) to_dict() carries keys
+		# __init__ no longer accepts (e.g. message_context). Filter the config dict
+		# to exactly __init__'s parameters — the single source, no duplicates, no
+		# unknown kwargs.
+		import inspect as _inspect
+		_valid = set(_inspect.signature(cls.__init__).parameters)
+		_cfg = {k: v for k, v in config.to_dict().items() if k in _valid}
 		instance = cls(
 			llm=llm,
 			task=task,
 			action_descriptions=action_descriptions,
 			system_prompt_class=system_prompt_class,
-			max_input_tokens=config.max_input_tokens,
-			max_actions_per_step=config.max_actions_per_step,
-			**config.to_dict()
+			**_cfg
 		)
 
 		# Override logger if provided (DI pattern)
@@ -706,6 +726,24 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		else:
 			self._runtime_identity_message = None
 			self._runtime_identity_tokens = 0
+
+	def set_environment_message(self, content: Optional[str]) -> None:
+		"""014-C1: pin the <environment> block (where the agent lives — host,
+		workspace path + persistence, posture axes, host executables) as a
+		foundation message right after runtime identity.
+
+		Stored as an ENVIRONMENT-origin control message and injected by
+		get_messages()/get_messages_for_llm(). Kept out of the system prompt so
+		the prompt stays cacheable; per-session-stable (set once at session
+		construction). Pass falsy content to clear (the inert default on a
+		plain multi-tenant server).
+		"""
+		if content and content.strip():
+			self._environment_message = make_control_message(content, MessageOrigin.ENVIRONMENT)
+			self._environment_tokens = self._count_message_tokens(self._environment_message)
+		else:
+			self._environment_message = None
+			self._environment_tokens = 0
 
 	def add_file_paths(self, file_paths: list[str]) -> None:
 		"""Add file paths message with properly escaped paths.

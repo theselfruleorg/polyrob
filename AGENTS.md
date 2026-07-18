@@ -46,7 +46,7 @@ POLYROB is a sophisticated enterprise-grade AI automation platform with advanced
 | **`docs/CONFIGURATION.md`** | Env-flag SSOT (default + meaning + code anchor) | Update when a flag/default changes; trust the code anchor over prose. ⚠️ Adding/renaming a flag row REQUIRES `python scripts/gen_flags_catalog.py` (regenerates `core/flags_catalog.py`; the contract test in `tests/unit/core/test_flags.py` fails otherwise). Runtime view: `polyrob doctor --flags` |
 | **`CHANGELOG.md`** | Dated, point-in-time change history | Append-only |
 | **`README.md`** | Public-facing feature/setup overview | Keep accurate; avoid pinning exact model names |
-| **`docs/guide/`** | User-facing guide (getting-started, cli, api, architecture, configuration, console, skills, self-hosting, deployment-postures, instances, migration) | Keep accurate; this is the published documentation |
+| **`docs/guide/`** | User-facing guide (getting-started, cli, api, architecture, configuration, console, skills, self-hosting, deployment-postures, instances, migration, **payments** = full wallet/x402/invoicing/subscriptions/8004/credits/trading reference) | Keep accurate; this is the published documentation |
 | **`docs/comparison.md`**, **`docs/examples.md`** | Public comparison + usage examples | Keep accurate; linked from README |
 | **`docs/SKILL_AUTHORING_STANDARD.md`** | Skill-authoring conventions | Update when skill format/safety rules change |
 
@@ -57,7 +57,7 @@ prose in this file. This file should describe the current architecture, not narr
 
 The application follows a modular architecture with clear separation of concerns:
 
-- **Core Framework** (`core/`): Dependency injection container, configuration management, component lifecycle, permission system, agent wallet, instance/identity (`core/instance.py`), and the shared autonomy runtime (`core/autonomy_runtime.py`)
+- **Core Framework** (`core/`): Dependency injection container, configuration management, component lifecycle, permission system, agent wallet, instance/identity (`core/instance.py`), the shared autonomy runtime (`core/autonomy_runtime.py`), and the cross-cutting config/policy surface (`core/config_policy/` — `AutonomyConfig`, the compute/autonomy posture ladders, `full_autonomy_enabled`/`_mode_capability_default`, the `_bool_env`/`_int_env` flag parsers). WS-1 (2026-07-16) relocated that cluster here from `agents/task/constants.py` to break the core↔`agents.task` import cycle; `agents/task/constants.py` re-exports every symbol for back-compat, but **new code imports from `core.config_policy`**. The layering ratchet (`tests/test_layering_ratchet.py`) forbids any `core/` import of `agents.task.constants` and only lets the remaining `core→agents.*` edges shrink. WS-2 added `core/tool_capabilities.py` — the ONE per-tool capability table (dimensions `money`/`high_impact`/`delegate_blocked`/`exec`/`readable_while_tainted`, plus the catalog permissions/risk tiers): `MONEY_TOOLS`, `DELEGATE_BLOCKED_TOOLS`, `HIGH_IMPACT_TOOL_IDS` and `VALID_TOOL_IDS` are all derivations, and `register_optional_tool` refuses an unclassified tool.
 - **Modules** (`modules/`): Database management, LLM integration (multi-provider), and memory management
 - **Agents** (`agents/`): The Task automation agent (the single front-door agent; chat routes through `TaskAgent.chat_once`) plus personality/prompt support
 - **Tools** (`tools/`): External integrations (browser automation, document processing, social media APIs, email, blockchain, MCP, code-exec, cron/goal tools)
@@ -139,9 +139,14 @@ constructor (use `Agent.from_params(**kwargs)` for the legacy kwarg form). The s
 `_create_llm_from_config` no longer inlines a per-call thread/fresh-loop hack — it delegates
 to `core/async_bridge.py::run_coroutine_sync` (P4), one persistent background loop reused for
 every sync-from-async call (kills thread churn + the httpx "loop closed" GC bug; live-verified
-via `polyrob run`). Still deferred (P4 tail): removing the wrapper entirely by building the LLM in an
-async `initialize()` rather than `__init__`; the benign `workspace_dir`/`get_workspace_dir`
-naming dual (both return the same in-memory value).
+via `polyrob run`). The P4 tail is CLOSED as won't-fix (F-3e adjudication, 2026-07-17): removing
+the wrapper by building the LLM in an async `initialize()` would move the LLM-dependent back half
+of the Agent constructor (MessageManager SSOT build, native-tools reconciliation, aux
+provisioning) behind an `await` — a high-risk lifecycle re-slice for purely cosmetic gain, since
+the bug the bridge exists for is already fixed and the async twins
+(`_create_llm_from_config_async`/`_provision_aux_llm_async`) already serve the async call sites.
+The old `get_workspace_dir()` async shim was deleted (the sync `workspace_dir` property is the
+one accessor).
 
 **Key Principles:**
 - Native tools preferred (OpenAI, Anthropic, Gemini support it)
@@ -315,7 +320,9 @@ naming dual (both return the same in-memory value).
   the workspace. Gated `CODING_TOOLS_ENABLED` (default OFF; **ON** under `POLYROB_LOCAL` via the safe group),
   and blocked for delegated leaf children (in `DELEGATE_BLOCKED_TOOLS`).
 - **Compute posture** (`AGENT_COMPUTE_POSTURE`, 0–3, default 0, computer-use parity) — a THIRD
-  orthogonal capability axis (beside `POLYROB_LOCAL` trust and `AUTONOMY_POSTURE` loops): how much
+  orthogonal capability axis (beside `POLYROB_LOCAL` trust and `AUTONOMY_POSTURE` loops; a FOURTH,
+  `AUTONOMY_MODE`, governs capability/approval defaults rather than host access — see "Autonomy &
+  continuous-learning loops" below): how much
   host/compute capability the agent has. Resolver + the single gate predicate live in
   `agents/task/constants.py` (`compute_posture()` frozen at import; `compute_posture_allows(ctx, N)`
   = posture≥N AND owner tenant AND not-leaf/sub-agent AND not a forged self-wake/delegation-result
@@ -340,7 +347,7 @@ naming dual (both return the same in-memory value).
     approval-gated (the Controller UNIONs `shell_run`+`self_env_*` into the gated set and defaults the
     provider to interactive at posture≥2), and emits a `self_modification` audit event.
     `SELF_ENV_ENABLED` defaults ON at posture≥2.
-  - **3 `host`** — Hermes-parity host access; requires `POLYROB_LOCAL`, single-tenant box only
+  - **3 `host`** — full host access; requires `POLYROB_LOCAL`, single-tenant box only
     (refused on network surfaces). Not yet wired as a distinct backend.
   Security: `AGENT_COMPUTE_POSTURE` + the approval flags are frozen at import; the env/config files
   that hold them are hard-denied to every agent-writable surface (`secret_guard`'s `is_credential_file`
@@ -370,7 +377,12 @@ naming dual (both return the same in-memory value).
   helpers are ported but **unwired** (no llama.cpp/xAI-Responses 400-recovery path in POLYROB).
 - **MCP exec rate limit** (WS-B3) — `tools/mcp/rate_limit.py::MCPExecRateLimiter` guards
   `MCPTool.execute_tool` per `(user_id, server)`; `MCP_EXEC_RATE_PER_WINDOW` (20) /
-  `MCP_EXEC_RATE_WINDOW_SEC` (60). MCP secrets are `${VAR}` placeholders in `config/mcp_config.json`
+  `MCP_EXEC_RATE_WINDOW_SEC` (60). Since F-1 (2026-07-17) it is a back-compat shim over the
+  canonical rate-limit primitives in `core/rate_limit.py` (`SlidingWindowLimiter`/`TokenBucket`/
+  `FixedWindowCounter`) — every in-process limiter (api middleware, user MCP admin, x402 public
+  endpoints, webview throttles, `RateLimitManager`) is a configured instance of those, ratcheted
+  by `tests/test_rate_limiter_ratchet.py`; the one documented exception is the telegram
+  RetryAfter penalty tracker. MCP secrets are `${VAR}` placeholders in `config/mcp_config.json`
   (`MCP_GATEWAY_TOKEN`, `ANYSITE_JWT`), resolved by `tools/mcp/config.py` (WS-A2).
 - **MCP resource subscriptions** (Item 7F) — `resources/subscribe`/`unsubscribe` are live:
   `MCPClient.subscribe_resource`/`unsubscribe_resource` (`tools/mcp/protocol.py`), incoming
@@ -411,9 +423,10 @@ naming dual (both return the same in-memory value).
 - **Least-privilege child toolset** (UP-05, 2026-06-16) — a delegated sub-agent gets a **dedicated
   child Controller** (not the shared parent one), built in `SubAgentManager._build_child_controller`.
   Its toolset is narrowed via two levers (since POLYROB registers tools two ways):
-  `narrow_child_tools` drops **blocked container tool_ids** (`DELEGATE_BLOCKED_TOOLS` =
-  `{code_execution, coding, cronjob, x402_pay, hyperliquid, polymarket}`, env-overridable via
-  `DELEGATE_BLOCKED_TOOLS`); and the **delegation
+  `narrow_child_tools` drops **blocked container tool_ids** (`DELEGATE_BLOCKED_TOOLS` —
+  derived from the per-tool capability table `core/tool_capabilities.py` as
+  `ids_with("delegate_blocked")`, 15 ids incl. exec/self-mod/money/receivables tools;
+  env-overridable via `DELEGATE_BLOCKED_TOOLS`); and the **delegation
   *actions*** (`subtask`/`parallel_subtasks`/`delegate_task` — NOT tool_ids; registered unconditionally
   in `_register_default_actions`) are suppressed on the leaf child via the Registry `exclude_actions`
   seam (`delegation_exclusions_for_child`). NOTE: `task` is the **TODO** tool, not delegation — never
@@ -540,6 +553,22 @@ mechanisms.**
   `AutonomyConfig.reflection_on_session_close`) are members of
   `_POSTURE_OWNER_VISIBLE_FLAGS` — the server is no longer continuity-dark when
   the operator asked for owner-visible autonomy.
+- **`AUTONOMY_MODE` — the fourth axis, capability/approval master switch** (proposal 013):
+  `supervised` (default, byte-identical) or `autonomous`, effective only on a genuinely
+  single-owner deployment (`POLYROB_LOCAL` + a bound owner principal — `full_autonomy_enabled()`;
+  otherwise it clamps back to `supervised` with a one-time WARN). `autonomous` moves the
+  *defaults* of a fixed capability-flag group ON (`TWITTER_ENABLED`/`MCP_ENABLED`/
+  `GROUP_CHAT_ENABLED`/`EMAIL_SURFACE_ENABLED`/`X402_INVOICE_ENABLED` receive-side/
+  `MESSAGE_AUTONOMOUS_ALLOWLISTED`/`CORRESPONDENT_ACCESS_ENABLED`/`CORRESPONDENT_REPLY_ENABLED`),
+  widens the autonomous goal/planner toolset (`AUTONOMOUS_MODE_TOOLS`), flips approvals to
+  allow+audit+notify (`auto_notify`, with self-modification verbs and payment-SPEND verbs always
+  staying on the durable `owner_queue` lane), replaces the outbound per-address ACL with a
+  policy+cap ladder (`OUTBOUND_POLICY=open` + `OUTBOUND_DAILY_SEND_CAP`), and raises
+  `AUTONOMY_POSTURE`'s own default to `full` so the loop axis needs no separate flip. It never
+  moves money-SPEND, host access (`AGENT_COMPUTE_POSTURE`), or secrets — those keep their own
+  gates under both modes; an explicit per-flag env always wins over the mode default.
+  `agents/task/constants.py::autonomy_mode`/`full_autonomy_enabled`/`_mode_capability_default`;
+  full flag table in `docs/CONFIGURATION.md`.
 
 **Terminal-native consolidation (2026-06-17, Fusion `opus4.8-4.8`-reviewed; plan
 `docs/plans/2026-06-17-terminal-native-consolidation.md`):** closes the "built but not wired" gap so
@@ -717,13 +746,44 @@ Invariants: tier = **authenticated sender** (never thread membership); the dispa
 block is **fail-CLOSED** once the model is on; the **capability gate**
 (`agents/task/agent/core/correspondent_gate.py`, registered fail-closed in `construction.py`)
 denies high-impact tools (money/comms/code-exec/delegation/browser) while a session is
-correspondent-tainted (taint set on inject, cleared on a genuine owner turn).
+correspondent-tainted (taint is lock-guarded + **source-tracked** — the orchestrator records
+each tainting `(surface, address)`; set on inject, cleared on a genuine owner turn). An
+opt-in scoped exemption (`CORRESPONDENT_REPLY_ENABLED`, default OFF) lets a tainted session
+`message`/`send_email` EXACTLY the tainting party — 1:1 only, rounds-capped per 24h,
+fail-closed — for autonomous multi-round exchanges.
 **Owner-by-email is OFF in v1** (forgeable `From:`) — all email senders are correspondent or
 denied. Auto-seed is approval-gated (`CORRESPONDENT_REQUIRE_APPROVAL`, default ON) + per-day
-capped; owner seeds manually via `polyrob owner invite`. **Email surface** (`surfaces/email/`,
+capped (NEW addresses only; re-seeds exempt) and runs **before** the send — a cap-refusal
+blocks the outbound rather than orphaning the reply; a new pending binding emits a
+`correspondent_pending` event and shows in `polyrob owner pending`. **Every** outbound path
+seeds: the generic guardrail lives in `core/surfaces/seed.py`
+and the proactive `message` tool seeds via `perform_message_send`.
+
+**Conversation continuity (2026-07-13):** the durable per-correspondent container is
+`core/surfaces/conversations.py::ConversationStore` (one row per
+`(tenant, surface, address)`, bounded message log, registered by `install_surface_bus` as
+`conversation_store`). Every send/reply is recorded; injected replies carry a prepended
+context block (inside the untrusted frame); the read-only `contact_history` action shows the
+per-address transcript or (address omitted) the who-replied listing. Email threading is
+real: `EmailTool.send_email_ex` mints/returns the Message-ID and sets
+`In-Reply-To`/`References` (from the conversation's `last_inbound_mid`); the surface binds
+each outbound Message-ID to its SENDING session via registry **thread-anchor rows**
+(`provenance='thread'`, state mirrors the base row, exempt from the cap), so multiple
+sessions can converse with one address. Address-only resolution routes same-tenant
+ambiguity to the most recent binding (`CORRESPONDENT_RESOLVE_LATEST`, default ON);
+cross-tenant ambiguity always denies. A reply to a DEAD session is not dropped: it
+**resumes** into a fresh session with the conversation context, re-pointing registry +
+store (`CONVERSATION_RESUME_ENABLED`, default ON; `correspondent_resumed` event). Delivery
+is wake-correct (ephemerals count as pending input), crash-safe (unconsumed ephemerals
+persist), bounded (`MAX_EPHEMERAL_MESSAGES`), and per-chat serialized (KeyedLock in the
+shared inbound handler). Idle bindings can expire via `CORRESPONDENT_TTL_DAYS` (default
+0 = never).
+
+**Email surface** (`surfaces/email/`,
 `EMAIL_SURFACE_ENABLED`): IMAP poll (Message-ID/surrogate dedup, marks `\Seen`,
 quoted-history truncation) inbound + buffered SMTP outbound, inheriting the base `Surface`
-engine; run via `polyrob email`. Admin: `polyrob owner {show,correspondents,approve,invite}`.
+engine; run via `polyrob email`. Admin: `polyrob owner {show,correspondents,approve,invite}`
+(`approve --all [<surface>]` bulk-approves pending correspondents).
 
 ### Payment & Billing (`modules/credits/`, `modules/x402/`)
 - **Credit System**: Pre-purchased credits, deducted per LLM call
@@ -736,29 +796,106 @@ engine; run via `polyrob email`. Admin: `polyrob owner {show,correspondents,appr
 - **Billing Failures**: Tracked in `billing_failures` table for admin reconciliation
 - **Treasury**: Configurable via `X402_PAYMENT_RECIPIENT` env var
 - See `modules/x402/README.md` for full x402 documentation
-- **Agent financial agency (money loop)** — gated
-  `X402_INVOICE_ENABLED` (default OFF): the agent creates *pending*
-  `x402_payment_requests` rows from inside a session (`modules/x402/invoicing.py`
-  — `metadata.kind=agent_invoice` + originating `session_id`; ceiling
-  `X402_INVOICE_MAX_USD`, per-tenant daily cap `X402_INVOICE_DAILY_MAX`) via the
-  `x402_invoice` tool (`x402_request` / `x402_invoices` / `accounting` —
-  `tools/x402/invoice_tool.py`; leaf-delegation-blocked, `x402_request` in the
-  recommended approval set). A settlement watcher on the autonomy-runtime ticker
-  seam (`modules/x402/settlement_watcher.py`) expires stale invoices and, on
-  settlement, re-enters the originating session via `deliver_self_wake`
-  (payment context in wake `metadata`). Settlement is an ATTESTED transition
-  (`polyrob owner settle <id>`), never inferred. The unified read-only ledger
-  (`modules/credits/unified_ledger.py`) joins usage_records costs +
-  `wallet_spend` events + x402 receipts (earned/pending/spent/net, tenant-scoped,
-  every leg fail-open). Agent finances stay separate from platform billing —
-  receivables are deliberately NOT written into the wallet PolicyGate spend
-  audit. First-class events: `payment_requested`/`payment_settled`/`payment_expired`.
+- **Agent financial agency (built-in ecommerce)** — the agent can quote, invoice, get
+  paid, meter, and account for itself. All new behavior is behind default-OFF flags;
+  a deployment that enables none of them is byte-identical to a plain server. Crypto is
+  the only rail today (Stripe/fiat is a designed-for, deferred extension); a no-payments
+  deploy degrades gracefully (invoice tool absent, not broken).
+  - **Two ledgers, never summed** (`modules/credits/unified_ledger.py::build_ledger`) —
+    agent finances stay separate from platform billing (`modules/credits`); the unified
+    ledger only *joins* the two, read-only, into distinct blocks. `ledger["treasury"]`
+    is the agent's own money (USDC): `income_usd`/`spend_usd`/`pending_usd`/
+    `pending_count`/`balance_usd`/`net_usd`/`available`, where `net_usd = income − spend`
+    and runtime/API cost never enters it. `ledger["runtime"]` is the owner's money
+    (compute cost): `spend_window_usd`/`spend_total_usd`/`calls_window`/`calls_total`/
+    `provider_balance_usd`/`available` — it has **no** `net` (there is nothing to net
+    compute cost against). The two blocks are never summed into one figure; the legacy
+    top-level `total_spend_usd`/`net_usd`/`earned_usd` fields are gone with **no**
+    deprecation alias (deliberate — a surviving alias would let a straggler consumer
+    keep silently reading the merge; deletion makes it fail loudly instead). Both
+    `balance_usd` fields are display-only and opt-in (`include_balances=True` —
+    `build_ledger` is also called from hot non-display paths, e.g. `core/recap.py`, so
+    the network-read balance probes must never fire by default); unknown is `None`,
+    never `$0.00`. Terminology is income/spend — "earned" is retired. There is no
+    autonomy budget gate: the former rate-ceiling (`AUTONOMY_BUDGET_USD` et al.) gated
+    the merged figure and could not protect a finite balance, so it was removed; every
+    wallet-spend gate (`WALLET_DAILY_CAP_USD`, venue caps, `PAYMENT_APPROVAL_MODE`,
+    `metering_gate`, correspondent-taint, x402 invoice caps) is unaffected and still
+    live. The credit-death sentinel (`core/credit_sentinel.py`) is the backstop: ONE
+    trip site in `agents/task/agent/core/error_recovery.py` covers interactive, cron,
+    and goal runs alike (`looks_like_credit_death`, gated to the LLM exception family).
+  - **Receivables (invoicing)** — gated `X402_INVOICE_ENABLED` (default OFF): the
+    `x402_invoice` tool (`x402_request`/`x402_invoices`/`accounting`,
+    `tools/x402/invoice_tool.py`; leaf-delegation-blocked) creates *pending*
+    `x402_payment_requests` rows (`modules/x402/invoicing.py`, `metadata.kind=
+    agent_invoice` + originating `session_id`; ceiling `X402_INVOICE_MAX_USD`,
+    per-tenant daily cap `X402_INVOICE_DAILY_MAX`). The counterparty is carried two
+    ways: a free-form `payer_contact` string (rendered "billed to") and a typed
+    `correspondent_ref {surface,address,thread_id}` (routing). Tenant scoping uses
+    `json_extract(metadata,'$.tenant_id')`, never `metadata LIKE`.
+  - **Invoice as image + delivery** — gated `INVOICE_CARD_ENABLED` (ON under
+    `POLYROB_LOCAL`): `modules/pfp/cards.py::render_invoice_card` composes a branded
+    PNG (Mindprint face + amount + purpose + QR + "billed to") in pure Pillow (never
+    Chromium), with a shipped OFL font under `assets/fonts/`; the QR payload
+    (`modules/x402/artifact.py`, `INVOICE_QR_STYLE`: `address` default | `eip681`)
+    prefers `eip681` when on-chain detection is on. Rendering is fail-open to
+    text-only. The outbound-media leg (`OutboundMessage.media` +
+    `SurfaceCapabilities.media_out`) delivers the card as a Telegram photo / email
+    attachment / `message(media_paths=…)` (workspace-confined, symlink-guarded).
+  - **Approval** — `PAYMENT_APPROVAL_MODE` (`approve` default | `auto`): `approve`
+    routes every outward payment request through the durable, remotely-approvable
+    `owner_queue` `ApprovalProvider` (`tools/controller/approval_queue.py` — reuses the
+    goal-board asks store; Telegram `tap-` `/approve` verbs; one-shot post-timeout
+    grant); `auto` auto-approves *within the caps* and notifies the owner after the
+    fact. Correspondent-tainted / forged / leaf turns can never reach a money verb.
+  - **Settlement** — no longer attestation-only. A pending invoice completes by owner
+    attestation (`polyrob owner settle <id>`), a payer-driven facilitator `POST
+    /api/x402/requests/{id}/pay`, OR — gated `X402_SETTLE_ONCHAIN_DETECT` (mainnet +
+    treasury) — **facilitator-free on-chain USDC detection**: the settlement watcher
+    (`modules/x402/settlement_watcher.py`, autonomy-runtime ticker) scans treasury
+    `Transfer` logs (`modules/x402/onchain_probe.py`, `settlement_scan` checkpoint),
+    exact-atomic oldest-first match, `transaction_hash` partial-unique-index +
+    `claim_for_settlement` CAS against double-settle, `payment_unmatched` owner notice
+    on no-match. Amount-jitter (`X402_INVOICE_AMOUNT_JITTER`, forced on with detection)
+    keeps same-amount invoices distinguishable, disclosed at full precision on every
+    payer-facing surface. On settlement the watcher re-enters the originating session
+    via `deliver_self_wake` (correspondent-linked → DATA rail); on expiry it escalates
+    to the session + a one-off owner notice. Events: `payment_requested`/`_settled`/
+    `_expired`/`_unmatched`.
+  - **Watchtower subscriptions** — gated `SUBSCRIPTIONS_ENABLED` (default OFF):
+    prepaid periods + renewal invoices driven from the same watcher tick
+    (`modules/x402/subscriptions.py` — atomic `apply_settlement` with a
+    `subscription_applied_settlements` PK ledger + typed `SettlementResult`, idempotent
+    and CancelledError-safe; partial-unique-index against duplicate renewals). A
+    `cron/runner.py` job gates on subscription status (`subscription_lapsed` $0 skip);
+    `polyrob owner sub list/cancel`. (Inert until a `create_subscription` caller is
+    wired.)
+  - **Metering → invoice bridge** — gated `USAGE_INVOICE_BRIDGE_ENABLED` (default OFF):
+    a tenant-scoped `usage_rollup` (`modules/credits/usage_rollup.py`) + `usage_summary`
+    read action drafts an invoice payload from measured `usage_records` cost — a
+    *suggestion* the agent must still fire through the approval-gated `x402_request`;
+    the bridge never mints a payment request itself.
+  - **Payment-backed reputation (ERC-8004)** — gated `EIP8004_PAYMENT_FEEDBACK`
+    (rides `EIP8004_ENABLED`, default OFF): on settlement of a correspondent-linked
+    invoice, the agent offers a `ProofOfPayment`-backed feedback *authorization* (never
+    auto-submits). `submit_feedback` verifies the proof against the settled invoice
+    (exists + `toAddress`==treasury + txHash-only replay guard + `agent_id` bound to the
+    EIP-712-signed `feedback_auth.agentId`). ERC-8004 is the trust layer, not a payment
+    rail; the `ReputationManager` is a local simulation, not yet on-chain.
+  - **Machine payer** — the x402 HTTP middleware (`modules/x402/middleware.py`) charges
+    the A2A / OpenAI-compat surfaces per *billed* route (exact `(method,path)` gating,
+    not prefix); the shared `build_x402_challenge` produces one challenge shape.
 
 ## Common Commands
 
 ### Development
 ```bash
-# Run the bot locally
+# Run the agent locally (terminal-native)
+polyrob run "your task"     # one-shot
+polyrob                     # chat REPL
+
+# Run the API server locally (FastAPI; this is what `python main.py` starts —
+# it does NOT run the terminal agent)
 python main.py
 
 # Run all tests
@@ -790,67 +927,49 @@ sqlite3 data/database/bot.db
 sqlite3 data/database/bot.db ".schema"
 ```
 
-### Browser/Virtual Display
+### Browser
 ```bash
-# Start Xvfb for headless browser operations
-./start_xvfb.sh
-
-# Monitor Xvfb
-./monitor_xvfb.sh
-
 # Install Playwright browsers
 python -m playwright install --with-deps chromium
 ```
+(The old Xvfb scripts are legacy — the headless prod shape doesn't use a virtual
+display; Playwright runs headless natively.)
 
 ### Deployment
 
-> **Current Rob #1 prod reality (2026-07-06, verified live):** the Hetzner VPS runs
-> `polyrob.service` (headless agent, tree `/opt/polyrob`, env `/etc/polyrob/polyrob.env`,
-> data `POLYROB_DATA_DIR=/var/lib/polyrob`) + `polyrob-webview.service` (standalone
-> monitoring console, loopback :5050 behind nginx TLS — deploy via
-> `scripts/deploy_webview.sh`). There is NO `polyrob-api.service`/`polyrob-webgate.service`
-> on that box; the commands below describe the classic api+webgate shape.
+> **Rob #1 prod shape (verified live):** the Hetzner VPS runs `polyrob.service`
+> (headless agent = `polyrob telegram`, tree `/opt/polyrob`, env
+> `/etc/polyrob/polyrob.env`, data `POLYROB_DATA_DIR=/var/lib/polyrob`),
+> `polyrob-webview.service` (monitoring console, loopback :5050 behind nginx TLS) and
+> `polyrob-email.service` (email surface). There is NO
+> `polyrob-api.service`/`polyrob-webgate.service` on that box — that api+webgate shape
+> is the OSS self-hosting posture (`docs/guide/self-hosting.md`), not prod.
 
-**PREFERRED: Selective file/directory updates (for most changes)**
 ```bash
-# Update specific directories (agents, modules, tools, api, webview, etc.)
-rsync -avz --delete -e "ssh -i ~/.ssh/your_key" ./agents/ root@YOUR_SERVER_IP:/opt/rob/agents/
-rsync -avz --delete -e "ssh -i ~/.ssh/your_key" ./modules/ root@YOUR_SERVER_IP:/opt/rob/modules/
-rsync -avz --delete -e "ssh -i ~/.ssh/your_key" ./tools/ root@YOUR_SERVER_IP:/opt/rob/tools/
-rsync -avz --delete -e "ssh -i ~/.ssh/your_key" ./api/ root@YOUR_SERVER_IP:/opt/rob/api/
+# On the VPS (preferred), from the maintenance clone:
+cd ~/rob_dev && bash scripts/deploy_prod.sh
 
-# Update webview
-rsync -avz --delete -e "ssh -i ~/.ssh/your_key" ./webview/ root@YOUR_SERVER_IP:/opt/rob/webview/
+# From a dev machine (HOST/KEY via ~/.polyrob/ops.env — no targets in the repo):
+bash scripts/deploy_from_local.sh
 
-# Restart services after changes
-ssh -i ~/.ssh/your_key root@YOUR_SERVER_IP "sudo systemctl restart polyrob-api.service polyrob-webgate.service"
-
-# Check service status
-ssh -i ~/.ssh/your_key root@YOUR_SERVER_IP "sudo systemctl status polyrob-api.service polyrob-webgate.service"
-
-# View logs
-ssh -i ~/.ssh/your_key root@YOUR_SERVER_IP "sudo journalctl -u polyrob-api.service -f"
+# Webview console only:
+bash scripts/deploy_webview.sh
 ```
 
-**Full deployment (only when redeploying entire app)**
-```bash
-# Deploy to production (single server, uses deploy_unified.sh)
-./deploy_unified.sh --autoconfirm
-
-# Clean deployment (when issues occur)
-./deploy_unified.sh --clean --autoconfirm
-
-# Component-only
-./deploy_unified.sh --component api --autoconfirm
-./deploy_unified.sh --component webview --autoconfirm
-```
+Both deploy scripts share one safety envelope: clean tree via `git archive` → tar backup
+of live code → rsync code dirs → DB migration (idempotent) → subprocess import-test
+BEFORE restart → restart → verify → auto-rollback on failure. See `DEPLOYMENT.md` for
+the full runbook.
 
 **IMPORTANT: What NOT to do**
-- ❌ NEVER rsync the entire project directory at once (`rsync -avz --delete . ubuntu@...:/opt/rob/`)
-- ❌ NEVER make direct edits on the server
-- ❌ NEVER skip testing on development before production
-- ❌ NEVER use nuclear clean on production without extreme caution
-- ❌ NEVER deploy without backing up production first
+- ❌ NEVER run `deploy_unified.sh` — retired (targeted the dead api+webgate shape; it
+  now exits 1). Legacy body: `deployment/legacy/deploy_unified.sh` (do not run).
+- ❌ NEVER single-file scp CODE onto prod (2026-07-01 ImportError outage) — deploy a
+  consistent tree via the scripts.
+- ❌ NEVER rsync the working tree (other sessions' uncommitted files) — the scripts use
+  `git archive HEAD` for exactly this reason.
+- ❌ NEVER make direct edits on the server.
+- ❌ NEVER deploy without the tar backup the scripts take for you.
 
 ## Environment Configuration
 
@@ -983,80 +1102,59 @@ When investigating issues in the codebase:
 ### Server Environments
 
 **Production Server (Hetzner Cloud)**
-- Provider: Hetzner Cloud (CPX31, 8 GB RAM, Helsinki `hel1`)
-- IP: YOUR_SERVER_IP
-- Hostname: YOUR_HOSTNAME
-- Domain: https://app.your-polyrob-host.example/ (apex + www 301-redirect to app)
-- Access: `ssh -i ~/.ssh/your_key root@YOUR_SERVER_IP` (`YOUR_OPS_EMAIL` ed25519 key)
-- Non-root user: `ubuntu` (sudo NOPASSWD, same key)
-- OS: Ubuntu 24.04 LTS
-- Directory: /opt/rob
-- Migrated from AWS EC2 eu-central-1 on 2026-05-17 (see MIGRATION_HETZNER.md)
+- Provider: Hetzner Cloud (CPX31, 8 GB RAM, Helsinki `hel1`), Ubuntu 24.04 LTS
+- Access: SSH key-only; targets/keys live in `~/.polyrob/ops.env` (gitignored), never in
+  the repo
+- Code: `/opt/polyrob` · Env: `/etc/polyrob/polyrob.env` · Data: `/var/lib/polyrob`
+- Units: `polyrob.service` (agent), `polyrob-webview.service` (console),
+  `polyrob-email.service` (email surface)
+- History: migrated from AWS EC2 on 2026-05-17
 
 ### Deployment Process
 
-The deployment script (`deploy_unified.sh`) handles:
-- Virtual environment setup with proper permissions
-- Requirements installation with automatic retry
-- Python import validation
-- SSL certificate setup (Let's Encrypt for production with self-signed fallback)
-- Automatic Telegram webhook configuration with SSL support
-- Service management (polyrob-api.service, polyrob-webgate.service)
-- Nginx configuration
-
-### SSL and Webhook Management
-
-**SSL Certificates:**
-- Production uses Let's Encrypt certificates with automatic renewal
-- Falls back to self-signed certificates if Let's Encrypt fails
-- Development uses self-signed certificates by default
-
-**Webhook Configuration:**
-- Automatically configured during deployment
-- SSL certificate uploaded to Telegram
-- Domain-based webhook URL configuration
-- Webhook status verification with pending_update_count monitoring
+`scripts/deploy_prod.sh` (on-box) / `scripts/deploy_from_local.sh` (remote-driven) — one
+safety envelope: `git archive` clean tree → tar backup → rsync code dirs → DB migration
+(idempotent) → subprocess import-test BEFORE restart → restart → verify (active +
+autonomy loops + telegram online) → auto-rollback from the backup on failure; stamps
+`/opt/polyrob/.deployed_sha`. `scripts/deploy_webview.sh` covers the console. Full
+runbook: `DEPLOYMENT.md`.
 
 ### Service Management
 ```bash
 # Check service status
-sudo systemctl status polyrob-api.service polyrob-webgate.service nginx
+sudo systemctl status polyrob.service polyrob-webview.service polyrob-email.service nginx
 
 # View logs
-sudo journalctl -u polyrob-api.service -f
-sudo journalctl -u polyrob-webgate.service -f
+sudo journalctl -u polyrob.service -f
 
-# Restart services
-sudo systemctl restart polyrob-api.service polyrob-webgate.service
+# Restart (the deploy scripts restart for you)
+sudo systemctl restart polyrob.service
 ```
 
 ### Deployment Best Practices
 
-1. **Always test on development before production**
-2. **Use rsync for selective file updates rather than full redeployment**
-3. **Backup production before major changes**
+1. **Test locally before deploying** (`pytest tests/` + the deploy's import-test is the
+   last line, not the first)
+2. **Deploy consistent trees via the scripts** — never single-file scp, never
+   working-tree rsync
+3. **Let the scripts back up and verify** — they tar the live code and auto-roll-back
 4. **Monitor logs after deployment**
-5. **Verify service status and webhook configuration**
+5. **Check `.deployed_sha` vs `git rev-parse HEAD`** to detect drift
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Permission Errors:**
-- The deploy script automatically fixes virtual environment permissions
-- If issues persist, run with `--nuclear-clean` (development only)
-
-**Import Failures:**
-- Check Python import test output from deployment
-- Verify all required files were deployed
-- Check virtual environment integrity
-
-**SSL Certificate Issues:**
-- Script automatically falls back to self-signed if Let's Encrypt fails
-- Ensure DNS points to correct IP for production
-- Script automatically attempts renewal for expired certificates
+**Import Failures (deploy aborts before restart):**
+- The deploy import-tests in a subprocess; on failure it restores the backup and exits —
+  the running service was never touched. Reproduce with the IMPORT_OK one-liner in
+  `DEPLOYMENT.md`.
 
 **Service Failures:**
-- Check logs: `sudo journalctl -u polyrob-api.service -f`
-- Verify Python path and imports
-- Check virtual environment activation
+- Check logs: `sudo journalctl -u polyrob.service -n 100`
+- Verify env file loads: `set -a && . /etc/polyrob/polyrob.env && set +a`
+- Check venv: `/opt/polyrob/venv/bin/python -c "import core"`
+
+**SSL Certificate Issues:**
+- `sudo certbot certificates` / `sudo certbot renew`, then
+  `sudo systemctl reload nginx`

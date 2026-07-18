@@ -140,7 +140,11 @@ async def get_deposit_address(
             user_id=user_id,
             deposit_address=deposit_address,
             chains=["ethereum", "sepolia"],
-            qr_code_url=f"https://chart.googleapis.com/chart?chs=200x200&cht=qr&chl={deposit_address}",
+            # Google Charts' `chart.googleapis.com` QR endpoint was discontinued
+            # (G-19) — that URL 404s. No replacement generator wired yet; leave
+            # the field None (kept on the response model for API compatibility)
+            # rather than emit a dead link.
+            qr_code_url=None,
             instructions=(
                 f"Send USDC, USDT, or ETH to this address on Ethereum mainnet or Sepolia testnet. "
                 f"Credits will be added automatically (1 credit = $0.01 USD). "

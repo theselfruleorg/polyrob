@@ -24,3 +24,18 @@ def test_get_catalog_skills_is_bounded():
     sm = SkillManager()
     catalog = sm.get_catalog_skills(max_skills=2)
     assert len(catalog) <= 2
+
+
+def test_polyrob_user_guide_visible_in_catalog_with_its_description():
+    """owner-UX P3 T2: the polyrob-user-guide builtin skill must actually be
+    reachable via the catalog the model sees, not just present as a rules.json
+    entry with a bodiless/orphaned SKILL.md."""
+    sm = SkillManager()
+    catalog = sm.get_catalog_skills()
+    ids = {s.skill_id for s in catalog}
+    assert "polyrob-user-guide" in ids
+
+    text = sm.format_skill_catalog(catalog)
+    assert 'id="polyrob-user-guide"' in text
+    # one-line description (frontmatter, agentskills.io source of truth) renders
+    assert "The map of what POLYROB is" in text

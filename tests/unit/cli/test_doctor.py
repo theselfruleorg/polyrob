@@ -113,10 +113,11 @@ def test_embedder_present_branch(monkeypatch):
     import types
 
     fake_spec = importlib.util.spec_from_loader("sentence_transformers", loader=None)
+    real_find_spec = importlib.util.find_spec
     monkeypatch.setattr(
         importlib.util,
         "find_spec",
-        lambda name: fake_spec if name == "sentence_transformers" else importlib.util.find_spec.__wrapped__(name),
+        lambda name: fake_spec if name == "sentence_transformers" else real_find_spec(name),
     )
 
     lines = doctor_report({})

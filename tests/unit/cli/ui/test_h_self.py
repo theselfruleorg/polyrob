@@ -110,8 +110,8 @@ def test_self_empty_docs_graceful(monkeypatch):
     ctx, buf = _plain_ctx()
     h_self(ctx)
     out = buf.getvalue()
-    assert "No SOUL/identity doc authored." in out
-    assert "No SELF/identity doc authored." in out
+    assert "no SOUL/identity doc authored" in out
+    assert "no SELF/identity doc authored" in out
 
 
 # ---------------------------------------------------------------------------
@@ -130,7 +130,7 @@ def test_self_soul_loader_raises_is_failopen(monkeypatch):
     h_self(ctx)
     out = buf.getvalue()
     # SOUL degrades to the empty placeholder; SELF still shows.
-    assert "No SOUL/identity doc authored." in out
+    assert "no SOUL/identity doc authored" in out
     assert "ok self" in out
 
 

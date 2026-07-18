@@ -4,8 +4,11 @@ Covers:
 - polyrob run --help shows --toolset option.
 - polyrob run --toolset research parses and resolves the toolset.
 - /toolset (no arg) lists all named toolsets.
-- /toolset <name> resolves and prints a specific toolset with guidance.
-- /toolset <unknown> prints the fallback default set.
+- /toolset <name> validates + persists a "session.toolset" preference (owner-UX
+  P2 T6 — the arg branch is a pref-setting SWITCH, not a read-only detail
+  view; see tests/unit/cli/test_persona_toolset_switch.py for the full
+  valid/invalid + honest-message contract).
+- /toolset <unknown> is rejected, listing the valid toolset names.
 """
 import pytest
 import unittest.mock as mock
@@ -80,10 +83,20 @@ def test_resolve_tool_list_tools_takes_precedence_over_toolset():
 # /toolset slash command handler
 # ---------------------------------------------------------------------------
 
-def _make_ctx(args=None):
-    """Build a minimal CommandContext for handler tests."""
+def _make_ctx(args=None, *, home_dir=None):
+    """Build a minimal CommandContext for handler tests.
+
+    ``home_dir`` (when given) wires ``ctx.container.config.data_dir`` so a
+    write-behavior test (the ``args`` branch persists a preference) never
+    touches the real ``data/`` tree — pass ``tmp_path`` for any test that
+    invokes the arg branch with a KNOWN toolset name (persists).
+    """
+    from types import SimpleNamespace
     from cli.ui.commands.registry import CommandContext
-    ctx = CommandContext(args=args or [])
+    container = None
+    if home_dir is not None:
+        container = SimpleNamespace(config=SimpleNamespace(data_dir=home_dir))
+    ctx = CommandContext(args=args or [], container=container)
     return ctx
 
 
@@ -113,8 +126,10 @@ def test_toolset_handler_no_args_lists_toolsets(capsys):
     assert "polyrob run --toolset" in combined.lower()
 
 
-def test_toolset_handler_with_name_shows_resolved_ids(capsys):
-    """_h_toolset(['research']) emits the research tool ids and guidance."""
+def test_toolset_handler_with_name_persists_and_shows_resolved_ids(tmp_path, capsys):
+    """_h_toolset(['research']) persists session.toolset and confirms with the
+    resolved ids + an honest next-session message (owner-UX P2 T6)."""
+    from core.prefs import load_preferences
     from cli.ui.commands.handlers import _h_toolset
 
     output_lines = []
@@ -122,7 +137,7 @@ def test_toolset_handler_with_name_shows_resolved_ids(capsys):
     def fake_emit(text, *, title="", style=""):
         output_lines.append(text)
 
-    ctx = _make_ctx(args=["research"])
+    ctx = _make_ctx(args=["research"], home_dir=tmp_path)
     ctx.emit = fake_emit  # type: ignore
 
     with mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
@@ -134,12 +149,16 @@ def test_toolset_handler_with_name_shows_resolved_ids(capsys):
     assert "perplexity" in combined
     assert "anysite" in combined
     assert "web_fetch" in combined  # research now uses the lightweight web reader, not browser
-    # Must show guidance (new sessions only — no live switching).
-    assert "new session" in combined.lower() or "polyrob run" in combined.lower()
+    # Must show guidance (next session — no live switching).
+    assert "next session" in combined.lower() or "polyrob run" in combined.lower()
+    assert load_preferences(tmp_path, "local")["session.toolset"] == "research"
 
 
-def test_toolset_handler_unknown_name_falls_back_to_default(capsys):
-    """_h_toolset(['no_such_set']) falls back to 'default' and says so."""
+def test_toolset_handler_unknown_name_rejected_lists_valid_names(tmp_path):
+    """_h_toolset(['no_such_set']) is REJECTED (no fallback, no persist) and
+    lists the valid toolset names."""
+    from core.prefs import load_preferences
+    from agents.task.tool_defaults import TOOLSETS
     from cli.ui.commands.handlers import _h_toolset
 
     output_lines = []
@@ -147,15 +166,17 @@ def test_toolset_handler_unknown_name_falls_back_to_default(capsys):
     def fake_emit(text, *, title="", style=""):
         output_lines.append(text)
 
-    ctx = _make_ctx(args=["no_such_set"])
+    ctx = _make_ctx(args=["no_such_set"], home_dir=tmp_path)
     ctx.emit = fake_emit  # type: ignore
 
     with mock.patch("core.bootstrap.cli_unavailable_tools", return_value=[]):
         _h_toolset(ctx)
 
     combined = "\n".join(output_lines)
-    # Should mention fallback.
-    assert "unknown" in combined.lower() or "default" in combined.lower()
+    assert "unknown" in combined.lower()
+    for name in TOOLSETS:
+        assert name in combined
+    assert "session.toolset" not in load_preferences(tmp_path, "local")
 
 
 def test_toolset_handler_registered_in_default_registry():

@@ -362,17 +362,27 @@ class ContextRetriever:
 
         # OPTIMIZATION: Smart finding selection by importance
         if phase_memory.key_findings:
+            n = len(phase_memory.key_findings)
+            # D5 FIX (2026-07-11): add_finding stamps every finding 1.0 and nothing
+            # recalculates below the prune trigger, so the importance sort (stable)
+            # kept insertion order and the top-N slice froze on the OLDEST findings
+            # for phases between the display cap and the prune cap. When importance
+            # carries no signal (all stored values identical), fall back to recency
+            # so the newest findings win the slice.
+            stored = phase_memory.finding_importance[:n]
+            importance_is_flat = len(set(stored)) <= 1
+
             # Calculate importance scores for all findings
             finding_scores = []
-            for i in range(len(phase_memory.key_findings)):
+            for i in range(n):
                 # Use existing importance or calculate it
-                if i < len(phase_memory.finding_importance):
-                    importance = phase_memory.finding_importance[i]
+                if i < len(stored) and not importance_is_flat:
+                    importance = stored[i]
                 else:
                     # Fallback: recency-based importance
-                    recency_score = (i + 1) / len(phase_memory.key_findings)
+                    recency_score = (i + 1) / n
                     importance = recency_score
-                
+
                 finding_scores.append((i, importance, phase_memory.key_findings[i]))
             
             # Sort by importance (descending)

@@ -24,12 +24,20 @@ from modules.llm.messages import (
     AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage,
     ChatGeneration, ChatResult
 )
-from pydantic import BaseModel, Field, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
-from modules.llm.deepseek_client import DeepSeekClient
-from modules.llm.gemini_client import GeminiClient
-from modules.llm.openai_client import OpenAIClient
-from modules.llm.anthropic_client import AnthropicClient
+# WS revalidation (2026-07-16): the four provider-client imports are TYPE_CHECKING-only.
+# They were the eager chain pulling the anthropic/openai/google.generativeai SDKs into
+# EVERY entry-point import (cli.polyrob, api.app) via agents.task.agent -> service ->
+# adapters — the client classes are used here only as __init__ annotations; the real
+# instances are constructed by llm_factory, which imports the client modules lazily.
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from modules.llm.anthropic_client import AnthropicClient
+    from modules.llm.deepseek_client import DeepSeekClient
+    from modules.llm.gemini_client import GeminiClient
+    from modules.llm.openai_client import OpenAIClient
 from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.model_registry import get_model_config
 
@@ -43,6 +51,16 @@ def think_scrubber_enabled() -> bool:
     return os.getenv("THINK_SCRUBBER_ENABLED", "1").lower() not in ("0", "false", "no", "off")
 
 
+def token_streaming_enabled() -> bool:
+    """019 P5 gate for TRUE per-token streaming. Default OFF.
+
+    When ON and the wrapped client implements ``astream_agent_response``,
+    ``LLMClientAdapter.astream`` yields real deltas instead of the legacy
+    single full-response chunk. OFF = byte-identical legacy behavior.
+    """
+    return os.getenv("LLM_TOKEN_STREAMING", "0").lower() in ("1", "true", "yes", "on")
+
+
 class BaseChatModel(BaseModel, ABC):
     """Abstract base class for chat models.
 
@@ -51,8 +69,7 @@ class BaseChatModel(BaseModel, ABC):
     """
     model_name: str = Field(default="unknown")
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @abstractmethod
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
@@ -323,6 +340,65 @@ class LLMClientAdapter(BaseChatModel):
                 
         return client_messages
     
+    def _build_generation_params(self, stop: Optional[List[str]], kwargs: dict) -> dict:
+        """Assemble per-call generation params (shared by _agenerate + _astream_true).
+
+        Prefers an explicit per-call value; otherwise falls back to the
+        configured default captured at construction (so the temperature/
+        max_tokens passed to create_chat_model is actually honored). Also
+        folds telemetry metadata (session/agent ids) into the params.
+        """
+        # Extract metadata for telemetry - look for session and agent information
+        metadata = {}
+        if 'metadata' in kwargs:
+            metadata.update(kwargs['metadata'])
+        if 'session_id' in kwargs:
+            metadata['session_id'] = kwargs['session_id']
+        elif 'run_id' in kwargs:
+            # Some adapters use run_id
+            metadata['session_id'] = kwargs['run_id']
+        if 'agent_id' in kwargs:
+            metadata['agent_id'] = kwargs['agent_id']
+
+        generation_params = {}
+        temperature = kwargs.get("temperature")
+        if temperature is None:
+            temperature = self._default_temperature
+        if temperature is not None:
+            generation_params["temperature"] = temperature
+
+        max_tokens = kwargs.get("max_tokens")
+        if max_tokens is None:
+            max_tokens = self._default_max_tokens
+        if max_tokens is not None:
+            generation_params["max_tokens"] = max_tokens
+
+        if stop:
+            generation_params["stop_sequences"] = stop
+
+        if metadata:
+            generation_params["metadata"] = metadata
+        return generation_params
+
+    @staticmethod
+    def _usage_metadata_from(usage_data: Optional[dict]) -> Optional[dict]:
+        """Map a client usage_data dict to the standard usage_metadata shape
+        (shared by _agenerate + _astream_true so accounting can't diverge)."""
+        if not usage_data:
+            return None
+        usage_metadata = {
+            'input_tokens': usage_data.get('prompt_tokens'),
+            'output_tokens': usage_data.get('completion_tokens'),
+            'total_tokens': usage_data.get('total_tokens'),
+        }
+        # Add cached tokens if present
+        if usage_data.get('cached_tokens'):
+            usage_metadata['cache_read_input_tokens'] = usage_data.get('cached_tokens')
+        # G3: cache-WRITE (creation) tokens, billed at a surcharge downstream
+        if usage_data.get('cache_creation_tokens'):
+            usage_metadata['cache_creation_input_tokens'] = usage_data.get('cache_creation_tokens')
+        return usage_metadata
+
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:
         """Generate a response asynchronously.
 
@@ -364,47 +440,7 @@ class LLMClientAdapter(BaseChatModel):
         client_messages = self._convert_to_client_messages(messages)
         self._logger.debug(f"Converted to {len(client_messages)} client messages")
 
-        # Extract metadata for telemetry - look for session and agent information
-        metadata = {}
-
-        # Check for metadata in kwargs
-        if 'metadata' in kwargs:
-            metadata.update(kwargs['metadata'])
-
-        # Check for session information in various places
-        if 'session_id' in kwargs:
-            metadata['session_id'] = kwargs['session_id']
-        elif 'run_id' in kwargs:
-            # Some adapters use run_id
-            metadata['session_id'] = kwargs['run_id']
-
-        # Check for agent information
-        if 'agent_id' in kwargs:
-            metadata['agent_id'] = kwargs['agent_id']
-
-        # Handle generation parameters. Prefer an explicit per-call value; otherwise
-        # fall back to the configured default captured at construction (so the
-        # temperature/max_tokens passed to create_chat_model is actually honored
-        # instead of being dropped and reverting to the client's 0.7 default).
-        generation_params = {}
-        temperature = kwargs.get("temperature")
-        if temperature is None:
-            temperature = self._default_temperature
-        if temperature is not None:
-            generation_params["temperature"] = temperature
-
-        max_tokens = kwargs.get("max_tokens")
-        if max_tokens is None:
-            max_tokens = self._default_max_tokens
-        if max_tokens is not None:
-            generation_params["max_tokens"] = max_tokens
-
-        if stop:
-            generation_params["stop_sequences"] = stop
-
-        # Add metadata to generation params so LLM client can access it
-        if metadata:
-            generation_params["metadata"] = metadata
+        generation_params = self._build_generation_params(stop, kwargs)
 
         # Check if tools are provided - with fallback to _pending_tools
         # CRITICAL FIX (Dec 2025): the adapter's internal routing may bypass our
@@ -461,19 +497,8 @@ class LLMClientAdapter(BaseChatModel):
                 # Create AIMessage with tool calls and usage data
                 # CRITICAL: Populate usage_metadata in standard format
                 # so extract_token_usage() can find it
-                usage_metadata = None
-                if usage_data:
-                    usage_metadata = {
-                        'input_tokens': usage_data.get('prompt_tokens'),
-                        'output_tokens': usage_data.get('completion_tokens'),
-                        'total_tokens': usage_data.get('total_tokens'),
-                    }
-                    # Add cached tokens if present
-                    if usage_data.get('cached_tokens'):
-                        usage_metadata['cache_read_input_tokens'] = usage_data.get('cached_tokens')
-                    # G3: cache-WRITE (creation) tokens, billed at a surcharge downstream
-                    if usage_data.get('cache_creation_tokens'):
-                        usage_metadata['cache_creation_input_tokens'] = usage_data.get('cache_creation_tokens')
+                usage_metadata = self._usage_metadata_from(usage_data)
+                if usage_metadata:
                     self._logger.debug(f"[NATIVE_TOOLS] Populating usage_metadata for token extraction: {usage_metadata}")
 
                 ai_message = AIMessage(content=self._scrub_content(content or ""), usage_metadata=usage_metadata)
@@ -515,6 +540,34 @@ class LLMClientAdapter(BaseChatModel):
             # Add raw response data for token extraction
             if raw_response:
                 generation.generation_info = {"raw": raw_response}
+
+                # Money-correctness fix (Task 5c fix pass 2, reviewer rec (a)):
+                # stamp the provider's own response id onto THIS per-call
+                # `ai_message` object (never the shared `self._client`) right
+                # here, synchronously, with no intervening await since the
+                # client call above returned. Under default-on parallel
+                # sub-agent delegation, multiple concurrent Agent.run() loops
+                # can share the SAME LLM client object (SubAgentManager.
+                # run_subtask inherits `parent_agent.llm` verbatim when a
+                # subtask has no own model), so `self._client.last_response`
+                # is a single mutable slot two concurrent completions race to
+                # overwrite -- reading it later (e.g. in billing) can pick up
+                # ANOTHER call's id. Stamping it onto the per-call response
+                # object closes that window: each concurrent caller gets its
+                # own AIMessage with its own id, immune to the shared slot
+                # being overwritten afterwards. Covers BOTH branches above
+                # (native tool-calling and the plain path) since they
+                # converge here before either `ai_message`/`generation` is
+                # returned. Absent on providers whose raw response carries no
+                # id (e.g. Gemini) -- `extract_stable_request_id` then falls
+                # back to the old shared-client read and finally to a fresh
+                # uuid, never a false dedup.
+                provider_response_id = (
+                    raw_response.get('id') if isinstance(raw_response, dict)
+                    else getattr(raw_response, 'id', None)
+                )
+                if isinstance(provider_response_id, str) and provider_response_id:
+                    ai_message._polyrob_provider_response_id = provider_response_id
 
             total_duration = time.time() - start_time
             self._logger.debug(f"_agenerate completed in {total_duration:.1f}s")
@@ -627,22 +680,185 @@ class LLMClientAdapter(BaseChatModel):
         return AIMessage(content="")
 
     async def astream(self, input, config=None, *, stop=None, **kwargs):
-        """Override astream to pass tools through kwargs to _agenerate.
+        """Stream a response, passing tools through kwargs.
 
-        For now, this falls back to ainvoke since our clients don't support
-        true streaming with tool calls. Future: implement proper streaming.
-        
+        Default (legacy, byte-identical): the full ainvoke() result wrapped as
+        a 1-item async iterator — "streaming" of one chunk.
+
+        019 P5 (`LLM_TOKEN_STREAMING`, default OFF): when the flag is ON and
+        the wrapped client implements ``astream_agent_response``, yields TRUE
+        per-token deltas via ``_astream_true``. A failure BEFORE the first
+        yielded chunk falls back to the legacy single-chunk form; after the
+        first chunk it propagates (the agent loop's retry machinery owns it —
+        a silent fallback would double the streamed text).
+
         CRITICAL FIX (Dec 2025): Also store tools in instance variable as fallback.
         """
         # CRITICAL FIX: Store tools in instance variable before calling ainvoke
         if 'tools' in kwargs and kwargs['tools']:
             self._pending_tools = kwargs['tools']
             self._logger.debug(f"[TOOLS_FIX] astream: Stored {len(kwargs['tools'])} tools in _pending_tools")
-        
-        # For now, just yield the full response as a single chunk
-        # True streaming with tool calls is complex and provider-specific
+
+        if token_streaming_enabled() and hasattr(self._client, 'astream_agent_response'):
+            yielded_any = False
+            try:
+                async for chunk in self._astream_true(input, stop=stop, **kwargs):
+                    yielded_any = True
+                    yield chunk
+                return
+            except Exception as e:
+                if yielded_any:
+                    raise
+                self._logger.warning(
+                    f"true token streaming failed before first chunk; "
+                    f"falling back to single-chunk: {type(e).__name__}: {e}"
+                )
+
+        # Legacy: yield the full response as a single chunk
         response = await self.ainvoke(input, config=config, stop=stop, **kwargs)
         yield response
+
+    async def _astream_true(self, input, *, stop=None, **kwargs):
+        """TRUE token streaming (019 P5): scrubbed text deltas, then ONE final
+        AIMessage carrying tool_calls / usage_metadata / provider-response-id.
+
+        Contract with the client's ``astream_agent_response``: it yields
+        ``{"type": "text", "text": str}`` deltas followed by exactly one
+        ``{"type": "final", "content", "tool_calls", "usage_data",
+        "response_id"}``. Consumers that concatenate chunk content reconstruct
+        exactly the scrubbed completion the non-streaming path would return —
+        the final chunk carries only the UN-streamed tail (or the whole content
+        when deltas were suppressed).
+
+        Reasoning scrub: deltas run through a per-call StreamingThinkScrubber
+        (same algorithm the whole-string scrub uses), so a ``<think>`` block
+        split across delta boundaries never leaks.
+
+        Brain-state guard (three layers): a native-tools completion usually
+        BEGINS with the brain-state JSON — streaming that would show raw JSON
+        fragments to the user. (1) The stream is held until the first
+        non-whitespace character: ``{`` OR a backtick (fenced ```json payloads)
+        suppresses live deltas for the whole call — the final chunk then
+        carries the full content, exact legacy single-chunk behavior. (2) Once
+        live, a rolling window watches for the brain-state marker
+        (``"current_state"`` — e.g. prose followed by a TRAILING brain block);
+        on sight the stream MUTES: no further live deltas, the remainder rides
+        the final chunk as one piece, where the downstream whole-chunk brain
+        scrub works. (3) hitl_manager's per-chunk scrub stays as backstop.
+        """
+        # Convert input to messages (mirrors ainvoke)
+        if isinstance(input, list):
+            messages = input
+        elif hasattr(input, 'to_messages'):
+            messages = input.to_messages()
+        else:
+            messages = [HumanMessage(content=str(input))]
+
+        client_messages = self._convert_to_client_messages(messages)
+        generation_params = self._build_generation_params(stop, kwargs)
+        tools = kwargs.get('tools')
+        if not tools and getattr(self, '_pending_tools', None):
+            tools = self._pending_tools
+            self._pending_tools = None
+
+        scrubber = None
+        if think_scrubber_enabled():
+            try:
+                from modules.llm.think_scrubber import StreamingThinkScrubber
+                scrubber = StreamingThinkScrubber()
+            except Exception:
+                scrubber = None
+
+        mode = "holding"  # -> "live" | "suppressed" | "muted"
+        held = ""
+        window = ""  # rolling tail of LIVE-emitted text for cross-delta marker detection
+        muted_parts: List[str] = []  # scrubbed text withheld after a live->muted flip
+        final_event = None
+        _BRAIN_MARKER = '"current_state"'
+
+        async for event in self._client.astream_agent_response(
+            messages=client_messages, tools=tools, **generation_params
+        ):
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") == "text":
+                piece = event.get("text") or ""
+                if scrubber is not None:
+                    try:
+                        piece = scrubber.feed(piece)
+                    except Exception:
+                        scrubber = None  # fail-open: stream raw from here on
+                        piece = event.get("text") or ""
+                if not piece:
+                    continue
+                if mode == "holding":
+                    held += piece
+                    stripped = held.lstrip()
+                    if not stripped:
+                        continue
+                    # '{' = brain-state JSON; '`' = fenced payload (```json …)
+                    if stripped[0] in "{`":
+                        mode = "suppressed"
+                    else:
+                        mode = "live"
+                        if _BRAIN_MARKER in held:
+                            mode = "muted"
+                            muted_parts.append(held)
+                        else:
+                            yield AIMessage(content=held)
+                            window = held[-32:]
+                        held = ""
+                elif mode == "live":
+                    if _BRAIN_MARKER in window + piece:
+                        # a trailing brain block began mid-stream — stop live
+                        # emission; the remainder rides the final chunk whole.
+                        mode = "muted"
+                        muted_parts.append(piece)
+                    else:
+                        yield AIMessage(content=piece)
+                        window = (window + piece)[-32:]
+                elif mode == "muted":
+                    muted_parts.append(piece)
+                # suppressed: swallow — the final chunk carries everything
+            elif event.get("type") == "final":
+                final_event = event
+
+        if final_event is None:
+            raise RuntimeError(
+                "streaming client ended without a final event "
+                f"({self._client.__class__.__name__}.astream_agent_response)"
+            )
+
+        tail = ""
+        if scrubber is not None:
+            try:
+                tail = scrubber.flush()
+            except Exception:
+                tail = ""
+        if mode == "live":
+            final_content = tail
+        elif mode == "muted":
+            # everything withheld since the flip + the scrubber tail, as ONE
+            # piece — consumers concatenating chunk content still reconstruct
+            # the full completion, and the downstream whole-chunk brain scrub
+            # sees the complete block.
+            final_content = "".join(muted_parts) + tail
+        else:
+            # holding (empty/whitespace-only stream) or suppressed: the final
+            # chunk carries the WHOLE scrubbed completion, legacy-equivalent.
+            final_content = self._scrub_content(final_event.get("content") or "")
+
+        final_message = AIMessage(
+            content=final_content,
+            usage_metadata=self._usage_metadata_from(final_event.get("usage_data")),
+        )
+        tool_calls = final_event.get("tool_calls")
+        if tool_calls:
+            final_message.tool_calls = tool_calls
+        response_id = final_event.get("response_id")
+        if isinstance(response_id, str) and response_id:
+            final_message._polyrob_provider_response_id = response_id
+        yield final_message
 
 
 class DeepSeekAdapter(LLMClientAdapter):
@@ -654,7 +870,7 @@ class DeepSeekAdapter(LLMClientAdapter):
     Docs: https://api-docs.deepseek.com/guides/function_calling
     """
 
-    def __init__(self, client: DeepSeekClient, **kwargs):
+    def __init__(self, client: "DeepSeekClient", **kwargs):
         """Initialize with a DeepSeek client.
 
         Args:
@@ -697,7 +913,7 @@ class GeminiAdapter(LLMClientAdapter):
     internally in GeminiClient._generate_with_tools(). No adapter-level conversion needed.
     """
 
-    def __init__(self, client: GeminiClient, **kwargs):
+    def __init__(self, client: "GeminiClient", **kwargs):
         """Initialize with a Gemini client.
 
         Args:
@@ -722,7 +938,7 @@ class DeepSeekAgentAdapter(DeepSeekAdapter):
     Instead, it implements manual JSON parsing to extract the required structure.
     """
     
-    def __init__(self, client: DeepSeekClient, output_schema_class: Any = None, **kwargs):
+    def __init__(self, client: "DeepSeekClient", output_schema_class: Any = None, **kwargs):
         """Initialize with a DeepSeek client and optional output schema.
         
         Args:
@@ -747,7 +963,7 @@ class GeminiAgentAdapter(GeminiAdapter):
     implementing manual JSON parsing when needed to extract the required structure.
     """
     
-    def __init__(self, client: GeminiClient, output_schema_class: Any = None, **kwargs):
+    def __init__(self, client: "GeminiClient", output_schema_class: Any = None, **kwargs):
         """Initialize with a Gemini client and optional output schema.
         
         Args:
@@ -768,7 +984,7 @@ class GeminiAgentAdapter(GeminiAdapter):
 class OpenAIAdapter(LLMClientAdapter):
     """Adapter for OpenAI client - provides consistent pattern across all providers."""
     
-    def __init__(self, client: OpenAIClient, **kwargs):
+    def __init__(self, client: "OpenAIClient", **kwargs):
         """Initialize with an OpenAI client.
         
         Args:
@@ -795,7 +1011,7 @@ class AnthropicAdapter(LLMClientAdapter):
         {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "..."}}
     """
     
-    def __init__(self, client: AnthropicClient, **kwargs):
+    def __init__(self, client: "AnthropicClient", **kwargs):
         """Initialize with an Anthropic client.
         
         Args:

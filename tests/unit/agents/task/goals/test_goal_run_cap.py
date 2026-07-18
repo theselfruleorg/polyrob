@@ -22,7 +22,7 @@ async def test_goal_run_capped_by_max_run_seconds(tmp_path, monkeypatch):
     async def _hang(*a, **k):
         await asyncio.sleep(100)
 
-    monkeypatch.setattr(disp_mod, "_run_task_as_session", _hang)
+    monkeypatch.setattr(disp_mod, "_run_task_to_outcome", _hang)
     monkeypatch.setattr(
         "agents.task.constants.AutonomyConfig.goal_max_run_seconds",
         staticmethod(lambda: 0.2),

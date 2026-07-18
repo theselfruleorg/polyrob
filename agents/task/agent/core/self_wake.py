@@ -35,19 +35,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional
 
-SELF_WAKE_KIND = "self_wake"
-DELEGATION_RESULT_KIND = "delegation_result"
-
-# SK-F10 (T11 followup): the kinds a producer uses to forge a non-user re-entry
-# into a session (self-wake W1, async-delegation-result UP-12). This module has
-# zero project-internal imports (stdlib only), which is exactly why it is the
-# shared home: the ingress producer (agents.task.agent.core.user_ingress), the
-# async-delegation producer (agents.task.agent.orchestrator), and the
-# security-gate consumer (tools.controller.action_registration) can all import
-# these constants without risking an import cycle. Previously duplicated as
-# independent literal tuples/strings that had to be hand-kept in sync — a single
-# miss on any side would silently de-gate the forged-turn check.
-FORGED_TURN_KINDS = (SELF_WAKE_KIND, DELEGATION_RESULT_KIND)
+# SK-F10: promoted to core.security.forged_turns (R-4, 2026-07-17) so the core
+# posture gate imports them downward instead of reaching up into agents.
+# Re-exported here for every existing agents-tier consumer.
+from core.security.forged_turns import (  # noqa: F401
+    DELEGATION_RESULT_KIND,
+    FORGED_TURN_KINDS,
+    SELF_WAKE_KIND,
+)
 
 
 @dataclass
@@ -185,6 +180,23 @@ class ReentryBudget:
 
 _BUDGET_LOCK = threading.Lock()
 _BUDGET_SINGLETON: Optional[ReentryBudget] = None
+
+
+def effective_self_wake_enabled(user_id, home_dir) -> bool:
+    """Tenant-effective self-wake switch: the ``SELF_WAKE_ENABLED`` env/posture
+    default AND-merged with the ``autonomy.self_wake`` pref — the pref can only
+    DISABLE the loop, never enable one the operator has off (018 P0.2; this key
+    was DEAD: settable/displayed but every consumer read the env directly).
+    No pref file present => byte-identical to
+    ``AutonomyConfig.self_wake_enabled()``. Fail-open to the env value."""
+    from agents.task.constants import AutonomyConfig
+    env_on = AutonomyConfig.self_wake_enabled()
+    try:
+        from core import prefs
+        return bool(prefs.resolve("autonomy.self_wake", user_id, home_dir,
+                                  env_value=env_on, default=env_on))
+    except Exception:
+        return env_on
 
 
 def get_reentry_budget() -> ReentryBudget:

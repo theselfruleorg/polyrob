@@ -31,6 +31,18 @@ ALLOWED_TARGETS = ("telegram", "email", "twitter")
 SILENT_MARKER = "[SILENT]"
 
 
+def effective_digest_channel(user_id: Optional[str], home_dir: Optional[str],
+                             *, default: str = "telegram") -> str:
+    """Owner's preferred digest delivery channel: pref (override, spec
+    ``digest.channel``) over ``default`` (no env backing this knob — it is a
+    pure preference). No pref file present => ``default`` unchanged (owner-UX
+    P1 T4), preserving ``cron/digest.py``'s legacy ``payload.get("deliver") or
+    "telegram"`` fallback."""
+    from core import prefs
+    return prefs.resolve("digest.channel", user_id, home_dir,
+                         env_value=None, default=default)
+
+
 def _allow_explicit_target() -> bool:
     """Whether an agent-supplied ``deliver_target`` (arbitrary address/chat) is honored.
 
@@ -174,15 +186,14 @@ async def _deliver_twitter(task_agent: Any, job: Any, final: str) -> bool:
 
 
 async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> bool:
-    # Telegram routing goes through the bot's message sink if one is registered on
-    # the container. Best-effort: absent a router, log and skip (fail-open).
+    # Recipient + sink resolution both live on the user-delivery rail (T6): the rail
+    # does its own sink lookup and records a durable owner_notice fallback when no
+    # live sink exists — strictly better than the old silent early-False. We resolve
+    # the chat id up front only because the proactive-send gate needs it.
     _, container = _config_and_container(task_agent)
-    sink = None
-    if container is not None and hasattr(container, "get_service"):
-        sink = container.get_service("telegram_sink") or container.get_service("message_router")
     chat_id = deliver_target or _owner_telegram(task_agent, job)
-    if sink is None or not chat_id:
-        logger.info("cron delivery: telegram sink/chat unavailable for job %s", getattr(job, "id", "?"))
+    if not chat_id:
+        logger.info("cron delivery: no telegram recipient for job %s", getattr(job, "id", "?"))
         return False
 
     # Gate proactive send by surface send-policy (WhatsApp 24h window etc.).
@@ -200,13 +211,18 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
         )
         return False
 
-    send = getattr(sink, "send_message", None)
-    if send is None:
-        return False
-    res = send(chat_id, final)
-    if hasattr(res, "__await__"):
-        res = await res
-    return bool(res)
+    # §3.2: the actual send rides the ONE user-delivery rail — content-hash
+    # dedup + per-tenant caps (proposal 006's duplicate-spam class) and the
+    # durable owner_notice fallback live there, shared with agent sends and
+    # framework notices. The cron layer keeps its own gates above.
+    from core.surfaces.user_delivery import deliver_user_message
+    outcome = await deliver_user_message(
+        container, str(getattr(job, "user_id", "") or ""), final,
+        source="cron", recipient_override=chat_id)
+    if outcome != "sent":
+        logger.info("cron delivery: rail outcome=%s for job %s",
+                    outcome, getattr(job, "id", "?"))
+    return outcome == "sent"
 
 
 def _owner_email(task_agent: Any, job: Any) -> Optional[str]:
@@ -256,22 +272,14 @@ def _configured_owner_telegram_id() -> Optional[str]:
 
 
 def _owner_telegram(task_agent: Any, job: Any) -> Optional[str]:
-    """Resolve the job owner's telegram chat id (tenant scope)."""
-    uid = getattr(job, "user_id", None)
-    # 1. explicit user-directory mapping (real multi-user store)
+    """Resolve the job owner's telegram chat id (tenant scope).
+
+    Delegates to the ONE canonical resolver on the user-delivery rail
+    (user_directory → digit-uid-IS-chat-id → owner principal) so cron and the
+    rail can never disagree about who "the owner" is (audit T6, 2026-07-16 —
+    previously a byte-similar copy of ``user_delivery._resolve_recipient``).
+    """
+    import core.surfaces.user_delivery as _ud
     container = getattr(task_agent, "container", None)
-    if container is not None and hasattr(container, "get_service"):
-        users = container.get_service("user_directory")
-        if users is not None and hasattr(users, "get_telegram_chat_id"):
-            try:
-                cid = users.get_telegram_chat_id(uid)
-                if cid:
-                    return str(cid)
-            except Exception:
-                pass
-    # 2. the user_id IS the telegram chat id (telegram-origin sessions).
-    if uid and str(uid).isdigit():
-        return str(uid)
-    # 3. headless autonomy run (non-numeric tenant): fall back to the single
-    #    configured owner id so proactive outreach actually reaches the owner.
-    return _configured_owner_telegram_id()
+    return _ud.resolve_telegram_recipient(
+        container, str(getattr(job, "user_id", "") or ""))

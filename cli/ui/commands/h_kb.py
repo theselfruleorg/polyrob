@@ -24,6 +24,8 @@ gate / bootstrap on their home modules.
 
 from __future__ import annotations
 
+from cli.ui import candy
+
 # The default collection mirrors ``cli/commands/kb.py`` (kb search / add default).
 _DEFAULT_COLLECTION = "default"
 
@@ -90,15 +92,15 @@ async def _do_list(ctx, *, collection, user_id: str) -> None:
         return
 
     if not sources:
-        scope = f" in collection {collection!r}" if collection else ""
-        ctx.emit(f"No sources in the knowledge base{scope}.", title="kb")
+        hint = f"collection {collection!r}" if collection else ""
+        ctx.emit(candy.empty("sources in the knowledge base", hint), title="kb")
         return
 
     header = f"KB sources ({len(sources)})"
     if collection:
         header += f" — collection {collection!r}"
     lines = [header + ":"]
-    lines.extend(f"  • {src}" for src in sources)
+    lines.extend(candy.bullet(src) for src in sources)
     ctx.emit("\n".join(lines), title="kb")
 
 
@@ -115,7 +117,7 @@ async def _do_search(ctx, *, query: str, user_id: str) -> None:
         return
 
     if not result:
-        ctx.emit(f"No results for {query!r}.", title="kb")
+        ctx.emit(candy.empty(f"results for {query!r}", yet=False), title="kb")
         return
 
     ctx.emit(f"Results for {query!r}:\n{result}", title="kb")

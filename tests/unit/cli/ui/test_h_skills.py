@@ -135,7 +135,7 @@ def test_query_no_match_is_graceful(monkeypatch):
     ctx, buf = _plain_ctx(args=["nonexistentquery"])
     _run(ctx)
     out = buf.getvalue()
-    assert "No skills match" in out
+    assert "no skills match" in out
     assert "nonexistentquery" in out
 
 
@@ -149,7 +149,7 @@ def test_empty_catalog_is_graceful(monkeypatch):
     _patch_manager(monkeypatch, manager)
     ctx, buf = _plain_ctx()
     _run(ctx)
-    assert "No skills available" in buf.getvalue()
+    assert "no skills available" in buf.getvalue()
 
 
 def test_manager_unavailable_is_graceful(monkeypatch):

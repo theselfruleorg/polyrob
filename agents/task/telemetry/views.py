@@ -648,8 +648,257 @@ class ToolExecutionTelemetryEvent(BaseTelemetryEvent):
 	result_truncated: bool = False  # Whether result was truncated
 	result_preview: Optional[str] = None  # First 200 chars of result
 	session_id: Optional[str] = None  # Explicit session ID
+	call_id: Optional[str] = None  # Span join key (019): pairs with tool_started
 	name: str = 'tool_execution'
-	
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class ToolStartedEvent(BaseTelemetryEvent):
+	"""Span-start event (019): a tool call has been DISPATCHED, not yet returned.
+
+	Emitted immediately before the action is awaited so surfaces can show the
+	in-flight tool instead of dead air. Pairs with the ``tool_execution``
+	completion event via ``call_id``.
+	"""
+	agent_id: str
+	step: int
+	tool_name: str
+	action_name: str
+	parameters: Dict[str, Any]
+	call_id: Optional[str] = None  # LLM tool-call id or synthesized span id
+	index: int = 0  # Position within the step's action batch
+	total_in_batch: int = 1
+	session_id: Optional[str] = None
+	name: str = 'tool_started'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class LLMStartedEvent(BaseTelemetryEvent):
+	"""Span-start event (019): an LLM call has begun (model is "thinking").
+
+	The completion side is the llm_usage record (which deliberately never
+	reaches the feed), so this start marker is the only live signal of LLM
+	latency surfaces get.
+	"""
+	agent_id: str
+	step: int
+	provider: str
+	model_name: str
+	attempt: int = 0
+	context_tokens_est: Optional[int] = None
+	session_id: Optional[str] = None
+	name: str = 'llm_started'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class AwaitingApprovalEvent(BaseTelemetryEvent):
+	"""Wait-state event (019): an action is BLOCKED on owner approval.
+
+	Emitted at the approval hook the moment the provider wait begins, so the
+	run doesn't just look stalled. Carries the action name + timeout, never
+	raw params.
+	"""
+	session_id: str
+	action_name: str
+	ask_id: Optional[str] = None
+	timeout_sec: Optional[float] = None
+	step: int = 0
+	agent_id: str = ''
+	name: str = 'awaiting_approval'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class ApprovalResolvedEvent(BaseTelemetryEvent):
+	"""Wait-state exit event (019): the approval wait ended.
+
+	``decision`` is one of approved | denied | timeout | error.
+	"""
+	session_id: str
+	action_name: str
+	decision: str
+	waited_sec: float = 0.0
+	ask_id: Optional[str] = None
+	agent_id: str = ''
+	name: str = 'approval_resolved'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class CompactionStartedEvent(BaseTelemetryEvent):
+	"""019 P1: context compaction began (mode = llm | emergency)."""
+	agent_id: str
+	step: int
+	mode: str
+	tokens_before: Optional[int] = None
+	session_id: Optional[str] = None
+	name: str = 'compaction_started'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class CompactionFinishedEvent(BaseTelemetryEvent):
+	"""019 P1: context compaction ended."""
+	agent_id: str
+	step: int
+	mode: str
+	tokens_before: Optional[int] = None
+	tokens_after: Optional[int] = None
+	duration_seconds: float = 0.0
+	success: bool = True
+	session_id: Optional[str] = None
+	name: str = 'compaction_finished'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class RetryWaitEvent(BaseTelemetryEvent):
+	"""019 P1: the step-error handler is sleeping before a retry.
+
+	``reason`` ∈ llm_error | parse_error | rate_limit | connection_error |
+	unknown_error.
+	"""
+	agent_id: str
+	step: int
+	reason: str
+	delay_sec: float
+	attempt: int = 0
+	provider: str = ''
+	session_id: Optional[str] = None
+	name: str = 'retry_wait'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class SubagentStartedEvent(BaseTelemetryEvent):
+	"""019 P1: a delegated sub-agent began — mirrored into the PARENT feed."""
+	agent_id: str  # parent agent id
+	child_agent_id: str
+	child_session_id: str = ''
+	goal_preview: str = ''
+	session_id: Optional[str] = None  # parent session
+	name: str = 'subagent_started'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class SubagentFinishedEvent(BaseTelemetryEvent):
+	"""019 P1: a delegated sub-agent finished — mirrored into the PARENT feed."""
+	agent_id: str  # parent agent id
+	child_agent_id: str
+	ok: bool = False
+	duration_seconds: float = 0.0
+	goal_preview: str = ''
+	session_id: Optional[str] = None  # parent session
+	name: str = 'subagent_finished'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class DelegationDispatchedEvent(BaseTelemetryEvent):
+	"""019 P1: a background (async) delegation detached."""
+	session_id: str
+	delegation_id: str
+	goal_preview: str = ''
+	agent_id: str = ''
+	name: str = 'delegation_dispatched'
+
+	def get_session_id(self) -> Optional[str]:
+		"""Get the session ID for this event"""
+		if self.session_id:
+			return self.session_id
+		elif self.agent_id and '_' in self.agent_id:
+			return self.agent_id.split('_', 1)[1]
+		return None
+
+
+@dataclass
+class DelegationCompletedEvent(BaseTelemetryEvent):
+	"""019 P1: a background delegation reached a terminal state.
+
+	``status`` ∈ completed | error | timeout | cancelled.
+	"""
+	session_id: str
+	delegation_id: str
+	status: str = ''
+	duration_seconds: float = 0.0
+	goal_preview: str = ''
+	agent_id: str = ''
+	name: str = 'delegation_completed'
+
 	def get_session_id(self) -> Optional[str]:
 		"""Get the session ID for this event"""
 		if self.session_id:

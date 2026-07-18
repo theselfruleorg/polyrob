@@ -75,11 +75,13 @@ def apply_update(
         _unwind()
         return ApplyResult(False, "install", exc, snap, True)
 
-    # 2. guarded migration (restores DBs byte-identical on its own failure)
+    # 2. guarded migration (restores DBs byte-identical on its own failure).
+    # Reuses the master snapshot — one snapshot per apply, and rollback selection
+    # always finds the FULL one (U2/U9).
     mres = migrate_guarded(
         migrate=runners.migrate, db_paths=ctx.db_paths,
         snapshots_root=ctx.snapshots_root, data_home=ctx.data_home,
-        from_version=from_version, to_version=to_version,
+        from_version=from_version, to_version=to_version, snapshot=snap,
     )
     if not mres.ok:
         _unwind()

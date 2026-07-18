@@ -87,7 +87,7 @@ def read_skill_resource_confined(skill_dir, rel_path: str, *, max_bytes: int = 2
     check), and oversize files. Returns ``(ok, content_or_error_message)``.
     """
     from pathlib import Path
-    from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+    from core.security.untrusted_wrap import wrap_untrusted
     try:
         base = Path(skill_dir).resolve()
         target = (base / rel_path).resolve()

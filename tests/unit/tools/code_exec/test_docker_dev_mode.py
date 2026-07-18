@@ -236,3 +236,89 @@ async def test_docker_dev_install_then_import(tmp_path, monkeypatch):
         assert "ok-imported" in imp.stdout, f"import failed: {imp.stderr[-2000:]}"
     finally:
         await b.teardown()
+
+
+# --- 014 B1: dev container defaults to a node-capable image -----------------------
+
+def _setup_argv(fake: "_RecordingDocker"):
+    runs = [a for a in fake.log if a[:2] == ["run", "-d"]]
+    assert runs, f"no persistent 'docker run -d' recorded; log={fake.log}"
+    return runs[0]
+
+
+@pytest.mark.asyncio
+async def test_dev_mode_defaults_to_node_capable_image(monkeypatch, tmp_path):
+    monkeypatch.delenv("CODE_EXEC_DOCKER_IMAGE", raising=False)
+    monkeypatch.delenv("CODE_EXEC_DEV_IMAGE", raising=False)
+    fake = _RecordingDocker()
+    _pin_workdir(monkeypatch, str(tmp_path))
+    b = DockerBackend(session_id="s-img", docker_runner=fake, dev_mode=True)
+    await b.setup()
+    assert "nikolaik/python-nodejs:python3.11-nodejs20" in _setup_argv(fake)
+
+
+@pytest.mark.asyncio
+async def test_explicit_image_env_wins_in_dev_mode(monkeypatch, tmp_path):
+    monkeypatch.setenv("CODE_EXEC_DOCKER_IMAGE", "myimg:pinned")
+    fake = _RecordingDocker()
+    _pin_workdir(monkeypatch, str(tmp_path))
+    b = DockerBackend(session_id="s-img2", docker_runner=fake, dev_mode=True)
+    await b.setup()
+    assert "myimg:pinned" in _setup_argv(fake)
+
+
+def test_non_dev_image_default_unchanged(monkeypatch):
+    monkeypatch.delenv("CODE_EXEC_DOCKER_IMAGE", raising=False)
+    monkeypatch.delenv("CODE_EXEC_DEV_IMAGE", raising=False)
+    assert DockerBackend(docker_runner=_RecordingDocker()).image == "python:3.12-slim"
+
+
+def test_dev_image_env_overrides_dev_default(monkeypatch):
+    monkeypatch.delenv("CODE_EXEC_DOCKER_IMAGE", raising=False)
+    monkeypatch.setenv("CODE_EXEC_DEV_IMAGE", "mydev:img")
+    b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.image == "mydev:img"
+
+
+# --- 014 B2: effective_setup_network — what a run/exec ACTUALLY experiences -------
+
+def test_effective_network_persistent_dev_auto_bridge(monkeypatch):
+    monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
+    b = DockerBackend(session_id="s-net", docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.effective_setup_network() == "bridge"
+
+
+def test_effective_network_explicit_none_still_wins(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_NETWORK", "none")
+    b = DockerBackend(session_id="s-net2", docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.effective_setup_network() == "none"
+
+
+def test_effective_network_ephemeral_dev_is_env_driven(monkeypatch):
+    # ephemeral (no session): per-request policy, NO auto-bridge — honest "none"
+    monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
+    b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.effective_setup_network() == "none"
+
+
+# --- 014 B3: dev-mode timeout ceiling matches the shell foreground contract -------
+# (pre-014 the backend re-clamp silently cut shell_run foreground commands to 30s:
+#  shell/tool.py clamps to 120, executor passes through, backend re-clamped to 30).
+
+def test_dev_mode_timeout_ceiling_120_when_unset(monkeypatch):
+    monkeypatch.delenv("CODE_EXEC_MAX_TIMEOUT_SEC", raising=False)
+    b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.max_timeout == 120.0
+    assert b._clamp_timeout(999) == 120.0
+
+
+def test_explicit_max_timeout_env_wins_in_dev_mode(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_MAX_TIMEOUT_SEC", "45")
+    b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.max_timeout == 45.0
+
+
+def test_non_dev_timeout_default_unchanged(monkeypatch):
+    monkeypatch.delenv("CODE_EXEC_MAX_TIMEOUT_SEC", raising=False)
+    b = DockerBackend(docker_runner=_RecordingDocker())
+    assert b.max_timeout == 30.0

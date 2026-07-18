@@ -110,6 +110,13 @@ from agents.task.logging_config import get_task_logger
 # Import centralized path management
 from agents.task.path import pm
 
+# G-1: rate limiter for the swallowed usage_tracker.record_llm_usage failure log
+from agents.task.agent.core.metering_failure_log import metering_failure_limiter
+
+# G-26 reachability fix (Task 5c): STABLE per-completion idempotency key for
+# usage_tracker.record_llm_usage's request_id dedup.
+from agents.task.agent.core.aux_metering import extract_stable_request_id
+
 
 
 
@@ -127,18 +134,31 @@ class NextActionInternalMixin:
 		``usage_metadata`` and raised NameError every time that branch streamed)."""
 		full_content = ""
 		fallback_usage_metadata = None
+		# Fix pass 2 (money-correctness): astream() yields the single already-
+		# stamped AIMessage from adapters.py._agenerate as its one chunk;
+		# propagate its per-call `_polyrob_provider_response_id` onto the
+		# rebuilt response so this fallback's billing gets the same stable,
+		# race-proof dedup key as the primary path instead of falling back to
+		# the shared, concurrency-racy `<client>.last_response` read.
+		stamped_provider_response_id = None
 
 		async def _run():
-			nonlocal full_content, fallback_usage_metadata
+			nonlocal full_content, fallback_usage_metadata, stamped_provider_response_id
 			async for chunk in self.llm.astream(current_messages):
 				if hasattr(chunk, 'content') and chunk.content:
 					full_content += chunk.content
 					await self.hitl_manager.stream_output(chunk.content)
 				if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
 					fallback_usage_metadata = chunk.usage_metadata
+				chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
+				if chunk_stamped_id:
+					stamped_provider_response_id = chunk_stamped_id
 
 		await asyncio.wait_for(_run(), timeout=timeout_seconds)
-		return AIMessage(content=full_content, usage_metadata=fallback_usage_metadata)
+		result = AIMessage(content=full_content, usage_metadata=fallback_usage_metadata)
+		if stamped_provider_response_id:
+			result._polyrob_provider_response_id = stamped_provider_response_id
+		return result
 
 	async def _bill_llm_response(self, response, llm_duration, provider=None,
 								 purpose="next_action"):
@@ -166,6 +186,12 @@ class NextActionInternalMixin:
 		output_tokens = token_usage.get('completion_tokens', 0) or 0
 		cached_tokens = token_usage.get('cached_tokens', 0) or 0
 		cache_creation_tokens = token_usage.get('cache_creation_tokens', 0) or 0
+		# G-26 reachability fix: extract the provider's own response id (when
+		# available) as the STABLE dedup key for this completion. Must run
+		# synchronously here, with no await between the LLM call that produced
+		# `response` and this point, so a concurrent call on a shared client
+		# can't overwrite the source before we read it.
+		request_id = extract_stable_request_id(getattr(self, 'llm', None), response, provider)
 
 		if self.usage_tracker and self.user_id:
 			try:
@@ -182,7 +208,8 @@ class NextActionInternalMixin:
 					duration_seconds=llm_duration,
 					component="agent",
 					purpose=purpose,
-					success=True
+					success=True,
+					request_id=request_id
 				)
 				self.logger.info(
 					f"✓ Step {getattr(getattr(self, 'state', None), 'n_steps', '?')}: "
@@ -196,7 +223,10 @@ class NextActionInternalMixin:
 				self.logger.warning("⚠️ Session suspended due to insufficient credits")
 				raise
 			except Exception as e:
-				self.logger.error(f"Failed to record LLM usage: {e}", exc_info=True)
+				# G-1: full traceback the first time per process, then rate-limited
+				# (was: a full traceback on EVERY LLM call, flooding the journal
+				# when metering was FK-blocked by an unseeded user_profiles row).
+				metering_failure_limiter.record(self.logger, e)
 		elif self.user_id:
 			# Fallback: telemetry only, NO billing (usage_tracker should always exist
 			# in production). G5: made visible so JSON/DB divergence is diagnosable.
@@ -220,6 +250,119 @@ class NextActionInternalMixin:
 				except Exception as e:
 					self.logger.debug(f"Failed to capture LLM telemetry: {e}")
 		return token_usage
+
+	@staticmethod
+	def _classify_llm_error(e: Exception) -> str:
+		"""Classify an LLM-call exception into a retry bucket (P7 finalization:
+		extracted from _get_next_action_internal's except handler). Pure — decides
+		parse / rate_limit / parameter_error / other from the message text."""
+		s = str(e).lower()
+		if "parse" in s or "json" in s or "validation" in s:
+			return "parse"
+		if "rate" in s or "limit" in s:
+			return "rate_limit"
+		if "llm_client" in s:
+			return "parameter_error"
+		return "other"
+
+	def _verify_vision_post_response(self, response) -> None:
+		"""Post-response vision diagnostics (P7 finalization: extracted verbatim from
+		_get_next_action_internal). Pure logging + reset of the expected-image counter —
+		reads `response` and `self._expected_image_count`, mutates only that counter, and
+		is a no-op when no images were expected. No load-bearing local leaks out."""
+		if hasattr(self, '_expected_image_count') and self._expected_image_count > 0:
+			# Extract response text
+			response_text = ""
+			if hasattr(response, 'content'):
+				response_text = str(response.content)
+			elif isinstance(response, dict) and 'parsed' in response:
+				parsed_obj = response['parsed']
+				if hasattr(parsed_obj, 'current_state'):
+					brain_state = parsed_obj.current_state
+					# Concatenate all brain state fields
+					response_text = " ".join([
+						str(getattr(brain_state, field, ""))
+						for field in ['page_summary', 'memory', 'evaluation_previous_goal', 'next_goal', 'reasoning']
+						if hasattr(brain_state, field)
+					])
+			else:
+				response_text = str(response)
+
+			# ENHANCED VISION VERIFICATION: Three-layer check
+			# Layer 0: NEGATIVE patterns (indicates failure - check first!)
+			negative_keywords = [
+				'cannot view', 'cannot analyze', 'cannot see', 'cannot directly',
+				'unfortunately i cannot', 'unable to view', 'unable to analyze', 'not able to',
+				'do not have access', 'cannot access', 'don\'t have access',
+				'need a url', 'need to navigate', 'current interface',
+				'through my interface', 'via browser', 'hosted online',
+				'would need', 'could you please', 'share a web link',
+				'provide a url', 'upload to', 'host the image'
+			]
+			has_negative = any(keyword in response_text.lower() for keyword in negative_keywords)
+
+			# Layer 1: Basic vision keywords (mentions images)
+			vision_mention_keywords = [
+				'image', 'picture', 'screenshot', 'visual', 'photo',
+				'see', 'shown', 'displayed', 'appears', 'looks like',
+				'in the image', 'from the screenshot', 'attached image'
+			]
+			mentions_vision = any(keyword in response_text.lower() for keyword in vision_mention_keywords)
+
+			# Layer 2: Actual visual description keywords (describes content)
+			visual_description_keywords = [
+				'shows', 'depicts', 'contains', 'features', 'displays',
+				'color', 'colours', 'shape', 'button', 'field', 'layout', 'text',
+				'positioned', 'aligned', 'centered', 'located', 'placed',
+				'red', 'blue', 'green', 'white', 'black', 'background', 'foreground',
+				'top', 'bottom', 'left', 'right', 'corner', 'center',
+				'label', 'heading', 'icon', 'menu', 'section', 'panel'
+			]
+			has_description = any(keyword in response_text.lower() for keyword in visual_description_keywords)
+
+			# Check negative patterns FIRST (overrides everything else)
+			if has_negative:
+				matched_negatives = [kw for kw in negative_keywords if kw in response_text.lower()]
+				self.logger.error(
+					f"❌ VISION FAILURE (NEGATIVE PATTERN): LLM explicitly states inability to view images. "
+					f"Matched patterns: {matched_negatives[:3]}\n"
+					f"Root causes:\n"
+					f"   1. Images did NOT reach the LLM (most likely - check upload timing)\n"
+					f"   2. Message format error (multimodal content malformed)\n"
+					f"   3. Session auto-started before files uploaded (WEBVIEW_AUTO_START_BUG)\n"
+					f"   Response preview: {response_text[:200]}..."
+				)
+			elif mentions_vision and has_description:
+				self.logger.info(
+					f"✅ VISION SUCCESS: LLM response contains actual visual analysis. "
+					f"Images ({self._expected_image_count}) were processed correctly."
+				)
+			elif mentions_vision and not has_description:
+				self.logger.warning(
+					f"⚠️ VISION PARTIAL: Response mentions images but lacks detailed visual description. "
+					f"Possible issues:\n"
+					f"   1. LLM received images but chose not to describe them\n"
+					f"   2. Images may be in wrong position relative to text (MESSAGE_ORDER_BUG)\n"
+					f"   3. LLM confused about image context/workflow\n"
+					f"   Response preview: {response_text[:200]}..."
+				)
+			elif not mentions_vision and has_description:
+				self.logger.info(
+					f"✅ VISION SUCCESS: Response contains visual description despite no explicit mention. "
+					f"Images ({self._expected_image_count}) likely processed."
+				)
+			else:
+				# FIXED: Don't log ERROR for non-visual tasks
+				# The LLM may correctly ignore screenshots when executing filesystem/tool tasks
+				# Only log at DEBUG level since this is expected behavior for non-visual tasks
+				self.logger.debug(
+					f"📷 VISION SKIPPED: LLM response has no visual content ({self._expected_image_count} image(s) sent). "
+					f"This is normal for non-visual tasks (filesystem ops, tool calls). "
+					f"Response preview: {response_text[:100] if response_text else '(empty)'}..."
+				)
+
+			# Clear the counter
+			self._expected_image_count = 0
 
 	async def _get_next_action_internal(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Internal implementation of get_next_action."""
@@ -423,6 +566,25 @@ Then emit your function calls."""
 									self._llm_call_in_progress = True
 									self._llm_call_start_time = llm_start
 
+									# 019 P0: llm_started span event — surfaces render
+									# "thinking" instead of dead air during LLM latency
+									# (the llm_usage completion record never reaches the
+									# feed). Fail-open; flag-gated.
+									try:
+										from core.config_policy import AutonomyConfig as _RunEvCfg
+										if _RunEvCfg.run_events_enabled():
+											from agents.task.telemetry.views import LLMStartedEvent
+											self.telemetry_manager.capture_event(LLMStartedEvent(
+												agent_id=self.agent_id,
+												step=self.state.n_steps,
+												provider=provider,
+												model_name=self.model_name,
+												attempt=retry_count,
+												context_tokens_est=request_info.get("estimated_input_tokens"),
+											))
+									except Exception:
+										pass
+
 									# CONSISTENT ADAPTER PATTERN:
 									# Our adapters (OpenAIAdapter, DeepSeekAdapter, etc.) accept tools via kwargs
 									# They extract tools from kwargs and call client.generate_agent_response()
@@ -436,8 +598,17 @@ Then emit your function calls."""
 										collected_tool_calls = []
 
 										usage_metadata = None  # Collect usage metadata from final chunk
+										# Fix pass 2 (money-correctness): astream() only ever yields ONE chunk
+										# (the full ainvoke() result wrapped as a 1-item async iterator -- see
+										# LLMClientAdapter.astream), already carrying the per-call
+										# `_polyrob_provider_response_id` stamped by adapters.py._agenerate.
+										# Propagate it onto the rebuilt `response` below so streaming-mode
+										# calls get the same stable, per-call billing dedup key as the
+										# non-streaming path instead of falling back to the shared,
+										# concurrency-racy `<client>.last_response` read.
+										stamped_provider_response_id = None
 										async def stream_with_timeout():
-											nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata
+											nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata, stamped_provider_response_id
 											async for chunk in self.llm.astream(current_messages, tools=tools):
 												# Extract content
 												if hasattr(chunk, 'content') and chunk.content:
@@ -451,6 +622,10 @@ Then emit your function calls."""
 												if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
 													collected_tool_calls.extend(chunk.tool_calls)
 
+												chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
+												if chunk_stamped_id:
+													stamped_provider_response_id = chunk_stamped_id
+
 											# Collect usage metadata (usually in final chunk)
 											if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
 												usage_metadata = chunk.usage_metadata
@@ -462,6 +637,8 @@ Then emit your function calls."""
 										response = AIMessage(content=full_content, usage_metadata=usage_metadata)
 										if collected_tool_calls:
 											response.tool_calls = collected_tool_calls
+										if stamped_provider_response_id:
+											response._polyrob_provider_response_id = stamped_provider_response_id
 									else:
 										# Regular batch call
 										self.logger.info(f"[DEBUG_TOOLS] Calling llm.ainvoke with tools={len(tools) if tools else 0}")
@@ -488,6 +665,14 @@ Then emit your function calls."""
 										f"(cached: {cached_tokens})"
 									)
 
+									# G-26 reachability fix: extract the provider's own response id
+									# (when available) as the STABLE dedup key for this completion.
+									# Runs synchronously right after the LLM call above returned, with
+									# no intervening await, so a concurrent call on a shared client
+									# can't overwrite the source before we read it.
+									_native_provider = getattr(self, 'llm_provider', 'unknown')
+									request_id = extract_stable_request_id(getattr(self, 'llm', None), response, _native_provider)
+
 									# Record LLM usage to ALL systems atomically (SINGLE WRITE PATH)
 									# This replaces separate calls to usage_meter + telemetry_manager
 									if self.usage_tracker and self.user_id:
@@ -497,7 +682,7 @@ Then emit your function calls."""
 												session_id=self.session_id,
 												agent_id=self.agent_id,
 												model=self.model_name,
-												provider=getattr(self, 'llm_provider', 'unknown'),
+												provider=_native_provider,
 												input_tokens=input_tokens,
 												output_tokens=output_tokens,
 												cached_tokens=cached_tokens,
@@ -505,7 +690,8 @@ Then emit your function calls."""
 												duration_seconds=llm_duration,
 												component="agent",
 												purpose="next_action",
-												success=True
+												success=True,
+												request_id=request_id
 											)
 
 											# Log what user was charged (transparent billing)
@@ -930,9 +1116,13 @@ Then emit your function calls."""
 							self.logger.debug("Using streaming mode for final fallback LLM call")
 							full_content = ""
 							fallback_usage_metadata = None  # Initialize for fallback path
+							# Fix pass 2 (money-correctness): propagate the per-call stamped
+							# provider response id through this rebuild too (see
+							# _stream_plain_fallback above for the full rationale).
+							stamped_provider_response_id = None
 
 							async def stream_with_timeout():
-								nonlocal full_content, fallback_usage_metadata
+								nonlocal full_content, fallback_usage_metadata, stamped_provider_response_id
 								async for chunk in self.llm.astream(current_messages):
 									if hasattr(chunk, 'content') and chunk.content:
 										full_content += chunk.content
@@ -940,9 +1130,14 @@ Then emit your function calls."""
 									# Collect usage metadata from final chunk if available
 									if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
 										fallback_usage_metadata = chunk.usage_metadata
+									chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
+									if chunk_stamped_id:
+										stamped_provider_response_id = chunk_stamped_id
 
 							await asyncio.wait_for(stream_with_timeout(), timeout=timeout_seconds)
 							response = AIMessage(content=full_content, usage_metadata=fallback_usage_metadata)
+							if stamped_provider_response_id:
+								response._polyrob_provider_response_id = stamped_provider_response_id
 						else:
 							response = await asyncio.wait_for(
 								self.llm.ainvoke(current_messages),
@@ -1178,105 +1373,8 @@ Then emit your function calls."""
 				parsed.action = parsed.action[: self.max_actions_per_step]
 				self._log_response(parsed)
 
-				# ============================================================================
-				# NEW: POST-RESPONSE VISION VERIFICATION
-				# ============================================================================
-				if hasattr(self, '_expected_image_count') and self._expected_image_count > 0:
-					# Extract response text
-					response_text = ""
-					if hasattr(response, 'content'):
-						response_text = str(response.content)
-					elif isinstance(response, dict) and 'parsed' in response:
-						parsed_obj = response['parsed']
-						if hasattr(parsed_obj, 'current_state'):
-							brain_state = parsed_obj.current_state
-							# Concatenate all brain state fields
-							response_text = " ".join([
-								str(getattr(brain_state, field, ""))
-								for field in ['page_summary', 'memory', 'evaluation_previous_goal', 'next_goal', 'reasoning']
-								if hasattr(brain_state, field)
-							])
-					else:
-						response_text = str(response)
-
-					# ENHANCED VISION VERIFICATION: Three-layer check
-					# Layer 0: NEGATIVE patterns (indicates failure - check first!)
-					negative_keywords = [
-						'cannot view', 'cannot analyze', 'cannot see', 'cannot directly',
-						'unfortunately i cannot', 'unable to view', 'unable to analyze', 'not able to',
-						'do not have access', 'cannot access', 'don\'t have access',
-						'need a url', 'need to navigate', 'current interface',
-						'through my interface', 'via browser', 'hosted online',
-						'would need', 'could you please', 'share a web link',
-						'provide a url', 'upload to', 'host the image'
-					]
-					has_negative = any(keyword in response_text.lower() for keyword in negative_keywords)
-
-					# Layer 1: Basic vision keywords (mentions images)
-					vision_mention_keywords = [
-						'image', 'picture', 'screenshot', 'visual', 'photo',
-						'see', 'shown', 'displayed', 'appears', 'looks like',
-						'in the image', 'from the screenshot', 'attached image'
-					]
-					mentions_vision = any(keyword in response_text.lower() for keyword in vision_mention_keywords)
-
-					# Layer 2: Actual visual description keywords (describes content)
-					visual_description_keywords = [
-						'shows', 'depicts', 'contains', 'features', 'displays',
-						'color', 'colours', 'shape', 'button', 'field', 'layout', 'text',
-						'positioned', 'aligned', 'centered', 'located', 'placed',
-						'red', 'blue', 'green', 'white', 'black', 'background', 'foreground',
-						'top', 'bottom', 'left', 'right', 'corner', 'center',
-						'label', 'heading', 'icon', 'menu', 'section', 'panel'
-					]
-					has_description = any(keyword in response_text.lower() for keyword in visual_description_keywords)
-
-					# Check negative patterns FIRST (overrides everything else)
-					if has_negative:
-						matched_negatives = [kw for kw in negative_keywords if kw in response_text.lower()]
-						self.logger.error(
-							f"❌ VISION FAILURE (NEGATIVE PATTERN): LLM explicitly states inability to view images. "
-							f"Matched patterns: {matched_negatives[:3]}\n"
-							f"Root causes:\n"
-							f"   1. Images did NOT reach the LLM (most likely - check upload timing)\n"
-							f"   2. Message format error (multimodal content malformed)\n"
-							f"   3. Session auto-started before files uploaded (WEBVIEW_AUTO_START_BUG)\n"
-							f"   Response preview: {response_text[:200]}..."
-						)
-					elif mentions_vision and has_description:
-						self.logger.info(
-							f"✅ VISION SUCCESS: LLM response contains actual visual analysis. "
-							f"Images ({self._expected_image_count}) were processed correctly."
-						)
-					elif mentions_vision and not has_description:
-						self.logger.warning(
-							f"⚠️ VISION PARTIAL: Response mentions images but lacks detailed visual description. "
-							f"Possible issues:\n"
-							f"   1. LLM received images but chose not to describe them\n"
-							f"   2. Images may be in wrong position relative to text (MESSAGE_ORDER_BUG)\n"
-							f"   3. LLM confused about image context/workflow\n"
-							f"   Response preview: {response_text[:200]}..."
-						)
-					elif not mentions_vision and has_description:
-						self.logger.info(
-							f"✅ VISION SUCCESS: Response contains visual description despite no explicit mention. "
-							f"Images ({self._expected_image_count}) likely processed."
-						)
-					else:
-						# FIXED: Don't log ERROR for non-visual tasks
-						# The LLM may correctly ignore screenshots when executing filesystem/tool tasks
-						# Only log at DEBUG level since this is expected behavior for non-visual tasks
-						self.logger.debug(
-							f"📷 VISION SKIPPED: LLM response has no visual content ({self._expected_image_count} image(s) sent). "
-							f"This is normal for non-visual tasks (filesystem ops, tool calls). "
-							f"Response preview: {response_text[:100] if response_text else '(empty)'}..."
-						)
-
-					# Clear the counter
-					self._expected_image_count = 0
-				# ============================================================================
-				# END POST-RESPONSE VISION VERIFICATION
-				# ============================================================================
+				# Post-response vision verification (extracted → _verify_vision_post_response, P7).
+				self._verify_vision_post_response(response)
 
 				# DEBUG: Log final parsed output
 
@@ -1287,15 +1385,7 @@ Then emit your function calls."""
 				last_error = e
 				elapsed_time = time.time() - start_time
 				
-				# FIXED: Better error type classification
-				if "parse" in str(e).lower() or "json" in str(e).lower() or "validation" in str(e).lower():
-					last_error_type = "parse"
-				elif "rate" in str(e).lower() or "limit" in str(e).lower():
-					last_error_type = "rate_limit"
-				elif "llm_client" in str(e).lower():
-					last_error_type = "parameter_error"
-				else:
-					last_error_type = "other"
+				last_error_type = self._classify_llm_error(e)
 				
 				self.logger.error(f"LLM request attempt {retry_count} failed after {elapsed_time:.2f}s: {str(e)}", exc_info=True)
 				

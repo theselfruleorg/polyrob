@@ -398,23 +398,9 @@ export class ChatManager {
             }
         });
 
-        // Also listen for 'streaming_output' (alternative event name)
-        this.socket.on('streaming_output', (data) => {
-            logger.debug('[Chat] Received streaming_output for session:', data.session_id);
-
-            if (data.session_id === this.sessionId) {
-                this.onStreamChunk(data);
-            }
-        });
-
-        // Also listen for 'stream_update' (emitted by SSE-to-WS bridge)
-        this.socket.on('stream_update', (data) => {
-            logger.debug('[Chat] Received stream_update for session:', data.session_id);
-
-            if (data.session_id === this.sessionId) {
-                this.onStreamChunk(data);
-            }
-        });
+        // NOTE: the server emits exactly ONE chat-stream event: 'stream_chunk'
+        // (webview/server.py). Dead alternate handlers were removed 2026-07-12
+        // (client/server event-registry drift, UI-surface review W7).
 
         logger.debug('[Chat] Socket listeners ready');
     }
@@ -2654,6 +2640,34 @@ export class ChatManager {
         }
     }
 
+    /**
+     * Default tool_ids for a new session's fallback config, sourced from the
+     * server's /api/task/capabilities `default_tools` (the tool-defaults SSOT in
+     * agents/task/tool_defaults.py) rather than hardcoded. Cached per instance.
+     * Falls back to a static list only if the endpoint is unreachable, so session
+     * creation never breaks. (R-6)
+     */
+    async getDefaultTools() {
+        if (this._defaultTools) return this._defaultTools;
+        try {
+            // Prefer capabilities already loaded by the config panel; else fetch.
+            let caps = window.configPanel && window.configPanel.capabilities;
+            if (!caps) {
+                const resp = await fetch('/api/task/capabilities');
+                if (resp.ok) caps = await resp.json();
+            }
+            if (caps && Array.isArray(caps.default_tools) && caps.default_tools.length) {
+                this._defaultTools = caps.default_tools;
+                return this._defaultTools;
+            }
+        } catch (error) {
+            logger.warn('[Chat] Could not fetch default_tools from /capabilities, using static fallback:', error);
+        }
+        // Last-resort static fallback — never block session creation.
+        this._defaultTools = ['browser', 'filesystem'];
+        return this._defaultTools;
+    }
+
     async createSessionAndSendMessage(message) {
         logger.debug('[Chat] Creating new session with message:', message);
 
@@ -2671,11 +2685,14 @@ export class ChatManager {
         const hasPendingFiles = this.fileManager && this.fileManager.hasPendingFiles();
         logger.debug('[Chat] Has pending files:', hasPendingFiles);
 
+        // Default tools come from the server capabilities SSOT (R-6), not a hardcode.
+        const defaultTools = await this.getDefaultTools();
+
         // Get configuration from config panel if available
         let sessionConfig = {
             task: message,  // Store task for display
             model: 'claude-sonnet-4.5',  // Use Claude by default (Anthropic works reliably)
-            tools: ['browser', 'filesystem'],
+            tools: defaultTools,
             max_steps: 50,
             temperature: 0.0,
             use_vision: true,
@@ -3109,8 +3126,6 @@ export class ChatManager {
         // Remove socket event listeners
         if (this.socket) {
             this.socket.off('stream_chunk');
-            this.socket.off('streaming_output');
-            this.socket.off('stream_update');
             this.socket.off('feed_update');
         }
 

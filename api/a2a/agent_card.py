@@ -8,7 +8,7 @@ Reference: https://a2a-protocol.org/latest/topics/agent-discovery/
 """
 
 from typing import List, Dict, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from fastapi import APIRouter, Request
 import os
 import logging
@@ -59,8 +59,7 @@ class SecurityScheme(BaseModel):
     in_: Optional[str] = Field(None, alias="in")  # For apiKey: "header", "query", "cookie"
     description: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class AgentCard(BaseModel):

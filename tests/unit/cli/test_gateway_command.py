@@ -10,7 +10,12 @@ def _patch_gateway_bootstrap(monkeypatch, data_dir="/tmp/polyrob-instanceX"):
     wiring hermetically. Returns the fake container. Callers set the surface flags they
     want AFTER calling this (env is already copied)."""
     monkeypatch.setattr(os, "environ", dict(os.environ))
-    for v in ("TELEGRAM_SURFACE_ENABLED", "WHATSAPP_SURFACE_ENABLED", "EMAIL_SURFACE_ENABLED"):
+    for v in ("TELEGRAM_SURFACE_ENABLED", "WHATSAPP_SURFACE_ENABLED", "EMAIL_SURFACE_ENABLED",
+              "DISCORD_SURFACE_ENABLED", "SLACK_SURFACE_ENABLED", "SIGNAL_SURFACE_ENABLED",
+              "X_SURFACE_ENABLED",
+              "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SIGNAL_ACCOUNT",
+              "TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
+              "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET"):
         monkeypatch.delenv(v, raising=False)
 
     fake_container = MagicMock()
@@ -132,3 +137,84 @@ def test_gateway_builds_telegram_harness_with_container_data_dir(monkeypatch):
 
     CliRunner().invoke(gw_mod.gateway, [])
     assert captured.get("data_dir") == "/tmp/polyrob-instanceX"
+
+
+# ---------------------------------------------------------------------------
+# 3.1 / H2 (2026-07-14 review): the gateway launches Discord/Slack/Signal/X
+# when their flags are on — previously it silently ignored them, so an
+# enabled-but-unlaunched surface gave the operator NO signal at all.
+# ---------------------------------------------------------------------------
+
+# (surface name, flag, creds to set, harness patch target)
+_CONNECTORS = [
+    ("discord", "DISCORD_SURFACE_ENABLED",
+     {"DISCORD_BOT_TOKEN": "d-tok"},
+     "surfaces.discord.harness.build_discord_harness"),
+    ("slack", "SLACK_SURFACE_ENABLED",
+     {"SLACK_BOT_TOKEN": "xoxb-1", "SLACK_APP_TOKEN": "xapp-1"},
+     "surfaces.slack.harness.build_slack_harness"),
+    ("signal", "SIGNAL_SURFACE_ENABLED",
+     {"SIGNAL_ACCOUNT": "+15550001111"},
+     "surfaces.signal.harness.build_signal_harness"),
+    ("x", "X_SURFACE_ENABLED",
+     {"TWITTER_API_KEY": "k", "TWITTER_API_SECRET_KEY": "s",
+      "TWITTER_ACCESS_TOKEN": "t", "TWITTER_ACCESS_TOKEN_SECRET": "ts"},
+     "surfaces.x.harness.build_x_harness"),
+]
+
+
+@pytest.mark.parametrize("name,flag,creds,target", _CONNECTORS)
+def test_gateway_builds_connector_harness_when_enabled(monkeypatch, name, flag, creds, target):
+    """Flag on + creds present → the gateway builds the harness with the container data_dir."""
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv(flag, "true")
+    for k, v in creds.items():
+        monkeypatch.setenv(k, v)
+
+    captured = {}
+
+    def _fake_harness(container, task_agent, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after capture")  # gateway try/except swallows -> skips
+
+    monkeypatch.setattr(target, _fake_harness)
+
+    CliRunner().invoke(gw_mod.gateway, [])
+    assert captured.get("data_dir") == "/tmp/polyrob-instanceX", (
+        f"{name}: harness not built (or built without the container data_dir)")
+
+
+@pytest.mark.parametrize("name,flag,creds,target", _CONNECTORS)
+def test_gateway_warns_and_skips_connector_without_creds(monkeypatch, name, flag, creds, target):
+    """Flag on but creds missing → loud WARN + skip; the harness must NOT be built."""
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv(flag, "true")
+    # creds deliberately absent (cleared by _patch_gateway_bootstrap)
+
+    def _fail(*a, **k):
+        raise AssertionError(f"build_{name}_harness must NOT be called without creds")
+
+    monkeypatch.setattr(target, _fail)
+
+    res = CliRunner().invoke(gw_mod.gateway, [])
+    assert f"skipping {name}" in res.output.lower()
+
+
+def test_gateway_no_surfaces_message_lists_all_flags(monkeypatch):
+    """The 'no surfaces enabled' guidance names every launchable surface flag."""
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    res = CliRunner().invoke(gw_mod.gateway, [])
+    for flag in ("TELEGRAM_SURFACE_ENABLED", "WHATSAPP_SURFACE_ENABLED",
+                 "EMAIL_SURFACE_ENABLED", "DISCORD_SURFACE_ENABLED",
+                 "SLACK_SURFACE_ENABLED", "SIGNAL_SURFACE_ENABLED",
+                 "X_SURFACE_ENABLED"):
+        assert flag in res.output

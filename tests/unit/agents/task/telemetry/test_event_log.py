@@ -49,7 +49,8 @@ def test_aggregate_counts_and_spend(tmp_path):
     agg = log.aggregate()
     assert agg["counts_by_kind"]["cron_run"] == 2
     assert agg["counts_by_kind"]["wallet_spend"] == 2
-    assert abs(agg["total_spend_usd"] - 5.5) < 1e-9
+    assert abs(agg["wallet_spend_usd"] - 5.5) < 1e-9
+    assert "total_spend_usd" not in agg
 
 
 def test_record_is_fail_open_on_bad_db(tmp_path):
@@ -78,3 +79,14 @@ def test_query_limit_and_desc_order(tmp_path):
     rows = log.query(limit=2)
     # Most recent first.
     assert [r["attrs"].get("_none", r["ts"]) for r in rows] == [4.0, 3.0]
+
+
+def test_get_event_log_honors_env_path_override(tmp_path, monkeypatch):
+    """TELEMETRY_EVENT_LOG_PATH redirects the default singleton — the seam the
+    test suite uses to keep durable telemetry OUT of the developer's data home
+    (and the §3.2 delivery-rail memory isolated per test)."""
+    from agents.task.telemetry.event_log import get_event_log
+    p = str(tmp_path / "redirected.db")
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", p)
+    log = get_event_log()
+    assert log.db_path == p

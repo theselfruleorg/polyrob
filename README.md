@@ -73,7 +73,7 @@ One agent core, many front doors:
 - **Web dashboard** — a real-time Socket.IO console: watch the agent work, browse its workspace, preview files and browser screenshots, inspect memory and the goal board.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
-- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), and WhatsApp.
+- **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, and X (Twitter) DMs.
 
 ## 🧠 Multi-provider intelligence
 
@@ -215,7 +215,7 @@ snapshot → guarded migrate → verify → **auto-rollback** on failure).
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
 | MCP client | STDIO / SSE / HTTP / Streamable HTTP, live resource subscriptions |
-| Chat surfaces | Telegram, email, WhatsApp — one agent core, many channels |
+| Chat surfaces | Telegram, email, WhatsApp, Discord, Slack, Signal, X DMs — one agent core, many channels |
 
 ---
 
@@ -224,6 +224,7 @@ snapshot → guarded migrate → verify → **auto-rollback** on failure).
 Multi-provider LLM (**OpenAI · Anthropic · Google Gemini · DeepSeek · OpenRouter · NVIDIA NIM**) ·
 **Playwright** browser · **MCP** (STDIO/SSE/HTTP/Streamable) · **AnySite** (200+ sites) ·
 **Perplexity** search · **Twitter/X** · **Gmail / IMAP-SMTP** · **Telegram** · **WhatsApp** ·
+**Discord** · **Slack** · **Signal** ·
 voice transcription (**faster-whisper**) · **A2A** · OpenAI-compatible `/v1` · **agentskills.io**
 skills · **sqlite-vec** + **sentence-transformers** local RAG.
 
@@ -295,6 +296,11 @@ mid-session with `/model <provider> <model>` (or `<provider>/<model>`). Configur
 **[docs/guide/configuration.md](docs/guide/configuration.md)** · full environment-flag reference
 (SSOT) → **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
+Everything crypto — the agent wallet, paying for resources (x402), getting paid
+(invoicing, branded QR cards, on-chain settlement), watchtower subscriptions, ERC-8004
+reputation, credits, and the trading tools — is documented end-to-end (all OFF by
+default) in **[docs/guide/payments.md](docs/guide/payments.md)**.
+
 ---
 
 ## Installation options
@@ -340,7 +346,7 @@ polyrob/
 ├── core/      # DI, config, permissions, instance/identity, autonomy runtime
 ├── modules/   # LLM, Memory, Database, Auth, Credits
 ├── tools/     # Browser, MCP, Email, Twitter, code-exec
-├── surfaces/  # Chat-surface adapters (Telegram, Email)
+├── surfaces/  # Chat-surface adapters (Telegram, Email, WhatsApp, Discord, Slack, Signal, X)
 ├── cron/      # Durable scheduled runs + goal board
 └── webview/   # Optional single-user web dashboard
 ```

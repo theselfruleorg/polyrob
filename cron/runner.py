@@ -29,7 +29,8 @@ def default_cron_tools() -> list:
         from agents.task.goals.dispatcher import default_goal_tools
         return default_goal_tools()
     except Exception:
-        return ["filesystem", "task"]
+        from agents.task.constants import BASE_DEFAULT_TOOLS
+        return list(BASE_DEFAULT_TOOLS)
 
 
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
@@ -46,7 +47,7 @@ def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     except Exception:
         pass
 
-from agents.task.runtime.run_as_session import run_task_as_session as _run_task_as_session
+from agents.task.runtime.run_as_session import run_task_to_outcome as _run_task_to_outcome
 from cron.jobs import CronJob
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ class CronTicker:
 
     async def run_forever(self, stop_event: Optional[asyncio.Event] = None) -> None:
         from core.tickers import IntervalTicker
-        from agents.task.constants import (
+        from core.config_policy import (
             ticker_idle_backoff_enabled,
             ticker_idle_backoff_max_multiplier,
         )
@@ -109,16 +110,53 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         # $0 no-op, not a job failure) so a persistent hiccup can't spin.
         if payload.get("digest"):
             try:
-                from agents.task.constants import AutonomyConfig
-                if not AutonomyConfig.owner_digest_enabled():
+                from cron.digest import digest_enabled_for, run_digest
+                # owner-UX P1 T4: user_id + data_dir are already in scope right
+                # here (per-job tenant, this runner's own data_dir), so the
+                # digest.enabled pref can tighten/override OWNER_DIGEST_ENABLED
+                # per-tenant without any new plumbing.
+                if not digest_enabled_for(job.user_id, data_dir):
                     _cron_ev(job, "skipped", "digest_disabled")
                     return True
-                from cron.digest import run_digest
                 ok = await run_digest(task_agent, job)
                 _cron_ev(job, "done" if ok else "skipped", "digest")
             except Exception:
                 logger.warning("cron job %s: digest tick failed", job.id, exc_info=True)
             return True
+        # G-35 owner kill-switch: AutonomyConfig.autonomy_halted() (AUTONOMY_HALT env
+        # or a halt-file, togglable without a restart) is honored by goal dispatch
+        # (dispatcher.py) but was never referenced here — a paid cron tick kept
+        # firing straight through a halt. Checked FIRST, before any of the paid-work
+        # gates below. The digest branch above stays exempt: it is $0 by
+        # construction and is the owner's OWN report (an owner who halted autonomy
+        # still wants their digest, not silence about why nothing else ran).
+        from core.config_policy import AutonomyConfig
+        if AutonomyConfig.autonomy_halted():
+            logger.warning("cron job %s: AUTONOMY_HALT active — $0 skip, agent not invoked", job.id)
+            _cron_ev(job, "skipped", "halted")
+            return True
+        # Task 14 (Phase 3 R5): a watchtower cron job carrying
+        # payload.subscription_id $0-skips once its subscription lapses.
+        # Decision: suspended/canceled -> skip (subscription_permits_work
+        # returns False only for a RESOLVED non-active/grace status — a
+        # missing/dangling id is permissive, never gating); active/grace ->
+        # run (grace keeps delivering while a renewal is chased — the whole
+        # point of a grace period). Gated SUBSCRIPTIONS_ENABLED so a job
+        # without the feature on never even queries the subscriptions table
+        # (byte-identical to today). Fail-open: a lookup error runs the tick
+        # rather than silently starving a paying customer's job.
+        sub_id = payload.get("subscription_id")
+        if sub_id:
+            try:
+                from modules.x402 import subscriptions as subs
+                if subs.subscriptions_enabled() and not await subs.subscription_permits_work(sub_id):
+                    logger.info("cron job %s: subscription %s lapsed — $0 skip, "
+                               "agent not invoked", job.id, sub_id)
+                    _cron_ev(job, "skipped", "subscription_lapsed")
+                    return True
+            except Exception:
+                logger.warning("cron job %s: subscription gate check failed — "
+                              "running tick", job.id, exc_info=True)
         if not payload.get("wake_agent", True):
             logger.info("cron job %s: wake_agent=False — $0 tick, agent not invoked", job.id)
             _cron_ev(job, "skipped", "wake_agent_false")
@@ -139,6 +177,17 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 return True
         except Exception:
             logger.warning("cron job %s: wake gate error — running tick", job.id, exc_info=True)
+        # §6.3 provider-credit sentinel: an LLM-invoking tick while credits are
+        # dead is a guaranteed paid failure — skip as a $0 tick until the latch
+        # auto-releases. Digest/wake_agent=false ticks already returned above.
+        try:
+            from core.credit_sentinel import credit_sentinel_active
+            if credit_sentinel_active():
+                logger.info("cron job %s: provider-credit sentinel active — $0 skip", job.id)
+                _cron_ev(job, "skipped", "credit_sentinel")
+                return True
+        except Exception:
+            pass
         ok = False
         try:
             ok = await _execute(job, payload)
@@ -156,6 +205,17 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         session_id = None
         _t0 = time.time()
         _cron_ev(job, "started")
+        # 019 P2: owner notice at run START (posture-gated default; the one
+        # delivery rail dedups/caps). Fail-open.
+        try:
+            from agents.task.constants import AutonomyConfig as _StartCfg
+            if _StartCfg.autonomy_start_notice():
+                from core.self_evolution import push_owner_message
+                await push_owner_message(
+                    getattr(task_agent, "container", None),
+                    f"▶ cron run started: {(job.task or '')[:120]} ({job.id[:8]})")
+        except Exception:
+            logger.debug("cron start notice failed for %s", job.id, exc_info=True)
         from core.runtime_config import resolve_runtime_config
         provider = payload.get("provider") or resolve_runtime_config(None, None)[0]
         # Fill the provider's default model from the registry when the job doesn't pin
@@ -178,7 +238,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "cron": True,
         }
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
 
             # Legacy branch (CRON_RUN_LOOP=OFF): create-only, return bool(session_info).
             # Kept exactly as-is — run_task_as_session does NOT apply here.
@@ -187,20 +247,27 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 return bool(session_info)
 
             # W3 LIVE-BUG FIX: route through the shared helper so create_session AND
-            # run_session are both called and refusals are normalised to (sid, None).
-            session_id, final = await _run_task_as_session(
+            # run_session are both called. §2: consume the RunOutcome envelope —
+            # the done() ledger text, never a re-extracted message-history string.
+            run = await _run_task_to_outcome(
                 task_agent, user_id=job.user_id, request=request, autonomous=True
             )
+            session_id = run.session_id
 
             # Back-half: cron-specific log messages + early returns.
             if session_id is None:
                 logger.error("cron job %s: create_session returned no id", job.id)
                 return False
-            if final is None:
+            if run.refusal:
                 # run_task_as_session already collapsed refusal/empty → None; we emit the
                 # original log so operators see one clear refusal line (no double-logging:
                 # run_task_as_session is intentionally silent on refusals).
                 logger.warning("cron job %s: run did not complete (refusal or empty)", job.id)
+                # Task 10: the sentinel trip moved to error_recovery.py (the
+                # universal LLM-error path) — a credit-death refusal is already
+                # tripped upstream, inside the real Agent step loop, before this
+                # status string is ever formed. This site now only CHECKS the
+                # latch (see credit_sentinel_active() above).
                 try:
                     from modules.memory.episodic import finalize_episode
                     await finalize_episode(
@@ -213,23 +280,25 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 _cron_ev(job, "failed", "refusal_or_empty", duration_s=round(time.time() - _t0, 3))
                 return False
 
+            final = run.result_text()
+
             # Episodic write happens BEFORE out-of-band delivery (Task 7): delivery's
             # surfaced-mark is a plain UPDATE keyed on session_id, so the row must
             # already exist or the mark is a silent no-op. Order matters here.
             try:
-                from modules.memory.episodic import finalize_episode, collect_provenance
-                orchestrator = task_agent.get_orchestrator(session_id)
-                prov = await collect_provenance(orchestrator)
+                from modules.memory.episodic import finalize_episode
+                # Provenance was collected into the envelope while the
+                # orchestrator was resident (run_task_to_outcome).
                 await finalize_episode(
                     session_id=session_id, user_id=job.user_id, kind="cron",
                     task=job.task, outcome="done",
-                    summary=str(final)[:2000] if final is not None else None,
-                    spend_usd=prov["spend_usd"], steps=prov["steps"],
-                    artifacts=prov["artifacts"],
+                    summary=final[:2000] if final else None,
+                    spend_usd=run.spend_usd, steps=run.steps,
+                    artifacts=run.artifacts,
                     meta={"source": "cron", "job_id": job.id},
                 )
                 _cron_ev(job, "done", duration_s=round(time.time() - _t0, 3),
-                         spend_usd=prov.get("spend_usd"), steps=prov.get("steps"))
+                         spend_usd=run.spend_usd, steps=run.steps)
             except Exception:
                 logger.warning("cron episodic write failed", exc_info=True)
 

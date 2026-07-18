@@ -54,7 +54,7 @@ class SelfEnvTool(BaseTool):
     @staticmethod
     def _allowed(execution_context) -> bool:
         try:
-            from agents.task.constants import compute_posture_allows
+            from core.config_policy import compute_posture_allows
             return bool(compute_posture_allows(execution_context, 2))
         except Exception:
             return False
@@ -108,12 +108,20 @@ class SelfEnvTool(BaseTool):
         # Use the BROAD secret classifier (is_secret_path) so in-tree app DBs
         # (data/**/bot.db, *.sqlite — may hold tokens/wallet material/PII) and named
         # credential files are denied too, not just the narrow name-glob set.
-        from agents.task.agent.core.secret_guard import (
+        from core.security.secret_guard import (
             is_credential_file, is_protected_config_path, is_secret_path,
         )
         if (is_credential_file(target) or is_protected_config_path(target)
                 or is_secret_path(target, root=root)):
             return None, f"refusing to touch a credential/secret/config file: {rel_path}"
+        # 018 P4: config-DEFAULT source is protected like config FILES. The
+        # posture/approval ladder is defined in core/config_policy/ — patching
+        # e.g. _resolve_compute_posture would be a code-level flag flip that the
+        # env/config file denials above cannot see (source-vs-config asymmetry
+        # from the 2026-07-17 config review).
+        if "config_policy" in target.parts:
+            return None, ("refusing to patch capability-policy source "
+                          f"(core/config_policy/): {rel_path}")
         return target, None
 
     # --- subprocess seam (injectable for tests) ------------------------------

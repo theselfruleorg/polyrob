@@ -23,8 +23,9 @@ class _FakeSM:
 
 def _ctx(args, sm, user_id="u1"):
     emitted = {}
-    ctx = SimpleNamespace(args=args, user_id=user_id,
-                          emit=lambda text, title=None: emitted.update({"text": text}))
+    ctx = SimpleNamespace(
+        args=args, user_id=user_id,
+        emit=lambda text, title=None: emitted.update({"text": text, "title": title}))
     return ctx, emitted
 
 
@@ -55,6 +56,7 @@ def test_learn_empty_description_shows_usage(monkeypatch):
     h_learn.h_learn(ctx)
     assert "usage:" in emitted["text"]
     assert sm.created == {}  # nothing written
+    assert emitted["title"] == "learn"  # title on every emit (Wave B2)
 
 
 def test_learn_rejected_surfaces_error(monkeypatch):
@@ -67,6 +69,15 @@ def test_learn_rejected_surfaces_error(monkeypatch):
     ctx, emitted = _ctx(["do", "a", "bad", "thing"], sm)
     h_learn.h_learn(ctx)
     assert "rejected" in emitted["text"].lower()
+    assert emitted["title"] == "learn"
+
+
+def test_learn_unavailable_no_skill_manager_has_title(monkeypatch):
+    monkeypatch.setattr(h_learn, "_skill_manager", lambda ctx: None)
+    ctx, emitted = _ctx(["do", "a", "thing"], None)
+    h_learn.h_learn(ctx)
+    assert "unavailable" in emitted["text"]
+    assert emitted["title"] == "learn"
 
 
 def test_distill_produces_valid_structure():

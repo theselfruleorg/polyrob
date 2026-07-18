@@ -1171,11 +1171,15 @@ class GeminiClient(LLMClient):
                             timeout=float(self.DEFAULT_REQUEST_TIMEOUT)
                         )
                         self.logger.warning(f"[DEBUG] SUCCESS without tools! Tools are the problem.")
-                        # Return text-only response
+                        # Return text-only response as the 3-tuple the caller's
+                        # _unpack_tool_gen_result requires (P1 finalization: this
+                        # path returned a 2-tuple, raising ValueError downstream and
+                        # dropping usage). Stash the response so usage is extracted.
                         text = ""
                         if hasattr(response, 'text'):
                             text = response.text
-                        return text, []
+                        self.last_response = response
+                        return text, [], self._extract_usage_data()
                     except Exception as e2:
                         self.logger.error(f"[DEBUG] Also failed without tools: {e2}")
 

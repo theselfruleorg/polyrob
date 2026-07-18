@@ -67,6 +67,16 @@ def test_prompt_distinguishes_routine_empty_from_blocked(board, tmp_path):
     assert "not a blocker" in p or "not report" in p or "do not report" in p
 
 
+def test_prompt_states_closed_acceptance_check_type_set(board, tmp_path):
+    # Proposal 016 #2: the prompt states the EXACT valid check types (closed set)
+    # and forbids inventing others — an invented type fail-closes forever.
+    o, done, blocked, d = _seed(board, tmp_path)
+    p = build_planner_prompt(board, "rob", d)
+    assert "artifact_glob" in p and "http_ok" in p and "file_contains" in p
+    low = p.lower()
+    assert "do not invent" in low or "not invent other types" in low
+
+
 def test_prompt_surfaces_objective_success_criteria(board, tmp_path):
     # §7.3: an objective's success_criteria (stored in its payload) is shown so the
     # planner measures against what the owner wants, not a self-set proxy.

@@ -80,7 +80,18 @@ class CommandContext:
         return getattr(agent, "message_manager", None) if agent is not None else None
 
     def emit(self, text: str, *, title: str = "", style: str = "") -> None:
-        """Print a block of text through the renderer (rich or plain)."""
+        """Print a block of text through the renderer (rich or plain).
+
+        SECURITY (P1 finalization): slash-command output (e.g. ``/memory search``,
+        ``/export``) can echo tool results or stored content that contains
+        credential shapes. Scrub here — this is the single choke point for command
+        output, mirroring the tool-trace renderer's own scrub.
+        """
+        try:
+            from cli.ui.secrets import scrub_secrets
+            text = scrub_secrets(text)
+        except Exception:
+            pass  # never let scrubbing failure suppress output
         renderer = self.renderer
         if renderer is None:
             print(text)
@@ -275,19 +286,88 @@ class SlashCompleter:
                 yield from self._complete_toolset(tail, Completion)
             elif cmd.name == "persona":
                 yield from self._complete_persona(tail, Completion)
+            elif cmd.name == "config":
+                yield from self._complete_config(tail, Completion)
             return
 
-        # Command-name completion: complete against names + aliases.
+        # Command-name completion: complete against names + aliases. An alias
+        # row shows an honest pointer (``→ /canonical``) instead of repeating
+        # the canonical command's help — otherwise /compact and /compress read
+        # as two identical commands in the menu.
         word = text[1:].lower()
         for name in self._registry.names():
             if name.startswith(word):
                 cmd = self._registry.lookup(name)
+                if cmd is None:
+                    meta = ""
+                elif cmd.name != name:
+                    meta = f"→ /{cmd.name}"
+                else:
+                    meta = cmd.help
                 yield Completion(
                     name,
                     start_position=-len(word),
                     display=f"/{name}",
-                    display_meta=(cmd.help if cmd else ""),
+                    display_meta=meta,
                 )
+
+    _CONFIG_SUBS = ("list", "get", "set", "explain", "search", "check")
+
+    def _complete_config(self, tail: str, Completion: Any):
+        """`/config <sub>`, then key completion for get/set/explain, then
+        enum/bool value completion for set (018 P2a). Fail-open — the config
+        service is a registry read, but any hiccup must yield nothing."""
+        try:
+            parts = tail.split(" ")
+            if len(parts) <= 1:
+                prefix = (parts[0] if parts else "").lower()
+                for sub in self._CONFIG_SUBS:
+                    if sub.startswith(prefix):
+                        yield Completion(sub, start_position=-len(prefix),
+                                         display=sub)
+                return
+            sub = parts[0].lower()
+            if sub not in ("get", "set", "explain"):
+                return
+            if len(parts) == 2:
+                prefix = parts[1]
+                from core.config_service import known_keys
+                shown = 0
+                for key in known_keys():
+                    if key.startswith(prefix):
+                        yield Completion(key, start_position=-len(prefix),
+                                         display=key)
+                        shown += 1
+                        if shown >= 40:
+                            return
+                return
+            if sub == "set" and len(parts) == 3:
+                key, prefix = parts[1], parts[2].lower()
+                for val in self._config_value_candidates(key):
+                    if val.startswith(prefix):
+                        yield Completion(val, start_position=-len(parts[2]),
+                                         display=val)
+        except Exception:
+            return
+
+    @staticmethod
+    def _config_value_candidates(key: str):
+        try:
+            from core.prefs import PREF_SCHEMA
+            spec = PREF_SCHEMA.get(key)
+            if spec is not None:
+                if spec.type == "bool":
+                    return ("on", "off", "true", "false")
+                if spec.type == "enum":
+                    return tuple(spec.enum_values)
+                return ()
+            from core.flags import REGISTRY
+            flag = REGISTRY.get(key)
+            if flag is not None and flag.kind == "bool":
+                return ("on", "off", "true", "false")
+        except Exception:
+            pass
+        return ()
 
     def _complete_session_ids(self, prefix: str, Completion: Any):
         try:

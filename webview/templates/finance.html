@@ -7,7 +7,7 @@
 <div class="terminal-container webgate-page">
     <div class="webgate-header">
         <h2>Finance</h2>
-        <p class="text-muted text-sm">The agent's own balance sheet — earned, spent, pending — over a trailing window. Evidence-backed, read-only.</p>
+        <p class="text-muted text-sm">Two statements, never summed: the agent's own Treasury — income, spend, pending — and, separately, what it costs to run me. Over a trailing window. Evidence-backed, read-only.</p>
     </div>
     <form id="finance-controls" class="webgate-search" onsubmit="return false;">
         <label class="text-sm text-muted" for="finance-days">Window</label>
@@ -18,6 +18,7 @@
             <option value="90">90 days</option>
         </select>
     </form>
+    <div id="finance-note" class="webgate-note" style="display:none;"></div>
     <div id="finance-kpis" class="webgate-kpi-row">
         <div class="loading">Loading…</div>
     </div>
@@ -32,17 +33,34 @@
 .webgate-kpi .kpi-sub { font-size: 0.75rem; opacity: 0.6; margin-top: 2px; }
 .kpi-value.pos { color: #3ba55d; }
 .kpi-value.neg { color: #d83c3e; }
+.kpi-value.unavailable { color: inherit; opacity: 0.5; }
 .webgate-brk-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color, #2a2a2a); }
 .webgate-brk-row .brk-k { opacity: 0.8; }
+.webgate-note {
+    margin: 8px 0 4px; padding: 8px 12px; border-radius: 6px;
+    border: 1px solid #b8860b; background: rgba(184, 134, 11, 0.12);
+    font-size: 0.85rem;
+}
 </style>
 
 <script>
 (function () {
     const kpis = document.getElementById('finance-kpis');
     const brk = document.getElementById('finance-breakdown');
+    const note = document.getElementById('finance-note');
     const daysSel = document.getElementById('finance-days');
 
     function money(n) { return '$' + (Number(n) || 0).toFixed(2); }
+
+    // H14b: a block whose `available` flag is false could not be read at all
+    // (broken/absent data layer) — its numbers are fabricated zeros, not real
+    // ones. Render "—" instead of a real-looking "$0.00" so the two are never
+    // visually indistinguishable (final review Finding 1, related root cause:
+    // `treasury.available`/`runtime.available` existed with a dedicated test
+    // but no reader — this is that reader).
+    function moneyIf(n, available) {
+        return available === false ? '—' : money(n);
+    }
 
     function kpi(label, value, cls, sub) {
         return '<div class="webgate-kpi"><div class="kpi-label">' + label + '</div>' +
@@ -58,26 +76,45 @@
     async function load() {
         kpis.innerHTML = '<div class="loading">Loading…</div>';
         brk.innerHTML = '';
+        note.style.display = 'none';
+        note.textContent = '';
         try {
             const res = await fetch('/api/webgate/ledger?days=' + encodeURIComponent(daysSel.value));
             const d = await res.json();
-            const net = Number(d.net_usd) || 0;
+            if (d.note) {
+                note.textContent = '⚠ ' + d.note;
+                note.style.display = '';
+            }
+            // Two statements, never summed: treasury is the agent's own USDC,
+            // runtime is the owner's LLM/API bill. Reading the legacy merged
+            // top-level fields here would fold the owner's API bill into the
+            // agent's own P&L.
+            const t = d.treasury || {}, r = d.runtime || {};
+            const tAvail = t.available !== false, rAvail = r.available !== false;
+            const net = Number(t.net_usd) || 0;
             kpis.innerHTML =
-                kpi('Earned', money(d.earned_usd), 'pos', (d.settled_payments || 0) + ' settled') +
-                kpi('Spent', money(d.total_spend_usd), 'neg',
-                    (d.llm_calls || 0) + ' LLM calls, ' + (d.wallet_payments || 0) + ' payments') +
-                kpi('Net', money(net), net >= 0 ? 'pos' : 'neg', 'over ' + (d.window_days || '?') + 'd') +
-                kpi('Pending', money(d.pending_invoices_usd), '',
-                    (d.pending_invoices || 0) + ' invoice(s)');
+                kpi('Income', moneyIf(t.income_usd, t.available), tAvail ? 'pos' : 'unavailable',
+                    (d.settled_payments || 0) + ' settled') +
+                kpi('Treasury spend', moneyIf(t.spend_usd, t.available), tAvail ? 'neg' : 'unavailable', 'wallet') +
+                kpi('Net', moneyIf(net, t.available), !tAvail ? 'unavailable' : (net >= 0 ? 'pos' : 'neg'),
+                    'over ' + (d.window_days || '?') + 'd') +
+                kpi('Pending', moneyIf(t.pending_usd, t.available), tAvail ? '' : 'unavailable',
+                    (t.pending_count || 0) + ' invoice(s)');
             const caps = d.caps || {};
             brk.innerHTML =
-                row('LLM / API cost', money(d.llm_api_cost_usd)) +
-                row('Wallet spend', money(d.wallet_spend_usd)) +
+                row('Runtime cost (window)', moneyIf(r.spend_window_usd, r.available)) +
+                row('Runtime cost (lifetime)', moneyIf(r.spend_total_usd, r.available)) +
+                row('LLM calls', rAvail ? ((r.calls_window || 0) + ' / ' + (r.calls_total || 0) + ' lifetime') : '—') +
                 row('Platform credits spent', money(d.credits_spent)) +
                 row('Invoice ceiling', caps.invoice_max_usd != null ? money(caps.invoice_max_usd) : '—') +
                 row('Daily invoicing cap', caps.invoice_daily_max != null ? String(caps.invoice_daily_max) : '—') +
                 row('Wallet daily cap', caps.wallet_daily_cap_usd != null ? money(caps.wallet_daily_cap_usd) : 'unset') +
-                row('Autonomy budget', caps.autonomy_budget_usd != null ? money(caps.autonomy_budget_usd) : '—');
+                // A None balance is OMITTED, never rendered as $0.00 (H14b) —
+                // treasury.balance_usd and runtime.provider_balance_usd are
+                // independent (either can be present without the other).
+                (r.provider_balance_usd == null ? '' :
+                    row('Provider balance', money(r.provider_balance_usd))) +
+                (t.balance_usd == null ? '' : row('Wallet balance', money(t.balance_usd)));
         } catch (e) {
             kpis.innerHTML = '<div class="webgate-empty">Could not load the ledger.</div>';
         }

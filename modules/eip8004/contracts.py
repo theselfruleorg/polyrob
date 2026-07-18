@@ -1,5 +1,14 @@
 """ERC-8004 Contract Interfaces.
 
+>>> STATUS: SIMULATION / not wired on-chain. <<<
+No code in this repository calls these interfaces — there is no on-chain write
+path. `build_registration_file` / the `/eip8004/*` API only ever emit a
+`trustMode: "local"` (off-chain, in-process) registration; the reputation and
+validation "registries" are process-volatile Python dicts, not the on-chain
+contracts these interfaces describe. Treat everything below as ABI/interface
+reference for a FUTURE on-chain integration, not as running code.
+See docs/guide/payments.md §ERC-8004 for the current, honest status.
+
 Interface definitions for interacting with the on-chain registries.
 Uses web3.py for contract interactions.
 """

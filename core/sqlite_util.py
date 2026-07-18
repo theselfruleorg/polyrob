@@ -30,7 +30,8 @@ def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Conne
 def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None):
     """Execute one statement with jittered retry on write contention.
 
-    fetch: None -> rowcount; 'one' -> a Row or None; 'all' -> list[Row].
+    fetch: None -> rowcount; 'one' -> a Row or None; 'all' -> list[Row];
+    'lastrowid' -> the INSERT's rowid (for sidecar tables keyed by it).
     """
     last_err: Optional[Exception] = None
     for _ in range(_MAX_RETRIES):
@@ -46,6 +47,10 @@ def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional
                     rows = cur.fetchall()
                     conn.commit()
                     return rows
+                if fetch == "lastrowid":
+                    rowid = cur.lastrowid
+                    conn.commit()
+                    return rowid
                 conn.commit()
                 return cur.rowcount
             finally:

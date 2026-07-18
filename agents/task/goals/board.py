@@ -18,6 +18,7 @@ inert until a dispatcher/tool touches it.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -26,6 +27,8 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from core.sqlite_util import execute_retry, wal_connect
+
+logger = logging.getLogger(__name__)
 
 # status lifecycle: triage -> ready -> running -> {done | blocked} ; cancelled is terminal
 STATUS_TRIAGE = "triage"
@@ -44,6 +47,9 @@ KIND_ASK = "ask"
 # ask lifecycle (§7.2b) — disjoint from goal statuses so nothing dispatches them
 ASK_OPEN = "open"
 ASK_FULFILLED = "fulfilled"
+# Task 9 (G-2): a tool_approval ask's owner-declined outcome. Disjoint from the
+# goal-status STATUS_CANCELLED string on purpose — an ask is never a goal.
+ASK_REJECTED = "rejected"
 
 # objective lifecycle (disjoint from goal statuses so nothing dispatches them)
 OBJ_ACTIVE = "active"
@@ -333,6 +339,8 @@ class GoalBoard:
                 self._event(goal_id, "failed", {"failures": fails, "error": error[:500]})
             else:
                 self._event(goal_id, "stale_completion", {"error": error[:500]})
+        # §5.2: keep the compact attempt ledger current (fail-open).
+        self._append_attempt(goal_id, error=error, session_id=session_id)
         return self.get(goal_id)
 
     def block_from_ready(self, goal_id: str, *, error: str) -> bool:
@@ -391,6 +399,105 @@ class GoalBoard:
             (now,),
         )
         return rc or 0
+
+    def requeue_running_on_boot(self) -> int:
+        """§5.1 cold-start sweep: re-queue ``running`` goals immediately at boot
+        WITHOUT a failure increment — a process restart is not the goal's fault.
+
+        Without this, a goal ``running`` across a deploy waited out its claim
+        TTL and ``reclaim_stale`` counted the restart as a failure — two deploys
+        mid-goal silently ``blocked`` it. Mirrors cron's reclaim of running rows
+        (``cron/jobs.py::reclaim_stale_running``). Call ONCE at process start,
+        before any ticker runs.
+        """
+        rows = execute_retry(
+            self.db_path,
+            "SELECT id FROM goals WHERE status='running' AND kind='goal'",
+            (), fetch="all",
+        ) or []
+        ids = [r["id"] for r in rows]
+        if not ids:
+            return 0
+        n = 0
+        for gid in ids:
+            rc = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='ready', claim_lock=NULL, claim_expires=NULL
+                    WHERE id=? AND status='running'""",
+                (gid,),
+            )
+            if rc == 1:
+                n += 1
+                self._event(gid, "requeued_on_boot", {})
+        return n
+
+    def unblock(self, goal_id: str, *, user_id: str, rationale: str = "") -> bool:
+        """§5.3: requeue a ``blocked`` goal with a rationale (symmetric to
+        ``fulfill_ask``). Tenant-scoped; resets the breaker so the retry budget
+        is fresh. Returns False for a non-blocked row or a wrong tenant."""
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals SET status='ready', consecutive_failures=0,
+                  claim_lock=NULL, claim_expires=NULL, completed_at=NULL
+                WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
+            (goal_id, user_id),
+        )
+        if rc == 1:
+            self._event(goal_id, "unblocked", {"rationale": str(rationale)[:500]})
+        return rc == 1
+
+    def age_out_blocked(self, *, max_age_days: int = 14) -> int:
+        """§5.3: age ancient ``blocked`` goals out VISIBLY (→ cancelled, logged)
+        instead of letting them rot as permanent planner context. The age is
+        measured from when the goal blocked (completed_at) else creation."""
+        if max_age_days <= 0:
+            return 0
+        cutoff = self._now() - max_age_days * 86400
+        rows = execute_retry(
+            self.db_path,
+            """SELECT id FROM goals
+                WHERE status='blocked' AND kind='goal'
+                  AND COALESCE(completed_at, created_at) < ?""",
+            (cutoff,), fetch="all",
+        ) or []
+        n = 0
+        now = self._now()
+        for r in rows:
+            gid = r["id"]
+            rc = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='cancelled', completed_at=?
+                    WHERE id=? AND status='blocked'""",
+                (now, gid),
+            )
+            if rc == 1:
+                n += 1
+                self._event(gid, "aged_out", {"max_age_days": max_age_days})
+        return n
+
+    _MAX_ATTEMPTS_KEPT = 5
+
+    def _append_attempt(self, goal_id: str, *, error: str,
+                        session_id: Optional[str]) -> None:
+        """§5.2 attempt ledger: keep a compact per-attempt tail in the payload so
+        retries stop being amnesiac (the retry prompt + goal_show read it).
+        Fail-open — ledger bookkeeping never breaks failure recording."""
+        try:
+            g = self.get(goal_id)
+            if g is None:
+                return
+            merged = dict(g.payload or {})
+            attempts = list(merged.get("attempts") or [])
+            attempts.append({
+                "ts": self._now(),
+                "error": str(error)[:500],
+                "session_id": session_id,
+            })
+            merged["attempts"] = attempts[-self._MAX_ATTEMPTS_KEPT:]
+            execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
+                          (json.dumps(merged), goal_id))
+        except Exception:
+            logger.debug("attempt-ledger append failed for %s", goal_id, exc_info=True)
 
     def count_started_since(self, seconds: float) -> int:
         """Goal runs STARTED in the trailing window (quota accounting)."""
@@ -534,17 +641,27 @@ class GoalBoard:
 
     def create_ask(self, *, user_id: str, what: str, why: str = "",
                    blocks_goal_ids: Optional[List[str]] = None,
-                   objective_id: Optional[str] = None) -> Goal:
+                   objective_id: Optional[str] = None,
+                   extra_payload: Optional[Dict[str, Any]] = None,
+                   force: bool = False) -> Goal:
         """A durable owner-facing need ("I require X from you to proceed").
 
         Never dispatched (``ready()`` filters ``kind='goal'``). Dedups ONLY against
         this tenant's OPEN asks — a matching one is refreshed (its dependent-goal
         set unioned) rather than respawned, so a recurring blocker stays ONE ask.
+
+        ``extra_payload`` (Task 9 / G-2) merges additional keys into the created
+        payload atomically at creation (e.g. a ``tool_approval`` ask's discriminator
+        + stable request hash) — no separate post-create UPDATE, no read/write race.
+        ``force=True`` skips the fuzzy title-similarity dedup above: a caller that
+        already does its own EXACT-match dedup (e.g. by request hash) needs this,
+        since two distinct requests can otherwise share a near-identical generic
+        title (e.g. "Approve x402_request?") and get fuzzy-merged into one ask.
         """
         from agents.task.constants import AutonomyConfig
         threshold = AutonomyConfig.goal_dedup_threshold()
         blocks = list(blocks_goal_ids or [])
-        if threshold > 0:
+        if not force and threshold > 0:
             for a in self.asks(user_id=user_id, status=ASK_OPEN):
                 if title_similarity(what, a.title) >= threshold:
                     merged = sorted(set((a.payload or {}).get("blocks_goal_ids", [])) | set(blocks))
@@ -554,9 +671,12 @@ class GoalBoard:
                                   (json.dumps(payload), a.id))
                     self._event(a.id, "ask_refreshed", {"what": what[:200]})
                     return self.get(a.id)
+        payload: Dict[str, Any] = {"blocks_goal_ids": blocks}
+        if extra_payload:
+            payload.update(extra_payload)
         return self.create(user_id=user_id, title=what, body=why, kind=KIND_ASK,
                            status=ASK_OPEN, parent_id=objective_id, force=True,
-                           payload={"blocks_goal_ids": blocks})
+                           payload=payload)
 
     def asks(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
         sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"
@@ -567,37 +687,89 @@ class GoalBoard:
         rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
         return [Goal.from_row(r) for r in rows]
 
+    def decide_ask(self, ask_id: str, *, user_id: str, approved: bool) -> tuple:
+        """Record an owner decision (approve or reject) on an OPEN ask.
+
+        Generalizes :meth:`fulfill_ask` (Task 9 / G-2 — a ``tool_approval`` ask
+        needs a real reject outcome, not just fulfilled/still-open). Approving
+        flips BLOCKED dependent goals back to ready (the original unblock hop);
+        rejecting never touches dependent goals. The decision is also stamped
+        into the ask's own ``payload.decision`` (``"approved"``/``"rejected"``)
+        so a poller (e.g. ``OwnerQueueApprover``) can read the outcome straight
+        off the row without a second status vocabulary. Tenant-scoped CAS —
+        only an OPEN ask for THIS ``user_id`` transitions. Returns
+        ``(ok, unblocked_count)``.
+        """
+        now = self._now()
+        ask = self.get(ask_id)
+        payload = dict(ask.payload or {}) if ask else {}
+        payload["decision"] = "approved" if approved else "rejected"
+        new_status = ASK_FULFILLED if approved else ASK_REJECTED
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE goals SET status=?, completed_at=?, payload=? "
+            "WHERE id=? AND kind=? AND status=? AND user_id=?",
+            (new_status, now, json.dumps(payload), ask_id, KIND_ASK, ASK_OPEN, user_id),
+        )
+        if rc != 1:
+            return (False, 0)
+        self._event(ask_id, "ask_fulfilled" if approved else "ask_rejected", {})
+        unblocked = 0
+        if approved:
+            for gid in (ask.payload or {}).get("blocks_goal_ids", []) if ask else []:
+                # 2026-07-14 night-2: stamp the fulfillment onto the goal payload so
+                # the retry prompt (context.build_goal_run_task) tells the run the
+                # blocker was FIXED — without this the agent reads only the old
+                # failure ledger and declares BLOCKED from memory without retrying.
+                dep = self.get(gid)
+                dep_payload = dict(dep.payload or {}) if dep else {}
+                dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
+                rc2 = execute_retry(
+                    self.db_path,
+                    """UPDATE goals SET status='ready', consecutive_failures=0,
+                          last_failure_error=NULL, claim_lock=NULL, claim_expires=NULL,
+                          payload=?
+                        WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
+                    (json.dumps(dep_payload), gid, user_id),
+                )
+                if rc2 == 1:
+                    self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
+                    unblocked += 1
+        return (True, unblocked)
+
     def fulfill_ask(self, ask_id: str, *, user_id: str) -> tuple:
         """Mark an ask fulfilled and flip its BLOCKED dependent goals back to ready.
 
         The unblock hop: each dependent goal that is currently ``blocked`` gets a
         clean failure counter and re-enters the dispatch queue. Tenant-scoped CAS.
-        Returns ``(ok, unblocked_count)``.
+        Returns ``(ok, unblocked_count)``. Thin wrapper over :meth:`decide_ask`
+        (``approved=True``) — kept as its own method since it's the established
+        public name (`polyrob owner fulfill`, Telegram ``/fulfill``).
         """
-        now = self._now()
+        return self.decide_ask(ask_id, user_id=user_id, approved=True)
+
+    def consume_ask_grant(self, ask_id: str) -> bool:
+        """Atomically consume a FULFILLED ask's one-shot grant flag (Task 9 / G-2).
+
+        A ``tool_approval`` ask is created with ``payload.grant_consumed=false``
+        (see :class:`tools.controller.approval_queue.OwnerQueueApprover`). Once
+        it is approved (fulfilled) AFTER the requester already timed out and gave
+        up, the NEXT identical request may redeem it exactly once. The CAS is a
+        string ``REPLACE`` guarded by a ``LIKE`` match on the literal
+        ``json.dumps`` token — the same atomic-claim shape
+        ``modules/x402/invoicing.py::claim_wake`` uses (no read-modify-write
+        race between two concurrent redeemers). Returns True for the caller that
+        won the claim; False otherwise (already consumed, no such ask, or the
+        payload doesn't carry the flag).
+        """
         rc = execute_retry(
             self.db_path,
-            "UPDATE goals SET status=?, completed_at=? "
-            "WHERE id=? AND kind=? AND status=? AND user_id=?",
-            (ASK_FULFILLED, now, ask_id, KIND_ASK, ASK_OPEN, user_id),
+            """UPDATE goals SET payload = REPLACE(payload, '"grant_consumed": false',
+                                                    '"grant_consumed": true')
+                WHERE id=? AND kind=? AND payload LIKE '%"grant_consumed": false%'""",
+            (ask_id, KIND_ASK),
         )
-        if rc != 1:
-            return (False, 0)
-        self._event(ask_id, "ask_fulfilled", {})
-        unblocked = 0
-        ask = self.get(ask_id)
-        for gid in (ask.payload or {}).get("blocks_goal_ids", []) if ask else []:
-            rc2 = execute_retry(
-                self.db_path,
-                """UPDATE goals SET status='ready', consecutive_failures=0,
-                      last_failure_error=NULL, claim_lock=NULL, claim_expires=NULL
-                    WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
-                (gid, user_id),
-            )
-            if rc2 == 1:
-                self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
-                unblocked += 1
-        return (True, unblocked)
+        return rc == 1
 
     def objectives(self, *, user_id: str, status: Optional[str] = None) -> List[Goal]:
         sql = "SELECT * FROM goals WHERE kind=? AND user_id=?"

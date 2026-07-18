@@ -3,7 +3,7 @@
 No entry-point/plugin infra: surfaces are registered by an explicit
 register_surface(container, surface) call in the lifespan, each gated by its own
 flag. is_surface_enabled is a cheap predicate that never constructs the surface
-(Hermes env-enablement idea, plain-registry implementation).
+(a plain-registry, env-flag-gated implementation).
 """
 
 

@@ -19,13 +19,45 @@ Each instance is identified by its **instance ID** (`POLYROB_INSTANCE_ID`, defau
 `rob`). Today, the instance ID determines:
 
 - The name the agent uses for itself (CLI banners, `/session`, `/self`)
-- The path for the operator-authored SOUL docs and the agent's own evolving SELF
-  doc, nested under the shared data home: `<data_home>/identity/{instance_id}/user_{user_id}/`
+- The path for the agent's own evolving SELF docs (`self.md`, `owner.md`,
+  `contract.md`), nested under the shared data home:
+  `<data_home>/identity/{instance_id}/user_{user_id}/`.
+  **The operator-authored SOUL docs are NOT nested** — they live flat at
+  `<data_home>/identity/identity.md` and `<data_home>/identity/operating.md`
+  (a SOUL file placed in the nested per-user directory never loads)
 - The instance's owner principal, when `POLYROB_OWNER_USER_ID` isn't set explicitly
 
 It does **not** currently partition memory, skills, cron/goal state, or the auth
 database — see [Instance isolation](#instance-isolation) below for what actually
 separates two instances.
+
+### Authoring your instance's SOUL
+
+The SOUL is the operator-authored, frozen identity layer — who this instance *is*
+(mission, values, boundaries). The agent can never edit it; it's pinned into every
+session as a foundation message. To author it:
+
+```bash
+# 1. Find your data home (local CLI default: ./.polyrob under your working dir;
+#    server: $POLYROB_DATA_DIR)
+mkdir -p <data_home>/identity
+
+# 2. Who the instance is — mission, personality, values
+$EDITOR <data_home>/identity/identity.md
+
+# 3. (Optional) How it operates — standing constraints, escalation rules, tone
+$EDITOR <data_home>/identity/operating.md
+```
+
+Both files are plain Markdown, loaded in that order (identity first) and capped at
+~60k chars combined. They take effect at the next session start — no restart of
+anything else needed. Blank or missing files are simply skipped (a fresh install has
+no SOUL and behaves identically).
+
+The agent's own evolving **SELF** docs (`self.md`, plus `owner.md` owner-facts and
+`contract.md`) are separate: agent-written through a quarantine-and-scan pipeline,
+stored per-user under `identity/{instance_id}/user_{uid}/`. Author the SOUL; let the
+agent earn the SELF.
 
 ---
 
@@ -122,9 +154,12 @@ for full separation.
 - **Separate memory, skills, cron/goal state, and auth DB** — requires a distinct
   working directory (local/CLI) or a distinct `POLYROB_DATA_DIR` (server) per
   instance.
-- **Separate self-identity** — the operator-authored SOUL docs and the agent's own
-  evolving SELF doc *are* already instance-scoped within a shared data home
+- **Separate SELF identity** — the agent's own evolving SELF docs *are* already
+  instance-scoped within a shared data home
   (`<data_home>/identity/{instance_id}/user_{user_id}/`), so even instances that
-  share a data home never blend their self-context.
+  share a data home never blend their evolving self-context. The operator-authored
+  SOUL docs (`<data_home>/identity/identity.md` + `operating.md`) are flat — two
+  instances sharing one data home share one SOUL; give each its own data home if
+  their SOULs must differ.
 - **LLM provider keys** (`ANTHROPIC_API_KEY` etc.) are process-wide env vars —
   shared across instances unless you launch each from a separate environment file.

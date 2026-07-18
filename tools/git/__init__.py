@@ -2,7 +2,7 @@
 
 Structured git over the confined workspace root. Gated OFF by default
 (``GIT_TOOLS_ENABLED``) and ON under ``POLYROB_LOCAL`` (it is in
-``agents.task.constants._SAFE_LOCAL_FLAGS``). Never in the default ``tool_ids``.
+``core.config_policy._SAFE_LOCAL_FLAGS``). Never in the default ``tool_ids``.
 
 LANDMINE: the action-closure module (``tool.py``) must NOT use
 ``from __future__ import annotations``.
@@ -15,7 +15,7 @@ def git_enabled() -> bool:
     raw = os.getenv("GIT_TOOLS_ENABLED")
     if raw is not None:
         return _bool_env("GIT_TOOLS_ENABLED", False)
-    from agents.task.constants import _safe_autonomy_default
+    from core.config_policy import _safe_autonomy_default
     return _safe_autonomy_default("GIT_TOOLS_ENABLED")
 
 

@@ -20,6 +20,7 @@ never ``BotConfig.get`` (which is a getattr that silently ignores the env).
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 # code_root == the install/code root: the parent of this ``core/`` package.
@@ -96,8 +97,32 @@ def resolve_runtime_paths(*, local: bool) -> RuntimePaths:
     )
 
 
-# The PathManager's own legacy default (agents/task/path.py reads DATA_ROOT,
-# NOT POLYROB_DATA_DIR — the landmine at the heart of RC-1, 2026-07-07).
+def resolve_data_home() -> Path:
+    """Resolve the runtime DATA HOME (goals.db/cron.db/memory.db/surface_state.db…).
+
+    This is the FIRST of the two path axes and must not be confused with
+    :func:`resolve_session_data_root` below: services key their sidecar DBs off
+    the *data home* (``POLYROB_DATA_DIR`` axis), sessions key artifacts off the
+    *session tree* (PathManager/``DATA_ROOT`` axis).
+
+    One policy, shared by every admin/console read of those DBs (webview
+    ``pages``/``activity`` via ``webgate.data_dir()``, ``polyrob owner``,
+    ``polyrob surface``): ``POLYROB_DATA_DIR`` wins, else converge on the
+    CLI/agent home (``cwd/.polyrob``). This function is the SSOT for that rule:
+    ``core.bootstrap._resolve_cli_data_home`` (build_cli_container) and
+    ``core.runtime_config.get_data_root`` both delegate here, so admin verbs and
+    the running daemons always read the SAME files (``POLYROB_PROJECT_DIR`` moves
+    only the workspace, never the data home). The server-only
+    ``/var/lib/polyrob`` default is deliberately NOT applied here: a headless
+    deploy always sets ``POLYROB_DATA_DIR`` explicitly, and call sites
+    historically converged on the CLI resolution when it is unset.
+    """
+    return resolve_runtime_paths(local=True).data_home
+
+
+# The PathManager's legacy default. Since T10 (2026-07-16) a bare PathManager()
+# delegates HERE (the RC-1 landmine — its constructor reading DATA_ROOT only —
+# is closed); this constant remains the both-envs-unset terminal fallback.
 _LEGACY_SESSIONS_DEFAULT = "./data/task"
 
 
@@ -133,3 +158,65 @@ def resolve_session_data_root() -> Path:
     if data_home and data_home.strip():
         return Path(data_home).resolve() / "sessions"
     return Path(_LEGACY_SESSIONS_DEFAULT).resolve()
+
+
+# --- WS-3 (2026-07-16): one seam for the scattered `x or "data"` CWD-write fallbacks ---
+
+def data_dir_or_home(value: Optional[str]) -> str:
+    """Return *value* if it is a non-empty path, else the resolved data home.
+
+    The ONE replacement for the ~10 scattered ``getattr(cfg, "data_dir", None) or
+    "data"`` / ``data_dir="data"`` fallbacks: when no container/config is present the
+    fallback must be the data home (``POLYROB_DATA_DIR`` else ``cwd/.polyrob``), NEVER a
+    relative ``"data"`` under the current working directory (a latent CWD/tree write).
+    ``config.data_dir`` is absolute after bootstrap, so passing it through is a no-op.
+    """
+    if value:
+        return str(value)
+    return str(resolve_data_home())
+
+
+def goals_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the goal-board DB (``goals.db``).
+
+    One helper for the four sites that re-joined ``{data_dir}/goals.db`` with their own
+    home resolution + relative ``"data"`` fallback (cli/commands/goals.py,
+    tools/goal_tools.py, cron/digest.py, tools/controller/approval_queue.py). Pass an
+    explicit *data_dir* (e.g. the CLI's ``get_data_root()``) to pin it; omit it to use
+    the data home.
+    """
+    return os.path.join(data_dir_or_home(data_dir), "goals.db")
+
+
+def cron_db_path(data_dir: Optional[str] = None) -> str:
+    """Absolute path to the cron job store (``cron.db``) — the ``goals_db_path`` twin
+    for the scheduler's DB (tools/cronjob_tools.py + the operator ``seed_*`` scripts).
+    """
+    return os.path.join(data_dir_or_home(data_dir), "cron.db")
+
+
+def sidecar_db_path(name: str) -> Path:
+    """Durable sidecar DB home: ``<data_home>/<name>`` — the db_manifest axis (R-2 T1).
+
+    ``telemetry_events.db`` and the ``messages.db`` mirror historically resolved
+    under ``pm().data_root`` (the SESSION artifact tree — ``<data_home>/sessions``
+    on prod-shaped installs) while ``core/db_manifest.py`` expects
+    ``<data_home>/<name>``, so backups silently missed the live files. This helper
+    is the ONE resolution rule for both.
+
+    Legacy fallback (read-both, write-new): if the new path does not exist but the
+    old session-tree location does, return the OLD path — an existing install keeps
+    appending to its real file (history is never forked across two files) until the
+    one-shot boot relocation (core/sidecar_relocate.py) or the operator moves it.
+    A fresh install starts at the new path.
+    """
+    new = resolve_data_home() / name
+    if new.exists():
+        return new
+    try:
+        legacy = Path(resolve_session_data_root()) / name
+        if legacy.exists():
+            return legacy
+    except Exception:
+        pass
+    return new

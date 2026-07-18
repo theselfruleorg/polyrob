@@ -16,6 +16,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _ensure_conversation_store(container, db_path: str) -> None:
+    """E1 (2026-07-13 review): register the durable per-correspondent conversation
+    container alongside the bus. Idempotent + fail-open — the store is additive and
+    every consumer treats it as optional."""
+    try:
+        if container.get_service("conversation_store") is not None:
+            return
+        import os as _os
+        from core.surfaces.conversations import ConversationStore
+        conv_db = _os.path.join(_os.path.dirname(db_path) or ".", "conversations.db")
+        container.register_service("conversation_store", ConversationStore(conv_db))
+        logger.info("surface bus: conversation store installed (%s)", conv_db)
+    except Exception as e:
+        logger.debug("conversation store unavailable: %s", e)
+
+
 def install_surface_bus(container, db_path: str = None) -> bool:
     """Build SessionChatRegistry + MessageRouter and register them on ``container``.
 
@@ -31,15 +47,17 @@ def install_surface_bus(container, db_path: str = None) -> bool:
     if not SurfaceConfig.singular_chat_enabled():
         return False
 
+    if db_path is None:
+        import os as _os
+        from core.runtime_paths import data_dir_or_home
+        data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
+        db_path = _os.path.join(data_dir, "surfaces.db")
+
     # Idempotent: never clobber a live router (it holds surface subscriptions).
     existing = container.get_service("message_router")
     if existing is not None:
+        _ensure_conversation_store(container, db_path)
         return True
-
-    if db_path is None:
-        import os as _os
-        data_dir = getattr(getattr(container, "config", None), "data_dir", "data") or "data"
-        db_path = _os.path.join(data_dir, "surfaces.db")
 
     try:
         from core.surfaces.session_chat_registry import SessionChatRegistry
@@ -52,6 +70,8 @@ def install_surface_bus(container, db_path: str = None) -> bool:
 
         from core.surfaces.outbound_allowlist import OutboundAllowlist
         container.register_service("outbound_allowlist", OutboundAllowlist(db_path))
+
+        _ensure_conversation_store(container, db_path)
 
         if SurfaceConfig.outbound_queue_enabled():
             import os

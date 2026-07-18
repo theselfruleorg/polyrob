@@ -5,9 +5,15 @@ catastrophic per-tx ceiling, idempotency de-dup, and an append-only audit trail.
 A future budget engine can extend `check`."""
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from core.config_policy import AutonomyConfig
 from typing import Callable, List, Optional
+
+logger = logging.getLogger(__name__)
 
 _DAY_SECONDS = 86_400
 
@@ -44,6 +50,36 @@ class PolicyGate:
             e["idempotency_key"] for e in self._audit
             if e.get("idempotency_key")
         }
+        # M4 (2026-07-15): per-instance mutex so a caller can make check -> (awaited
+        # network spend) -> record ATOMIC. Without it, two concurrent value-moving
+        # calls both check() a nearly-exhausted cap at the same rolling-spend, both
+        # pass, then both record — clearing past the cap. Created lazily on first
+        # `reserve()` so it binds to the running loop (PolicyGate is built
+        # synchronously, sometimes with no loop yet). check()/record() are unchanged
+        # and remain callable without the lock (legacy callers).
+        self._reserve_lock: Optional[asyncio.Lock] = None
+
+    @asynccontextmanager
+    async def reserve(self):
+        """Serialize a check -> spend -> record critical section per gate instance.
+
+        Usage (the caller keeps calling the unchanged check()/record())::
+
+            async with gate.reserve():
+                d = gate.check(...)
+                if not d.allowed:
+                    return refuse(d.reason)
+                result = await do_the_spend(...)
+                gate.record(...)
+
+        Holding the lock across the awaited spend is what stops two concurrent
+        callers from both passing a nearly-exhausted cap (M4). Per-process only —
+        a shared cross-process ledger is a separate, larger change.
+        """
+        if self._reserve_lock is None:
+            self._reserve_lock = asyncio.Lock()
+        async with self._reserve_lock:
+            yield
 
     def _rolling_24h_spend(self, venue: Optional[str] = None) -> float:
         window_start = self._now() - _DAY_SECONDS
@@ -55,6 +91,31 @@ class PolicyGate:
         )
 
     def check(self, *, venue: str, amount_usd: float, idempotency_key: Optional[str]) -> PolicyDecision:
+        # H5: the owner kill-switch is STRUCTURALLY part of the money gate. Every
+        # PolicyGate consumer (x402, trading, any future money verb) refuses while
+        # halted, regardless of per-call-site discipline. (The probe import is
+        # top-level since WS-1 ph4 — core.config_policy is core-tier and light.)
+        # Fail CLOSED: if the probe raises, treat as halted rather than opening
+        # the gate. At defaults (not halted) this is transparent — the decision
+        # below is byte-identical.
+        try:
+            _halted = AutonomyConfig.autonomy_halted()
+        except Exception as e:
+            # Distinct reason from the genuine-halt branch below: a broken import
+            # or a raising probe is an INFRASTRUCTURE failure, not the owner's
+            # kill-switch — don't let an operator mistake "my import is broken"
+            # for "I halted autonomy." Still fail CLOSED (money path).
+            logger.error(
+                "PolicyGate halt probe failed — refusing (fail closed): %s", e,
+                exc_info=True,
+            )
+            return PolicyDecision(
+                False,
+                "kill-switch probe failed — money paths refused (fail closed)",
+            )
+        if _halted:
+            return PolicyDecision(
+                False, "owner kill-switch active — autonomy halted, money movement refused")
         if amount_usd > self._ceiling:
             return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}")
         if idempotency_key and idempotency_key in self._seen_idempotency:

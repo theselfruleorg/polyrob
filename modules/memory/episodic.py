@@ -25,7 +25,7 @@ async def finalize_episode(*, session_id: str, user_id: Optional[str], kind: str
                            started_ts: Optional[int] = None,
                            meta: Optional[Dict[str, Any]] = None) -> None:
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.episodic_memory_enabled():
             return
         if outcome not in _TERMINAL:                # don't stamp an in-progress row
@@ -57,8 +57,9 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
       read as ``total_user_cost_usd``.
     - steps: sum of ``agent.state.n_steps`` across the orchestrator's non-sub-agent
       agents (``orchestrator.agents``, skipping ``agent._is_sub_agent``).
-    - artifacts: left empty — no cheap workspace-diff was available at the call
-      sites; a follow-up may populate it.
+    - artifacts: the evidence pack's bounded, no-LLM collector (B4/D4 — ledger
+      descriptors for real-output actions + time-windowed workspace file scan,
+      ``agents.task.runtime.evidence.collect_artifacts``). ``[]`` on any error.
 
     Every lookup is defensive: a ``None`` orchestrator, a missing attribute, a
     ``None`` usage_tracker, or a DB error all degrade silently to the zero value.
@@ -82,6 +83,15 @@ async def collect_provenance(orchestrator: Any) -> Dict[str, Any]:
         if tracker is not None and session_id:
             breakdown = await tracker.get_session_breakdown(session_id)
             out["spend_usd"] = float(breakdown.get("total_user_cost_usd", 0.0) or 0.0)
+    except Exception:
+        pass
+    try:
+        # Lazy import (same pattern as finalize_episode's constants import) so this
+        # module keeps working when the agents package isn't importable.
+        from agents.task.runtime import evidence as _evidence
+        arts = _evidence.collect_artifacts(orchestrator)
+        if arts:
+            out["artifacts"] = arts
     except Exception:
         pass
     return out

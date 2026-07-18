@@ -97,8 +97,18 @@ from cli.commands.subagents import subagents as _subagents_group  # noqa: E402
 from cli.commands.todos import todos as _todos_group  # noqa: E402
 from cli.commands.update import update_cmd as _update_cmd  # noqa: E402
 from cli.commands.pfp import pfp as _pfp_group  # noqa: E402
+from cli.commands.soul import soul as _soul_group  # noqa: E402
 from cli.commands.journey import journey as _journey_cmd  # noqa: E402
+from cli.commands.finance import finance as _finance_cmd  # noqa: E402
+from cli.commands.cron import cron as _cron_group  # noqa: E402
 from cli.commands.wallet import wallet_cmd as _wallet_cmd  # noqa: E402
+from cli.commands.datagen import datagen as _datagen_group  # noqa: E402
+from cli.commands.knowledge import knowledge as _knowledge_group  # noqa: E402
+from cli.commands.approvals import approvals as _approvals_group  # noqa: E402
+from cli.commands.discord import discord as _discord_cmd  # noqa: E402
+from cli.commands.slack import slack as _slack_cmd  # noqa: E402
+from cli.commands.signal import signal as _signal_cmd  # noqa: E402
+from cli.commands.x import x as _x_cmd  # noqa: E402
 
 cli.add_command(_run_cmd)
 cli.add_command(_session_group)
@@ -122,12 +132,22 @@ cli.add_command(_dashboard_cmd, name="webgate")  # alias
 cli.add_command(_surface_group)
 cli.add_command(_gateway_cmd)
 cli.add_command(_goals_group)
+cli.add_command(_cron_group)
 cli.add_command(_subagents_group)
 cli.add_command(_todos_group)
 cli.add_command(_update_cmd)
 cli.add_command(_pfp_group)
+cli.add_command(_soul_group)
 cli.add_command(_journey_cmd)
+cli.add_command(_finance_cmd)
 cli.add_command(_wallet_cmd)
+cli.add_command(_datagen_group)
+cli.add_command(_knowledge_group)
+cli.add_command(_approvals_group)
+cli.add_command(_discord_cmd)
+cli.add_command(_slack_cmd)
+cli.add_command(_signal_cmd)
+cli.add_command(_x_cmd)
 
 
 def main():

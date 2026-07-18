@@ -190,3 +190,36 @@ def test_budget_without_store_unchanged():
     b = ReentryBudget(2, 0.0)
     assert b.try_consume("s1") and b.try_consume("s1")
     assert b.try_consume("s1") is False
+
+
+def test_record_terminal_cas_does_not_clobber_completed(store):
+    """P1 (finalization): the cold-start sweep uses only_if_running=True so it can't
+    overwrite a delegation that a concurrent completion already moved to terminal."""
+    store.record_dispatched(
+        session_id="s1", user_id="u1", delegation_id="deleg_0001",
+        goal="g", profile="executor", parent_agent_id=None, dispatched_at=100.0,
+    )
+    # Genuine completion (authoritative, unconditional).
+    n1 = store.record_terminal("s1", "deleg_0001", status="completed",
+                               completed_at=101.0, result_text="the real result")
+    assert n1 == 1
+
+    # Sweep tries to mark interrupted with the CAS guard — must change 0 rows.
+    n2 = store.record_terminal("s1", "deleg_0001", status="interrupted",
+                               completed_at=102.0, result_text="restarted",
+                               only_if_running=True)
+    assert n2 == 0
+    row = store.get("s1", "deleg_0001")
+    assert row["status"] == "completed"
+    assert row["result_text"] == "the real result"
+
+
+def test_record_terminal_cas_marks_a_still_running_row(store):
+    store.record_dispatched(
+        session_id="s2", user_id="u1", delegation_id="deleg_0002",
+        goal="g", profile="executor", parent_agent_id=None, dispatched_at=100.0,
+    )
+    n = store.record_terminal("s2", "deleg_0002", status="interrupted",
+                              completed_at=102.0, only_if_running=True)
+    assert n == 1
+    assert store.get("s2", "deleg_0002")["status"] == "interrupted"

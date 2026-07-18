@@ -27,11 +27,61 @@ logger = logging.getLogger(__name__)
 
 # Proposal 001 (owner-approved option 2, 2026-07-01): tools an agent may request for its OWN
 # self-created goals, filtered to a safe allowlist so it can self-direct research/content/coding
-# (and — per owner — posting) but NOT self-grant money (wallet/x402/hyperliquid/polymarket),
-# code execution, cron, or meta goal/skill tools. Mirrors CHILD_INHERITABLE_TOOLS + web_fetch + twitter.
+# (and — per owner — posting) but NOT self-grant money-SPEND (wallet/x402_pay/hyperliquid/
+# polymarket), code execution, cron, or meta goal/skill tools.
+# Proposal 009 (owner battle-test kickoff, 2026-07-13/14): the kickoff mission explicitly
+# sanctions email outreach, telegram group/channel posting (`message` — every send is still
+# gated by the owner outbound allowlist) and x402 INVOICING (receivables only, capped;
+# x402_pay/spend stays excluded), plus knowledge notes.
 _SELF_GOAL_ALLOWED_TOOLS = frozenset(
-    {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding", "web_fetch", "twitter"}
+    {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding", "web_fetch",
+     "twitter", "email", "message", "x402_invoice", "knowledge"}
 )
+
+
+def allowed_self_goal_tools() -> frozenset:
+    """Tool ids an agent-created goal may request. Under effective autonomous mode
+    (AUTONOMY_MODE=autonomous on a single-owner instance) this expands to the full
+    AUTONOMOUS_MODE_TOOLS grant; money-spend/host tools are in NEITHER set."""
+    try:
+        from agents.task.constants import AUTONOMOUS_MODE_TOOLS
+        from core.config_policy import full_autonomy_enabled
+        if full_autonomy_enabled():
+            return frozenset(_SELF_GOAL_ALLOWED_TOOLS | set(AUTONOMOUS_MODE_TOOLS))
+    except Exception:
+        pass
+    return _SELF_GOAL_ALLOWED_TOOLS
+
+
+# Proposal 009 #1 (2026-07-14): whenever a self-created goal carries ANY tools payload, union in
+# this safe baseline so the dispatched session is never starved of basics (night-1 failure mode:
+# tools=['twitter'] sessions had no filesystem; text-only goals had no web_fetch to research).
+_SELF_GOAL_BASELINE_TOOLS = ("filesystem", "task", "web_fetch", "knowledge")
+
+# Proposal 009 option B: when the agent sets no `tools`, infer them from the goal's own text —
+# the night-1 blocked goals literally named their needed tool in title/acceptance ("Publish
+# queued OSS launch X thread" → twitter) but dispatched tool-starved. Substring match on
+# lowercased title+body+acceptance; result is still filtered through _SELF_GOAL_ALLOWED_TOOLS,
+# so inference can never grant more than an explicit request could.
+_TOOL_TEXT_TOKENS = {
+    "twitter": ("twitter", "tweet", "x thread", "x post", "x.com"),
+    "email": ("email", "e-mail", "mailbox", "imap", "smtp"),
+    "message": ("telegram", "t.me/", "channel"),
+    "x402_invoice": ("x402", "invoice", "invoicing"),
+    "web_fetch": ("web_fetch", "fetch", "http", "url", "website", "research", "browse"),
+    "knowledge": ("knowledge", "notes"),
+    "anysite": ("anysite",),
+    "coding": ("coding",),
+}
+
+
+def _infer_tools_from_text(*texts: Optional[str]) -> set:
+    blob = " ".join(t for t in texts if t).lower()
+    if not blob:
+        return set()
+    found = {tool for tool, tokens in _TOOL_TEXT_TOKENS.items()
+             if any(tok in blob for tok in tokens)}
+    return found & allowed_self_goal_tools()
 
 
 class GoalCreateAction(BaseModel):
@@ -41,11 +91,25 @@ class GoalCreateAction(BaseModel):
     priority: int = Field(5, ge=1, le=10, description="1-10, higher runs first.")
     tools: Optional[List[str]] = Field(
         None,
-        description=("Optional tools this goal may use (e.g. ['filesystem','coding','web_fetch',"
-                     "'twitter']). Filtered to a safe allowlist; money/code-exec/cron are never granted."),
+        description=("ALWAYS list every tool this goal needs to actually finish (e.g. 'twitter' "
+                     "to post to X, 'email' to send mail, 'message' to post to telegram, "
+                     "'x402_invoice' to invoice, 'web_fetch' to read the web) — a goal without "
+                     "the right tools dispatches tool-starved and blocks. Filtered to a safe "
+                     "allowlist; money-spend/code-exec/cron are never granted. If unset, tools "
+                     "are inferred from the goal text and a safe baseline is applied."),
     )
     objective_id: Optional[str] = Field(None, description="Parent objective this goal advances.")
     acceptance: Optional[str] = Field(None, description="What 'done' must prove (ids/paths/urls).")
+    acceptance_checks: Optional[List[Any]] = Field(
+        None,
+        description=("Optional TYPED checks the framework executes at run end (fail-closed "
+                     "when present). ONLY these types exist — do NOT invent others: "
+                     "[{'type':'artifact_glob','pattern':'*.md'}, "
+                     "{'type':'http_ok','url':'https://…'}, "
+                     "{'type':'file_contains','path':'report.md','contains':['A','B'],"
+                     "'mode':'all'}]. Prefer setting one when the outcome is mechanically "
+                     "checkable."),
+    )
 
 
 class GoalListAction(BaseModel):
@@ -61,6 +125,12 @@ class GoalShowAction(BaseModel):
 class GoalCancelAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     goal_id: str = Field(..., description="The goal id to cancel.")
+
+
+class GoalUnblockAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    goal_id: str = Field(..., description="The blocked goal id.")
+    rationale: str = Field("", description="Why it can proceed now (what changed).")
 
 
 class ObjectiveAddAction(BaseModel):
@@ -116,8 +186,9 @@ class GoalTool(BaseTool):
 
     def _resolve_board(self) -> GoalBoard:
         if getattr(self, "_goal_board", None) is None:
-            data_dir = getattr(self.config, "data_dir", "data") if getattr(self, "config", None) else "data"
-            self._goal_board = GoalBoard(os.path.join(data_dir, "goals.db"))
+            from core.runtime_paths import goals_db_path
+            data_dir = getattr(self.config, "data_dir", None) if getattr(self, "config", None) else None
+            self._goal_board = GoalBoard(goals_db_path(data_dir))
         return self._goal_board
 
     @staticmethod
@@ -134,13 +205,21 @@ class GoalTool(BaseTool):
     async def goal_create(self, params: GoalCreateAction, execution_context=None) -> ActionResult:
         user_id = self._user(execution_context)
         payload: dict = {}
+        allowed: List[str] = []
         if params.tools:
-            allowed = [t for t in params.tools if t in _SELF_GOAL_ALLOWED_TOOLS]
-            dropped = [t for t in params.tools if t not in _SELF_GOAL_ALLOWED_TOOLS]
+            _allowed_set = allowed_self_goal_tools()
+            allowed = [t for t in params.tools if t in _allowed_set]
+            dropped = [t for t in params.tools if t not in _allowed_set]
             if dropped:
                 logger.info("goal_create: dropped non-allowlisted tools %s (kept %s)", dropped, allowed)
-            if allowed:
-                payload["tools"] = allowed
+        inferred: set = set()
+        if not allowed:
+            # Proposal 009 option B: no (valid) explicit tools — infer from the goal's own text.
+            inferred = _infer_tools_from_text(params.title, params.body, params.acceptance)
+            if inferred:
+                logger.info("goal_create: inferred tools %s from goal text", sorted(inferred))
+        if allowed or inferred:
+            payload["tools"] = sorted(set(allowed) | inferred | set(_SELF_GOAL_BASELINE_TOOLS))
         board = self._resolve_board()
         parent_id = None
         if params.objective_id:
@@ -151,6 +230,13 @@ class GoalTool(BaseTool):
             parent_id = obj.id
         if params.acceptance:
             payload["acceptance"] = params.acceptance
+        if params.acceptance_checks:
+            # §4.4: optional sharpener — keep only well-formed {'type': str, ...}
+            # dicts; malformed entries are dropped (never a create gate).
+            typed = [c for c in params.acceptance_checks
+                     if isinstance(c, dict) and str(c.get("type") or "").strip()]
+            if typed:
+                payload["acceptance_checks"] = typed[:10]
         try:
             goal = board.create(
                 user_id=user_id, title=params.title, body=params.body, priority=params.priority,
@@ -182,10 +268,46 @@ class GoalTool(BaseTool):
         g = board.get(params.goal_id)
         if not g or g.user_id != self._user(execution_context):
             return ActionResult(error="Goal not found.", include_in_memory=True)
-        msg = (f"Goal `{g.id}` [{g.status}] p{g.priority}\n"
-               f"Title: {g.title}\nFailures: {g.consecutive_failures}/{g.max_retries}\n"
-               f"Result: {(g.result or '')[:500]}")
-        return ActionResult(extracted_content=msg, include_in_memory=True)
+        payload = g.payload or {}
+        lines = [
+            f"Goal `{g.id}` [{g.status}] p{g.priority}",
+            f"Title: {g.title}",
+            f"Failures: {g.consecutive_failures}/{g.max_retries}",
+            f"Result: {(g.result or '')[:500]}",
+        ]
+        # §5.2/§5.3 stewardship: the agent sees its goal's full contract + attempt
+        # history so it can maintain its pipeline and its user's picture of it.
+        if payload.get("acceptance"):
+            lines.append(f"Acceptance: {str(payload['acceptance'])[:300]}")
+        if payload.get("acceptance_checks"):
+            lines.append(f"Typed checks: {payload['acceptance_checks']}")
+        if payload.get("outcome"):
+            lines.append(f"Outcome: {str(payload['outcome'])[:300]}")
+        if g.last_failure_error:
+            lines.append(f"Last failure: {str(g.last_failure_error)[:300]}")
+        attempts = payload.get("attempts") or []
+        if attempts:
+            lines.append("Attempts:")
+            for a in attempts[-5:]:
+                if isinstance(a, dict):
+                    lines.append(f"  - {str(a.get('error') or '')[:200]}")
+        return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
+
+    @BaseTool.action("Requeue a BLOCKED goal with a rationale (§5.3 stewardship; "
+                     "resets its retry budget).", param_model=GoalUnblockAction)
+    async def goal_unblock(self, params: GoalUnblockAction, execution_context=None) -> ActionResult:
+        refusal = _autonomy_refusal(execution_context)
+        if refusal:
+            return refusal
+        board = self._resolve_board()
+        ok = board.unblock(params.goal_id, user_id=self._user(execution_context),
+                           rationale=params.rationale)
+        if not ok:
+            return ActionResult(error=f"Cannot unblock `{params.goal_id}`: not a blocked goal of yours.",
+                                include_in_memory=True)
+        return ActionResult(
+            extracted_content=f"Unblocked goal `{params.goal_id}` (retry budget reset).",
+            include_in_memory=True)
 
     @BaseTool.action("Cancel a durable goal.", param_model=GoalCancelAction)
     async def goal_cancel(self, params: GoalCancelAction, execution_context=None) -> ActionResult:
@@ -262,7 +384,7 @@ class GoalTool(BaseTool):
         if params.acceptance is not None:
             patch["acceptance"] = params.acceptance
         if params.tools is not None:
-            patch["tools"] = [t for t in params.tools if t in _SELF_GOAL_ALLOWED_TOOLS]
+            patch["tools"] = [t for t in params.tools if t in allowed_self_goal_tools()]
         ok = self._resolve_board().update_fields(
             params.goal_id, user_id=self._user(execution_context),
             title=params.title, body=params.body, priority=params.priority,
@@ -274,7 +396,7 @@ class GoalTool(BaseTool):
 
 
 def goals_enabled() -> bool:
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     return AutonomyConfig.goals_enabled()
 
 

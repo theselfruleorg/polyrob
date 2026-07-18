@@ -570,8 +570,12 @@ def create_app() -> FastAPI:
     x402_enabled = os.environ.get("X402_ENABLED", "false").lower() == "true"
     if x402_enabled:
         try:
-            from modules.x402.middleware import X402PaymentMiddleware
+            from modules.x402.middleware import X402PaymentMiddleware, install_auth_state_writer
+            from api.auth_state import set_auth_state
 
+            # R-4 inversion: modules/x402 no longer imports api.auth_state; the
+            # api tier installs the canonical C4 writer at mount time.
+            install_auth_state_writer(set_auth_state)
             app.add_middleware(X402PaymentMiddleware, enabled=True)
             logger.info("✅ x402 payment middleware enabled (using fastapi-x402)")
         except ImportError as e:

@@ -20,7 +20,6 @@ from .user_utils import (
     generate_user_id,
     is_valid_hash_id,
     get_id_type,
-    get_or_create_user_from_data,
     format_user_display_name
 )
 
@@ -41,6 +40,5 @@ __all__ = [
     'generate_user_id',
     'is_valid_hash_id',
     'get_id_type',
-    'get_or_create_user_from_data',
     'format_user_display_name'
 ]

@@ -53,6 +53,8 @@ class MessageOrigin:
                                         # NOT a genuine human message
     RUNTIME_IDENTITY = "runtime_identity"  # the model/provider the agent is actually
                                         # running on — so it can answer truthfully
+    ENVIRONMENT = "environment"         # where the agent lives (host/workspace/
+                                        # posture axes) — 014-C1 foundation block
     EPISODIC_DIGEST = "episodic_digest"    # session-start recent-activity digest
                                         # (own recent runs), chat/owner sessions only
     SESSION_BRIDGE = "session_bridge"      # cross-session continuity bridge (Task 6)
@@ -201,6 +203,20 @@ class AIMessage(BaseMessage):
     id: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)
     usage_metadata: Optional[Dict[str, Any]] = None
+    # Money-correctness fix (Task 5c fix pass 2): the provider's own response
+    # id (Anthropic ``msg_...``, OpenAI/OpenRouter ``chatcmpl-...``, etc.),
+    # stamped by ``modules.llm.adapters.LLMClientAdapter._agenerate`` onto
+    # THIS per-call AIMessage instance right after the raw provider response
+    # is captured. Deliberately a dedicated field (not the generic ``id``
+    # above, which is message-identity, not provider-completion-identity) so
+    # ``extract_stable_request_id`` (agents/task/agent/core/aux_metering.py)
+    # can read a STABLE, per-call idempotency key for billing dedup without
+    # racing a concurrent call that shares the same underlying LLM client
+    # object (parallel sub-agent delegation shares `parent_agent.llm`
+    # verbatim -- see SubAgentManager.run_subtask). Never sent to the
+    # provider wire format (to_dict() does not include it) and never
+    # persisted (checkpoint/save_to_disk whitelist fields explicitly).
+    _polyrob_provider_response_id: Optional[str] = None
 
     def __post_init__(self):
         """Initialize defaults and sync tool_calls with additional_kwargs."""

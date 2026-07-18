@@ -104,22 +104,21 @@ def payment_required_response(
 ) -> Dict[str, Any]:
     """Generate 402 response with both payment options."""
     from modules.x402.x402_integration import get_x402_price_usd
+    from modules.x402.middleware import build_x402_challenge
 
     cost_usd = cost_credits * 0.01
     # C2: single price SSOT — the quoted x402 price MUST equal the live charge.
     x402_cost_usd = get_x402_price_usd()
 
-    # Get x402 handler from app state
-    payment_handler = getattr(request.app.state, 'x402_handler', None)
-
-    x402_details = {}
-    if payment_handler:
-        x402_response = payment_handler.create_payment_required_response(
-            amount_usd=x402_cost_usd,
-            asset="usdc",
-            metadata={"endpoint": request.url.path, "cost_credits": cost_credits}
-        )
-        x402_details = x402_response['body']['payment']
+    # G-16: share the SAME challenge builder the middleware's own early 402 uses
+    # (`build_x402_challenge`) instead of reading `app.state.x402_handler` — that
+    # attribute is never assigned anywhere (api/app.py: "x402 is now handled via
+    # fastapi-x402 middleware, no custom handler needed"), so this branch always
+    # produced an EMPTY payment_details dict. A payer hitting either 402 producer
+    # (the middleware's early challenge, or this endpoint-layer 402 once a request
+    # gets further with no valid payment) now gets the same usable `accepts` block.
+    x402_challenge = build_x402_challenge(request.url.path, cost_usd=x402_cost_usd)
+    payment_details = x402_challenge["accepts"][0]
 
     return {
         "error": "Payment Required",
@@ -132,7 +131,9 @@ def payment_required_response(
             },
             "x402": {
                 "cost_usd": x402_cost_usd,
-                "payment_details": x402_details
+                "payment_details": payment_details,
+                "accepts": x402_challenge["accepts"],
+                "x402Version": x402_challenge["x402Version"],
             }
         }
     }

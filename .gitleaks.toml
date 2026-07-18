@@ -13,6 +13,8 @@ paths = [
     '''webview/static/js/ethers\.min\.js''',
     # credential-scrubbing tests: their whole point is to contain fake keys
     '''tests/unit/cli/ui/test_scrubber\.py''',
+    '''tests/unit/cli/ui/test_command_emit_scrub\.py''',
+    '''tests/unit/tools/hf_deploy/test_broker\.py''',
     '''tests/unit/cli/ui/test_nested_arg_scrub\.py''',
     '''tests/unit/cli/ui/test_tool_transparency\.py''',
     '''tests/unit/cli/test_quick_key_setup\.py''',

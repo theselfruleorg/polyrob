@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from core.exceptions import RateLimitError
 from core.base_component import BaseComponent
 from core.config import BotConfig
+from core.rate_limit import SlidingWindowLimiter
 
 class RateLimitManager(BaseComponent):
     """Manager for handling rate limits across different operations."""
@@ -41,13 +42,21 @@ class RateLimitManager(BaseComponent):
             }
         }
         
-        self._rate_limits = {}
         self._locks = {}
         self._initialization_mode = False
-        
+
         # Use extremely lenient defaults
         self._default_window = kwargs.get('window_seconds', getattr(config, 'rate_limit_window', 1))
         self._default_max_requests = kwargs.get('max_requests', getattr(config, 'rate_limit_max_requests', 100))
+
+        # F-1 (2026-07-17): the per-operation timestamp-list machinery is the
+        # canonical sliding-window primitive (key = operation, limits passed per
+        # call since they vary by operation); this class keeps the component /
+        # per-op-lock / init-mode / RateLimitError wrapper surface.
+        self._limiter = SlidingWindowLimiter(self._default_max_requests, self._default_window)
+        # operation -> (max_requests, window) as first registered — backs the
+        # legacy get_remaining_requests/get_reset_time contract (-1 for unknown).
+        self._op_limits_seen: Dict[str, Any] = {}
         
         # Much higher operation-specific limits
         self._operation_limits = {
@@ -110,17 +119,16 @@ class RateLimitManager(BaseComponent):
     async def _initialize(self) -> None:
         """Initialize rate limit manager internals."""
         try:
-            # Initialize rate limit tracking
-            self._rate_limits = {}
+            # Register the service-specific limits so remaining/reset queries
+            # answer for them before their first check.
             for service, endpoints in self._service_limits.items():
                 for endpoint_type, limits in endpoints.items():
                     operation = f"{service}_{endpoint_type}" if endpoint_type != 'default' else service
-                    self._rate_limits[operation] = {
-                        'requests': [],
-                        'max_requests': limits.get('max_requests', self._default_max_requests),
-                        'time_window': limits.get('window', self._default_window)
-                    }
-                    
+                    self._op_limits_seen[operation] = (
+                        limits.get('max_requests', self._default_max_requests),
+                        limits.get('window', self._default_window),
+                    )
+
             self._locks = {}
             self._last_cleanup = time.time()
             self.logger.info("Rate limit manager initialized successfully")
@@ -143,7 +151,8 @@ class RateLimitManager(BaseComponent):
     async def _cleanup(self) -> None:
         """Clean up rate limit manager resources."""
         try:
-            self._rate_limits.clear()
+            self._limiter = SlidingWindowLimiter(self._default_max_requests, self._default_window)
+            self._op_limits_seen.clear()
             self._locks.clear()
             self.logger.info("Rate limit manager cleaned up successfully")
         except Exception as e:
@@ -179,33 +188,23 @@ class RateLimitManager(BaseComponent):
                 self._locks[operation] = asyncio.Lock()
                 
             async with self._locks[operation]:
-                # Initialize rate limit tracking for operation if needed
-                if operation not in self._rate_limits:
-                    self._rate_limits[operation] = {
-                        'requests': [],
-                        'max_requests': max_reqs,
-                        'time_window': window
-                    }
-                    
-                # Get rate limit info
-                rate_limit = self._rate_limits[operation]
+                # Register the operation's limits on first sight (legacy: the
+                # first check's effective values win).
+                self._op_limits_seen.setdefault(operation, (max_reqs, window))
+
                 current_time = time.time()
-                
-                # Clean up old requests
-                cutoff_time = current_time - window
-                rate_limit['requests'] = [
-                    t for t in rate_limit['requests'] 
-                    if t > cutoff_time
-                ]
-                
+
                 # Check if we need to do cache cleanup
                 if current_time - self._last_cleanup > self._cleanup_interval:
                     await self._cleanup_old_entries()
                     self._last_cleanup = current_time
-                
-                # Check if we're over the limit
-                if len(rate_limit['requests']) >= max_reqs:
-                    wait_time = rate_limit['requests'][0] - cutoff_time
+
+                # Check-and-record via the canonical primitive (a denied call is
+                # never recorded).
+                if not self._limiter.check(operation, max_calls=max_reqs, window=window):
+                    wait_time = self._limiter.retry_after(
+                        operation, max_calls=max_reqs, window=window
+                    )
                     if self._initialization_mode:
                         # During initialization, just log warning and continue
                         self.logger.warning(
@@ -220,9 +219,7 @@ class RateLimitManager(BaseComponent):
                             message=f"Rate limit exceeded for {operation}. Please wait {wait_time:.1f} seconds."
                         )
                     return False
-                    
-                # Add current request
-                rate_limit['requests'].append(current_time)
+
                 return True
                 
         except RateLimitError:
@@ -239,31 +236,23 @@ class RateLimitManager(BaseComponent):
             return False
 
     async def _cleanup_old_entries(self) -> None:
-        """Clean up old rate limit entries."""
+        """Drop registrations (and their locks) for operations with no live
+        requests — the limiter prunes its own timestamps."""
         try:
-            current_time = time.time()
             operations_to_remove = []
-            
-            for operation, rate_limit in self._rate_limits.items():
-                cutoff_time = current_time - rate_limit['time_window']
-                rate_limit['requests'] = [
-                    t for t in rate_limit['requests'] 
-                    if t > cutoff_time
-                ]
-                
-                # If no recent requests, mark for removal
-                if not rate_limit['requests']:
+
+            for operation, (max_reqs, window) in list(self._op_limits_seen.items()):
+                if self._limiter.remaining(operation, max_calls=max_reqs, window=window) >= max_reqs:
                     operations_to_remove.append(operation)
-                    
-            # Remove empty operations
+
             for operation in operations_to_remove:
-                self._rate_limits.pop(operation, None)
+                self._op_limits_seen.pop(operation, None)
                 self._locks.pop(operation, None)
-                
+
             self.logger.debug(
                 f"Cleaned up {len(operations_to_remove)} expired rate limit entries"
             )
-            
+
         except Exception as e:
             self.logger.error(f"Error cleaning up rate limit entries: {e}")
 
@@ -277,21 +266,13 @@ class RateLimitManager(BaseComponent):
             Number of remaining requests, or -1 if operation not found
         """
         try:
-            if operation not in self._rate_limits:
+            seen = self._op_limits_seen.get(operation)
+            if seen is None:
                 return -1
-                
-            rate_limit = self._rate_limits[operation]
-            current_time = time.time()
-            cutoff_time = current_time - rate_limit['time_window']
-            
-            # Count valid requests
-            valid_requests = len([
-                t for t in rate_limit['requests']
-                if t > cutoff_time
-            ])
-            
-            return max(0, rate_limit['max_requests'] - valid_requests)
-            
+
+            max_reqs, window = seen
+            return self._limiter.remaining(operation, max_calls=max_reqs, window=window)
+
         except Exception as e:
             self.logger.error(f"Error getting remaining requests for {operation}: {e}")
             return -1
@@ -306,19 +287,17 @@ class RateLimitManager(BaseComponent):
             Seconds until reset, or -1 if operation not found
         """
         try:
-            if operation not in self._rate_limits:
+            seen = self._op_limits_seen.get(operation)
+            if seen is None:
                 return -1
-                
-            rate_limit = self._rate_limits[operation]
-            if not rate_limit['requests']:
+
+            _max_reqs, window = seen
+            oldest_request = self._limiter.oldest(operation, window=window)
+            if oldest_request is None:
                 return 0
-                
-            current_time = time.time()
-            oldest_request = min(rate_limit['requests'])
-            reset_time = oldest_request + rate_limit['time_window'] - current_time
-            
-            return max(0, reset_time)
-            
+
+            return max(0, oldest_request + window - time.time())
+
         except Exception as e:
             self.logger.error(f"Error getting reset time for {operation}: {e}")
             return -1

@@ -386,15 +386,10 @@ class BaseAgent(BaseComponent):
                     character=self.active_character
                 )
             
-            # Get knowledge context if available
+            # Dead branch removed (D10, 2026-07-11): MemoryManager.knowledge_base is
+            # permanently None since the RAG KB was retired — cross-session recall
+            # lives in the MemoryProvider backends now.
             knowledge_context = ""
-            if self.memory_manager and self.memory_manager.knowledge_base:
-                entries = await self.memory_manager.knowledge_base.search(
-                    query=input_text,
-                    top_k=3
-                )
-                if entries:
-                    knowledge_context = "\n\n".join(e["text"] for e in entries)
             
             return {
                 "system": system_prompt,

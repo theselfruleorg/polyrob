@@ -45,9 +45,11 @@ def _resolve_configured_db_path(
 ) -> Optional[Path]:
     """The REAL bot.db path the app uses: ``DB_PATH`` env, else the config ``.env``.
 
-    Mirrors ``core/config.py``: a relative value anchors to ``POLYROB_DATA_DIR`` when
-    set, else the data-home. Returns None when nothing pins it (the manifest's default
-    layouts then cover it).
+    Since R-2 B2 the app genuinely honors DB_PATH
+    (``modules/database/database_manager.py::resolve_bot_db_path``), so trusting it
+    here is finally correct. A relative value anchors to ``POLYROB_DATA_DIR`` when
+    set, else the data-home. Returns None when nothing pins it (the manifest's
+    default layouts then cover it).
     """
     raw = os.getenv("DB_PATH")
     if not raw:
@@ -90,11 +92,15 @@ def resolve_update_context(*, local: bool = True) -> UpdateContext:
         if cand.is_file() and cand not in config_paths:
             config_paths.append(cand)
     try:
-        from core.paths import polyrob_home
+        from core.paths import env_file_candidates
 
-        home_env = polyrob_home() / ".env"
-        if home_env.is_file() and home_env not in config_paths:
-            config_paths.append(home_env)
+        # Snapshot the user-level env layers the runtime actually reads (R-1):
+        # ~/.polyrob/.env plus the legacy ~/.rob/.env transition fallback, which
+        # still holds live keys on migrated boxes — a rollback must restore both.
+        for cand in env_file_candidates(local_mode=True):
+            if cand.tier in ("home", "legacy-home") and cand.path.is_file() \
+                    and cand.path not in config_paths:
+                config_paths.append(cand.path)
     except Exception:
         pass
 
@@ -102,15 +108,37 @@ def resolve_update_context(*, local: bool = True) -> UpdateContext:
     # skills out of the code tree into <data_home>/skills, a code swap (pip -U) no
     # longer touches them — but they must ride the snapshot so update/rollback
     # preserves them alongside identity/.
-    dir_paths: List[Path] = [p for p in (data_home / "identity", data_home / "skills") if p.is_dir()]
+    # M1 (2026-07-15): back up wallet/ too — meta.json (the write-once derivation
+    # record) + audit.jsonl (the spend/replay audit). Without it a restore brings
+    # back the seed's config copy but not meta.json, so resolve_scheme falls back
+    # to "legacy" post-restore (silent derivation-scheme flip, H1/H2 chain) and
+    # the spend caps/replay guard reset.
+    dir_paths: List[Path] = [
+        p for p in (data_home / "identity", data_home / "skills", data_home / "wallet")
+        if p.is_dir()
+    ]
 
     # Resolve the REAL bot.db path from config (not a guessed layout). Pass it as an
     # explicit extra so it is captured even when it lives OUTSIDE data_home (prod:
     # /opt/polyrob/data/database/bot.db). The manifest's default layouts still cover
     # the un-configured case. (§2.6 — data-loss guard.)
     configured_db = _resolve_configured_db_path(config_paths, data_home)
-    extra = [configured_db] if configured_db else None
-    db_paths = all_sqlite_dbs(data_home, extra_dbs=extra)
+    extra: List[Path] = [configured_db] if configured_db else []
+    # R-2 T2: a pre-relocation install still holds telemetry_events.db /
+    # messages.db at the legacy SESSION-tree location (<data_root>/<name>) while
+    # the manifest's candidates sit on the data-home axis — capture the legacy
+    # files explicitly so a backup never silently misses them.
+    try:
+        from core.runtime_paths import resolve_session_data_root
+
+        session_root = Path(resolve_session_data_root())
+        for name in ("telemetry_events.db", "messages.db"):
+            legacy = session_root / name
+            if legacy.is_file():
+                extra.append(legacy)
+    except Exception:
+        pass
+    db_paths = all_sqlite_dbs(data_home, extra_dbs=extra or None)
 
     return UpdateContext(
         data_home=data_home,

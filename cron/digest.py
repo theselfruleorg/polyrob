@@ -15,15 +15,22 @@ import time
 from typing import Any, Dict, List, Optional
 
 
+def digest_enabled_for(user_id: Optional[str], home_dir: Optional[str]) -> bool:
+    """Owner's digest on/off switch: pref (override, spec ``digest.enabled``)
+    over the ``OWNER_DIGEST_ENABLED`` env default. No pref file present =>
+    byte-identical to ``AutonomyConfig.owner_digest_enabled()`` (owner-UX P1 T4)."""
+    from core.config_policy import AutonomyConfig
+    from core import prefs
+    env_value = AutonomyConfig.owner_digest_enabled()
+    return prefs.resolve("digest.enabled", user_id, home_dir,
+                         env_value=env_value, default=env_value)
+
+
 def _ledger(user_id: str, days: int) -> Dict[str, Any]:
-    try:
-        from core.async_bridge import run_coroutine_sync
-        from modules.credits.unified_ledger import build_ledger
-        # Loop-safe: compose_digest is awaited inside the cron runner's running
-        # loop, where a bare asyncio.run would raise and empty the money section.
-        return run_coroutine_sync(build_ledger(user_id, days=max(1, int(days)))) or {}
-    except Exception:
-        return {}
+    """Seam kept for test monkeypatching; the read lives on the shared layer (T8).
+    include_balances=True: the digest is a display surface (spec §4.1)."""
+    from core.activity_evidence import ledger_rollup
+    return ledger_rollup(user_id, days, include_balances=True)
 
 
 def _event_aggregate(user_id: str, since_ts: Optional[float]) -> Dict[str, Any]:
@@ -41,7 +48,8 @@ def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
         import os
 
         from agents.task.goals.board import GoalBoard
-        board = GoalBoard(os.path.join(data_dir or "data", "goals.db"))
+        from core.runtime_paths import goals_db_path
+        board = GoalBoard(goals_db_path(data_dir))
         rows = board.asks(user_id=user_id, status="open") or []
         out = []
         for a in rows:
@@ -53,19 +61,11 @@ def _open_asks(user_id: str, data_dir: Optional[str]) -> List[Dict[str, Any]]:
 
 
 def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
-    try:
-        from core.async_bridge import run_coroutine_sync
-        from modules.memory.registry import memory_recall_episodes
-        rows = run_coroutine_sync(memory_recall_episodes(
-            user_id=user_id, since_ts=int(since_ts) if since_ts else None,
-            limit=20, order="newest"))
-        out = []
-        for r in rows or []:
-            get = (r.get if isinstance(r, dict) else lambda k, d=None: getattr(r, k, d))
-            out.append({"kind": get("kind"), "outcome": get("outcome")})
-        return out
-    except Exception:
-        return []
+    """Seam kept for test monkeypatching; the read lives on the shared layer (T8).
+    Rows carry the superset fields (kind/outcome/spend_usd/task/ts) — the digest
+    consumes kind/outcome and ignores the rest."""
+    from core.activity_evidence import recent_episodes
+    return recent_episodes(user_id, since_ts)
 
 
 async def compose_digest(user_id: str, *, days: int = 1,
@@ -77,22 +77,63 @@ async def compose_digest(user_id: str, *, days: int = 1,
     asks = _open_asks(user_id, data_dir)
     episodes = _episodes(user_id, since_ts)
 
+    from core.event_kinds import GOAL_COMPLETION, GOAL_RUN, SELF_MODIFICATION
     counts = agg.get("counts_by_kind", {}) or {}
     n_sessions = len(episodes)
-    n_goals = int(counts.get("goal_run", 0)) + int(counts.get("goal_completion", 0))
-    n_self_mods = int(counts.get("self_modification", 0))
-    earned = float(ledger.get("earned_usd") or 0.0)
-    spent = float(ledger.get("total_spend_usd") or 0.0)
-    net = float(ledger.get("net_usd") or (earned - spent))
-    pending_n = int(ledger.get("pending_invoices") or 0)
-    pending_usd = float(ledger.get("pending_invoices_usd") or 0.0)
+    n_goals = int(counts.get(GOAL_RUN, 0)) + int(counts.get(GOAL_COMPLETION, 0))
+    n_self_mods = int(counts.get(SELF_MODIFICATION, 0))
 
     period = "today" if days == 1 else f"last {days}d"
     lines = [f"Daily digest — {period}:"]
     lines.append(f"• Activity: {n_sessions} session(s), {n_goals} goal event(s), "
                  f"{n_self_mods} self-change(s)")
-    lines.append(f"• Money: earned ${earned:.2f}, spent ${spent:.2f}, net ${net:.2f}"
-                 + (f"; {pending_n} pending invoice(s) ${pending_usd:.2f}" if pending_n else ""))
+
+    # H14b (final whole-branch review, Finding 1): `_ledger` fails open to `{}`
+    # when the unified-ledger read raises (or the DB isn't there). `{}` and a
+    # genuinely quiet day with real zeros used to render the EXACT same
+    # "Treasury: income $0.00, spend $0.00, net $0.00" / "Runtime cost: $0.00"
+    # lines — the owner had no way to tell "we couldn't read the ledger" from
+    # "nothing happened today". This is the same lie shape as the 2026-07-16
+    # incident this project exists to fix. Short-circuit to an honest empty
+    # state instead of fabricating money lines from an empty dict.
+    if not ledger:
+        lines.append("• Money: no data (ledger unreadable)")
+    else:
+        t = ledger.get("treasury") or {}
+        r = ledger.get("runtime") or {}
+        income = float(t.get("income_usd") or 0.0)
+        t_spend = float(t.get("spend_usd") or 0.0)
+        t_net = float(t.get("net_usd") or 0.0)
+        t_balance = t.get("balance_usd")
+        pending_n = int(t.get("pending_count") or 0)
+        pending_usd = float(t.get("pending_usd") or 0.0)
+        r_window = float(r.get("spend_window_usd") or 0.0)
+        r_total = float(r.get("spend_total_usd") or 0.0)
+        r_balance = r.get("provider_balance_usd")
+
+        treasury_line = f"• Treasury: income ${income:.2f}, spend ${t_spend:.2f}, net ${t_net:.2f}"
+        if t_balance is not None:
+            treasury_line += f" · balance ${t_balance:.2f}"
+        if pending_n:
+            treasury_line += f"; {pending_n} pending invoice(s) ${pending_usd:.2f}"
+        lines.append(treasury_line)
+        runtime_line = f"• Runtime cost: ${r_window:.2f} {period} · ${r_total:.2f} total"
+        if r_balance is not None:
+            runtime_line += f" · balance ${r_balance:.2f}"
+        lines.append(runtime_line)
+
+        # Partial degradation (SOME legs read, some didn't — distinct from the
+        # fully-unreadable `{}` case above) still renders the numbers it has,
+        # annotated so the owner knows a leg is absent rather than zero.
+        # Mirrors core/recap.py and cli/ui/commands/h_finance.py.
+        try:
+            from modules.credits.unified_ledger import ledger_availability_note
+            note = ledger_availability_note(ledger)
+            if note:
+                lines.append(f"  ⚠ {note}")
+        except Exception:
+            pass
+
     if asks:
         lines.append(f"• Pending approvals ({len(asks)}):")
         for a in asks[:5]:
@@ -115,7 +156,18 @@ async def run_digest(task_agent: Any, job: Any) -> bool:
         text = await compose_digest(getattr(job, "user_id", ""), days=days, data_dir=data_dir)
     except Exception:
         return False
-    target = payload.get("deliver") or "telegram"
+    # owner-UX P1 T4: an explicit payload.deliver still wins (a seeded job's own
+    # setting); absent that, the digest.channel pref overrides the "telegram"
+    # legacy default. Reuses the SAME data_dir already resolved above (no new
+    # global default) — falls back to "data" (this function's existing
+    # convention, mirroring _open_asks) when the job set none.
+    try:
+        from cron.delivery import effective_digest_channel
+        from core.runtime_paths import data_dir_or_home
+        target = payload.get("deliver") or effective_digest_channel(
+            getattr(job, "user_id", ""), data_dir_or_home(data_dir))
+    except Exception:
+        target = payload.get("deliver") or "telegram"
     try:
         from cron.delivery import deliver_result
         return await deliver_result(task_agent, job, text, target=target,

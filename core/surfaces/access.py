@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 from enum import Enum
+from core.config_policy import _mode_capability_default
 from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _LOCAL_OWNER_SURFACES = {"cli", "local", "repl"}
 class AccessTier(str, Enum):
     OWNER = "owner"
     CORRESPONDENT = "correspondent"
+    GROUP_PARTICIPANT = "group_participant"  # W3: non-owner in an allowlisted group
     DENIED = "denied"
 
 
@@ -62,13 +64,43 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
     try:
         from core.pairing import PairingStore
         cfg = getattr(container, "config", None) if container else None
-        data_dir = getattr(cfg, "data_dir", "data") or "data"
+        from core.runtime_paths import data_dir_or_home
+        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
         store = PairingStore(os.path.join(data_dir, "pairing.db"))
         if store.is_paired(uid):
             return True
     except Exception as e:
         logger.debug("access-tier pairing check failed (fail-closed): %s", e)
     return False
+
+
+def _group_chat_mode_default() -> bool:
+    """Default for GROUP_CHAT_ENABLED when it is unset in the resolved env source:
+    ON under effective autonomous mode (core.config_policy._mode_capability_default),
+    else OFF — same guarded pattern as core/config.py's MCP consumer seam
+    (013 T2 review fix, Finding 1). Without this, `resolve_access_tier` re-derived the
+    flag from raw env and disagreed with `SurfaceConfig.group_chat_enabled()` (which the
+    dispatcher already checks before reaching here), leaving group ingress DENIED under
+    autonomous mode with the env unset. Fail-closed: any import/call fault -> False."""
+    try:
+        return _mode_capability_default("GROUP_CHAT_ENABLED")
+    except Exception as e:
+        logger.debug("group-chat mode-default check failed (fail-closed to off): %s", e)
+        return False
+
+
+def _group_chat_allowed(container: Any, surface: str, chat_id: str) -> bool:
+    """Default-DENY group allowlist check. Fail-closed: any fault -> False."""
+    try:
+        from core.surfaces.group_allowlist import GroupAllowlist
+        cfg = getattr(container, "config", None) if container else None
+        from core.runtime_paths import data_dir_or_home
+        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        store = GroupAllowlist(os.path.join(data_dir, "group_allowlist.db"))
+        return store.is_allowed(surface, chat_id)
+    except Exception as e:
+        logger.debug("group allowlist check failed (fail-closed): %s", e)
+        return False
 
 
 def resolve_access_tier(
@@ -89,9 +121,29 @@ def resolve_access_tier(
         surface = getattr(source, "surface_id", "") or ""
         chat_type = getattr(source, "chat_type", "dm") or "dm"
 
-        # v1: no per-author tiering inside a multi-party chat -> DENIED.
+        # Multi-party chats: DENIED unless the operator opted into group chat
+        # (GROUP_CHAT_ENABLED, W3). When on: the chat must be allowlisted
+        # (default-DENY GroupAllowlist), the owner keeps OWNER, and everyone
+        # else in an allowed chat becomes GROUP_PARTICIPANT (their messages are
+        # mention-gated DATA at the dispatcher — never a command/steer turn).
         if chat_type != "dm":
-            return AccessTier.DENIED
+            raw_group = src.get("GROUP_CHAT_ENABLED", "")
+            if raw_group is None or not str(raw_group).strip():
+                # Unset -> the mode-governed default (explicit env, even falsey,
+                # always wins over the default; only the unset case moves).
+                group_on = _group_chat_mode_default()
+            else:
+                group_on = str(raw_group).strip().lower() in _BOOL_TRUE
+            if not group_on:
+                return AccessTier.DENIED
+            chat_id = str(getattr(source, "chat_id", "") or "")
+            if not chat_id or not _group_chat_allowed(container, surface, chat_id):
+                return AccessTier.DENIED
+            # Inside a group, the local-owner bypass is NEVER honoured — group
+            # senders are network principals even on a locally-launched surface.
+            if _is_owner_or_paired(container, uid, src, allow_local=False):
+                return AccessTier.OWNER
+            return AccessTier.GROUP_PARTICIPANT
 
         if _is_owner_or_paired(container, uid, src,
                                allow_local=surface in _LOCAL_OWNER_SURFACES):

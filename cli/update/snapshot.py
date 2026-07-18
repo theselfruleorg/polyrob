@@ -51,6 +51,10 @@ class SnapshotManifest:
     git_sha: Optional[str]
     items: List[SnapshotItem] = field(default_factory=list)
     label: Optional[str] = None
+    # "full" = DBs + config + identity (the pre-update master snapshot);
+    # "db_only" = databases only (e.g. a standalone pre-migrate snapshot).
+    # Rollback selection prefers "full" (see latest_complete).
+    scope: str = "full"
 
     def to_json(self) -> str:
         return json.dumps({
@@ -60,12 +64,19 @@ class SnapshotManifest:
             "created_at": self.created_at,
             "git_sha": self.git_sha,
             "label": self.label,
+            "scope": self.scope,
             "items": [vars(i) for i in self.items],
         }, indent=2)
 
     @classmethod
     def from_dir(cls, snapshot_dir: Path) -> "SnapshotManifest":
         data = json.loads((snapshot_dir / MANIFEST_NAME).read_text())
+        items = [SnapshotItem(**i) for i in data.get("items", [])]
+        scope = data.get("scope")
+        if scope not in ("full", "db_only"):
+            # Legacy manifest (pre-scope): infer — any non-db item means it captured
+            # config/identity too, i.e. a full snapshot.
+            scope = "full" if any(i.kind != "db" for i in items) else "db_only"
         return cls(
             from_version=data.get("from_version", ""),
             to_version=data.get("to_version", ""),
@@ -73,7 +84,8 @@ class SnapshotManifest:
             created_at=data.get("created_at", ""),
             git_sha=data.get("git_sha"),
             label=data.get("label"),
-            items=[SnapshotItem(**i) for i in data.get("items", [])],
+            scope=scope,
+            items=items,
         )
 
 
@@ -128,13 +140,30 @@ def create_snapshot(
     dir_paths: Optional[List[Path]] = None,
     timestamp: Optional[str] = None,
     label: Optional[str] = None,
+    scope: str = "full",
 ) -> SnapshotInfo:
     """Create a crash-consistent snapshot; the ``DONE`` marker is written last."""
     snapshots_root = Path(snapshots_root)
     data_home = Path(data_home)
     ts = timestamp or _now_stamp()
-    snap_dir = snapshots_root / f"{ts}_{from_version or 'unknown'}"
-    snap_dir.mkdir(parents=True, exist_ok=True)
+    base = f"{ts}_{from_version or 'unknown'}"
+    snap_dir = snapshots_root / base
+    # Never reuse an existing snapshot dir (two snapshots in the same second would
+    # silently clobber each other's manifest) — uniquify with a numeric suffix.
+    n = 2
+    while snap_dir.exists():
+        snap_dir = snapshots_root / f"{base}-{n}"
+        n += 1
+    snap_dir.mkdir(parents=True)
+    # M2 (2026-07-15): the snapshot holds raw copies of config (`.env.production`
+    # → MASTER_SEED) and dirs (`wallet/` → meta.json/audit.jsonl). chmod 0700 so
+    # no other local-box user/process can read it off disk — independent of (and
+    # complementary to) the credential-name guard in secret_guard.py, which stops
+    # the AGENT's own file tools, not other OS principals.
+    try:
+        os.chmod(snap_dir, 0o700)
+    except OSError:
+        pass  # best-effort (e.g. unsupported on the platform); DONE-marker gate is separate
 
     if db_paths is None:
         db_paths = all_sqlite_dbs(data_home)
@@ -170,7 +199,7 @@ def create_snapshot(
 
     manifest = SnapshotManifest(
         from_version=from_version, to_version=to_version, method=method,
-        created_at=ts, git_sha=git_sha, items=items, label=label,
+        created_at=ts, git_sha=git_sha, items=items, label=label, scope=scope,
     )
     (snap_dir / MANIFEST_NAME).write_text(manifest.to_json())
 
@@ -246,10 +275,21 @@ def list_snapshots(snapshots_root: Path) -> List[SnapshotInfo]:
 
 
 def latest_complete(snapshots_root: Path) -> Optional[SnapshotInfo]:
+    """Newest complete snapshot, preferring FULL scope.
+
+    A bare `--rollback` promises "databases, config, and identity"; a newer
+    db_only snapshot must not shadow the full one (U2). Falls back to the newest
+    complete snapshot of any scope when no full one exists.
+    """
+    fallback: Optional[SnapshotInfo] = None
     for info in list_snapshots(snapshots_root):
-        if info.complete:
+        if not info.complete:
+            continue
+        if info.manifest is not None and info.manifest.scope == "full":
             return info
-    return None
+        if fallback is None:
+            fallback = info
+    return fallback
 
 
 def prune_snapshots(snapshots_root: Path, keep: int = 3) -> List[Path]:

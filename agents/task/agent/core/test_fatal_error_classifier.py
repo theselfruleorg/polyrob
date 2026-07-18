@@ -36,3 +36,27 @@ def test_quota_exceeded_stays_fatal_even_with_failover():
 
 def test_unknown_error_not_fatal():
     assert _is_fatal_step_error("connection reset by peer", billing_failover_enabled=False) is False
+
+
+# I-5: real prod shape (2026-07-09 outage) — contains "402"/"credits" but NEITHER
+# "insufficient_quota" NOR "billing", so the old ad-hoc substring check missed it and
+# billing failover never engaged. The SSOT detector (core.credit_sentinel.looks_like_credit_death,
+# already unit-tested against this exact shape) matches on the "402" marker.
+_REAL_OPENROUTER_402 = (
+    '402 "This request requires more credits, or fewer max_tokens. '
+    'visit https://openrouter.ai/settings/credits and add more credits"'
+).lower()
+
+
+def test_real_openrouter_402_is_fatal_billing_when_failover_off():
+    # Today (substring 'insufficient_quota'/'billing' miss) this returns False -> the
+    # error is NOT treated as billing-fatal and slips into generic retry; after the fix
+    # it is correctly classified fatal-billing when failover is off.
+    assert _is_fatal_step_error(_REAL_OPENROUTER_402, billing_failover_enabled=False) is True
+
+
+def test_real_openrouter_402_flows_to_handler_when_failover_enabled():
+    # With failover on, this must NOT be fatal *here* in the step-loop gate — it needs to
+    # flow through to _handle_step_error (error_recovery.py), which attempts a provider
+    # swap before halting.
+    assert _is_fatal_step_error(_REAL_OPENROUTER_402, billing_failover_enabled=True) is False

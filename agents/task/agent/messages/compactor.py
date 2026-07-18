@@ -405,7 +405,7 @@ class CompactorMixin:
 			return True
 
 		except _TRANSIENT_COMPACTION_ERRORS as e:
-			# Phase 0.3 (Hermes parity): a transient/credential failure must NOT cause
+			# Phase 0.3: a transient/credential failure must NOT cause
 			# permanent lossy compaction. Abort, keep the FULL context, and retry next
 			# step. The >=95% mechanical emergency prune is the overflow backstop, so
 			# this is safe even if the failure persists.
@@ -599,6 +599,12 @@ Completed Actions. Do NOT list an already-completed action under In Progress or
 Remaining Work — after this summary replaces the raw history, anything left phrased as
 a pending "to-do" will be RE-RUN. Only genuinely-unfinished work belongs in Remaining
 Work.
+
+RESOLVED/PENDING TRACKING: under "## Resolved Questions", record every question the
+user asked and its answer, and every decision made and why — so it is not re-asked or
+re-litigated after compaction. Under "## Blocked / Open Questions" and "## Pending
+User Asks", record every question or thread still awaiting a reply — worded so it
+survives compaction instead of being silently dropped once the raw history is gone.
 
 {prior_block}Conversation to summarize:
 {conversation}

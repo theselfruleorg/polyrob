@@ -27,15 +27,46 @@ SIDECAR_DB_NAMES = (
     "users.db",
     "tg_dedup.db",
     "autonomy_state.db",
+    # D11 (2026-07-11): previously missing from the manifest — backup/rollback
+    # silently skipped them. R-2 T1 (2026-07-17): telemetry_events.db now resolves
+    # via core.runtime_paths.sidecar_db_path — <data_home>/telemetry_events.db,
+    # matching this manifest (axis parity pinned by
+    # tests/unit/core/test_sidecar_db_path.py). A PRE-EXISTING install may still
+    # hold the file at the legacy session-tree location (<data_root>/…) until the
+    # one-shot boot relocation runs; cli/update/context.py passes those legacy
+    # paths via `extra_dbs` so backups never miss them either way.
+    # (TELEMETRY_EVENT_LOG_PATH still overrides; off-home overrides also ride
+    # `extra_dbs`.)
+    "telemetry_events.db",
+    "surfaces.db",       # core/surfaces/bootstrap.py + telegram outbound allowlist
+    "pairing.db",        # core/pairing.py
+    "messages.db",       # agents/task/agent/messages/persistence.py (opt-in mirror)
+    "wa_dedup.db",       # surfaces/whatsapp/harness.py
+    "email_dedup.db",    # surfaces/email/harness.py
+    # T1 (2026-07-16): surface/deploy sidecars that were missing — backup/rollback
+    # silently skipped them (second generation of the D11 class; the grep-based
+    # contract test in tests/unit/core/test_db_manifest_sidecars.py now guards this).
+    "slack_dedup.db",       # surfaces/slack/harness.py
+    "signal_dedup.db",      # surfaces/signal/harness.py
+    "discord_dedup.db",     # surfaces/discord/harness.py
+    "x_dedup.db",           # surfaces/x/harness.py
+    "wa_window.db",         # surfaces/whatsapp/harness.py (24h send-window tracker)
+    "group_allowlist.db",   # core/surfaces/access.py (group ingress allowlist)
+    "conversations.db",     # core/surfaces/bootstrap.py (ConversationStore)
+    "outbox.db",            # core/surfaces/bootstrap.py (durable outbound queue)
+    "surface_state.db",     # core/surfaces/bootstrap.py (surface cursor/state KV)
+    "deployed_apps.db",     # tools/hf_deploy/registry.py
 )
 
 _PathLike = Union[str, Path]
 
 
 # bot.db is NOT at a single fixed path: its real location is config-driven (the
-# ``DB_PATH`` env / ``AgentConfig.db_path``, default ``data/bot.db`` anchored to the
-# data-home). Prod ships ``DB_PATH=<root>/data/database/bot.db``; the historical guess
-# was ``<root>/database/bot.db``. When we can't resolve the config value we must treat
+# ``DB_PATH`` env / ``AgentConfig.db_path``, default ``data/database/bot.db`` anchored to
+# the data-home — R-2 B2 made DB_PATH real: ``modules/database/database_manager.py::
+# resolve_bot_db_path``). Prod ships ``DB_PATH=<root>/data/database/bot.db``; the
+# historical guess was ``<root>/database/bot.db``. When we can't resolve the config
+# value we must treat
 # ALL known layouts as candidates so a snapshot never silently skips the live DB — a
 # missed bot.db means a rollback wipes the user's real data (data-loss).
 _BOT_DB_RELATIVE_LAYOUTS = (

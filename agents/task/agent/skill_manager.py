@@ -40,9 +40,15 @@ SOFT_INJECT_WARN_CHARS = MAX_SKILL_INJECT_CHARS  # warn-only threshold at inject
 MAX_SKILL_CONTENT_CHARS = MAX_SKILL_FILE_CHARS   # back-compat alias (no code imports this as of 2026-07 grep)
 MIN_SKILL_CONTENT_CHARS = 50     # Minimum meaningful content
 MAX_SKILL_ID_LENGTH = 50
-VALID_TOOL_IDS = {'browser', 'mcp', 'filesystem', 'perplexity', 'email', 'task',
-                  'anysite', 'coding', 'code_execution', 'polymarket', 'hyperliquid',
-                  'polymarket_data', 'hyperliquid_data', 'web_fetch'}
+# DERIVED from the WS-2 capability table (was a third hand-list that went stale on
+# optional/posture tools — T5). Every registrable tool must have a capability row
+# (register_optional_tool refuses otherwise), so the table's keys ARE the registrable
+# vocabulary; `tool_manage` is the one aspirational id (gated everywhere, not yet
+# registrable). Registry parity stays belt-and-braces guarded by
+# tests/unit/agents/task/test_valid_tool_ids_parity.py.
+from core.tool_capabilities import TOOL_CAPABILITIES as _TOOL_CAPABILITIES
+
+VALID_TOOL_IDS = set(_TOOL_CAPABILITIES) - {'tool_manage'}
 
 
 def validate_skill_content_length(body: str) -> Tuple[bool, str]:

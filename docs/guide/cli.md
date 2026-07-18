@@ -26,7 +26,7 @@ polyrob          # or: polyrob chat
 polyrob --plain  # plain output, no toolbar
 ```
 
-The REPL starts a persistent agent session. Type your goal and press Enter. The agent reasons and acts step by step, printing each action and result. Type `exit` (or `Ctrl-C`) to quit. See [Slash commands](#slash-commands-repl) below.
+The REPL starts a persistent agent session. Type your goal and press Enter. The agent reasons and acts step by step, printing each action and result. Type `exit` (or `Ctrl-C`) to quit. Press `Ctrl-L` to clear and repaint the screen if the terminal ever renders artifacts. See [Slash commands](#slash-commands-repl) below.
 
 ---
 
@@ -55,6 +55,9 @@ the two.
 | `--max-steps` | Maximum steps (default: 50) |
 | `--plain` | Force plain output (no ANSI / panels) |
 | `--verbose`, `-v` | Show debug logging |
+
+With `--verbose` the console shows DEBUG detail, while `bot.log` follows `LOG_LEVEL`
+(set `LOG_LEVEL=DEBUG` to capture DEBUG in the file too).
 
 ---
 
@@ -243,9 +246,13 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 | `polyrob telegram` | Run the Telegram surface (requires the `telegram` extra and a bot token) |
 | `polyrob whatsapp` | Run the WhatsApp Cloud API surface (webhook server; requires Meta creds) |
 | `polyrob email` | Run the email surface (IMAP poll + SMTP) |
-| `polyrob gateway` | Run all enabled surfaces (Telegram + WhatsApp + Email) in one process |
+| `polyrob discord` | Run the Discord surface (gateway websocket; requires a bot token) |
+| `polyrob slack` | Run the Slack surface (Socket Mode; requires app + bot tokens) |
+| `polyrob signal` | Run the Signal surface (against a `signal-cli` daemon) |
+| `polyrob x` | Run the X/Twitter DM surface (polling; reuses the `TWITTER_*` creds) |
+| `polyrob gateway` | Run all enabled surfaces in one process |
 | `polyrob surface` | Inspect/pause/resume per-surface circuit breakers: `list`, `pause`, `resume` |
-| `polyrob owner` | Owner/correspondent admin: `show`, `correspondents`, `approve`, `invite` |
+| `polyrob owner` | Owner/correspondent admin: `show`, `correspondents`, `approve`, `invite`, `pending`/`show-pending`/`promote`/`reject` (self-evolution review), `asks`/`fulfill`, `allow`/`deny`/`allowlist` (outbound messaging), `invoices`/`settle` (x402), `groups` (group-chat allowlist) |
 | `polyrob version` | Show version and environment info |
 
 ### Autonomy & workspace
@@ -253,8 +260,21 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 | Command | Description |
 |---------|-------------|
 | `polyrob goals` | Manage the durable goals board: `create`, `list`, `show`, `cancel`, `pause`/`resume`, `retry`, `objective` (standing objectives), … |
+| `polyrob cron` | Schedule/inspect/cancel durable cron jobs: `schedule <task> <spec>`, `list`, `show`, `cancel` (specs: `30m`, `every monday 09:00`, 5-field cron, ISO one-shot) |
 | `polyrob subagents` | Inspect agent delegation / subagent activity: `list`, `show`, `info` |
 | `polyrob todos` | Manage a standalone workspace `todo.md` (`list`/`add`/`done`/`clear`/`stats`) |
+
+### Owner, money & knowledge
+
+| Command | Description |
+|---------|-------------|
+| `polyrob journey` | Timeline recap: what the agent did, learned, earned, changed (`--since 24h\|7d`) |
+| `polyrob finance` | Balance sheet over the unified ledger: earned, spent, pending invoices, net (`--days`) |
+| `polyrob wallet` | Agent wallet: addresses/balances/caps; `set-cap daily\|per-tx` writes the money-authoritative env caps |
+| `polyrob approvals` | Manage the approval-gated action set: `list`, `add`, `remove` |
+| `polyrob knowledge` | `export` the notes/episodes/skills/identity/goals knowledge vault (Obsidian-compatible) |
+| `polyrob datagen` | Synthetic dataset generation: `run`, `export` (trajectory corpus) |
+| `polyrob pfp` | Avatar/profile picture: `show`, `generate`, `pick`, `push`, `studio` |
 
 ---
 
@@ -268,9 +288,13 @@ Inside the interactive REPL, commands are prefixed with `/`. Type `/help` to lis
 | `/exit` (`/quit`, `/q`) | Leave the REPL |
 | `/status` | Live session status (tokens, cost, context) |
 | `/usage` (`/cost`) | Authoritative usage breakdown (DB / estimate) |
+| `/telemetry [window]` | Cross-session event counts + wallet spend (e.g. `/telemetry 24h`) |
+| `/journey [window]` (`/recap`) | Timeline: what the agent did, learned, earned, changed |
+| `/finance [days]` | Balance sheet: earned, spent, pending invoices, net |
+| `/learn <description>` | Describe a procedure; distill it into a pending skill for review |
 | `/tools` | List the agent's registered tools/actions |
-| `/toolset [name]` | List named toolsets or resolve a specific one |
-| `/persona [name]` | List personas or show details for one |
+| `/toolset [name]` | List named toolsets, or set the default toolset for new sessions (persists `session.toolset`; applies next session — no live tool re-registration) |
+| `/persona [name-or-text]` | List personas, or set the default persona for new sessions (persists `session.persona`; a known template key or literal text, threat-scanned; applies next session) |
 | `/sessions` | List all known sessions |
 | `/replay <session-id>` (`/resume`) | Replay a session's feed (visual history) — not a re-attach; continue a session with `polyrob run --resume <id>` |
 | `/history` | Show this conversation's turns |
@@ -294,6 +318,10 @@ Inside the interactive REPL, commands are prefixed with `/`. Type `/help` to lis
 | `/cron` (`/crons`) `[list]` | List scheduled cron jobs (read-only) |
 | `/mcp [list]` | List configured MCP servers and their status |
 | `/kb [list [collection]\|search <query>]` | List + search the local knowledge base |
+| `/pending [show\|approve\|reject <kind> <id>]` | Review the agent's pending self-evolution proposals (skills, identity notes) — owner-only |
+| `/approve [list\|add <action>\|remove <action>]` | Manage approval gates: which actions need your OK before they run |
+| `/config [list [group]\|get KEY\|set KEY VALUE [--confirm]\|check]` | View/change preferences and flags |
+| `/context` | Context-assembly breakdown: per-slot token counts + % of context |
 
 ---
 

@@ -17,8 +17,9 @@ class _TaskAgent:
         self.calls = []
         self.started = []
 
-    async def deliver_correspondent_data(self, session_id, source, text, metadata=None):
-        self.calls.append((session_id, source, text))
+    async def deliver_correspondent_data(self, session_id, source, text, metadata=None,
+                                         *, surface=None):
+        self.calls.append((session_id, source, text, surface))
         return True
 
 
@@ -31,4 +32,5 @@ async def test_correspondent_data_routes_to_delivery_not_session_start():
     ta = _TaskAgent()
     reply = await act_on_inbound(ta, InboundResult(inbound=inbound, decision=decision))
     assert reply is None
-    assert ta.calls == [("orig_sess", "john@acme.com", "the invoice is paid")]
+    # B5: the harness passes the inbound surface so taint records (surface, address)
+    assert ta.calls == [("orig_sess", "john@acme.com", "the invoice is paid", "email")]

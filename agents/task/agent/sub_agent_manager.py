@@ -161,10 +161,6 @@ class SubAgentManager:
     - Shared resource coordination
     """
 
-    # Class-level shared resource locks
-    _file_locks: Dict[str, asyncio.Lock] = {}
-    _api_rate_limiters: Dict[str, asyncio.Semaphore] = {}
-
     # Task patterns that are too simple for sub-agents
     SIMPLE_TASK_PATTERNS = [
         'read file', 'write file', 'save file', 'create file',
@@ -215,39 +211,6 @@ class SubAgentManager:
             f"SubAgentManager initialized (max_concurrent={TimeoutConfig.MAX_CONCURRENT_SUB_AGENTS}, "
             f"max_depth={self._max_depth})"
         )
-
-    @classmethod
-    def get_file_lock(cls, file_path: str) -> asyncio.Lock:
-        """Get or create lock for a file path.
-
-        Prevents multiple sub-agents from writing to the same file.
-
-        Args:
-            file_path: Path to the file
-
-        Returns:
-            asyncio.Lock for the file
-        """
-        if file_path not in cls._file_locks:
-            cls._file_locks[file_path] = asyncio.Lock()
-        return cls._file_locks[file_path]
-
-    @classmethod
-    def get_api_limiter(cls, api_name: str, max_concurrent: int = 2) -> asyncio.Semaphore:
-        """Get or create rate limiter for an API.
-
-        Prevents multiple sub-agents from overwhelming the same API.
-
-        Args:
-            api_name: Name of the API (e.g., 'linkedin', 'twitter')
-            max_concurrent: Maximum concurrent requests
-
-        Returns:
-            asyncio.Semaphore for the API
-        """
-        if api_name not in cls._api_rate_limiters:
-            cls._api_rate_limiters[api_name] = asyncio.Semaphore(max_concurrent)
-        return cls._api_rate_limiters[api_name]
 
     def _is_task_too_simple(self, task: str) -> bool:
         """Check if a task is too simple for a sub-agent.
@@ -493,6 +456,53 @@ class SubAgentManager:
         )
         return child_controller
 
+    def _emit_subagent_event(
+        self,
+        phase: str,
+        sub_agent_id: str,
+        *,
+        goal: str = '',
+        child_session_id: str = '',
+        ok: bool = False,
+        duration: float = 0.0,
+    ) -> None:
+        """019 P1: emit subagent_started/subagent_finished into the PARENT feed.
+
+        Fail-open, flag-gated — telemetry must never affect the delegation.
+        """
+        try:
+            from core.config_policy import AutonomyConfig
+            if not AutonomyConfig.run_events_enabled():
+                return
+            telemetry = getattr(self.orchestrator, 'telemetry_manager', None)
+            if not telemetry:
+                return
+            from agents.task.telemetry.views import (
+                SubagentFinishedEvent,
+                SubagentStartedEvent,
+            )
+            preview = (goal or '')[:120]
+            if phase == 'started':
+                event = SubagentStartedEvent(
+                    agent_id=f"orchestrator_{self.session_id}",
+                    child_agent_id=sub_agent_id,
+                    child_session_id=child_session_id,
+                    goal_preview=preview,
+                    session_id=self.session_id,
+                )
+            else:
+                event = SubagentFinishedEvent(
+                    agent_id=f"orchestrator_{self.session_id}",
+                    child_agent_id=sub_agent_id,
+                    ok=ok,
+                    duration_seconds=duration,
+                    goal_preview=preview,
+                    session_id=self.session_id,
+                )
+            telemetry.capture_event(event)
+        except Exception:
+            pass
+
     async def run_subtask(
         self,
         task: str,
@@ -612,6 +622,15 @@ class SubAgentManager:
         async with self._concurrency_semaphore:
             self.logger.debug(f"✓ Acquired concurrency slot for {sub_agent_id}")
             try:
+                # 019 P1: mirror the child lifecycle into the PARENT session's
+                # feed (same-tenant — the child shares the parent orchestrator).
+                # Emitted INSIDE this try so the finally's 'finished' emit
+                # always pairs it — a cancellation while queued for a slot must
+                # not strand the parent's RunActivity at 'delegating'.
+                self._emit_subagent_event(
+                    'started', sub_agent_id, goal=task,
+                    child_session_id=virtual_session_id,
+                )
                 # UP-05: build a least-privilege child controller (narrowed toolset
                 # minus code_execution/cronjob; delegation actions excluded for the
                 # leaf child) instead of sharing the parent's full controller. Returns
@@ -746,6 +765,10 @@ class SubAgentManager:
                 if _run_sa_end is not None:
                     await _run_sa_end(goal=task, agent_id=sub_agent_id,
                                       parent_session_id=self.session_id, ok=_sub_ok)
+                self._emit_subagent_event(
+                    'finished', sub_agent_id, goal=task, ok=_sub_ok,
+                    duration=time.time() - start_time,
+                )
 
                 # Cleanup sub-agent to prevent resource leaks
                 if sub_agent:

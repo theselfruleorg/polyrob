@@ -13,9 +13,10 @@ structurally invisible. This registry makes the flag surface a runtime object:
 - ``resolve_flag``/``resolve_all``  name -> resolved value + source, using the
                           canonical parsers in :mod:`core.env`. Callers may pass
                           a ``dynamic_default`` hook so posture/local-derived
-                          defaults (which live in ``agents.task.constants`` and
-                          cannot be imported from core) resolve live — see
-                          ``agents/task/flag_defaults.py``.
+                          defaults resolve live — see
+                          ``core/config_policy/flag_defaults.py`` (the hook stays
+                          caller-injected, so plain resolution keeps its static
+                          defaults).
 
 Secrets (keys/tokens/passwords) are never echoed: :func:`is_secret_flag` masks
 their values in every resolution, so ``doctor --flags`` output is safe to paste.

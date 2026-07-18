@@ -301,8 +301,12 @@ async def get_reputation(
         limit=limit,
         offset=offset,
     )
-    
+
+    # M21: served even when EIP8004_ENABLED is off — reads stay available but
+    # honest. `summary.simulated` already carries the marker (ReputationSummary
+    # defaults it True); also stamp the composite response for visibility.
     return {
+        "simulated": True,
         "summary": summary.model_dump(),
         "feedback": feedback_list,
     }
@@ -423,30 +427,39 @@ async def get_validation_summary(
     return await manager.get_validation_summary(agent_id=agent_id)
 
 
-@router.get("/validation/pending")
+@router.get("/validation/pending", response_model=List[Dict[str, Any]])
 async def list_pending_validations(
     agent_id: Optional[int] = None,
     manager: ValidationManager = Depends(get_validation_manager),
 ):
     """List pending validation requests.
-    
+
     Args:
         agent_id: Optional filter by agent ID
-        
+
     Returns:
-        List of pending validation requests
+        Pending validation requests (bare list, original shape). Each item is
+        stamped `simulated: true` (M21: served even when EIP8004_ENABLED is
+        off — the validation registry is a local, process-volatile
+        simulation, not an on-chain registry).
     """
-    return await manager.list_pending_validations(agent_id=agent_id)
+    pending = await manager.list_pending_validations(agent_id=agent_id)
+    return [{**item, "simulated": True} for item in pending]
 
 
-@router.get("/validation/validators")
+@router.get("/validation/validators", response_model=Dict[str, str])
 async def list_validators(
     manager: ValidationManager = Depends(get_validation_manager),
 ):
     """List supported validator types.
-    
+
     Returns:
-        Dictionary of validator types and descriptions
+        Validator types and descriptions (bare dict, original shape), each
+        description suffixed " (simulated)" (M21: this is a static local
+        list, not read from an on-chain registry).
     """
-    return manager.get_supported_validators()
+    return {
+        name: f"{description} (simulated)"
+        for name, description in manager.get_supported_validators().items()
+    }
 

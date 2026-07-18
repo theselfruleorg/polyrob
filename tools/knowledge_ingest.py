@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
 from tools.controller.types import ActionResult
-from agents.task.agent.core.secret_guard import (
+from core.security.secret_guard import (
     is_secret_path,
     is_binary_file,
     estimate_tokens_rough,
@@ -39,10 +39,8 @@ logger = logging.getLogger(__name__)
 
 
 def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
+    from core.env import int_env
+    return int_env(name, default)
 
 
 def _kb_max_files() -> int:
@@ -745,7 +743,7 @@ def _resolve_confinement_root(session_id: str, user_id: str) -> Path:
         workspace = path_manager.get_workspace_dir(session_id, user_id)
         return workspace.resolve()
     except Exception:
-        from agents.task.constants import local_mode_enabled
+        from core.config_policy import local_mode_enabled
         if local_mode_enabled():
             return Path.cwd().resolve()
         raise
@@ -914,7 +912,7 @@ class KnowledgeTool(BaseTool):
 
 
 def kb_enabled() -> bool:
-    from agents.task.constants import AutonomyConfig
+    from core.config_policy import AutonomyConfig
     return AutonomyConfig.kb_enabled()
 
 

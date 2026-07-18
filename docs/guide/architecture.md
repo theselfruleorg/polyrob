@@ -32,7 +32,7 @@ Supported providers: **OpenAI**, **Anthropic**, **Google Gemini**, **DeepSeek**,
 
 Key behaviors:
 - **Native tool calling** — uses each provider's structured function-call protocol; no JSON parsing hacks.
-- **Automatic failover** — a rate-limit or connection error on the primary provider automatically retries on a fallback provider. Failover on billing/quota-exhaustion errors is opt-in (`BILLING_FAILOVER_ENABLED`, off by default).
+- **Automatic failover** — a rate-limit or connection error on the primary provider automatically retries on a fallback provider. Failover on billing/quota-exhaustion errors is also attempted before a permanent halt (`BILLING_FAILOVER_ENABLED`, on by default); it has no second provider to fall back to unless more than one is configured.
 - **Prompt caching** — provider-specific caching (Anthropic `cache_control`, OpenAI prefix caching) reduces token costs on long sessions.
 - **Reasoning tokens** — extended thinking / reasoning effort for Claude, DeepSeek, and OpenAI reasoning models when `THINKING_CONFIG_ENABLED=true` (off by default).
 
@@ -113,6 +113,27 @@ All interaction surfaces implement a common **Surface contract** — a unified i
 | REST API | HTTP endpoints for programmatic access — see [api.md](api.md) |
 
 Telegram, WhatsApp, and Email are off by default. When enabled, messages from anyone other than the bound owner are treated as untrusted correspondent data, not steering input — manage this with `polyrob owner` (see the "Chat-surface access model" section of [AGENTS.md](../../AGENTS.md) for the full model). Run every enabled chat surface together with `polyrob gateway`.
+
+### Chat-surface owner commands
+
+Every chat surface (Telegram, WhatsApp, Discord, Slack, Signal, X DMs, Email)
+dispatches through the SAME decision executor
+(`surfaces/telegram/harness.py::act_on_inbound`), so the bound owner gets one
+identical set of in-chat admin verbs regardless of which surface they're
+typing into — a decision made from a phone is the same primitive as
+`polyrob owner` on the CLI or the REPL's slash commands. A non-owner sender
+gets a `🔒 Owner only.` refusal and none of these touch anything:
+
+| Command | Description |
+|---------|-------------|
+| `/status` | Session + autonomy snapshot: bound-session state (idle/running, model, context %), open/running goal counts, next cron run, cost over the trailing 24h |
+| `/recap [window]` (alias `/journey`) | Timeline recap: what the agent did, learned, earned, changed — default `24h`, also accepts `30m`/`7d`/a bare number of seconds |
+| `/goals` | Goal board summary: counts by status plus up to 5 most recent open/running goals |
+| `/prefs` | Effective preferences (read-only) — the same schema/values `/config` and the Console's `/preferences` page show |
+| `/pending`, `/approve <id>`, `/reject <id>` | Review and decide the agent's pending self-evolution proposals (skills, identity notes, guarded preference changes) |
+| `/asks`, `/fulfill <id>` | What's blocking the agent on you, and marking one fulfilled |
+| `/allow`, `/deny`, `/allowlist` | Manage outbound messaging permissions |
+| `/task`, `/cancel`, `/new`, `/help` | Start/stop/reset the active task session; list all commands |
 
 ---
 

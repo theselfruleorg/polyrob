@@ -1,7 +1,7 @@
 """API models for request/response validation and typing."""
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from datetime import datetime
 
 from core.version import get_version
@@ -71,11 +71,7 @@ class RateLimitInfo(BaseModel):
     reset_at: Optional[datetime] = Field(None, description="When the rate limit resets (alternative)")
     limit: int = Field(100, description="Total request limit")
     window: str = Field("minute", description="Rate limit window (minute, hour)")
-    
-    class Config:
-        json_encoders = {
-            datetime: lambda dt: dt.isoformat() if dt else None
-        }
+
 
 
 class AgentCapability(BaseModel):
@@ -155,6 +151,15 @@ class SessionStatusResponse(BaseModel):
     config: Optional[Dict[str, Any]] = Field(None, description="Session configuration")
     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Session metadata")
     webview_url: Optional[str] = Field(None, description="WebView URL for this session")
+
+    # 019 P1: what the agent is doing RIGHT NOW (phase/detail/seconds_in_state/
+    # step/call_id), derived from the run-state feed events. None when unknown —
+    # session idle since restart, RUN_EVENTS_ENABLED=off, or a REMOTE session
+    # owned by another worker (in-process snapshot).
+    current_activity: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Live run activity: {phase, detail, seconds_in_state, step, call_id}; null when unknown/remote"
+    )
     
     # Debugging
     internal_status: Optional[str] = Field(

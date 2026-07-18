@@ -30,13 +30,76 @@ def test_env_and_config_files_are_credential_guarded(path):
 
 
 @pytest.mark.parametrize("path", [
+    ".polyrob/wallet/meta.json",
+    ".polyrob/wallet/audit.jsonl",
+    "/var/lib/polyrob/wallet/meta.json",
+    "data/wallet/audit.jsonl",
+])
+def test_wallet_policy_files_are_credential_guarded(path):
+    """H3: the wallet derivation record and spend audit are money-policy state.
+    Under POLYROB_LOCAL the workspace IS the project cwd (which contains
+    .polyrob/wallet/), so without this the agent's file tools could zero the
+    audit sink (resetting the daily-cap window + replay guard on the next
+    restart) or rewrite the write-once derivation scheme."""
+    assert is_credential_file(Path(path)) is True
+
+
+@pytest.mark.parametrize("path", [
+    ".polyrob/wallet/audit.jsonl.hwm",
+    "/var/lib/polyrob/wallet/audit.jsonl.hwm",
+    "data/wallet/audit.jsonl.hwm",
+])
+def test_wallet_audit_hwm_sidecar_is_credential_guarded(path):
+    """Minor #6 (2026-07-16): `JsonlAuditSink` writes a `<path>.hwm` high-water-mark
+    sidecar next to `audit.jsonl` (core/wallet/audit_sink.py) to detect truncation.
+    Same money-policy-state rationale as the audit log itself — the exact-match
+    `wallet/audit.jsonl` glob alone did not cover this sidecar filename."""
+    assert is_credential_file(Path(path)) is True
+
+
+@pytest.mark.parametrize("path", [
+    # M2: `cli/update/snapshot.py` stores config copies under a numeric-index
+    # prefix (`config/{i:02d}_{basename}`), which defeated the `.env*`/`*.env`/
+    # `config/.env.*` globs (they all assume the ORIGINAL basename). A local
+    # box's `config/.env.production` (holds MASTER_SEED) would otherwise be
+    # `read_file`-able once backed up by `polyrob update`.
+    "config/00_.env.production",
+    "snapshots/20260715T120000Z_0.5.1/config/00_.env.production",
+    "/data/snapshots/20260715T120000Z_0.5.1/config/01_.env.development",
+    # M2 (directory analog, surfaced by the M1 fix): dir copies get the same
+    # numeric-index prefix on the COPIED DIRECTORY name
+    # (`dirs/{i:02d}_{src.name}`), so `wallet/meta.json` becomes
+    # `dirs/00_wallet/meta.json` — the exact multi-component `wallet/meta.json`
+    # glob no longer lines up. The blanket `snapshots/*/dirs/*` rule covers any
+    # backed-up dir (wallet/identity/skills) regardless of the index prefix.
+    "snapshots/20260715T120000Z_0.5.1/dirs/00_wallet/meta.json",
+    "snapshots/20260715T120000Z_0.5.1/dirs/00_wallet/audit.jsonl",
+])
+def test_snapshot_renamed_copies_are_credential_guarded(path):
+    assert is_credential_file(Path(path)) is True
+
+
+@pytest.mark.parametrize("path", [
     "app.py",
     "README.md",
     "src/config.py",       # a python 'config' module is NOT a dotenv file
     "environment.md",
+    "wallet.py",           # a python 'wallet' module is not the wallet data dir
+    "cli/commands/wallet.py",
 ])
 def test_ordinary_files_still_editable(path):
     assert is_credential_file(Path(path)) is False
+
+
+def test_env_dotted_globs_are_intentionally_broad():
+    """M2's `*.env.*` glob denies ANY basename containing `.env.` (e.g. a
+    numeric-prefixed snapshot copy `00_.env.production`), which also catches
+    non-secret names like `test.env.example`. This is a deliberate over-deny:
+    the guard's job is to never let a real credential slip through a renamed
+    copy, and refusing an example file's read/write is a minor inconvenience
+    (not a security or data-loss issue) compared to a leaked MASTER_SEED."""
+    assert is_credential_file(Path("test.env.example")) is True
+    assert is_credential_file(Path("00_.env.production")) is True
 
 
 # --- absolute protected-config paths for the self_env tool (WS-5) -----------------

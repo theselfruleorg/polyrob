@@ -69,7 +69,7 @@ def test_live_manager_lists_servers():
 def test_live_manager_empty_is_graceful():
     ctx, buf = _plain_ctx(container=_FakeContainer(_FakeMCPTool(_FakeManager([]))))
     asyncio.run(h_mcp(ctx))
-    assert "No MCP servers configured." in buf.getvalue()
+    assert "no MCP servers configured" in buf.getvalue()
 
 
 def test_live_manager_error_falls_back_to_config(monkeypatch):
@@ -114,7 +114,7 @@ def test_config_disabled_is_graceful(monkeypatch):
     monkeypatch.setattr(h_mcp_mod, "_load_static_config", lambda: (False, {}))
     ctx, buf = _plain_ctx()
     asyncio.run(h_mcp(ctx))
-    assert "MCP disabled." in buf.getvalue()
+    assert "MCP disabled" in buf.getvalue()
 
 
 def test_config_enabled_but_empty_is_graceful(monkeypatch):
@@ -122,7 +122,7 @@ def test_config_enabled_but_empty_is_graceful(monkeypatch):
     monkeypatch.setattr(h_mcp_mod, "_load_static_config", lambda: (True, {}))
     ctx, buf = _plain_ctx()
     asyncio.run(h_mcp(ctx))
-    assert "No MCP servers configured." in buf.getvalue()
+    assert "no MCP servers configured" in buf.getvalue()
 
 
 def test_config_disabled_with_servers_shows_them(monkeypatch):
@@ -156,4 +156,4 @@ def test_no_container_falls_back_to_config(monkeypatch):
     monkeypatch.setattr(h_mcp_mod, "_load_static_config", lambda: (False, {}))
     ctx, buf = _plain_ctx()
     asyncio.run(h_mcp(ctx))
-    assert "MCP disabled." in buf.getvalue()
+    assert "MCP disabled" in buf.getvalue()

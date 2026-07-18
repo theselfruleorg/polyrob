@@ -1,6 +1,6 @@
 """Typed value objects for the Surface contract. Transport-free.
 
-Session keys are CHAT-scoped (Hermes parity): a group chat is one shared session,
+Session keys are CHAT-scoped: a group chat is one shared session,
 a DM is isolated by user. Identity rides on the message, never in the key.
 """
 from dataclasses import dataclass, field
@@ -43,6 +43,9 @@ class InboundMessage:
     reply_to: Optional[str] = None
     raw: Optional[dict] = None              # escape hatch
     internal: bool = False                  # synthetic (self-wake/delegation)
+    mentions_bot: Optional[bool] = None     # W3 groups: True/False when the surface
+                                            # can detect mentions; None = unknown
+                                            # (treated as NOT mentioned by the gate)
 
 
 @dataclass
@@ -53,6 +56,14 @@ class OutboundMessage:
     partial: bool = False                   # True = stream delta; False = committed
     stream_id: Optional[str] = None
     reply_to: Optional[str] = None
+    # Outbound media contract (Task 7, G-40): a renderable entry is
+    #   {"kind": "image" | "document", "path": "<local file path>", "caption": str | None}
+    # `path` must resolve inside the CURRENT session's workspace — producers (e.g. the
+    # `message()` tool) validate this before it ever reaches a surface. A surface skips
+    # any entry that lacks a `path` (not renderable) and any path that doesn't exist /
+    # isn't readable, logging a WARN — media delivery is fail-open, text is not.
+    # The legacy email-subject entry `{"subject": ...}` remains legal (EmailSurface.send
+    # reads media[0]["subject"]) but is NOT a renderable media entry.
     media: list = field(default_factory=list)
 
 
@@ -66,6 +77,7 @@ class SurfaceCapabilities:
     markdown_flavor: str = "none"           # "none" | "markdown_v2" | "html"
     service_window_secs: int = 0            # >0 = business-initiated send window (WhatsApp 24h)
     requires_template_outside_window: bool = False  # outside the window, only templates send
+    media_out: bool = False                 # can render OutboundMessage.media (photo/attachment)
 
 
 @dataclass

@@ -1,8 +1,8 @@
 """Pure snapshot-replay state for the persistent shell (WS-2).
 
 The shell is stateful across `shell_run` calls, but NOT via a single long-lived
-interactive process (which deadlocks on partial reads). Instead — Hermes' model —
-each command is wrapped so it cd's into the saved cwd, re-exports the saved user
+interactive process (which deadlocks on partial reads). Instead, a snapshot-replay
+model: each command is wrapped so it cd's into the saved cwd, re-exports the saved user
 env, runs, then emits sentinel-framed `pwd`/`env`. The tool parses that trailing
 block to persist cwd + user env for the next call and strips it from the output
 the model sees.

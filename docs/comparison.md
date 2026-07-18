@@ -17,7 +17,7 @@ A comprehensive comparison of POLYROB with major AI agent frameworks as of 2026.
 | **Persistent Memory** | ✅ SQLite + Vector | ✅ FTS5 + H-MEM | ✅ FTS5 |
 | **Durable Goals** | ✅ Goal board + Cron | ✅ Cron only | ❌ |
 | **Skills System** | ✅ agentskills.io `SKILL.md` + install pipeline (local/git/URL, scanned & quarantined) | ✅ Learning loop | ✅ Workspace skills |
-| **Multi-Surface** | ✅ 6+ (CLI, API, Web, Telegram, WhatsApp, Email) | ✅ 6+ platforms | ✅ 20+ channels |
+| **Multi-Surface** | ✅ 10+ (CLI, API, Web, Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | ✅ 6+ platforms | ✅ 20+ channels |
 | **A2A Protocol** | ✅ Google spec | ❌ | ❌ |
 | **MCP Support** | ✅ Full client | ✅ | ✅ |
 | **Delegation** | ✅ Sub-agents, least-privilege (task-split; not model-ensemble) | ✅ RPC scripts | ✅ Multi-agent |

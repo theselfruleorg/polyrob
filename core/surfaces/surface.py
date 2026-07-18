@@ -1,4 +1,4 @@
-"""Surface ABC: thin required surface (Hermes parity) + fat shared defaults.
+"""Surface ABC: thin required surface + fat shared defaults.
 
 Required (every surface MUST implement): surface_id, capabilities, send(), start(),
 stop().

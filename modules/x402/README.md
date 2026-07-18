@@ -9,6 +9,13 @@
 
 The x402 module implements the [x402 payment protocol](https://x402.org) for pay-per-request API access. It enables AI agents and users to pay for API calls using USDC stablecoins on supported blockchains (Base, Avalanche, etc.).
 
+> **This README covers the x402 protocol + machine-payer HTTP middleware.** For the
+> complete crypto/payments picture — the agent wallet, agent invoicing, branded QR
+> invoice cards, approval modes, facilitator-free on-chain settlement detection,
+> watchtower subscriptions, the metering→invoice bridge, and ERC-8004 payment-backed
+> reputation — see the end-to-end guide at
+> [`docs/guide/payments.md`](../../docs/guide/payments.md).
+
 This implementation uses the **[fastapi-x402](https://github.com/jordo1138/fastapi-x402)** library which handles payment verification and settlement via the official Coinbase facilitator.
 
 ## How It Works
@@ -165,28 +172,34 @@ request.state.authenticated = True
 
 ## Database Schema
 
+The DDL below drifts easily (columns/indices have been added since this was
+first written), so this section is a pointer + prose summary rather than an
+inline copy — **the authoritative schema is
+[`modules/database/x402_tables.py`](../database/x402_tables.py)**
+(`X402Tables.create_tables()`), mirrored in
+[`modules/database/schema.sql`](../database/schema.sql). Trust the code
+anchor over this prose if they ever disagree.
+
 ### x402_payment_requests
 
-```sql
-CREATE TABLE x402_payment_requests (
-    id TEXT PRIMARY KEY,
-    amount TEXT,
-    amount_usd REAL,
-    asset TEXT DEFAULT 'usdc',
-    chain TEXT DEFAULT 'base',
-    recipient TEXT,
-    nonce TEXT,
-    deadline INTEGER,
-    status TEXT DEFAULT 'pending',
-    payer_address TEXT,
-    transaction_hash TEXT,
-    payment_id TEXT,
-    metadata TEXT,
-    created_at TIMESTAMP,
-    completed_at TIMESTAMP,
-    updated_at TIMESTAMP
-);
-```
+The core payment-request/invoice row: `id` (PK, `inv_<12hex>` for
+agent-created invoices), `user_id` (nullable FK → `user_profiles`, tenant
+scoping), `payer_address`, `amount`/`amount_usd`/`asset`/`chain`/`recipient`,
+`nonce` (unique), `deadline`, `status` (`pending`/`completed`/`expired`/…),
+`transaction_hash` (partial-UNIQUE — a given on-chain tx settles at most one
+invoice ever), `payment_id`, `metadata` (JSON — carries things like
+`kind: "agent_invoice"` and `subscription_id`), and timestamps
+(`created_at`/`completed_at`/`updated_at`). Indexed on `nonce`, `status`,
+`payer_address`, `user_id`, and the `transaction_hash` unique index.
+
+### Related tables
+
+- **`settlement_scan`** — one row per treasury address, tracking the last
+  on-chain block scanned for USDC transfer-log settlement detection
+  (`X402_SETTLE_ONCHAIN_DETECT`).
+- **`subscriptions`** / **`subscription_applied_settlements`** — the
+  watchtower-subscription prepaid-period model (`SUBSCRIPTIONS_ENABLED`) and
+  its settlement idempotency ledger.
 
 ## Testing
 

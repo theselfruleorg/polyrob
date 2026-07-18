@@ -3,7 +3,7 @@
 Covers the async ``_h_memory`` handler:
 - ``/memory search <query>`` emits recall hits from the active provider.
 - bare ``/memory`` still shows the active provider name (legacy behavior).
-- graceful no-results ("No matches.") and no-provider messages.
+- graceful no-results ("no matches for …") and no-provider messages.
 - empty query → usage hint.
 
 Hermetic: monkeypatches ``modules.memory.registry.get_memory_registry`` to
@@ -107,7 +107,7 @@ def test_memory_search_no_results(monkeypatch):
     _patch_registry(monkeypatch, _FakeProvider(result=""))
     ctx, buf = _plain_ctx(user_id="u1", args=["search", "nothing"])
     asyncio.run(_h_memory(ctx))
-    assert "No matches." in buf.getvalue()
+    assert "no matches for" in buf.getvalue()
 
 
 def test_memory_search_empty_query_shows_usage(monkeypatch):

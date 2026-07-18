@@ -1,5 +1,17 @@
 # ERC-8004: Trustless Agents Implementation
 
+> ⚠️ **STATUS: SIMULATION / not wired on-chain — no on-chain write path exists.**
+> `ReputationManager` and `ValidationManager` are process-volatile in-memory
+> simulations (a restart wipes all "reputation"); `trustMode` is only ever
+> `"local"` unless an operator explicitly declares `EIP8004_ONCHAIN_ENABLED`,
+> and even then no code performs the actual on-chain registration — it is an
+> operator's out-of-band attestation, not a verified on-chain fact. The
+> `IdentityRegistryContract` / `ReputationRegistryContract` /
+> `ValidationRegistryContract` interfaces in `contracts.py` have **zero
+> callers** in this codebase today. See
+> [docs/guide/payments.md §ERC-8004](../../docs/guide/payments.md#8-payment-backed-reputation--erc-8004-moduleseip8004)
+> for the current, honest status before relying on anything below.
+
 > **Standard**: [EIP-8004](https://eips.ethereum.org/EIPS/eip-8004) (Draft)  
 > **Authors**: Marco De Rossi, Davide Crapis, Jordan Ellis, Erik Reppel  
 > **Status**: Review  
@@ -558,15 +570,19 @@ Submit feedback for an agent. Requires valid authorization.
 
 Get reputation summary and feedback list.
 
-**Response:**
+**Response:** (always served, even when `EIP8004_ENABLED` is off — the
+reputation registry is a local, process-volatile simulation, not an on-chain
+registry, so both the envelope and the nested `summary` carry `simulated`)
 ```json
 {
+  "simulated": true,
   "summary": {
     "agentId": 1,
     "totalFeedback": 42,
     "averageScore": 94.5,
     "recentScores": [95, 92, 98, 90, 95],
-    "topTags": ["web-automation", "research", "file-management"]
+    "topTags": ["web-automation", "research", "file-management"],
+    "simulated": true
   },
   "feedback": [
     {
@@ -660,7 +676,9 @@ Get validation status.
 
 Get validation summary for an agent.
 
-**Response:**
+**Response:** (always served, even when `EIP8004_ENABLED` is off — the
+validation registry is a local, process-volatile simulation, not an on-chain
+registry)
 ```json
 {
   "agentId": 1,
@@ -669,7 +687,8 @@ Get validation summary for an agent.
   "validatorBreakdown": {
     "0xValidator1...": 10,
     "0xValidator2...": 5
-  }
+  },
+  "simulated": true
 }
 ```
 
@@ -677,13 +696,15 @@ Get validation summary for an agent.
 
 List supported validator types.
 
-**Response:**
+**Response:** (bare `Dict[str, str]`; each description is suffixed
+`" (simulated)"` since this is a static local list, not read from an
+on-chain registry)
 ```json
 {
-  "stake-secured": "Validation via stake-secured inference re-execution",
-  "zkml": "Validation via zkML cryptographic proofs",
-  "tee": "Validation via TEE (Trusted Execution Environment) attestation",
-  "judge": "Validation via trusted third-party judges"
+  "stake-secured": "Validation via stake-secured inference re-execution (simulated)",
+  "zkml": "Validation via zkML cryptographic proofs (simulated)",
+  "tee": "Validation via TEE (Trusted Execution Environment) attestation (simulated)",
+  "judge": "Validation via trusted third-party judges (simulated)"
 }
 ```
 

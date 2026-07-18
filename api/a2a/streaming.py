@@ -121,6 +121,37 @@ async def task_event_stream(
                                 if event.final:
                                     return
 
+                        # 019 P4: an approval wait is A2A's NATIVE
+                        # input-required state; resolution returns to working.
+                        # The session's internal status stays "running" while
+                        # blocked inside a step, so force the state here.
+                        elif event_type == "awaiting_approval":
+                            task = await handler.get_task(task_id, history_length=0)
+                            task.status.state = A2ATaskState.INPUT_REQUIRED
+                            action_name = data.get("action_name") or "action"
+                            task.status.message = A2AMessage(
+                                role="agent",
+                                parts=[{"kind": "text",
+                                        "text": f"Awaiting owner approval for '{action_name}'"}]
+                            )
+                            yield _format_sse_event(
+                                TaskStatusUpdateEvent(task=task, final=False)
+                            )
+
+                        elif event_type == "approval_resolved":
+                            task = await handler.get_task(task_id, history_length=0)
+                            task.status.state = A2ATaskState.WORKING
+                            decision = data.get("decision") or "resolved"
+                            action_name = data.get("action_name") or "action"
+                            task.status.message = A2AMessage(
+                                role="agent",
+                                parts=[{"kind": "text",
+                                        "text": f"Approval {decision} for '{action_name}'"}]
+                            )
+                            yield _format_sse_event(
+                                TaskStatusUpdateEvent(task=task, final=False)
+                            )
+
                         # Step/action events as status updates
                         elif event_type in ["step", "step_result", "action", "action_result"]:
                             # Create intermediate status message

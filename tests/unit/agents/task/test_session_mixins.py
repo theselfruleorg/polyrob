@@ -37,12 +37,6 @@ def test_workspace_dir_property_none_when_unset():
     assert host.workspace_dir is None
 
 
-@pytest.mark.asyncio
-async def test_get_workspace_dir_matches_property():
-    host = _Host(workspace_dir="/tmp/ws")
-    assert await host.get_workspace_dir() == host.workspace_dir == "/tmp/ws"
-
-
 # --- BrowserPoolMixin ---
 
 

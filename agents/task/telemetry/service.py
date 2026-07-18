@@ -66,6 +66,27 @@ class ProductTelemetry:
 	# Signature: (session_id: str, event: dict) -> None
 	_on_feed_entry = None
 
+	# 019 P2: additional feed subscribers (same signature). The single
+	# ``_on_feed_entry`` slot stays for the CLI (back-compat); surfaces that
+	# also need live feed events (e.g. Telegram progress) register here so
+	# nobody clobbers anybody in a shared process (the gateway runs ALL
+	# surfaces in one process).
+	_feed_subscribers: list = []
+
+	@classmethod
+	def add_feed_subscriber(cls, callback) -> None:
+		"""Register an additional (session_id, event) feed callback. Idempotent."""
+		if callback not in cls._feed_subscribers:
+			cls._feed_subscribers.append(callback)
+
+	@classmethod
+	def remove_feed_subscriber(cls, callback) -> None:
+		"""Unregister a feed callback (no-op if absent)."""
+		try:
+			cls._feed_subscribers.remove(callback)
+		except ValueError:
+			pass
+
 	def __init__(self) -> None:
 		# CRITICAL FIX: Separate Posthog analytics from feed writing
 		# Feed writing is ALWAYS enabled (required for webview)
@@ -566,6 +587,7 @@ class ProductTelemetry:
 					filename = f"{seq:06d}_{update_type}_{step:04d}.json"
 				else:
 					filename = f"{seq:06d}_{update_type}.json"
+
 				
 				# Write update to file with atomic file operations to prevent race conditions
 				update_path = feed_dir / filename
@@ -589,10 +611,31 @@ class ProductTelemetry:
 
 							self.logger.debug(f"Saved {update_type} update to feed file: {update_path}")
 
+							# 019 P1: fold the event into the per-session
+							# RunActivity snapshot at this ONE choke point —
+							# AFTER the write succeeded, so the snapshot never
+							# claims a state the feed doesn't show. Best-effort.
+							try:
+								from agents.task.telemetry.run_activity import note_feed_event
+								note_feed_event(
+									clean_id, update_type,
+									sanitized_update.get('data'),
+									sanitized_update.get('step'),
+								)
+							except Exception:
+								pass
+
 							# Emit to CLI feed callback if registered
 							if self.__class__._on_feed_entry:
 								try:
 									self.__class__._on_feed_entry(clean_id, sanitized_update)
+								except Exception:
+									pass
+
+							# 019 P2: additional subscribers (surface progress etc.)
+							for _subscriber in list(self.__class__._feed_subscribers):
+								try:
+									_subscriber(clean_id, sanitized_update)
 								except Exception:
 									pass
 
@@ -1263,3 +1306,36 @@ class ProductTelemetry:
 				self.logger.info(f"Rotated telemetry events file to {rotated}")
 		except Exception as e:
 			self.logger.debug(f"Events rotation error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Manager-free feed emission (019)
+# ---------------------------------------------------------------------------
+
+_shared_emitter: Optional[ProductTelemetry] = None
+_shared_emitter_lock = threading.Lock()
+
+
+def emit_feed_event(event: BaseTelemetryEvent) -> None:
+	"""Best-effort feed emission for call sites that hold NO TelemetryManager.
+
+	019 P0: the approval layer (``tools/controller/approval.py``) needs to write
+	wait-state events to the session's feed but only has an execution context,
+	not the orchestrator's manager. The event must carry its own ``session_id``
+	(routing happens via ``event.get_session_id()``). Lazily constructs ONE
+	shared ``ProductTelemetry`` for the process; never raises.
+	"""
+	global _shared_emitter
+	try:
+		svc = _shared_emitter
+		if svc is None:
+			with _shared_emitter_lock:
+				if _shared_emitter is None:
+					_shared_emitter = ProductTelemetry()
+				svc = _shared_emitter
+		svc.capture(event)
+	except Exception:
+		try:
+			logger.debug("emit_feed_event failed", exc_info=True)
+		except Exception:
+			pass

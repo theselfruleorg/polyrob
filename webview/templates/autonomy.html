@@ -55,6 +55,11 @@
     }
 
     loadGoals(); loadCron();
+    // 019 P3: auto-refresh so a goal that starts RUNNING (or a cron job that
+    // fires) shows without a manual reload.
+    setInterval(function () {
+        if (document.visibilityState === 'visible') { loadGoals(); loadCron(); }
+    }, 10000);
 })();
 </script>
 {% endblock %}

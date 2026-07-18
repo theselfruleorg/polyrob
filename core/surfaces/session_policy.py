@@ -1,4 +1,4 @@
-"""P0.1: session-boundary policy (pure) — ports Hermes's SessionResetPolicy.
+"""P0.1: session-boundary policy (pure) — a stable session-reset policy.
 
 A chat keyed by a stable `session_key` (`agent:main:{surface}:{type}:{chat}:{user}`)
 continues the SAME underlying session_id until a boundary fires; then the next message

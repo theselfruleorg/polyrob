@@ -211,6 +211,11 @@ migrations/*.backup
 *_SECRET*
 credentials.json
 secrets.json
+# ...but the safety globs must never swallow real source files: on a
+# case-insensitive checkout (macOS/Windows) `*_SECRET*` matches the
+# secret-guard TEST module, which broke the public release export
+# (fresh clone -> untracked -> git add refused). Re-include explicitly.
+!tests/unit/agents/task/core/test_secret_guard.py
 
 # Browser automation
 playwright-report/
@@ -253,3 +258,6 @@ config/.env.production
 
 # Superpowers / subagent-driven-development working artifacts (internal)
 .superpowers/
+
+# M19 (2026-07-15): retired legacy SaaS env backups must never be committable
+config/.env.production.*

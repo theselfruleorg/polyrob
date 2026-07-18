@@ -14,7 +14,7 @@ from modules.memory.registry import get_memory_registry
 logger = logging.getLogger(__name__)
 
 
-def maybe_register_memory_backend(*, data_dir: str = "data",
+def maybe_register_memory_backend(*, data_dir: Optional[str] = None,
                                   embedding_model=None) -> Optional[MemoryProvider]:
     """Register the configured external memory provider; return it (or None).
 
@@ -46,7 +46,9 @@ def maybe_register_memory_backend(*, data_dir: str = "data",
     if existing is not None and getattr(existing, "is_external", False):
         # Already have an external provider this process — don't re-register.
         return existing
-    db_path = os.path.join(data_dir, "memory.db")
+    # WS-3: an omitted data_dir resolves to the data home, never a relative "data".
+    from core.runtime_paths import data_dir_or_home
+    db_path = os.path.join(data_dir_or_home(data_dir), "memory.db")
     if backend == "local_vector":
         from modules.memory.local_vector_memory_provider import LocalVectorMemoryProvider, _vec_available
         # Graceful fallback: if sqlite-vec unavailable, fall back to FTS5

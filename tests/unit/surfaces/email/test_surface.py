@@ -9,9 +9,11 @@ class _Sender:
     def __init__(self, ok=True):
         self.ok = ok
         self.sent = []
+        self.kwargs = []
 
     async def send_email(self, to_email, subject, body, **kw):
         self.sent.append((to_email, subject, body))
+        self.kwargs.append(kw)
         return self.ok
 
 
@@ -55,3 +57,42 @@ async def test_send_fail_open_on_sender_error():
                                              text="hi"))
     assert res.success is False
     assert "smtp down" in (res.error or "")
+
+
+def test_capabilities_media_out():
+    assert EmailSurface(_Sender()).capabilities.media_out is True
+
+
+@pytest.mark.asyncio
+async def test_send_maps_path_media_to_attachments():
+    s = _Sender()
+    surface = EmailSurface(s)
+    msg = OutboundMessage(
+        session_key="agent:main:email:dm:john@acme.com", text="see attached",
+        media=[{"kind": "image", "path": "/tmp/card.png", "caption": None}],
+    )
+    res = await surface.send(msg)
+    assert res.success is True
+    assert s.kwargs[0]["attachments"] == ["/tmp/card.png"]
+
+
+@pytest.mark.asyncio
+async def test_send_legacy_subject_entry_stays_subject_not_attachment():
+    s = _Sender()
+    surface = EmailSurface(s)
+    msg = OutboundMessage(
+        session_key="agent:main:email:dm:john@acme.com", text="body",
+        media=[{"subject": "Custom Subject"}],
+    )
+    res = await surface.send(msg)
+    assert res.success is True
+    assert s.sent[0][1] == "Custom Subject"  # subject still extracted
+    assert s.kwargs[0]["attachments"] is None  # NOT treated as an attachment
+
+
+@pytest.mark.asyncio
+async def test_send_no_media_passes_no_attachments():
+    s = _Sender()
+    surface = EmailSurface(s)
+    await surface.send(OutboundMessage(session_key="agent:main:email:dm:x@y.com", text="hi"))
+    assert s.kwargs[0]["attachments"] is None

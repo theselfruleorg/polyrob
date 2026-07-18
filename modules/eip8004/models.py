@@ -9,6 +9,16 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 from enum import Enum
 
+# M21 (2026-07-15 wallet/crypto review): ReputationManager/ValidationManager are
+# process-volatile in-memory simulations — a restart wipes all "reputation" — and
+# these reads stay served even when EIP8004_ENABLED is off. Rather than hard-gate
+# the reads, every response carries this honest marker.
+_SIMULATION_NOTE = (
+    "This registry is a local, process-volatile simulation (in-memory; a restart "
+    "wipes it) — not read from an on-chain registry. See docs/guide/payments.md "
+    "§ERC-8004."
+)
+
 
 # =============================================================================
 # Configuration
@@ -61,6 +71,14 @@ class Registration(BaseModel):
     """Agent registration on a specific chain."""
     agentId: int = Field(..., description="ERC-721 tokenId")
     agentRegistry: str = Field(..., description="Registry identifier (eip155:chainId:address)")
+    attestation: Optional[str] = Field(
+        None,
+        description="L11 (2026-07-15 wallet/crypto review): 'operator' marks that this "
+        "registration is the operator's own out-of-band claim (e.g. a manual on-chain "
+        "mint the operator performed themselves) — no code in this repository has ever "
+        "signed or broadcast the on-chain registration transaction. Never omit this when "
+        "the entry is emitted so a consumer can't mistake it for a code-verified fact.",
+    )
 
 
 class RegistrationFile(BaseModel):
@@ -192,12 +210,13 @@ class ValidationResponseModel(BaseModel):
 
 class ValidationStatus(BaseModel):
     """Validation status from on-chain query."""
-    
+
     validatorAddress: str
     agentId: int
     response: int
     tag: Optional[str]
     lastUpdate: int  # Unix timestamp
+    simulated: bool = Field(default=True, description=_SIMULATION_NOTE)
 
 
 # =============================================================================
@@ -246,12 +265,13 @@ class GetReputationRequest(BaseModel):
 
 class ReputationSummary(BaseModel):
     """Agent reputation summary."""
-    
+
     agentId: int
     totalFeedback: int
     averageScore: float
     recentScores: List[int]
     topTags: List[str]
+    simulated: bool = Field(default=True, description=_SIMULATION_NOTE)
 
 
 class RequestValidationRequest(BaseModel):
@@ -263,9 +283,10 @@ class RequestValidationRequest(BaseModel):
 
 class ValidationSummary(BaseModel):
     """Validation summary for an agent."""
-    
+
     agentId: int
     totalValidations: int
     averageResponse: float
     validatorBreakdown: Dict[str, int]
+    simulated: bool = Field(default=True, description=_SIMULATION_NOTE)
 

@@ -234,7 +234,8 @@ async def test_status_plain():
     out = buf.getvalue()
     assert "gemini-2.5-flash" in out
     assert "100 in" in out
-    assert "step: 3" in out
+    step_line = next(line for line in out.splitlines() if "step" in line)
+    assert "3" in step_line
 
 
 @pytest.mark.asyncio
@@ -312,7 +313,7 @@ async def test_sessions_empty():
     reg = default_registry()
     ctx, buf = _plain_ctx(task_agent=task_agent)
     await reg.dispatch("/sessions", ctx)
-    assert "No sessions" in buf.getvalue()
+    assert "no sessions yet" in buf.getvalue()
 
 
 @pytest.mark.asyncio
@@ -334,7 +335,7 @@ async def test_history_empty():
     reg = default_registry()
     ctx, buf = _plain_ctx(conversation=convo)
     await reg.dispatch("/history", ctx)
-    assert "No conversation history" in buf.getvalue()
+    assert "no conversation history yet" in buf.getvalue()
 
 
 @pytest.mark.asyncio
@@ -435,6 +436,18 @@ def test_todos_reads_session_file_via_pm(monkeypatch, tmp_path):
     out = buf.getvalue()
     assert "alpha" in out
     assert "1/2" in out  # one of two completed
+    assert "--- todos ---" in out  # title on every emit (Wave B1)
+
+
+def test_todos_empty_uses_candy_grammar(monkeypatch, tmp_path):
+    # No todo.md at all -> the shared empty-state grammar, not the old bespoke line.
+    monkeypatch.setattr("agents.task.path.pm", lambda: _FakePM(tmp_path))
+    from cli.ui.commands.handlers import _h_todos
+    ctx, buf = _plain_ctx(session_id="s1", user_id="u1")
+    _h_todos(ctx)
+    out = buf.getvalue()
+    assert "no todos yet" in out
+    assert "--- todos ---" in out
 
 
 def test_logs_finds_dir_via_pm(monkeypatch, tmp_path):
@@ -937,7 +950,7 @@ async def test_resume_missing_session(tmp_path, monkeypatch):
     out = buf.getvalue()
     # pm() may create an empty feed dir as a side effect, so "empty" is also a
     # valid not-found signal; either way nothing was replayed.
-    assert ("No feed dir" in out) or ("is empty" in out)
+    assert ("no feed dir" in out) or ("is empty" in out)
     assert "replaying" not in out
 
 
@@ -995,3 +1008,72 @@ def test_compact_still_works_after_compress_alias():
     cmd = reg.lookup("compact")
     assert cmd is not None
     assert cmd.name == "compact"
+
+
+# ---------------------------------------------------------------------------
+# View normalization (Wave B1) — /goals, /pending onto the shared candy grammar
+# ---------------------------------------------------------------------------
+
+
+def test_goals_not_initialized_uses_candy_grammar(monkeypatch, tmp_path):
+    # No goals.db at all -> the not-initialized empty state (GOALS_ENABLED=off hint).
+    # yet=False here (per spec) -> "no goals", not "no goals yet".
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    from cli.ui.commands.handlers import _h_goals
+    ctx, buf = _plain_ctx(user_id="u1")
+    _h_goals(ctx)
+    out = buf.getvalue()
+    assert "no goals" in out
+    assert "GOALS_ENABLED=off or none created" in out
+    assert "--- goals ---" in out  # title on every emit (Wave B1)
+
+
+def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
+    from agents.task.goals.board import GoalBoard
+    from cli.ui.commands.handlers import _h_goals
+
+    GoalBoard(str(tmp_path / "goals.db"))  # creates the db/table, no rows
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ctx, buf = _plain_ctx(user_id="u1")
+    _h_goals(ctx)
+    out = buf.getvalue()
+    assert "no goals yet" in out
+    assert "/autonomy shows loop state" in out
+    assert "--- goals ---" in out
+
+
+def test_goals_lists_rows_with_title(monkeypatch, tmp_path):
+    from agents.task.goals.board import GoalBoard
+    from cli.ui.commands.handlers import _h_goals
+
+    board = GoalBoard(str(tmp_path / "goals.db"))
+    board.create(user_id="u1", title="write the report")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ctx, buf = _plain_ctx(user_id="u1")
+    _h_goals(ctx)
+    out = buf.getvalue()
+    assert "write the report" in out
+    assert "--- goals ---" in out
+
+
+def test_pending_empty_uses_candy_grammar(tmp_path):
+    import types
+    from cli.ui.commands.handlers import _h_pending
+
+    ctx, buf = _plain_ctx(
+        container=types.SimpleNamespace(config=types.SimpleNamespace(data_dir=str(tmp_path))),
+        user_id="local",
+        args=[],
+    )
+    _h_pending(ctx)
+    out = buf.getvalue()
+    assert "no pending proposals yet" in out
+    assert "--- pending ---" in out
+
+
+def test_goals_view_has_no_emoji():
+    # state_glyph vocabulary replaced the per-view emoji map
+    import cli.ui.commands.handlers as handlers
+    src = open(handlers.__file__, encoding="utf-8").read()
+    for emoji in ("🟢", "🟡", "✅", "🔴", "⬜", "⚪", "⏱️"):
+        assert emoji not in src

@@ -37,7 +37,18 @@ from abc import ABC, abstractmethod
 from typing import Any, List
 
 from cli.ui import dialog
-from cli.ui.events import ErrorEvent, RenderEvent, SessionDone, Step, ToolExec
+from cli.ui.events import (
+    ApprovalDecision,
+    ApprovalPending,
+    ErrorEvent,
+    LLMStarted,
+    RenderEvent,
+    SessionDone,
+    Step,
+    ToolExec,
+    ToolStarted,
+)
+from cli.ui.theme import ICONS
 from cli.ui.state import SessionState
 
 #: Ring-buffer cap: enough for the longest realistic turn, bounded so a runaway
@@ -83,6 +94,10 @@ class Renderer(ABC):
         # guard is never duplicated.  Reset by on_turn_start.
         self._message_bubble_rendered: bool = False
         self._last_bubble_text: str = ""
+        # 019 span pairing: call_ids whose `→ name(args)` line already printed
+        # at tool_started, so the paired tool_execution prints only the result
+        # line (never a duplicate call line). Reset by on_turn_start; bounded.
+        self._printed_start_ids: set[str] = set()
 
     @property
     def state(self) -> SessionState:
@@ -163,6 +178,26 @@ class Renderer(ABC):
             self._handle_tool_exec(event)
             return
 
+        # 019 span/wait events. Tool/LLM starts are activity-layer by default
+        # (concrete renderers print the call line / feed the live line);
+        # approval waits are dialog-layer notices rendered here in the base so
+        # both renderers show a blocked run identically.
+        if isinstance(event, ToolStarted):
+            self._handle_tool_started(event)
+            return
+
+        if isinstance(event, LLMStarted):
+            self._handle_llm_started(event)
+            return
+
+        if isinstance(event, ApprovalPending):
+            self._handle_approval_pending(event)
+            return
+
+        if isinstance(event, ApprovalDecision):
+            self._handle_approval_decision(event)
+            return
+
         # Extension seam (D2): a registered event renders by its spec's layer +
         # render_line, via the renderer-neutral _emit_line — so a new core event
         # needs ZERO edits here or in either concrete renderer.
@@ -213,6 +248,66 @@ class Renderer(ABC):
         tool results in the default view (``state.last_step_sub_agent``).
         """
         return
+
+    def _handle_tool_started(self, event: ToolStarted) -> None:
+        """Render a tool-dispatch span start (019).
+
+        Default no-op; concrete renderers override to print the
+        ``→ name(args)`` call line the moment the tool is dispatched and to
+        record the span id via ``_note_start_printed`` so the paired
+        completion prints only the result line.
+        """
+        return
+
+    def _handle_llm_started(self, event: LLMStarted) -> None:
+        """Render an LLM-call span start (019).
+
+        Default no-op — the status bar / activity line (fed from
+        ``SessionState``) is the visible surface; renderers may override for
+        a trace line under ``/verbose``.
+        """
+        return
+
+    def _handle_approval_pending(self, event: ApprovalPending) -> None:
+        """Dialog-layer notice: the run is BLOCKED on owner approval (019).
+
+        Always shown (not gated by ``show_tools`` — a blocked run that looks
+        idle is the exact failure 019 exists to kill).
+        """
+        tail = f" (times out in {event.timeout_sec:.0f}s)" if event.timeout_sec else ""
+        self._emit_line(
+            f"{ICONS.pause} awaiting approval: {event.action_name or 'action'}"
+            f" — approve via /pending or `polyrob owner pending`{tail}"
+        )
+
+    def _handle_approval_decision(self, event: ApprovalDecision) -> None:
+        """Dialog-layer notice: the approval wait resolved (019)."""
+        verb = {
+            "approved": f"{ICONS.ok} approved",
+            "denied": f"{ICONS.fail} denied",
+            "timeout": f"{ICONS.fail} timed out",
+            "error": f"{ICONS.fail} errored",
+        }.get(event.decision, event.decision or "resolved")
+        waited = f" after {event.waited_sec:.0f}s" if event.waited_sec >= 1.0 else ""
+        self._emit_line(f"approval {verb}: {event.action_name or 'action'}{waited}")
+
+    # ------------------------------------------------------------------
+    # 019 span-pairing bookkeeping (shared by both renderers)
+    # ------------------------------------------------------------------
+
+    _START_IDS_MAX = 256
+
+    def _note_start_printed(self, call_id: str | None) -> None:
+        """Record that the ``→`` call line for *call_id* was printed."""
+        if call_id and len(self._printed_start_ids) < self._START_IDS_MAX:
+            self._printed_start_ids.add(call_id)
+
+    def _consume_start_printed(self, call_id: str | None) -> bool:
+        """True (once) when the ``→`` line for *call_id* already printed."""
+        if call_id and call_id in self._printed_start_ids:
+            self._printed_start_ids.discard(call_id)
+            return True
+        return False
 
     def _should_show_tool(self, action_name: str) -> bool:
         """Shared gate for a tool line (call-start or result).
@@ -278,6 +373,7 @@ class Renderer(ABC):
         # Reset bubble-dedup state for the new turn.
         self._message_bubble_rendered = False
         self._last_bubble_text = ""
+        self._printed_start_ids.clear()
 
     @abstractmethod
     def on_turn_end(self, answer: str) -> None:

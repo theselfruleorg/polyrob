@@ -80,7 +80,7 @@ def code_exec_docker_persistent_enabled() -> bool:
     wins; posture 0 keeps the historical default OFF.
     """
     try:
-        from agents.task.constants import compute_posture
+        from core.config_policy import compute_posture
         default = compute_posture() >= 1
     except Exception:
         default = False

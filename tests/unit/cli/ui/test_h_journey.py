@@ -1,36 +1,59 @@
-"""/journey — pure renderer unions episodes/events/authored-skills/ledger."""
+"""/journey — pure renderer groups core.recap.build_recap's entries.
+
+Data-gathering (episodes/events/authored-skills/ledger) was extracted to
+``core/recap.py`` (owner-UX P4 T1, see ``tests/unit/core/test_recap.py`` for
+the source-level tests, including the loop-safety regression for the ledger
+seam that used to live here). This module only tests the rendering layer:
+``build_recap`` is the seam h_journey now depends on, so these tests
+monkeypatch it directly instead of the old per-source private functions.
+"""
 from types import SimpleNamespace
 
 from cli.ui.commands import h_journey
+from core.recap import RecapEntry
 
 
 def test_render_journey_sections(monkeypatch):
-    monkeypatch.setattr(h_journey, "_episodes", lambda uid, since: [
-        {"kind": "goal", "outcome": "done", "spend_usd": 0.2, "task": "ship X"}])
-    monkeypatch.setattr(h_journey, "_events", lambda uid, since: [
-        {"kind": "self_modification", "attrs": {"kind": "skill", "skill_id": "s1"}}])
-    monkeypatch.setattr(h_journey, "_authored", lambda uid, data_dir=None: [
-        {"skill_id": "s1", "load_count": 3, "created_by": "agent"}])
-    monkeypatch.setattr(h_journey, "_ledger", lambda uid, days: {
-        "earned_usd": 1.5, "settled_payments": 1, "total_spend_usd": 0.2, "net_usd": 1.3})
+    monkeypatch.setattr(h_journey.recap, "build_recap", lambda *a, **k: [
+        RecapEntry(ts=100.0, kind="episode", text='goal:done $0.20 "ship X"', amount=0.2),
+        RecapEntry(ts=90.0, kind="self_modification", text="skill s1"),
+        RecapEntry(ts=80.0, kind="skill", text="s1 [agent] (used 3x)"),
+        RecapEntry(ts=70.0, kind="ledger",
+                   text="Income: $1.50 (1 settled) · spend $0.20 · net $1.30 · runtime $0.05",
+                   amount=1.3),
+    ])
     out = h_journey.render_journey(user_id="u1", since_label="7d")
     assert "ship X" in out
-    assert "Earned: $1.50" in out and "net $1.30" in out
+    assert "Income: $1.50" in out and "net $1.30" in out
     assert "s1" in out and "used 3x" in out
-    assert "Changed:" in out and "skill s1" in out
+    assert "── Changed" in out and "skill s1" in out
 
 
 def test_render_journey_all_empty_is_stable(monkeypatch):
-    # every source fails open to empty — the renderer still produces all sections.
-    monkeypatch.setattr(h_journey, "_episodes", lambda *a, **k: [])
-    monkeypatch.setattr(h_journey, "_events", lambda *a, **k: [])
-    monkeypatch.setattr(h_journey, "_authored", lambda *a, **k: [])
-    monkeypatch.setattr(h_journey, "_ledger", lambda *a, **k: {})
+    # build_recap fails open to [] — the renderer still produces all sections.
+    monkeypatch.setattr(h_journey.recap, "build_recap", lambda *a, **k: [])
     out = h_journey.render_journey(user_id="u1", since_label="24h")
-    assert "Did:" in out and "no episodes" in out
-    assert "Earned: $0.00" in out
+    assert "── Did" in out and "no episodes" in out
+    # H14b: an absent/empty ledger must NOT be rendered as a fabricated "$0.00 ·
+    # $0.00 · $0.00" (a broken/absent data layer masquerading as a real balance
+    # sheet) — the honest empty-state line replaces it. Terminology is
+    # income/spend — "earned" is retired, including this fallback line.
+    assert "Income: no money activity recorded yet" in out
+    assert "Earned" not in out            # word-specific: "learned" also matches a bare "earned" substring
+    assert "$0.00" not in out
     assert "no authored skills" in out
     assert "no self-modifications" in out
+
+
+def test_render_journey_invalid_window_is_friendly(monkeypatch):
+    # core.recap.build_recap raises ValueError on a malformed window — the REPL
+    # renderer must turn that into a short message, never a raw traceback.
+    def _raise(*a, **k):
+        raise ValueError("invalid recap window 'junk' (expected e.g. '30m' / '24h' / '7d')")
+
+    monkeypatch.setattr(h_journey.recap, "build_recap", _raise)
+    out = h_journey.render_journey(user_id="u1", since_label="junk")
+    assert "invalid window" in out
 
 
 def test_window_seconds_parse():
@@ -52,20 +75,9 @@ def test_h_journey_handler_emits(monkeypatch):
     assert emitted["title"] == "journey"
 
 
-def test_ledger_seam_works_inside_running_loop(monkeypatch):
-    # Regression: the REPL dispatches this sync handler INSIDE a running event loop,
-    # where a bare asyncio.run() raises -> fail-open empties the money section. The
-    # loop-safe bridge must return the real ledger even under a running loop.
-    import asyncio
-
-    async def _fake_build(user_id, *, days=7, db=None):
-        return {"earned_usd": 4.0, "total_spend_usd": 1.0, "net_usd": 3.0}
-
-    monkeypatch.setattr("modules.credits.unified_ledger.build_ledger", _fake_build)
-
-    async def _driver():
-        # calling the SYNC seam from within a running loop (mirrors the REPL)
-        return h_journey._ledger("u1", 7)
-
-    result = asyncio.run(_driver())
-    assert result.get("earned_usd") == 4.0  # NOT {} from a swallowed RuntimeError
+def test_recap_alias_resolves_to_journey():
+    """2026-07-12 UI-surface review: the same core.recap ships as '/journey' on
+    the CLI and '/recap' on Telegram — the REPL now answers to both."""
+    from cli.ui.commands.handlers import build_default_registry
+    cmd = build_default_registry().lookup("recap")
+    assert cmd is not None and cmd.name == "journey"

@@ -55,3 +55,20 @@ def test_fulfill_unknown_ask_exits_nonzero(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     res = CliRunner().invoke(owner, ["fulfill", "nope"])
     assert res.exit_code != 0
+
+
+def test_asks_excludes_tool_approval_asks(tmp_path, monkeypatch):
+    """A tool_approval ask (Task 9 / G-2) has its OWN surface (`owner pending` /
+    `owner promote tool_approval`) — `owner asks` must not double-list it."""
+    from cli.commands.owner import owner
+    _env(tmp_path, monkeypatch)
+    board = _board(tmp_path)
+    ask = board.create_ask(
+        user_id="gleb", what="Approve x402_request? [feedface]",
+        extra_payload={"ask_kind": "tool_approval", "request_hash": "feedface"},
+        force=True,
+    )
+    res = CliRunner().invoke(owner, ["asks"])
+    assert res.exit_code == 0
+    assert "no open asks" in res.output
+    assert ask.id not in res.output

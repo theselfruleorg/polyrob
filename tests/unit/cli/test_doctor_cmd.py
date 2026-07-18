@@ -68,6 +68,10 @@ def test_doctor_command_sees_production_only_key(tmp_path, monkeypatch):
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    # The suite-wide operator-env sandbox (tests/conftest.py) disables the
+    # backfill; this test exercises exactly that mechanism (against ITS OWN
+    # fake config/.env.production above), so opt back in explicitly.
+    monkeypatch.setenv("POLYROB_ENV_KEY_BACKFILL", "1")
     monkeypatch.chdir(tmp_path)
     res = CliRunner().invoke(doctor, [])
     assert res.exit_code == 0, res.output

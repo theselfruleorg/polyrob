@@ -153,6 +153,57 @@ See [../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
 
 ---
 
+## Letting the agent deploy to Hugging Face Spaces (`hf_deploy`)
+
+The optional `hf_deploy` tool lets the agent publish its own session workspace as
+a Hugging Face Space (Docker SDK) — useful for shipping a demo/app it just built.
+It is OFF by default and gated at `AGENT_COMPUTE_POSTURE>=2` (self-maintenance
+tier); see [../CONFIGURATION.md](../CONFIGURATION.md) for the full flag table.
+
+**1. Provision an HF token.** Create a Hugging Face **fine-grained** access
+token scoped to `Write access to contents/settings of all repos under your
+personal namespace` (or a specific org), from
+https://huggingface.co/settings/tokens. Do not use a `read`-only or org-wide
+admin token — a Space-write-scoped token is the least privilege that works.
+
+**2. Set the environment:**
+
+```bash
+HF_DEPLOY_ENABLED=true
+AGENT_COMPUTE_POSTURE=2          # self-maintenance tier; hf_deploy is refused below this
+HF_DEPLOY_ORG=your-hf-username   # or an org you have write access to
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx # the fine-grained write token from step 1
+```
+
+**3. First-publish approval vs. approved-app redeploy.** The first `deploy` of a
+NEW app name is gated by a real approving provider: the tool resolves the SAME
+interactive-default provider the Controller uses at `AGENT_COMPUTE_POSTURE>=2`
+(`interactive_cli` unless you set `APPROVAL_PROVIDER` to something else). On an
+attended terminal that prompts you to approve; on an **unattended/headless** run
+`interactive_cli` cannot prompt and **fail-closes to deny**, so a brand-new
+PUBLIC app can never be first-published by an autonomous run — you approve the
+first publish yourself, interactively.
+
+Once an app name is approved (its `deployed_apps.db` row records `approved_at`),
+later redeploys of that SAME app **skip the approver entirely and run
+unattended** — subject only to `HF_DEPLOY_DAILY_MAX` (default 10/day) and
+`HF_DEPLOY_MIN_INTERVAL_SEC` (default 120s between deploys of the same app). This
+is what lets an autonomous goal iterate on an already-approved app without a
+prompt on every deploy. (Note: `deploy` is deliberately NOT in the Controller's
+`APPROVAL_REQUIRED_TOOLS` sets — a blanket Controller gate can't tell first
+publish from redeploy, so the tool owns that distinction via its registry.)
+
+**4. Ship==tested contract.** Every `deploy` call refuses unless the session's
+action ledger shows a green `run_tests` with no code-edit action after it — a
+deploy is never the untested state of the workspace.
+
+`HF_TOKEN` is read directly from the process environment at deploy time; it is
+never written to a param, a result, or a log line (broker errors are
+token-scrubbed). `hf_deploy` is excluded from delegated sub-agents
+(`DELEGATE_BLOCKED_TOOLS`) and from correspondent-tainted sessions.
+
+---
+
 ## Logs
 
 ```bash

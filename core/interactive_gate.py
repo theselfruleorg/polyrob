@@ -23,7 +23,8 @@ def _workspace_lock_path() -> Optional[str]:
     Gated by CLI_WORKSPACE_LOCK (default on) AND POLYROB_WORKSPACE_LOCK_DIR, which only
     build_cli_container sets — so this is a no-op on the server (no env => None).
     """
-    if os.environ.get("CLI_WORKSPACE_LOCK", "1").strip().lower() in ("0", "false", "off", "no"):
+    from core.env import bool_env
+    if not bool_env("CLI_WORKSPACE_LOCK", True):  # SSOT falsey set (incl. "none") — P4
         return None
     root = os.environ.get("POLYROB_WORKSPACE_LOCK_DIR")
     if not root:

@@ -8,6 +8,7 @@ orchestrator.submit_user_message / record_decision etc. unchanged.
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any, Dict, List, Optional
 
 # C1: context-reference expansion is an ALLOWLIST of trusted human-intake kinds.
@@ -15,9 +16,31 @@ from typing import Any, Dict, List, Optional
 # kinds, etc. — is never expanded (expansion is a filesystem read on caller text).
 _TRUSTED_CONTEXT_REF_KINDS = {"comment", "continuation"}
 
+# B5 (2026-07-13 review): one lock for all taint mutations. The flag was a bare bool
+# raced by the owner-turn clear and the correspondent-inject set; contention is
+# negligible (a few writes per turn), so a module-level lock keeps it simple.
+_TAINT_LOCK = threading.Lock()
+
 
 class HITLIngressMixin:
     """User-message + approval-decision ingress for SessionOrchestrator."""
+
+    # --- correspondent taint (B5) ------------------------------------------
+    def _set_correspondent_taint(self, surface: Optional[str], address: Optional[str]) -> None:
+        """Mark the session correspondent-tainted, recording WHO tainted it so the
+        scoped reply exemption (D1) can allow answering exactly that party."""
+        src = (surface or "", (address or "").strip().lower())
+        with _TAINT_LOCK:
+            if not hasattr(self, "_correspondent_taint_sources"):
+                self._correspondent_taint_sources = set()
+            self._correspondent_taint_sources.add(src)
+            self._correspondent_tainted = True
+
+    def _clear_correspondent_taint(self) -> None:
+        """A genuine owner turn re-opens the gate — clear the flag AND the sources."""
+        with _TAINT_LOCK:
+            self._correspondent_tainted = False
+            self._correspondent_taint_sources = set()
 
     async def submit_user_message(
         self,
@@ -41,7 +64,7 @@ class HITLIngressMixin:
         # WS-A: a genuine owner/continuation turn clears any correspondent taint — the
         # owner is driving again, so the capability gate re-opens high-impact tools.
         if kind in _TRUSTED_CONTEXT_REF_KINDS:
-            self._correspondent_tainted = False
+            self._clear_correspondent_taint()
 
         # C1: expand @file/@folder/@diff/@url references for trusted human intake only
         # (allowlist). Forged/system kinds are never expanded — see _TRUSTED_CONTEXT_REF_KINDS.
@@ -123,6 +146,9 @@ class HITLIngressMixin:
         text: str,
         source: str,
         metadata: Optional[Dict[str, Any]] = None,
+        *,
+        surface: Optional[str] = None,
+        address: Optional[str] = None,
     ) -> bool:
         """WS-A: inject a third-party correspondent reply as DATA, not a steering turn.
 
@@ -152,7 +178,8 @@ class HITLIngressMixin:
         mm.push_ephemeral_message(msg)
         # Taint the session: the capability gate now blocks high-impact tools until the
         # owner drives again (cleared in submit_user_message on a genuine owner turn).
-        self._correspondent_tainted = True
+        # The source label doubles as the address when the caller doesn't split them.
+        self._set_correspondent_taint(surface, address or source)
         logger = getattr(self, "logger", None)
         if logger is not None:
             logger.info(f"Injected correspondent DATA from {source} (ephemeral, untrusted)")

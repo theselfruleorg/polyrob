@@ -50,17 +50,18 @@ def h_learn(ctx) -> None:
     """REPL handler: /learn <freeform description of a procedure>."""
     description = " ".join(getattr(ctx, "args", None) or []).strip()
     if not description:
-        ctx.emit("usage: /learn <describe a procedure to distill into a pending skill>")
+        ctx.emit("usage: /learn <describe a procedure to distill into a pending skill>",
+                  title="learn")
         return
     uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
 
     try:
         mgr = _skill_manager(ctx)
     except Exception as e:
-        ctx.emit(f"(/learn unavailable: {e})")
+        ctx.emit(f"(/learn unavailable: {e})", title="learn")
         return
     if mgr is None:
-        ctx.emit("(/learn unavailable: no skill manager)")
+        ctx.emit("(/learn unavailable: no skill manager)", title="learn")
         return
 
     skill_id, content = _distill(description)
@@ -70,7 +71,8 @@ def h_learn(ctx) -> None:
     try:
         ok, _errs = mgr.validate_skill_id(skill_id)
         if not ok:
-            ctx.emit(f"/learn could not derive a valid skill id from: {description[:60]}")
+            ctx.emit(f"/learn could not derive a valid skill id from: {description[:60]}",
+                      title="learn")
             return
     except Exception:
         pass
@@ -82,12 +84,12 @@ def h_learn(ctx) -> None:
             skill_id, content, user_id=uid,
             description=(description[:200]), created_by="agent", pending=True)
     except Exception as e:
-        ctx.emit(f"(/learn failed to write skill: {e})")
+        ctx.emit(f"(/learn failed to write skill: {e})", title="learn")
         return
 
     if not getattr(res, "ok", False):
         errs = "; ".join(getattr(res, "errors", []) or []) or "rejected"
-        ctx.emit(f"/learn rejected: {errs}")
+        ctx.emit(f"/learn rejected: {errs}", title="learn")
         return
 
     sid = getattr(res, "skill_id", skill_id)

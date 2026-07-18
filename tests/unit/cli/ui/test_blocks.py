@@ -140,22 +140,25 @@ def test_error_panel_full_message():
 
 def test_subagent_line_is_dim_oneliner():
     out = _render(blocks.subagent_line("researcher", 2, "looking up docs"))
-    assert "researcher" in out
+    assert "└ researcher" in out
     assert "step 2" in out
+    assert "looking up docs" in out
 
 
 def test_agent_message_renders_with_speaker_mark():
+    from cli.ui.theme import ICONS
     out = _render(blocks.agent_message("the answer is 42"))
     assert "the answer is 42" in out
-    assert "● rob" in out
+    assert f"{ICONS.speaker} rob" in out
 
 
 def test_no_final_message_notice_with_goal():
+    from cli.ui.theme import ICONS
     out = _render(blocks.no_final_message_notice("Deliver the review"))
     assert "finished without a final message" in out
     assert "last goal:" in out
     assert "Deliver the review" in out
-    assert "● rob" in out
+    assert f"{ICONS.speaker} rob" in out
 
 
 def test_no_final_message_notice_without_goal():
@@ -165,8 +168,10 @@ def test_no_final_message_notice_without_goal():
 
 
 def test_turn_summary_line_segments():
+    from cli.ui.theme import ICONS
     out = _render(blocks.turn_summary_line(
         steps=3, tools=2, tokens=14200, cost=0.0041, elapsed_seconds=28.0))
+    assert f"{ICONS.speaker}" in out
     assert "3 steps" in out
     assert "2 tools" in out
     assert "14.2k tok" in out
@@ -183,7 +188,9 @@ def test_turn_summary_line_omits_zero_segments():
 
 
 def test_turn_summary_line_failed():
+    from cli.ui.theme import ICONS
     out = _render(blocks.turn_summary_line(steps=1, failed=True))
+    assert f"{ICONS.speaker}" in out
     assert "failed" in out
 
 
@@ -232,11 +239,12 @@ _MSG_STEP = {
 
 
 def test_agent_message_renders_full_markdown_no_truncation():
+    from cli.ui.theme import ICONS
     out = _render(blocks.agent_message(_LONG_MARKDOWN))
     assert "Repository Review" in out
     assert "point three" in out
     assert "…" not in out  # never truncated
-    assert "rob" in out
+    assert f"{ICONS.speaker}" in out
 
 
 def test_step_block_skips_echo_reasoning_and_send_message_line():
@@ -293,3 +301,45 @@ def test_user_message_echoes_text_with_caret():
 def test_user_message_blank_returns_none():
     assert blocks.user_message("   ") is None
     assert blocks.user_message("") is None
+
+
+# ---------------------------------------------------------------------------
+# Sub-agent lane glyph migration (Task 7)
+# ---------------------------------------------------------------------------
+
+
+def test_subagent_line_uses_tree_glyph():
+    line = blocks.subagent_line("researcher", 3, "scanning docs")
+    text = line.plain
+    assert text.startswith("  └ researcher")
+    assert "step 3" in text and "scanning docs" in text
+
+
+def test_subagent_line_no_summary():
+    text = blocks.subagent_line("researcher", 2).plain
+    assert text == "  └ researcher · step 2"
+
+
+def test_subagent_line_collapses_multiline_summary():
+    text = blocks.subagent_line("r", 1, "line1\nline2").plain
+    tree_idx = text.index("└")
+    assert "\n" not in text[tree_idx:]
+
+
+def test_speaker_glyphs_come_from_theme():
+    from cli.ui.theme import ICONS
+    assert blocks.agent_message("hi") is not None  # existing golden covers content
+    assert blocks.working_notice().plain.startswith(f"{ICONS.working} ")
+
+
+def test_agent_message_has_no_trailing_blank_line():
+    # Blank-BEFORE-only rhythm: the gap below the last block is owned by the
+    # pinned region's spacer row, not the bubble.
+    out = _render(blocks.agent_message("hi"))
+    assert out.startswith("\n")
+    assert not out.endswith("\n\n")
+
+
+def test_turn_summary_line_has_leading_blank():
+    out = _render(blocks.turn_summary_line(steps=3, tools=2, tokens=14200, cost=0.004))
+    assert out.startswith("\n")

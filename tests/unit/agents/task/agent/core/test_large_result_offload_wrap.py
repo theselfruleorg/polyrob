@@ -14,12 +14,12 @@ result object that DOES carry a name.
 import logging
 from pathlib import Path
 
-from agents.task.agent.core.memory_writer import MemoryWriterMixin
+from agents.task.agent.core.result_offload import ToolResultOffloadMixin
 from tools.controller.types import ActionResult
 
 
 def _agent(controller=None):
-    a = MemoryWriterMixin.__new__(MemoryWriterMixin)
+    a = ToolResultOffloadMixin.__new__(ToolResultOffloadMixin)
     a.session_id = "s1"
     a.user_id = "u1"
     a.controller = controller

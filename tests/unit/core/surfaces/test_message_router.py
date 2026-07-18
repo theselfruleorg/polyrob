@@ -99,3 +99,27 @@ async def test_send_message_backcompat_shim(router):
     r.subscribe("telegram", surf)
     await r.send_message(chat_id="555", text="cron note", surface_id="telegram")
     assert len(surf.sent) == 1 and surf.sent[0].text == "cron note"
+    assert surf.sent[0].media == []  # default keeps today's shape
+
+
+@pytest.mark.asyncio
+async def test_send_message_threads_media(router):
+    r, reg = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    media = [{"kind": "image", "path": "/tmp/x.png", "caption": None}]
+    await r.send_message(chat_id="555", text="see attached", surface_id="telegram", media=media)
+    assert surf.sent[0].media == media
+
+
+def test_capabilities_returns_subscribed_surface_caps(router):
+    r, reg = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    caps = r.capabilities("telegram")
+    assert caps is not None and caps.supports_streaming is True
+
+
+def test_capabilities_returns_none_for_unknown_surface(router):
+    r, reg = router
+    assert r.capabilities("nope") is None

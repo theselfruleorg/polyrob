@@ -703,7 +703,15 @@ async def get_session_status(
         # Add webview URL if present in metadata
         metadata = session_info.get("metadata", {})
         response_data["webview_url"] = metadata.get("webview_url")
-        
+
+        # 019 P1: live run activity (in-process snapshot; None when this worker
+        # doesn't own the session or nothing has run since restart).
+        try:
+            from agents.task.telemetry.run_activity import get_activity
+            response_data["current_activity"] = get_activity(session_id)
+        except Exception:
+            response_data["current_activity"] = None
+
         return SessionStatusResponse(**response_data)
         
     except HTTPException:
@@ -907,6 +915,20 @@ async def switch_active_session(
         logger.error(f"Error switching session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+def _capability_defaults(config) -> tuple:
+    """Default (provider, model) advertised by /capabilities.
+
+    Falls back to the provider's policy default (llm_client_registry.DEFAULT_MODELS,
+    env-overridable via POLYROB_<PROVIDER>_MODEL) — never a hardcoded literal, which
+    is how the deprecated x-ai/grok-4.1-fast kept being advertised after the registry
+    had already marked it dead (structural audit T2, 2026-07-16).
+    """
+    from modules.llm.llm_client_registry import get_default_model
+    provider = getattr(config, 'provider', None) or 'openrouter'
+    model = getattr(config, 'model', None) or get_default_model(provider)
+    return provider, model
+
+
 @router.get("/capabilities")
 async def get_capabilities(request: Request):
     """Get system capabilities including available models and tools."""
@@ -982,9 +1004,7 @@ async def get_capabilities(request: Request):
         
         # Get default configuration
         config = container.config
-        # Default to Grok 4.1 Fast for task agent (best agentic model)
-        default_model = getattr(config, 'model', 'x-ai/grok-4.1-fast')
-        default_provider = getattr(config, 'provider', 'openrouter')
+        default_provider, default_model = _capability_defaults(config)
 
         # Get MCP server information if available, including connection status
         mcp_servers = {"global": [], "user": [], "include_global": True}

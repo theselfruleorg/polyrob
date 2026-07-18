@@ -147,7 +147,7 @@ class CodeExecutionTool(BaseTool):
         not leaf/sub-agent AND not a forged turn). Fail-closed on any fault.
         """
         try:
-            from agents.task.constants import compute_posture_allows
+            from core.config_policy import compute_posture_allows
             return bool(compute_posture_allows(execution_context, 1))
         except Exception:
             return False
@@ -183,16 +183,31 @@ class CodeExecutionTool(BaseTool):
             bad = [p for p in packages if p.startswith("-") or not _PKG_SPEC_RE.fullmatch(p)]
             if bad:
                 return ActionResult(error=f"invalid package spec(s) (package names, not pip flags): {bad!r}")
-            net = (os.getenv("CODE_EXEC_NETWORK", "none") or "none").lower()
-            if net in ("none", ""):
-                return ActionResult(error=(
-                    "packages needs sandbox network egress, but CODE_EXEC_NETWORK "
-                    "is 'none'. The operator must set CODE_EXEC_NETWORK=egress."
-                ))
-
         try:
             backend = await self._get_backend(execution_context, dev_mode=dev_mode)
             workdir = self._resolve_workdir(execution_context)
+
+            if packages:
+                # 014 B2: gate on the network the install will ACTUALLY get, not
+                # the raw env — a posture-1 persistent dev container auto-bridges
+                # when CODE_EXEC_NETWORK is unset (docker.py::_resolve_setup_network).
+                # Backends without the probe fall back to the env policy unchanged.
+                eff = None
+                probe = getattr(backend, "effective_setup_network", None)
+                if callable(probe):
+                    try:
+                        eff = str(probe()).lower()
+                    except Exception:
+                        eff = None
+                if eff is None:
+                    eff = (os.getenv("CODE_EXEC_NETWORK", "none") or "none").lower()
+                if eff in ("none", ""):
+                    return ActionResult(error=(
+                        "packages needs sandbox network egress, but the effective "
+                        "sandbox network is 'none'. The operator must set "
+                        "CODE_EXEC_NETWORK=egress (or run at AGENT_COMPUTE_POSTURE>=1 "
+                        "with the persistent dev container, which networks itself)."
+                    ))
 
             if packages:
                 quoted = " ".join(shlex.quote(p) for p in packages)

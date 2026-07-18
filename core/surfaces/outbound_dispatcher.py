@@ -8,7 +8,7 @@ from typing import Callable, Optional
 
 from core.surfaces.envelopes import OutboundMessage
 from core.surfaces.outbound_queue import OutboundDeliveryQueue
-from core.surfaces.rate_bucket import TokenBucket
+from core.rate_limit import TokenBucket
 
 logger = logging.getLogger(__name__)
 

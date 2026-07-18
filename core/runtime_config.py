@@ -85,12 +85,13 @@ def env_keys_present(env=None) -> set:
 def get_data_root() -> str:
     """Resolve the CLI/local runtime data home (where goals.db/cron.db/memory.db live).
 
-    Mirrors ``core.bootstrap._resolve_cli_data_home`` — the SSOT for the data-home
-    rule: honors ``POLYROB_DATA_DIR``/``POLYROB_PROJECT_DIR``, else ``cwd/.polyrob``.
-    The terminal-native ``polyrob goals``/``cron`` surfaces use this so they read the
-    SAME database the autonomy dispatcher writes (``<data_root>/goals.db``). Lazy
-    import avoids a module cycle with core.bootstrap.
+    Delegates to the ONE data-home rule, ``core.runtime_paths.resolve_data_home``
+    (``POLYROB_DATA_DIR`` wins, else ``cwd/.polyrob``); ``core.bootstrap.
+    _resolve_cli_data_home`` resolves through the same seam, so the terminal-native
+    ``polyrob goals``/``cron`` surfaces read the SAME database the autonomy dispatcher
+    writes (``<data_root>/goals.db``). ``POLYROB_PROJECT_DIR`` moves only the
+    workspace, never the data home (parity-pinned by
+    tests/unit/core/test_data_home_resolver.py).
     """
-    from core.bootstrap import _resolve_cli_data_home
-    data_home, _ws_is_project_root, _project_root = _resolve_cli_data_home()
-    return str(data_home)
+    from core.runtime_paths import resolve_data_home
+    return str(resolve_data_home())

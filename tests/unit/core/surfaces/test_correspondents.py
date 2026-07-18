@@ -71,15 +71,44 @@ def test_address_only_resolves_when_single_active_binding(reg):
     assert row is not None and row["session_id"] == "s1"
 
 
-def test_ambiguous_address_requires_thread(reg):
-    # Same correspondent, two active sessions -> address-only is ambiguous -> None.
+def test_same_tenant_ambiguity_routes_to_latest_conversation(reg):
+    """A4 (2026-07-13 review): same-tenant multi-session address-only replies route
+    to the most recently active binding (default ON) — the legacy None starved
+    every session after the first. Exact thread matches still win outright."""
     reg.seed(surface="email", address="john@acme.com", session_id="s1",
-             user_id="u_owner", thread_id="t1", provenance="owner", require_approval=False)
+             user_id="u_owner", thread_id="t1", provenance="owner",
+             require_approval=False, now=1000.0)
     reg.seed(surface="email", address="john@acme.com", session_id="s2",
-             user_id="u_owner", thread_id="t2", provenance="owner", require_approval=False)
+             user_id="u_owner", thread_id="t2", provenance="owner",
+             require_approval=False, now=2000.0)
+    row = reg.resolve(surface="email", address="john@acme.com")
+    assert row is not None and row["session_id"] == "s2"
+    # an exact thread still resolves to ITS session, not the latest
+    assert reg.resolve(surface="email", address="john@acme.com",
+                       thread_id="t1")["session_id"] == "s1"
+
+
+def test_same_tenant_ambiguity_denies_when_latest_fallback_off(reg, monkeypatch):
+    monkeypatch.setenv("CORRESPONDENT_RESOLVE_LATEST", "false")
+    reg.seed(surface="email", address="john@acme.com", session_id="s1",
+             user_id="u_owner", thread_id="t1", provenance="owner",
+             require_approval=False, now=1000.0)
+    reg.seed(surface="email", address="john@acme.com", session_id="s2",
+             user_id="u_owner", thread_id="t2", provenance="owner",
+             require_approval=False, now=2000.0)
     assert reg.resolve(surface="email", address="john@acme.com") is None
-    # but an exact thread still resolves
-    assert reg.resolve(surface="email", address="john@acme.com", thread_id="t2")["session_id"] == "s2"
+
+
+def test_cross_tenant_ambiguity_still_denies(reg):
+    """Two TENANTS bound to one address can never be disambiguated by recency —
+    routing a reply into the wrong tenant is a data leak. Stays None."""
+    reg.seed(surface="email", address="john@acme.com", session_id="s1",
+             user_id="tenant_a", thread_id="t1", provenance="owner",
+             require_approval=False, now=1000.0)
+    reg.seed(surface="email", address="john@acme.com", session_id="s2",
+             user_id="tenant_b", thread_id="t2", provenance="owner",
+             require_approval=False, now=2000.0)
+    assert reg.resolve(surface="email", address="john@acme.com") is None
 
 
 def test_expired_binding_stops_resolving(reg):
@@ -124,3 +153,35 @@ def test_seed_is_idempotent_on_key(reg):
     # one row, resolves once
     assert reg.resolve(surface="email", address="john@acme.com", thread_id="t1")["session_id"] == "s1"
     assert reg.count_seeds_since(user_id="u_owner", since_secs=10**9) == 1
+
+
+def test_unscoped_approve_refuses_when_pending_rows_span_tenants(reg):
+    """P1 (finalization): two tenants share (surface, address, thread) as pending.
+    An unscoped approve() (user_id=None, the CLI default) must NOT cross-promote
+    both — it refuses and returns False; the caller must pass user_id."""
+    reg.seed(surface="email", address="x@acme.com", session_id="s1",
+             user_id="tenant_a", thread_id="t", provenance="owner", require_approval=True)
+    reg.seed(surface="email", address="x@acme.com", session_id="s2",
+             user_id="tenant_b", thread_id="t", provenance="owner", require_approval=True)
+
+    assert reg.approve(surface="email", address="x@acme.com", thread_id="t") is False
+    # Neither tenant was promoted.
+    assert reg.resolve(surface="email", address="x@acme.com", thread_id="t") is None
+
+
+def test_scoped_approve_promotes_only_the_named_tenant(reg):
+    reg.seed(surface="email", address="x@acme.com", session_id="s1",
+             user_id="tenant_a", thread_id="t", provenance="owner", require_approval=True)
+    reg.seed(surface="email", address="x@acme.com", session_id="s2",
+             user_id="tenant_b", thread_id="t", provenance="owner", require_approval=True)
+
+    assert reg.approve(surface="email", address="x@acme.com", thread_id="t",
+                       user_id="tenant_a") is True
+    row = reg.resolve(surface="email", address="x@acme.com", thread_id="t")
+    assert row is not None and row["user_id"] == "tenant_a"
+
+
+def test_unscoped_approve_still_works_for_single_tenant(reg):
+    reg.seed(surface="email", address="solo@acme.com", session_id="s1",
+             user_id="only_tenant", thread_id="t", provenance="owner", require_approval=True)
+    assert reg.approve(surface="email", address="solo@acme.com", thread_id="t") is True

@@ -90,10 +90,16 @@ async def _ensure_memory_backend() -> None:
         click.echo(click.style(f"note: container build skipped (FTS-only): {e}", dim=True))
 
     if not data_dir:
-        # FTS-only fallback path: derive the .polyrob/ data dir directly.
-        from pathlib import Path
-        rob_dir = Path.cwd() / ".polyrob"
-        data_dir = str(rob_dir) if (rob_dir.exists() or os.environ.get("POLYROB_LOCAL", "")) else "data"
+        # FTS-only fallback path: resolve the SAME data home the agent uses —
+        # _resolve_cli_data_home honors POLYROB_DATA_DIR (the headless case), so a
+        # container-build failure never silently points the KB at the wrong dir.
+        try:
+            from core.bootstrap import _resolve_cli_data_home
+            data_dir = str(_resolve_cli_data_home()[0])
+        except Exception:
+            from pathlib import Path
+            rob_dir = Path.cwd() / ".polyrob"
+            data_dir = str(rob_dir) if (rob_dir.exists() or os.environ.get("POLYROB_LOCAL", "")) else "data"
 
     try:
         # vector recall needs the embedder; without it this is FTS-only.

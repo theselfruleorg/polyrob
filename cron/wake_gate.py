@@ -4,7 +4,8 @@ review tick when nothing observable changed since the last tick.
 The observed autonomy economy was ~23/25 no-op review wakes — every tick paid
 for a full model run to conclude "nothing new". The gate computes a cheap
 fingerprint over the tenant's observable autonomy state (goal board + goal
-events + cron activity + newest episode) and compares it to the baseline stored
+events + cron activity + newest episode + x402 payment-request state) and
+compares it to the baseline stored
 at the previous tick; equality means the paid model call is skipped ($0 tick,
 same shape as ``wake_agent=False``).
 
@@ -154,6 +155,52 @@ def _episode_cursor(user_id: str, data_dir: str) -> str:
     return "episodes:none"
 
 
+# Task 12 (Phase 2, G-36): mirrors modules.x402.invoicing.INVOICE_KIND. Not
+# imported from there directly — every leg here reads its owning module's
+# table with raw SQL rather than importing the module, so this fingerprint
+# stays cheap and dependency-light (no fastapi_x402/web3 import chain on
+# every cron tick just to read a literal).
+_AGENT_INVOICE_LIKE = '%"kind": "agent_invoice"%'
+
+
+def _x402_cursor(user_id: str, data_dir: str) -> str:
+    """Tenant-scoped x402 payment-request signal (G-36): newest update time +
+    per-status row counts for this tenant's agent invoices
+    (``x402_payment_requests`` in ``data_dir/database/bot.db`` — see
+    ``modules/database/database_manager.py``). A settlement
+    (pending->completed), an expiry (pending->expired), or a new invoice
+    changes this leg, so a change-gated job watching payment events is never
+    skipped on the very tick it should react to.
+
+    Tenant match mirrors the SAFE pattern established across modules/x402 and
+    modules/credits/unified_ledger.py: the ``user_id`` column OR
+    ``json_extract(metadata, '$.tenant_id')`` — NOT a ``metadata LIKE`` on the
+    tenant id, which would misfire (SQLite LIKE treats ``_`` as a wildcard,
+    and real tenant ids look like ``u_<hex>``)."""
+    db = os.path.join(data_dir, "database", "bot.db")
+    if not os.path.exists(db):
+        return "x402:none"
+    return _neutral_on_missing_table(lambda: _x402_read(user_id, db), "x402:none")
+
+
+def _x402_read(user_id: str, db: str) -> str:
+    newest = execute_retry(
+        db,
+        "SELECT MAX(updated_at) AS m FROM x402_payment_requests "
+        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) AND metadata LIKE ?",
+        (user_id, user_id, _AGENT_INVOICE_LIKE), fetch="one",
+    )
+    counts = execute_retry(
+        db,
+        "SELECT status, COUNT(*) AS n FROM x402_payment_requests "
+        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) AND metadata LIKE ? "
+        "GROUP BY status ORDER BY status",
+        (user_id, user_id, _AGENT_INVOICE_LIKE), fetch="all",
+    )
+    count_sig = ",".join(f"{r['status']}={r['n']}" for r in (counts or []))
+    return f"x402:{(newest or {})['m'] if newest else None}:{count_sig}"
+
+
 def compute_wake_fingerprint(
     user_id: str, *, data_dir: str, exclude_job_id: Optional[str] = None
 ) -> str:
@@ -163,6 +210,7 @@ def compute_wake_fingerprint(
         lambda: _goal_board_cursor(user_id, data_dir),
         lambda: _cron_cursor(user_id, data_dir, exclude_job_id),
         lambda: _episode_cursor(user_id, data_dir),
+        lambda: _x402_cursor(user_id, data_dir),
     ):
         try:
             parts.append(source())
@@ -176,7 +224,7 @@ def compute_wake_fingerprint(
 def gate_applies(job: Any) -> bool:
     """Both guards: the global flag AND the per-job opt-in (never delivery jobs)."""
     try:
-        from agents.task.constants import AutonomyConfig
+        from core.config_policy import AutonomyConfig
         if not AutonomyConfig.wake_change_gate():
             return False
         payload = dict(getattr(job, "payload", None) or {})

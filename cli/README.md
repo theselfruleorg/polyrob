@@ -1,6 +1,6 @@
 # CLI Package — terminal-native `polyrob`
 
-_Last reviewed: 2026-06-30. For the user-facing command reference see [../docs/guide/cli.md](../docs/guide/cli.md); for env flags see ../docs/CONFIGURATION.md._
+_Last reviewed: 2026-07-12. For the user-facing command reference see [../docs/guide/cli.md](../docs/guide/cli.md); for env flags see ../docs/CONFIGURATION.md._
 
 ## Overview
 
@@ -65,7 +65,7 @@ cli/
     ├── banner.py dialog.py bootstrap_notice.py
     └── commands/         #   slash-command registry + handlers
         ├── registry.py   #     CommandRegistry / Command
-        └── handlers.py   #     /help /status /model /memory /autonomy /goals … (25)
+        └── handlers.py   #     /help /status /model /memory /autonomy /goals /finance … (registry-generated /help is the authoritative list)
 ```
 
 ## Key invariants

@@ -216,6 +216,9 @@ async function initializeSocket(io) {
         if (inserted) {
             // Update sidebar based on event type
             handleSidebarUpdates(item);
+            // 019 P3: live run-state banner (awaiting approval / retrying /
+            // compacting) — LIVE events only, never the history replay.
+            updateStateBanner(item);
         }
     });
 
@@ -764,6 +767,58 @@ async function initializeSocket(io) {
                 `;
                 break;
                 
+            case 'tool_started': {
+                // 019: span start — the tool is IN FLIGHT (its tool_execution
+                // completion card follows when it returns).
+                const toolName = item.data?.tool_name || '';
+                const actionName = item.data?.action_name || toolName || 'tool';
+                content = `
+                    <div class="feed-header feed-llm-line">
+                        <span class="feed-type">
+                            <span class="event-icon">▶️</span>
+                            ${toolName ? `<span class="tool-badge">${escapeHtml(toolName)}</span> ` : ''}→ ${escapeHtml(actionName)}
+                            <span class="status-running">running…</span>
+                        </span>
+                        <span class="feed-time">${timestamp}</span>
+                    </div>
+                `;
+                break;
+            }
+
+            case 'awaiting_approval': {
+                // 019: the run is BLOCKED on owner approval — prominent line.
+                const actionName = item.data?.action_name || 'action';
+                content = `
+                    <div class="feed-header">
+                        <span class="feed-type"><span class="event-icon">⏸</span> Awaiting approval: <strong>${escapeHtml(actionName)}</strong></span>
+                        <span class="feed-time">${timestamp}</span>
+                    </div>
+                    <div class="feed-content compact">
+                        <div class="event-parameters">Approve on the <a href="/pending" target="_blank">pending</a> page (or \`polyrob owner pending\`).</div>
+                    </div>
+                `;
+                break;
+            }
+
+            case 'llm_started':
+            case 'approval_resolved':
+            case 'retry_wait':
+            case 'compaction_started':
+            case 'compaction_finished':
+            case 'subagent_started':
+            case 'subagent_finished':
+            case 'delegation_dispatched':
+            case 'delegation_completed': {
+                // 019: compact one-line run-state cards.
+                content = `
+                    <div class="feed-header feed-llm-line">
+                        <span class="feed-type"><span class="event-icon">${typeInfo.icon}</span> ${escapeHtml(runEventSummary(item))}</span>
+                        <span class="feed-time">${timestamp}</span>
+                    </div>
+                `;
+                break;
+            }
+
             default:
                 // Generic formatting for other types
                 let dataContent = '';
@@ -845,11 +900,175 @@ async function initializeSocket(io) {
         return content;
     }
     
+    // ------------------------------------------------------------------
+    // 019 P3: live run-state banner (page-level, visible on every tab).
+    // Driven ONLY by live feed_update events; sticky states (approval) clear
+    // on their resolution event, transient ones (retry/compacting) clear on
+    // the next sign of progress.
+    // ------------------------------------------------------------------
+    let stateBannerKind = null;
+
+    function setStateBanner(kind, text, opts = {}) {
+        const banner = document.getElementById('session-state-banner');
+        if (!banner) return;
+        stateBannerKind = kind;
+        banner.className = `session-state-banner banner-${kind}`;
+        banner.innerHTML = '';
+        const label = document.createElement('span');
+        label.className = 'banner-text';
+        label.textContent = text;
+        banner.appendChild(label);
+        if (opts.approval) {
+            const readOnly = window.sessionReadOnly === true;
+            if (!readOnly) {
+                const mkBtn = (labelText, approved) => {
+                    const btn = document.createElement('button');
+                    btn.textContent = labelText;
+                    btn.className = 'banner-btn';
+                    btn.addEventListener('click', () => bannerApprove(approved, btn));
+                    banner.appendChild(btn);
+                };
+                mkBtn('Approve', true);
+                mkBtn('Deny', false);
+            }
+            const link = document.createElement('a');
+            link.href = '/pending';
+            link.target = '_blank';
+            link.className = 'banner-link';
+            link.textContent = readOnly ? 'View pending' : 'Review all';
+            banner.appendChild(link);
+        }
+        banner.classList.remove('hidden');
+    }
+
+    function clearStateBanner(kind) {
+        const banner = document.getElementById('session-state-banner');
+        if (!banner) return;
+        if (kind && stateBannerKind !== kind) return;
+        stateBannerKind = null;
+        banner.classList.add('hidden');
+        banner.innerHTML = '';
+    }
+
+    async function bannerApprove(approved, btn) {
+        // Inline decide via the existing webgate pending actions. The feed
+        // event carries the action name but not the ask id, so resolve the
+        // open tool-approval ask; ambiguity falls back to the /pending page.
+        try {
+            if (btn) btn.disabled = true;
+            const resp = await fetch('/api/webgate/pending');
+            const data = await resp.json();
+            const asks = (data.items || []).filter(it => it.kind === 'tool_approval');
+            if (asks.length !== 1) {
+                window.open('/pending', '_blank');
+                return;
+            }
+            const verb = approved ? 'promote' : 'reject';
+            const r = await fetch(
+                `/api/webgate/pending/${asks[0].kind}/${encodeURIComponent(asks[0].id)}/${verb}`,
+                { method: 'POST' }
+            );
+            if (r.ok) {
+                clearStateBanner('approval');
+            } else {
+                window.open('/pending', '_blank');
+            }
+        } catch (err) {
+            logger.warn('[Banner] inline approval failed:', err);
+            window.open('/pending', '_blank');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
+    }
+
+    function updateStateBanner(item) {
+        const d = item.data || {};
+        switch (item.type) {
+            case 'awaiting_approval':
+                setStateBanner('approval',
+                    `⏸ Awaiting your approval: ${d.action_name || 'action'}`,
+                    { approval: true });
+                break;
+            case 'approval_resolved':
+                clearStateBanner('approval');
+                break;
+            case 'retry_wait': {
+                const delay = typeof d.delay_sec === 'number'
+                    ? ` — retrying in ${Math.round(d.delay_sec)}s` : ' — retrying';
+                setStateBanner('retry', `↻ ${d.reason || 'provider error'}${delay}`);
+                break;
+            }
+            case 'compaction_started':
+                setStateBanner('compacting', '📦 Compacting context…');
+                break;
+            case 'compaction_finished':
+                clearStateBanner('compacting');
+                break;
+            case 'tool_started':
+            case 'llm_started':
+            case 'step':
+                // progress resumed — clear the transient states (never approval)
+                clearStateBanner('retry');
+                clearStateBanner('compacting');
+                break;
+            case 'session_completion':
+            case 'task_complete':
+                clearStateBanner();
+                break;
+        }
+    }
+
+    /**
+     * 019: one-line human summary for the run-state kinds (mirrors
+     * webview/activity.py::summarize so /activity and the session feed agree).
+     */
+    function runEventSummary(item) {
+        const d = item.data || {};
+        switch (item.type) {
+            case 'llm_started':
+                return `thinking (${d.model_name || d.provider || 'llm'})`;
+            case 'approval_resolved': {
+                const waited = typeof d.waited_sec === 'number' && d.waited_sec >= 1
+                    ? ` after ${Math.round(d.waited_sec)}s` : '';
+                return `approval ${d.decision || 'resolved'}: ${d.action_name || '?'}${waited}`;
+            }
+            case 'retry_wait': {
+                const delay = typeof d.delay_sec === 'number' ? ` ${Math.round(d.delay_sec)}s` : '';
+                return `retrying (${d.reason || '?'})${delay}`;
+            }
+            case 'compaction_started':
+                return `compacting context (${d.mode || '?'})`;
+            case 'compaction_finished':
+                return `compacted context (${d.mode || '?'})`;
+            case 'subagent_started':
+                return `sub-agent started: ${d.goal_preview || ''}`;
+            case 'subagent_finished':
+                return `sub-agent finished ${d.ok ? 'ok' : 'FAILED'}`;
+            case 'delegation_dispatched':
+                return `delegation ${d.delegation_id || '?'} dispatched: ${d.goal_preview || ''}`;
+            case 'delegation_completed':
+                return `delegation ${d.delegation_id || '?'} ${d.status || 'done'}`;
+            default:
+                return item.type;
+        }
+    }
+
     function getEventTypeInfo(type) {
         // Map of event types to icons and labels
         const eventTypes = {
             'step': { icon: '🤖', label: 'Agent Step', className: 'event-agent-step' },
             'tool_execution': { icon: '🔧', label: 'Tool Execution', className: 'event-tool-execution' },
+            'tool_started': { icon: '▶️', label: 'Tool Started', className: 'event-tool-started' },
+            'llm_started': { icon: '💭', label: 'Thinking', className: 'event-llm-started' },
+            'awaiting_approval': { icon: '⏸', label: 'Awaiting Approval', className: 'event-awaiting-approval' },
+            'approval_resolved': { icon: '✔️', label: 'Approval Resolved', className: 'event-approval-resolved' },
+            'retry_wait': { icon: '↻', label: 'Retrying', className: 'event-retry-wait' },
+            'compaction_started': { icon: '📦', label: 'Compacting', className: 'event-compaction' },
+            'compaction_finished': { icon: '📦', label: 'Compacted', className: 'event-compaction' },
+            'subagent_started': { icon: '🤝', label: 'Sub-agent Started', className: 'event-subagent' },
+            'subagent_finished': { icon: '🤝', label: 'Sub-agent Finished', className: 'event-subagent' },
+            'delegation_dispatched': { icon: '⇢', label: 'Delegation Dispatched', className: 'event-delegation' },
+            'delegation_completed': { icon: '⇢', label: 'Delegation Completed', className: 'event-delegation' },
             'planner': { icon: '🧠', label: 'Planner', className: 'event-planner' },
             'agent_message': { icon: '💬', label: 'Agent Message', className: 'event-agent-message' },
             'task_complete': { icon: '✅', label: 'Task Complete', className: 'event-task-complete' },

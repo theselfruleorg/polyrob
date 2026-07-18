@@ -24,10 +24,11 @@ async def test_run_goal_fills_default_model_when_payload_has_none(tmp_path):
 
     async def _fake_run(task_agent, *, user_id, request, autonomous=False):
         captured.update(request)
-        return "sess-1", "ok"
+        from agents.task.runtime.run_outcome import RunOutcome
+        return RunOutcome(session_id="sess-1", status="ok")
 
     # get_default_model is imported lazily inside _run_goal; patch it at its source.
-    with patch.object(disp_mod, "_run_task_as_session", _fake_run), \
+    with patch.object(disp_mod, "_run_task_to_outcome", _fake_run), \
          patch("modules.llm.llm_client_registry.get_default_model", return_value="prov/model-x"):
         d = GoalDispatcher(board, _DummyAgent())
         await d._run_goal(goal)

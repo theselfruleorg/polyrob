@@ -31,6 +31,7 @@ from .models import (
 from .registration import build_registration_file
 from .reputation import ReputationManager
 from .validation import ValidationManager
+from .payment_proof import proof_from_settled_invoice
 from .contracts import (
     IdentityRegistryContract,
     ReputationRegistryContract,
@@ -54,6 +55,7 @@ __all__ = [
     'ReputationSummary',
     # Functions
     'build_registration_file',
+    'proof_from_settled_invoice',
     # Managers
     'ReputationManager',
     'ValidationManager',

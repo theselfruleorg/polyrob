@@ -31,6 +31,19 @@ def bool_env(name: str, default: bool) -> bool:
     return parse_bool(raw, default)
 
 
+def float_env(name: str, default: float) -> float:
+    """Float twin of :func:`int_env` (018 P5a — there was NO float SSOT; every
+    float flag was a raw crash-prone ``float(os.getenv(...))``). Unset, blank,
+    or unparsable (incl. the ``"none"``/``"off"`` disable idioms) => *default*."""
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def int_env(name: str, default: int) -> int:
     """Read an integer env var, returning ``default`` on missing or non-integer value."""
     try:

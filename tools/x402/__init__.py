@@ -32,8 +32,15 @@ def register_x402_tool(force: bool = False) -> bool:
 
 
 def x402_invoicing_enabled() -> bool:
-    from core.env import bool_env
-    return bool_env("X402_INVOICE_ENABLED", False)
+    """Gate for the receivables/invoicing tool (RECEIVE side only — x402_pay/wallet
+    stay OFF regardless). Delegates to modules.x402.invoicing.x402_invoicing_enabled
+    — the shared SSOT (013 T2 review fix, Finding 2) — so the tool-registration gate
+    can never disagree with the settlement/pay-endpoint gate (api/x402_endpoints.py)
+    or the autonomy-runtime settlement-watcher gate, all three of which read the same
+    env var. Default OFF; ON under effective AUTONOMY_MODE=autonomous via
+    _mode_capability_default. Explicit X402_INVOICE_ENABLED always wins."""
+    from modules.x402.invoicing import x402_invoicing_enabled as _invoicing_enabled
+    return _invoicing_enabled()
 
 
 def register_x402_invoice_tool(force: bool = False) -> bool:

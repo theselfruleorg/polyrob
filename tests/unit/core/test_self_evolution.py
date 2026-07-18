@@ -201,13 +201,16 @@ async def test_notify_owner_pending_failopen_no_container(tmp_path, monkeypatch)
     assert ok is False
 
 
-# --- T4-04: a push that can't be delivered live persists a durable owner_notice -----
+# --- T4-04 (+§3.2): pushes ride the ONE delivery rail; an undeliverable push
+# persists a durable owner_notice ---------------------------------------------
 
 @pytest.mark.asyncio
 async def test_push_owner_message_records_notice_when_no_sink(monkeypatch):
     import core.self_evolution as se
+    import core.surfaces.user_delivery as ud
     calls = []
-    monkeypatch.setattr(se, "_record_owner_notice", lambda text: calls.append(text))
+    monkeypatch.setattr(ud, "_record_notice",
+                        lambda event_log, user_id, text: calls.append(text))
 
     class _NoSink:
         def get_service(self, name):
@@ -221,9 +224,11 @@ async def test_push_owner_message_records_notice_when_no_sink(monkeypatch):
 @pytest.mark.asyncio
 async def test_push_owner_message_no_notice_when_delivered(monkeypatch):
     import core.self_evolution as se
+    import core.surfaces.user_delivery as ud
     monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
     calls = []
-    monkeypatch.setattr(se, "_record_owner_notice", lambda text: calls.append(text))
+    monkeypatch.setattr(ud, "_record_notice",
+                        lambda event_log, user_id, text: calls.append(text))
 
     class _Sink:
         async def send_message(self, chat_id, text):
@@ -236,3 +241,133 @@ async def test_push_owner_message_no_notice_when_delivered(monkeypatch):
     ok = await se.push_owner_message(_C(), "hi owner")
     assert ok is True
     assert calls == []  # delivered live -> no fallback notice
+
+
+@pytest.mark.asyncio
+async def test_push_owner_message_dedups_identical_content(monkeypatch):
+    """§3.2: the shared push rail now has a memory — the same text twice within
+    the dedup window sends once (the watermark duplicate-spam class)."""
+    import core.self_evolution as se
+    monkeypatch.setenv("POLYROB_OWNER_TELEGRAM_ID", "28436760")
+    sent = []
+
+    class _Sink:
+        async def send_message(self, chat_id, text):
+            sent.append(text)
+            return True
+
+    class _C:
+        def get_service(self, name):
+            return _Sink() if name == "telegram_sink" else None
+
+    c = _C()
+    assert await se.push_owner_message(c, "✅ goal done. Result: X") is True
+    assert await se.push_owner_message(c, "✅ goal done. Result: X") is False
+    assert sent == ["✅ goal done. Result: X"]
+
+
+# --- 019 #1: pending-notification batching (fingerprint cooldown) -------------
+# maybe_notify_owner_pending must NOT re-attempt a delivery while the pending
+# set is unchanged since the last notification (29/30 daily slots were burned
+# by it on 2026-07-18, starving the daily digest). A genuinely new pending
+# item, an owner promote/reject, or a process restart re-notifies.
+
+
+def _patch_rail(monkeypatch, outcomes=None):
+    """Count delivery ATTEMPTS entering the rail. Bypasses the real rail so the
+    fingerprint batching is tested independently of the rail's own
+    content-hash dedup (which would also suppress an identical second text)."""
+    import core.surfaces.user_delivery as ud
+    attempts = []
+    queue = list(outcomes or [])
+
+    async def _fake_deliver(container, user_id, text, **kw):
+        attempts.append(text)
+        return queue.pop(0) if queue else "sent"
+
+    monkeypatch.setattr(ud, "deliver_user_message", _fake_deliver)
+    return attempts
+
+
+async def _notify(container, tmp_path, mgr):
+    return await self_evolution.maybe_notify_owner_pending(
+        container, "gleb", home_dir=tmp_path, instance_id="rob",
+        skill_manager=mgr)
+
+
+@pytest.mark.asyncio
+async def test_notify_unchanged_pending_set_attempts_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
+    attempts = _patch_rail(monkeypatch)
+    _seed_self_pending(tmp_path)
+    mgr = _skill_mgr(tmp_path)
+    c = object()  # non-None is all the patched rail needs
+    assert await _notify(c, tmp_path, mgr) is True
+    assert await _notify(c, tmp_path, mgr) is False  # unchanged set: no re-notify
+    assert len(attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_new_pending_item_notifies_again(tmp_path, monkeypatch):
+    monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
+    attempts = _patch_rail(monkeypatch)
+    _seed_self_pending(tmp_path)
+    mgr = _skill_mgr(tmp_path)
+    c = object()
+    assert await _notify(c, tmp_path, mgr) is True
+    assert await _notify(c, tmp_path, mgr) is False
+    # a genuinely NEW pending item changes the set -> prompt notify
+    mgr.create_skill("learned-thing", GOOD_SKILL, user_id="gleb", created_by="agent")
+    assert await _notify(c, tmp_path, mgr) is True
+    assert len(attempts) == 2
+    assert "learned-thing" in attempts[-1]
+
+
+@pytest.mark.asyncio
+async def test_notify_fingerprint_survives_restart(tmp_path, monkeypatch):
+    """The fingerprint is persisted under the identity tier root, so a process
+    restart (module state gone) does not re-notify an unchanged set."""
+    monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
+    attempts = _patch_rail(monkeypatch)
+    _seed_self_pending(tmp_path)
+    mgr = _skill_mgr(tmp_path)
+    c = object()
+    assert await _notify(c, tmp_path, mgr) is True
+    self_evolution._notify_fingerprints.clear()  # simulate restart
+    assert await _notify(c, tmp_path, mgr) is False
+    assert len(attempts) == 1
+
+
+@pytest.mark.asyncio
+async def test_notify_after_promote_notifies_reproposal(tmp_path, monkeypatch):
+    """An owner promote clears the fingerprint: a re-proposal under the SAME
+    kind/id (fresh self-context draft) must notify again."""
+    monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
+    attempts = _patch_rail(monkeypatch)
+    _seed_self_pending(tmp_path)
+    mgr = _skill_mgr(tmp_path)
+    c = object()
+    assert await _notify(c, tmp_path, mgr) is True
+    ok, _ = self_evolution.promote(
+        "self_context", "gleb", user_id="gleb",
+        home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+    assert ok
+    _seed_self_pending(tmp_path)  # same kind:id as before
+    assert await _notify(c, tmp_path, mgr) is True
+    assert len(attempts) == 2
+
+
+@pytest.mark.asyncio
+async def test_notify_rate_limited_attempt_is_retried(tmp_path, monkeypatch):
+    """A rate_limited outcome wrote nothing durable, so the set does NOT count
+    as notified — the next pending write retries."""
+    monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
+    attempts = _patch_rail(monkeypatch, outcomes=["rate_limited", "sent"])
+    _seed_self_pending(tmp_path)
+    mgr = _skill_mgr(tmp_path)
+    c = object()
+    assert await _notify(c, tmp_path, mgr) is False  # rate_limited
+    assert await _notify(c, tmp_path, mgr) is True   # retried and delivered
+    assert await _notify(c, tmp_path, mgr) is False  # now batched
+    assert len(attempts) == 2

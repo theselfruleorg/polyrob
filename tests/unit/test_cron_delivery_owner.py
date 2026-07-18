@@ -66,3 +66,13 @@ def test_owner_alias_roundtrip_prod_config(monkeypatch):
     # and the UNIQUE(tg_user_id) constraint forbids upserting one), so delivery MUST
     # fall through to the configured owner id.
     assert _owner_telegram(_Agent(), _Job("rob")) == "28436760"
+
+
+def test_owner_telegram_delegates_to_rail_resolver(monkeypatch):
+    """T6 (2026-07-16): _owner_telegram must be a thin delegate of the ONE canonical
+    resolver on the user-delivery rail — patching the rail resolver changes cron's
+    answer (previously two byte-similar copies that could drift)."""
+    import core.surfaces.user_delivery as ud
+    monkeypatch.setattr(ud, "resolve_telegram_recipient",
+                        lambda container, user_id: "424242")
+    assert _owner_telegram(_Agent(), _Job("rob")) == "424242"

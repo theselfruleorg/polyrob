@@ -323,6 +323,26 @@ class PersistenceMixin:
 
 				history_data["messages"].append(msg_data)
 
+			# B2 (2026-07-13 correspondent review): persist UNCONSUMED one-shot
+			# ephemerals (correspondent replies / recall notes). They are not part of
+			# committed history, but losing them on eviction/restart silently dropped
+			# a correspondent reply that arrived while the session was idle. In-flight
+			# (`_ephemeral_pending`) entries come first — they are older.
+			try:
+				pending_ephemeral = []
+				for eph in (list(getattr(self, '_ephemeral_pending', None) or [])
+							+ list(getattr(self, '_ephemeral_messages', None) or [])):
+					pending_ephemeral.append({
+						"type": eph.__class__.__name__,
+						"content": eph.content,
+						"origin": getattr(eph, "origin", MessageOrigin.USER),
+						"msg_metadata": getattr(eph, "metadata", None) or {},
+					})
+				if pending_ephemeral:
+					history_data["pending_ephemeral"] = pending_ephemeral
+			except Exception as e:
+				self.logger.debug(f"ephemeral persistence skipped: {e}")
+
 			# Save to disk
 			save_path.parent.mkdir(parents=True, exist_ok=True)
 			with open(save_path, 'w') as f:
@@ -349,7 +369,8 @@ class PersistenceMixin:
 					)
 				try:
 					from agents.task.agent.messages.sqlite_persistence import SqliteMessageStore
-					store = SqliteMessageStore(os.path.join(str(getattr(pm(), "data_root", "data")), "messages.db"))
+					from core.runtime_paths import sidecar_db_path
+					store = SqliteMessageStore(str(sidecar_db_path("messages.db")))
 					# MED-4: atomic single-transaction swap (no clear()+append() race/churn).
 					store.replace_all(session_id, [
 						{
@@ -441,6 +462,27 @@ class PersistenceMixin:
 					restored.source = saved_meta["source"]
 
 			self.logger.info(f"📂 Loaded {messages_loaded} messages from {load_path}")
+
+			# B2: restore unconsumed ephemerals (never into committed history; no
+			# token accounting — same contract as push_ephemeral_message). Appended
+			# directly: they were already sensitive-data-filtered before saving.
+			try:
+				restored_ephemeral = 0
+				for eph_data in history_data.get("pending_ephemeral") or []:
+					eph_class = message_classes.get(eph_data.get("type"))
+					if not eph_class:
+						continue
+					eph = eph_class(content=eph_data.get("content", ""))
+					eph.origin = eph_data.get("origin", MessageOrigin.USER)
+					if eph_data.get("msg_metadata"):
+						eph.metadata = eph_data["msg_metadata"]
+					self._ephemeral_messages.append(eph)
+					restored_ephemeral += 1
+				if restored_ephemeral:
+					self.logger.info(
+						f"📂 Restored {restored_ephemeral} pending ephemeral message(s)")
+			except Exception as e:
+				self.logger.debug(f"ephemeral restore skipped: {e}")
 			return True
 
 		except Exception as e:

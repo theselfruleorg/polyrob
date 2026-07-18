@@ -1,4 +1,15 @@
 {
+  "polyrob-user-guide": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": ["what can you do", "how do i", "enable", "configure", "settings", "help", "features", "preferences", "contract", "wallet", "avatar", "export", "seed", "private key"],
+      "action_names": ["preferences", "owner_doc_manage"],
+      "task_patterns": ["what can you do", "how do (i|we)", "help me (configure|set up|enable)", "(enable|configure|change).*(setting|feature|preference)", "what.*(features|can you)"]
+    },
+    "priority": 1,
+    "auto_activate": true,
+    "description": "The map of what POLYROB is, its surfaces, configuration layers, autonomy, money/safety model, and skills/learning — load this first when the owner asks what you can do, how to enable/configure something, or wants help with settings/preferences/the operating contract"
+  },
   "person-analyzer": {
     "triggers": {
       "tool_ids": [],

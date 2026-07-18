@@ -106,7 +106,7 @@ def test_kb_list_empty_is_graceful(monkeypatch):
     _patch(monkeypatch, sources=[])
     ctx, buf = _plain_ctx(args=["list"])
     asyncio.run(h_kb(ctx))
-    assert "No sources" in buf.getvalue()
+    assert "no sources in the knowledge base" in buf.getvalue()
 
 
 def test_kb_list_with_collection_filter(monkeypatch):
@@ -153,7 +153,7 @@ def test_kb_search_no_results_is_graceful(monkeypatch):
     _patch(monkeypatch, search_result="")
     ctx, buf = _plain_ctx(args=["search", "nothingmatches"])
     asyncio.run(h_kb(ctx))
-    assert "No results" in buf.getvalue()
+    assert "no results for" in buf.getvalue()
 
 
 def test_kb_search_missing_query_shows_usage(monkeypatch):

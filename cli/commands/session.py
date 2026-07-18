@@ -111,7 +111,7 @@ async def _session_list(show_all: bool, as_json: bool):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -156,12 +156,19 @@ async def _session_list(show_all: bool, as_json: bool):
 
 @session.command("tail")
 @click.argument("session_id")
-def session_tail(session_id: str):
-    """Stream a session's feed (reads from feed directory)."""
-    asyncio.run(_session_tail(session_id))
+@click.option("--follow", "-f", is_flag=True,
+              help="Keep streaming new feed events as they arrive (Ctrl-C to stop).")
+def session_tail(session_id: str, follow: bool):
+    """Stream a session's feed (reads from feed directory).
+
+    With --follow, keeps watching the feed directory and renders new events
+    live — a second terminal can watch any running session (including
+    goal/cron sessions) while it works. 019 P1.
+    """
+    asyncio.run(_session_tail(session_id, follow=follow))
 
 
-async def _session_tail(session_id: str):
+async def _session_tail(session_id: str, follow: bool = False):
     import json
     from core.bootstrap import setup_project_path, setup_sqlite_compat
     setup_project_path()
@@ -190,19 +197,45 @@ async def _session_tail(session_id: str):
 
     click.echo(click.style("[polyrob] ", fg="cyan") + f"Tailing feed: {feed_dir}")
 
-    feed_files = sorted(feed_dir.glob("*.json"))
     _state = SessionState()
     _renderer = PlainRenderer(state=_state, stream=sys.stdout)
-    for f in feed_files:
+
+    def _render_file(path) -> bool:
         try:
-            data = json.loads(f.read_text())
+            data = json.loads(path.read_text())
             event = _normalize_event(data)
             _state.update(event)
             _renderer.on_event(event)
+            return True
         except (json.JSONDecodeError, OSError):
-            pass
+            return False
 
-    click.echo(click.style("[polyrob] ", fg="cyan") + f"End of feed ({len(feed_files)} entries)")
+    seen: set[str] = set()
+    feed_files = sorted(feed_dir.glob("*.json"))
+    for f in feed_files:
+        _render_file(f)
+        seen.add(f.name)
+
+    if not follow:
+        click.echo(click.style("[polyrob] ", fg="cyan")
+                   + f"End of feed ({len(feed_files)} entries)")
+        return
+
+    # --follow: poll for new feed files. Filenames are sequence-prefixed
+    # ({seq:06d}_{type}.json) and write-once (atomic rename), so a sorted
+    # name-dedup poll is ordered and race-free — no watcher dependency.
+    click.echo(click.style("[polyrob] ", fg="cyan")
+               + "Following (Ctrl-C to stop)…")
+    try:
+        while True:
+            await asyncio.sleep(0.5)
+            for f in sorted(feed_dir.glob("*.json")):
+                if f.name in seen:
+                    continue
+                _render_file(f)
+                seen.add(f.name)
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        click.echo(click.style("[polyrob] ", fg="cyan") + "Stopped.")
 
 
 @session.command("cancel")
@@ -223,7 +256,7 @@ async def _session_cancel(session_id: str):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -258,7 +291,7 @@ async def _session_show(session_id: str, as_json: bool):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -314,7 +347,7 @@ async def _session_pause(session_id: str):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -348,7 +381,7 @@ async def _session_resume(session_id: str):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -368,10 +401,36 @@ async def _session_resume(session_id: str):
 @session.command("export")
 @click.argument("session_id")
 @click.option("--output", "-o", type=click.Path(), help="Output file path.")
-@click.option("--format", type=click.Choice(["json", "txt"]), default="json", help="Export format.")
+@click.option("--format", type=click.Choice(["json", "txt", "raw", "sharegpt", "openai"]),
+              default="json", help="Export format (raw/sharegpt/openai = training formats).")
 def session_export(session_id: str, output: Optional[str], format: str):
     """Export a session's data (transcript, messages, artifacts)."""
     asyncio.run(_session_export(session_id, output, format))
+
+
+def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
+    """Assemble → label-enrich → scrub (fail-closed) → render one session (W1 T4)."""
+    from agents.task.path import pm
+    from datagen.assemble import (assemble_record, find_memory_db,
+                                  load_episode_labels)
+    from datagen.formats import FORMATS
+    from datagen.scrub import scrub_record
+
+    labels = None
+    try:
+        # memory.db lives in BotConfig.data_dir — the PARENT of pm().data_root
+        # on the local CLI — so resolve it instead of assuming data_root.
+        memory_db = find_memory_db(pm().data_root)
+        user_id = (session_info or {}).get("user_id") or ""
+        if memory_db is not None:
+            labels = load_episode_labels(memory_db, str(user_id), session_id)
+    except Exception:
+        labels = None
+    record = assemble_record(Path(session_dir), session_meta=session_info,
+                             labels=labels)
+    record.session_id = session_id
+    scrub_record(record)  # ScrubError propagates: refuse to export unscrubbed
+    return FORMATS[fmt](record)
 
 
 async def _session_export(session_id: str, output: Optional[str], format: str):
@@ -385,7 +444,7 @@ async def _session_export(session_id: str, output: Optional[str], format: str):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     from agents.task.path import pm
 
@@ -416,6 +475,20 @@ async def _session_export(session_id: str, output: Optional[str], format: str):
     if not session_dir:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session directory not found for {session_id}")
         sys.exit(1)
+
+    if format in ("raw", "sharegpt", "openai"):
+        from datagen.scrub import ScrubError
+        try:
+            rendered = _render_training_format(
+                session_id, session_info, session_dir, format)
+        except ScrubError as e:
+            click.echo(click.style("[polyrob] ", fg="red")
+                       + f"Export refused (scrub failed): {e}")
+            sys.exit(1)
+        with open(output, "w") as f:
+            json.dump(rendered, f, indent=2, default=str)
+        click.echo(click.style("[polyrob] ", fg="green") + f"Exported to {output}")
+        return
 
     export_data = _assemble_export_data(
         session_id, session_info, session_dir, datetime.now().isoformat()
@@ -488,12 +561,12 @@ def _assemble_export_data(session_id, session_info, session_dir, exported_at) ->
         }
         if meta:
             export_data["session"] = meta
-    history_file = session_dir / "message_history.json"
-    if history_file.exists():
-        try:
-            export_data["messages"] = json.loads(history_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            export_data["messages"] = []
+    # Read via datagen (current memory/ location first, legacy root fallback) —
+    # the old direct read missed memory/message_history.json entirely (W1 T4).
+    from datagen.assemble import read_message_history
+    history = read_message_history(session_dir)
+    if history:
+        export_data["messages"] = history
     feed_dir = session_dir / "feed"
     if feed_dir.exists():
         export_data["feed_events"] = len(sorted(feed_dir.glob("*.json")))
@@ -505,7 +578,7 @@ def task_agent_or_none(container):
     import logging as _logging
     _logging.disable(_logging.CRITICAL)
     task_agent = container.get_agent("task_agent")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
     return task_agent
 
 
@@ -573,7 +646,7 @@ async def _session_costs(session_id: str, as_json: bool):
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
     container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:

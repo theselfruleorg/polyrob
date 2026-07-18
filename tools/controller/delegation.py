@@ -42,27 +42,24 @@ LEAF: Role = "leaf"
 #      are enabled. They are suppressed on a leaf child via the Registry's
 #      exclude_actions seam (see delegation_exclusions_for_child).
 # NOTE: "task" is the TODO tool (task_todo_*), NOT delegation — do not block it.
-DELEGATE_BLOCKED_TOOLS: frozenset = frozenset({
-    "code_execution",  # local subprocess exec — not a sandbox (Item 3)
-    "coding",          # str_replace/apply_patch/run_tests — leaf can't mutate/run the repo (H10-B, #4146 lesson)
-    "cronjob",         # durable scheduled runs (CronJobTool)
-    "x402_pay",        # agent crypto payments — never delegate to a leaf
-    "x402_invoice",    # agent invoicing (outward-facing money) — never delegate to a leaf
-    "hyperliquid",     # crypto trading — never delegate to a leaf
-    "polymarket",      # crypto trading — never delegate to a leaf
-    # P0: coding / self-evolution container tool_ids a leaf must never wield.
-    "git",            # git write surface (push/commit) — leaf can't ship code
-    "github",         # PR/merge/issue write — leaf can't ship code
-    "process",        # background processes (P1) — leaf can't spawn long-running jobs
-    "tool_manage",    # dynamic-tool authoring (P1) — leaf can't create/promote tools
-    "mcp",            # MCP install path (P0/P2) — leaf can't install servers
-    "shell",          # persistent sandbox shell (WS-2) — leaf never gets a shell
-    "self_env",       # self-maintenance verbs (WS-5) — leaf never self-manages
-})
+# WS-2 (2026-07-16): derived from the ONE per-tool capability table
+# (core/tool_capabilities.py, `delegate_blocked`) — classify a new tool there, not
+# here; per-entry rationale lives with the table rows. Parity-pinned by
+# tests/unit/core/test_tool_capabilities.py; the DELEGATE_BLOCKED_TOOLS env override
+# below (get_blocked_child_tools) is unchanged.
+from core.tool_capabilities import ids_with as _ids_with
+
+DELEGATE_BLOCKED_TOOLS: frozenset = _ids_with("delegate_blocked")
 
 # Delegation action names (registered by Controller._register_subtask_action).
+# `preferences` (owner-UX P2 T2) rides the SAME exclusion set even though it is
+# not a delegation verb: a leaf/sub-agent must never change tenant config or
+# propose operating-contract rules, and this is the one seam that keeps the
+# tool out of the child's registry/ActionModel entirely (defence-in-depth on
+# top of the `_is_forged_or_autonomous_turn` runtime refusal inside the action).
 DELEGATION_ACTION_NAMES: frozenset = frozenset({
     "subtask", "parallel_subtasks", "delegate_task",
+    "preferences",
 })
 
 _BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"

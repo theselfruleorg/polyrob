@@ -28,3 +28,8 @@ def test_onchain_trust_mode_when_declared(monkeypatch):
     reg = build_registration_file("https://example.test")
     assert reg.trustMode == "onchain"
     assert len(reg.registrations) == 1
+    # L11 (2026-07-15 review): no code in this repo ever signs/broadcasts the
+    # on-chain registration — EIP8004_ONCHAIN_ENABLED just flips a publicly
+    # served claim based on operator-supplied env config. The emitted entry
+    # must say so rather than reading as a code-verified fact.
+    assert reg.registrations[0].attestation == "operator"

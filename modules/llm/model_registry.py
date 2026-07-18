@@ -489,12 +489,116 @@ class ModelRegistry:
         ))
 
         # ========================================
-        # ANTHROPIC MODELS (December 2024)
+        # ANTHROPIC MODELS
+        # Source: https://docs.anthropic.com/en/docs/about-claude/models
+        # DEPRECATED ALIASES: Claude 3.x names are mapped onto the 4.5 models below
+        # for backward compatibility.
         # ========================================
 
-        # Claude 4.5 Series - Latest (Nov 2025)
-        # Source: https://docs.anthropic.com/en/docs/about-claude/models
-        # DEPRECATED ALIASES: Claude 3.x models are deprecated but mapped here for backward compatibility
+        # ----------------------------------------
+        # CURRENT LINEUP (Fable 5 / Opus 4.6-4.8 / Sonnet 4.6-5)
+        # All 1M-context natively (no beta header — cross-checked vs the live
+        # OpenRouter anthropic mirror, 2026-07-14) and 128K max output. Extended
+        # thinking is ADAPTIVE on these models — `budget_tokens` is rejected (400)
+        # on Fable 5 / Opus 4.7-4.8 / Sonnet 5 and deprecated on Opus 4.6 /
+        # Sonnet 4.6 — so `thinking_budget_tokens` is left unset (adaptive/effort
+        # is the control, get_thinking_config() returns {} => no thinking params
+        # sent, byte-identical to today). max_completion_tokens kept at the 64000
+        # family convention (128K output would require streaming). Pricing from
+        # the claude-api model catalog (cached 2026-06-24).
+        # ----------------------------------------
+
+        # Claude Fable 5 - most capable widely-released model (thinking always on)
+        self._register_model(ModelConfig(
+            name="claude-fable-5",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=10.00, output_price=50.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # always-on adaptive; budget_tokens rejected
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-fable", "fable-5", "fable", "claude-fable5"]
+        ))
+
+        # Claude Opus 4.8 - most capable Opus-tier (current flagship Opus)
+        self._register_model(ModelConfig(
+            name="claude-opus-4-8",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=5.00, output_price=25.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # adaptive; budget_tokens rejected (400)
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-opus-4.8", "claude-4.8-opus", "opus-4.8", "opus-4-8"]
+        ))
+
+        # Claude Opus 4.7 - previous-generation Opus
+        self._register_model(ModelConfig(
+            name="claude-opus-4-7",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=5.00, output_price=25.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # adaptive; budget_tokens rejected (400)
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-opus-4.7", "opus-4.7", "opus-4-7"]
+        ))
+
+        # Claude Opus 4.6 - older Opus (adaptive thinking recommended)
+        self._register_model(ModelConfig(
+            name="claude-opus-4-6",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=5.00, output_price=25.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # adaptive (budget_tokens deprecated here)
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-opus-4.6", "opus-4.6", "opus-4-6"]
+        ))
+
+        # Claude Sonnet 5 - near-Opus quality on coding/agentic at Sonnet cost.
+        # Standard pricing $3/$15 (intro $2/$10 through 2026-08-31); the standard
+        # rate is used here so cost estimates never under-bill during the intro.
+        self._register_model(ModelConfig(
+            name="claude-sonnet-5",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=3.00, output_price=15.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # adaptive on by default; budget_tokens rejected
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-sonnet5", "claude-5-sonnet", "sonnet-5"]
+        ))
+
+        # Claude Sonnet 4.6 - previous-generation Sonnet
+        self._register_model(ModelConfig(
+            name="claude-sonnet-4-6",
+            provider=ModelProvider.ANTHROPIC,
+            context_window=1000000,
+            max_completion_tokens=64000,
+            pricing=ModelPricing(input_price=3.00, output_price=15.00),
+            capabilities=ModelCapabilities(
+                supports_thinking=True,  # adaptive (budget_tokens deprecated here)
+            ),
+            chars_per_token=5.0,
+            aliases=["claude-sonnet-4.6", "sonnet-4.6", "sonnet-4-6"]
+        ))
+
+        # ----------------------------------------
+        # LEGACY LINEUP (still active; default anthropic model = claude-sonnet-4-5)
+        # ----------------------------------------
+
+        # Claude 4.5 Series
         self._register_model(ModelConfig(
             name="claude-sonnet-4-5",
             provider=ModelProvider.ANTHROPIC,
@@ -839,8 +943,8 @@ class ModelRegistry:
             name="z-ai/glm-5.2",
             provider=ModelProvider.OPENROUTER,
             context_window=1048576,  # 1.05M tokens (OpenRouter API is authoritative)
-            max_completion_tokens=262144,  # 256K max output
-            pricing=ModelPricing(input_price=1.20, output_price=4.10),  # OpenRouter models API verified 2026-06-20
+            max_completion_tokens=32768,  # OpenRouter top_provider cap (re-verified 2026-07-14; was 262144)
+            pricing=ModelPricing(input_price=0.93, cached_input_price=0.18, output_price=3.00),  # OpenRouter models API re-verified 2026-07-14 (was 1.20/4.10)
             capabilities=ModelCapabilities(
                 supports_vision=False,  # text->text
                 supports_function_calling=True,
@@ -896,6 +1000,67 @@ class ModelRegistry:
             aliases=["glm-4.7", "glm4.7"]
         ))
 
+        # GLM-5.1 - Gen-5 GLM between 5 and 5.2 (203K ctx). Native tools +
+        # reasoning + structured outputs, text-only. Verified 2026-07-14.
+        self._register_model(ModelConfig(
+            name="z-ai/glm-5.1",
+            provider=ModelProvider.OPENROUTER,
+            context_window=202752,  # 203K tokens
+            max_completion_tokens=128000,
+            pricing=ModelPricing(input_price=0.966, cached_input_price=0.1794, output_price=3.036),
+            capabilities=ModelCapabilities(
+                supports_vision=False,
+                supports_function_calling=True,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_json_mode=True,
+                supports_thinking=True,
+                thinking_budget_tokens=32000,
+            ),
+            knowledge_cutoff="2026-04",
+            aliases=["glm-5.1", "glm5.1"]
+        ))
+
+        # GLM-5-Turbo - faster/cheaper Gen-5 GLM (262K ctx). Native tools +
+        # reasoning + structured outputs, text-only. Verified 2026-07-14.
+        self._register_model(ModelConfig(
+            name="z-ai/glm-5-turbo",
+            provider=ModelProvider.OPENROUTER,
+            context_window=262144,  # 262K tokens
+            max_completion_tokens=131072,
+            pricing=ModelPricing(input_price=1.20, cached_input_price=0.24, output_price=4.00),
+            capabilities=ModelCapabilities(
+                supports_vision=False,
+                supports_function_calling=True,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_json_mode=True,
+                supports_thinking=True,
+                thinking_budget_tokens=32000,
+            ),
+            knowledge_cutoff="2026-03",
+            aliases=["glm-5-turbo", "glm5-turbo"]
+        ))
+
+        # GLM-4.7-Flash - cheapest GLM tier (203K ctx), speed-optimized, text-only.
+        # Native tools; reasoning off on the flash tier. Verified 2026-07-14.
+        self._register_model(ModelConfig(
+            name="z-ai/glm-4.7-flash",
+            provider=ModelProvider.OPENROUTER,
+            context_window=202752,  # 203K tokens
+            max_completion_tokens=16384,
+            pricing=ModelPricing(input_price=0.06, cached_input_price=0.01, output_price=0.40),
+            capabilities=ModelCapabilities(
+                supports_vision=False,
+                supports_function_calling=True,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_json_mode=True,
+            ),
+            knowledge_cutoff="2026-01",
+            aliases=["glm-4.7-flash", "glm4.7-flash", "glm-flash"]
+        ))
+
         # ----------------------------------------
         # GROK MODELS (xAI via OpenRouter)
         # https://openrouter.ai/provider/xai
@@ -908,9 +1073,9 @@ class ModelRegistry:
         self._register_model(ModelConfig(
             name="x-ai/grok-4.3",
             provider=ModelProvider.OPENROUTER,
-            context_window=2000000,  # 2M tokens (family value; API is authoritative)
+            context_window=1000000,  # 1M tokens (OpenRouter re-verified 2026-07-14; was 2M)
             max_completion_tokens=30000,
-            pricing=ModelPricing(input_price=1.25, output_price=2.50),  # OpenRouter models API verified 2026-06-20 (was 0.20/0.50 — ~5x too low)
+            pricing=ModelPricing(input_price=1.25, cached_input_price=0.20, output_price=2.50),  # OpenRouter models API verified 2026-06-20, cache read re-verified 2026-07-14
             capabilities=ModelCapabilities(
                 supports_vision=True,
                 supports_function_calling=True,
@@ -920,6 +1085,47 @@ class ModelRegistry:
             ),
             knowledge_cutoff="2025-11",
             aliases=["grok-4.3", "grok-43", "grok"]
+        ))
+
+        # Grok 4.5 - newest xAI flagship on OpenRouter (created most-recently in the
+        # live models API, 2026-07-14). 500K ctx, multimodal, native tools + reasoning.
+        # Specs/pricing verified vs GET https://openrouter.ai/api/v1/models (2026-07-14).
+        self._register_model(ModelConfig(
+            name="x-ai/grok-4.5",
+            provider=ModelProvider.OPENROUTER,
+            context_window=500000,  # 500K tokens (OpenRouter API authoritative)
+            max_completion_tokens=30000,
+            pricing=ModelPricing(input_price=2.00, cached_input_price=0.50, output_price=6.00),
+            capabilities=ModelCapabilities(
+                supports_vision=True,
+                supports_function_calling=True,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_json_mode=True,
+                supports_thinking=True,
+            ),
+            knowledge_cutoff="2026-04",
+            aliases=["grok-4.5", "grok-45"]
+        ))
+
+        # Grok 4.20 - 2M-context multi-agent Grok; cheaper than 4.5. Native tools +
+        # reasoning, multimodal. (x-ai/grok-4.20-multi-agent shares these specs.)
+        self._register_model(ModelConfig(
+            name="x-ai/grok-4.20",
+            provider=ModelProvider.OPENROUTER,
+            context_window=2000000,  # 2M tokens (OpenRouter API authoritative)
+            max_completion_tokens=30000,
+            pricing=ModelPricing(input_price=1.25, cached_input_price=0.20, output_price=2.50),
+            capabilities=ModelCapabilities(
+                supports_vision=True,
+                supports_function_calling=True,
+                supports_tools=True,
+                supports_streaming=True,
+                supports_json_mode=True,
+                supports_thinking=True,
+            ),
+            knowledge_cutoff="2026-03",
+            aliases=["grok-4.20", "grok-420", "grok-4-20"]
         ))
 
         # Grok 4.1 Fast - DEPRECATED by xAI (kept for back-compat / historical ids;
@@ -1457,7 +1663,7 @@ class ModelRegistry:
             aliases=["gpt-oss-120b", "gpt-oss"]
         ))
 
-        # Nous Hermes 4 70B — ROB's parity benchmark. NOTE: OpenRouter does NOT
+        # Nous Hermes 4 70B (open model via OpenRouter). NOTE: OpenRouter does NOT
         # advertise the `tools` parameter for Hermes-4, so supports_tools=False →
         # the agent uses the JSON-from-text fallback (not native tool calls).
         self._register_model(ModelConfig(
@@ -1475,7 +1681,7 @@ class ModelRegistry:
             aliases=["hermes-4-70b", "hermes4-70b"]
         ))
 
-        # Nous Hermes 4 405B — flagship Hermes. Same no-native-tools caveat as 70B.
+        # Nous Hermes 4 405B (larger variant). Same no-native-tools caveat as 70B.
         self._register_model(ModelConfig(
             name="nousresearch/hermes-4-405b",
             provider=ModelProvider.OPENROUTER,
@@ -1627,11 +1833,12 @@ class ModelRegistry:
                 model = self._models.get('z-ai/glm-5.2')
                 if model:
                     logger.info(f"Fallback: '{name}' -> 'z-ai/glm-5.2'")
-            # OpenRouter/Grok variants fallback to x-ai/grok-4.1-fast
+            # OpenRouter/Grok variants fallback to x-ai/grok-4.5 (newest live flagship;
+            # grok-4.1-fast is 404'd by OpenRouter so it must not be the fallback target).
             elif 'grok' in model_lower:
-                model = self._models.get('x-ai/grok-4.1-fast')
+                model = self._models.get('x-ai/grok-4.5')
                 if model:
-                    logger.info(f"Fallback: '{name}' -> 'x-ai/grok-4.1-fast'")
+                    logger.info(f"Fallback: '{name}' -> 'x-ai/grok-4.5'")
             # Kimi variants fallback to moonshotai/kimi-k2-0905
             elif 'kimi' in model_lower:
                 model = self._models.get('moonshotai/kimi-k2-0905')

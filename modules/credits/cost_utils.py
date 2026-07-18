@@ -21,19 +21,35 @@ def calculate_cost_from_tokens(
     input_tokens: Optional[int] = None,
     output_tokens: Optional[int] = None,
     total_tokens: Optional[int] = None,
-    cached_tokens: int = 0
+    cached_tokens: int = 0,
+    cache_creation_tokens: int = 0
 ) -> float:
     """
     Calculate API cost from token counts using model registry.
 
     This is the SINGLE implementation - all other files should import this.
 
+    ⚠️ ESTIMATE PATH, NOT THE BILLING PATH: this helper (and its callers --
+    telemetry display estimates, webview stats, the public pricing
+    calculator) feeds DISPLAY numbers only. The real charge/deduction and
+    the `usage_records` ledger row are computed by
+    `LLMUsageTracker._calculate_costs` (which now routes through
+    `modules.credits.pricing.compute_llm_cost`, the actual billing entry
+    point). If you're wiring up a new billing-affecting call site, use
+    `compute_llm_cost` directly instead of this function.
+
     Args:
         model_name: Name of the model
         input_tokens: Number of input/prompt tokens
         output_tokens: Number of output/completion tokens
         total_tokens: Total tokens (fallback if split not available)
-        cached_tokens: Number of cached tokens
+        cached_tokens: Number of cached (read) tokens
+        cache_creation_tokens: Number of cache-WRITE tokens (G-24: Anthropic
+            1.25x surcharge). Defaults to 0 for callers that genuinely can't
+            know this (e.g. the total-tokens-only estimate fallback below,
+            or a caller with no cache-metrics from its provider) -- that is
+            a correct default, not a dropped parameter, as long as the
+            caller forwards whatever it DOES have.
 
     Returns:
         Estimated API cost in USD
@@ -51,13 +67,17 @@ def calculate_cost_from_tokens(
                 model_name=model_name,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cached_tokens=cached_tokens
+                cached_tokens=cached_tokens,
+                cache_creation_tokens=cache_creation_tokens
             )
         except Exception as e:
             logger.warning(f"Cost calculation failed for {model_name}: {e}")
             # Fall through to estimation
 
-    # Fallback: estimate split from total (65% input, 35% output)
+    # Fallback: estimate split from total (65% input, 35% output). This is a
+    # genuine "can't know cache tokens" case -- a bare total-token count
+    # carries no cache-read/cache-write split at all, so 0/0 here is not a
+    # dropped parameter, it's the honest ceiling of what this estimate can do.
     if total_tokens and total_tokens > 0:
         estimated_input = int(total_tokens * 0.65)
         estimated_output = int(total_tokens * 0.35)
@@ -72,7 +92,8 @@ def calculate_cost_from_tokens(
                 model_name=model_name,
                 input_tokens=estimated_input,
                 output_tokens=estimated_output,
-                cached_tokens=0  # Can't estimate cached from total
+                cached_tokens=0,  # Can't estimate cached from total
+                cache_creation_tokens=0  # Can't estimate cache-write from total either
             )
         except Exception as e:
             logger.warning(f"Cost estimation failed for {model_name}: {e}")

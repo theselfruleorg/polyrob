@@ -49,14 +49,18 @@ async def test_ledger_joins_costs_and_receipts(tmp_path):
         assert ledger["llm_api_cost_usd"] == pytest.approx(0.05)
         assert ledger["credits_spent"] == pytest.approx(10.0)
         assert ledger["llm_calls"] == 1
-        assert ledger["earned_usd"] == pytest.approx(5.0)
+        assert ledger["treasury"]["income_usd"] == pytest.approx(5.0)
         assert ledger["settled_payments"] == 1
         assert ledger["pending_invoices"] == 1
         assert ledger["pending_invoices_usd"] == pytest.approx(2.0)
-        assert ledger["net_usd"] == pytest.approx(5.0 - 0.05 - ledger["wallet_spend_usd"])
+        # treasury.net_usd = income - spend, NEVER minus the runtime api_cost
+        # (that merge was the 2026-07-16 bug this ledger split fixes).
+        assert ledger["treasury"]["net_usd"] == pytest.approx(5.0 - ledger["wallet_spend_usd"])
 
         text = format_ledger(ledger)
-        assert "earned" in text and "$5.0000" in text and "net" in text
+        # format_ledger (Task 3) renders income/spend, never "earned" (H14b
+        # honesty rule: never present treasury via the retired legacy word).
+        assert "income" in text and "$5.0000" in text and "net" in text
     finally:
         await db.close()
 
@@ -69,7 +73,31 @@ async def test_ledger_tenant_scoped(tmp_path):
             user_id="other", session_id="s9", amount_usd=9.0, purpose="theirs", db=db)
         await invoicing.settle_payment_request(inv["request_id"], db=db)
         ledger = await build_ledger("rob", days=7, db=db)
-        assert ledger["earned_usd"] == 0.0
+        assert ledger["treasury"]["income_usd"] == 0.0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_ledger_tenant_match_does_not_wildcard_leak(tmp_path):
+    """G-14: the inbound leg's tenant match used `metadata LIKE '%"tenant_id":
+    "<id>"%'` — SQLite LIKE treats `_`/`%` as wildcards, and real tenant ids
+    contain underscores (u_<hex>). The settled ROW belongs to the non-
+    underscore lookalike tenant 'uXabc'; the ledger QUERY runs as 'u_abc' — the
+    '_' in the QUERYING id is what the old LIKE pattern read as a live wildcard
+    (matching 'X'), so 'u_abc' would incorrectly read uXabc's earned/pending
+    totals on this money query."""
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="uXabc", session_id="s1", amount_usd=5.0, purpose="theirs", db=db)
+        await invoicing.settle_payment_request(inv["request_id"], db=db)
+        leaked = await build_ledger("u_abc", days=7, db=db)
+        assert leaked["treasury"]["income_usd"] == 0.0
+        assert leaked["settled_payments"] == 0
+        theirs = await build_ledger("uXabc", days=7, db=db)
+        assert theirs["treasury"]["income_usd"] == pytest.approx(5.0)
+        assert theirs["settled_payments"] == 1
     finally:
         await db.close()
 
@@ -84,8 +112,8 @@ async def test_ledger_fail_open_without_db():
         async def fetch_all(self, *a, **k):
             raise RuntimeError("nope")
     ledger = await build_ledger("rob", days=7, db=_Broken())
-    assert ledger["earned_usd"] == 0.0 and ledger["llm_api_cost_usd"] == 0.0
-    assert "net_usd" in ledger
+    assert ledger["treasury"]["income_usd"] == 0.0 and ledger["llm_api_cost_usd"] == 0.0
+    assert "net_usd" in ledger["treasury"]
 
 
 @pytest.mark.asyncio
