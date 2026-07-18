@@ -110,9 +110,16 @@ def test_render_finance_fail_open_on_ledger_error(monkeypatch):
 # CLI command
 # --------------------------------------------------------------------------- #
 
-def test_cli_finance_prints_the_ledger(monkeypatch):
+def test_cli_finance_prints_the_ledger(monkeypatch, tmp_path):
     import cli.ui.commands.h_finance as h_finance
     monkeypatch.setattr(h_finance, "build_ledger", _fake_ledger)
+    # Hermetic DB resolution: on a clean checkout (public CI) no data-home bot.db
+    # exists, so the command would take the honest "no data yet" early exit and
+    # never reach the patched build_ledger. DB_PATH only needs to be an existing
+    # file — the ledger itself is faked above.
+    db_file = tmp_path / "bot.db"
+    db_file.write_bytes(b"")
+    monkeypatch.setenv("DB_PATH", str(db_file))
     from cli.commands.finance import finance
     res = CliRunner().invoke(finance, ["--days", "7", "--user", "u1"])
     assert res.exit_code == 0, res.output

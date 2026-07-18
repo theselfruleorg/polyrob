@@ -49,7 +49,7 @@ Issues = "https://github.com/theselfruleorg/polyrob/issues"
 polyrob = "cli.polyrob:main"
 
 [tool.setuptools.packages.find]
-include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","data"]
+include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","datagen*","data"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json","*.txt","*.md"]

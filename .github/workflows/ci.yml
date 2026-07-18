@@ -17,7 +17,10 @@ jobs:
       - run: pip install -e ".[dev,all]"
       # The pfp renderer tests launch real headless chromium via playwright.
       - run: python -m playwright install --with-deps chromium
-      - run: pytest -q
+      # -p no:randomly: the blessed deterministic invocation. pytest-randomly
+      # (a [dev] extra) otherwise shuffles test order per run, and a handful of
+      # order-dependent tests turn CI into a coin flip.
+      - run: pytest -q -p no:randomly
   secrets:
     runs-on: ubuntu-latest
     steps:

@@ -52,6 +52,9 @@ def test_goal_create_drops_malformed_checks(tmp_path):
 
 
 def test_seed_goal_check_arg_parses():
+    import pytest
+    # scripts/ is private-tree tooling and never ships to the public repo.
+    pytest.importorskip("scripts.seed_goal")
     from scripts.seed_goal import parse_check
     assert parse_check("artifact_glob:*.md") == {"type": "artifact_glob", "pattern": "*.md"}
     assert parse_check("http_ok:https://example.com/x") == {
