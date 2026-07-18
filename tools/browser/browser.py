@@ -1079,11 +1079,21 @@ class Browser(BaseTool):
 				)
 
 			element_node = state.selector_map[params.index]
-			locate_result = await context.get_locate_element(element_node)
-			locator = locate_result.locator
+			# get_locate_element returns an ElementHandle (Optional), NOT a wrapper
+			# with a `.locator` attribute — the old locator access raised
+			# AttributeError on every call (P1 finalization). Use the ElementHandle API.
+			handle = await context.get_locate_element(element_node)
+			if handle is None:
+				return ActionResult(error=f'Could not locate dropdown at index {params.index}',
+									 include_in_memory=True)
 
-			# Get all option elements
-			options = await locator.locator('option').all_text_contents()
+			# Get all option elements via the ElementHandle's query_selector_all.
+			option_handles = await handle.query_selector_all('option')
+			options = []
+			for oh in option_handles:
+				txt = await oh.text_content()
+				if txt is not None:
+					options.append(txt.strip())
 			return ActionResult(
 				extracted_content=f'📋 Dropdown options: {", ".join(options)}',
 				include_in_memory=True
@@ -1117,11 +1127,16 @@ class Browser(BaseTool):
 				)
 
 			element_node = state.selector_map[params.index]
-			locate_result = await context.get_locate_element(element_node)
-			locator = locate_result.locator
+			# get_locate_element returns an ElementHandle (Optional); ElementHandle
+			# has select_option directly (the old `.locator` access raised
+			# AttributeError — P1 finalization).
+			handle = await context.get_locate_element(element_node)
+			if handle is None:
+				return ActionResult(error=f'Could not locate dropdown at index {params.index}',
+									 include_in_memory=True)
 
 			# Select by label/text
-			await locator.select_option(label=params.text)
+			await handle.select_option(label=params.text)
 			return ActionResult(
 				extracted_content=f'✅ Selected "{params.text}" from dropdown at index {params.index}',
 				include_in_memory=True

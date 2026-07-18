@@ -138,3 +138,59 @@ async def test_apply_patch_action_rejects_mismatch(tmp_path):
         ApplyPatchParams(file_path="m.py", patch="@@ -1,1 +1,1 @@\n-Z\n+Y\n")
     )
     assert res.error is not None and "mismatch" in res.error
+
+
+# --- I-2/H1 LSP diagnostics-after-edit wiring --------------------------------
+
+@pytest.mark.asyncio
+async def test_str_replace_appends_diagnostics_when_flag_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODING_LSP_ENABLED", "true")
+    monkeypatch.setattr(
+        "tools.coding.lsp.diagnose_file",
+        lambda path, root, timeout_sec=8.0, runner=None: "x.py:1:1 undefined name 'foo'",
+    )
+    (tmp_path / "x.py").write_text("a = 1\n")
+    t = _tool(tmp_path)
+    res = await t.str_replace(
+        StrReplaceParams(file_path="x.py", old_string="a = 1", new_string="a = 2")
+    )
+    assert getattr(res, "error", None) in (None, "")
+    assert "<diagnostics>" in res.extracted_content
+    assert "undefined name 'foo'" in res.extracted_content
+    assert res.extracted_content.startswith("Edited x.py (1 replacement).")
+
+
+@pytest.mark.asyncio
+async def test_str_replace_flag_off_byte_identical_no_subprocess(tmp_path, monkeypatch):
+    monkeypatch.delenv("CODING_LSP_ENABLED", raising=False)
+    calls = []
+
+    def _spy_runner(cmd, cwd, timeout_sec):
+        calls.append(cmd)
+        raise AssertionError("runner must not be invoked when CODING_LSP_ENABLED is off")
+
+    monkeypatch.setattr("tools.coding.lsp.default_runner", _spy_runner)
+    (tmp_path / "x.py").write_text("a = 1\n")
+    t = _tool(tmp_path)
+    res = await t.str_replace(
+        StrReplaceParams(file_path="x.py", old_string="a = 1", new_string="a = 2")
+    )
+    assert getattr(res, "error", None) in (None, "")
+    assert res.extracted_content == "Edited x.py (1 replacement)."
+    assert calls == []  # zero subprocess spawns
+
+
+def test_confine_blocks_git_directory(tmp_path):
+    """P1 (finalization): the coding tool must refuse to touch .git/* (a patched
+    .git/config hooksPath or .git/hooks/* is an RCE persistence vector), parity
+    with self_env._confine. The shadow-snapshot dir is named `git` (no dot)."""
+    from tools.coding.tool import CodingError
+    (tmp_path / ".git" / "hooks").mkdir(parents=True)
+    t = object.__new__(CodingTool)
+    for bad in (".git/hooks/pre-commit", ".git/config"):
+        with pytest.raises(CodingError) as ei:
+            t._confine(bad, str(tmp_path))
+        assert ".git" in str(ei.value)
+    # A normal in-root path is still allowed.
+    ok = t._confine("src/app.py", str(tmp_path))
+    assert ok.endswith("src/app.py")

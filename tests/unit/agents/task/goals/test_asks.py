@@ -76,6 +76,21 @@ def test_fulfill_ask_unblocks_dependents(board):
     assert board.get(a.id).status == ASK_FULFILLED
 
 
+def test_fulfill_ask_stamps_owner_unblocked_on_goal(board):
+    """2026-07-14 night-2: without a fulfillment stamp the retry prompt shows only
+    the old failure ledger and the agent gives up from memory without retrying."""
+    g = board.create(user_id="rob", title="Post the intro in the public group")
+    _block(board, g)
+    a = board.create_ask(user_id="rob", what="Grant telegram posting",
+                         blocks_goal_ids=[g.id])
+    ok, unblocked = board.fulfill_ask(a.id, user_id="rob")
+    assert ok is True and unblocked == 1
+    payload = board.get(g.id).payload or {}
+    stamp = payload.get("owner_unblocked") or {}
+    assert stamp.get("ask_id") == a.id
+    assert float(stamp.get("ts") or 0) > 0
+
+
 def test_fulfill_ask_wrong_tenant_noop(board):
     a = board.create_ask(user_id="rob", what="Grant Twitter write access")
     ok, unblocked = board.fulfill_ask(a.id, user_id="mallory")

@@ -55,15 +55,14 @@ async def upgrade(db, db_manager):
         await conv_contexts.create_table()
         logger.info("✓ Conversation contexts created")
     
-    # ========================================
-    # RECORD VERSION
-    # ========================================
-    
-    await db.execute("""
-        INSERT OR REPLACE INTO schema_version (version, description, applied_at)
-        VALUES (?, ?, CURRENT_TIMESTAMP)
-    """, (VERSION, DESCRIPTION))
-    
+    # NOTE: recording the applied version is the RUNNER's single responsibility
+    # (migrations/migrate.py + boot.py call DatabaseVersionManager.record_migration,
+    # which writes the canonical `schema_versions` table). This migration must NOT
+    # self-record: it previously INSERTed into `schema_version` (SINGULAR) — a table
+    # that is never created — so `migrate upgrade` crashed on a fresh DB with
+    # "no such table". Removing the self-record fixes that AND the redundant
+    # double-record.
+
     logger.info(f"✅ Schema {VERSION} applied successfully!")
     logger.info("   - 14 core tables created")
     logger.info("   - Wallet-based authentication ready")
@@ -97,9 +96,10 @@ async def verify(db, db_manager):
     }
     
     try:
-        # Check schema version
+        # Check schema version in the canonical `schema_versions` (plural) table
+        # written by DatabaseVersionManager.record_migration.
         result = await db.fetch_one("""
-            SELECT version FROM schema_version WHERE version = ?
+            SELECT version FROM schema_versions WHERE version = ?
         """, (VERSION,))
         checks['schema_version'] = result is not None
         

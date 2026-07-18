@@ -121,5 +121,63 @@ async def test_filesystem_read_file_allows_ordinary_file(tmp_path, monkeypatch):
     assert "hello world" in out
 
 
+# ---------------------------------------------------------------------------
+# protected identity files (owner-UX P1 T6 review fix): preferences.toml /
+# contract.md under an identity/ segment are un-writable by the ordinary
+# file/coding tools — only the gated action/CLI/webview seams may write them.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("rel", [
+    "identity/rob/user_1/preferences.toml",
+    "identity/rob/user_1/contract.md",
+    "Identity/rob/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
+])
+def test_coding_confine_blocks_identity_protected_files(tmp_path, rel):
+    from tools.coding.tool import CodingError
+    root = tmp_path / "ws"
+    root.mkdir()
+    tool = _coding_tool()
+    with pytest.raises(CodingError):
+        tool._confine(rel, str(root))
+
+
+def test_coding_confine_allows_other_identity_files(tmp_path):
+    root = tmp_path / "ws"
+    root.mkdir()
+    tool = _coding_tool()
+    target = tool._confine("identity/rob/user_1/notes.md", str(root))
+    assert target.startswith(str(root))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rel", [
+    "identity/rob/user_1/preferences.toml",
+    "identity/rob/user_1/contract.md",
+    "Identity/rob/user_1/preferences.toml",  # case-insensitive filesystems (APFS/Windows)
+])
+async def test_filesystem_write_file_refuses_identity_protected(tmp_path, monkeypatch, rel):
+    tool = _fs_tool(tmp_path)
+    target = tmp_path / rel
+    monkeypatch.setattr(tool, "_normalize_path", lambda p: str(target))
+    monkeypatch.setattr(tool, "ensure_initialized", _anoop, raising=False)
+
+    from tools.filesystem import WriteFileAction
+    with pytest.raises(ServiceError):
+        await tool.write_file(WriteFileAction(file_path=rel, content="X=1"))
+    assert not target.exists()  # nothing written
+
+
+@pytest.mark.asyncio
+async def test_filesystem_write_file_allows_other_identity_files(tmp_path, monkeypatch):
+    tool = _fs_tool(tmp_path)
+    target = tmp_path / "identity" / "rob" / "user_1" / "notes.md"
+    monkeypatch.setattr(tool, "_normalize_path", lambda p: str(target))
+    monkeypatch.setattr(tool, "ensure_initialized", _anoop, raising=False)
+
+    from tools.filesystem import WriteFileAction
+    await tool.write_file(WriteFileAction(file_path="identity/rob/user_1/notes.md", content="hello"))
+    assert target.read_text() == "hello"
+
+
 async def _anoop(*a, **k):
     return None

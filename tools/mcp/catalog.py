@@ -1,7 +1,7 @@
 """Curated MCP install catalog (P0-C / Tier-3a).
 
-A small allowlist of vetted MCP servers the agent may install at runtime, mirroring
-Hermes's ``optional-mcps/``. Only ids with a NAMED, reviewed catalog entry can be
+A small allowlist of vetted MCP servers the agent may install at runtime. Only ids
+with a NAMED, reviewed catalog entry can be
 installed; an arbitrary agent-supplied server config is never installed directly —
 the agent picks an id, it does not hand-write the command line.
 

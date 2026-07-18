@@ -1,22 +1,31 @@
-"""`/journey` — a narrative timeline of what the agent did, learned, earned, changed.
+"""`/journey` — a narrative timeline of what the agent did, learned, changed,
+and its income (never "earned" — see the money-ledger split below).
 
-A consumer over data POLYROB already produces — episodes (``recall_episodes``),
-the durable event log (``self_modification`` / ``payment_settled`` / goal events),
-authored-skill provenance (``skill_usage``), and the unified ledger. NOT new
-machinery. Every source is read through a module-level seam function so the REPL
-handler and the ``polyrob journey`` Click command share one pure renderer, and
-tests can monkeypatch each source independently. Every read fails open to an
-empty section — a missing provider / disabled flag never breaks the timeline.
+A consumer over ``core.recap.build_recap`` — the surface-neutral core that
+does the actual data-gathering (episodes, the durable event log,
+authored-skill provenance, the unified ledger). This module is now ONLY the
+rendering layer: it groups ``build_recap``'s flat, timestamped entries back
+into the four familiar sections (Did/Income/Learned/Changed) so both the REPL
+handler and the ``polyrob journey`` Click command keep sharing one pure
+renderer, and CLI-visible output stays the same as before the extraction.
 
-No ``from __future__ import annotations`` (kept consistent with the CLI command
-modules; unnecessary here).
+No ``from __future__ import annotations`` (kept consistent with the CLI
+command modules; unnecessary here).
 """
-import time
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
+
+from cli.ui import candy
+from core import recap
 
 
 def _window_seconds(label: str) -> Optional[float]:
-    """Parse '30m'/'24h'/'7d' -> seconds; None if unset/bad (=> all time)."""
+    """Parse '30m'/'24h'/'7d' -> seconds; None if unset/bad (=> all time).
+
+    Display-only: used to pick the "last X" vs "all time" scope heading.
+    Deliberately fail-open (unlike ``core.recap._parse_window``, which is the
+    one that actually bounds the data query and raises on a malformed,
+    non-empty label) — a bad label here should never crash the heading.
+    """
     if not label:
         return None
     label = label.strip().lower()
@@ -32,121 +41,59 @@ def _window_seconds(label: str) -> Optional[float]:
         return None
 
 
-def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
-    """Episodes for the tenant (what I did) via the memory registry. Fail-open."""
-    try:
-        from core.async_bridge import run_coroutine_sync
-        from modules.memory.registry import memory_recall_episodes
-        # run_coroutine_sync is loop-safe: bare asyncio.run would raise inside the
-        # REPL's running event loop (dispatch awaits this sync handler), silently
-        # emptying this section.
-        rows = run_coroutine_sync(memory_recall_episodes(
-            user_id=user_id, since_ts=int(since_ts) if since_ts else None,
-            limit=20, order="newest"))
-        out = []
-        for r in rows or []:
-            # rows may be EpisodeRecord-like or dicts — normalize.
-            get = (r.get if isinstance(r, dict) else lambda k, d=None: getattr(r, k, d))
-            out.append({"kind": get("kind"), "outcome": get("outcome"),
-                        "spend_usd": get("spend_usd", 0.0) or 0.0,
-                        "task": get("task") or get("summary") or ""})
-        return out
-    except Exception:
-        return []
-
-
-def _events(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
-    """Durable event-log rows for the tenant (changed/earned). Fail-open."""
-    try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
-        if not event_log_enabled():
-            return []
-        return get_event_log().query(
-            user_id=user_id, since_ts=since_ts, limit=200) or []
-    except Exception:
-        return []
-
-
-def _authored(user_id: str, data_dir: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Authored skills + reuse counts for the tenant (learned). Fail-open."""
-    try:
-        from modules.skills.skill_usage import get_skill_usage_store
-        return get_skill_usage_store(data_dir).list_authored(user_id=user_id) or []
-    except Exception:
-        return []
-
-
-def _ledger(user_id: str, days: int) -> Dict[str, Any]:
-    """Unified ledger rollup for the tenant (earned/spent). Fail-open to zeros."""
-    try:
-        from core.async_bridge import run_coroutine_sync
-        from modules.credits.unified_ledger import build_ledger
-        return run_coroutine_sync(build_ledger(user_id, days=max(1, int(days)))) or {}
-    except Exception:
-        return {}
-
-
 def render_journey(*, user_id: str, since_label: str = "7d",
                    data_dir: Optional[str] = None) -> str:
-    """Pure renderer: union the four sources into a plain-text timeline."""
+    """Pure renderer: group ``build_recap``'s entries into a plain-text timeline."""
     secs = _window_seconds(since_label)
-    since_ts = (time.time() - secs) if secs else None
-    days = max(1, int((secs or 7 * 86400) // 86400))
     scope = f"last {since_label}" if secs else "all time"
 
-    episodes = _episodes(user_id, since_ts)
-    events = _events(user_id, since_ts)
-    authored = _authored(user_id, data_dir)
-    ledger = _ledger(user_id, days)
+    try:
+        entries = recap.build_recap(user_id, data_home=data_dir, window=since_label)
+    except ValueError as e:
+        return f"journey — {scope}\n\n(invalid window: {e})"
+
+    episodes = [e for e in entries if e.kind == "episode"]
+    authored = [e for e in entries if e.kind == "skill"]
+    changes = [e for e in entries if e.kind == "self_modification"]
+    ledger_entry = next((e for e in entries if e.kind == "ledger"), None)
 
     lines: List[str] = [f"journey — {scope}"]
 
     # Did — episodes
     lines.append("")
-    lines.append("Did:")
+    lines.append(candy.section("Did"))
     if episodes:
-        for e in episodes[:20]:
-            spend = f" ${float(e.get('spend_usd') or 0):.2f}" if e.get("spend_usd") else ""
-            task = (e.get("task") or "").strip().replace("\n", " ")[:80]
-            lines.append(f"  - {e.get('kind') or '?'}:{e.get('outcome') or '?'}{spend} \"{task}\"")
+        lines.extend(candy.bullet(e.text) for e in episodes[:20])
     else:
-        lines.append("  (no episodes recorded)")
+        lines.append(f"{candy.GUTTER}(no episodes recorded)")
 
-    # Earned — ledger + payment_settled events
-    earned = float(ledger.get("earned_usd") or 0.0)
-    spent = float(ledger.get("total_spend_usd") or 0.0)
-    net = float(ledger.get("net_usd") or (earned - spent))
-    settled = int(ledger.get("settled_payments") or 0)
+    # Income — ledger rollup. H14b: when there's no ledger entry (build_recap
+    # skips an all-zero rollup so the /recap empty-state works), render an honest
+    # "no money activity recorded yet" line — NEVER a fabricated "$0.00 · $0.00 ·
+    # $0.00", which reads as a real balance sheet on a broken/absent data layer.
+    # Terminology is income/spend (never "earned") — matches the real
+    # ledger-entry text core.recap builds ("Income: $X (…) · spend $Y · net $Z
+    # · runtime $W"), so the fallback reads like a missing instance of the same
+    # line rather than a different vocabulary.
     lines.append("")
-    lines.append(
-        f"Earned: ${earned:.2f} ({settled} settled) · spent ${spent:.2f} · net ${net:.2f}")
+    lines.append(ledger_entry.text if ledger_entry else
+                 "Income: no money activity recorded yet")
 
     # Learned — authored skills
     lines.append("")
-    lines.append("Learned:")
+    lines.append(candy.section("Learned"))
     if authored:
-        for s in authored[:20]:
-            sid = s.get("skill_id") or "?"
-            loads = s.get("load_count") if s.get("load_count") is not None else s.get("loads", 0)
-            by = s.get("created_by") or ""
-            by = f" [{by}]" if by else ""
-            lines.append(f"  - {sid}{by} (used {loads}x)")
+        lines.extend(candy.bullet(s.text) for s in authored[:20])
     else:
-        lines.append("  (no authored skills)")
+        lines.append(f"{candy.GUTTER}(no authored skills)")
 
     # Changed — self_modification events
-    changes = [e for e in events if e.get("kind") == "self_modification"]
     lines.append("")
-    lines.append("Changed:")
+    lines.append(candy.section("Changed"))
     if changes:
-        for c in changes[:20]:
-            a = c.get("attrs") or {}
-            what = a.get("kind") or a.get("action") or "self_modification"
-            ident = a.get("skill_id") or a.get("id") or ""
-            ident = f" {ident}" if ident else ""
-            lines.append(f"  - {what}{ident}")
+        lines.extend(candy.bullet(c.text) for c in changes[:20])
     else:
-        lines.append("  (no self-modifications)")
+        lines.append(f"{candy.GUTTER}(no self-modifications)")
 
     return "\n".join(lines)
 

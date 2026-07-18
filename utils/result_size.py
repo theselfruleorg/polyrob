@@ -21,19 +21,9 @@ MAX_RESULT_CHARS = 25000
 MAX_RESULT_TOKENS = 6000  # ~4 chars per token
 
 
-def estimate_tokens(content: str) -> int:
-    """Estimate token count from content.
-
-    Uses simple heuristic of ~4 chars per token.
-    This is approximate but sufficient for limit checking.
-
-    Args:
-        content: String content to estimate
-
-    Returns:
-        Estimated token count
-    """
-    return len(content) // 4
+# (removed) estimate_tokens: a dead "chars//4" helper with zero callers — a stale
+# twin of secret_guard.estimate_tokens_rough (which HAS the max(1, ...) floor this
+# one lacked). should_truncate below checks len(content) directly. P5 finalization.
 
 
 def should_truncate(content: str) -> bool:

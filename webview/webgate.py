@@ -130,7 +130,26 @@ def bind_host() -> str:
     An explicit ``WEBGATE_HOST``/``WEBVIEW_HOST`` override always wins.
     """
     default = "127.0.0.1" if is_local() else "0.0.0.0"
-    return os.environ.get("WEBGATE_HOST", os.environ.get("WEBVIEW_HOST", default))
+    host = os.environ.get("WEBGATE_HOST", os.environ.get("WEBVIEW_HOST", default))
+    # P1 finalization: local posture has NO auth (the loopback operator IS the owner),
+    # so a non-loopback bind would expose an UNAUTHENTICATED console to the network.
+    # Refuse the override and force loopback — to serve the console on the network,
+    # use an authenticated posture (own_ops/multitenant).
+    if is_local() and not _is_loopback_host(host):
+        logging.getLogger(__name__).error(
+            "WEBGATE_HOST=%r ignored in local posture — a non-loopback bind would expose "
+            "an UNAUTHENTICATED console to the network. Forcing 127.0.0.1. Use "
+            "POLYROB_POSTURE=own_ops or multitenant (authenticated) for a network bind.",
+            host,
+        )
+        return "127.0.0.1"
+    return host
+
+
+def _is_loopback_host(host: str) -> bool:
+    """True if ``host`` binds to loopback only (safe for the no-auth local posture)."""
+    h = (host or "").strip().lower()
+    return h in ("127.0.0.1", "::1", "localhost", "") or h.startswith("127.")
 
 
 def bind_port() -> int:
@@ -190,7 +209,27 @@ def branding_config() -> Dict[str, str]:
     }
 
 
+def data_dir() -> str:
+    """Runtime data home the console reads sidecar DBs from (goals.db/cron.db/
+    memory.db/identity/…) — the webview-side wrapper over the ONE core policy
+    seam ``core.runtime_paths.resolve_data_home`` shared with the CLI admin
+    verbs. Env is honored here too so a standalone webview deploy
+    (``scripts/deploy_webview.sh``) where ``core`` isn't importable still
+    respects ``POLYROB_DATA_DIR`` and falls back to the legacy ``./data``
+    instead of raising. Do NOT re-implement resolution logic at call sites.
+    """
+    env = os.environ.get("POLYROB_DATA_DIR")
+    if env:
+        return env
+    try:
+        from core.runtime_paths import resolve_data_home
+        return str(resolve_data_home())
+    except Exception:
+        return "data"
+
+
 __all__ = [
     "posture", "is_multitenant", "is_own_ops", "is_local", "requires_owner_login",
     "bind_host", "bind_port", "local_owner_id", "console_display_name", "branding_config",
+    "data_dir",
 ]

@@ -17,7 +17,7 @@ async def test_fake_fetch_returns_paid_result():
     res = await c.fetch_with_payment(
         url="http://paid", method="GET", body=None,
         signer=LocalEoaSigner(KEY), network="base-sepolia",
-        facilitator_url="http://f", max_amount_usd=1.0,
+        max_amount_usd=1.0,
     )
     assert isinstance(res, X402Result)
     assert res.paid is True and res.body == "DATA"

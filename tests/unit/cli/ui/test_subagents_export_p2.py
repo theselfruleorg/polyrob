@@ -56,7 +56,7 @@ def test_subagents_lists_live_background_delegations():
     ctx, r = _ctx(orchestrator=orch)
     _h_subagents(ctx)
     out = r.buf.getvalue()
-    assert "Background delegations (2)" in out
+    assert "background delegations (2)" in out  # candy.section head (Wave B1)
     assert "deadbeef" in out or "deadbee" in out
     assert "research the pricing page" in out
     assert "draft the summary" in out
@@ -66,14 +66,14 @@ def test_subagents_no_orchestrator_is_graceful():
     ctx, r = _ctx()  # orchestrator is None
     _h_subagents(ctx)
     out = r.buf.getvalue()
-    assert "Delegation:" in out
-    assert "No active background delegations." in out
+    assert "delegation" in out  # candy.kv_lines row (Wave B1)
+    assert "no background delegations yet" in out
 
 
 def test_subagents_empty_registry_says_none():
     ctx, r = _ctx(orchestrator=_Orch([]))
     _h_subagents(ctx)
-    assert "No active background delegations." in r.buf.getvalue()
+    assert "no background delegations yet" in r.buf.getvalue()
 
 
 def test_subagents_failing_registry_fails_open():
@@ -86,7 +86,7 @@ def test_subagents_failing_registry_fails_open():
 
     ctx, r = _ctx(orchestrator=_BadOrch())
     _h_subagents(ctx)  # must not raise
-    assert "Delegation:" in r.buf.getvalue()  # static info still shown
+    assert "delegation" in r.buf.getvalue()  # static info still shown
 
 
 # ---- /export defaults into the session workspace --------------------------

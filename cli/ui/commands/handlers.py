@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from core.runtime_paths import data_dir_or_home
+
 from cli.ui.commands.registry import (
     Command,
     CommandContext,
@@ -20,7 +22,36 @@ from cli.ui.commands.registry import (
 )
 
 
+def _print_scrubbed(out, renderable) -> None:
+    """Route a direct Rich print through the same secret scrub ``emit`` uses.
+
+    ``CommandContext.emit`` is the documented output choke point, but it only
+    takes strings — the handlers' Rich-table branches used to print straight
+    to the console, bypassing the scrub (2026-07-12 UI-surface review S2).
+    Strings are scrubbed whole; Table cells are scrubbed in place (str cells
+    only — Rich cell renderables pass through). Scrub failure never suppresses
+    output (same fail-open contract as ``emit``).
+    """
+    try:
+        from rich.table import Table
+
+        from cli.ui.secrets import scrub_secrets
+        if isinstance(renderable, str):
+            renderable = scrub_secrets(renderable)
+        elif isinstance(renderable, Table):
+            for column in renderable.columns:
+                cells = getattr(column, "_cells", None) or []
+                for i, cell in enumerate(cells):
+                    if isinstance(cell, str):
+                        cells[i] = scrub_secrets(cell)
+    except Exception:
+        pass
+    out.print(renderable)
+
+
 def _h_help(ctx: CommandContext) -> None:
+    from cli.ui import candy
+
     lines = ["Commands:"]
     reg = ctx.registry or default_registry()
     for cmd in reg.commands():
@@ -30,7 +61,7 @@ def _h_help(ctx: CommandContext) -> None:
         alias_str = ""
         if cmd.aliases:
             alias_str = "  (" + ", ".join(f"/{a}" for a in cmd.aliases) + ")"
-        lines.append(f"  {invoke:<28} {cmd.help}{alias_str}")
+        lines.append(f"{candy.GUTTER}{invoke:<28} {cmd.help}{alias_str}")
     ctx.emit("\n".join(lines), title="help")
 
 
@@ -40,6 +71,9 @@ def _h_exit(ctx: CommandContext) -> None:
 
 def _h_status(ctx: CommandContext) -> None:
     """Live session status: model, tokens, cost estimate, ctx %, steps, compactions."""
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     state = ctx.state
     # Refresh ctx metrics from the live message_manager when available.
     agent = ctx.agent
@@ -51,11 +85,13 @@ def _h_status(ctx: CommandContext) -> None:
 
     console = ctx.console()
     if console is not None and state is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="session status", title_justify="left", show_header=False)
-        table.add_column("k", style="bold")
-        table.add_column("v")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False,
+                      show_edge=False, show_header=False)
+        table.add_column("k", style=style("label"))
+        table.add_column("v", style=style("value"))
         table.add_row("session", ctx.session_id[:16] or "—")
         table.add_row("model", f"{state.model or '—'} ({state.provider or '—'})")
         table.add_row("status", state.status or "—")
@@ -72,30 +108,28 @@ def _h_status(ctx: CommandContext) -> None:
             )
         table.add_row("compactions", str(state.compactions))
         table.add_row("elapsed", f"{state.elapsed():.1f}s")
-        console.print(table)
+        _print_scrubbed(console, table)
         return
 
     # Plain fallback.
     if state is None:
         ctx.emit("(no session state)")
         return
-    lines = [
-        f"session: {ctx.session_id[:16] or '—'}",
-        f"model: {state.model or '—'} ({state.provider or '—'})",
-        f"status: {state.status}",
-        f"step: {state.step}",
-        f"tokens: {state.tokens_in} in / {state.tokens_out} out / {state.tokens_total} total",
-        f"cost (est): ${state.cost_estimate_total:.4f}",
+    rows = [
+        ("session", ctx.session_id[:16] or "—"),
+        ("model", f"{state.model or '—'} ({state.provider or '—'})"),
+        ("status", state.status or "—"),
+        ("step", str(state.step)),
+        ("tokens", f"{state.tokens_in} in · {state.tokens_out} out · {state.tokens_total} total"),
+        ("cost (est)", f"${state.cost_estimate_total:.4f}"),
     ]
     if state.ctx_percent:
-        lines.append(
-            f"context: {state.ctx_percent:.0f}% ({state.ctx_tokens}/{state.ctx_max})"
-        )
-    lines += [
-        f"compactions: {state.compactions}",
-        f"elapsed: {state.elapsed():.1f}s",
+        rows.append(("context", f"{state.ctx_percent:.0f}% ({state.ctx_tokens}/{state.ctx_max})"))
+    rows += [
+        ("compactions", str(state.compactions)),
+        ("elapsed", f"{state.elapsed():.1f}s"),
     ]
-    ctx.emit("\n".join(lines), title="status")
+    ctx.emit(candy.kv_lines(rows), title="status")
 
 
 async def _h_usage(ctx: CommandContext) -> None:
@@ -136,54 +170,47 @@ async def _fetch_breakdown(ctx: CommandContext) -> Optional[Dict[str, Any]]:
 
 
 def _render_usage_breakdown(ctx: CommandContext, breakdown: Dict[str, Any]) -> None:
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     console = ctx.console()
     by_type = breakdown.get("by_type", [])
-    if console is not None:
-        from rich.table import Table
-
-        table = Table(title="usage (DB — authoritative)", title_justify="left")
-        for col in ("type", "calls", "in", "out", "cache", "credits", "api $", "markup $"):
-            table.add_column(col)
-        for row in by_type:
-            tok = row.get("tokens", {})
-            table.add_row(
-                str(row.get("type", "")),
-                str(row.get("calls", 0)),
-                str(tok.get("input", 0)),
-                str(tok.get("output", 0)),
-                str(tok.get("cached", 0)),
-                f"{row.get('credits_charged', 0)}",
-                f"${row.get('api_cost_usd', 0):.4f}",
-                f"${row.get('markup_usd', 0):.4f}",
-            )
-        table.add_row(
-            "TOTAL",
-            "",
-            "",
-            "",
-            "",
-            f"{breakdown.get('total_credits_charged', 0)}",
-            f"${breakdown.get('total_api_cost_usd', 0):.4f}",
-            f"${breakdown.get('total_markup_usd', 0):.4f}",
-        )
-        console.print(table)
-        return
-
-    lines = ["usage (DB — authoritative):"]
+    columns = ["type", "calls", "in", "out", "cache", "credits", "api $", "markup $"]
+    rows: List[List[Any]] = []
     for row in by_type:
         tok = row.get("tokens", {})
-        lines.append(
-            f"  {row.get('type', '')}: calls={row.get('calls', 0)} "
-            f"in={tok.get('input', 0)} out={tok.get('output', 0)} "
-            f"cache={tok.get('cached', 0)} credits={row.get('credits_charged', 0)} "
-            f"api=${row.get('api_cost_usd', 0):.4f} markup=${row.get('markup_usd', 0):.4f}"
-        )
-    lines.append(
-        f"  TOTAL: credits={breakdown.get('total_credits_charged', 0)} "
-        f"api=${breakdown.get('total_api_cost_usd', 0):.4f} "
-        f"markup=${breakdown.get('total_markup_usd', 0):.4f}"
-    )
-    ctx.emit("\n".join(lines), title="usage")
+        rows.append([
+            row.get("type", ""),
+            row.get("calls", 0),
+            tok.get("input", 0),
+            tok.get("output", 0),
+            tok.get("cached", 0),
+            row.get("credits_charged", 0),
+            f"${row.get('api_cost_usd', 0):.4f}",
+            f"${row.get('markup_usd', 0):.4f}",
+        ])
+    rows.append([
+        "TOTAL", "", "", "", "",
+        breakdown.get("total_credits_charged", 0),
+        f"${breakdown.get('total_api_cost_usd', 0):.4f}",
+        f"${breakdown.get('total_markup_usd', 0):.4f}",
+    ])
+
+    if console is not None:
+        from rich import box
+        from rich.table import Table
+
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        for col in columns:
+            table.add_column(col)
+        for r in rows:
+            table.add_row(*[str(c) for c in r])
+        _print_scrubbed(console, "usage (DB — authoritative)")
+        _print_scrubbed(console, table)
+        return
+
+    text = "usage (DB — authoritative):\n" + candy.table_lines(columns, rows)
+    ctx.emit(text, title="usage")
 
 
 def _maybe_note_estimate_drift(ctx: CommandContext, breakdown: Dict[str, Any]) -> None:
@@ -200,23 +227,34 @@ def _maybe_note_estimate_drift(ctx: CommandContext, breakdown: Dict[str, Any]) -
 
 
 def _render_usage_estimate(ctx: CommandContext) -> None:
+    from cli.ui import candy
+
     state = ctx.state
     if state is None:
-        ctx.emit("No usage recorded for this session.")
+        ctx.emit(candy.empty("usage recorded for this session"), title="usage")
         return
-    lines = [
-        "usage (estimate — from llm_usage files; CLI sessions skip DB credit tracking):",
-        f"  tokens: {state.tokens_in} in · {state.tokens_out} out · {state.tokens_total} total",
-        f"  cost (est): ${state.cost_estimate_total:.4f}",
+    rows = [
+        ("tokens", f"{state.tokens_in} in · {state.tokens_out} out · {state.tokens_total} total"),
+        ("cost (est)", f"${state.cost_estimate_total:.4f}"),
     ]
-    ctx.emit("\n".join(lines), title="usage")
+    text = (
+        "usage (estimate — from llm_usage files; CLI sessions skip DB credit tracking):\n"
+        + candy.kv_lines(rows)
+    )
+    ctx.emit(text, title="usage")
 
 
 def _h_tools(ctx: CommandContext) -> None:
     """List the agent's registered actions, grouped by tool."""
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     actions = _registry_actions(ctx)
     if not actions:
-        ctx.emit("(no registered tools — agent registry unavailable)")
+        ctx.emit(
+            candy.empty("registered tools", "agent registry unavailable", yet=False),
+            title="tools",
+        )
         return
 
     grouped: Dict[str, List[str]] = {}
@@ -226,20 +264,19 @@ def _h_tools(ctx: CommandContext) -> None:
 
     console = ctx.console()
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="registered tools", title_justify="left")
-        table.add_column("tool", style="bold")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        table.add_column("tool", style=style("value"))
         table.add_column("actions")
         for tool in sorted(grouped):
             table.add_row(tool, ", ".join(grouped[tool]))
-        console.print(table)
+        _print_scrubbed(console, table)
         return
 
-    lines = ["registered tools:"]
-    for tool in sorted(grouped):
-        lines.append(f"  {tool}: {', '.join(grouped[tool])}")
-    ctx.emit("\n".join(lines), title="tools")
+    rows = [[tool, ", ".join(grouped[tool])] for tool in sorted(grouped)]
+    ctx.emit(candy.table_lines(["tool", "actions"], rows), title="tools")
 
 
 def _registry_actions(ctx: CommandContext) -> Dict[str, Any]:
@@ -269,17 +306,34 @@ def _registry_actions(ctx: CommandContext) -> Dict[str, Any]:
     return {}
 
 
+def _resolve_prefs_home_dir(ctx: CommandContext) -> Any:
+    """Resolve the POLYROB home dir the SAME way /self, /config, /approve do.
+
+    The container config's ``data_dir`` (fallback ``"data"``) — the tree
+    ``preferences.toml`` and other identity-tier state actually lives under.
+    """
+    try:
+        cfg = getattr(ctx.container, "config", None) if ctx.container else None
+        return data_dir_or_home(getattr(cfg, "data_dir", None))
+    except Exception:
+        return data_dir_or_home(None)
+
+
 def _h_toolset(ctx: CommandContext) -> None:
-    """List named toolsets or show the current session's active tool ids.
+    """List named toolsets, or set the DEFAULT toolset for future sessions.
 
     Usage:
       /toolset           — list all named toolsets + current session tools
-      /toolset <name>    — print what the named toolset resolves to (pruned for CLI)
+      /toolset <name>    — validate *name* against the named-toolset registry
+                           and persist it as the ``session.toolset`` preference
 
-    NOTE: Live mid-session tool switching is not supported — the session's tool
-    set is fixed at creation time. ``/toolset <name>`` prints the resolved ids and
-    explains how to apply them on the NEXT session (``--toolset NAME`` on run, or
-    ``POLYROB_AGENT_TOOLSET=NAME`` env).
+    NOTE (owner-UX P2 T6): live mid-session tool switching is NOT supported —
+    the session's Controller/tool registration is fixed at agent-creation
+    time, and this command does not attempt to re-register tools on the live
+    controller. ``/toolset <name>`` validates + persists the preference; it
+    takes effect starting the NEXT session (``session.toolset``'s schema
+    ``applies`` is ``"next-session"`` — see ``core/prefs.py``). This session's
+    active tool set is unchanged.
     """
     from agents.task.tool_defaults import TOOLSETS, resolve_toolset
     from core.bootstrap import cli_unavailable_tools
@@ -288,55 +342,33 @@ def _h_toolset(ctx: CommandContext) -> None:
     console = ctx.console()
 
     if args:
-        # /toolset <name> — show resolved + pruned ids for that name, with guidance.
+        # /toolset <name> — validate + persist as the default for new sessions.
         name = args[0].strip().lower()
+        if name not in TOOLSETS:
+            valid = ", ".join(sorted(TOOLSETS.keys()))
+            ctx.emit(
+                f"Unknown toolset: {name!r}. Valid toolsets: {valid}",
+                title="toolset",
+            )
+            return
+
+        home_dir = _resolve_prefs_home_dir(ctx)
+        from core.prefs import write_preference
+        ok, err = write_preference(home_dir, ctx.user_id or "local", "session.toolset", name)
+        if not ok:
+            ctx.emit(f"toolset not saved: {err}", title="toolset")
+            return
+
         resolved = resolve_toolset(name)
         unavailable = set(cli_unavailable_tools(resolved))
         available = [t for t in resolved if t not in unavailable]
-        known = name in TOOLSETS
-        qualifier = "" if known else f" (unknown — fell back to 'default')"
-
-        if console is not None:
-            from rich.table import Table
-
-            table = Table(
-                title=f"toolset: {name}{qualifier}",
-                title_justify="left",
-                show_header=False,
-            )
-            table.add_column("k", style="bold")
-            table.add_column("v")
-            table.add_row("resolved ids", ", ".join(resolved) or "—")
-            table.add_row("CLI-available", ", ".join(available) or "—")
-            if unavailable:
-                table.add_row("not available in CLI", ", ".join(sorted(unavailable)))
-            table.add_row(
-                "to apply on next run",
-                f"polyrob run --toolset {name} <task>",
-            )
-            table.add_row(
-                "or set env",
-                f"POLYROB_AGENT_TOOLSET={name}",
-            )
-            table.add_row(
-                "note",
-                "Live tool switching is not supported — applies to NEW sessions only.",
-            )
-            console.print(table)
-        else:
-            lines = [
-                f"toolset: {name}{qualifier}",
-                f"  resolved ids:       {', '.join(resolved) or '—'}",
-                f"  CLI-available:      {', '.join(available) or '—'}",
-            ]
-            if unavailable:
-                lines.append(f"  not available:      {', '.join(sorted(unavailable))}")
-            lines += [
-                f"  to apply:  polyrob run --toolset {name} <task>",
-                f"             or POLYROB_AGENT_TOOLSET={name}",
-                "  note: live tool switching is not supported — new sessions only.",
-            ]
-            ctx.emit("\n".join(lines), title="toolset")
+        ctx.emit(
+            f"toolset '{name}' saved (resolves to: {', '.join(available) or '—'}) — "
+            "applies to the NEXT session (start a new chat, or "
+            f"`polyrob run --toolset {name} <task>`). This session's tool set is "
+            "unchanged.",
+            title="toolset",
+        )
         return
 
     # /toolset (no arg) — list all named toolsets + current session tools.
@@ -346,11 +378,15 @@ def _h_toolset(ctx: CommandContext) -> None:
         {getattr(a, "tool", None) or "default" for a in actions.values()} - {"default"}
     ) if actions else []
 
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="named toolsets", title_justify="left")
-        table.add_column("name", style="bold")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        table.add_column("name", style=style("value"))
         table.add_column("ids")
         table.add_column("CLI-available")
         for ts_name, ts_ids in sorted(TOOLSETS.items()):
@@ -358,29 +394,28 @@ def _h_toolset(ctx: CommandContext) -> None:
             avail = [t for t in ts_ids if t not in unavail]
             mark = " (unavailable tools pruned)" if unavail else ""
             table.add_row(ts_name, ", ".join(ts_ids), ", ".join(avail) + mark)
-        console.print(table)
+        _print_scrubbed(console, table)
 
         if current_tools:
-            console.print(f"current session tools: {', '.join(current_tools)}")
+            _print_scrubbed(console, f"current session tools: {', '.join(current_tools)}")
         else:
-            console.print("(current session tool set unavailable)")
-        console.print(
-            "[dim]Use: polyrob run --toolset <name> <task>  "
-            "or set POLYROB_AGENT_TOOLSET=<name>[/dim]"
+            _print_scrubbed(console, "(current session tool set unavailable)")
+        _print_scrubbed(
+            console,
+            "Use: polyrob run --toolset <name> <task>  or set POLYROB_AGENT_TOOLSET=<name>",
         )
     else:
-        lines = ["named toolsets:"]
+        rows = []
         for ts_name, ts_ids in sorted(TOOLSETS.items()):
             unavail = set(cli_unavailable_tools(ts_ids))
             avail = [t for t in ts_ids if t not in unavail]
-            mark = " *" if unavail else ""
-            lines.append(f"  {ts_name:<14} {', '.join(ts_ids)}")
-            if unavail:
-                lines.append(f"  {'':14} CLI-available: {', '.join(avail)}{mark}")
+            mark = " (unavailable tools pruned)" if unavail else ""
+            rows.append([ts_name, ", ".join(ts_ids), ", ".join(avail) + mark])
+        lines = [candy.table_lines(["name", "ids", "CLI-available"], rows)]
         if current_tools:
             lines.append(f"current session: {', '.join(current_tools)}")
         lines.append("Use: polyrob run --toolset <name> <task>  or  POLYROB_AGENT_TOOLSET=<name>")
-        ctx.emit("\n".join(lines), title="toolsets")
+        ctx.emit("\n".join(lines), title="toolset")
 
 
 def _list_persona_names(characters_dir: Optional[Path] = None) -> List[str]:
@@ -418,137 +453,117 @@ def _list_persona_names(characters_dir: Optional[Path] = None) -> List[str]:
 
 
 def _h_persona(ctx: CommandContext) -> None:
-    """List available personas or show guidance on switching the active persona.
+    """List available personas, or set the DEFAULT persona for future sessions.
 
     Usage:
-      /persona           — list all available persona names
-      /persona <name>    — show the persona's bio and explain how to activate it
+      /persona                  — list all available (character) persona names
+      /persona <name-or-text>   — set the ``session.persona`` preference: a
+                                   known template key (general, research,
+                                   coding, social, trading, blank) persists
+                                   that key; anything else is treated as
+                                   literal persona text
 
-    NOTE: Live mid-session persona switching is not supported — the character/
-    persona block is resolved at session-start time (gated by
-    ``TASK_PERSONALITY_BLOCK``).  ``/persona <name>`` shows the persona description
-    and explains how to activate it on the NEXT session via the environment.
+    The literal-text branch is threat-scanned at write time
+    (``core.prefs.write_preference`` — same fail-closed scan as the SELF/
+    identity docs); a flagged value is REJECTED and the error is surfaced
+    verbatim, never silently written.
+
+    NOTE (owner-UX P2 T6): like ``/toolset``, this does not live-patch the
+    CURRENT session's already-built system prompt — the ``<identity>`` block
+    is assembled once, at agent-creation time
+    (``agents/task/agent/message_manager/service.py``), not re-read per turn.
+    The persisted preference takes effect starting the NEXT session
+    (``session.persona``'s schema ``applies`` is ``"next-session"`` — see
+    ``core/prefs.py``). Best-effort: the live orchestrator's ``_persona_block``
+    seam (``cli/persona.py``) is still refreshed, so anything freshly created
+    within THIS session (e.g. a delegated sub-agent) picks up the new persona
+    immediately — but the current turn's system prompt is unchanged.
     """
     args = ctx.args
     console = ctx.console()
     names = _list_persona_names()
 
     if args:
-        target = args[0].strip().lower()
+        value = " ".join(args).strip()
+        from agents.task.templates import TEMPLATES
 
-        # Try to load the bio from the character file for display.
-        bio: str = ""
-        adjectives: List[str] = []
-        topics: List[str] = []
-        try:
-            from pathlib import Path as _Path
+        key_candidate = value.lower()
+        persisted = key_candidate if key_candidate in TEMPLATES else value
 
-            chars_dir = _Path("data") / "characters"
-            char_file = chars_dir / f"{target}.character.json"
-            if char_file.exists():
-                import json as _json
+        home_dir = _resolve_prefs_home_dir(ctx)
+        from core.prefs import write_preference
+        ok, err = write_preference(home_dir, ctx.user_id or "local", "session.persona", persisted)
+        if not ok:
+            ctx.emit(f"persona not saved: {err}", title="persona")
+            return
 
-                data = _json.loads(char_file.read_text(encoding="utf-8"))
-                raw_bio = data.get("bio", "")
-                if isinstance(raw_bio, list):
-                    bio = " ".join(raw_bio)
-                else:
-                    bio = str(raw_bio)
-                adjectives = data.get("adjectives", [])
-                topics = data.get("topics", [])
-        except Exception:
-            pass
+        # Best-effort: refresh the live orchestrator's persona seam (does NOT
+        # rewrite this session's already-built system prompt — see NOTE above).
+        orch = ctx.orchestrator
+        if orch is not None:
+            try:
+                from cli.persona import resolve_cli_persona
+                refreshed = resolve_cli_persona(user_id=ctx.user_id, home_dir=home_dir)
+                if refreshed:
+                    orch._persona_block = refreshed
+            except Exception:
+                pass
 
-        known = target in names
-        qualifier = "" if known else " (unknown)"
-
-        if console is not None:
-            from rich.table import Table
-
-            table = Table(
-                title=f"persona: {target}{qualifier}",
-                title_justify="left",
-                show_header=False,
-            )
-            table.add_column("k", style="bold")
-            table.add_column("v")
-            if bio:
-                table.add_row("bio", bio)
-            if adjectives:
-                table.add_row("adjectives", ", ".join(adjectives))
-            if topics:
-                table.add_row("topics", ", ".join(topics))
-            table.add_row("available personas", ", ".join(names) or "—")
-            table.add_row(
-                "to activate on next run",
-                "POLYROB_PERSONA=<template> polyrob …  "
-                "(templates: general, research, coding, social, trading, blank)",
-            )
-            table.add_row(
-                "note",
-                "Live persona switching is not supported — applies to NEW sessions only.",
-            )
-            console.print(table)
-        else:
-            lines = [f"persona: {target}{qualifier}"]
-            if bio:
-                lines.append(f"  bio:        {bio}")
-            if adjectives:
-                lines.append(f"  adjectives: {', '.join(adjectives)}")
-            if topics:
-                lines.append(f"  topics:     {', '.join(topics)}")
-            lines += [
-                f"  available:  {', '.join(names) or '—'}",
-                "  to activate: POLYROB_PERSONA=<template> polyrob …  "
-                "(templates: general, research, coding, social, trading, blank)",
-                "  note: live persona switching is not supported — new sessions only.",
-            ]
-            ctx.emit("\n".join(lines), title="persona")
+        ctx.emit(
+            f"persona saved (session.persona = {persisted!r}) — applies to the "
+            "NEXT session. This session's active persona is unchanged.",
+            title="persona",
+        )
         return
 
     # /persona (no arg) — list all available persona names.
+    from cli.ui import candy
+    from cli.ui.theme import style
+
+    def _persona_bio(pname: str) -> str:
+        try:
+            from pathlib import Path as _Path
+            import json as _json
+
+            pfile = _Path("data") / "characters" / f"{pname}.character.json"
+            if pfile.exists():
+                d = _json.loads(pfile.read_text(encoding="utf-8"))
+                raw = d.get("bio", "")
+                return (raw if isinstance(raw, str) else " ".join(raw))[:80]
+        except Exception:
+            pass
+        return ""
+
+    guidance = [
+        "Set the CLI persona with POLYROB_PERSONA=<template> "
+        "(general, research, coding, social, trading, blank).",
+        "Or use /persona <name-or-text> to set it as your default for "
+        "new sessions (applies next session).",
+    ]
+
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="available personas", title_justify="left")
-        table.add_column("name", style="bold")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        table.add_column("name", style=style("value"))
         table.add_column("bio")
         for pname in names:
-            pbio = ""
-            try:
-                from pathlib import Path as _Path
-                import json as _json
-
-                pfile = _Path("data") / "characters" / f"{pname}.character.json"
-                if pfile.exists():
-                    d = _json.loads(pfile.read_text(encoding="utf-8"))
-                    raw = d.get("bio", "")
-                    pbio = (raw if isinstance(raw, str) else " ".join(raw))[:80]
-            except Exception:
-                pass
-            table.add_row(pname, pbio)
-        console.print(table)
-        console.print(
-            "[dim]Set the CLI persona with POLYROB_PERSONA=<template> "
-            "(general, research, coding, social, trading, blank).[/dim]"
-        )
-        console.print(
-            "[dim]Or use /persona <name> for details. Live switching not supported.[/dim]"
-        )
+            table.add_row(pname, _persona_bio(pname))
+        _print_scrubbed(console, table)
+        for line in guidance:
+            _print_scrubbed(console, line)
     else:
-        lines = ["available personas:"]
-        for pname in names:
-            lines.append(f"  {pname}")
-        lines += [
-            "Set the CLI persona with POLYROB_PERSONA=<template> "
-            "(general, research, coding, social, trading, blank).",
-            "Or use /persona <name> for details. Live switching not supported.",
-        ]
+        rows = [[pname, _persona_bio(pname)] for pname in names]
+        lines = [candy.table_lines(["name", "bio"], rows)] + guidance
         ctx.emit("\n".join(lines), title="personas")
 
 
 def _h_sessions(ctx: CommandContext) -> None:
     """List all sessions from the session manager."""
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     task_agent = ctx.task_agent
     sm = getattr(task_agent, "session_manager", None) if task_agent is not None else None
     if sm is None:
@@ -560,33 +575,33 @@ def _h_sessions(ctx: CommandContext) -> None:
         ctx.emit(f"Could not list sessions: {exc}")
         return
     if not sessions:
-        ctx.emit("No sessions found.")
+        ctx.emit(candy.empty("sessions"), title="sessions")
         return
+
+    rows = [
+        [
+            str(s.get("id", ""))[:16],
+            str(s.get("status", "")),
+            str(s.get("created_at", ""))[:19],
+            _session_model(s),
+        ]
+        for s in sessions
+    ]
 
     console = ctx.console()
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="sessions", title_justify="left")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
         for col in ("id", "status", "created", "model"):
             table.add_column(col)
-        for s in sessions:
-            table.add_row(
-                str(s.get("id", ""))[:16],
-                str(s.get("status", "")),
-                str(s.get("created_at", ""))[:19],
-                _session_model(s),
-            )
-        console.print(table)
+        for r in rows:
+            table.add_row(*[str(c) for c in r])
+        _print_scrubbed(console, table)
         return
 
-    lines = ["sessions:"]
-    for s in sessions:
-        lines.append(
-            f"  {str(s.get('id', ''))[:16]} {s.get('status', '')} "
-            f"{str(s.get('created_at', ''))[:19]} {_session_model(s)}"
-        )
-    ctx.emit("\n".join(lines), title="sessions")
+    ctx.emit(candy.table_lines(["id", "status", "created", "model"], rows), title="sessions")
 
 
 def _session_model(session: Dict[str, Any]) -> str:
@@ -600,35 +615,37 @@ def _session_model(session: Dict[str, Any]) -> str:
 
 def _h_history(ctx: CommandContext) -> None:
     """Show the conversation turns (user + assistant)."""
+    from cli.ui import candy
+    from cli.ui.identity import agent_display_name
+    from cli.ui.theme import style
+
     convo = ctx.conversation
     turns = list(getattr(convo, "turns", []) or [])
     if not turns:
-        ctx.emit("No conversation history yet.")
+        ctx.emit(candy.empty("conversation history"), title="history")
         return
+
+    agent_col = agent_display_name()
+    rows = [
+        [str(i), _truncate(getattr(t, "user", ""), 60), _truncate(getattr(t, "assistant", ""), 60)]
+        for i, t in enumerate(turns, 1)
+    ]
 
     console = ctx.console()
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        from cli.ui.identity import agent_display_name
-        table = Table(title="history", title_justify="left")
-        table.add_column("#", style="dim")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        table.add_column("#", style=style("label"))
         table.add_column("user")
-        table.add_column(agent_display_name())
-        for i, t in enumerate(turns, 1):
-            table.add_row(
-                str(i),
-                _truncate(getattr(t, "user", ""), 60),
-                _truncate(getattr(t, "assistant", ""), 60),
-            )
-        console.print(table)
+        table.add_column(agent_col)
+        for r in rows:
+            table.add_row(*r)
+        _print_scrubbed(console, table)
         return
 
-    lines = ["history:"]
-    for i, t in enumerate(turns, 1):
-        lines.append(f"  [{i}] > {_truncate(getattr(t, 'user', ''), 80)}")
-        lines.append(f"      {_truncate(getattr(t, 'assistant', ''), 80)}")
-    ctx.emit("\n".join(lines), title="history")
+    ctx.emit(candy.table_lines(["#", "user", agent_col], rows), title="history")
 
 
 def _h_clear(ctx: CommandContext) -> None:
@@ -851,7 +868,8 @@ async def _h_memory(ctx: CommandContext) -> None:
             hits = await provider.search(query, user_id=ctx.user_id or "local", limit=10)
             text = hits.strip() if isinstance(hits, str) else str(hits or "").strip()
             if not text:
-                ctx.emit("No matches.", title="memory")
+                from cli.ui import candy
+                ctx.emit(candy.empty(f"matches for {query!r}", yet=False), title="memory")
                 return
             ctx.emit(text, title="memory")
             return
@@ -935,31 +953,37 @@ def _h_session(ctx: CommandContext) -> None:
     Distinct from ``/status`` (live token/cost metrics) — this is the static
     identity card. Fail-open per field.
     """
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     rows = _session_info_rows(ctx)
     console = ctx.console()
     if console is not None:
+        from rich import box
         from rich.table import Table
 
-        table = Table(title="session", title_justify="left", show_header=False)
-        table.add_column("k", style="bold")
-        table.add_column("v")
+        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False,
+                      show_edge=False, show_header=False)
+        table.add_column("k", style=style("label"))
+        table.add_column("v", style=style("value"))
         for k, v in rows:
             table.add_row(k, str(v))
-        console.print(table)
+        _print_scrubbed(console, table)
         return
-    ctx.emit("\n".join(f"{k}: {v}" for k, v in rows), title="session")
+    ctx.emit(candy.kv_lines(rows), title="session")
 
 
-def autonomy_status_lines(user_id: str, data_dir: str = "data") -> list:
-    """Build the /autonomy report: enabled loops + scheduled cron jobs / open goals.
+def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
+    """Gather autonomy loop flags + cron jobs + open goals into structured data.
 
     Pure + fail-open: each store read is independently guarded so a missing/locked
-    DB degrades to an '(unavailable)' line instead of raising into the REPL.
+    DB degrades to a captured exception instead of raising into the REPL. Shared by
+    ``autonomy_status_lines`` (legacy plain-line shape) and ``_h_autonomy`` (candy
+    grammar) so both read the same snapshot without duplicating the store reads.
     """
     import os
     from agents.task.constants import AutonomyConfig, local_mode_enabled
 
-    lines = [f"local mode (POLYROB_LOCAL): {'on' if local_mode_enabled() else 'off'}"]
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
         ("goals", AutonomyConfig.goals_enabled()),
@@ -967,39 +991,100 @@ def autonomy_status_lines(user_id: str, data_dir: str = "data") -> list:
         ("cron-run-loop", AutonomyConfig.cron_run_loop()),
         ("background-review", AutonomyConfig.background_review_enabled()),
     ]
-    lines.append("loops: " + ", ".join(f"{n}={'on' if v else 'off'}" for n, v in flags))
 
+    cron_jobs = None
+    cron_error: Optional[Exception] = None
     try:
         from cron.service import CronService
         from cron.jobs import CronJobStore
-        jobs = CronService(CronJobStore(os.path.join(data_dir, "cron.db"))).list_jobs(user_id=user_id)
-        lines.append(f"cron jobs: {len(jobs)}")
-        for j in jobs[:10]:
-            when = j.next_run_at.isoformat() if j.next_run_at else "-"
-            lines.append(f"  - {j.id} [{j.status}] {j.schedule_spec} -> {when}: {j.task[:48]}")
+        cron_jobs = CronService(CronJobStore(os.path.join(data_dir, "cron.db"))).list_jobs(user_id=user_id)
     except Exception as e:  # fail-open: stores may not exist yet
-        lines.append(f"cron jobs: (unavailable: {e})")
+        cron_error = e
 
+    open_goals = None
+    goals_error: Optional[Exception] = None
     try:
         from agents.task.goals.board import GoalBoard
         goals = GoalBoard(os.path.join(data_dir, "goals.db")).list(user_id=user_id)
         open_goals = [g for g in goals if getattr(g, "status", "") not in ("done", "cancelled")]
-        lines.append(f"goals (open): {len(open_goals)}")
     except Exception as e:
-        lines.append(f"goals (open): (unavailable: {e})")
+        goals_error = e
+
+    return {
+        "local_mode": local_mode_enabled(),
+        "flags": flags,
+        "cron_jobs": cron_jobs,
+        "cron_error": cron_error,
+        "open_goals": open_goals,
+        "goals_error": goals_error,
+    }
+
+
+def autonomy_status_lines(user_id: str, data_dir: str = "data") -> list:
+    """Build the /autonomy report: enabled loops + scheduled cron jobs / open goals.
+
+    Legacy plain-line shape, kept byte-compatible for existing callers/tests (see
+    ``tests/unit/cli/ui/test_commands_autonomy.py``) — ``_h_autonomy`` renders its
+    own candy-grammar view from ``_autonomy_snapshot`` instead of reusing these
+    lines, so this function's return format is free to stay untouched.
+    """
+    snap = _autonomy_snapshot(user_id, data_dir)
+
+    lines = [f"local mode (POLYROB_LOCAL): {'on' if snap['local_mode'] else 'off'}"]
+    lines.append("loops: " + ", ".join(f"{n}={'on' if v else 'off'}" for n, v in snap["flags"]))
+
+    if snap["cron_error"] is not None:
+        lines.append(f"cron jobs: (unavailable: {snap['cron_error']})")
+    else:
+        jobs = snap["cron_jobs"]
+        lines.append(f"cron jobs: {len(jobs)}")
+        for j in jobs[:10]:
+            when = j.next_run_at.isoformat() if j.next_run_at else "-"
+            lines.append(f"  - {j.id} [{j.status}] {j.schedule_spec} -> {when}: {j.task[:48]}")
+
+    if snap["goals_error"] is not None:
+        lines.append(f"goals (open): (unavailable: {snap['goals_error']})")
+    else:
+        lines.append(f"goals (open): {len(snap['open_goals'])}")
 
     return lines
 
 
 def _h_autonomy(ctx: CommandContext) -> None:
     """Show autonomy loop state + scheduled cron jobs / open goals (read-only)."""
+    from cli.ui import candy
+
     data_dir = "data"
     try:
         cfg = getattr(ctx.container, "config", None)
-        data_dir = getattr(cfg, "data_dir", "data") or "data"
+        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
     except Exception:
         pass
-    ctx.emit("\n".join(autonomy_status_lines(ctx.user_id or "local", data_dir)), title="autonomy")
+
+    snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
+
+    rows = [("local mode", "on" if snap["local_mode"] else "off")]
+    rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
+    lines = [candy.kv_lines(rows), ""]
+
+    if snap["cron_error"] is not None:
+        lines.append(f"{candy.GUTTER}(unavailable: {snap['cron_error']})")
+    else:
+        jobs = snap["cron_jobs"]
+        lines.append(candy.section(f"cron jobs ({len(jobs)})"))
+        for j in jobs[:10]:
+            when = j.next_run_at.isoformat() if j.next_run_at else "-"
+            preview = (j.task or "")[:48]
+            lines.append(candy.status_line(j.status, f"{j.id} {j.schedule_spec} -> {when}: {preview}"))
+
+    lines.append("")
+    if snap["goals_error"] is not None:
+        lines.append(f"{candy.GUTTER}(unavailable: {snap['goals_error']})")
+    else:
+        open_goals = snap["open_goals"]
+        lines.append(candy.section(f"goals (open: {len(open_goals)})"))
+
+    ctx.emit("\n".join(lines), title="autonomy")
 
 
 def _h_verbose(ctx: CommandContext) -> None:
@@ -1060,7 +1145,8 @@ def _h_steps(ctx: CommandContext) -> None:
         return
     count = renderer.render_trace()
     if not count:
-        ctx.emit("No turn recorded yet — run a turn first, then /steps.")
+        from cli.ui import candy
+        ctx.emit(candy.empty("turn recorded", "run a turn first, then /steps"), title="steps")
 
 
 def _h_resume(ctx: CommandContext) -> None:
@@ -1078,7 +1164,8 @@ def _h_resume(ctx: CommandContext) -> None:
 
     feed_dir = _resolve_feed_dir(ctx, target)
     if feed_dir is None or not feed_dir.is_dir():
-        ctx.emit(f"No feed dir found for session {target}.")
+        from cli.ui import candy
+        ctx.emit(candy.empty(f"feed dir for session {target}", yet=False), title="resume")
         return
 
     files = sorted(feed_dir.glob("[0-9]*_*.json"))
@@ -1168,6 +1255,8 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
 
 def _h_goals(ctx: CommandContext) -> None:
     """Show goals board summary."""
+    from cli.ui import candy
+
     try:
         from agents.task.goals.board import GoalBoard
         from core.runtime_config import get_data_root
@@ -1177,7 +1266,10 @@ def _h_goals(ctx: CommandContext) -> None:
         db_path = data_root / "goals.db"
 
         if not db_path.exists():
-            ctx.emit("Goals board not initialized (GOALS_ENABLED=off or no goals created)")
+            ctx.emit(
+                candy.empty("goals", "GOALS_ENABLED=off or none created", yet=False),
+                title="goals",
+            )
             return
 
         board = GoalBoard(str(db_path))
@@ -1187,24 +1279,23 @@ def _h_goals(ctx: CommandContext) -> None:
         goals = board.list(user_id=ctx.user_id or "local", limit=10)
 
         if not goals:
-            ctx.emit("No goals found")
+            ctx.emit(candy.empty("goals", "/autonomy shows loop state"), title="goals")
             return
 
-        lines = [f"Goals board ({len(goals)} shown):"]
-        for g in goals[:10]:
-            status_color = {"ready": "🟢", "running": "🟡", "done": "✅", "blocked": "🔴", "cancelled": "⬜"}.get(g.status, "⚪")
-            lines.append(f"  {status_color} {g.id[:8]}: {g.title[:40]}")
+        lines = [candy.status_line(g.status, f"{g.id[:8]}: {g.title[:40]}") for g in goals[:10]]
 
         if len(goals) >= 10:
-            lines.append(f"  ... (run `polyrob goals list` for all)")
+            lines.append(f"{candy.GUTTER}… (run `polyrob goals list` for all)")
 
-        ctx.emit("\n".join(lines))
+        ctx.emit("\n".join(lines), title="goals")
     except Exception as e:
-        ctx.emit(f"Goals: {e}")
+        ctx.emit(f"Goals: {e}", title="goals")
 
 
 def _h_subagents(ctx: CommandContext) -> None:
     """Show delegation capability info + live background delegations for this session."""
+    from cli.ui import candy
+
     try:
         from agents.task.constants import TimeoutConfig
 
@@ -1212,11 +1303,11 @@ def _h_subagents(ctx: CommandContext) -> None:
         max_concurrent = TimeoutConfig.get_max_concurrent_sub_agents()
         max_async = TimeoutConfig.get_max_async_sub_agents()
 
-        lines = [
-            f"Delegation: {'enabled' if enabled else 'disabled'}",
-            f"Max concurrent: {max_concurrent}",
-            f"Max background: {max_async}",
-        ]
+        lines = [candy.kv_lines([
+            ("delegation", "enabled" if enabled else "disabled"),
+            ("max concurrent", max_concurrent),
+            ("max background", max_async),
+        ])]
 
         # Live background (async) delegations tracked by this session's orchestrator —
         # the read-only counterpart to the delegate_task(background=true) tool, so
@@ -1231,14 +1322,16 @@ def _h_subagents(ctx: CommandContext) -> None:
 
         lines.append("")
         if records:
-            lines.append(f"Background delegations ({len(records)}):")
-            status_icon = {"running": "🟡", "completed": "✅", "error": "🔴", "timeout": "⏱️"}
+            lines.append(candy.section(f"background delegations ({len(records)})"))
             for r in records[:10]:
-                icon = status_icon.get(getattr(r, "status", ""), "⚪")
+                status = getattr(r, "status", "")
                 goal = _truncate(getattr(r, "goal", "") or "", 48)
-                lines.append(f"  {icon} {str(getattr(r, 'delegation_id', '?'))[:8]}: {goal}")
+                did = str(getattr(r, "delegation_id", "?"))[:8]
+                lines.append(candy.status_line(status, f"{did}: {goal}"))
         else:
-            lines.append("No active background delegations.")
+            lines.append(candy.empty(
+                "background delegations", "delegate_task(background=true) starts one"
+            ))
 
         ctx.emit("\n".join(lines), title="subagents")
     except Exception as e:
@@ -1248,13 +1341,14 @@ def _h_subagents(ctx: CommandContext) -> None:
 def _h_todos(ctx: CommandContext) -> None:
     """Show todos from the agent's session todo file."""
     import re
+    from cli.ui import candy
     from agents.task.path import pm
 
     # Resolve the SAME file the task tool writes (session-scoped), not ./todo.md in
     # CWD — the agent never writes there, so the old path always showed "no todos".
     todo_file = pm().get_todo_file_path(ctx.session_id, ctx.user_id)
     if not todo_file.exists():
-        ctx.emit("No todos yet (the agent writes them via the task tool)")
+        ctx.emit(candy.empty("todos"), title="todos")
         return
 
     content = todo_file.read_text()
@@ -1266,20 +1360,20 @@ def _h_todos(ctx: CommandContext) -> None:
             items.append((status.lower() == "x", text.strip()))
 
     if not items:
-        ctx.emit("No todos in todo.md")
+        ctx.emit(candy.empty("todos"), title="todos")
         return
 
     completed = sum(1 for done, _ in items if done)
     total = len(items)
-    lines = [f"Todos: {completed}/{total} completed"]
+    lines = [f"{completed}/{total} completed"]
     for completed_flag, text in items[:10]:
-        marker = "✓" if completed_flag else "○"
-        lines.append(f"  {marker} {text[:50]}")
+        state_word = "done" if completed_flag else "open"
+        lines.append(candy.status_line(state_word, text[:50]))
 
     if len(items) > 10:
-        lines.append(f"  ... ({len(items) - 10} more)")
+        lines.append(f"{candy.GUTTER}… ({len(items) - 10} more)")
 
-    ctx.emit("\n".join(lines))
+    ctx.emit("\n".join(lines), title="todos")
 
 
 def _h_logs(ctx: CommandContext) -> None:
@@ -1291,12 +1385,14 @@ def _h_logs(ctx: CommandContext) -> None:
     log_dir = pm().get_logs_dir(ctx.session_id, ctx.user_id)
 
     if not log_dir or not log_dir.exists():
-        ctx.emit(f"No logs found for session {ctx.session_id[:12]}")
+        from cli.ui import candy
+        ctx.emit(candy.empty(f"logs for session {ctx.session_id[:12]}", yet=False), title="logs")
         return
 
     log_files = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True)[:3]
     if not log_files:
-        ctx.emit(f"No log files in {log_dir}")
+        from cli.ui import candy
+        ctx.emit(candy.empty(f"log files in {log_dir}", yet=False), title="logs")
         return
 
     lines = [f"Recent logs (last 3 files):"]
@@ -1426,35 +1522,56 @@ def _h_telemetry(ctx: CommandContext) -> None:
     scope = f"last {window}" if secs else "all time"
     counts = agg.get("counts_by_kind", {})
 
+    from cli.ui import candy
+    from cli.ui.theme import style
+
     console = ctx.console()
     if console is not None:
+        from rich import box
         from rich.table import Table
-        t = Table(title=f"telemetry — {scope}", title_justify="left", show_header=True)
-        t.add_column("event kind", style="bold")
+
+        t = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+        t.add_column("event kind", style=style("value"))
         t.add_column("count", justify="right")
         for kind, n in sorted(counts.items(), key=lambda kv: -kv[1]):
             t.add_row(kind, str(n))
-        t.add_row("[dim]total[/dim]", f"[dim]{agg.get('total_events', 0)}[/dim]")
-        t.add_row("[green]wallet spend[/green]", f"[green]${agg.get('total_spend_usd', 0.0):.4f}[/green]")
-        console.print(t)
+        t.add_row("total", str(agg.get("total_events", 0)))
+        t.add_row("wallet spend", f"${agg.get('wallet_spend_usd', 0.0):.4f}")
+        _print_scrubbed(console, f"telemetry — {scope}")
+        _print_scrubbed(console, t)
         if recent:
-            rt = Table(title="recent events", title_justify="left", show_header=True)
-            rt.add_column("kind"); rt.add_column("outcome/detail"); rt.add_column("session", style="dim")
+            rt = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
+            rt.add_column("kind")
+            rt.add_column("outcome/detail")
+            rt.add_column("session", style=style("label"))
             for r in recent:
                 a = r.get("attrs", {})
                 # memory_* events carry a scrubbed preview instead of an outcome (T4-02)
                 detail = (a.get("outcome") or a.get("action") or a.get("reason")
                           or a.get("preview") or "")
                 rt.add_row(r["kind"], str(detail), (r.get("session_id") or "")[:12])
-            console.print(rt)
+            _print_scrubbed(console, "recent events")
+            _print_scrubbed(console, rt)
         return
 
     # Plain fallback.
-    lines = [f"telemetry — {scope}:"]
+    lines = [f"telemetry — {scope}:", "", candy.section("totals")]
     for kind, n in sorted(counts.items(), key=lambda kv: -kv[1]):
         lines.append(f"  {kind}: {n}")
     lines.append(f"  total events: {agg.get('total_events', 0)}")
-    lines.append(f"  wallet spend: ${agg.get('total_spend_usd', 0.0):.4f}")
+    lines.append(f"  wallet spend: ${agg.get('wallet_spend_usd', 0.0):.4f}")
+    if recent:
+        recent_rows = []
+        for r in recent:
+            a = r.get("attrs", {})
+            detail = (a.get("outcome") or a.get("action") or a.get("reason")
+                      or a.get("preview") or "")
+            recent_rows.append([r["kind"], str(detail), (r.get("session_id") or "")[:12]])
+        lines += [
+            "",
+            candy.section("recent events"),
+            candy.table_lines(["kind", "outcome/detail", "session"], recent_rows),
+        ]
     ctx.emit("\n".join(lines), title="telemetry")
 
 
@@ -1468,10 +1585,13 @@ def _h_pending(ctx: CommandContext) -> None:
     Usage:
       /pending                       — list pending proposals (skills + identity notes)
       /pending show <kind> <id>      — full-body review of one proposal (T3-09)
-      /pending approve <kind> <id>   — promote to active (kind: skill | self_context)
+      /pending approve <kind> <id>   — promote to active
+                                        (kind: skill | self_context | owner_doc |
+                                         contract | pref_change)
       /pending reject <kind> <id>    — reject (archive, recoverable)
     """
     import core.instance as _ci
+    from cli.ui import candy
     from core import self_evolution
 
     uid = (ctx.user_id or "").strip() or "local"
@@ -1483,38 +1603,59 @@ def _h_pending(ctx: CommandContext) -> None:
         return
 
     cfg = getattr(ctx.container, "config", None) if ctx.container else None
-    home_dir = getattr(cfg, "data_dir", "data") or "data"
+    home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
     instance_id = _ci.resolve_instance_id()
 
     args = list(ctx.args or [])
     if args and args[0].lower() in ("approve", "promote", "reject", "show"):
         if len(args) < 3:
-            ctx.emit("usage: /pending show|approve|reject <kind> <id>   (kind: skill | self_context)")
+            ctx.emit("usage: /pending show|approve|reject <kind> <id>   "
+                     "(kind: skill | self_context | owner_doc | contract | pref_change)")
             return
         verb, kind, item_id = args[0].lower(), args[1], " ".join(args[2:])
         if verb == "show":
             ok, body = self_evolution.show(kind, item_id, user_id=uid,
                                            home_dir=home_dir, instance_id=instance_id)
-            ctx.emit(body, title=f"pending {kind}:{item_id}" if ok else "pending",
-                     style="" if ok else "yellow")
+            ctx.emit(body, title=f"pending {kind}:{item_id}" if ok else "pending")
             return
         fn = self_evolution.reject if verb == "reject" else self_evolution.promote
         ok, msg = fn(kind, item_id, user_id=uid, home_dir=home_dir, instance_id=instance_id)
-        ctx.emit(msg, title="pending", style="" if ok else "yellow")
+        ctx.emit(msg, title="pending")
         return
 
     items = self_evolution.list_pending(uid, home_dir=home_dir, instance_id=instance_id)
     if not items:
-        ctx.emit("no pending proposals", title="pending")
+        ctx.emit(candy.empty("pending proposals", "/approve <id> reviews one"), title="pending")
         return
     lines = [f"{len(items)} pending proposal(s):"]
     for it in items:
-        label = "identity" if it["kind"] == "self_context" else "skill"
-        lines.append(f"  [{label}] {it['kind']}:{it['id']}  ({it['chars']} chars)")
-        lines.append(f"      {it['preview']}")
+        # pending_kind_label is landing from a parallel wave; fall back to the
+        # raw kind so /pending never breaks on a tree without it.
+        label = getattr(self_evolution, "pending_kind_label", lambda k: k)(it["kind"])
+        lines.append(candy.status_line(
+            "pending", f"[{label}] {it['kind']}:{it['id']}  ({it['chars']} chars)"
+        ))
+        lines.append(f"{candy.GUTTER}  {it['preview']}")
     lines.append("")
     lines.append("approve: /pending approve <kind> <id>    reject: /pending reject <kind> <id>")
     ctx.emit("\n".join(lines), title="pending")
+
+
+def _h_context(ctx: CommandContext) -> None:
+    """Context-assembly transparency (owner-UX P1 T9).
+
+    One line per populated foundation slot (system prompt, runtime identity,
+    self_context, project_context, skills, history) with its token count and
+    % of context, plus a total + context-limit footer. Reads the LIVE
+    session's message manager via ``ctx.message_manager`` (same seam as
+    ``/clear``/``/compact``); the rendering itself is the pure
+    ``render_context_breakdown`` in ``h_context.py`` — no live session yet
+    degrades to a friendly line rather than an error.
+    """
+    from cli.ui.commands.h_context import render_context_breakdown
+
+    out = render_context_breakdown(ctx.message_manager)
+    ctx.emit(out, title="context")
 
 
 # ---------------------------------------------------------------------------
@@ -1538,8 +1679,14 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_journey import h_journey as _h_journey
     reg.register(
         Command("journey", _h_journey,
-                "Timeline: what I did, learned, earned, changed (arg: window e.g. 24h|7d)",
-                usage="[window]")
+                "Timeline: what I did, learned, changed, and my income (arg: window e.g. 24h|7d)",
+                usage="[window]", aliases=("recap",))
+    )
+    from cli.ui.commands.h_finance import h_finance as _h_finance
+    reg.register(
+        Command("finance", _h_finance,
+                "Balance sheet: income, spend, pending, net + runtime cost (arg: days)",
+                usage="[days]")
     )
     from cli.ui.commands.h_learn import h_learn as _h_learn
     reg.register(
@@ -1551,14 +1698,14 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "toolset",
         _h_toolset,
-        "List named toolsets or resolve a specific toolset",
+        "List named toolsets, or set the default toolset for new sessions",
         usage="[name]",
     ))
     reg.register(Command(
         "persona",
         _h_persona,
-        "List available personas or show details for a named persona",
-        usage="[name]",
+        "List available personas, or set the default persona for new sessions",
+        usage="[name-or-text]",
     ))
     reg.register(Command("sessions", _h_sessions, "List all known sessions"))
     reg.register(
@@ -1573,7 +1720,7 @@ def build_default_registry() -> CommandRegistry:
     )
     reg.register(Command("history", _h_history, "Show this conversation's turns"))
     reg.register(Command("clear", _h_clear, "Clear history (keep the system prompt)"))
-    reg.register(Command("compact", _h_compact, "Compact history via the LLM (async)", aliases=("compress",)))
+    reg.register(Command("compact", _h_compact, "Compact conversation history (runs in background)", aliases=("compress",)))
     reg.register(
         Command(
             "model",
@@ -1624,6 +1771,7 @@ def build_default_registry() -> CommandRegistry:
     from cli.ui.commands.h_cron import h_cron
     from cli.ui.commands.h_mcp import h_mcp
     from cli.ui.commands.h_kb import h_kb
+    from cli.ui.commands.h_pfp import h_pfp
 
     reg.register(Command(
         "skills", h_skills,
@@ -1642,9 +1790,94 @@ def build_default_registry() -> CommandRegistry:
         usage="[list [collection] | search <query>]",
     ))
     reg.register(Command(
+        "pfp", h_pfp,
+        "Show/generate the agent avatar (Mindprint; generation is optional)",
+        usage="[status|generate [force]|show]", aliases=("avatar",),
+    ))
+    reg.register(Command(
         "pending", _h_pending,
         "Review the agent's pending self-evolution proposals (show/approve/reject)",
         usage="[show|approve|reject <kind> <id>]",
+    ))
+
+    from cli.ui.commands.h_config import ConfigCtx, cmd_config
+
+    async def _h_config(ctx: CommandContext) -> None:
+        # Same home_dir resolution as /self and /pending: the container
+        # config's data_dir (fallback "data") — the tree preferences.toml
+        # and other identity-tier state actually lives under.
+        cfg = getattr(ctx.container, "config", None) if ctx.container else None
+        home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        config_ctx = ConfigCtx(user_id=ctx.user_id or "local", home_dir=home_dir)
+        args = list(ctx.args or [])
+        # 018 P2b: bare /config in the persistent app opens the settings picker
+        # (the SAME frozen ReplPicker /model uses, fed setting rows). Selection
+        # prefills a ready-to-send `/config set KEY …`. Any hiccup — no app, no
+        # picker, cancel — falls back to the classic list panel.
+        if not args:
+            picked = await _config_pick_interactive(config_ctx)
+            if picked == "handled":
+                return
+        out = cmd_config(config_ctx, args)
+        ctx.emit(out, title="config")
+
+    async def _config_pick_interactive(config_ctx) -> str:
+        """Open the settings picker; returns 'handled' iff a row was picked and
+        the input buffer was seeded (nothing to print). Fail-open otherwise."""
+        try:
+            from prompt_toolkit.application.current import get_app_or_none
+
+            app = get_app_or_none()
+            picker = getattr(app, "_picker", None) if app is not None else None
+            if picker is None or not getattr(app, "is_running", False):
+                return "fallback"
+            from cli.ui.config_picker import build_setting_choices, prefill_for
+
+            choices = build_setting_choices(config_ctx.user_id, config_ctx.home_dir)
+            if not choices:
+                return "fallback"
+            sel = await picker.open(
+                choices, 0,
+                ["Enter seeds a /config set command · ⛨ guarded · ≈ advisory · ↻ restart"])
+            if not sel:
+                return "fallback"
+            _group, key = sel
+            from core import config_service
+            info = config_service.describe(key, user_id=config_ctx.user_id,
+                                           home_dir=config_ctx.home_dir)
+            buf = picker.input_buffer
+            buf.text = prefill_for(info)
+            buf.cursor_position = len(buf.text)
+            return "handled"
+        except Exception:
+            return "fallback"
+
+    reg.register(Command(
+        "config", _h_config,
+        "View/change preferences and flags (list|get|set|explain|search|check)",
+        usage="list [group] | get KEY | set KEY VALUE [--confirm] | "
+              "explain KEY | search QUERY | check",
+    ))
+
+    from cli.ui.commands.h_approve import ApproveCtx, cmd_approve
+
+    def _h_approve(ctx: CommandContext) -> None:
+        # Same home_dir resolution as /config/self/pending: the container
+        # config's data_dir (fallback "data").
+        cfg = getattr(ctx.container, "config", None) if ctx.container else None
+        home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        approve_ctx = ApproveCtx(user_id=ctx.user_id or "local", home_dir=home_dir)
+        out = cmd_approve(approve_ctx, list(ctx.args or []))
+        ctx.emit(out, title="approve")
+
+    reg.register(Command(
+        "approve", _h_approve,
+        "Manage approval gates (list|add|remove)",
+        usage="list | add <action> | remove <action>",
+    ))
+    reg.register(Command(
+        "context", _h_context,
+        "Context-assembly breakdown: per-slot token counts + % of context",
     ))
     return reg
 

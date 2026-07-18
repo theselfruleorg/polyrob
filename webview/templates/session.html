@@ -18,6 +18,8 @@
     // Session ownership and authentication status
     window.isSessionOwner = {{ 'true' if is_owner else 'false' }};
     window.isUserAuthenticated = {{ 'true' if is_authenticated else 'false' }};
+    // 019 P3: the run-state banner hides mutating controls on a read-only console
+    window.sessionReadOnly = {{ 'true' if read_only else 'false' }};
     
     console.log('[Session] Ownership status:', {
         isOwner: window.isSessionOwner,
@@ -38,6 +40,29 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-typescript.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-bash.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.29.0/components/prism-markdown.min.js"></script>
+<!-- 019 P3: live run-state banner styles -->
+<style>
+    .session-state-banner {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 14px; margin: 0 0 6px 0; border-radius: 6px;
+        font-size: 0.92em; border: 1px solid transparent;
+    }
+    .session-state-banner.hidden { display: none; }
+    .session-state-banner.banner-approval {
+        background: rgba(255, 170, 0, 0.12); border-color: rgba(255, 170, 0, 0.5);
+    }
+    .session-state-banner.banner-retry,
+    .session-state-banner.banner-compacting {
+        background: rgba(90, 150, 255, 0.10); border-color: rgba(90, 150, 255, 0.4);
+    }
+    .session-state-banner .banner-btn {
+        padding: 2px 10px; border-radius: 4px; cursor: pointer;
+        border: 1px solid rgba(255, 255, 255, 0.25); background: transparent;
+        color: inherit; font-size: 0.9em;
+    }
+    .session-state-banner .banner-btn:hover { background: rgba(255, 255, 255, 0.08); }
+    .session-state-banner .banner-link { font-size: 0.9em; opacity: 0.8; }
+</style>
 <!-- Marked.js for Markdown rendering in workspace -->
 <script src="https://cdn.jsdelivr.net/npm/marked@11.1.0/marked.min.js"></script>
 <!-- Papa Parse for CSV parsing in workspace -->
@@ -49,6 +74,8 @@
 {% block content %}
 <div class="session-container">
     <div class="main-panel">
+        <!-- 019 P3: live run-state banner (awaiting approval / retrying / compacting) -->
+        <div id="session-state-banner" class="session-state-banner hidden"></div>
         <!-- Tabs for main panel -->
         <div class="tabs-wrapper">
             <button id="sidebar-toggle-btn" class="btn-sidebar-toggle" title="Toggle sidebar">☰</button>

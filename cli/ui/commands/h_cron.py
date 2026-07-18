@@ -18,6 +18,7 @@ only defines the handler.
 
 from __future__ import annotations
 
+from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 
 
@@ -38,14 +39,14 @@ def h_cron(ctx: CommandContext) -> None:
 
         db_path = Path(get_data_root()) / "cron.db"
         if not db_path.exists():
-            ctx.emit("Cron not enabled (no cron jobs scheduled).", title="cron")
+            ctx.emit(candy.empty("cron jobs scheduled", "not enabled"), title="cron")
             return
 
         service = CronService(CronJobStore(str(db_path)))
         jobs = service.list_jobs(user_id=user_id)
 
         if not jobs:
-            ctx.emit("No cron jobs scheduled.", title="cron")
+            ctx.emit(candy.empty("cron jobs scheduled"), title="cron")
             return
 
         lines = [f"Cron jobs ({len(jobs)}):"]
@@ -53,12 +54,13 @@ def h_cron(ctx: CommandContext) -> None:
             when = job.next_run_at.isoformat() if job.next_run_at else "-"
             state = job.status if job.enabled else f"{job.status} (disabled)"
             task_preview = (job.task or "").replace("\n", " ")[:48]
-            lines.append(
-                f"  - {job.id[:8]} [{state}] {job.schedule_spec} -> {when}: {task_preview}"
-            )
+            lines.append(candy.status_line(
+                job.status,
+                f"{job.id[:8]} [{state}] {job.schedule_spec} -> {when}: {task_preview}",
+            ))
         if len(jobs) > 20:
-            lines.append(f"  ... (+{len(jobs) - 20} more)")
+            lines.append(f"{candy.GUTTER}… (+{len(jobs) - 20} more)")
 
         ctx.emit("\n".join(lines), title="cron")
     except Exception as e:  # fail-open: store may not exist / be locked yet
-        ctx.emit(f"Cron: (unavailable: {e})", title="cron")
+        ctx.emit(f"{candy.GUTTER}(unavailable: {e})", title="cron")

@@ -35,6 +35,13 @@ def _env(monkeypatch, tmp_path):
     c._refreeze_compute_posture_for_tests()
     clear_loopback_ports()
     yield
+    # Fixture teardown is LIFO, so this runs BEFORE monkeypatch reverts the env
+    # vars it set above — refreezing here first would just re-snapshot "1".
+    # Clear the var ourselves first so the refreeze actually restores posture 0,
+    # instead of leaking posture=1 into every later test in this pytest process
+    # (the order-dependent tests/unit/tools/ flake on
+    # test_child_goal_no_inheritable_parent_tools_falls_back).
+    monkeypatch.delenv("AGENT_COMPUTE_POSTURE", raising=False)
     c._refreeze_compute_posture_for_tests()
     clear_loopback_ports()
 

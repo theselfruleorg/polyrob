@@ -65,6 +65,20 @@ class DeleteFileParams(BaseModel):
     file_path: str = Field(..., description="Path to delete (relative to the workspace)")
 
 
+class SnapshotsParams(BaseModel):
+    file_path: Optional[str] = Field(
+        None,
+        description="Limit to pre-edit snapshots of this file (relative to the workspace); omit for the whole shadow history",
+    )
+
+
+class RestoreParams(BaseModel):
+    file_path: str = Field(..., description="File to restore (relative to the workspace)")
+    snapshot_id: Optional[str] = Field(
+        None, description="Snapshot id (short sha, from `snapshots`) to restore; omit for the latest snapshot of this file"
+    )
+
+
 class CodingTool(BaseTool):
     """Edit/search/test the workspace. Gated by CODING_TOOLS_ENABLED."""
 
@@ -101,13 +115,24 @@ class CodingTool(BaseTool):
         from core.path_safety import is_within_root
         if not is_within_root(target, root):
             raise CodingError(f"path escapes the workspace root: {file_path}")
+        # .git guard (P1 finalization, parity with self_env._confine): a patched
+        # .git/config (fsmonitor/core.hooksPath) or .git/hooks/* is an RCE
+        # persistence vector that fires on the next git operation. The shadow-
+        # snapshot dir is named `git` (no dot), so this never blocks snapshots.
+        if ".git" in Path(target).parts:
+            raise CodingError(f"refusing to touch the .git directory: {file_path}")
         # Secret-content guard: refuse credential-shaped targets (.env*, *.pem,
         # config/.env.*, …) even when in-root. Under POLYROB_LOCAL the workspace is
         # the project cwd, so confinement alone can't stop a coding action from
         # reading/rewriting a config/.env.production that lives in the project.
-        from agents.task.agent.core.secret_guard import is_credential_file
+        from core.security.secret_guard import is_credential_file, is_protected_config_path
         if is_credential_file(Path(target)):
             raise CodingError(f"refusing to touch a credential/secret file: {file_path}")
+        # Protected identity files (owner-UX P1 T6): preferences.toml/contract.md
+        # under an identity/ segment are only writable via the gated
+        # action/CLI/webview seams, never by the coding tool.
+        if is_protected_config_path(Path(target)):
+            raise CodingError(f"refusing to touch a protected config/identity file: {file_path}")
         return target
 
     # --- code_exec backend resolution (P1-B F7b) ------------------------------
@@ -169,6 +194,91 @@ class CodingTool(BaseTool):
         from tools.controller.types import ActionResult
         return ActionResult(error=msg)
 
+    async def _with_diagnostics(self, msg: str, target: str, root: str) -> str:
+        """Best-effort: append an LSP <diagnostics> block to a successful edit
+        (I-2 / H1, dedup decision D2). Gated by CODING_LSP_ENABLED (default
+        OFF) — checked FIRST so a disabled flag spawns zero subprocesses.
+
+        Individually fail-open: any failure here (flag resolution, checker
+        invocation, parsing) is swallowed and the original ``msg`` returned
+        unchanged — a diagnostics crash must NEVER turn a successful edit into
+        an error result.
+        """
+        try:
+            from core.config_policy import AutonomyConfig
+            if not AutonomyConfig.coding_lsp_enabled():
+                return msg
+            from tools.coding.lsp import diagnose_file
+            # P1 finalization: checker subprocess offloaded off the event loop.
+            diagnostics = await asyncio.to_thread(diagnose_file, target, root)
+            if diagnostics:
+                return f"{msg}\n<diagnostics>\n{diagnostics}\n</diagnostics>"
+        except Exception as e:
+            getattr(self, "logger", logging.getLogger(__name__)).warning(
+                f"coding lsp diagnostics skipped: {e}"
+            )
+        return msg
+
+    def _snapshot_dir(self, execution_context=None) -> Optional[str]:
+        """Resolve the shadow-git snapshot dir for this call, or ``None`` when
+        snapshotting isn't eligible right now (I-4 / H2, dedup decision D3) —
+        the caller treats ``None`` as "skip silently" (fail-open).
+
+        Gated by, in order (cheapest-first so a disabled flag does zero work):
+        ``CODING_SNAPSHOT_ENABLED`` AND ``compute_posture_allows(ctx, 1)`` AND a
+        resolvable ``session_id``.
+
+        Placement: ``pm().get_subdir(session_id, 'coding_snapshots', user_id)``
+        resolves through the session DATA dir. Under default POLYROB_LOCAL the
+        data home is ``<cwd>/.polyrob/...`` — i.e. physically UNDER the
+        project-root workspace, consistent with all other ``.polyrob/`` session
+        state. The safety basis is therefore NOT physical separation but:
+        (a) the shadow git dir is named ``git``, not ``.git``, so git repo
+        auto-discovery in the workspace never picks it up; (b) ``.polyrob/`` is
+        auto-gitignored (``core/bootstrap.py``, default-on), so the developer's
+        own repo never tracks it; (c) every shadow-git call passes an explicit
+        ``--git-dir`` (``tools/coding/snapshot.py``), so the workspace's own
+        ``.git`` is never touched; (d) only the single touched file is ever
+        staged (never ``add -A``), so the shadow repo never ingests the tree.
+        """
+        try:
+            from core.config_policy import AutonomyConfig, compute_posture_allows
+            if not AutonomyConfig.coding_snapshot_enabled():
+                return None
+            if not compute_posture_allows(execution_context, 1):
+                return None
+            sid = getattr(execution_context, "session_id", None) or getattr(self, "session_id", None)
+            if not sid:
+                return None
+            uid = getattr(execution_context, "user_id", None)
+            from agents.task.path import pm
+            return str(pm().get_subdir(sid, "coding_snapshots", uid))
+        except Exception:
+            return None
+
+    async def _snapshot_before_edit(self, target: str, root: str, execution_context=None) -> None:
+        """Best-effort pre-mutation snapshot (I-4 / H2): commit the single
+        about-to-be-mutated file into the shadow git repo (see
+        ``_snapshot_dir`` for placement + safety basis) BEFORE the
+        write/delete/move happens.
+
+        Fail-open in every dimension — disabled flag, posture-denied, no
+        session, git absent, timeout, whatever: this NEVER blocks or fails the
+        caller's edit; failures are swallowed and logged at debug only.
+        """
+        try:
+            snap_dir = self._snapshot_dir(execution_context)
+            if not snap_dir:
+                return
+            rel_path = os.path.relpath(target, root)
+            from tools.coding.snapshot import snapshot_file
+            # P1 finalization: git subprocess offloaded off the event loop.
+            await asyncio.to_thread(snapshot_file, snap_dir, root, rel_path)
+        except Exception as e:
+            getattr(self, "logger", logging.getLogger(__name__)).debug(
+                f"coding snapshot skipped: {e}"
+            )
+
     # --- actions -------------------------------------------------------------
 
     @BaseTool.action(
@@ -189,10 +299,12 @@ class CodingTool(BaseTool):
                 )
             except EditError as e:
                 return self._err(str(e))
+            await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
             n = content.count(params.old_string) if params.replace_all else 1
-            return self._ok(f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''}).")
+            msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
+            return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -215,9 +327,11 @@ class CodingTool(BaseTool):
                 updated = apply_patch(content, params.patch)
             except EditError as e:
                 return self._err(str(e))
+            await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
-            return self._ok(f"Patched {params.file_path}.")
+            msg = f"Patched {params.file_path}."
+            return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -232,7 +346,12 @@ class CodingTool(BaseTool):
         try:
             root = self._resolve_root(execution_context)
             search_root = self._confine(params.path, root) if params.path else root
-            hits = search_files(
+            # P1 finalization: run the (agent-supplied, unbounded) regex search in a
+            # thread so a catastrophic-backtracking pattern (ReDoS) or a large tree
+            # can't freeze the event loop — the loop stays responsive while the
+            # worker thread does the CPU/IO work.
+            hits = await asyncio.to_thread(
+                search_files,
                 search_root, params.pattern, glob=params.glob, output_mode=params.output_mode,
             )
             if not hits:
@@ -266,7 +385,7 @@ class CodingTool(BaseTool):
             # WS-1: an entitled session runs importable-mode (PYTHONPATH=/install)
             # so packages installed via run_code(packages=[...]) are visible here.
             try:
-                from agents.task.constants import compute_posture_allows
+                from core.config_policy import compute_posture_allows
                 dev_mode = bool(compute_posture_allows(execution_context, 1))
             except Exception:
                 dev_mode = False
@@ -305,10 +424,15 @@ class CodingTool(BaseTool):
                 return self._err(f"path is a directory: {params.file_path}")
             if os.path.exists(target) and not params.overwrite:
                 return self._err(f"file already exists: {params.file_path} (set overwrite=true)")
+            # Only an overwrite of an EXISTING file is a mutation worth a snapshot —
+            # a not-yet-existing file has nothing to restore back to (no-op skip).
+            if os.path.exists(target):
+                await self._snapshot_before_edit(target, root, execution_context)
             os.makedirs(os.path.dirname(target) or root, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(params.content or "")
-            return self._ok(f"Created {params.file_path} ({len(params.content or '')} bytes).")
+            msg = f"Created {params.file_path} ({len(params.content or '')} bytes)."
+            return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -325,6 +449,11 @@ class CodingTool(BaseTool):
                 return self._err(f"source not found: {params.src_path}")
             if os.path.exists(dest) and not params.overwrite:
                 return self._err(f"destination exists: {params.dest_path} (set overwrite=true)")
+            # src is always mutated (moved away from this path); dest only when an
+            # existing file's content is about to be overwritten by the move.
+            await self._snapshot_before_edit(src, root, execution_context)
+            if os.path.exists(dest):
+                await self._snapshot_before_edit(dest, root, execution_context)
             os.makedirs(os.path.dirname(dest) or root, exist_ok=True)
             import shutil as _shutil
             _shutil.move(src, dest)
@@ -344,6 +473,7 @@ class CodingTool(BaseTool):
                 return self._err(f"file not found: {params.file_path}")
             if os.path.isdir(target):
                 return self._err(f"refusing to delete a directory: {params.file_path}")
+            await self._snapshot_before_edit(target, root, execution_context)
             os.remove(target)
             return self._ok(f"Deleted {params.file_path}.")
         except CodingError as e:
@@ -351,3 +481,62 @@ class CodingTool(BaseTool):
         except Exception as e:
             getattr(self, "logger", logging.getLogger(__name__)).error(f"delete_file failed: {e}")
             return self._err(f"delete_file failed: {e}")
+
+    _SNAPSHOT_DISABLED_MSG = (
+        "snapshots are disabled (needs CODING_SNAPSHOT_ENABLED=true, "
+        "AGENT_COMPUTE_POSTURE>=1, and an owner session)"
+    )
+
+    @BaseTool.action(
+        "List pre-edit shadow-git snapshots (I-4/H2), optionally for one file; "
+        "requires CODING_SNAPSHOT_ENABLED",
+        param_model=SnapshotsParams,
+    )
+    async def snapshots(self, params: SnapshotsParams, execution_context=None):
+        try:
+            snap_dir = self._snapshot_dir(execution_context)
+            if not snap_dir:
+                return self._err(self._SNAPSHOT_DISABLED_MSG)
+            root = self._resolve_root(execution_context)
+            rel = None
+            if params.file_path:
+                try:
+                    target = self._confine(params.file_path, root)
+                except CodingError as e:
+                    return self._err(str(e))
+                rel = os.path.relpath(target, root)
+            from tools.coding.snapshot import list_snapshots
+            entries = list_snapshots(snap_dir, root, rel)
+            if not entries:
+                return self._ok("(no snapshots)")
+            lines = [f"{e['id']}  {e['date']}  {e['subject']}" for e in entries]
+            return self._ok("\n".join(lines))
+        except Exception as e:
+            getattr(self, "logger", logging.getLogger(__name__)).error(f"snapshots failed: {e}")
+            return self._err(f"snapshots failed: {e}")
+
+    @BaseTool.action(
+        "Restore a file to a prior pre-edit snapshot (I-4/H2; defaults to the "
+        "latest snapshot of that file); requires CODING_SNAPSHOT_ENABLED",
+        param_model=RestoreParams,
+    )
+    async def restore(self, params: RestoreParams, execution_context=None):
+        try:
+            snap_dir = self._snapshot_dir(execution_context)
+            if not snap_dir:
+                return self._err(self._SNAPSHOT_DISABLED_MSG)
+            root = self._resolve_root(execution_context)
+            try:
+                target = self._confine(params.file_path, root)
+            except CodingError as e:
+                return self._err(str(e))
+            rel = os.path.relpath(target, root)
+            from tools.coding.snapshot import restore_file
+            ok = restore_file(snap_dir, root, rel, params.snapshot_id)
+            if not ok:
+                return self._err(f"no snapshot available to restore {params.file_path}")
+            which = f" (snapshot {params.snapshot_id})" if params.snapshot_id else ""
+            return self._ok(f"Restored {params.file_path}{which}.")
+        except Exception as e:
+            getattr(self, "logger", logging.getLogger(__name__)).error(f"restore failed: {e}")
+            return self._err(f"restore failed: {e}")

@@ -137,3 +137,82 @@ async def test_fulfill_refused_for_non_owner(env):
 async def test_help_mentions_owner_verbs(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
     assert "/pending" in out and "/asks" in out
+
+
+# --- Task 9 / G-2: tool-approval asks ride the SAME /pending /approve /reject verbs,
+# namespaced tap-<id> so they never collide with a self-evolution proposal id. ---------
+
+def _seed_tool_approval(home, uid="gleb", tool_name="x402_request"):
+    from agents.task.goals.board import GoalBoard
+    import os
+    board = GoalBoard(os.path.join(str(home), "goals.db"))
+    ask = board.create_ask(
+        user_id=uid, what=f"Approve {tool_name}? [deadbeef01]",
+        why=f"tool={tool_name} params={{}}",
+        extra_payload={"ask_kind": "tool_approval", "tool_name": tool_name,
+                       "request_hash": "deadbeef01", "grant_consumed": False},
+        force=True,
+    )
+    return board, ask
+
+
+@pytest.mark.asyncio
+async def test_pending_lists_tool_approval_ask(env):
+    board, ask = _seed_tool_approval(env)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/pending", "/pending"))
+    assert "tool_approval" in out
+    assert f"tap-{ask.id}" in out
+
+
+@pytest.mark.asyncio
+async def test_approve_resolves_tool_approval_ask(env):
+    from agents.task.goals.board import ASK_FULFILLED
+    board, ask = _seed_tool_approval(env)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", f"/approve tap-{ask.id}"))
+    assert "approved" in out.lower()
+    assert board.get(ask.id).status == ASK_FULFILLED
+    assert board.get(ask.id).payload["decision"] == "approved"
+
+
+@pytest.mark.asyncio
+async def test_reject_resolves_tool_approval_ask(env):
+    from agents.task.goals.board import ASK_REJECTED
+    board, ask = _seed_tool_approval(env)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/reject", f"/reject tap-{ask.id}"))
+    assert "rejected" in out.lower()
+    assert board.get(ask.id).status == ASK_REJECTED
+
+
+@pytest.mark.asyncio
+async def test_approve_tool_approval_unknown_id(env):
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve tap-nope"))
+    assert "no open" in out.lower() or "failed" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_approve_still_dispatches_self_evolution_when_no_tap_prefix(env):
+    """Namespace dispatch must not break the existing self-evolution /approve —
+    a bare (non tap-) id still routes to core.self_evolution."""
+    _seed_pending_self(env)
+    _seed_tool_approval(env)  # a tool_approval ask also open at the same time
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve gleb"))
+    assert "promoted" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_pending_refused_for_non_owner_hides_tool_approval(env):
+    _seed_tool_approval(env)
+    out = await act_on_inbound(_Agent(str(env)),
+                               _cmd("/pending", "/pending", user="u_stranger"))
+    assert "owner" in out.lower()
+    assert "tool_approval" not in out
+
+
+@pytest.mark.asyncio
+async def test_asks_excludes_tool_approval_asks(env):
+    """A tool_approval ask has its OWN surface (/pending) — /asks (the generic
+    ask board) must not also list it under a second, un-namespaced id."""
+    board, ask = _seed_tool_approval(env)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/asks", "/asks"))
+    assert "no open asks" in out.lower()
+    assert ask.id not in out

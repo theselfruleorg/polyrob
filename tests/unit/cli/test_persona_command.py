@@ -3,8 +3,10 @@
 Covers:
 - _list_persona_names() returns persona names from a tmp characters dir.
 - /persona (no arg) lists available personas including the new use-case ones.
-- /persona <name> shows bio/guidance for a known persona.
-- /persona <unknown> shows guidance + marks as unknown.
+- /persona <name-or-text> persists a "session.persona" preference (owner-UX
+  P2 T6 — the arg branch is a pref-setting SWITCH, not a read-only detail
+  view; see tests/unit/cli/test_persona_toolset_switch.py for the full
+  template-key/literal-text/threat-scan-rejection contract).
 - Each new *.character.json is valid JSON and parses via Character.from_dict().
 - /persona is registered in the default REPL command registry.
 """
@@ -14,6 +16,7 @@ from __future__ import annotations
 import json
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from typing import List
 from unittest import mock
 
@@ -24,13 +27,24 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_ctx(args: List[str] | None = None, *, characters_dir: Path | None = None):
-    """Build a minimal CommandContext with a captured emit list."""
+def _make_ctx(args: List[str] | None = None, *, characters_dir: Path | None = None,
+              home_dir: Path | None = None):
+    """Build a minimal CommandContext with a captured emit list.
+
+    ``home_dir`` (when given) wires ``ctx.container.config.data_dir`` so a
+    write-behavior test (the ``args`` branch persists a preference) never
+    touches the real ``data/`` tree — pass ``tmp_path`` for any test that
+    invokes the arg branch.
+    """
     from cli.ui.commands.registry import CommandContext
 
     output: List[str] = []
 
-    ctx = CommandContext(args=args or [])
+    container = None
+    if home_dir is not None:
+        container = SimpleNamespace(config=SimpleNamespace(data_dir=home_dir))
+
+    ctx = CommandContext(args=args or [], container=container)
 
     def fake_emit(text: str, *, title: str = "", style: str = "") -> None:
         output.append(text)
@@ -155,89 +169,55 @@ def test_persona_no_arg_shows_guidance(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# /persona <name> — show details + guidance
+# /persona <name-or-text> — owner-UX P2 T6: a pref-setting SWITCH, not a
+# read-only detail view. Full template-key/literal-text/threat-scan/live-attr
+# coverage lives in tests/unit/cli/test_persona_toolset_switch.py; these three
+# just confirm the arg branch in THIS module's handler wiring behaves as the
+# new contract expects (a bare character name is not a TEMPLATES key, so it
+# persists as literal text — there is no more "unknown" rejection here).
 # ---------------------------------------------------------------------------
 
 
-def test_persona_with_known_name_shows_bio(tmp_path):
-    """/persona coder emits the bio and guidance for the 'coder' persona."""
+def test_persona_with_arg_persists_as_literal_text(tmp_path):
+    """/persona coder — 'coder' isn't a TEMPLATES key, so it persists as
+    literal persona text and confirms with a "next session" message."""
+    from core.prefs import load_preferences
     from cli.ui.commands.handlers import _h_persona
 
-    _make_char_file(tmp_path, "coder", "Pragmatic software engineer bio")
+    ctx = _make_ctx(args=["coder"], home_dir=tmp_path)
+    _h_persona(ctx)
 
-    ctx = _make_ctx(args=["coder"])
-
-    with mock.patch(
-        "cli.ui.commands.handlers._list_persona_names",
-        return_value=["coder"],
-    ), mock.patch(
-        "cli.ui.commands.handlers.Path",
-        wraps=Path,
-    ) as _path_mock:
-        # Patch the file read to use tmp_path.
-        real_open = Path.open
-
-        def patched_open(self, *a, **kw):
-            if self.name.endswith(".character.json") and not self.exists():
-                # Redirect to tmp_path if the real path doesn't exist.
-                alt = tmp_path / self.name
-                return real_open(alt, *a, **kw)
-            return real_open(self, *a, **kw)
-
-        # Simpler: just patch the handler's internal path resolution.
-        # The handler uses Path("data") / "characters" / f"{target}.character.json".
-        # We patch it by overriding the file read inline.
-        pass
-
-    # Simpler approach: invoke with real data/characters/coder.character.json.
-    ctx2 = _make_ctx(args=["coder"])
-
-    with mock.patch(
-        "cli.ui.commands.handlers._list_persona_names",
-        return_value=["coder"],
-    ):
-        _h_persona(ctx2)
-
-    combined = _combined_output(ctx2)
-    # Should mention the persona name.
+    combined = _combined_output(ctx)
     assert "coder" in combined.lower()
-    # Should show the activation guidance env var.
-    assert "POLYROB_PERSONA" in combined  # the real CLI persona lever
-    # Should note that live switching is not supported.
-    assert "not supported" in combined.lower() or "new session" in combined.lower()
+    assert "next session" in combined.lower()
+    assert load_preferences(tmp_path, "local")["session.persona"] == "coder"
 
 
-def test_persona_with_unknown_name_shows_unknown_qualifier():
-    """/persona no_such_persona marks the persona as unknown."""
+def test_persona_with_arbitrary_text_has_no_unknown_concept(tmp_path):
+    """Any free text is a valid persona value — there is no 'unknown persona'
+    rejection on this branch (only the write-side threat scan can refuse)."""
+    from core.prefs import load_preferences
     from cli.ui.commands.handlers import _h_persona
 
-    ctx = _make_ctx(args=["no_such_persona"])
-
-    with mock.patch(
-        "cli.ui.commands.handlers._list_persona_names",
-        return_value=["coder", "researcher"],
-    ):
-        _h_persona(ctx)
+    ctx = _make_ctx(args=["no_such_persona"], home_dir=tmp_path)
+    _h_persona(ctx)
 
     combined = _combined_output(ctx)
-    assert "unknown" in combined.lower()
+    assert "unknown" not in combined.lower()
+    assert "saved" in combined.lower()
+    assert load_preferences(tmp_path, "local")["session.persona"] == "no_such_persona"
 
 
-def test_persona_with_name_shows_available_list():
-    """/persona <name> still lists all available personas for discoverability."""
+def test_persona_with_multiword_arg_joins_as_literal_text(tmp_path):
+    """Multi-word input is joined (space-separated) into one literal persona
+    string, not just the first token."""
+    from core.prefs import load_preferences
     from cli.ui.commands.handlers import _h_persona
 
-    ctx = _make_ctx(args=["writer"])
+    ctx = _make_ctx(args=["a", "friendly", "writer"], home_dir=tmp_path)
+    _h_persona(ctx)
 
-    with mock.patch(
-        "cli.ui.commands.handlers._list_persona_names",
-        return_value=["analyst", "coder", "ops", "researcher", "writer"],
-    ):
-        _h_persona(ctx)
-
-    combined = _combined_output(ctx)
-    for p in ("analyst", "coder", "ops", "researcher", "writer"):
-        assert p in combined
+    assert load_preferences(tmp_path, "local")["session.persona"] == "a friendly writer"
 
 
 # ---------------------------------------------------------------------------

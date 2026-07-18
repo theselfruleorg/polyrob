@@ -243,3 +243,28 @@ def test_reject_archives_draft_recoverable(tmp_path):
     w.reject(user_id="gleb")
     archived = list((tmp_path / "identity" / "rob" / "user_gleb" / ".archived").glob("*.md"))
     assert any("rejected draft body" in p.read_text(encoding="utf-8") for p in archived)
+
+
+def test_scan_gate_is_shared_by_all_three_writers(tmp_path, monkeypatch):
+    """T4 (2026-07-16): the fail-CLOSED identity gate must be ONE implementation —
+    a raising scanner rejects the write in every writer, and the subclasses must
+    not carry their own copy-pasted propose() bodies (the 3-copy drift hazard)."""
+    import modules.memory.task.threat_scan as ts
+
+    def _boom(_body):
+        raise RuntimeError("scanner exploded")
+
+    monkeypatch.setattr(ts, "is_identity_suspicious", _boom)
+
+    from core.self_context_writer import SelfContextWriter
+    from core.contract_writer import ContractWriter
+    from core.owner_doc_writer import OwnerDocWriter
+
+    for W in (SelfContextWriter, ContractWriter, OwnerDocWriter):
+        res = W(tmp_path).propose("durable fact " * 10, user_id="u1")
+        assert not res.ok, W.__name__
+        assert any("scan" in e for e in res.errors), (W.__name__, res.errors)
+
+    # Prove it's the shared body: subclasses must NOT override propose anymore.
+    assert "propose" not in ContractWriter.__dict__
+    assert "propose" not in OwnerDocWriter.__dict__

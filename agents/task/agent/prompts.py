@@ -44,6 +44,7 @@ class SystemPrompt:
 		include_browser_tools: bool = True,  # NEW: Toggle browser tools section
 		persona_block: Optional[str] = None,  # S1: chat-mode persona appended to <identity>
 		tool_ids: Optional[List[str]] = None,  # Session's loaded tool_ids for config-aware gating
+		autonomous: bool = False,  # §3.3: goal/cron/autonomous session -> communication contract
 	):
 		# The tools actually loaded this session. Used to gate config-aware sections
 		# (e.g. <anysite>, <browser-tools>, <input-format>, the no-MCP fallback) on the
@@ -56,6 +57,7 @@ class SystemPrompt:
 		# S1 (chat consolidation): optional character/personality text injected
 		# AFTER the static identity sentence so the prompt-cache stable prefix is
 		# preserved. Empty/None => byte-identical to the legacy prompt.
+		self.autonomous = bool(autonomous)
 		self.persona_block = (persona_block or "").strip()
 		self.action_descriptions = action_description
 		self.max_actions_per_step = max_actions_per_step  # Flexible, not enforced
@@ -692,6 +694,26 @@ Task Completion:
 			"- On an autonomous turn with no one watching, act on your standing goals."
 		)
 
+	def _get_communication_contract_content(self) -> str:
+		"""§3.3 (intelligence-stack finalization): the agent OWNS keeping its user
+		informed in autonomous sessions. Static, cache-stable text — behavior is
+		shaped by contract + post-run verification, not per-event framework rails."""
+		return (
+			"You are running AUTONOMOUSLY (a goal/cron/scheduled session). The user is not\n"
+			"watching live, but your send_message DOES reach them (a delivery rail carries\n"
+			"it; it dedups and rate-limits, so meaningful messages only). YOU own keeping\n"
+			"your user informed:\n"
+			"- On a long task, briefly report the plan first.\n"
+			"- Report a blocker the MOMENT it is confirmed — one message naming exactly\n"
+			"  what you need to proceed.\n"
+			"- Report completion WITH the concrete evidence (file paths, ids, urls).\n"
+			"  Never claim delivered work without naming what exists; your run is\n"
+			"  verified against the recorded evidence afterwards.\n"
+			"- Your goal board is durable and yours to steward: goals and attempt history\n"
+			"  are visible via goal_show/goal_list. Maintain your pipeline and your\n"
+			"  user's picture of it — silence is a failure mode; so is spam."
+		)
+
 	def _get_security_content(self) -> str:
 		"""UP-06: teach the model that <untrusted_tool_result> content is DATA.
 
@@ -766,6 +788,24 @@ Task Completion:
 			UNTRUSTED_TOOL_RESULT_WRAP = False
 		if UNTRUSTED_TOOL_RESULT_WRAP:
 			optional_sections += f"\n<security>\n{self._get_security_content()}\n</security>\n"
+		# T8 (013 owner transparency directive): disclose gated/missing tools + remedy.
+		# Skip when tool_ids is unknown (legacy caller) — never claim an absence we
+		# can't verify. Per-session stable (varies only with the session's tool_ids,
+		# same as the existing config-aware sections) so prompt caching is unaffected.
+		try:
+			from agents.task.agent.core.tool_availability import build_tool_availability_note
+			if self._tool_ids_known:
+				note = build_tool_availability_note(set(self.tool_ids))
+				if note:
+					optional_sections += f"\n{note}\n"
+		except Exception:
+			pass
+		# §3.3: autonomous sessions carry the communication contract (static text,
+		# gated on a per-session flag -> byte-stable across the session's steps).
+		if self.autonomous:
+			optional_sections += (f"\n<communication-contract>\n"
+			                      f"{self._get_communication_contract_content()}\n"
+			                      f"</communication-contract>\n")
 		try:
 			from agents.task.constants import _bool_env
 			_precedence_on = _bool_env("SOURCE_PRECEDENCE_PROMPT", True)

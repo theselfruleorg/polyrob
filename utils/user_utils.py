@@ -122,43 +122,6 @@ def get_id_type(user_id: str) -> str:
         return 'unknown'
 
 
-async def get_or_create_user_from_data(user_data: Dict[str, Any], user_manager) -> Dict[str, Any]:
-    """Extract user data from a dictionary and get or create user profile.
-
-    Args:
-        user_data: Dictionary containing user data
-        user_manager: UserProfileManager instance
-
-    Returns:
-        Dict[str, Any]: Dictionary with user data including user_id
-    """
-    # Extract user data
-    extracted_data = extract_user_data(user_data)
-
-    # Get user ID from data
-    user_id = extracted_data.get('user_id')
-    if not user_id:
-        # Generate a new user ID if not provided
-        user_id = generate_user_id()
-        extracted_data['user_id'] = user_id
-
-    # Get or create user profile
-    profile = await user_manager.get_or_create_by_id(user_id, extracted_data)
-
-    # Return combined data
-    result = {
-        'user_id': profile.user_id,
-        'first_name': profile.first_name,
-        'last_name': profile.last_name,
-        'role': profile.role,
-        'email': profile.email,
-        'wallet_address': getattr(profile, 'wallet_address', ''),
-        'total_sessions': profile.total_sessions
-    }
-
-    return result
-
-
 def format_user_display_name(user_data: Dict[str, Any]) -> str:
     """Format a user's display name from their data.
 

@@ -583,13 +583,13 @@ class TestConfinementRoot:
         refuse rather than silently confining to the process CWD."""
         import tools.knowledge_ingest as ki_mod
         import agents.task.path as path_mod
-        import agents.task.constants as const_mod
+        import core.config_policy as policy_mod
 
         def boom(*a, **k):
             raise RuntimeError("no path manager")
 
         monkeypatch.setattr(path_mod, "pm", boom)
-        monkeypatch.setattr(const_mod, "local_mode_enabled", lambda: False)
+        monkeypatch.setattr(policy_mod, "local_mode_enabled", lambda: False)
 
         with pytest.raises(Exception):
             ki_mod._resolve_confinement_root("s1", "u1")
@@ -598,13 +598,13 @@ class TestConfinementRoot:
         """Under local mode the CWD fallback is acceptable (single-user)."""
         import tools.knowledge_ingest as ki_mod
         import agents.task.path as path_mod
-        import agents.task.constants as const_mod
+        import core.config_policy as policy_mod
 
         def boom(*a, **k):
             raise RuntimeError("no path manager")
 
         monkeypatch.setattr(path_mod, "pm", boom)
-        monkeypatch.setattr(const_mod, "local_mode_enabled", lambda: True)
+        monkeypatch.setattr(policy_mod, "local_mode_enabled", lambda: True)
         monkeypatch.chdir(tmp_path)
 
         root = ki_mod._resolve_confinement_root("s1", "u1")

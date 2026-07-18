@@ -222,35 +222,24 @@ class ToolCallTracker:
                 self._current_step_calls.clear()
                 self.logger.debug(f"Completed step with {len(self._step_history[-1])} tool calls")
 
-            # PERSISTENCE: Auto-save state after each step with retry logic
+            # PERSISTENCE: best-effort auto-save of tool-call state (a durability
+            # backstop). P1 finalization: complete_step is called ~12x/step from the
+            # async step machinery, so it must NOT block the event loop. The old
+            # code retried a failed save with blocking time.sleep (up to 0.7s) while
+            # holding self._lock — a catastrophic loop freeze on any transient write
+            # error. A single best-effort attempt is enough: this file is a backstop,
+            # not the source of truth, and a miss is re-saved on the next step.
             try:
                 from agents.task.path import pm
-                import time
 
-                # Clean session ID before getting data dir
                 clean_session_id = pm().clean_session_id(self.session_id)
                 data_dir = pm().get_data_dir(clean_session_id)
                 state_file = data_dir / "tool_calls.json"
-
-                # Ensure directory exists
                 data_dir.mkdir(parents=True, exist_ok=True)
-
-                # Retry logic: 3 attempts with exponential backoff
-                max_retries = 3
-                for attempt in range(max_retries):
-                    if self.save_to_file(state_file):
-                        if attempt > 0:
-                            self.logger.info(f"✓ Auto-saved tool call state to {state_file} (attempt {attempt + 1})")
-                        else:
-                            self.logger.debug(f"✓ Auto-saved tool call state to {state_file}")
-                        break
-                    else:
-                        if attempt < max_retries - 1:
-                            wait_time = 0.1 * (2 ** attempt)  # 0.1s, 0.2s, 0.4s
-                            self.logger.warning(f"Failed to save tool call state (attempt {attempt + 1}/{max_retries}), retrying in {wait_time}s...")
-                            time.sleep(wait_time)
-                        else:
-                            self.logger.error(f"❌ Failed to auto-save tool call state after {max_retries} attempts: {state_file}")
+                if self.save_to_file(state_file):
+                    self.logger.debug(f"✓ Auto-saved tool call state to {state_file}")
+                else:
+                    self.logger.warning(f"tool call state save failed (non-fatal): {state_file}")
             except Exception as e:
                 self.logger.error(f"❌ Critical error during tool call state persistence: {e}", exc_info=True)
 

@@ -112,14 +112,24 @@ class AutonomyStateStore:
         )
 
     def record_terminal(self, session_id: str, delegation_id: str, *, status: str,
-                        completed_at: float, result_text: str = "") -> None:
-        execute_retry(
-            self.db_path,
-            """UPDATE delegations SET status=?, completed_at=?, result_text=?
-               WHERE session_id=? AND delegation_id=?""",
-            (status, completed_at, (result_text or "")[:_RESULT_TEXT_CAP],
-             session_id, delegation_id),
-        )
+                        completed_at: float, result_text: str = "",
+                        only_if_running: bool = False) -> int:
+        """Record a delegation's terminal status. Returns the rows changed.
+
+        ``only_if_running`` adds an ``AND status='running'`` CAS guard (P1
+        finalization): the cold-start recovery sweep must NOT overwrite a
+        delegation that a concurrent completion already moved to a genuine terminal
+        state (completed/failed) between ``list_running()`` and this UPDATE — that
+        would clobber a real result with a false 'interrupted'. The genuine
+        completion path leaves this False (its write is authoritative)."""
+        sql = ("UPDATE delegations SET status=?, completed_at=?, result_text=? "
+               "WHERE session_id=? AND delegation_id=?")
+        params = [status, completed_at, (result_text or "")[:_RESULT_TEXT_CAP],
+                  session_id, delegation_id]
+        if only_if_running:
+            sql += " AND status='running'"
+        n = execute_retry(self.db_path, sql, tuple(params))
+        return int(n or 0)
 
     def get(self, session_id: str, delegation_id: str) -> Optional[dict]:
         row = execute_retry(
@@ -236,11 +246,17 @@ async def recover_interrupted_delegations(task_agent: Any, db_path: str) -> int:
     for row in rows:
         session_id, delegation_id = row["session_id"], row["delegation_id"]
         try:
-            store.record_terminal(
+            changed = store.record_terminal(
                 session_id, delegation_id, status="interrupted",
                 completed_at=time.time(),
                 result_text="Process restarted while this delegation was running.",
+                only_if_running=True,  # CAS: don't clobber a concurrent completion
             )
+            if not changed:
+                # The delegation reached a genuine terminal state between the
+                # list_running() read and now — not actually interrupted. Skip the
+                # false 'interrupted' event + wake.
+                continue
             recovered += 1
         except Exception:
             logger.warning("could not mark delegation %s/%s interrupted",

@@ -18,6 +18,9 @@ from tools.mcp.security import MCPEncryption, MCPURLValidator, get_encryption, g
 from tools.mcp.config import MCPServerConfig, MCPServerType
 
 from core.logging import get_component_logger
+# FIX #11 rate limiting is a configured instance of the canonical sliding-window
+# primitive (F-1, 2026-07-17); the alias keeps this module's established name.
+from core.rate_limit import SlidingWindowLimiter as RateLimiter
 
 # Module-level logger for static methods
 logger = get_component_logger("UserMCPService")
@@ -42,45 +45,6 @@ class TestConnectionResult:
     error: Optional[str] = None
     tools_discovered: Optional[int] = None
     tools: Optional[List[str]] = None  # List of tool names discovered
-
-
-class RateLimiter:
-    """Simple in-memory rate limiter (FIX #11)."""
-    
-    def __init__(self, max_requests: int = 10, window_seconds: int = 60):
-        self.max_requests = max_requests
-        self.window_seconds = window_seconds
-        self._requests: Dict[str, List[float]] = {}  # user_id -> list of timestamps
-    
-    def check(self, user_id: str) -> bool:
-        """Check if request is allowed. Returns True if allowed."""
-        import time
-        now = time.time()
-        
-        if user_id not in self._requests:
-            self._requests[user_id] = []
-        
-        # Remove old requests outside window
-        cutoff = now - self.window_seconds
-        self._requests[user_id] = [t for t in self._requests[user_id] if t > cutoff]
-        
-        if len(self._requests[user_id]) >= self.max_requests:
-            return False
-        
-        self._requests[user_id].append(now)
-        return True
-    
-    def remaining(self, user_id: str) -> int:
-        """Get remaining requests in window."""
-        import time
-        now = time.time()
-        cutoff = now - self.window_seconds
-        
-        if user_id not in self._requests:
-            return self.max_requests
-        
-        recent = [t for t in self._requests[user_id] if t > cutoff]
-        return max(0, self.max_requests - len(recent))
 
 
 class UserMCPService:

@@ -280,3 +280,49 @@ def test_elapsed_increases_over_time():
 def test_elapsed_starts_near_zero():
     s = _make_state()
     assert s.elapsed() < 1.0  # fresh state: well under 1 second
+
+
+# ---------------------------------------------------------------------------
+# poll_usage() — min_interval throttling
+# ---------------------------------------------------------------------------
+
+
+def test_poll_usage_min_interval_throttles_scan(tmp_path):
+    t = {"now": 100.0}
+    state = SessionState(clock=lambda: t["now"])
+    usage_dir = tmp_path / "data" / "llm_usage"
+    usage_dir.mkdir(parents=True)
+    (usage_dir / "llm_usage_1.json").write_text(
+        '{"prompt_tokens": 10, "completion_tokens": 5, "token_count": 15, "cost_estimate": 0.01}'
+    )
+    state.poll_usage(tmp_path, min_interval=0.5)
+    assert state.tokens_total == 15
+
+    # A new file arrives 0.1s later — inside the interval, scan must be skipped.
+    (usage_dir / "llm_usage_2.json").write_text(
+        '{"prompt_tokens": 10, "completion_tokens": 5, "token_count": 15, "cost_estimate": 0.01}'
+    )
+    t["now"] = 100.1
+    state.poll_usage(tmp_path, min_interval=0.5)
+    assert state.tokens_total == 15  # unchanged: throttled
+
+    # Past the interval the scan runs and picks the file up.
+    t["now"] = 100.7
+    state.poll_usage(tmp_path, min_interval=0.5)
+    assert state.tokens_total == 30
+
+
+def test_poll_usage_default_is_unthrottled(tmp_path):
+    t = {"now": 100.0}
+    state = SessionState(clock=lambda: t["now"])
+    usage_dir = tmp_path / "data" / "llm_usage"
+    usage_dir.mkdir(parents=True)
+    (usage_dir / "llm_usage_1.json").write_text(
+        '{"prompt_tokens": 1, "completion_tokens": 1, "token_count": 2, "cost_estimate": 0.0}'
+    )
+    state.poll_usage(tmp_path)
+    (usage_dir / "llm_usage_2.json").write_text(
+        '{"prompt_tokens": 1, "completion_tokens": 1, "token_count": 2, "cost_estimate": 0.0}'
+    )
+    state.poll_usage(tmp_path)  # same instant, no interval → still scans
+    assert state.tokens_total == 4

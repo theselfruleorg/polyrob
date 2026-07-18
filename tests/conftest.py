@@ -5,6 +5,80 @@ import os
 import pytest
 
 
+# ---------------------------------------------------------------------------
+# Operator-env sandbox (§3.5, 2026-07-16): tests must never read the dev box
+# operator's REAL env files. The first test that built a CLI container ran
+# core.bootstrap.load_env(local_mode=True), which read ~/.polyrob/.env (real
+# provider keys / owner binding) and could backfill config/.env.production
+# secrets into os.environ — poisoning every later test (the order-dependent
+# failures: chat_resolver_parity, budget_gate, identity, protected_config_guard).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session", autouse=True)
+def _operator_env_file_sandbox():
+    """Disable the config/.env.production key backfill for the whole session.
+
+    Without this, the first keyless test that ran load_env(local_mode=True)
+    adopted up to ~144 production secrets into os.environ. NOTE: deliberately
+    does NOT redirect POLYROB_HOME/HOME — many tests isolate by patching
+    ``Path.home`` or setting HOME themselves, and a session-wide POLYROB_HOME
+    would shadow that (it regressed ~20 init/identity/mcp-config tests when
+    tried). The cross-test leak from ~/.polyrob/.env and the legacy ~/.rob/.env
+    is handled by the per-test restore guard below instead.
+    """
+    prior = os.environ.get("POLYROB_ENV_KEY_BACKFILL")
+    os.environ["POLYROB_ENV_KEY_BACKFILL"] = "0"
+    try:
+        yield
+    finally:
+        if prior is None:
+            os.environ.pop("POLYROB_ENV_KEY_BACKFILL", None)
+        else:
+            os.environ["POLYROB_ENV_KEY_BACKFILL"] = prior
+
+
+# The narrow var set an operator env file can inject through load_env paths the
+# session sandbox cannot redirect (the legacy direct ~/.rob/.env read): provider/
+# model pins, the owner binding, and provider keys. Restored around EVERY test so
+# one test's load_env cannot poison later tests. Deliberately a NAMED list, not a
+# full environ snapshot — >function-scoped env fixtures stay intact (none touch
+# these today; keep it that way).
+_OPERATOR_ENV_VARS = (
+    "DEFAULT_PROVIDER", "DEFAULT_MODEL", "CHAT_PROVIDER", "CHAT_MODEL",
+    "POLYROB_OWNER_USER_ID", "POLYROB_OWNER_EMAIL", "POLYROB_OWNER_USERNAME",
+    "POLYROB_OWNER_TELEGRAM_ID", "POLYROB_OWNER_PASSWORD_HASH",
+    "BOT_OWNER_USER_ID", "BOT_OWNER_EMAIL",
+    "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+    "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "NVIDIA_API_KEY",
+    "PERPLEXITY_API_KEY",
+    # Frozen-security-flag class: `polyrob init` applies these to os.environ
+    # in-process ("authoritative" by design), so a CliRunner init test leaks
+    # them into every later test's _refreeze_* baseline (POLYROB_LOCAL is
+    # already popped by the workspace-lock fixture).
+    "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER",
+    "PAYMENT_APPROVAL_MODE", "PAYMENT_APPROVAL_TIMEOUT_SEC",
+    "APPROVAL_GRANT_TTL_HOURS", "AGENT_COMPUTE_POSTURE",
+    "AUTONOMY_POSTURE", "AUTONOMY_MODE",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_operator_env_vars():
+    """Undo raw os.environ writes of the operator-file var set after each test.
+
+    monkeypatch-based changes tear down before this runs (LIFO), so this only
+    catches UNMANAGED writes — exactly the load_env injection class.
+    """
+    before = {k: os.environ.get(k) for k in _OPERATOR_ENV_VARS}
+    yield
+    for k, v in before.items():
+        if os.environ.get(k) != v:
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 @pytest.fixture(autouse=True)
 def _cancel_leaked_agent_tasks():
     """Cancel TaskAgent's fire-and-forget periodic loops after each test.
@@ -87,6 +161,29 @@ def _isolate_path_manager():
 
 
 @pytest.fixture(autouse=True)
+def _credit_sentinel_off():
+    """Default the provider-credit sentinel OFF per-test (mirrors
+    ``_isolate_autonomy_state_store`` below).
+
+    Any test that drives a fake 402/credit-death through the REAL
+    error-recovery/trip path writes a fresh ``CREDIT_SENTINEL`` file under the
+    shared data home; every later goals/cron test then honestly refuses to
+    dispatch ("provider-credit sentinel active") — this is what turned the
+    public 0.8.0 CI red across 31 unrelated tests. Sentinel-behavior tests
+    opt back in with ``monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")``
+    (plus a tmp ``POLYROB_DATA_DIR``)."""
+    prev = os.environ.get("CREDIT_SENTINEL_ENABLED")
+    os.environ["CREDIT_SENTINEL_ENABLED"] = "off"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("CREDIT_SENTINEL_ENABLED", None)
+        else:
+            os.environ["CREDIT_SENTINEL_ENABLED"] = prev
+
+
+@pytest.fixture(autouse=True)
 def _isolate_autonomy_state_store():
     """Keep restart-durable autonomy state OUT of the developer's real data home.
 
@@ -115,6 +212,58 @@ def _isolate_autonomy_state_store():
 
 
 @pytest.fixture(autouse=True)
+def _reset_autonomy_marker_global():
+    """The in-process autonomous-session marker is a module-global set; any test
+    that runs a goal/cron helper (run_task_to_outcome marks ids like "s1")
+    leaks it into unrelated suites — the forged-turn guard then misreads a
+    genuine owner turn as autonomous (this bit tools/controller tests).
+    Promoted from the goals-suite conftest to global scope. Fail-open."""
+    try:
+        from agents.task.goals import autonomy_marker
+        autonomy_marker._SESSIONS.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from agents.task.goals import autonomy_marker
+        autonomy_marker._SESSIONS.clear()
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_telemetry_event_log(tmp_path, monkeypatch):
+    """Keep the durable telemetry event log OUT of the developer's real data home.
+
+    ``get_event_log()`` resolves ``telemetry_events.db`` under the data root — on
+    a dev machine that is the repo's ``.polyrob``. Tests that trigger owner
+    pushes/escalations (or, since §3.2, ANY user-bound delivery — the rail's
+    dedup/rate memory lives in this log) would persist rows there and leak
+    dedup state across test runs. Redirect the default to a per-test tmp db;
+    tests that want a specific store still pass an explicit path/instance.
+    """
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
+                       str(tmp_path / "telemetry_events.db"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_deployed_apps_db(tmp_path, monkeypatch):
+    """Keep the hf_deploy ``deployed_apps.db`` OUT of the developer's real data home.
+
+    ``default_deployed_apps_db()`` resolves under the data root — on a dev
+    machine that is the repo's ``.polyrob``. Redirect the default to a
+    per-test tmp db (mirrors ``_isolate_telemetry_event_log`` above); the
+    hf_deploy suite additionally passes an explicit ``db_path`` per test
+    (belt), so this is the suspenders for any code path that resolves the
+    default (e.g. the tool's production registry getter, the boot-reconcile
+    sweep).
+    """
+    monkeypatch.setenv("DEPLOYED_APPS_DB_PATH", str(tmp_path / "deployed_apps.db"))
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_external_skill_roots(monkeypatch):
     """Default external (agentskills.io ecosystem) skill discovery to zero roots for
     every test (Task 14, ``skill_discovery.user_external_roots``).
@@ -132,5 +281,66 @@ def _isolate_external_skill_roots(monkeypatch):
     try:
         from agents.task.agent import skill_discovery
         monkeypatch.setattr(skill_discovery, "user_external_roots", lambda: [], raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_autonomy_halt_probe(tmp_path, monkeypatch):
+    """Keep ``AutonomyConfig.autonomy_halted()``'s kill-switch probe out of the
+    developer's real local data home.
+
+    ``autonomy_halted()`` (agents/task/constants.py) is fail-CLOSED (H6 leg 3):
+    besides the ``AUTONOMY_HALT`` env flag, it checks for an ``AUTONOMY_HALT``
+    FILE at ``POLYROB_DATA_DIR``/``DATA_ROOT``/the RESOLVED data home
+    (``core.runtime_paths.resolve_data_home()``). With none of those env vars
+    set, ``resolve_data_home()`` converges on ``cwd/.polyrob`` — this repo's own
+    real local dev data dir when pytest runs from the repo root. A developer who
+    has ever run ``polyrob owner halt`` (or hand-touched the file) in this tree
+    would otherwise have EVERY money-path test (PolicyGate, wallet, trading
+    approval) that doesn't itself mock the probe silently fail-closed for a
+    reason that has nothing to do with the test — and, worse, misattribute it to
+    "the kill-switch is on" (see the PolicyGate probe-failure-reason fix).
+
+    Close every lever the probe reads, without touching the ``resolve_data_home``
+    FUNCTION object itself (several tests — ``test_data_home_resolver.py``,
+    ``test_owner_halt.py`` — import/patch that function directly and must see
+    the REAL implementation): drop the ``AUTONOMY_HALT``/``DATA_ROOT`` env
+    overrides, and give every test its own throwaway ``POLYROB_DATA_DIR``
+    (fresh, empty ``tmp_path`` subdir — never contains an ``AUTONOMY_HALT``
+    file). ``resolve_data_home()`` itself honors ``POLYROB_DATA_DIR`` first, so
+    one env var closes both the explicit ``bases[0]`` check AND the resolved-
+    data-home check in the SAME call.
+
+    A test that wants to exercise a REAL halt file or a specific data home sets
+    its own env/monkeypatch inside the test body (e.g.
+    ``test_autonomy_halted_fail_closed.py``, ``test_owner_halt.py``,
+    ``test_data_home_resolver.py``) — applied after this fixture's setup, those
+    calls win normally, so existing halt/data-home tests are unaffected.
+    Fail-open (never raise from this fixture).
+    """
+    monkeypatch.delenv("AUTONOMY_HALT", raising=False)
+    monkeypatch.delenv("DATA_ROOT", raising=False)
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "autonomy_halt_isolate"))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_skill_usage_singleton():
+    """Unbind the first-caller-wins skill-usage store singleton after every test.
+
+    ``modules.skills.skill_usage.get_skill_usage_store`` binds the process-global
+    ``_STORE`` to the FIRST data_dir it is called with. A test that records skill
+    provenance (e.g. ``test_self_evolution.py`` creating authored skills for
+    "gleb") pins the singleton to its tmp dir; every later test asking for a
+    DIFFERENT data home silently reads that stale store — which made the recap
+    "nothing to report" test order-dependent (2026-07-12 parity wave sweep).
+    Fail-open, post-yield (mirrors the telemetry/event-log isolation above).
+    """
+    yield
+    try:
+        import modules.skills.skill_usage as _su
+        with _su._STORE_LOCK:
+            _su._STORE = None
     except Exception:
         pass

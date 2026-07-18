@@ -1,6 +1,6 @@
 """SessionChatRegistry: pure chat-scoped session-key + durable chat<->session map.
 
-build_session_key is PURE and CHAT-scoped (Hermes parity). The SQLite map is what
+build_session_key is PURE and CHAT-scoped. The SQLite map is what
 lets an inbound update resolve to its existing session cross-worker without an
 in-process handle.
 """

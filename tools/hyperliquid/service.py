@@ -919,9 +919,17 @@ class HyperliquidTool(BaseTool):
         'Place a limit order for perpetuals or spot',
         param_model=PlaceLimitOrderParams
     )
-    async def place_limit_order(self, params: PlaceLimitOrderParams) -> Dict[str, Any]:
+    async def place_limit_order(self, params: PlaceLimitOrderParams, execution_context=None) -> Dict[str, Any]:
         """Place a limit order"""
         await self.ensure_initialized()
+
+        # H11: a forged/autonomous turn (self-wake, delegation-result, leaf, autonomous
+        # run) OR the owner kill-switch (autonomy_halted) blocks a live order — the owner
+        # must drive trades. Parity with x402 spend + the owner-queue approver.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
         start_time = time.time()
 
@@ -970,84 +978,98 @@ class HyperliquidTool(BaseTool):
         # legitimately repeat, so we don't replay-block — caps/ceiling/audit apply.
         from core.wallet.factory import get_policy_gate
         policy = get_policy_gate()
-        decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
-        if not decision.allowed:
-            return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
+        # M4 (2026-07-15): hold the gate's reserve lock across check -> submit -> record
+        # so two concurrent orders can't both pass a nearly-exhausted cap at the same
+        # stale rolling-spend and then both record (clearing past the cap). Mirrors
+        # x402/service.py::x402_fetch. The dry-run early-returns inside the block exit the
+        # lock without recording (no spend happened); evaluate_live_trade / the SDK submit
+        # never re-enter policy.check/record, so there is no self-deadlock.
+        async with policy.reserve():
+            decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
+            if not decision.allowed:
+                return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
-        # T11 live kill-switch: dry-run unless master + venue switches on AND within cap.
-        from tools.crypto_trade_gate import evaluate_live_trade
-        gate = evaluate_live_trade("hyperliquid", order_value_usd)
-        if not gate.live:
-            return {"success": False, "dry_run": True,
-                    "error": f"Order not submitted (dry-run): {gate.reason}",
-                    "order_details": {"coin": params.coin, "is_buy": params.is_buy,
-                                      "size": params.size, "price": params.price}}
+            # T11 live kill-switch: dry-run unless master + venue switches on AND within cap.
+            from tools.crypto_trade_gate import evaluate_live_trade
+            gate = evaluate_live_trade("hyperliquid", order_value_usd)
+            if not gate.live:
+                return {"success": False, "dry_run": True,
+                        "error": f"Order not submitted (dry-run): {gate.reason}",
+                        "order_details": {"coin": params.coin, "is_buy": params.is_buy,
+                                          "size": params.size, "price": params.price}}
 
-        await self.rate_limit("place_limit_order")
+            await self.rate_limit("place_limit_order")
 
-        exchange, error = await self._get_exchange_client()
-        if error:
-            return {"success": False, "error": error}
+            exchange, error = await self._get_exchange_client()
+            if error:
+                return {"success": False, "error": error}
 
-        try:
-            # Determine order type
-            order_type = {"limit": {"tif": "Alo" if params.post_only else "Gtc"}}
+            try:
+                # Determine order type
+                order_type = {"limit": {"tif": "Alo" if params.post_only else "Gtc"}}
 
-            # Place order via SDK
-            result = exchange.order(
-                name=params.coin.upper(),
-                is_buy=params.is_buy,
-                sz=params.size,
-                limit_px=params.price,
-                order_type=order_type,
-                reduce_only=params.reduce_only,
-                cloid=params.client_order_id,
-            )
+                # Place order via SDK
+                result = exchange.order(
+                    name=params.coin.upper(),
+                    is_buy=params.is_buy,
+                    sz=params.size,
+                    limit_px=params.price,
+                    order_type=order_type,
+                    reduce_only=params.reduce_only,
+                    cloid=params.client_order_id,
+                )
 
-            policy.record(
-                venue="hyperliquid", action="place_limit_order",
-                amount_usd=order_value_usd, counterparty=params.coin.upper(),
-                idempotency_key=None, result_ref=str(result)[:80],
-            )
+                policy.record(
+                    venue="hyperliquid", action="place_limit_order",
+                    amount_usd=order_value_usd, counterparty=params.coin.upper(),
+                    idempotency_key=None, result_ref=str(result)[:80],
+                )
 
-            # Audit log
-            if self.db:
-                await self.db.audit_log(
-                    user_id=self._user_id,
-                    action="place_limit_order",
-                    tool_name="place_limit_order",
-                    market_id=params.coin,
-                    details={
+                # Audit log
+                if self.db:
+                    await self.db.audit_log(
+                        user_id=self._user_id,
+                        action="place_limit_order",
+                        tool_name="place_limit_order",
+                        market_id=params.coin,
+                        details={
+                            "side": "buy" if params.is_buy else "sell",
+                            "size": params.size,
+                            "price": params.price,
+                            "result": result,
+                        }
+                    )
+
+                return {
+                    "success": True,
+                    "result": result,
+                    "order_details": {
+                        "coin": params.coin.upper(),
                         "side": "buy" if params.is_buy else "sell",
                         "size": params.size,
                         "price": params.price,
-                        "result": result,
-                    }
-                )
-
-            return {
-                "success": True,
-                "result": result,
-                "order_details": {
-                    "coin": params.coin.upper(),
-                    "side": "buy" if params.is_buy else "sell",
-                    "size": params.size,
-                    "price": params.price,
-                    "value_usd": order_value_usd,
-                },
-                "execution_time_ms": (time.time() - start_time) * 1000
-            }
-        except Exception as e:
-            self.logger.error(f"place_limit_order failed: {e}")
-            return {"success": False, "error": str(e)}
+                        "value_usd": order_value_usd,
+                    },
+                    "execution_time_ms": (time.time() - start_time) * 1000
+                }
+            except Exception as e:
+                self.logger.error(f"place_limit_order failed: {e}")
+                return {"success": False, "error": str(e)}
 
     @BaseTool.action(
         'Place a market order (marketable IOC at mid +/- slippage) for perpetuals or spot',
         param_model=PlaceMarketOrderParams
     )
-    async def place_market_order(self, params: PlaceMarketOrderParams) -> Dict[str, Any]:
+    async def place_market_order(self, params: PlaceMarketOrderParams, execution_context=None) -> Dict[str, Any]:
         """Place a market order as a marketable IOC limit at mid +/- slippage."""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch block a live order
+        # (see place_limit_order).
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
         start_time = time.time()
 
@@ -1105,83 +1127,94 @@ class HyperliquidTool(BaseTool):
         # N2: route value-moving trades through the wallet PolicyGate.
         from core.wallet.factory import get_policy_gate
         policy = get_policy_gate()
-        decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
-        if not decision.allowed:
-            return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
+        # M4 (2026-07-15): serialize check -> submit -> record under the gate's reserve
+        # lock (see place_limit_order for the rationale / no-deadlock note).
+        async with policy.reserve():
+            decision = policy.check(venue="hyperliquid", amount_usd=order_value_usd, idempotency_key=None)
+            if not decision.allowed:
+                return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
-        # T11 live kill-switch: dry-run unless master + venue switches on AND within cap.
-        from tools.crypto_trade_gate import evaluate_live_trade
-        gate = evaluate_live_trade("hyperliquid", order_value_usd)
-        if not gate.live:
-            return {"success": False, "dry_run": True,
-                    "error": f"Order not submitted (dry-run): {gate.reason}",
-                    "order_details": {"coin": params.coin, "is_buy": params.is_buy,
-                                      "size": params.size}}
+            # T11 live kill-switch: dry-run unless master + venue switches on AND within cap.
+            from tools.crypto_trade_gate import evaluate_live_trade
+            gate = evaluate_live_trade("hyperliquid", order_value_usd)
+            if not gate.live:
+                return {"success": False, "dry_run": True,
+                        "error": f"Order not submitted (dry-run): {gate.reason}",
+                        "order_details": {"coin": params.coin, "is_buy": params.is_buy,
+                                          "size": params.size}}
 
-        await self.rate_limit("place_market_order")
+            await self.rate_limit("place_market_order")
 
-        exchange, error = await self._get_exchange_client()
-        if error:
-            return {"success": False, "error": error}
+            exchange, error = await self._get_exchange_client()
+            if error:
+                return {"success": False, "error": error}
 
-        try:
-            order_type = {"limit": {"tif": "Ioc"}}
-            result = exchange.order(
-                name=params.coin.upper(),
-                is_buy=params.is_buy,
-                sz=params.size,
-                limit_px=limit_px,
-                order_type=order_type,
-                reduce_only=params.reduce_only,
-            )
+            try:
+                order_type = {"limit": {"tif": "Ioc"}}
+                result = exchange.order(
+                    name=params.coin.upper(),
+                    is_buy=params.is_buy,
+                    sz=params.size,
+                    limit_px=limit_px,
+                    order_type=order_type,
+                    reduce_only=params.reduce_only,
+                )
 
-            policy.record(
-                venue="hyperliquid", action="place_market_order",
-                amount_usd=order_value_usd, counterparty=params.coin.upper(),
-                idempotency_key=None, result_ref=str(result)[:80],
-            )
+                policy.record(
+                    venue="hyperliquid", action="place_market_order",
+                    amount_usd=order_value_usd, counterparty=params.coin.upper(),
+                    idempotency_key=None, result_ref=str(result)[:80],
+                )
 
-            if self.db:
-                await self.db.audit_log(
-                    user_id=self._user_id,
-                    action="place_market_order",
-                    tool_name="place_market_order",
-                    market_id=params.coin,
-                    details={
+                if self.db:
+                    await self.db.audit_log(
+                        user_id=self._user_id,
+                        action="place_market_order",
+                        tool_name="place_market_order",
+                        market_id=params.coin,
+                        details={
+                            "side": "buy" if params.is_buy else "sell",
+                            "size": params.size,
+                            "mid_price": mid,
+                            "limit_px": limit_px,
+                            "slippage": params.slippage,
+                            "result": result,
+                        },
+                    )
+
+                return {
+                    "success": True,
+                    "result": result,
+                    "order_details": {
+                        "coin": params.coin.upper(),
                         "side": "buy" if params.is_buy else "sell",
                         "size": params.size,
                         "mid_price": mid,
                         "limit_px": limit_px,
                         "slippage": params.slippage,
-                        "result": result,
+                        "value_usd": order_value_usd,
                     },
-                )
-
-            return {
-                "success": True,
-                "result": result,
-                "order_details": {
-                    "coin": params.coin.upper(),
-                    "side": "buy" if params.is_buy else "sell",
-                    "size": params.size,
-                    "mid_price": mid,
-                    "limit_px": limit_px,
-                    "slippage": params.slippage,
-                    "value_usd": order_value_usd,
-                },
-                "execution_time_ms": (time.time() - start_time) * 1000,
-            }
-        except Exception as e:
-            self.logger.error(f"place_market_order failed: {e}")
-            return {"success": False, "error": str(e)}
+                    "execution_time_ms": (time.time() - start_time) * 1000,
+                }
+            except Exception as e:
+                self.logger.error(f"place_market_order failed: {e}")
+                return {"success": False, "error": str(e)}
 
     @BaseTool.action(
         'Cancel an open order',
         param_model=CancelOrderParams
     )
-    async def cancel_order(self, params: CancelOrderParams) -> Dict[str, Any]:
+    async def cancel_order(self, params: CancelOrderParams, execution_context=None) -> Dict[str, Any]:
         """Cancel an order"""
         await self.ensure_initialized()
+
+        # H11: a forged/autonomous turn OR the owner kill-switch can never mutate the
+        # owner's live orders (parity with place_*_order).
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         await self.rate_limit("cancel_order")
 
         start_time = time.time()
@@ -1220,9 +1253,16 @@ class HyperliquidTool(BaseTool):
         'Cancel all open orders',
         param_model=CancelAllOrdersParams
     )
-    async def cancel_all_orders(self, params: CancelAllOrdersParams) -> Dict[str, Any]:
+    async def cancel_all_orders(self, params: CancelAllOrdersParams, execution_context=None) -> Dict[str, Any]:
         """Cancel all open orders"""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch cannot mutate live orders.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         await self.rate_limit("cancel_all_orders")
 
         start_time = time.time()
@@ -1265,9 +1305,17 @@ class HyperliquidTool(BaseTool):
         'Update leverage for a perpetual market',
         param_model=UpdateLeverageParams
     )
-    async def update_leverage(self, params: UpdateLeverageParams) -> Dict[str, Any]:
+    async def update_leverage(self, params: UpdateLeverageParams, execution_context=None) -> Dict[str, Any]:
         """Update leverage for a coin"""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch cannot change leverage
+        # (a risk-posture mutation) — the owner must drive it.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         await self.rate_limit("update_leverage")
 
         start_time = time.time()
@@ -1350,12 +1398,21 @@ class HyperliquidTool(BaseTool):
         'Delegate trading to a fresh Hyperliquid agent/API wallet (signed by the master key)',
         param_model=EmptyParams,
     )
-    async def approve_agent(self, params: Any) -> Dict[str, Any]:
+    async def approve_agent(self, params: EmptyParams, execution_context=None) -> Dict[str, Any]:
         """Approve a freshly-generated agent wallet so trades can be signed without the
         master key. Signed by the MASTER key (the one place it's used). Persists the new
         agent wallet (never returns its private key). On-chain behavior is testnet-verified.
         """
         await self.ensure_initialized()
+
+        # H11: approve_agent signs with the MASTER key to authorize a new trading agent —
+        # a value-adjacent mutation. A forged/autonomous turn OR the owner kill-switch
+        # must never reach it; the owner must drive delegation.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         if not HAS_SDK:
             return {"success": False, "error": "hyperliquid-python-sdk not installed"}
 
@@ -1411,10 +1468,18 @@ class HyperliquidTool(BaseTool):
         'Revoke the local Hyperliquid agent wallet (stop using it for signing)',
         param_model=EmptyParams,
     )
-    async def revoke_agent(self, params: Any) -> Dict[str, Any]:
+    async def revoke_agent(self, params: EmptyParams, execution_context=None) -> Dict[str, Any]:
         """Clear the stored agent wallet so trading falls back to the master key. NOTE: the
         on-chain approval persists until it expires; rotate by approving a fresh agent."""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch cannot alter the trading
+        # delegation state (parity with approve_agent).
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         credentials = await self._get_user_credentials()
         if not credentials:
             return {"success": False, "error": "Credentials not configured"}

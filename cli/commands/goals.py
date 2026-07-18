@@ -45,8 +45,11 @@ def _get_board(data_root: Optional[Path] = None) -> GoalBoard:
     if data_root is None:
         data_root = Path(get_data_root())
 
-    db_path = data_root / "goals.db"
-    return GoalBoard(str(db_path))
+    # WS-3: one shared {data_dir}/goals.db resolver. The CLI keeps its own
+    # get_data_root() home resolution (parity-pinned against the dispatcher by
+    # tests/unit/core/test_cli_data_home_isolation.py) and only the join is shared.
+    from core.runtime_paths import goals_db_path
+    return GoalBoard(goals_db_path(str(data_root)))
 
 
 def _format_goal(goal: Goal) -> str:

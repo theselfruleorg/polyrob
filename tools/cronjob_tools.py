@@ -59,7 +59,9 @@ class CronJobTool(BaseTool):
 
     def _resolve_service(self) -> CronService:
         if getattr(self, "_cron_service", None) is None:
-            data_dir = getattr(self.config, "data_dir", "data") if getattr(self, "config", None) else "data"
+            from core.runtime_paths import data_dir_or_home
+            data_dir = data_dir_or_home(
+                getattr(self.config, "data_dir", None) if getattr(self, "config", None) else None)
             self._cron_service = CronService(CronJobStore(os.path.join(data_dir, "cron.db")))
         return self._cron_service
 
@@ -127,7 +129,7 @@ def cron_enabled() -> bool:
     An explicit CRON_ENABLED always wins.
     """
     try:
-        from agents.task.constants import _posture_autonomy_default
+        from core.config_policy import _posture_autonomy_default
         default = _posture_autonomy_default("CRON_ENABLED")
     except Exception:
         default = False

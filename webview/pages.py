@@ -22,6 +22,7 @@ which is a ``getattr`` trap — AGENTS.md landmine). NO ``from __future__ import
 annotations`` here (kept consistent with the registry-closure landmine elsewhere
 and unnecessary in this module).
 """
+import logging
 import os
 
 from pathlib import Path
@@ -44,10 +45,19 @@ from core.instance import (
     pfp_path,
     resolve_instance_id,
 )
+from core import self_evolution
+from core.prefs import (
+    PREF_SCHEMA,
+    SENSITIVITY_GUARDED,
+    display_effective,
+    write_preference,
+)
 from cron.jobs import CronJobStore
 from cron.service import CronService
 from core.version import get_version
-from modules.credits.unified_ledger import build_ledger
+from modules.credits.unified_ledger import build_ledger, ledger_availability_note
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -78,10 +88,13 @@ _TEMPLATES.env.globals["is_multitenant_posture"] = webgate.is_multitenant
 def _data_dir() -> str:
     """Data home the running services use (``goals.db``/``cron.db``/``memory.db``).
 
-    Honors ``POLYROB_DATA_DIR`` (the same env the agents/autonomy runtime read);
-    defaults to ``data`` (the tool/runtime default).
+    Delegates to :func:`webview.webgate.data_dir` — the webview wrapper over the
+    ONE core policy seam ``core.runtime_paths.resolve_data_home`` shared with
+    the CLI admin verbs (I-9, deduped 2026-07-12). Env wins; unset converges on
+    the CLI/agent home; standalone deploy without ``core`` falls back to the
+    legacy ``./data``. Keep this local name: routes and tests import it.
     """
-    return os.environ.get("POLYROB_DATA_DIR", "data")
+    return webgate.data_dir()
 
 
 def _cron_enabled() -> bool:
@@ -216,10 +229,10 @@ async def api_memory(request: Request, q: str = "", limit: int = 10):
 
     ``q`` set → discover; ``q`` empty → browse-recent. Fail-open to no items.
     Returns ``{items, count, mode, limit}`` so the page can caption results
-    honestly ("showing the N most recent" vs "N matches"). Per-hit
-    timestamp/score provenance is NOT available from the provider's search
-    surface (the ``memories`` FTS5 store has no timestamp column — the
-    episodic-memory plan tracks that); the envelope carries what exists.
+    honestly ("showing the N most recent" vs "N matches"). Since B2 (2026-07-12)
+    provider rows stamped with write-time provenance render a leading
+    ``[YYYY-MM-DD]`` inside the snippet text — deliberate: the date is the
+    provenance the page used to lack. Legacy stampless rows stay bare.
     """
     mode = "search" if (q or "").strip() else "browse"
     provider = _memory_provider()
@@ -349,17 +362,37 @@ async def avatar_live():
 
 def _empty_ledger(user_id: str, days: int) -> dict:
     """The all-zero ledger shape — returned when the ledger read fails so the
-    Finance page shows zeros rather than a 500 (every ledger leg fail-opens too)."""
-    return {"user_id": user_id, "window_days": days, "llm_api_cost_usd": 0.0,
-            "credits_spent": 0.0, "llm_calls": 0, "wallet_spend_usd": 0.0,
-            "wallet_payments": 0, "earned_usd": 0.0, "settled_payments": 0,
+    Finance page shows zeros rather than a 500 (every ledger leg fail-opens too).
+
+    SHAPE-IDENTICAL to a real ``build_ledger`` result (incl. the ``treasury``/
+    ``runtime`` blocks) — otherwise the Finance page would silently render a
+    different shape on the error path than on the happy path. Both blocks
+    report ``available: False`` (this is the "we couldn't read it" path, not a
+    genuine zero) and both balance fields are ``None`` (H14b: never a
+    fabricated $0.00). No ``earned_usd``/``total_spend_usd``/top-level
+    ``net_usd`` — those merged fields were deleted from ``build_ledger`` in
+    Task 8 with no alias, and the fallback must stay shape-identical."""
+    return {"user_id": user_id, "window_days": days,
+            "llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
+            "wallet_spend_usd": 0.0, "wallet_payments": 0, "settled_payments": 0,
             "pending_invoices_usd": 0.0, "pending_invoices": 0,
-            "total_spend_usd": 0.0, "net_usd": 0.0}
+            "costs_available": False, "inbound_available": False,
+            "wallet_metering": "error",
+            "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
+                         "pending_count": 0, "balance_usd": None, "net_usd": 0.0,
+                         "available": False},
+            "runtime": {"spend_window_usd": 0.0, "spend_total_usd": 0.0,
+                        "calls_window": 0, "calls_total": 0,
+                        "provider_balance_usd": None, "available": False}}
 
 
 def _ledger_caps() -> dict:
     """Display-only policy caps (NOT part of the ledger read model) — the operator
-    context for the earned/spent/pending numbers. Resolved from env, fail-open."""
+    context for the income/spend/pending numbers. Resolved from env, fail-open.
+
+    NOTE: ``autonomy_budget_usd`` was removed — the budget gate it described no
+    longer exists (see the money-ledger split proposal §5.3); this must never
+    advertise a flag that's gone."""
     def _f(name, default):
         try:
             v = os.environ.get(name)
@@ -370,7 +403,6 @@ def _ledger_caps() -> dict:
         "wallet_daily_cap_usd": _f("WALLET_DAILY_CAP_USD", None),
         "invoice_max_usd": _f("X402_INVOICE_MAX_USD", 50.0),
         "invoice_daily_max": _f("X402_INVOICE_DAILY_MAX", 10.0),
-        "autonomy_budget_usd": _f("AUTONOMY_BUDGET_USD", 10.0),
     }
 
 
@@ -378,22 +410,354 @@ def _ledger_caps() -> dict:
 async def api_ledger(request: Request, days: int = 7):
     """Unified financial ledger for the effective tenant — reuse ``build_ledger``.
 
-    earned / spent / pending / net over a trailing window. Read-only, tenant-
-    scoped (``_effective_user_id`` raises 403 outside the try — must not be
-    fail-open-swallowed). All-zero-tolerant: a ledger error degrades to zeros."""
+    Two blocks that must NEVER be summed: ``treasury`` (the agent's own USDC —
+    income/spend/pending/net) and ``runtime`` (the owner's LLM/API bill). This
+    is a DISPLAY surface, so it opts into the two balance probes
+    (``include_balances=True``). Read-only, tenant-scoped (``_effective_user_id``
+    raises 403 outside the try — must not be fail-open-swallowed). All-zero-
+    tolerant: a ledger error degrades to zeros (``_empty_ledger``, shape-
+    identical to a real read)."""
     days = max(1, min(int(days), 365))
     user_id = _effective_user_id(request)  # 403 in multitenant if no tenant identity
     try:
-        ledger = await build_ledger(user_id, days=days)
+        ledger = await build_ledger(user_id, days=days, include_balances=True)
     except Exception:
         ledger = _empty_ledger(user_id, days)
     ledger["caps"] = _ledger_caps()
+    # H14b (final whole-branch review, Finding 1 — related root cause):
+    # treasury/runtime carry `available` markers (and _empty_ledger's honest
+    # `available: False`) with zero production readers — finance.html never
+    # rendered them, so a broken read silently looked like a real $0.00 on
+    # this surface too. `ledger_availability_note` is the SAME helper
+    # core/recap.py and cli/ui/commands/h_finance.py already use; `None` when
+    # every leg is available, so a healthy ledger gets no new key.
+    ledger["note"] = ledger_availability_note(ledger)
     return JSONResponse(ledger)
 
 
 @router.get("/finance", response_class=HTMLResponse)
 async def finance_page(request: Request):
     return _TEMPLATES.TemplateResponse("finance.html", _page_context(request))
+
+
+@router.get("/api/webgate/config")
+async def api_config_search(request: Request, query: str = ""):
+    """018 P3: search/list BOTH config namespaces (prefs + ~409 catalog env
+    flags) via core.config_service — the same brain every other surface uses.
+    Read-only; secrets arrive pre-masked by the service."""
+    user_id = _effective_user_id(request)
+    from core import config_service
+    items = []
+    for info in config_service.search(query, user_id=user_id,
+                                      home_dir=_data_dir(), limit=500):
+        items.append({
+            "key": info.key, "namespace": info.namespace, "kind": info.kind,
+            "group": info.group, "description": info.description,
+            "value": str(info.effective), "source": info.source,
+            "applies": info.applies, "sensitivity": info.sensitivity,
+            "enforcement": info.enforcement, "secret": info.secret,
+        })
+    return JSONResponse({"user_id": user_id, "settings": items})
+
+
+@router.get("/api/webgate/config/{key}/explain")
+async def api_config_explain(request: Request, key: str):
+    """018 P3: full provenance chain for one setting (secrets masked)."""
+    user_id = _effective_user_id(request)
+    from core import config_service
+    try:
+        info = config_service.explain(key, user_id=user_id, home_dir=_data_dir())
+    except KeyError:
+        return JSONResponse({"error": f"unknown setting: {key}"}, status_code=404)
+    return JSONResponse({
+        "key": info.key, "namespace": info.namespace, "kind": info.kind,
+        "value": str(info.effective), "source": info.source,
+        "applies": info.applies, "sensitivity": info.sensitivity,
+        "enforcement": info.enforcement, "secret": info.secret,
+        "description": info.description,
+        "chain": [{"origin": s.origin, "value": str(s.value)} for s in info.chain],
+    })
+
+
+@router.patch("/api/webgate/config/{key}")
+async def api_config_set(request: Request, key: str):
+    """018 P3: write one setting through the config service.
+
+    Prefs keep the EXACT preferences-PATCH trust ladder (guarded scalar needs
+    ``confirm:true`` → the service queues otherwise); env-flag writes are
+    additionally restricted to the local/own_ops postures (an authenticated
+    OWNER console — never multitenant) and land in ./.polyrob/.env or
+    ~/.polyrob/.env with the catalog shape-check, restart-effective."""
+    if webgate.read_only():
+        return JSONResponse({"error": "webview is read-only"}, status_code=403)
+    user_id = _effective_user_id(request)
+    from core import config_service
+    from core.prefs import PREF_SCHEMA
+    if key not in PREF_SCHEMA and webgate.posture() not in ("local", "own_ops"):
+        return JSONResponse(
+            {"error": "env-flag writes require the owner console "
+                      "(local/own_ops posture)"}, status_code=403)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    res = config_service.set_value(
+        key, str(body.get("value", "")),
+        scope=body.get("scope"), user_id=user_id, home_dir=_data_dir(),
+        confirm=bool(body.get("confirm")))
+    status = 200 if res.ok else 400
+    if res.ok and res.outcome == "queued":
+        status = 202
+    return JSONResponse({"ok": res.ok, "outcome": res.outcome,
+                         "message": res.message, "applies": res.applies},
+                        status_code=status)
+
+
+@router.get("/api/webgate/preferences")
+async def api_preferences(request: Request):
+    """Typed preferences, schema-driven (owner-UX P4 T3).
+
+    One row per ``PREF_SCHEMA`` key with the spec fields the UI needs (type/
+    sensitivity/applies/enum/range/description) plus the EFFECTIVE value and
+    source via ``core.prefs.display_effective`` — the same helper the REPL
+    ``/config`` and the agent-callable ``preferences`` action render with, so
+    the console can never show state that drifts from enforcement. Tenant-
+    scoped via ``_effective_user_id`` (403 in multitenant without identity)."""
+    user_id = _effective_user_id(request)
+    home = _data_dir()
+    items = []
+    for key, spec in PREF_SCHEMA.items():
+        value, source = display_effective(key, user_id, home)
+        items.append({
+            "key": key,
+            "description": spec.description,
+            "type": spec.type,
+            "sensitivity": spec.sensitivity,
+            "merge": spec.merge,
+            "applies": spec.applies,
+            "env_flag": spec.env_flag,
+            "enum_values": list(spec.enum_values),
+            "min": spec.min_value,
+            "max": spec.max_value,
+            "value": value,
+            "source": source,
+        })
+    return JSONResponse({"user_id": user_id, "preferences": items})
+
+
+@router.patch("/api/webgate/preferences")
+async def api_preferences_patch(request: Request):
+    """Write one preference: ``{key, value, confirm?}`` (owner-UX P4 T3).
+
+    SAFE keys apply immediately; GUARDED keys without ``confirm:true`` return
+    409 ``{guarded: true}`` so the UI shows a confirm dialog; with
+    ``confirm:true`` they apply directly — the authenticated PATCH IS the
+    explicit owner confirmation, the same trust level as
+    ``polyrob config set … --confirm`` (per the P4 plan: no double-approval).
+    Validation/threat-scan/atomic-replace all live in
+    ``core.prefs.write_preference`` — nothing is re-implemented here.
+    ``WEBVIEW_READ_ONLY`` refuses with 403; tenant resolution is the same
+    fail-closed ``_effective_user_id`` as GET (never writes as the owner).
+
+    List-shrink routes through review (owner-UX P2-4 final review, item 3):
+    the local webview posture has no auth, so a confirmed wholesale-replace of
+    a GUARDED list key (``approvals.require``/``approvals.deny``) could
+    silently DROP a pref-added gate — bypassing the ``remove_entry`` owner
+    review flow every other surface enforces (``/approve remove``, the
+    agent-callable ``preferences`` action). So for a list-typed guarded key,
+    the new value is diffed against the CURRENT pref list: additions TIGHTEN
+    policy and still apply directly (same trust level as any other guarded
+    confirm); any REMOVED entry is instead queued as one
+    ``propose_pref_change(op="remove_entry", ...)`` per entry (mirrors
+    ``/approve remove`` — the owner reviews it via ``/pending``). A pure
+    addition (no entry removed) or a scalar guarded key is unaffected and
+    keeps the existing direct-apply, 200 response."""
+    if webgate.read_only():
+        raise HTTPException(status_code=403, detail="read-only console")
+    user_id = _effective_user_id(request)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"ok": False, "error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"ok": False, "error": "JSON body must be an object"},
+                            status_code=400)
+    key = str(body.get("key") or "")
+    spec = PREF_SCHEMA.get(key)
+    if spec is None:
+        return JSONResponse({"ok": False, "error": f"unknown preference: {key!r}"},
+                            status_code=400)
+    if "value" not in body or body["value"] is None:
+        return JSONResponse({"ok": False, "error": "value is required"},
+                            status_code=400)
+    if spec.sensitivity == SENSITIVITY_GUARDED and body.get("confirm") is not True:
+        return JSONResponse(
+            {"ok": False, "guarded": True,
+             "error": f"'{key}' is guarded — resend with confirm:true to apply"},
+            status_code=409)
+    if spec.sensitivity == SENSITIVITY_GUARDED and spec.type == "list":
+        from core.prefs import load_preferences, propose_pref_change, validate_pref
+
+        ok_new, new_items, verr = validate_pref(key, body.get("value"))
+        if not ok_new:
+            return JSONResponse({"ok": False, "error": verr}, status_code=400)
+        current = list(load_preferences(_data_dir(), user_id).get(key, []) or [])
+        removed = [item for item in current if item not in new_items]
+        added = [item for item in new_items if item not in current]
+        if removed:
+            queued = []
+            for entry in removed:
+                ok_p, result = propose_pref_change(
+                    user_id, key, None, _data_dir(), op="remove_entry", entry=entry)
+                if ok_p:
+                    queued.append({"key": key, "entry": entry, "proposal_id": result})
+                else:
+                    queued.append({"key": key, "entry": entry, "error": result})
+            applied_additions: list = []
+            if added:
+                updated = sorted(set(current) | set(added))
+                ok_add, add_err = write_preference(_data_dir(), user_id, key, updated)
+                if ok_add:
+                    applied_additions = added
+            value, source = display_effective(key, user_id, _data_dir())
+            return JSONResponse({
+                "ok": True, "key": key, "queued": queued,
+                "applied_additions": applied_additions,
+                "value": value, "source": source,
+            }, status_code=202)
+        # Pure addition (or no-op) — falls through to the normal direct-apply.
+    ok, err = write_preference(_data_dir(), user_id, key, body.get("value"))
+    if not ok:
+        return JSONResponse({"ok": False, "error": err}, status_code=400)
+    value, source = display_effective(key, user_id, _data_dir())
+    return JSONResponse({"ok": True, "key": key, "applies": spec.applies,
+                         "value": value, "source": source})
+
+
+def _pending_kwargs(request: Request) -> dict:
+    """Shared (user_id, home_dir, instance_id) for the pending-review verbs —
+    the SAME resolution `polyrob owner pending/promote/reject` uses, so a
+    decision made in the console is byte-identical to one made on the CLI."""
+    return {
+        "user_id": _effective_user_id(request),
+        "home_dir": _data_dir(),
+        "instance_id": resolve_instance_id(),
+    }
+
+
+def _webgate_goal_board():
+    """Same construction ``polyrob owner pending`` uses (``cli/commands/owner.py::
+    _goal_board`` / ``api_goals`` above) — one ``goals.db`` under the data home."""
+    return GoalBoard(os.path.join(_data_dir(), "goals.db"))
+
+
+def _webgate_correspondent_registry():
+    """Same construction ``polyrob owner pending/correspondents`` uses
+    (``cli/commands/owner.py::_registry``) — one ``correspondents.db`` under the
+    data home."""
+    from core.surfaces.correspondents import CorrespondentRegistry
+    return CorrespondentRegistry(os.path.join(_data_dir(), "correspondents.db"))
+
+
+@router.get("/api/webgate/pending")
+async def api_pending(request: Request):
+    """The tenant's pending items: self-evolution proposals (identity/skills/
+    contract/pref changes) via ``core.self_evolution``, PLUS (T10 parity with
+    ``polyrob owner pending``) queued tool-approval asks
+    (``tools.controller.approval_queue.list_pending_tool_approvals``) and
+    pending correspondent bindings (``cli.commands.owner._pending_correspondent_items``
+    — reused, not reimplemented). Read-only. Any one collector failing degrades
+    to an empty contribution rather than a 500 for the whole aggregate."""
+    kw = _pending_kwargs(request)
+    items = self_evolution.list_pending(kw["user_id"], home_dir=kw["home_dir"],
+                                        instance_id=kw["instance_id"])
+    try:
+        from tools.controller.approval_queue import list_pending_tool_approvals
+        items = items + list_pending_tool_approvals(_webgate_goal_board(), kw["user_id"])
+    except Exception:
+        logger.debug("api_pending: tool-approval collector failed", exc_info=True)
+    try:
+        from cli.commands.owner import _pending_correspondent_items
+        items = items + _pending_correspondent_items(_webgate_correspondent_registry(),
+                                                      kw["user_id"])
+    except Exception:
+        logger.debug("api_pending: correspondent collector failed", exc_info=True)
+    return JSONResponse({"user_id": kw["user_id"], "items": items})
+
+
+@router.get("/api/webgate/pending/{kind}/{item_id}")
+async def api_pending_show(request: Request, kind: str, item_id: str):
+    """Full quarantined body of ONE proposal so promote/reject is an informed
+    decision (same seam as `owner show-pending`)."""
+    kw = _pending_kwargs(request)
+    ok, body = self_evolution.show(kind, item_id, **kw)
+    return JSONResponse({"ok": ok, "body": body})
+
+
+def _decide_correspondent(item_id: str, user_id: str, *, approved: bool) -> tuple:
+    """Route a correspondent pending-item decision through the SAME primitive
+    the CLI ``polyrob owner approve <surface> <address>`` uses
+    (``CorrespondentRegistry.approve`` — never a reimplemented grant path).
+
+    ``item_id`` is ``"surface:address"`` (the id shape
+    ``cli.commands.owner._pending_correspondent_items`` builds). There is no
+    CLI/registry REJECT primitive for a pending correspondent (only
+    ``approve()`` promotes ``pending -> active``; the CLI itself has no
+    `owner reject correspondent` path) — a reject request degrades honestly to
+    ``(False, ...)`` rather than inventing new grant/deny logic here.
+    """
+    surface, sep, address = item_id.partition(":")
+    if not sep or not surface or not address:
+        return False, f"invalid correspondent id: {item_id!r} (expected surface:address)"
+    if not approved:
+        return False, ("correspondent bindings have no reject action — approve them "
+                       "or leave them pending (they expire per CORRESPONDENT_TTL_DAYS)")
+    ok = _webgate_correspondent_registry().approve(surface=surface, address=address,
+                                                   user_id=user_id)
+    if ok:
+        return True, f"approved {surface}:{address}"
+    return False, f"no pending correspondent {surface}:{address}"
+
+
+def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tuple:
+    """Dispatch a promote/reject decision to the RIGHT underlying function for
+    ``kind`` (T10 parity with ``polyrob owner promote/reject`` — see
+    ``cli/commands/owner.py``'s ``promote``/``reject`` commands, which this
+    mirrors): ``tool_approval`` -> ``decide_tool_approval`` (the SAME function
+    Telegram `/approve` `/reject` and the CLI call); ``correspondent`` ->
+    :func:`_decide_correspondent`; anything else -> the existing
+    ``core.self_evolution`` aggregator (identity/skills/contract/pref changes)."""
+    if kind == "tool_approval":
+        from tools.controller.approval_queue import decide_tool_approval
+        return decide_tool_approval(_webgate_goal_board(), item_id,
+                                    user_id=kw["user_id"], approved=approved)
+    if kind == "correspondent":
+        return _decide_correspondent(item_id, kw["user_id"], approved=approved)
+    fn = self_evolution.promote if approved else self_evolution.reject
+    return fn(kind, item_id, **kw)
+
+
+@router.post("/api/webgate/pending/{kind}/{item_id}/promote")
+async def api_pending_promote(request: Request, kind: str, item_id: str):
+    """Owner decision: promote a pending proposal to active. 403 in read-only;
+    tenant-scoped (a tenant can only act on its OWN queue). A miss/failure is
+    ``{ok:false, message}``, never a 500 — the aggregator is the authority."""
+    if webgate.read_only():
+        raise HTTPException(status_code=403, detail="read-only console")
+    kw = _pending_kwargs(request)
+    ok, msg = _decide_pending(kind, item_id, kw, approved=True)
+    return JSONResponse({"ok": ok, "message": msg})
+
+
+@router.post("/api/webgate/pending/{kind}/{item_id}/reject")
+async def api_pending_reject(request: Request, kind: str, item_id: str):
+    """Owner decision: reject (archive) a pending proposal. Same gating as
+    promote."""
+    if webgate.read_only():
+        raise HTTPException(status_code=403, detail="read-only console")
+    kw = _pending_kwargs(request)
+    ok, msg = _decide_pending(kind, item_id, kw, approved=False)
+    return JSONResponse({"ok": ok, "message": msg})
 
 
 @router.get("/api/webgate/doctor")
@@ -437,12 +801,40 @@ async def autonomy_page(request: Request):
 
 @router.get("/identity", response_class=HTMLResponse)
 async def identity_page(request: Request):
-    return _TEMPLATES.TemplateResponse("identity.html", _page_context(request))
+    """Read-only Identity page. ``ui.show_avatar`` (owner-UX prefs) decides whether
+    the avatar block renders at all — resolved for the page's effective tenant
+    (same seam the identity JSON endpoint uses), fail-open to True on ANY
+    resolution error (missing prefs module, unsafe/absent tenant id, disk error)."""
+    ctx = _page_context(request)
+    show_avatar = True
+    try:
+        from core import prefs as _prefs
+        user_id = _effective_user_id(request)
+        show_avatar = bool(_prefs.resolve("ui.show_avatar", user_id, _data_dir(),
+                                          env_value=None, default=True))
+    except Exception:
+        show_avatar = True
+    ctx["show_avatar"] = show_avatar
+    return _TEMPLATES.TemplateResponse("identity.html", ctx)
 
 
 @router.get("/system", response_class=HTMLResponse)
 async def system_page(request: Request):
     return _TEMPLATES.TemplateResponse("system.html", _page_context(request))
+
+
+@router.get("/preferences", response_class=HTMLResponse)
+async def preferences_page(request: Request):
+    ctx = _page_context(request)
+    ctx["read_only"] = webgate.read_only()
+    return _TEMPLATES.TemplateResponse("preferences.html", ctx)
+
+
+@router.get("/pending", response_class=HTMLResponse)
+async def pending_page(request: Request):
+    ctx = _page_context(request)
+    ctx["read_only"] = webgate.read_only()
+    return _TEMPLATES.TemplateResponse("pending.html", ctx)
 
 
 __all__ = ["router"]

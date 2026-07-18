@@ -94,6 +94,27 @@ def test_resolve_tools_explicit_payload_always_wins(monkeypatch):
     assert disp._resolve_tools(_Goal(payload={"tools": ["filesystem"]})) == ["filesystem"]
 
 
+def test_resolve_tools_infers_from_goal_text_when_payload_empty(monkeypatch):
+    """Proposal 009 (2026-07-14): a legacy goal with no tools payload whose text
+    names a capability resolves that tool at dispatch time instead of starving."""
+    disp = _dispatcher(_Board())
+    g = _Goal()
+    g.title = "Publish queued OSS launch X thread"
+    g.body = "post the tweet thread live"
+    tools = disp._resolve_tools(g)
+    assert "twitter" in tools
+    assert "filesystem" in tools and "task" in tools
+
+
+def test_resolve_tools_inference_never_grants_spend(monkeypatch):
+    disp = _dispatcher(_Board())
+    g = _Goal()
+    g.title = "x402_pay wallet hyperliquid polymarket run"
+    tools = disp._resolve_tools(g)
+    for danger in ("x402_pay", "wallet", "hyperliquid", "polymarket"):
+        assert danger not in tools
+
+
 def test_child_inherits_compute_at_posture_1(monkeypatch):
     _posture(monkeypatch, "1")
     parent = _Goal(payload={"tools": ["filesystem", "code_execution", "shell", "x402_pay"]})

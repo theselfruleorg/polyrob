@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
+from core import event_kinds as ek
 from webview import webgate
 
 logger = logging.getLogger(__name__)
@@ -136,6 +137,36 @@ def summarize(kind: str, data: Dict[str, Any]) -> str:
         name = d.get("tool_name") or d.get("action") or d.get("name") or "?"
         ok = d.get("success", True)
         return f"tool {name} {'ok' if ok else 'FAILED'}"
+    # 019 run-state span/wait events
+    if kind == "tool_started":
+        name = d.get("action_name") or d.get("tool_name") or "?"
+        return f"→ {name} started"
+    if kind == "llm_started":
+        model = d.get("model_name") or d.get("provider") or "?"
+        return f"thinking ({model})"
+    if kind == "awaiting_approval":
+        return f"⏸ awaiting approval: {d.get('action_name') or '?'}"
+    if kind == "approval_resolved":
+        waited = d.get("waited_sec")
+        tail = f" after {waited:.0f}s" if isinstance(waited, (int, float)) and waited >= 1 else ""
+        return f"approval {d.get('decision') or 'resolved'}: {d.get('action_name') or '?'}{tail}"
+    if kind in ("compaction_started", "compaction_finished"):
+        verb = "compacting" if kind == "compaction_started" else "compacted"
+        return f"{verb} context ({d.get('mode') or '?'})"
+    if kind == "retry_wait":
+        delay = d.get("delay_sec")
+        tail = f" {delay:.0f}s" if isinstance(delay, (int, float)) else ""
+        return f"retrying ({d.get('reason') or '?'}){tail}"
+    if kind in ("subagent_started", "subagent_finished"):
+        verb = "started" if kind == "subagent_started" else ("finished ok" if d.get("ok") else "finished FAILED")
+        return f"sub-agent {verb}: {_snip(d.get('goal_preview') or '', 60)}"
+    if kind in ("delegation_dispatched", "delegation_completed"):
+        verb = "dispatched" if kind == "delegation_dispatched" else (d.get("status") or "done")
+        return f"delegation {d.get('delegation_id') or '?'} {verb}: {_snip(d.get('goal_preview') or '', 60)}"
+    if kind == "provider_failure":
+        return f"provider {d.get('failed_provider') or '?'} FAILED ({d.get('error_type') or '?'})"
+    if kind == "provider_fallback_success":
+        return f"provider fallback {d.get('original_provider') or '?'} → {d.get('fallback_provider') or '?'}"
     if kind == "llm_request":
         model = d.get("model_name") or d.get("model") or "?"
         tokens = d.get("token_count") or d.get("total_tokens") or 0
@@ -162,19 +193,21 @@ def summarize(kind: str, data: Dict[str, Any]) -> str:
         return f"status → {d.get('status', '?')}"
     if kind == "error":
         return f"ERROR: {_snip(d.get('error_message') or d.get('message') or d.get('error') or '', 120)}"
-    if kind == "cron_run":
+    # Durable event-log kinds ride the core/event_kinds SSOT (T9) — a producer
+    # rename now fails the contract test instead of silently emptying this feed.
+    if kind == ek.CRON_RUN:
         return f"cron {d.get('job_id', '?')} → {d.get('outcome', '?')}"
-    if kind == "self_wake":
+    if kind == ek.SELF_WAKE:
         return f"self-wake → {d.get('outcome', '?')} ({_snip(d.get('reason'), 60)})"
-    if kind == "wallet_spend":
+    if kind == ek.WALLET_SPEND:
         return f"wallet spend ${d.get('amount_usd', '?')} @ {d.get('venue', '?')}"
-    if kind == "tool_denied":
+    if kind == ek.TOOL_DENIED:
         return f"tool DENIED: {d.get('tool') or d.get('tool_name') or '?'}"
-    if kind == "tool_timeout":
+    if kind == ek.TOOL_TIMEOUT:
         return f"tool timeout: {d.get('tool') or d.get('tool_name') or '?'}"
-    if kind == "autonomy_tick":
+    if kind == ek.AUTONOMY_TICK:
         return f"autonomy tick {d.get('loop', '?')} alive={d.get('alive', '?')}"
-    if kind == "owner_notice":
+    if kind == ek.OWNER_NOTICE:
         return f"owner notice: {_snip(d.get('message') or d.get('text') or '', 100)}"
     if kind == "skill_install":
         return f"skill installed: {d.get('name', '?')} (by {d.get('approver') or d.get('source') or '?'})"
@@ -335,8 +368,12 @@ class SqliteTail:
 
 
 def _data_dir() -> str:
-    """Data home for goals.db/skill_usage.db — same resolution as pages.py."""
-    return os.environ.get("POLYROB_DATA_DIR", "data")
+    """Data home for goals.db/skill_usage.db — same resolution as pages.py.
+
+    Delegates to :func:`webview.webgate.data_dir` (the wrapper over the ONE
+    core seam ``core.runtime_paths.resolve_data_home``; I-9, deduped
+    2026-07-12). Keep the local name: `activity_db_sources` and tests use it."""
+    return webgate.data_dir()
 
 
 def _sessions_data_root() -> Optional[str]:

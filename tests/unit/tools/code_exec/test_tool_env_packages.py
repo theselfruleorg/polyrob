@@ -36,6 +36,10 @@ def _clean(monkeypatch):
     )
     c._refreeze_compute_posture_for_tests()
     yield
+    # LIFO landmine (see d99b8bb3 / docs/ops/inbox.md 2026-07-14): this teardown
+    # runs BEFORE monkeypatch reverts env, so delenv explicitly or the refreeze
+    # re-snapshots a test's posture and leaks it module-globally.
+    monkeypatch.delenv("AGENT_COMPUTE_POSTURE", raising=False)
     c._refreeze_compute_posture_for_tests()
 
 
@@ -206,3 +210,54 @@ async def test_unentitled_session_stays_isolated():
     )
     assert not res.error
     assert be.requests[0].dev_mode is False
+
+
+# --- 014 B2: the packages gate honors the backend's EFFECTIVE network ------------
+# (a posture-1 persistent dev container auto-bridges when CODE_EXEC_NETWORK is
+# unset — docker.py::_resolve_setup_network — so a raw-env check wrongly refused
+# pip installs on a container that actually has egress).
+
+
+class _BridgedBackend(_RecordingBackend):
+    def effective_setup_network(self) -> str:
+        return "bridge"
+
+
+class _NoNetBackend(_RecordingBackend):
+    def effective_setup_network(self) -> str:
+        return "none"
+
+
+@pytest.mark.asyncio
+async def test_packages_allowed_when_backend_reports_bridge(monkeypatch):
+    _posture(monkeypatch, "1")
+    b = _BridgedBackend()
+    t = _tool(b)
+    res = await t.run_code(
+        RunCodeParams(language="python", code="print(1)", packages=["requests"]),
+        execution_context=_owner_ctx())
+    assert not res.error
+    assert any("pip install" in r.code for r in b.requests)  # install ran
+
+
+@pytest.mark.asyncio
+async def test_packages_refused_when_backend_reports_none(monkeypatch):
+    _posture(monkeypatch, "1")
+    t = _tool(_NoNetBackend())
+    res = await t.run_code(
+        RunCodeParams(language="python", code="print(1)", packages=["requests"]),
+        execution_context=_owner_ctx())
+    assert res.error and "network" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_packages_env_fallback_when_backend_has_no_probe(monkeypatch):
+    # backend without effective_setup_network: raw-env behavior is unchanged
+    _posture(monkeypatch, "1")
+    monkeypatch.setenv("CODE_EXEC_NETWORK", "egress")
+    b = _RecordingBackend()
+    t = _tool(b)
+    res = await t.run_code(
+        RunCodeParams(language="python", code="print(1)", packages=["requests"]),
+        execution_context=_owner_ctx())
+    assert not res.error

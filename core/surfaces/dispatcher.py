@@ -27,14 +27,16 @@ from core.surfaces.session_chat_registry import build_session_key
 
 logger = logging.getLogger(__name__)
 
-# Owner-admin verbs (§7.1/§7.2b): the phone-only headless owner's surface for the
-# self-evolution approve loop (/pending /approve /reject), open asks (/asks
-# /fulfill), and the outbound-messaging allowlist (/allow /deny /allowlist). The
-# surface handler owner-gates them by principal; routing here only classifies them
-# as COMMAND so they win over an active session.
+# Owner-admin verbs (§7.1/§7.2b, owner-UX P4 T2): the phone-only headless owner's
+# surface for the self-evolution approve loop (/pending /approve /reject), open
+# asks (/asks /fulfill), the outbound-messaging allowlist (/allow /deny
+# /allowlist), and the read-only status/recap/goals/prefs verbs (/status /recap
+# /goals /prefs). The surface handler owner-gates them by principal; routing here
+# only classifies them as COMMAND so they win over an active session.
 _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/pending", "/approve", "/reject", "/asks", "/fulfill",
-             "/allow", "/deny", "/allowlist")
+             "/allow", "/deny", "/allowlist",
+             "/status", "/recap", "/journey", "/goals", "/prefs", "/config")
 
 ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 
@@ -65,6 +67,8 @@ class RouteDecision:
     command: Optional[str] = None
     pairing_code: Optional[str] = None  # set on DENIED so the surface can tell the
                                         # user how to get approved (None = anon/no code)
+    silent: bool = False                # W3: DENIED without a user-facing reply
+                                        # (group denials never spam channels)
 
 
 async def route_inbound(
@@ -89,6 +93,68 @@ async def route_inbound(
                                  pairing_code=denial.pairing_code)
     except Exception as e:  # never block routing on a guard fault
         logger.debug("route_inbound access-gate skipped: %s", e)
+
+    # 0a-groups) W3 GROUP CHAT (opt-in GROUP_CHAT_ENABLED, default OFF). In an
+    #    allowlisted group chat: the owner gets the legacy flow (mention-gated);
+    #    a participant's message is DATA into the bound group session
+    #    (mention-gated, correspondent rail = untrusted-wrap + capability
+    #    taint); everything else is a SILENT deny (no pairing spam into
+    #    channels). Fail-CLOSED once the flag is on.
+    #    Flag OFF: group/channel messages are silently DENIED here — the old
+    #    fall-through meant "obey everyone in the room" on surfaces with no
+    #    sender allowlist of their own (discord/slack/signal have none; only
+    #    telegram has ALLOWED_TELEGRAM_USER_IDS). DMs are untouched.
+    _chat_type = getattr(inbound.identity.source, "chat_type", "dm") or "dm"
+    _group_enabled = False
+    if _chat_type != "dm":
+        try:
+            from agents.task.surface_config import SurfaceConfig as _SC
+            _group_enabled = _SC.group_chat_enabled()
+        except Exception as e:
+            logger.debug("route_inbound group flag read failed (treat as off): %s", e)
+            _group_enabled = False
+        if not _group_enabled:
+            logger.info(
+                "route_inbound: %s %s message denied — GROUP_CHAT_ENABLED off",
+                getattr(inbound.identity.source, "surface_id", "?"), _chat_type,
+            )
+            return RouteDecision(RouteKind.DENIED, session_key, silent=True)
+    if _group_enabled:
+        try:
+            from core.surfaces.access import AccessTier, resolve_access_tier
+            tier = resolve_access_tier(container, inbound.identity)
+            if tier == AccessTier.DENIED:
+                return RouteDecision(RouteKind.DENIED, session_key, silent=True)
+            require_mention = True
+            try:
+                from agents.task.surface_config import SurfaceConfig as _SC
+                require_mention = _SC.group_require_mention()
+            except Exception:
+                require_mention = True
+            mentioned = inbound.mentions_bot is True
+            if require_mention and not mentioned:
+                return RouteDecision(RouteKind.DENIED, session_key, silent=True)
+            if tier == AccessTier.GROUP_PARTICIPANT:
+                row = None
+                try:
+                    registry = (container.get_service("session_chat_registry")
+                                if container else None)
+                    if registry is not None:
+                        row = registry.resolve(session_key)
+                except Exception as e:
+                    logger.debug("group session resolve failed: %s", e)
+                    row = None
+                sid = row.get("session_id") if row else None
+                if sid:
+                    return RouteDecision(RouteKind.CORRESPONDENT_DATA,
+                                         session_key, session_id=sid)
+                # Participants can never START a session — silent ignore.
+                return RouteDecision(RouteKind.DENIED, session_key, silent=True)
+            # tier == OWNER -> continue to the legacy flow below.
+        except Exception as e:
+            logger.warning("route_inbound group model fault — failing CLOSED "
+                           "to silent DENIED: %s", e)
+            return RouteDecision(RouteKind.DENIED, session_key, silent=True)
 
     # 0b) WS-A THREE-TIER ACCESS MODEL (opt-in CORRESPONDENT_ACCESS_ENABLED, default
     #     OFF -> this whole block is skipped and routing is byte-identical to legacy).

@@ -51,7 +51,14 @@ Set `POLYROB_POSTURE` explicitly behind a reverse proxy. Owner login needs
   403 in read-only mode
 - `POST /api/internal/emit` — localhost-only fast push from the telemetry
   service into the session's Socket.IO room
-- `GET /api/webgate/{memory,goals,cron,identity,doctor}` — webgate v1 data
+- `GET /api/webgate/{memory,goals,cron,identity,doctor,ledger}` — webgate v1 data
+- `GET/PATCH /api/webgate/preferences` — typed prefs over `core.prefs`
+  (guarded keys 409 without `confirm:true`; PATCH 403 in read-only mode)
+- `GET /api/webgate/pending` + `POST .../pending/{kind}/{id}/{promote,reject}`
+  — self-evolution review queue over `core.self_evolution` (decisions 403 in
+  read-only mode)
+- `GET /api/webgate/knowledge/{notes,episodes,skills,kb,changes}` — the
+  `/knowledge` wiki readers
 
 ## Socket.IO events (namespace `/`)
 

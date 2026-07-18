@@ -157,26 +157,58 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			'browser': 5,  # Browser operations can be flaky
 		}
 
+		# owner-UX P1 T5: per-tenant home dir for pref resolution below — mirrors
+		# the SELF_CONTEXT block's data_dir source (construction.py):
+		# container.config.data_dir, falling back to "data". Resolved once,
+		# fail-open, so a Mock/absent container never breaks Controller construction.
+		from core.runtime_paths import data_dir_or_home
+		try:
+			_pref_data_home = data_dir_or_home(
+				getattr(getattr(self.container, "config", None), "data_dir", None))
+		except Exception:
+			_pref_data_home = data_dir_or_home(None)
+
 		# Hook pipeline (Item 7E/7H): owns the pre/post/transform hook lists + the
 		# fail-mode execution engine (extracted to tools/controller/hooks.py). The
 		# _pre/_post/_transform_tool_call_hooks attributes proxy into it; the public
 		# register_*/_run_* methods below delegate. Empty => no-op.
 		self._hooks_pipeline = HookPipeline(self.logger)
-		_denylist = os.getenv("POLYROB_TOOL_DENYLIST", "").strip()
+		_denylist_env = os.getenv("POLYROB_TOOL_DENYLIST", "").strip()
+		_denylist = [n.strip() for n in _denylist_env.split(",") if n.strip()]
+		# owner-UX P1 T5: `approvals.deny` prefs UNION into the operator denylist —
+		# additive only (a pref can ADD a never-run action, never remove one the
+		# operator configured via POLYROB_TOOL_DENYLIST). No pref file => the list
+		# above is returned unchanged (byte-identical legacy).
+		try:
+			from core import prefs as _prefs
+			_denylist = list(_prefs.resolve(
+				"approvals.deny", self.user_id, _pref_data_home,
+				env_value=_denylist, default=_denylist,
+			) or [])
+		except Exception as e:
+			self.logger.error(f"denylist pref union skipped (non-fatal): {e}")
 		if _denylist:
 			self.register_pre_tool_call_hook(
-				make_denylist_hook([n.strip() for n in _denylist.split(",") if n.strip()]),
+				make_denylist_hook(_denylist),
 				fail_mode="closed",  # a crashing guardrail must DENY, not silently allow
 			)
 
 		# Approval seam (Item 7E): gate the resolved action set through an
 		# ApprovalProvider (default AutoApprover = allow). Empty set => no-op.
-		# WS-6/WS-7: `resolve_gated_actions` reads the FROZEN import-time snapshot of
-		# APPROVAL_REQUIRED_TOOLS + APPROVAL_PROVIDER (so a mid-process env mutation
-		# can't flip gating) and, at compute posture >= 2, UNIONs the compute-tool
-		# gated set (shell_run + self_env_*) and defaults the provider to interactive.
-		from tools.controller.approval import resolve_gated_actions
-		_required, _provider_name = resolve_gated_actions()
+		# owner-UX P2 T4: the full composition — the FROZEN env+posture set
+		# (WS-6/WS-7: `APPROVAL_REQUIRED_TOOLS`/`APPROVAL_PROVIDER` snapshotted at
+		# import so a mid-process env mutation can't flip gating; posture >= 2
+		# UNIONs the compute-tool gated set and defaults the provider to
+		# interactive) UNIONed with owner `approvals.require` prefs, provider
+		# tightened by `approvals.provider` (stricter-of, never looser) — now
+		# lives in ONE helper, `effective_approval_state()`
+		# (tools/controller/approval.py). The `/approve` REPL command +
+		# `polyrob approvals` CLI call the SAME helper for display, so what the
+		# owner is shown can never drift from what's enforced here. No pref file
+		# => byte-identical to the pre-extraction inline composition.
+		from tools.controller.approval import effective_approval_state
+		_gates, _provider_name = effective_approval_state(self.user_id, _pref_data_home)
+		_required = set(_gates.keys())
 		if _required:
 			# H9: importing this module registers the 'interactive_cli' provider so an
 			# operator can actually select it via APPROVAL_PROVIDER.
@@ -185,21 +217,224 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			except Exception:
 				pass
 			from tools.controller.approval import get_approval_provider_or_deny, make_approval_hook
-			# H9: fail-CLOSED. An unknown APPROVAL_PROVIDER resolves to deny-by-default
-			# (not skip-registration), so a misconfigured provider can never silently
-			# leave the requested tools UNGATED.
-			_provider = get_approval_provider_or_deny(_provider_name)
-			try:
-				self.register_pre_tool_call_hook(
-					make_approval_hook(_provider, _required),
-					fail_mode="closed",  # approval failure must DENY
+			if _provider_name == "auto_notify":
+				# 013 T4: act-and-report under effective AUTONOMY_MODE=autonomous —
+				# TWO lanes instead of the single supervised hook. The always-gated
+				# self-modification verbs + owner `approvals.require` pref pins stay
+				# on the durable, remotely approvable owner_queue provider; the rest
+				# of the gated set is allowed by auto_notify and reported post-hoc
+				# (audit event + one owner notification per successful run). The
+				# supervised path below stays byte-identical.
+				try:
+					# Importing this module registers the 'owner_queue' provider
+					# (mirrors the payment wiring at :240 below).
+					import tools.controller.approval_queue  # noqa: F401
+					from tools.controller.approval import autonomous_gating_lanes
+					from tools.controller.approval_queue import (
+						OwnerQueueApprover, make_tool_auto_notify_hook)
+					_queued, _reported = autonomous_gating_lanes(_gates)
+					# Finding 2 (013 T4 review): PAYMENT_APPROVAL_TOOLS (x402_request,
+					# hyperliquid/polymarket order verbs) already get their OWN
+					# first-class pre-hook (mode="approve" -> owner_queue) + post-hoc
+					# notify (mode="auto") wired below via `payment_approval_mode()` —
+					# never ALSO route them through this generic reported lane, or a
+					# within-cap payment under PAYMENT_APPROVAL_MODE=auto gets a
+					# second, misleading "[auto-approved]" notification even when the
+					# owner explicitly approved it (mode="approve"). They stay
+					# ELIGIBLE for the owner_queue lane above if they're ever
+					# `_ALWAYS_GATED_VERBS`/pref-pinned (they aren't today) — this
+					# only strips them out of `_reported`, never `_queued`.
+					try:
+						from core.config_policy import PAYMENT_APPROVAL_TOOLS as _PAY_TOOLS
+						_reported -= set(_PAY_TOOLS)
+					except Exception as e:
+						self.logger.error(
+							f"Failed to exclude PAYMENT_APPROVAL_TOOLS from the "
+							f"auto_notify reported lane: {e}")
+					_orch = self.orchestrator
+					_taint_probe = lambda: bool(  # noqa: E731 — same probe shape as payment wiring
+						getattr(_orch, "_correspondent_tainted", False))
+					if _queued:
+						_q_provider = get_approval_provider_or_deny(
+							"owner_queue", user_id=self.user_id, home_dir=_pref_data_home,
+						)
+						# Same Finding-1 taint short-circuit as the payment wiring:
+						# a tainted turn is denied by owner_queue itself — no durable
+						# ask, no owner notification.
+						if isinstance(_q_provider, OwnerQueueApprover):
+							_q_provider.set_taint_probe(_taint_probe)
+						self.register_pre_tool_call_hook(
+							make_approval_hook(_q_provider, _queued),
+							fail_mode="closed",  # approval failure must DENY
+						)
+					if _reported:
+						_r_provider = get_approval_provider_or_deny(
+							"auto_notify", user_id=self.user_id, home_dir=_pref_data_home,
+						)
+						self.register_pre_tool_call_hook(
+							make_approval_hook(_r_provider, _reported),
+							fail_mode="closed",
+						)
+						self.register_post_tool_call_hook(
+							make_tool_auto_notify_hook(
+								self.container, _reported, taint_probe=_taint_probe),
+							fail_mode="open",  # a notify failure must never break the caller
+						)
+					self.logger.info(
+						f"🔐 Autonomous approval lanes: owner_queue={sorted(_queued)} "
+						f"auto_notify={sorted(_reported)}"
+					)
+				except Exception as e:
+					self.logger.error(f"Failed to wire autonomous approval lanes: {e}")
+			else:
+				# H9: fail-CLOSED. An unknown APPROVAL_PROVIDER resolves to deny-by-default
+				# (not skip-registration), so a misconfigured provider can never silently
+				# leave the requested tools UNGATED.
+				# owner-UX P2 T5: thread tenant context so the interactive ladder's
+				# [a]lways-allow/[n]ever branches can read/write this tenant's
+				# preferences.toml. Providers that don't accept these kwargs
+				# (AutoApprover/DenyByDefaultApprover) ignore them (see get_approval_provider).
+				_provider = get_approval_provider_or_deny(
+					_provider_name, user_id=self.user_id, home_dir=_pref_data_home,
 				)
-				self.logger.info(
-					f"🔐 Approval gating enabled for: {sorted(_required)} "
-					f"(provider={type(_provider).__name__})"
-				)
-			except Exception as e:
-				self.logger.error(f"Failed to wire approval gating: {e}")
+				try:
+					self.register_pre_tool_call_hook(
+						make_approval_hook(_provider, _required),
+						fail_mode="closed",  # approval failure must DENY
+					)
+					self.logger.info(
+						f"🔐 Approval gating enabled for: {sorted(_required)} "
+						f"(provider={type(_provider).__name__})"
+					)
+				except Exception as e:
+					self.logger.error(f"Failed to wire approval gating: {e}")
+
+		# Payment approval mode (Task 9 / G-2, T7 review fix): outward-facing
+		# payment-CREATION actions (core.config_policy.PAYMENT_APPROVAL_TOOLS)
+		# are gated FIRST-CLASS — independent of the generic APPROVAL_REQUIRED_TOOLS/
+		# APPROVAL_PROVIDER seam above, which stays exactly as it was for every
+		# non-payment tool. PAYMENT_APPROVAL_TOOLS splits into two lanes:
+		# PAYMENT_RECEIVE_APPROVAL_TOOLS (x402_request) is eligible for act-and-report
+		# under mode="auto"; everything else (the live-trade order verbs) is SPEND-side
+		# and ALWAYS keeps owner_queue pre-approval regardless of mode — the hard
+		# product line is money-spend/trading is never act-and-report. See
+		# agents/task/constants.py::payment_approval_mode / PAYMENT_RECEIVE_APPROVAL_TOOLS.
+		try:
+			from core.config_policy import (
+				PAYMENT_APPROVAL_TOOLS, PAYMENT_RECEIVE_APPROVAL_TOOLS, payment_approval_mode)
+			_payment_tools = set(PAYMENT_APPROVAL_TOOLS)
+			_receive_tools = _payment_tools & set(PAYMENT_RECEIVE_APPROVAL_TOOLS)
+			_spend_tools = _payment_tools - _receive_tools
+		except Exception as e:
+			self.logger.error(f"Failed to resolve PAYMENT_APPROVAL_TOOLS: {e}")
+			_payment_tools = set()
+			_receive_tools = set()
+			_spend_tools = set()
+		if _payment_tools:
+			_pay_mode = payment_approval_mode()
+			if _pay_mode == "approve":
+				try:
+					# Importing this module registers the 'owner_queue' provider
+					# (mirrors the H9 'interactive_cli' self-registration above).
+					import tools.controller.approval_queue  # noqa: F401
+					from tools.controller.approval import (
+						get_approval_provider_or_deny, make_approval_hook)
+					from core.config_policy import payment_approval_timeout_sec
+					from tools.controller.approval_queue import OwnerQueueApprover
+					_pay_provider = get_approval_provider_or_deny(
+						"owner_queue", user_id=self.user_id, home_dir=_pref_data_home,
+					)
+					# Finding 1 (fix pass 1): give owner_queue the SAME
+					# correspondent-taint probe correspondent_gate reads
+					# (`orchestrator._correspondent_tainted`) so a tainted turn is
+					# denied by owner_queue itself — no durable ask, no owner
+					# notification — regardless of hook registration order vs
+					# correspondent_gate (registered later, in agent construction).
+					# `get_approval_provider_or_deny` is the generic factory (only
+					# threads user_id/home_dir) — this Controller.__init__ is the
+					# site that actually has the orchestrator reference, so the
+					# probe is injected post-construction via the setter seam. Only
+					# a real OwnerQueueApprover gets it (a monkeypatched/custom
+					# 'owner_queue' provider under test is left untouched).
+					if isinstance(_pay_provider, OwnerQueueApprover):
+						_orch = self.orchestrator
+						_pay_provider.set_taint_probe(
+							lambda: bool(getattr(_orch, "_correspondent_tainted", False))
+						)
+					self.register_pre_tool_call_hook(
+						make_approval_hook(_pay_provider, _payment_tools,
+						                   timeout=payment_approval_timeout_sec()),
+						fail_mode="closed",  # approval failure must DENY
+					)
+					self.logger.info(
+						f"💳 Payment approval mode=approve: {sorted(_payment_tools)} "
+						"-> owner_queue"
+					)
+				except Exception as e:
+					self.logger.error(f"Failed to wire payment approval gating (spend lane): {e}")
+			else:  # "auto" — spend verbs STILL owner_queue pre-approved (hard line);
+				# only the receive-side subset act-and-reports.
+				if _spend_tools:
+					try:
+						# Importing this module registers the 'owner_queue' provider
+						# (mirrors the H9 'interactive_cli' self-registration above).
+						import tools.controller.approval_queue  # noqa: F401
+						from tools.controller.approval import (
+							get_approval_provider_or_deny, make_approval_hook)
+						from core.config_policy import payment_approval_timeout_sec
+						from tools.controller.approval_queue import OwnerQueueApprover
+						_pay_provider = get_approval_provider_or_deny(
+							"owner_queue", user_id=self.user_id, home_dir=_pref_data_home,
+						)
+						# Finding 1 (fix pass 1): give owner_queue the SAME
+						# correspondent-taint probe correspondent_gate reads
+						# (`orchestrator._correspondent_tainted`) so a tainted turn is
+						# denied by owner_queue itself — no durable ask, no owner
+						# notification — regardless of hook registration order vs
+						# correspondent_gate (registered later, in agent construction).
+						# `get_approval_provider_or_deny` is the generic factory (only
+						# threads user_id/home_dir) — this Controller.__init__ is the
+						# site that actually has the orchestrator reference, so the
+						# probe is injected post-construction via the setter seam. Only
+						# a real OwnerQueueApprover gets it (a monkeypatched/custom
+						# 'owner_queue' provider under test is left untouched).
+						if isinstance(_pay_provider, OwnerQueueApprover):
+							_orch = self.orchestrator
+							_pay_provider.set_taint_probe(
+								lambda: bool(getattr(_orch, "_correspondent_tainted", False))
+							)
+						self.register_pre_tool_call_hook(
+							make_approval_hook(_pay_provider, _spend_tools,
+							                   timeout=payment_approval_timeout_sec()),
+							fail_mode="closed",  # approval failure must DENY
+						)
+						self.logger.info(
+							f"💳 Payment approval mode=auto (spend lane): {sorted(_spend_tools)} "
+							"-> owner_queue"
+						)
+					except Exception as e:
+						self.logger.error(f"Failed to wire payment approval gating (spend lane): {e}")
+				if _receive_tools:
+					try:
+						from tools.controller.approval_queue import make_payment_auto_notify_hook
+						# Finding 1 (fix pass 1): SAME taint short-circuit as the
+						# 'approve' branch above — mode=auto emits no owner
+						# notification/audit for a tainted turn either.
+						_orch = self.orchestrator
+						self.register_post_tool_call_hook(
+							make_payment_auto_notify_hook(
+								self.container, _receive_tools,
+								taint_probe=lambda: bool(
+									getattr(_orch, "_correspondent_tainted", False)),
+							),
+							fail_mode="open",  # a notify failure must never break the caller
+						)
+						self.logger.info(
+							f"💳 Payment approval mode=auto: {sorted(_receive_tools)} "
+							"-> post-execution owner notify"
+						)
+					except Exception as e:
+						self.logger.error(f"Failed to wire payment auto-notify hook: {e}")
 
 		# Register only core 'done' action
 		self._register_default_actions()

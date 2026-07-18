@@ -12,8 +12,11 @@ from modules.llm.model_registry import get_model_config
 
 # (input_price, output_price) per 1M tokens — verified against the live
 # OpenRouter models API on 2026-06-20.
+# NOTE: z-ai/glm-5.2 was pinned here at (1.20, 4.10) on 2026-06-20 but its live
+# price has since dropped to (0.93, 3.00) — that refreshed value is pinned in
+# test_openrouter_pricing_verified_2026_07_14.py and test_glm_registry.py, so it
+# is intentionally not asserted here (a dated snapshot only holds while live).
 VERIFIED_PRICING = {
-    "z-ai/glm-5.2": (1.20, 4.10),
     "x-ai/grok-4.3": (1.25, 2.50),
     "qwen/qwen3-235b-a22b": (0.455, 1.82),
     "qwen/qwen3-max": (0.78, 3.90),

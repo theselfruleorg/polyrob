@@ -51,6 +51,7 @@ async def test_dispatch_noop_when_disabled(board, monkeypatch):
 @pytest.mark.asyncio
 async def test_dispatch_runs_and_completes(board, monkeypatch):
     monkeypatch.setenv("GOALS_ENABLED", "true")
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")  # §4.3: wake rides verified; test the rail itself
     monkeypatch.setenv("GOAL_MAX_CONCURRENT", "5")
     # self-wake is gated OFF by default (P5 T7); enable it here to exercise the feed.
     monkeypatch.setenv("GOAL_SELF_WAKE_ENABLED", "true")
@@ -70,6 +71,7 @@ async def test_dispatch_runs_and_completes(board, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_self_wake_marks_episode_surfaced(board, monkeypatch):
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")  # §4.3: wake rides verified; test the rail itself
     """Task 7: a successful self-wake delivery marks the goal's episode surfaced
     (so the session-start digest doesn't repeat what self-wake already told the
     owner). Fail-open: never blocks the self-wake feed itself.
@@ -106,6 +108,7 @@ async def test_self_wake_marks_episode_surfaced(board, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_self_wake_not_marked_when_delivery_fails(board, monkeypatch):
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")  # §4.3: wake rides verified; test the rail itself
     """FIX1: deliver_self_wake returning False (SELF_WAKE_ENABLED off, a
     remote/non-resident session dropped+audited, or the reentry budget
     exhausted) must NOT mark the episode surfaced -- otherwise the
@@ -477,7 +480,9 @@ async def test_completed_goal_pushes_result_to_owner(tmp_path, monkeypatch):
 
     disp = GoalDispatcher(board, _Agent())
     goal = board.create(user_id="rob", title="Post the announcement")
-    await disp._self_wake(goal, "sess-1", "Posted the thread — 3 tweets.")
+    # The owner-completion push moved out of _self_wake (agent re-entry only) into
+    # _notify_owner_done (decoupled, GOAL_NOTIFY_ON_DONE) — 2026-07-08.
+    await disp._notify_owner_done(goal, "sess-1", "Posted the thread — 3 tweets.")
 
     assert pushed, "a completed goal must push its result to the owner"
     assert "Post the announcement" in pushed[0]

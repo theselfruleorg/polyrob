@@ -28,6 +28,16 @@ from modules.memory.provider import MemoryProvider
 
 logger = logging.getLogger(__name__)
 
+# C1 (2026-07-11): Obsidian-style [[wikilink]] targets inside note bodies.
+_WIKILINK_RE = re.compile(r"\[\[([^\]\[]+)\]\]")
+
+
+def parse_wikilinks(text) -> list:
+    """Extract [[wikilink]] targets from a note body, in order. '' / None -> []."""
+    if not text:
+        return []
+    return _WIKILINK_RE.findall(str(text))
+
 
 def _require_user_id() -> bool:
     """Whether empty-user_id memory I/O is refused (default true = safe-by-construction).
@@ -64,12 +74,46 @@ class SqliteMemoryProvider(MemoryProvider):
                 "CREATE VIRTUAL TABLE IF NOT EXISTS memories "
                 "USING fts5(user_id UNINDEXED, session_id UNINDEXED, content)"
             )
+            # Provenance sidecar (B2, 2026-07-11): FTS5 can't be ALTERed, so the
+            # write-time metadata the store was missing (D1 — no timestamp, no kind)
+            # lives in a plain table keyed by the FTS rowid. NOT named `mem_meta` —
+            # that name is the local_vector provider's vector sidecar. content_hash
+            # powers exact-dup collapse at write; legacy rows simply have no row here
+            # and render unprefixed.
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS mem_provenance ("
+                "mem_rowid INTEGER PRIMARY KEY, user_id TEXT, "
+                "ts INTEGER NOT NULL, kind TEXT, content_hash TEXT)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_prov_user_hash "
+                         "ON mem_provenance(user_id, content_hash)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_mem_prov_ts "
+                         "ON mem_provenance(ts)")
             # UP-09: curated per-tenant notes for the optional `memory` tool. Plain
             # table (no FTS) — small, read-in-full, agent-curated. Tenant-scoped by user_id.
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS curated_memory ("
                 "id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, content TEXT)"
             )
+            # C1 (2026-07-11): promote curated_memory to a notes substrate — additive
+            # column migration (plain table, ALTERable; a pre-C1 table is widened in
+            # place, existing rows read as active legacy notes via COALESCE).
+            note_cols = (
+                ("title", "TEXT"),
+                ("tags", "TEXT"),            # JSON list
+                ("links", "TEXT"),           # JSON list of [[wikilink]] targets
+                ("source", "TEXT"),          # provenance: session/episode/skill id
+                ("created_ts", "INTEGER"),
+                ("updated_ts", "INTEGER"),
+                ("access_count", "INTEGER DEFAULT 0"),
+                ("status", "TEXT DEFAULT 'active'"),   # active|pending|archived
+                ("created_by", "TEXT"),
+            )
+            have = {r[1] for r in
+                    conn.execute("PRAGMA table_info(curated_memory)").fetchall()}
+            for col, decl in note_cols:
+                if col not in have:
+                    conn.execute(f"ALTER TABLE curated_memory ADD COLUMN {col} {decl}")
             # KB tables (Task 5): tenant-scoped knowledge-base chunks + source tracking.
             # Separate from the conversational mem_* tables — never touched by sync_turn.
             conn.execute(
@@ -193,14 +237,30 @@ class SqliteMemoryProvider(MemoryProvider):
         wins. Read directly from env so this module never imports agents.task."""
         return bool_env("MEMORY_STORE_ANSWER_ONLY", bool_env("POLYROB_LOCAL", False))
 
+    @staticmethod
+    def _row_cap() -> int:
+        """Max chars per stored memory row (D8). Episodes and curated notes already
+        cap their writes; the auto-injected `memories` rows did not, so one oversized
+        tool dump became a permanent recall-bloat row. <=0 disables."""
+        try:
+            return int(os.getenv("MEMORY_ROW_MAX_CHARS", "4000"))
+        except ValueError:
+            return 4000
+
     @classmethod
     def _compose_stored_content(cls, user_content: str, assistant_content: str) -> str:
         """Build the row content per the answer-only policy. Shared by the keyword and
         vector providers so both store the SAME string (keeps RRF dedup-by-content
-        consistent across the two halves)."""
+        consistent across the two halves). The D8 cap is applied HERE for the same
+        reason — a truncated FTS row must match its embedded twin byte-for-byte."""
         if cls._store_answer_only():
-            return (assistant_content or "").strip()
-        return f"User: {user_content}\nAssistant: {assistant_content}".strip()
+            content = (assistant_content or "").strip()
+        else:
+            content = f"User: {user_content}\nAssistant: {assistant_content}".strip()
+        cap = cls._row_cap()
+        if cap > 0 and len(content) > cap:
+            content = content[:cap]
+        return content
 
     @staticmethod
     async def _run_blocking(fn, *args, **kwargs):
@@ -212,18 +272,55 @@ class SqliteMemoryProvider(MemoryProvider):
         return await loop.run_in_executor(None, functools.partial(fn, *args, **kwargs))
 
     async def sync_turn(self, user_content: str, assistant_content: str, *,
-                        session_id: str, user_id=None) -> None:
+                        session_id: str, user_id=None):
+        """Returns True when a new row was inserted, False when the write was an
+        exact duplicate (collapsed into a ts refresh), None on early-out — so the
+        vector subclass can skip embedding a collapsed dup. Callers through the
+        registry ignore the return value (ABC contract stays None-compatible)."""
         content = self._compose_stored_content(user_content, assistant_content)
         if not content:
-            return
+            return None
         if self._anon_blocked(user_id):
-            return
-        await self._run_blocking(
-            execute_retry,
+            return None
+        return await self._run_blocking(
+            self._sync_turn_blocking, self._norm_user(user_id), session_id, content)
+
+    def _sync_turn_blocking(self, norm_user: str, session_id: str, content: str) -> bool:
+        """Write one memory row + its provenance stamp (B2). Exact duplicates
+        collapse: an existing (user, content_hash) provenance row gets its ts
+        refreshed instead of inserting a twin — the store stops growing on
+        repeated identical findings. Provenance failures never lose the memory
+        row (fail-open, like every other leg of this provider). Returns True on
+        a real insert, False on a dup collapse."""
+        import hashlib
+        content_hash = hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
+        try:
+            dup = execute_retry(
+                self.db_path,
+                "SELECT mem_rowid FROM mem_provenance "
+                "WHERE user_id = ? AND content_hash = ? LIMIT 1",
+                (norm_user, content_hash), fetch="one")
+            if dup is not None:
+                execute_retry(
+                    self.db_path,
+                    "UPDATE mem_provenance SET ts = ? WHERE mem_rowid = ?",
+                    (int(time.time()), dup["mem_rowid"]))
+                return False
+        except Exception as e:  # dedup probe failure -> fall through to plain insert
+            logger.debug("mem dedup probe skipped: %s", e)
+        rowid = execute_retry(
             self.db_path,
             "INSERT INTO memories (user_id, session_id, content) VALUES (?, ?, ?)",
-            (self._norm_user(user_id), session_id, content),
-        )
+            (norm_user, session_id, content), fetch="lastrowid")
+        try:
+            execute_retry(
+                self.db_path,
+                "INSERT OR REPLACE INTO mem_provenance "
+                "(mem_rowid, user_id, ts, kind, content_hash) VALUES (?,?,?,?,?)",
+                (rowid, norm_user, int(time.time()), "finding", content_hash))
+        except Exception as e:  # provenance is additive — never lose the memory row
+            logger.debug("mem provenance stamp skipped: %s", e)
+        return True
 
     @staticmethod
     def _clamp_limit(limit, default: int) -> int:
@@ -252,26 +349,30 @@ class SqliteMemoryProvider(MemoryProvider):
         limit = self._clamp_limit(limit, self.top_k)
         try:
             # M3: offload the (blocking) FTS query off the event loop.
-            contents = await self._run_blocking(
-                self._keyword_contents,
+            rows = await self._run_blocking(
+                self._keyword_rows,
                 query, norm_user=self._norm_user(user_id), limit=limit, sort=sort)
         except Exception as e:
             logger.warning("sqlite memory search failed: %s", e)
             return ""
-        return "\n".join(f"- {c}" for c in contents)
+        return self._format_recall_rows(rows)
 
-    def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
-                          sort: str = None, allow_browse: bool = True,
-                          exclude_session_id: str = None) -> list:
-        """FTS5 recall -> ranked list of content strings (no formatting). Subclasses
-        (e.g. the hybrid vector provider) reuse this to RRF-merge with other signals
-        without lossy re-parsing of a joined string. Discover when `query` has >=3-char
-        terms; otherwise browse most-recent (unless allow_browse=False -> []).
+    def _keyword_rows(self, query: str, *, norm_user: str, limit: int,
+                      sort: str = None, allow_browse: bool = True,
+                      exclude_session_id: str = None) -> list:
+        """FTS5 recall -> ranked list of ``{"content", "ts"}`` dicts (no formatting).
+        ``ts`` comes from the B2 provenance sidecar (None for legacy rows). Discover
+        when `query` has >=3-char terms; otherwise browse most-recent (unless
+        allow_browse=False -> []).
 
         P2-1: when `exclude_session_id` is set (the automatic prefetch passes the
         CURRENT session), rows written by that session are excluded — otherwise recall
         re-injects the session's OWN just-written findings (already in context via the
         H-MEM tail) as 'untrusted external' memory, wasting tokens and top-k slots.
+
+        Provenance is fetched in a SECOND query by rowid (not a JOIN) — FTS5 MATCH
+        does not compose reliably with JOIN/aliasing, and rank ordering must stay
+        exactly as before.
         """
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
         _excl_sql = " AND session_id != ?" if exclude_session_id else ""
@@ -281,7 +382,7 @@ class SqliteMemoryProvider(MemoryProvider):
             order = {"newest": "rowid DESC", "oldest": "rowid ASC"}.get(sort, "rank")
             rows = execute_retry(
                 self.db_path,
-                f"SELECT content FROM memories WHERE memories MATCH ? AND user_id = ?"
+                f"SELECT rowid, content FROM memories WHERE memories MATCH ? AND user_id = ?"
                 f"{_excl_sql} ORDER BY {order} LIMIT ?",
                 (match, norm_user) + _excl_arg + (limit,),
                 fetch="all",
@@ -290,14 +391,52 @@ class SqliteMemoryProvider(MemoryProvider):
             order = "rowid ASC" if sort == "oldest" else "rowid DESC"
             rows = execute_retry(
                 self.db_path,
-                f"SELECT content FROM memories WHERE user_id = ?{_excl_sql} "
+                f"SELECT rowid, content FROM memories WHERE user_id = ?{_excl_sql} "
                 f"ORDER BY {order} LIMIT ?",
                 (norm_user,) + _excl_arg + (limit,),
                 fetch="all",
             )
         else:
             return []
-        return [r["content"] for r in (rows or [])]
+        rows = rows or []
+        ts_by_rowid = {}
+        if rows:
+            try:
+                ids = [r["rowid"] for r in rows]
+                marks = ",".join("?" for _ in ids)
+                prows = execute_retry(
+                    self.db_path,
+                    f"SELECT mem_rowid, ts FROM mem_provenance WHERE mem_rowid IN ({marks})",
+                    tuple(ids), fetch="all")
+                ts_by_rowid = {p["mem_rowid"]: p["ts"] for p in (prows or [])}
+            except Exception as e:  # provenance is additive — recall must not break
+                logger.debug("mem provenance lookup skipped: %s", e)
+        return [{"content": r["content"], "ts": ts_by_rowid.get(r["rowid"])}
+                for r in rows]
+
+    def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
+                          sort: str = None, allow_browse: bool = True,
+                          exclude_session_id: str = None) -> list:
+        """Bare content strings (subclass RRF contract — the hybrid vector provider
+        merges ranked lists keyed by content). Delegates to `_keyword_rows`."""
+        return [r["content"] for r in self._keyword_rows(
+            query, norm_user=norm_user, limit=limit, sort=sort,
+            allow_browse=allow_browse, exclude_session_id=exclude_session_id)]
+
+    @staticmethod
+    def _recall_line(content: str, ts=None) -> str:
+        """One recall bullet; date-prefixed when the write-time stamp is known (B2)."""
+        if ts:
+            try:
+                day = time.strftime("%Y-%m-%d", time.localtime(int(ts)))
+                return f"- [{day}] {content}"
+            except Exception:
+                pass
+        return f"- {content}"
+
+    @classmethod
+    def _format_recall_rows(cls, rows) -> str:
+        return "\n".join(cls._recall_line(r["content"], r.get("ts")) for r in rows)
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
         # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-
@@ -310,13 +449,48 @@ class SqliteMemoryProvider(MemoryProvider):
         if not terms:
             return ""
         try:
-            contents = await self._run_blocking(
-                self._keyword_contents, query, norm_user=self._norm_user(user_id),
+            rows = await self._run_blocking(
+                self._keyword_rows, query, norm_user=self._norm_user(user_id),
                 limit=self.top_k, exclude_session_id=session_id)
         except Exception as e:
             logger.warning("sqlite memory prefetch failed: %s", e)
             return ""
-        return "\n".join(f"- {c}" for c in contents)
+        return self._format_recall_rows(rows)
+
+    _PRUNE_BATCH = 500  # ids per DELETE ... IN (...) — safely under any param limit
+
+    def prune_memories(self, *, older_than_ts: int) -> int:
+        """Age-based retention for the cross-session store (B3), across ALL tenants.
+        Deletes memories rows whose B2 provenance stamp is older than the cutoff
+        (+ the stamp itself). Legacy rows WITHOUT a provenance stamp are exempt —
+        their age is unknowable, and guessing risks deleting live recall. Called
+        from the curator tick on its own cadence, NEVER from the write path.
+        Fail-open: any DB error degrades to 0 rather than raising.
+        """
+        try:
+            rows = execute_retry(
+                self.db_path,
+                "SELECT mem_rowid FROM mem_provenance WHERE ts < ?",
+                (int(older_than_ts),), fetch="all")
+            ids = [r["mem_rowid"] for r in (rows or [])]
+            if not ids:
+                return 0
+            # Batched IN clauses: a multi-year backlog can exceed SQLite's bound-
+            # parameter limit (999 on older builds), and the resulting error would
+            # be swallowed fail-open — retention silently broken forever.
+            for i in range(0, len(ids), self._PRUNE_BATCH):
+                chunk = tuple(ids[i:i + self._PRUNE_BATCH])
+                marks = ",".join("?" for _ in chunk)
+                execute_retry(self.db_path,
+                              f"DELETE FROM memories WHERE rowid IN ({marks})",
+                              chunk)
+                execute_retry(self.db_path,
+                              f"DELETE FROM mem_provenance WHERE mem_rowid IN ({marks})",
+                              chunk)
+            return len(ids)
+        except Exception as e:
+            logger.warning("prune_memories failed: %s", e)
+            return 0
 
     # ---- curated per-tenant store (UP-09 `memory` tool) ----------------------
     @staticmethod
@@ -332,49 +506,276 @@ class SqliteMemoryProvider(MemoryProvider):
         return max_entries, max_chars
 
     async def curated_add(self, user_id, content: str) -> bool:
-        """Add a curated note for this tenant. Returns False on anon-refusal, empty
-        content, over-char-cap, or over-entry-cap (so the tool can report the reason)."""
-        if self._anon_blocked(user_id):
-            return False
-        content = (content or "").strip()
-        if not content:
-            return False
-        max_entries, max_chars = self._curated_caps()
-        if len(content) > max_chars:
-            return False
-        norm = self._norm_user(user_id)
-        try:
-            rows = execute_retry(
-                self.db_path,
-                "SELECT COUNT(*) AS n FROM curated_memory WHERE user_id = ?",
-                (norm,), fetch="all",
-            )
-            if rows and rows[0]["n"] >= max_entries:
-                return False
-            execute_retry(
-                self.db_path,
-                "INSERT INTO curated_memory (user_id, content) VALUES (?, ?)",
-                (norm, content),
-            )
-            return True
-        except Exception as e:
-            logger.warning("curated_add failed: %s", e)
-            return False
+        """Legacy verb: add an active, untitled note. Returns False on anon-refusal,
+        empty content, over-char-cap, or over-entry-cap (so the tool can report
+        the reason). Delegates to note_create (C1)."""
+        return (await self.note_create(user_id, content)) is not None
 
     async def curated_read(self, user_id) -> str:
-        """Return this tenant's curated notes as newline-joined "- {content}" (or "")."""
+        """Return this tenant's ACTIVE curated notes as newline-joined "- {content}"
+        (or ""). Pre-C1 rows have status NULL and read as active."""
         if self._anon_blocked(user_id):
             return ""
         try:
             rows = execute_retry(
                 self.db_path,
-                "SELECT content FROM curated_memory WHERE user_id = ? ORDER BY id",
+                "SELECT content FROM curated_memory WHERE user_id = ? "
+                "AND COALESCE(status, 'active') = 'active' ORDER BY id",
                 (self._norm_user(user_id),), fetch="all",
             )
         except Exception as e:
             logger.warning("curated_read failed: %s", e)
             return ""
         return "\n".join(f"- {r['content']}" for r in (rows or []))
+
+    # ---- notes substrate (C1, 2026-07-11) ------------------------------------
+    # curated_memory promoted to first-class notes: title/tags/[[wikilinks]]/
+    # provenance/status lifecycle. All verbs tenant-scoped and fail-open; caps
+    # ride the existing MEMORY_TOOL_MAX_ENTRIES/MAX_CHARS knobs (archived notes
+    # do NOT count against the entry cap — archiving frees space).
+
+    @staticmethod
+    def _note_row_to_dict(r) -> dict:
+        def _json_list(v):
+            try:
+                out = json.loads(v) if v else []
+                return out if isinstance(out, list) else []
+            except Exception:
+                return []
+        return {
+            "id": r["id"], "title": r["title"], "content": r["content"],
+            "tags": _json_list(r["tags"]), "links": _json_list(r["links"]),
+            "source": r["source"], "created_ts": r["created_ts"],
+            "updated_ts": r["updated_ts"],
+            "access_count": r["access_count"] or 0,
+            "status": r["status"] or "active",
+            "created_by": r["created_by"] or "agent",
+        }
+
+    _NOTE_FIELDS = ("id, title, content, tags, links, source, created_ts, "
+                    "updated_ts, access_count, status, created_by")
+
+    @staticmethod
+    def _tags_list(tags) -> list:
+        if not tags:
+            return []
+        if isinstance(tags, str):
+            return [t.strip() for t in tags.split(",") if t.strip()]
+        return [str(t).strip() for t in tags if str(t).strip()]
+
+    async def note_create(self, user_id, content: str, *, title: str = None,
+                          tags=None, source: str = None, created_by: str = "agent",
+                          status: str = "active"):
+        """Create a note; returns its id or None (anon/empty/over-cap/error).
+        [[wikilinks]] in the body are parsed into the links column at write."""
+        if self._anon_blocked(user_id):
+            return None
+        content = (content or "").strip()
+        if not content:
+            return None
+        max_entries, max_chars = self._curated_caps()
+        if len(content) > max_chars:
+            return None
+        norm = self._norm_user(user_id)
+        try:
+            rows = execute_retry(
+                self.db_path,
+                "SELECT COUNT(*) AS n FROM curated_memory WHERE user_id = ? "
+                "AND COALESCE(status, 'active') IN ('active', 'pending')",
+                (norm,), fetch="all")
+            if rows and rows[0]["n"] >= max_entries:
+                return None
+            now = int(time.time())
+            return execute_retry(
+                self.db_path,
+                "INSERT INTO curated_memory (user_id, content, title, tags, links, "
+                "source, created_ts, updated_ts, access_count, status, created_by) "
+                "VALUES (?,?,?,?,?,?,?,?,0,?,?)",
+                (norm, content, (title or "").strip() or None,
+                 json.dumps(self._tags_list(tags)),
+                 json.dumps(parse_wikilinks(content)),
+                 source, now, now, status, created_by),
+                fetch="lastrowid")
+        except Exception as e:
+            logger.warning("note_create failed: %s", e)
+            return None
+
+    async def note_update(self, user_id, note_id, *, content: str = None,
+                          title: str = None, tags=None) -> bool:
+        """Update a note's content/title/tags (tenant-scoped). Content updates
+        recompute links. Returns False when the note isn't this tenant's."""
+        if self._anon_blocked(user_id):
+            return False
+        sets, args = ["updated_ts = ?"], [int(time.time())]
+        if content is not None:
+            content = content.strip()
+            if not content:
+                return False
+            _, max_chars = self._curated_caps()
+            if len(content) > max_chars:
+                return False
+            sets += ["content = ?", "links = ?"]
+            args += [content, json.dumps(parse_wikilinks(content))]
+        if title is not None:
+            sets.append("title = ?"); args.append(title.strip() or None)
+        if tags is not None:
+            sets.append("tags = ?"); args.append(json.dumps(self._tags_list(tags)))
+        try:
+            n = execute_retry(
+                self.db_path,
+                f"UPDATE curated_memory SET {', '.join(sets)} "
+                f"WHERE id = ? AND user_id = ?",
+                tuple(args) + (note_id, self._norm_user(user_id)))
+            return bool(n)
+        except Exception as e:
+            logger.warning("note_update failed: %s", e)
+            return False
+
+    async def note_archive(self, user_id, note_id) -> bool:
+        """Archive (never delete) a note. Returns False when not this tenant's."""
+        if self._anon_blocked(user_id):
+            return False
+        try:
+            n = execute_retry(
+                self.db_path,
+                "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
+                "WHERE id = ? AND user_id = ?",
+                (int(time.time()), note_id, self._norm_user(user_id)))
+            return bool(n)
+        except Exception as e:
+            logger.warning("note_archive failed: %s", e)
+            return False
+
+    async def note_list(self, user_id, *, status: str = "active", tag: str = None,
+                        limit: int = 200) -> list:
+        """List this tenant's notes by status (newest updated first), optionally
+        filtered by tag. [] on anon-block or error."""
+        if self._anon_blocked(user_id):
+            return []
+        where = ["user_id = ?", "COALESCE(status, 'active') = ?"]
+        args = [self._norm_user(user_id), status]
+        if tag:
+            where.append("tags LIKE ?")
+            args.append(f'%{json.dumps(str(tag))[1:-1]}%')
+        try:
+            rows = execute_retry(
+                self.db_path,
+                f"SELECT {self._NOTE_FIELDS} FROM curated_memory "
+                f"WHERE {' AND '.join(where)} "
+                f"ORDER BY COALESCE(updated_ts, 0) DESC, id DESC LIMIT ?",
+                tuple(args) + (max(1, min(1000, int(limit or 200))),), fetch="all")
+        except Exception as e:
+            logger.warning("note_list failed: %s", e)
+            return []
+        return [self._note_row_to_dict(r) for r in (rows or [])]
+
+    async def note_get(self, user_id, note_id, *, bump_access: bool = True):
+        """Fetch one note (tenant-scoped). By default bumps access_count — the
+        AGENT-reuse signal the consolidation pass keys staleness on. Passive
+        viewers (the read-only webview) pass ``bump_access=False`` so browsing
+        the wiki never exempts an agent-unused note from the staleness archive.
+        None when absent."""
+        if self._anon_blocked(user_id):
+            return None
+        norm = self._norm_user(user_id)
+        try:
+            row = execute_retry(
+                self.db_path,
+                f"SELECT {self._NOTE_FIELDS} FROM curated_memory "
+                f"WHERE id = ? AND user_id = ?",
+                (note_id, norm), fetch="one")
+            if row is None:
+                return None
+            out = self._note_row_to_dict(row)
+            if bump_access:
+                execute_retry(
+                    self.db_path,
+                    "UPDATE curated_memory SET access_count = COALESCE(access_count,0)+1 "
+                    "WHERE id = ? AND user_id = ?",
+                    (note_id, norm))
+                out["access_count"] = (out["access_count"] or 0) + 1
+            return out
+        except Exception as e:
+            logger.warning("note_get failed: %s", e)
+            return None
+
+    def consolidate_notes(self, *, stale_before_ts: int) -> dict:
+        """Mechanical consolidation (C4), across ALL tenants, curator-tick only:
+
+        - **stale**: archive ACTIVE agent-authored notes never read
+          (access_count 0) and not updated since the cutoff. Owner-authored
+          (created_by user/owner) and legacy rows (NULL created_by/updated_ts —
+          unknowable) are exempt.
+        - **dupes**: within (user_id, content) groups of active notes, archive the
+          agent-authored copies, keeping the group's single oldest row (an
+          owner-authored copy always survives).
+
+        Archive-only (recoverable), fail-open. Returns
+        ``{"archived_stale": [(user_id, id)...], "archived_dupes": [...]}`` so the
+        curator can emit per-note audit events.
+        """
+        out = {"archived_stale": [], "archived_dupes": []}
+        now = int(time.time())
+        try:
+            stale = execute_retry(
+                self.db_path,
+                "SELECT id, user_id FROM curated_memory "
+                "WHERE COALESCE(status, 'active') = 'active' "
+                "AND created_by IS NOT NULL AND created_by NOT IN ('user', 'owner') "
+                "AND COALESCE(access_count, 0) = 0 "
+                "AND updated_ts IS NOT NULL AND updated_ts < ?",
+                (int(stale_before_ts),), fetch="all") or []
+            for r in stale:
+                execute_retry(
+                    self.db_path,
+                    "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
+                    "WHERE id = ?", (now, r["id"]))
+                out["archived_stale"].append((r["user_id"], r["id"]))
+        except Exception as e:
+            logger.warning("consolidate_notes stale pass failed: %s", e)
+        try:
+            groups = execute_retry(
+                self.db_path,
+                "SELECT user_id, content, MIN(id) AS keep_id FROM curated_memory "
+                "WHERE COALESCE(status, 'active') = 'active' "
+                "GROUP BY user_id, content HAVING COUNT(*) > 1",
+                fetch="all") or []
+            for g in groups:
+                dupes = execute_retry(
+                    self.db_path,
+                    "SELECT id, user_id FROM curated_memory "
+                    "WHERE user_id = ? AND content = ? AND id != ? "
+                    "AND COALESCE(status, 'active') = 'active' "
+                    "AND created_by IS NOT NULL AND created_by NOT IN ('user', 'owner')",
+                    (g["user_id"], g["content"], g["keep_id"]), fetch="all") or []
+                for r in dupes:
+                    execute_retry(
+                        self.db_path,
+                        "UPDATE curated_memory SET status = 'archived', updated_ts = ? "
+                        "WHERE id = ?", (now, r["id"]))
+                    out["archived_dupes"].append((r["user_id"], r["id"]))
+        except Exception as e:
+            logger.warning("consolidate_notes dupe pass failed: %s", e)
+        return out
+
+    async def note_backlinks(self, user_id, title: str) -> list:
+        """Notes whose links list contains `title` (the wiki backlink set)."""
+        if self._anon_blocked(user_id) or not (title or "").strip():
+            return []
+        try:
+            rows = execute_retry(
+                self.db_path,
+                f"SELECT {self._NOTE_FIELDS} FROM curated_memory "
+                f"WHERE user_id = ? AND links LIKE ? "
+                f"AND COALESCE(status, 'active') != 'archived' ORDER BY id",
+                (self._norm_user(user_id),
+                 f'%{json.dumps(str(title).strip())}%'), fetch="all")
+        except Exception as e:
+            logger.warning("note_backlinks failed: %s", e)
+            return []
+        # LIKE over the JSON is a pre-filter; confirm against the parsed list.
+        out = [self._note_row_to_dict(r) for r in (rows or [])]
+        return [n for n in out if str(title).strip() in n["links"]]
 
     async def curated_remove(self, user_id, substring: str) -> int:
         """Delete this tenant's curated notes containing `substring`. Returns count."""

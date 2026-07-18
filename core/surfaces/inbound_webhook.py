@@ -17,8 +17,7 @@ from core.surfaces.transcription import voice_present, transcribe_inbound_media
 from core.surfaces.voice_guard import voice_needs_guard, voice_unavailable_message
 from core.surfaces.voice_echo import voice_transcript, voice_echo_message
 from agents.task.surface_config import SurfaceConfig
-from surfaces.telegram.harness import act_on_inbound  # shared RouteDecision->TaskAgent dispatch
-from surfaces.telegram.inbound import InboundResult   # dataclass(.inbound, .decision) — DRY
+from core.surfaces.act import InboundResult, act_on_inbound  # actor registered by surfaces.telegram.harness
 
 logger = logging.getLogger(__name__)
 

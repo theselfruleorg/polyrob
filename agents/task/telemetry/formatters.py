@@ -394,9 +394,33 @@ class ToolExecutionFormatter(BaseFeedFormatter):
                 'result_size': event.properties.get('result_size'),
                 'result_truncated': event.properties.get('result_truncated', False),
                 'result_preview': event.properties.get('result_preview'),
-                'parameters': event.properties.get('parameters', {})
+                'parameters': event.properties.get('parameters', {}),
+                # 019 span join key: pairs this completion with its tool_started
+                'call_id': event.properties.get('call_id')
             }
         }
+
+
+class RunEventFormatter(BaseFeedFormatter):
+    """Formatter for 019 run-state span/wait events.
+
+    Covers tool_started / llm_started / awaiting_approval / approval_resolved:
+    a flat data envelope of the event's own properties, with ``step`` lifted
+    top-level (consumers key on it like tool_execution's).
+    """
+
+    def format(self, event: BaseTelemetryEvent) -> Dict[str, Any]:
+        """Format a run-state event for the feed."""
+        props = dict(event.properties)
+        out: Dict[str, Any] = {
+            'type': event.name,
+            'timestamp': time.time(),
+            'datetime': datetime.now().isoformat(),
+            'data': props,
+        }
+        if isinstance(props.get('step'), int):
+            out['step'] = props['step']
+        return out
 
 
 class ErrorFormatter(BaseFeedFormatter):
@@ -610,6 +634,14 @@ class FeedFormatterRegistry:
             # Iteration complete formatter for enhanced UI
             'iteration_complete': IterationCompleteFormatter(),
         }
+        # 019 run-state span/wait events share one formatter
+        run_event_formatter = RunEventFormatter()
+        for run_kind in ('tool_started', 'llm_started',
+                         'awaiting_approval', 'approval_resolved',
+                         'compaction_started', 'compaction_finished',
+                         'retry_wait', 'subagent_started', 'subagent_finished',
+                         'delegation_dispatched', 'delegation_completed'):
+            self._formatters[run_kind] = run_event_formatter
         self._generic_formatter = GenericEventFormatter()
 
     def get_formatter(self, event_name: str) -> BaseFeedFormatter:

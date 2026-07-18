@@ -10,6 +10,8 @@ from core.surfaces.idempotency import IdempotencyStore
 from core.surfaces.inbound_webhook import WebhookSurface
 from core.surfaces.media import Media
 
+import surfaces.telegram.harness  # noqa: F401 — registers the shared inbound actor (core.surfaces.act)
+
 logger = logging.getLogger(__name__)
 
 

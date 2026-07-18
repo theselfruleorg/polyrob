@@ -88,3 +88,19 @@ def is_identity_suspicious(text: str) -> bool:
     if is_suspicious(text):
         return True
     return any(rx.search(text) for rx in _IDENTITY_COMPILED)
+
+
+def is_skill_content_suspicious(text: str) -> bool:
+    """Scan for an agent-authored SKILL body/description (P1 finalization).
+
+    Composes the base instruction-override scan with invisible/zero-width/bidi
+    unicode detection — the docs (SKILL_AUTHORING_STANDARD §8) promise the latter
+    at write time, but the skill writer only called ``is_suspicious`` so a skill
+    body could smuggle a hidden instruction set past the plain-text ``.pending``
+    review. Does NOT include the stricter identity-subversion patterns (those are
+    for the SELF/identity doc, not a general skill). Fail-closed: callers reject on
+    True or on RAISE.
+    """
+    if not text:
+        return False
+    return has_invisible_unicode(text) or is_suspicious(text)

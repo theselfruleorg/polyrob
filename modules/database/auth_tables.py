@@ -174,6 +174,10 @@ class AuthTables:
                     cached_tokens INTEGER DEFAULT 0,
                     api_cost_usd REAL DEFAULT 0.0,
                     markup_multiplier REAL DEFAULT 1.0,
+                    -- G-26: real column for the request_id record_llm_usage generates
+                    -- "for deduplication" -- kept in sync with schema.sql. See the
+                    -- partial unique index below.
+                    request_id TEXT,
                     metadata TEXT,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
@@ -190,6 +194,68 @@ class AuthTables:
 
             await self.db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_usage_time ON usage_records(timestamp)
+            ''')
+
+            # G-26: self-heal request_id onto a pre-existing usage_records table
+            # (same idempotent-ALTER idiom as auth_nonces/chain_id above -- SQLite
+            # has no ALTER TABLE ... ADD COLUMN IF NOT EXISTS, and CREATE TABLE IF
+            # NOT EXISTS above is a no-op against an already-created table, so a
+            # legacy DB never gets the column from the CREATE TABLE alone).
+            # MUST run before the index below: creating the index against a
+            # column that doesn't exist yet would raise and crash boot (this
+            # whole method re-raises on any exception).
+            existing_usage_cols = await self.db.fetch_all("PRAGMA table_info(usage_records)")
+            if "request_id" not in {c["name"] for c in existing_usage_cols}:
+                try:
+                    await self.db.execute("ALTER TABLE usage_records ADD COLUMN request_id TEXT")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        raise
+
+            # G-26: partial unique index -- NULL request_id (legacy rows / any
+            # caller that genuinely has none) is exempt; only a real duplicate
+            # request_id is rejected at the DB level.
+            await self.db.execute('''
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_records_request_id
+                ON usage_records(request_id) WHERE request_id IS NOT NULL
+            ''')
+
+            # Billing failures (unpaid charges for admin reconciliation) — mirrors
+            # migrations v1_3_0. This inline creator was MISSING (U4, 2026-07-14
+            # review): a fresh install stamps v1.3.0 as applied without executing,
+            # so the table never existed and _record_billing_failure INSERTs
+            # silently failed. Kept in sync with v1_3_0_billing_failures.py; the
+            # contract test tests/unit/migrations/test_inline_schema_at_head.py
+            # enforces inline-schema == migration-HEAD.
+            await self.db.execute('''
+                CREATE TABLE IF NOT EXISTS billing_failures (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    request_id TEXT UNIQUE NOT NULL,
+                    credits_owed INTEGER NOT NULL,
+                    api_cost_usd REAL NOT NULL,
+                    model TEXT,
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    status TEXT DEFAULT 'pending',
+                    resolution_notes TEXT
+                )
+            ''')
+
+            await self.db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_billing_failures_user
+                ON billing_failures(user_id)
+            ''')
+
+            await self.db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_billing_failures_status
+                ON billing_failures(status)
+            ''')
+
+            await self.db.execute('''
+                CREATE INDEX IF NOT EXISTS idx_billing_failures_created
+                ON billing_failures(created_at)
             ''')
 
             # Pending sweeps (treasury transfer queue)

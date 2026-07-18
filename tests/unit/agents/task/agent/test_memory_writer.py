@@ -7,9 +7,10 @@ mixin and supplies a logger — no LLM, container, or H-MEM needed.
 import logging
 
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
+from agents.task.agent.core.result_offload import ToolResultOffloadMixin
 
 
-class _Host(MemoryWriterMixin):
+class _Host(MemoryWriterMixin, ToolResultOffloadMixin):  # offload trio moved to ToolResultOffloadMixin (P7)
     def __init__(self):
         self.logger = logging.getLogger("test_memory_writer")
 

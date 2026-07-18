@@ -35,6 +35,7 @@ not the more specific "what were we just discussing".
 from __future__ import annotations
 
 import logging
+from core.config_policy import AutonomyConfig
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -49,7 +50,6 @@ async def build_bridge_message(*, user_id: Optional[str], thread_key: Optional[s
     episode has an empty/whitespace-only summary. Fail-open — any error returns None.
     """
     try:
-        from agents.task.constants import AutonomyConfig
         if not AutonomyConfig.continuity_bridge_enabled() or not thread_key:
             return None
 

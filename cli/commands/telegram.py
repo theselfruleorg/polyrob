@@ -14,6 +14,7 @@ import sys
 from typing import Optional
 
 import click
+from core.runtime_paths import data_dir_or_home
 
 
 class TelegramTokenError(click.ClickException):
@@ -86,7 +87,7 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         sys.exit(1)
     if quiet:
-        _logging.disable(_logging.ERROR)
+        _logging.disable(_logging.NOTSET)
     elif not verbose:
         # Headless service: app logs at INFO in the journal, but silence the noisy
         # transport libraries (long-poll getUpdates, aiogram dispatcher, asyncio).
@@ -110,7 +111,7 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
     from surfaces.telegram.harness import build_telegram_harness
     # Pin harness state DBs (dedup / user directory) to the container's data_dir so
     # per-instance isolation holds under POLYROB_DATA_DIR (else they land in ./data).
-    _data_dir = getattr(getattr(container, "config", None), "data_dir", "data") or "data"
+    _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
     harness = build_telegram_harness(container, task_agent, token=token, webhook_base=None,
                                      data_dir=_data_dir)
 
@@ -126,7 +127,7 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
         from agents.task.constants import local_mode_enabled
         if local_mode_enabled():
             from core.autonomy_runtime import start_autonomy
-            _data_dir = getattr(getattr(container, "config", None), "data_dir", "data")
+            _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
             autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
     except Exception:
         autonomy_handles = None
@@ -137,6 +138,9 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
         username = getattr(me, "username", None)
     except Exception:
         username = None
+    # W3 groups (2026-07-14): the inbound builder needs our own username to detect
+    # @mentions / replies-to-us — without it every group message is silently denied.
+    harness.bot_username = username
     allow = (os.environ.get("ALLOWED_TELEGRAM_USER_IDS") or "").strip()
     click.echo(click.style("telegram bot online", fg="green")
                + (f": @{username}" if username else ""))

@@ -14,6 +14,9 @@ def test_empty_when_no_file(tmp_path, monkeypatch):
 
 def test_set_and_get_default_round_trip(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_CLI_CONFIG", str(tmp_path / "nested" / "cli.json"))
+    # set_default_model (G11 SSOT fix) also upserts ~/.polyrob/.env — keep it off
+    # the real home dir so this test never mutates the developer's actual config.
+    monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path)
     set_default_model("anthropic", "claude-opus-4-8")
     assert get_default_model() == ("anthropic", "claude-opus-4-8")
     # persisted to disk
@@ -29,6 +32,9 @@ def test_corrupt_file_returns_empty(tmp_path, monkeypatch):
 
 def test_save_preserves_other_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_CLI_CONFIG", str(tmp_path / "cli.json"))
+    # See test_set_and_get_default_round_trip above — keep the env-pin write off
+    # the real home dir.
+    monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path)
     save_cli_config({"foo": "bar"})
     set_default_model("openai", "gpt-5")
     cfg = load_cli_config()
@@ -39,6 +45,9 @@ def test_save_preserves_other_keys(tmp_path, monkeypatch):
 
 def test_model_set_default_command(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_CLI_CONFIG", str(tmp_path / "cli.json"))
+    # See test_set_and_get_default_round_trip above — keep the env-pin write off
+    # the real home dir.
+    monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path)
     from cli.polyrob import cli
     runner = CliRunner()
     result = runner.invoke(cli, ["model", "set-default", "anthropic", "claude-opus-4-8"])

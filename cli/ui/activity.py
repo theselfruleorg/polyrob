@@ -65,6 +65,7 @@ class ActivityLine:
         self._started_at = clock()
         self._steps = 0
         self._tools = 0
+        self._current = ""  # 019: live current activity ("→ navigate"/"thinking")
         self._live: Optional[Any] = None
         self._stopped = False
 
@@ -120,18 +121,26 @@ class ActivityLine:
         with self._lock:
             self._steps += 1
             self._tools += max(0, tool_actions)
+            self._current = ""  # the step's in-flight activity finished
+
+    def note_activity(self, label: str) -> None:
+        """Set the live current-activity label (019 span events)."""
+        with self._lock:
+            self._current = (label or "").strip()
 
     # ------------------------------------------------------------------
     # Composition
     # ------------------------------------------------------------------
 
     def compose_text(self) -> str:
-        """``rob · working · 2 tools · step 3 · 12s`` (spinner glyph excluded)."""
+        """``rob · working · → navigate · 2 tools · step 3 · 12s``."""
         with self._lock:
-            steps, tools = self._steps, self._tools
+            steps, tools, current = self._steps, self._tools, self._current
         sep = f" {ICONS.bullet} "
         from cli.ui.identity import agent_display_name
         parts = [agent_display_name(), "working" if (steps or tools) else "thinking"]
+        if current and current != "thinking":
+            parts.append(current)
         if tools:
             parts.append(f"{tools} tool{'s' if tools != 1 else ''}")
         if steps:

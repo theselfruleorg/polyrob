@@ -136,11 +136,6 @@ class ConversationContext(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     last_interaction: datetime = Field(default_factory=datetime.utcnow)
 
-    model_config = ConfigDict(
-        json_encoders={
-            datetime: lambda v: v.isoformat()
-        }
-    )
 
     def add_message(self, message: Union[Dict[str, Any], Message]) -> None:
         """Add a message to the context."""

@@ -23,15 +23,27 @@ from typing import List, Optional
 
 from core.instance import resolve_owner_principal
 
-# filesystem + task are auto-merged by the orchestrator, but list them for clarity.
-_DEFAULT_INTERACTIVE_TOOL_IDS = "goal,twitter,web_fetch,filesystem,task"
-
 
 def interactive_tool_ids() -> List[str]:
-    """The interactive-owner toolset (env ``INTERACTIVE_TOOL_IDS``-overridable)."""
-    raw = os.getenv("INTERACTIVE_TOOL_IDS", _DEFAULT_INTERACTIVE_TOOL_IDS)
-    ids = [t.strip() for t in raw.split(",") if t.strip()]
-    return ids or ["filesystem", "task"]
+    """The interactive-owner toolset (env ``INTERACTIVE_TOOL_IDS``-overridable).
+
+    Supervised default: the historical 5-tool string (byte-identical).
+    Effective ``AUTONOMY_MODE=autonomous``: the full ``AUTONOMOUS_MODE_TOOLS``
+    grant — the owner chat KEEPS ``goal``/``cronjob``, it is exactly where
+    scheduling belongs — plus the posture-gated compute tools
+    (``with_compute_tools``). An explicit env always wins (014 A2).
+    """
+    raw = os.getenv("INTERACTIVE_TOOL_IDS")
+    if raw is not None:
+        ids = [t.strip() for t in raw.split(",") if t.strip()]
+        return ids or ["filesystem", "task"]
+    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
+    from agents.task.tool_defaults import with_compute_tools, resolve_toolset
+    if full_autonomy_enabled():
+        return with_compute_tools(list(AUTONOMOUS_MODE_TOOLS))
+    # Supervised default: the SSOT "owner_interactive" toolset (byte-identical to the
+    # historical goal,twitter,web_fetch,filesystem,task string).
+    return resolve_toolset("owner_interactive")
 
 
 def owner_interactive_tool_ids(user_id: Optional[str], env=None) -> Optional[List[str]]:

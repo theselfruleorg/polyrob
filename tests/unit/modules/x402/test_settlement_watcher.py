@@ -183,3 +183,161 @@ def test_builder_reads_interval_env(monkeypatch):
     monkeypatch.setenv("X402_SETTLEMENT_WATCH_INTERVAL_SEC", "120")
     w = build_settlement_watcher(object())
     assert w.interval_seconds == 120
+
+
+# --- G-22: non-payment escalation --------------------------------------------
+# An invoice that lapses unpaid must wake the originating session (or the
+# owner) instead of silently vanishing.
+
+def _expire_soon(monkeypatch):
+    """Advance time.time() by 1h so a 0.1h-expiry invoice is stale."""
+    import time as _time
+    real_time = _time.time
+    monkeypatch.setattr(_time, "time", lambda: real_time() + 3600)
+
+
+def _capture_owner_notifications(monkeypatch):
+    calls = []
+
+    async def _fake_deliver(container, user_id, text, **kwargs):
+        calls.append({"container": container, "user_id": user_id, "text": text,
+                      "kwargs": kwargs})
+        return "sent"
+
+    monkeypatch.setattr(
+        "core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_expired_correspondent_active_delivers_data_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("CORRESPONDENT_ACCESS_ENABLED", "true")
+    owner_calls = _capture_owner_notifications(monkeypatch)
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_exp_c", amount_usd=2.0, purpose="svc",
+            expiry_hours=0.1, db=db,
+            correspondent_ref={"surface": "email", "address": "x@y.z", "thread_id": ""})
+        _expire_soon(monkeypatch)
+        agent = _CorrAgent(corr_state="active")
+        watcher = SettlementWatcher(agent, db=db)
+        out = await watcher.tick_once()
+        assert out["expired"] == 1
+        assert out["expired_notified"] == 1
+        assert len(agent.correspondent_deliveries) == 1
+        assert not agent.wakes  # NOT the owner self-wake rail
+        sid, src, text, meta = agent.correspondent_deliveries[0]
+        assert sid == "sess_exp_c" and src == "email:x@y.z"
+        assert "EXPIRED" in text and inv["request_id"] in text
+        assert meta["kind_hint"] == "payment_expired"
+        # the owner ALSO gets a durable notification, regardless of the
+        # session-side correspondent delivery
+        assert len(owner_calls) == 1
+        assert owner_calls[0]["user_id"] == "rob"
+        assert inv["request_id"] in owner_calls[0]["text"]
+
+        # second tick: exactly-once claim — no re-delivery on either rail
+        out2 = await watcher.tick_once()
+        assert out2["expired_notified"] == 0
+        assert len(agent.correspondent_deliveries) == 1
+        assert len(owner_calls) == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_no_correspondent_self_wake_and_owner_notice(tmp_path, monkeypatch):
+    owner_calls = _capture_owner_notifications(monkeypatch)
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_exp_w", amount_usd=3.5, purpose="report",
+            expiry_hours=0.1, db=db)
+        _expire_soon(monkeypatch)
+        agent = _WakeAgent()
+        out = await SettlementWatcher(agent, db=db).tick_once()
+        assert out["expired"] == 1
+        assert out["expired_notified"] == 1
+        assert len(agent.wakes) == 1
+        sid, uid, text, meta = agent.wakes[0]
+        assert sid == "sess_exp_w" and uid == "rob"
+        assert "EXPIRED" in text and inv["request_id"] in text
+        assert meta["kind_hint"] == "payment_expired"
+        # plus exactly one owner notification over the delivery rail
+        assert len(owner_calls) == 1
+        assert owner_calls[0]["user_id"] == "rob"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_expired_self_wake_disabled_still_marks_and_notifies_owner(tmp_path, monkeypatch):
+    owner_calls = _capture_owner_notifications(monkeypatch)
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="gone", amount_usd=1.0, purpose="p",
+            expiry_hours=0.1, db=db)
+        _expire_soon(monkeypatch)
+        agent = _WakeAgent(result=False)  # SELF_WAKE off / non-resident -> dropped
+        out = await SettlementWatcher(agent, db=db).tick_once()
+        assert out["expired_notified"] == 1
+        # wake was attempted (and dropped) but the row is marked exactly once
+        assert len(agent.wakes) == 1
+        assert await invoicing.expired_unnotified_invoices(db=db) == []
+        # the owner notification still fires despite the dropped wake
+        assert len(owner_calls) == 1
+        assert inv["request_id"] in owner_calls[0]["text"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_settled_row_not_expiry_woken_and_expired_row_not_settlement_woken(
+        tmp_path, monkeypatch):
+    _capture_owner_notifications(monkeypatch)
+    db = await _setup_db(tmp_path)
+    try:
+        settled_inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="s_settled", amount_usd=1.0, purpose="a", db=db)
+        expired_inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="s_expired", amount_usd=1.0, purpose="b",
+            expiry_hours=0.1, db=db)
+        await invoicing.settle_payment_request(settled_inv["request_id"], db=db)
+        _expire_soon(monkeypatch)
+
+        agent = _WakeAgent()
+        out = await SettlementWatcher(agent, db=db).tick_once()
+        assert out["settled_notified"] == 1
+        assert out["expired_notified"] == 1
+        assert len(agent.wakes) == 2
+        by_kind = {w[3]["kind_hint"]: w for w in agent.wakes}
+        assert set(by_kind.keys()) == {"payment_settled", "payment_expired"}
+        assert by_kind["payment_settled"][0] == "s_settled"
+        assert by_kind["payment_expired"][0] == "s_expired"
+        # no double terminal wake: exactly one wake per row, no cross-fire
+        assert sum(1 for w in agent.wakes if w[0] == "s_settled") == 1
+        assert sum(1 for w in agent.wakes if w[0] == "s_expired") == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_tick_with_no_expired_rows_is_noop(tmp_path, monkeypatch):
+    owner_calls = _capture_owner_notifications(monkeypatch)
+    db = await _setup_db(tmp_path)
+    try:
+        # a pending, not-yet-expired invoice must not trigger expiry escalation
+        await invoicing.create_payment_request(
+            user_id="rob", session_id="s", amount_usd=1.0, purpose="p",
+            expiry_hours=10.0, db=db)
+        agent = _WakeAgent()
+        out = await SettlementWatcher(agent, db=db).tick_once()
+        assert out["expired"] == 0
+        assert out["expired_notified"] == 0
+        assert out["settled_notified"] == 0
+        assert not agent.wakes
+        assert not owner_calls
+    finally:
+        await db.close()

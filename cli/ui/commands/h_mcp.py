@@ -15,6 +15,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from cli.ui import candy
+
 
 # ---------------------------------------------------------------------------
 # Live-manager discovery (best-effort, fail-open)
@@ -148,7 +150,7 @@ def _load_static_config() -> Tuple[bool, Dict[str, Any]]:
 
 def _emit_live(ctx: Any, servers: List[Dict[str, Any]]) -> None:
     if not servers:
-        ctx.emit("No MCP servers configured.", title="mcp")
+        ctx.emit(candy.empty("MCP servers configured", yet=False), title="mcp")
         return
     lines = [f"MCP servers ({len(servers)} live):"]
     for s in servers:
@@ -160,16 +162,16 @@ def _emit_live(ctx: Any, servers: List[Dict[str, Any]]) -> None:
         tail = f" · {tools} tools" if isinstance(tools, int) else ""
         err = s.get("last_error")
         err_tail = f" · error: {err}" if err else ""
-        lines.append(f"  {name:<20} {state}{tail}{err_tail}")
+        lines.append(candy.status_line(status, f"{name:<20} {state}{tail}{err_tail}"))
     ctx.emit("\n".join(lines), title="mcp")
 
 
 def _emit_config(ctx: Any, enabled: bool, servers: Dict[str, Any]) -> None:
     if not enabled and not servers:
-        ctx.emit("MCP disabled.", title="mcp")
+        ctx.emit(candy.empty("MCP servers", "MCP disabled (set MCP_ENABLED=true)", yet=False), title="mcp")
         return
     if not servers:
-        ctx.emit("No MCP servers configured.", title="mcp")
+        ctx.emit(candy.empty("MCP servers configured", yet=False), title="mcp")
         return
     header = "MCP servers (from config):"
     if not enabled:
@@ -180,7 +182,7 @@ def _emit_config(ctx: Any, enabled: bool, servers: Dict[str, Any]) -> None:
         srv_enabled = cfg.get("enabled", True)
         stype = cfg.get("type", "?")
         state = "enabled" if srv_enabled else "disabled"
-        lines.append(f"  {name:<20} {state} · type={stype} · not connected")
+        lines.append(candy.status_line(state, f"{name:<20} {state} · type={stype} · not connected"))
     ctx.emit("\n".join(lines), title="mcp")
 
 

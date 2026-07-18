@@ -48,3 +48,38 @@ def test_extended_agent_card_never_overrides_x402_price(monkeypatch):
     import api.a2a.agent_card as agent_card
     src = inspect.getsource(agent_card)
     assert "tier == 'premium'" not in src, "dead premium-price override must stay removed"
+
+
+def test_402_response_payment_details_nonempty_and_matches_middleware_shape(monkeypatch):
+    """G-16: payment_required_response used to read `request.app.state.x402_handler`,
+    which is never assigned anywhere (see api/app.py — x402 is handled entirely via
+    the fastapi-x402 middleware, "no custom handler needed"). That always left
+    `payment_details` as an empty dict. It must now share the same
+    `build_x402_challenge` builder the middleware's own 402 uses, so a payer hitting
+    EITHER 402 producer gets an equally usable `accepts` block.
+    """
+    monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0x" + "2" * 40)
+    monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
+    monkeypatch.setenv("X402_PRICE_USD", "0.03")
+
+    body = payment_required_response(_fake_request(), cost_credits=1)
+    x402_block = body["payment_options"]["x402"]
+
+    assert x402_block["payment_details"], "payment_details must not be empty"
+    assert x402_block["payment_details"]["payTo"] == "0x" + "2" * 40
+    assert x402_block["payment_details"]["network"] == "base"
+    assert x402_block["payment_details"]["maxAmountRequired"] == str(int(0.03 * 10 ** 6))
+
+    # Same shape (accepts/x402Version) the middleware's build_x402_challenge produces.
+    assert x402_block["accepts"][0] == x402_block["payment_details"]
+    assert x402_block["x402Version"] == 1
+
+
+def test_402_response_shares_middleware_challenge_builder():
+    """The endpoint-layer 402 must not revive a dead app.state.x402_handler
+    indirection — it should call the same builder the middleware uses."""
+    import inspect
+    import api.payment_verification as pv
+    src = inspect.getsource(pv.payment_required_response)
+    assert "getattr(request.app.state" not in src
+    assert "build_x402_challenge" in src

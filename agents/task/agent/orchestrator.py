@@ -46,13 +46,60 @@ from agents.task.session.cleanup import SessionCleanupMixin
 from agents.task.session.execution import SessionExecutionMixin
 from agents.task.session.hooks import SessionHooksMixin
 
-# Default tools that are always loaded for every session
-DEFAULT_TOOLS = ['filesystem', 'task']
+# Default tools that are always loaded for every session (SSOT in constants).
+from agents.task.constants import BASE_DEFAULT_TOOLS as _BASE_DEFAULT_TOOLS
+DEFAULT_TOOLS = list(_BASE_DEFAULT_TOOLS)
 
 # SA-01: strong refs for fire-and-forget async-delegation wake kicks. asyncio only
 # weakly references a bare create_task result, so without this the kick task could be
 # GC'd mid-flight before it re-runs the idle session's loop.
 _ASYNC_DELEGATION_KICKS: set = set()
+
+# G-1 (metering finalization): strong refs for the fire-and-forget owner-profile
+# seed task, same GC hazard as _ASYNC_DELEGATION_KICKS above.
+_OWNER_PROFILE_SEED_TASKS: set = set()
+
+# Module-level once-flag: SessionOrchestrator is constructed on EVERY session
+# (not once per process), so without this a session-scoped call would re-run
+# ensure_owner_profile's DB round trip on every single session construction.
+# ensure_owner_profile() itself is idempotent; this flag only avoids the
+# redundant work, not a correctness issue.
+_owner_profile_seed_scheduled = False
+
+
+def _maybe_seed_owner_profile(db: Optional[Any]) -> None:
+    """Fire-and-forget, once-per-process seed of the owner/local user_profiles
+    row(s) (G-1) so FK-constrained metering writes (usage_records) don't raise
+    IntegrityError on a headless/single-owner deployment where nothing else
+    seeds user_profiles. Covers plain chat sessions when the autonomy runtime
+    (core.autonomy_runtime.start_autonomy) isn't running.
+
+    Guarded by the module-level ``_owner_profile_seed_scheduled`` once-flag —
+    see its docstring. A ``db is None`` call is a no-op and does NOT consume
+    the flag (there's nothing to seed against yet; a later call with a real db
+    should still fire). Fail-open: never raises, never blocks session
+    construction — scheduling failures (e.g. no running event loop) are logged
+    and swallowed.
+    """
+    global _owner_profile_seed_scheduled
+    if _owner_profile_seed_scheduled or db is None:
+        return
+    _owner_profile_seed_scheduled = True
+    try:
+        from modules.database.user_profiles import ensure_owner_profile
+        coro = ensure_owner_profile(db=db)
+        try:
+            task = asyncio.create_task(coro)
+        except Exception:
+            coro.close()  # avoid an "coroutine was never awaited" leak on failure
+            raise
+        _OWNER_PROFILE_SEED_TASKS.add(task)
+        task.add_done_callback(_OWNER_PROFILE_SEED_TASKS.discard)
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "owner profile seed scheduling failed (non-fatal)", exc_info=True
+        )
+
 
 class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoolMixin, HITLIngressMixin, SessionCleanupMixin, SessionExecutionMixin, SessionHooksMixin):
     """Orchestrates sessions with multiple agents.
@@ -123,6 +170,7 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
         self.orchestrator_config = None
 
         # Initialize TelemetryManager for orchestrator-level telemetry
+        self.telemetry_degraded = False
         try:
             from agents.task.telemetry.manager import TelemetryManager
             self.telemetry_manager = TelemetryManager(
@@ -130,46 +178,83 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
                 agent_id=f"orchestrator_{self.session_id}"
             )
         except Exception as e:
-            # Create dummy if initialization fails - include ALL telemetry methods
+            # Create dummy if initialization fails — and be LOUD about it
+            # (019 P0.3): a silently-dead telemetry pipeline makes the UI
+            # indistinguishable from "agent doing nothing".
             import logging
             logger = logging.getLogger(f"task.orchestrator[{session_id}]")
             logger.error(f"Failed to initialize TelemetryManager: {e}", exc_info=True)
 
             class DummyTelemetryManager:
-                """Dummy telemetry manager that no-ops all telemetry calls."""
-                def capture_agent_registration(self, *args, **kwargs): pass
-                def capture_multi_agent_relationship(self, *args, **kwargs): pass
-                def capture_tool_execution(self, *args, **kwargs): pass
-                def capture_error(self, *args, **kwargs): pass
-                def capture_llm_request(self, *args, **kwargs): pass
-                def capture_step(self, *args, **kwargs): pass
-                def flush_buffers(self, *args, **kwargs): pass
+                """No-op stand-in installed when telemetry init fails.
+
+                ``__getattr__`` makes EVERY capture_*/flush_* a silent no-op so a
+                newly added capture method can never AttributeError under the
+                dummy; ``degraded`` lets surfaces report the dead pipeline
+                honestly instead of rendering nothing.
+                """
+                degraded = True
+
+                def __getattr__(self, _name):
+                    def _noop(*args, **kwargs):
+                        return None
+                    return _noop
+
             self.telemetry_manager = DummyTelemetryManager()
+            self.telemetry_degraded = True
+            # Loud degradation: the CLI's class-level feed callback is the one
+            # live channel that does NOT depend on the failed telemetry
+            # instance — push a visible error event through it so the REPL
+            # prints a warning instead of going dark for the whole session.
+            try:
+                from agents.task.telemetry.service import ProductTelemetry
+                _cb = ProductTelemetry._on_feed_entry
+                if _cb:
+                    _cb(self.session_id, {
+                        "type": "error",
+                        "step": 0,
+                        "data": {
+                            "error_type": "telemetry_degraded",
+                            "error_message": (
+                                "live activity unavailable: telemetry init failed "
+                                f"({type(e).__name__}: {e}) — tool/step lines will "
+                                "not render this session (see polyrob doctor)"
+                            ),
+                        },
+                    })
+            except Exception:
+                pass
 
         # Initialize unified usage tracker (replaces separate usage_meter + telemetry calls)
         # This provides single source of truth for token tracking and cost calculation
         try:
-            from modules.credits.usage_tracker import LLMUsageTracker
+            from modules.credits.usage_tracker import build_usage_tracker
 
-            # Get required services from container
+            # Get required services from container. §6.2 metering truth: a db
+            # WITHOUT a balance_manager (single-owner headless — no credit
+            # system) still gets a METERING-ONLY tracker, so autonomous runs
+            # record real spend instead of "NO BILLING".
             if container and hasattr(container, 'get_service'):
                 db = container.get_service('database_manager')
                 balance_manager = container.get_service('balance_manager')
-
-                if db and balance_manager:
-                    self.usage_tracker = LLMUsageTracker(
-                        db=db,
-                        balance_manager=balance_manager,
-                        telemetry_manager=self.telemetry_manager
-                    )
-                    import logging
-                    logger = logging.getLogger(f"task.orchestrator[{session_id}]")
-                    logger.info("✓ Unified usage tracker initialized")
+                # G-1: seed the owner/local user_profiles row(s) once per
+                # process so the FK-constrained usage_records write below
+                # doesn't raise IntegrityError on a headless deploy. No-op
+                # (and does not consume the once-flag) when db is None.
+                _maybe_seed_owner_profile(db)
+                self.usage_tracker = build_usage_tracker(
+                    db=db,
+                    balance_manager=balance_manager,
+                    telemetry_manager=self.telemetry_manager,
+                )
+                import logging
+                logger = logging.getLogger(f"task.orchestrator[{session_id}]")
+                if self.usage_tracker is None:
+                    logger.debug("Usage tracker not initialized - missing database manager")
+                elif balance_manager is None:
+                    logger.info("✓ Usage tracker initialized (metering-only, no credit billing)")
                 else:
-                    self.usage_tracker = None
-                    import logging
-                    logger = logging.getLogger(f"task.orchestrator[{session_id}]")
-                    logger.debug("Usage tracker not initialized - missing database or balance_manager")
+                    logger.info("✓ Unified usage tracker initialized")
             else:
                 self.usage_tracker = None
         except Exception as e:

@@ -237,6 +237,30 @@ class ExecutionMixin:
 					elif tool_name == 'browser':
 						self.logger.debug(f"🌐 Browser action '{action_type}' - timeout: {action_timeout}s")
 
+					# 019 P0: span-start — announce the tool the moment it is
+					# DISPATCHED (the completion event alone leaves a long tool
+					# invisible until it returns). The span id joins start to
+					# completion: the LLM tool-call id when present, else a
+					# synthesized per-batch id stamped on the action (a separate
+					# private attr — never write _tool_call_id, which drives
+					# message-sequence pairing).
+					span_id = getattr(action, "_tool_call_id", None)
+					if not span_id:
+						_step = getattr(self.orchestrator, 'current_step', 0) if self.orchestrator else 0
+						span_id = f"s{_step}i{i}"
+						try:
+							action._run_span_id = span_id
+						except Exception:
+							span_id = None
+					self._capture_tool_started(
+						action_name=action_type,
+						tool_name=tool_name,
+						params=action_params,
+						call_id=span_id,
+						index=i,
+						total_in_batch=action_count,
+					)
+
 					result = await asyncio.wait_for(
 						self.act(
 							action,
@@ -487,7 +511,8 @@ class ExecutionMixin:
 									duration=duration,
 									success=True,
 									result=action_result,
-									execution_context=execution_context
+									execution_context=execution_context,
+									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
 								)
 
 								return action_result
@@ -522,12 +547,13 @@ Check the controller registry and action implementations.
 									success=False,
 									result=action_result,
 									execution_context=execution_context,
-									error=str(e)
+									error=str(e),
+									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
 								)
-								
+
 								# Return informative action result
 								return action_result
-							
+
 							except Exception as e:
 								# Enhanced general exception handling
 								import traceback
@@ -550,7 +576,8 @@ Check the controller registry and action implementations.
 									success=False,
 									result=action_result,
 									execution_context=execution_context,
-									error=str(e)
+									error=str(e),
+									call_id=getattr(action, "_tool_call_id", None) or getattr(action, "_run_span_id", None)
 								)
 								
 								# Return informative action result
@@ -716,6 +743,42 @@ Check the controller registry and action implementations.
 
 		return self._max_operation_retries
 
+	def _capture_tool_started(
+		self,
+		action_name: str,
+		tool_name: str,
+		params: dict,
+		call_id: Optional[str] = None,
+		index: int = 0,
+		total_in_batch: int = 1,
+	) -> None:
+		"""Emit the 019 ``tool_started`` span-start feed event (fail-open).
+
+		Gated by ``RUN_EVENTS_ENABLED``; a telemetry failure never affects
+		execution.
+		"""
+		try:
+			from core.config_policy import AutonomyConfig
+			if not AutonomyConfig.run_events_enabled():
+				return
+			if not self.orchestrator or not hasattr(self.orchestrator, 'telemetry_manager'):
+				return
+			telemetry_manager = self.orchestrator.telemetry_manager
+			if not telemetry_manager:
+				return
+			step = getattr(self.orchestrator, 'current_step', 0)
+			telemetry_manager.capture_tool_started(
+				step=step,
+				tool_name=tool_name,
+				action_name=action_name,
+				parameters=params,
+				call_id=call_id,
+				index=index,
+				total_in_batch=total_in_batch,
+			)
+		except Exception as e:
+			self.logger.debug(f"Failed to capture tool started: {e}")
+
 	def _capture_tool_telemetry(
 		self,
 		action_name: str,
@@ -725,7 +788,8 @@ Check the controller registry and action implementations.
 		success: bool,
 		result: Any,
 		execution_context: Optional[ActionExecutionContext] = None,
-		error: Optional[str] = None
+		error: Optional[str] = None,
+		call_id: Optional[str] = None
 	) -> None:
 		"""Capture telemetry for tool execution.
 		
@@ -790,7 +854,8 @@ Check the controller registry and action implementations.
 				error=error,
 				result_size=result_size,
 				result_truncated=result_truncated,
-				result_preview=result_preview
+				result_preview=result_preview,
+				call_id=call_id
 			)
 		except Exception as e:
 			# Don't let telemetry failures affect execution

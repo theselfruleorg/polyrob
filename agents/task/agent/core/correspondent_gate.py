@@ -48,9 +48,25 @@ _HIGH_IMPACT_NAMES = frozenset({
     "delegate_task", "subtask", "parallel_subtasks",
     # Identity / self-evolution actions (registered directly).
     "skill_manage", "self_context_manage",
+    # owner-UX P2 T2: agent-callable config/contract action (registered
+    # directly, no owning tool_id) — a correspondent-tainted session must not
+    # read OR change tenant preferences / propose operating-contract rules.
+    "preferences",
     # Gated outbound message-to-target action (registered directly, no owning
     # tool_id) — owner/allowlist-checked send to telegram/email/whatsapp.
     "message",
+    # I-6: read-only runtime introspection (registered directly, no owning
+    # tool_id) — reveals wallet balance + tenant ledger, the same money data the
+    # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.
+    # Info-disclosure only, but a correspondent-tainted turn must not read it.
+    "agent_status",
+    # Task 13 (Phase 3 R3): read-only tenant usage rollup + suggested-invoice
+    # draft (registered directly, no owning tool_id). Same info-disclosure
+    # reasoning as agent_status — a tainted session must not read cost data
+    # or see an invoice-draft suggestion (a social-engineering target: a
+    # forged correspondent could otherwise fish for "how much would you
+    # invoice me").
+    "usage_summary",
     # Aspirational coding/self-evolution action names (no tool yet; harmless tokens).
     "self_modify", "mcp_install",
     # WS-5: self_env self-maintenance verbs (posture 2). Owner-only via the posture
@@ -65,6 +81,10 @@ _HIGH_IMPACT_NAMES = frozenset({
     # fault can't open arbitrary code execution to a tainted session (the code_execution
     # tool_id below only helps when resolution succeeds).
     "run_code",
+    # hf_deploy verbs enumerated by NAME (parity with run_code/shell_run) so a
+    # resolver fault can't let a tainted session publish/delete a PUBLIC HF Space
+    # (the hf_deploy tool_id below only helps when resolution succeeds).
+    "deploy", "undeploy",
     # P1-4: the agent money verb — x402_invoice tool, verb x402_request — mints a
     # payment request. The canonical forged-email social-engineering target; must be
     # unreachable while correspondent-tainted (x402_fetch/x402_pay already are).
@@ -94,6 +114,7 @@ _HIGH_IMPACT_NAMES = frozenset({
     "hyperliquid", "polymarket", "email", "twitter", "browser", "web_fetch",
     "git", "github", "process", "tool_manage", "mcp",
     "x402_invoice", "anysite", "perplexity",  # P1-4 legacy tool_id tokens
+    "hf_deploy",  # legacy tool_id token (deploy/undeploy — see HIGH_IMPACT_TOOL_IDS)
 })
 
 # Back-compat public name (tests / other callers import HIGH_IMPACT_TOOLS).
@@ -106,34 +127,33 @@ HIGH_IMPACT_TOOLS = _HIGH_IMPACT_NAMES
 # too (e.g. goal_list, cronjob_list, git_log) while tainted is the safe/fail-closed
 # direction — the owner clears the taint by replying.
 # ---------------------------------------------------------------------------
-HIGH_IMPACT_TOOL_IDS = frozenset({
-    "code_execution",  # run_code — arbitrary code exec
-    "coding",          # str_replace / apply_patch / run_tests / *_file — repo mutation
-    "cronjob",         # cronjob_schedule / cancel — durable recurring runs
-    "goal",            # goal_create / objective_* — durable autonomous work
-    "x402_pay",        # x402_fetch — auto-pay
-    "email",           # send_email — outbound comms
-    "twitter",         # twitter_post / reply / quote / thread — outbound comms
-    "browser",         # go_to_url / click_element / … — SSRF / exfil
-    "web_fetch",       # fetch_url — outbound fetch (SSRF / exfil)
-    "git",             # git_commit / clone / pull / push — ship code / identity
-    "github",          # github_open_pr / merge / … — ship code / identity
-    "mcp",             # execute_tool + dynamic {server}_{tool} — outbound / exec
-    "process",         # background processes (aspirational)
-    "tool_manage",     # dynamic-tool authoring (aspirational)
-    "shell",           # WS-2: persistent sandbox shell — arbitrary command exec
-    "self_env",        # WS-5: self-maintenance verbs — install/patch/restart/pull
-    # P1-4:
-    "x402_invoice",    # x402_request / accounting — mint agent payment requests (money)
-    "anysite",         # anysite_api — outbound structured-data egress (exfil channel)
-    "perplexity",      # perplexity_search — outbound search egress (exfil channel)
-})
+# WS-2 (2026-07-16): derived from the ONE per-tool capability table
+# (core/tool_capabilities.py, `high_impact`) — classify a new tool there, not here;
+# per-entry rationale lives with the table rows. Parity-pinned by
+# tests/unit/core/test_tool_capabilities.py. The trading venues' deliberate absence is
+# now explicit in the table (`readable_while_tainted`).
+from core.tool_capabilities import ids_with as _ids_with
+
+HIGH_IMPACT_TOOL_IDS = _ids_with("high_impact")
 
 # Substrings that mark a high-impact action even if the exact name isn't enumerated
 # (e.g. provider-prefixed MCP/web tools that reach the outside world). NOTE: do NOT add
 # "trade" here — as a substring it falsely flags the read action get_trade_history while
 # matching no real trade verb (those are enumerated above).
 _HIGH_IMPACT_PREFIXES = ("mcp_", "browser_", "web_", "email_", "pay", "send_email")
+
+# H10 (2026-07-15): the crypto TRADE verbs, matched as substrings so BOTH the bare
+# name AND every venue-namespaced runtime form are caught. Container-tool actions
+# register namespaced (polymarket_place_limit_order / hyperliquid_place_market_order),
+# and that namespaced name is what reaches the gate hook — but crypto tool_ids are
+# deliberately absent from HIGH_IMPACT_TOOL_IDS (reads must stay allowed), so bare-name
+# matching alone let the namespaced trade verb slip the gate. Unlike "trade", none of
+# these substrings appears in a read verb (reads are get_*). Keep in sync with the trade
+# verbs enumerated in _HIGH_IMPACT_NAMES.
+_HIGH_IMPACT_VERB_SUBSTRINGS = (
+    "place_limit_order", "place_market_order", "cancel_order",
+    "cancel_all_orders", "update_leverage", "approve_agent", "revoke_agent",
+)
 
 
 def is_high_impact(action_name: Optional[str]) -> bool:
@@ -148,6 +168,8 @@ def is_high_impact(action_name: Optional[str]) -> bool:
         return False
     name = str(action_name).strip().lower()
     if name in _HIGH_IMPACT_NAMES:
+        return True
+    if any(sub in name for sub in _HIGH_IMPACT_VERB_SUBSTRINGS):
         return True
     return any(name.startswith(p) or p in name for p in _HIGH_IMPACT_PREFIXES)
 
@@ -188,9 +210,90 @@ def build_tool_resolver(controller: Any) -> Callable[[str], Optional[str]]:
     return _resolve
 
 
+# ---------------------------------------------------------------------------
+# D1 (2026-07-13 review): scoped reply-while-tainted. Every correspondent reply
+# re-taints the session and taint blocks ALL outbound comms, so the agent could
+# never answer the person who just wrote in — every round needed an owner turn.
+# The exemption below permits message/send_email to EXACTLY the tainting
+# (surface, address): 1:1, no cc/bcc, budget- and flag-gated.
+# ---------------------------------------------------------------------------
+_REPLY_ACTIONS = frozenset({"message", "send_email"})
+
+
+def _param(params: Any, key: str) -> Any:
+    if params is None:
+        return None
+    if isinstance(params, dict):
+        return params.get(key)
+    return getattr(params, key, None)
+
+
+def _reply_target(action_name: str, params: Any) -> tuple:
+    """(surface, address) this call would message, or ('', '') when not a clean
+    single-recipient reply shape (multi-recipient / cc / bcc are never exempt)."""
+    name = str(action_name or "").strip().lower()
+    if name == "message":
+        return (str(_param(params, "surface") or ""),
+                str(_param(params, "target") or ""))
+    if name == "send_email":
+        if _param(params, "cc") or _param(params, "bcc"):
+            return ("", "")
+        to = _param(params, "to_email")
+        if isinstance(to, (list, tuple)):
+            to = to[0] if len(to) == 1 else None
+        return ("email", str(to or ""))
+    return ("", "")
+
+
+def _is_scoped_reply(action_name: str, params: Any, sources: Any) -> tuple:
+    """(is_reply_to_tainting_party, surface, address)."""
+    surface, address = _reply_target(action_name, params)
+    if not surface or not address:
+        return (False, surface, address)
+    key = (surface, address.strip().lower())
+    return (key in (sources or set()), surface, address.strip().lower())
+
+
+def build_reply_allowed(
+    get_container: Callable[[], Any],
+    get_user_id: Callable[[], str],
+) -> Callable[[str, str], bool]:
+    """Policy for the scoped tainted-reply exemption: flag + rounds budget.
+
+    Denies unless ``CORRESPONDENT_REPLY_ENABLED`` (default OFF) AND the tenant has
+    sent fewer than ``CORRESPONDENT_REPLY_MAX_ROUNDS`` outbound messages to that
+    address in the last 24h (counted from the ConversationStore). Fail-CLOSED —
+    if the budget can't be verified, the reply stays blocked (the owner can
+    always unblock by replying).
+    """
+    def _allowed(surface: str, address: str) -> bool:
+        try:
+            from agents.task.surface_config import SurfaceConfig
+            if not SurfaceConfig.correspondent_reply_enabled():
+                return False
+            max_rounds = SurfaceConfig.correspondent_reply_max_rounds()
+            container = get_container()
+            store = (container.get_service("conversation_store")
+                     if container else None)
+            if store is None:
+                # Flag explicitly ON but no budget substrate — allow (the flag is
+                # the operator's informed opt-in; without a store there is no
+                # rounds history to enforce).
+                return True
+            user_id = get_user_id() or ""
+            return store.outbound_count_since(user_id, surface, address,
+                                              86400) < max_rounds
+        except Exception as e:  # fail-closed
+            logger.debug("reply_allowed probe failed (deny): %s", e)
+            return False
+    return _allowed
+
+
 def make_correspondent_gate_hook(
     get_tainted: Callable[[], bool],
     resolve_tool: Optional[Callable[[str], Optional[str]]] = None,
+    get_taint_sources: Optional[Callable[[], Any]] = None,
+    reply_allowed: Optional[Callable[[str, str], bool]] = None,
 ):
     """Pre-tool-call hook ``(action_name, params, context) -> Optional[str]``.
 
@@ -203,6 +306,11 @@ def make_correspondent_gate_hook(
     the bare action name. It is called defensively: a resolver fault degrades to the
     name-only decision (never raises out of the hook, never silently opens a hole for a
     name-level high-impact action).
+
+    ``get_taint_sources`` + ``reply_allowed`` enable the D1 scoped-reply exemption:
+    while tainted, ``message``/``send_email`` to EXACTLY a tainting (surface, address)
+    is permitted when ``reply_allowed(surface, address)`` approves (flag + rounds
+    budget). Everything else stays denied.
     """
     def _hook(action_name: str, params: Any, context: Any) -> Optional[str]:
         tool_id: Optional[str] = None
@@ -220,6 +328,19 @@ def make_correspondent_gate_hook(
             logger.debug("correspondent gate taint probe failed (deny): %s", e)
             tainted = True
         if tainted:
+            # D1 scoped-reply exemption (never widens beyond the tainting party).
+            if (get_taint_sources is not None and reply_allowed is not None
+                    and str(action_name or "").strip().lower() in _REPLY_ACTIONS):
+                try:
+                    is_reply, surface, address = _is_scoped_reply(
+                        action_name, params, get_taint_sources())
+                    if is_reply and reply_allowed(surface, address):
+                        logger.info(
+                            "correspondent gate: scoped tainted reply to %s:%s "
+                            "permitted", surface, address)
+                        return None
+                except Exception as e:  # fail-closed: exemption probe never opens
+                    logger.debug("scoped-reply exemption probe failed (deny): %s", e)
             return (f"'{action_name}' is blocked: the latest input is untrusted "
                     f"correspondent DATA — owner confirmation is required before a "
                     f"high-impact action.")

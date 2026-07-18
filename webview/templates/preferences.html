@@ -1,0 +1,179 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Preferences{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Preferences{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Preferences</h2>
+        <p class="text-muted text-sm">
+            Typed per-tenant preferences (<code>preferences.toml</code>) — the same store the
+            CLI <code>/config</code> and the agent's <code>preferences</code> action use.
+            Merges are tighten-only against env flags; guarded keys ask for confirmation.
+            {% if read_only %}<strong>Read-only console: changes are disabled.</strong>{% endif %}
+        </p>
+    </div>
+    <div id="prefs-list" class="webgate-list">
+        <div class="loading">Loading…</div>
+    </div>
+</div>
+
+<style>
+.pref-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-color, #2a2a2a); }
+.pref-row .pref-key { flex: 0 0 220px; font-weight: 600; }
+.pref-row .pref-input { flex: 0 0 200px; }
+.pref-row .pref-meta { flex: 1 1 240px; font-size: 0.75rem; opacity: 0.65; }
+.pref-row .pref-status { flex: 0 0 90px; font-size: 0.75rem; }
+.pref-badge { display: inline-block; padding: 1px 6px; border-radius: 6px; font-size: 0.68rem; border: 1px solid var(--border-color, #444); opacity: 0.8; margin-left: 6px; }
+.pref-badge.guarded { border-color: #b8860b; color: #d5a021; }
+.pref-status.ok { color: #3ba55d; }
+.pref-status.err { color: #d83c3e; }
+.pref-source { font-size: 0.68rem; opacity: 0.55; margin-left: 6px; }
+</style>
+
+<script>
+(function () {
+    const READ_ONLY = {{ 'true' if read_only else 'false' }};
+    const list = document.getElementById('prefs-list');
+
+    function inputFor(p) {
+        let el;
+        if (p.type === 'enum') {
+            el = document.createElement('select');
+            const blank = document.createElement('option');
+            blank.value = ''; blank.textContent = '(unset)';
+            el.appendChild(blank);
+            (p.enum_values || []).forEach(v => {
+                const o = document.createElement('option');
+                o.value = v; o.textContent = v;
+                if (String(p.value) === v) o.selected = true;
+                el.appendChild(o);
+            });
+        } else if (p.type === 'bool') {
+            el = document.createElement('select');
+            [['', '(unset)'], ['true', 'true'], ['false', 'false']].forEach(([v, label]) => {
+                const o = document.createElement('option');
+                o.value = v; o.textContent = label;
+                if (p.value !== null && String(p.value) === v) o.selected = true;
+                el.appendChild(o);
+            });
+        } else {
+            el = document.createElement('input');
+            el.type = (p.type === 'int' || p.type === 'float') ? 'number' : 'text';
+            if (p.type === 'float') el.step = 'any';
+            if (p.value !== null && p.value !== undefined) {
+                el.value = Array.isArray(p.value) ? p.value.join(', ') : p.value;
+            }
+            if (p.type === 'list') el.placeholder = 'comma, separated';
+        }
+        el.className = 'form-control';
+        el.disabled = READ_ONLY;
+        return el;
+    }
+
+    function parseValue(p, el) {
+        const raw = el.value.trim();
+        if (raw === '') return null;
+        if (p.type === 'bool') return raw === 'true';
+        if (p.type === 'int') return parseInt(raw, 10);
+        if (p.type === 'float') return parseFloat(raw);
+        if (p.type === 'list') return raw.split(',').map(s => s.trim()).filter(Boolean);
+        return raw;
+    }
+
+    async function save(p, el, status) {
+        const value = parseValue(p, el);
+        if (value === null) { status.textContent = ''; return; }
+        status.textContent = '…'; status.className = 'pref-status';
+        let body = { key: p.key, value: value };
+        let r = await fetch('/api/webgate/preferences', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (r.status === 409) {
+            const info = await r.json();
+            if (info.guarded && window.confirm(
+                    p.key + ' is a guarded preference.\n\nApply ' + JSON.stringify(value) + '?')) {
+                body.confirm = true;
+                r = await fetch('/api/webgate/preferences', {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+            } else {
+                status.textContent = 'cancelled'; status.className = 'pref-status';
+                return;
+            }
+        }
+        const out = await r.json().catch(() => ({}));
+        if (r.status === 202 && out.ok) {
+            // List-shrink routes through review (owner-UX P2-4 final review,
+            // item 3): a removed entry is queued for owner approval instead
+            // of applied wholesale; any additions in the same PATCH still
+            // applied directly.
+            const n = (out.queued || []).length;
+            status.textContent = n
+                ? n + ' removal(s) queued for review (/pending)'
+                : 'queued for review';
+            status.className = 'pref-status';
+        } else if (r.ok && out.ok) {
+            status.textContent = 'saved (' + (out.applies || 'ok') + ')';
+            status.className = 'pref-status ok';
+        } else {
+            status.textContent = out.error || ('error ' + r.status);
+            status.className = 'pref-status err';
+            status.title = out.error || '';
+        }
+    }
+
+    function render(prefs) {
+        list.innerHTML = '';
+        prefs.forEach(p => {
+            const row = document.createElement('div');
+            row.className = 'pref-row';
+
+            const key = document.createElement('div');
+            key.className = 'pref-key';
+            key.textContent = p.key;
+            if (p.sensitivity === 'guarded') {
+                const b = document.createElement('span');
+                b.className = 'pref-badge guarded'; b.textContent = 'guarded';
+                key.appendChild(b);
+            }
+            const src = document.createElement('span');
+            src.className = 'pref-source';
+            src.textContent = p.value !== null && p.value !== undefined ? '(' + p.source + ')' : '';
+            key.appendChild(src);
+
+            const inputWrap = document.createElement('div');
+            inputWrap.className = 'pref-input';
+            const el = inputFor(p);
+            inputWrap.appendChild(el);
+
+            const meta = document.createElement('div');
+            meta.className = 'pref-meta';
+            meta.textContent = p.description + ' · applies: ' + p.applies
+                + (p.env_flag ? ' · env: ' + p.env_flag : '');
+
+            const status = document.createElement('div');
+            status.className = 'pref-status';
+
+            if (!READ_ONLY) el.addEventListener('change', () => save(p, el, status));
+
+            row.appendChild(key);
+            row.appendChild(inputWrap);
+            row.appendChild(meta);
+            row.appendChild(status);
+            list.appendChild(row);
+        });
+    }
+
+    fetch('/api/webgate/preferences')
+        .then(r => r.json())
+        .then(d => render(d.preferences || []))
+        .catch(() => { list.innerHTML = '<div class="text-muted">Failed to load preferences.</div>'; });
+})();
+</script>
+{% endblock %}

@@ -446,6 +446,18 @@ def register_optional_tool(
     """
     if not (force or enabled_fn()):
         return False
+    # WS-2 registration guard: a NEW tool must be classified in the per-tool
+    # capability table (core/tool_capabilities.py) so it cannot silently skip the
+    # money/high-impact/delegation gates. An explicit empty frozenset() row means
+    # "consciously no special capabilities" — absence means "nobody thought about it".
+    from core.tool_capabilities import is_classified
+    display = get_tool_display_name(name)
+    if not is_classified(display):
+        raise ValueError(
+            f"tool {name!r} (display {display!r}) has no capability classification — "
+            "add a row to core/tool_capabilities.py::TOOL_CAPABILITIES (empty frozenset() "
+            "if it genuinely has no money/high-impact/exec/delegation-blocking traits)"
+        )
     if name not in TOOL_DESCRIPTORS:
         TOOL_DESCRIPTORS[name] = descriptor
     register_tool_class(name, tool_cls)

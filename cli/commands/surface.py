@@ -16,12 +16,11 @@ import click
 
 
 def _data_dir() -> str:
-    # Match the worker's data home (build_cli_container's _resolve_cli_data_home =
-    # <cwd>/.polyrob by default) so pause/resume write the SAME surface_state.db the
+    # Match the worker's data home via the ONE core policy seam (POLYROB_DATA_DIR
+    # wins, else <cwd>/.polyrob) so pause/resume write the SAME surface_state.db the
     # worker reads — 'POLYROB_DATA_DIR or data' pointed the CLI at a divergent ./data.
-    from core.bootstrap import _resolve_cli_data_home
-    data_home, _, _ = _resolve_cli_data_home()
-    return str(data_home)
+    from core.runtime_paths import resolve_data_home
+    return str(resolve_data_home())
 
 
 def _store():

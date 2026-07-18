@@ -18,7 +18,7 @@ Why here? Pricing is OWNED by the credits module - it's business logic, not bot 
 
 import math
 import os
-from typing import Dict
+from typing import Any, Dict, Mapping, Optional, Union
 
 
 # ============================================================================
@@ -137,3 +137,74 @@ class PricingConfig:
 # Usage: from modules.credits.pricing import pricing
 #        price = pricing.MARKUP * api_cost
 pricing = PricingConfig()
+
+
+# ============================================================================
+# G-24 (billing-correctness batch, 2026-07): single LLM cost entry point
+# ============================================================================
+#
+# `modules.llm.model_registry.calculate_cost` bills THREE slices: regular
+# input, cached-read (discounted), and cache-WRITE (Anthropic's 1.25x
+# surcharge on cache-creation tokens). Historically only
+# `LLMUsageTracker._calculate_costs` (the real billing path) forwarded
+# `cache_creation_tokens` to it -- every other caller across the codebase
+# (display/telemetry estimate helpers, the public pricing calculator, dead
+# legacy meters) built its own `calculate_cost(...)` call and silently
+# dropped that argument, undercharging cache-heavy Anthropic estimates.
+#
+# `compute_llm_cost` is the ONE place that deconstructs a usage
+# object/dict and calls `calculate_cost` with every field forwarded. New
+# and existing callers should route through this instead of re-deriving
+# their own `calculate_cost(...)` invocation.
+def _usage_field(usage: Union[Mapping[str, Any], Any], *names: str, default: int = 0) -> int:
+    """Read the first present field out of a usage dict/object, trying each
+    name in `names` in order (covers naming drift across call sites, e.g.
+    `prompt_tokens` vs `input_tokens`)."""
+    if isinstance(usage, Mapping):
+        for name in names:
+            if name in usage and usage[name] is not None:
+                return int(usage[name])
+        return default
+    for name in names:
+        val = getattr(usage, name, None)
+        if val is not None:
+            return int(val)
+    return default
+
+
+def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any]) -> float:
+    """Compute the real API cost (USD) for a single LLM call's token usage.
+
+    THE billing-correctness entry point (G-24): always forwards BOTH
+    `cached_tokens` (discounted reads) AND `cache_creation_tokens`
+    (surcharged writes) to `calculate_cost`, so a caller can never silently
+    drop the cache-write surcharge the way the fragmented pre-fix callers did.
+
+    Args:
+        model: Model name (e.g. "claude-sonnet-4-5").
+        usage: Either a `TokenUsage`-like object (attributes) or a plain
+            dict/Mapping. Accepts both `prompt_tokens`/`completion_tokens`
+            and `input_tokens`/`output_tokens` naming (some call sites use
+            the OpenAI-style names). Missing `cached_tokens`/
+            `cache_creation_tokens` default to 0 (byte-identical to a plain,
+            uncached call -- this is a safe default, not silent data loss,
+            because 0 is exactly correct when a provider genuinely has no
+            cache metrics).
+
+    Returns:
+        Total API cost in USD (see `calculate_cost` for the pricing math).
+    """
+    from modules.llm.model_registry import calculate_cost
+
+    input_tokens = _usage_field(usage, "prompt_tokens", "input_tokens")
+    output_tokens = _usage_field(usage, "completion_tokens", "output_tokens")
+    cached_tokens = _usage_field(usage, "cached_tokens")
+    cache_creation_tokens = _usage_field(usage, "cache_creation_tokens")
+
+    return calculate_cost(
+        model_name=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cached_tokens=cached_tokens,
+        cache_creation_tokens=cache_creation_tokens,
+    )

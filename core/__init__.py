@@ -6,7 +6,7 @@
 import logging
 
 # Import logging utilities first
-from .logging import setup_logging, get_component_logger, initialize_task_logging
+from .logging import setup_logging, get_component_logger
 
 # Initialize root logger with our custom formatting
 setup_logging(log_level='INFO')
@@ -160,8 +160,7 @@ __all__ = [
     # Logging
     'setup_logging',
     'get_component_logger',
-    'initialize_task_logging',
-    
+
     # Component metadata
     'CORE_COMPONENTS',
     'MODULE_METADATA',

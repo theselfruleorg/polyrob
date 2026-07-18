@@ -42,6 +42,20 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
     )
     orchestrator._forged_turn_kind = forged_kind
 
+    # P1 finalization: a genuine (non-forged) batch means the owner is driving
+    # again — clear the self-wake re-entry budget for this session. Previously the
+    # only ReentryBudget.reset() caller was dead code, so after SELF_WAKE_MAX_REENTRIES
+    # forged wakes self-wake died PERMANENTLY for a session and never recovered from
+    # real conversation (only a 7-day staleness purge cleared it). Fail-open.
+    if forged_kind is None:
+        try:
+            from agents.task.agent.core.self_wake import get_reentry_budget
+            sid = getattr(orchestrator, "session_id", "") or ""
+            if sid:
+                get_reentry_budget().reset(sid)
+        except Exception:
+            pass
+
 
 class UserIngressMixin:
     """User-message queueing, approval shims, and TODO status for Agent."""

@@ -1,0 +1,77 @@
+name: Bug report
+description: Report a reproducible problem with POLYROB
+title: "[Bug] "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. The more of this form you fill in,
+        the faster we can reproduce and fix it.
+  - type: input
+    id: version
+    attributes:
+      label: POLYROB version
+      description: Output of `polyrob --version` (or `python -c "from core.version import get_version; print(get_version())"`).
+      placeholder: "0.8.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: install-method
+    attributes:
+      label: Install method
+      options:
+        - pip / pipx (PyPI)
+        - git clone (source / editable)
+        - docker
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment-shape
+    attributes:
+      label: Deployment shape
+      description: How are you running POLYROB when the bug happens?
+      options:
+        - Terminal CLI (`polyrob` REPL / `polyrob run`)
+        - Headless service (systemd — telegram/email/gateway surfaces)
+        - API server (`python main.py` / `polyrob serve`)
+        - Webview console
+        - other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS / platform
+      placeholder: "Ubuntu 24.04 / macOS 15 / Python 3.11"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what actually happened?
+      placeholder: |
+        1. Ran `polyrob ...`
+        2. Expected ...
+        3. Instead ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs / output
+      description: |
+        Paste terminal output, stack traces, or `journalctl -u polyrob.service` lines.
+        ⚠️ REDACT secrets before pasting — API keys, tokens, wallet material, `.env` contents.
+      render: shell
+  - type: textarea
+    id: flags
+    attributes:
+      label: Non-default configuration
+      description: |
+        Any env flags you've changed from defaults that could be relevant
+        (e.g. `AUTONOMY_MODE`, `MEMORY_BACKEND`, `AGENT_COMPUTE_POSTURE`).
+        `polyrob doctor --flags` shows the live view. Do NOT paste secrets.
+      render: shell

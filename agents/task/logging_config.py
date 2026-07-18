@@ -115,33 +115,19 @@ def setup_logging(log_level: str = 'INFO', log_file: Optional[str] = None) -> No
     configure_library_loggers()
 
 def configure_library_loggers():
-    """Configure logging levels for third-party libraries."""
-    # Silence noisy libraries
-    noisy_loggers = [
-        'urllib3',
-        'httpx',
-        'httpcore',
-        'selenium',
-        'PIL',
-        'matplotlib',
-        'asyncio',
-        'filelock',
-        'fontTools',
-        'pinecone',
-        'google.auth',
-        'google.api_core',
-        'google.cloud',
-        'googleapiclient',
-        'openai',
-        'anthropic'
-    ]
+    """Configure logging levels for third-party libraries.
 
-    for logger_name in noisy_loggers:
-        logging.getLogger(logger_name).setLevel(logging.WARNING)
-
-    # Special handling for very noisy loggers
-    logging.getLogger('httpx._client').setLevel(logging.ERROR)
-    logging.getLogger('httpcore._trace').setLevel(logging.ERROR)
+    Delegates to core.logging.quiet_noisy_libraries (the single source of truth
+    for the pin list); falls back to a local pin when core isn't importable.
+    """
+    if CORE_LOGGING_AVAILABLE:
+        from core.logging import quiet_noisy_libraries
+        quiet_noisy_libraries()
+    else:
+        for logger_name in ('urllib3', 'httpx', 'httpcore', 'openai', 'anthropic'):
+            logging.getLogger(logger_name).setLevel(logging.WARNING)
+        logging.getLogger('httpx._client').setLevel(logging.ERROR)
+        logging.getLogger('httpcore._trace').setLevel(logging.ERROR)
 
     # Disable propagation for task loggers to avoid duplicates
     logging.getLogger('task').propagate = False

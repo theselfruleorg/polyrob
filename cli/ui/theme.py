@@ -65,6 +65,13 @@ class Icons:
     subagent: str = "+"           # collapsed sub-agent line prefix
     error: str = "⚠"         # ⚠
     caret: str = "❯"         # user-turn echo caret
+    speaker: str = "●"       # agent speaker dot (bubble + turn summary)
+    working: str = "⋯"       # working notice
+    cooking: str = "✱"       # in-flight cooking glyph (status bar fallback)
+    autonomy: str = "⟲"      # background autonomy lane
+    pending: str = "○"       # open/pending item
+    pause: str = "⏸"         # blocked-on-approval wait state (019)
+    tree: str = "└"          # sub-agent lane prefix
 
 
 ICONS = Icons()
@@ -113,6 +120,11 @@ class Styles:
     status_ok: str = "green"
     status_running: str = "yellow"
     status_error: str = "red"
+    label: str = "dim"            # dim-label half of the kv hierarchy
+    value: str = ""               # bright-value half (terminal default)
+    accent: str = "cyan"
+    warn: str = "yellow"
+    subagent_name: str = "dim bold"
 
 
 STYLES = Styles()
@@ -123,6 +135,43 @@ def style(role: str) -> str:
     if no_color():
         return ""
     return getattr(STYLES, role, "")
+
+
+_STATE_GLYPHS = {
+    "running": ("●", "status_running"),
+    "active": ("●", "status_running"),
+    "in_progress": ("●", "status_running"),
+    "done": ("✓", "status_ok"),
+    "completed": ("✓", "status_ok"),
+    "ok": ("✓", "status_ok"),
+    "settled": ("✓", "status_ok"),
+    "failed": ("✗", "status_error"),
+    "error": ("✗", "status_error"),
+    "cancelled": ("✗", "meta"),
+    "blocked": ("⚠", "warn"),
+    "timeout": ("⚠", "warn"),
+    "pending": ("○", "meta"),
+    "open": ("○", "meta"),
+    "ready": ("○", "meta"),
+    "queued": ("○", "meta"),
+    "scheduled": ("○", "meta"),
+    "connected": ("✓", "status_ok"),
+    "disconnected": ("✗", "status_error"),
+    "connecting": ("●", "status_running"),
+    "reconnecting": ("●", "status_running"),
+    "enabled": ("✓", "status_ok"),
+    "disabled": ("○", "meta"),
+}
+
+
+def state_glyph(word: object) -> tuple[str, str]:
+    """Map a status word onto the (glyph, style-role) vocabulary.
+
+    One glyph grammar for every stateful list (/goals, /subagents, /todos, …) —
+    replaces per-view emoji. Unknown/blank states degrade to a neutral bullet.
+    """
+    key = str(word or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return _STATE_GLYPHS.get(key, ("·", "meta"))
 
 
 def fmt_tokens(n: int) -> str:

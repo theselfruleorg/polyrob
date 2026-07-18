@@ -36,6 +36,11 @@ Key mapping (formatters.py → RenderEvent field):
     data.duration_seconds → ToolExec.duration_seconds
     data.error            → ToolExec.error
 
+  tool_started / llm_started / awaiting_approval / approval_resolved  (019)
+    span/wait events from RunEventFormatter (flat data envelope) →
+    ToolStarted / LLMStarted / ApprovalPending / ApprovalDecision;
+    tool spans join on data.call_id (also carried by tool_execution).
+
   iteration_complete
     data.iteration        → IterationDone.iteration
     data.iteration_status → IterationDone.iteration_status
@@ -137,6 +142,62 @@ class ToolExec:
     parameters: Dict[str, Any] = field(default_factory=dict)
     result_preview: Optional[str] = None
     result_truncated: bool = False
+    call_id: Optional[str] = None  # 019 span join key (pairs with ToolStarted)
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolStarted:
+    """A tool call was DISPATCHED and is now in flight (019 span start).
+
+    Pairs with the later ``ToolExec`` completion via ``call_id`` so the
+    renderer can print the ``→ name(args)`` line at start and only the
+    ``✓``/``✗`` result line at completion.
+    """
+
+    type: str = "tool_started"
+    step: int = 0
+    tool_name: str = ""
+    action_name: str = ""
+    parameters: Dict[str, Any] = field(default_factory=dict)
+    call_id: Optional[str] = None
+    index: int = 0
+    total_in_batch: int = 1
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LLMStarted:
+    """An LLM call began — the model is "thinking" (019 span start)."""
+
+    type: str = "llm_started"
+    step: int = 0
+    provider: str = ""
+    model_name: str = ""
+    attempt: int = 0
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ApprovalPending:
+    """An action is BLOCKED waiting for owner approval (019 wait state)."""
+
+    type: str = "awaiting_approval"
+    action_name: str = ""
+    ask_id: Optional[str] = None
+    timeout_sec: Optional[float] = None
+    raw: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ApprovalDecision:
+    """The approval wait ended: approved | denied | timeout | error (019)."""
+
+    type: str = "approval_resolved"
+    action_name: str = ""
+    decision: str = ""
+    waited_sec: float = 0.0
+    ask_id: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -237,6 +298,10 @@ RenderEvent = (
     | Step
     | LLMCall
     | ToolExec
+    | ToolStarted
+    | LLMStarted
+    | ApprovalPending
+    | ApprovalDecision
     | IterationDone
     | ErrorEvent
     | SessionDone
@@ -350,6 +415,47 @@ def _normalize_inner(feed_dict: Dict[str, Any]) -> RenderEvent:
             parameters=params,
             result_preview=str(preview) if preview is not None else None,
             result_truncated=bool(data.get("result_truncated", False)),
+            call_id=data.get("call_id"),
+            raw=feed_dict,
+        )
+
+    if event_type == "tool_started":
+        raw_params = data.get("parameters")
+        return ToolStarted(
+            step=int(feed_dict.get("step", data.get("step", 0)) or 0),
+            tool_name=data.get("tool_name", ""),
+            action_name=data.get("action_name", ""),
+            parameters=raw_params if isinstance(raw_params, dict) else {},
+            call_id=data.get("call_id"),
+            index=int(data.get("index", 0) or 0),
+            total_in_batch=int(data.get("total_in_batch", 1) or 1),
+            raw=feed_dict,
+        )
+
+    if event_type == "llm_started":
+        return LLMStarted(
+            step=int(feed_dict.get("step", data.get("step", 0)) or 0),
+            provider=data.get("provider", ""),
+            model_name=data.get("model_name", ""),
+            attempt=int(data.get("attempt", 0) or 0),
+            raw=feed_dict,
+        )
+
+    if event_type == "awaiting_approval":
+        timeout_raw = data.get("timeout_sec")
+        return ApprovalPending(
+            action_name=data.get("action_name", ""),
+            ask_id=data.get("ask_id"),
+            timeout_sec=float(timeout_raw) if timeout_raw is not None else None,
+            raw=feed_dict,
+        )
+
+    if event_type == "approval_resolved":
+        return ApprovalDecision(
+            action_name=data.get("action_name", ""),
+            decision=str(data.get("decision", "") or ""),
+            waited_sec=float(data.get("waited_sec") or 0.0),
+            ask_id=data.get("ask_id"),
             raw=feed_dict,
         )
 

@@ -112,6 +112,10 @@ def test_memory_tool_add_emits_memory_write(log, monkeypatch, tmp_path):
         async def curated_remove(self, user_id, content):
             return 1
 
+        async def note_create(self, user_id, content, *, title=None, tags=None,
+                               source=None, created_by="agent", status="active"):
+            return 1
+
     monkeypatch.setenv("MEMORY_TOOL_ENABLED", "true")
     monkeypatch.setattr(
         "modules.memory.registry.get_memory_registry",

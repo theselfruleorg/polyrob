@@ -160,18 +160,28 @@ CREATE TABLE IF NOT EXISTS usage_records (
     cached_tokens INTEGER DEFAULT 0,
     api_cost_usd REAL DEFAULT 0.0,
     markup_multiplier REAL DEFAULT 1.0,
+    -- G-26: real column for the request_id that record_llm_usage generates
+    -- "for deduplication" (previously stored ONLY inside the metadata JSON,
+    -- so nothing at the DB level actually prevented a retry with a fresh
+    -- response object from double-writing the same charge as a second row).
+    request_id TEXT,
     metadata TEXT,
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
 );
 
 -- Indices for usage_records
-CREATE INDEX IF NOT EXISTS idx_usage_user 
+CREATE INDEX IF NOT EXISTS idx_usage_user
     ON usage_records(user_id);
-CREATE INDEX IF NOT EXISTS idx_usage_session 
+CREATE INDEX IF NOT EXISTS idx_usage_session
     ON usage_records(session_id);
-CREATE INDEX IF NOT EXISTS idx_usage_time 
+CREATE INDEX IF NOT EXISTS idx_usage_time
     ON usage_records(timestamp);
+-- G-26: partial unique index -- NULL request_id (legacy rows / any caller that
+-- genuinely has none) is explicitly exempt from uniqueness, only a REAL
+-- duplicate request_id is rejected.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_usage_records_request_id
+    ON usage_records(request_id) WHERE request_id IS NOT NULL;
 
 
 -- ============================================================================
@@ -201,32 +211,26 @@ CREATE TABLE IF NOT EXISTS x402_payment_requests (
 );
 
 -- Indices for x402_payment_requests
-CREATE INDEX IF NOT EXISTS idx_x402_requests_nonce 
+CREATE INDEX IF NOT EXISTS idx_x402_requests_nonce
     ON x402_payment_requests(nonce);
-CREATE INDEX IF NOT EXISTS idx_x402_requests_status 
+CREATE INDEX IF NOT EXISTS idx_x402_requests_status
     ON x402_payment_requests(status);
-CREATE INDEX IF NOT EXISTS idx_x402_requests_payer 
+CREATE INDEX IF NOT EXISTS idx_x402_requests_payer
     ON x402_payment_requests(payer_address);
-CREATE INDEX IF NOT EXISTS idx_x402_requests_user 
+CREATE INDEX IF NOT EXISTS idx_x402_requests_user
     ON x402_payment_requests(user_id);
+-- Task 11 (2026-07) review fix C2: a given on-chain tx must settle AT MOST
+-- ONE invoice EVER (see modules/database/x402_tables.py + migrations/versions/
+-- v1_6_0_x402_tx_hash_unique.py for the runtime self-heal + version-tracked
+-- migration that actually apply this on a live database).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_requests_tx_hash_unique
+    ON x402_payment_requests(transaction_hash) WHERE transaction_hash IS NOT NULL;
 
--- x402 access log
-CREATE TABLE IF NOT EXISTS x402_access_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    payment_request_id TEXT NOT NULL,
-    payer_address TEXT NOT NULL,
-    endpoint TEXT NOT NULL,
-    method TEXT NOT NULL,
-    response_status INTEGER,
-    accessed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (payment_request_id) REFERENCES x402_payment_requests(id) ON DELETE CASCADE
-);
-
--- Indices for x402_access_log
-CREATE INDEX IF NOT EXISTS idx_x402_access_payer 
-    ON x402_access_log(payer_address);
-CREATE INDEX IF NOT EXISTS idx_x402_access_endpoint 
-    ON x402_access_log(endpoint);
+-- NOTE (G-42, dead-code cleanup): an `x402_access_log` table (+ two indices)
+-- used to be defined here and in modules/database/x402_tables.py. Nothing
+-- ever INSERTed into it or read from it (verified dead DDL) -- removed
+-- rather than wired, to reduce schema surface. Keep this file in sync with
+-- x402_tables.py::X402Tables.create_tables() if you touch x402 DDL.
 
 
 -- ============================================================================
@@ -361,9 +365,8 @@ CREATE INDEX IF NOT EXISTS idx_conversation_contexts_mode
 --   - credit_transactions
 --   - usage_records
 --
--- PAYMENTS (2):
+-- PAYMENTS (1):
 --   - x402_payment_requests
---   - x402_access_log
 --
 -- CRYPTO (6):
 --   - user_deposit_addresses

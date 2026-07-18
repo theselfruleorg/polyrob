@@ -35,26 +35,16 @@ _CATEGORY_LABELS = {
     ToolCategory.INTEGRATION: "integration",
 }
 
-_PERMISSIONS = {
-    "filesystem": ["fs.read", "fs.write"],
-    "task": ["memory.read", "memory.write"],
-    "browser_manager": ["browser.control", "network.read"],
-    "perplexity": ["network.read"],
-    "twitter": ["network.read", "network.write", "social.post"],
-    "email": ["network.write", "email.send"],
-    "collabland": ["network.read"],
-    "alchemy": ["network.read"],
-    "mcp": ["mcp.call", "network.read"],
-    "anysite": ["network.read", "process.spawn"],
-    "polymarket": ["network.read", "trade.execute"],
-    "hyperliquid": ["network.read", "trade.execute"],
-    # Read-only split tools: market data only, no wallet/signing.
-    "polymarket_data": ["network.read"],
-    "hyperliquid_data": ["network.read"],
-}
+# Folded into core/tool_capabilities.py (WS-2 tail, 2026-07-16): permissions live
+# next to the capability rows and the risk tiers are DERIVED (high = external-write
+# permission; medium = high_impact capability without one). These names stay as
+# back-compat module attributes; classify a new tool THERE, not here.
+from core.tool_capabilities import TOOL_PERMISSIONS as _TOOL_PERMISSIONS
+from core.tool_capabilities import high_risk_tool_ids, medium_risk_tool_ids
 
-_HIGH_RISK_TOOLS = {"twitter", "email", "polymarket", "hyperliquid"}
-_MEDIUM_RISK_TOOLS = {"mcp", "anysite", "browser_manager", "perplexity"}
+_PERMISSIONS = {name: list(perms) for name, perms in _TOOL_PERMISSIONS.items()}
+_HIGH_RISK_TOOLS = high_risk_tool_ids()
+_MEDIUM_RISK_TOOLS = medium_risk_tool_ids()
 _ENABLE_FLAGS = {
     "twitter": "TWITTER_ENABLED",
 }

@@ -66,12 +66,19 @@ class SessionData:
         memory: HierarchicalMemory,
         phase_manager: PhaseManager,
         context_retriever: ContextRetriever,
-        compaction_manager: CompactionManager
+        compaction_manager: CompactionManager,
+        user_id: Optional[str] = None,
     ):
         self.memory = memory
         self.phase_manager = phase_manager
         self.context_retriever = context_retriever
         self.compaction_manager = compaction_manager
+        # SECURITY (P1 finalization): the tenant this cached session belongs to.
+        # The `_sessions` dict is process-global and keyed by session_id ALONE, so
+        # the load_session cache-hit path must verify this matches the requesting
+        # user_id — a reused session_id across tenants would otherwise return one
+        # tenant's warm H-MEM to another.
+        self.user_id = user_id
         self.last_brain_state: Optional[Dict[str, Any]] = None  # Phase 3: For semantic search
         # FIX (Dec 12, 2025): Step-level cache to prevent 5x redundant hierarchical searches per step
         self._cached_context: Optional[str] = None
@@ -188,7 +195,7 @@ class TaskContextManager(BaseComponent):
         # turn it on; explicit env still wins). Lazy import + fail-open to the
         # direct env read so modules.memory never hard-depends on agents.task.
         try:
-            from agents.task.constants import AutonomyConfig as _AC
+            from core.config_policy import AutonomyConfig as _AC
             self.reflection_on_session_close = _AC.reflection_on_session_close()
         except Exception:
             self.reflection_on_session_close = _bool_env("REFLECTION_ON_SESSION_CLOSE", False)
@@ -392,7 +399,8 @@ class TaskContextManager(BaseComponent):
             memory=memory,
             phase_manager=phase_manager,
             context_retriever=context_retriever,
-            compaction_manager=compaction_manager
+            compaction_manager=compaction_manager,
+            user_id=user_id,
         )
         self._sessions[session_id] = session_data
 
@@ -413,9 +421,22 @@ class TaskContextManager(BaseComponent):
         Returns:
             Loaded HierarchicalMemory, or None if not found
         """
-        # Check if already loaded
-        if session_id in self._sessions:
-            return self._sessions[session_id].memory
+        # Check if already loaded — but ONLY return the warm entry to the SAME
+        # tenant that owns it (P1 finalization: cross-tenant H-MEM cache leak). The
+        # cache is keyed by session_id alone; a session_id reused across tenants
+        # (permitted upstream after the old owner is reaped) must not hand tenant
+        # A's memory to tenant B. On mismatch, drop the stale entry and reload from
+        # the correct per-user path below.
+        cached = self._sessions.get(session_id)
+        if cached is not None:
+            if cached.user_id == user_id:
+                return cached.memory
+            logger.warning(
+                "H-MEM cache: session_id %s requested by user_id %r but cached for "
+                "%r — reloading from the correct tenant path",
+                session_id, user_id, cached.user_id,
+            )
+            del self._sessions[session_id]
 
         # Try to load from disk
         memory_path = self._get_memory_path(session_id, user_id)
@@ -452,7 +473,8 @@ class TaskContextManager(BaseComponent):
                 memory=memory,
                 phase_manager=phase_manager,
                 context_retriever=context_retriever,
-                compaction_manager=compaction_manager
+                compaction_manager=compaction_manager,
+                user_id=user_id,
             )
             self._sessions[session_id] = session_data
 

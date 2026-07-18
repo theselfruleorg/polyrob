@@ -192,6 +192,25 @@ def test_corrupt_manifest_is_graceful(tmp_path):
         restore_snapshot(info.path)
 
 
+def test_snapshot_dir_is_owner_only(tmp_path):
+    """M2: the snapshot dir holds raw copies of `.env.production` (MASTER_SEED)
+    and `wallet/` (meta.json/audit.jsonl) — chmod 0700 so no other local-box
+    user/process can read it off disk, independent of the credential-name guard
+    (which stops the AGENT's own file tools, not other OS principals)."""
+    import stat
+
+    data_home = tmp_path / "home"
+    snaps = tmp_path / "snaps"
+    db = data_home / "memory.db"
+    _wal_db(db, 1).close()
+
+    info = create_snapshot(snapshots_root=snaps, data_home=data_home,
+                           from_version="0.4.2", db_paths=[db], timestamp="T1")
+
+    mode = stat.S_IMODE(info.path.stat().st_mode)
+    assert mode == 0o700, f"snapshot dir must be 0700, got {oct(mode)}"
+
+
 def test_prune_keeps_n_complete(tmp_path):
     snaps = tmp_path / "snaps"
     data_home = tmp_path / "home"

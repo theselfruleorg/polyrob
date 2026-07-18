@@ -184,3 +184,17 @@ def test_unknown_command_with_arg_yields_nothing():
     reg.register(Command("noop", lambda ctx: None))
     c = SlashCompleter(reg)
     assert _completions(c, "/noop something") == []
+
+
+def test_alias_completion_shows_pointer_not_duplicate_help():
+    """/compress is an alias of /compact — its menu row must read `→ /compact`,
+    not repeat /compact's help (which made them look like duplicate commands)."""
+    from cli.ui.commands.handlers import default_registry
+    from cli.ui.commands.registry import SlashCompleter
+
+    completer = SlashCompleter(default_registry())
+    comps = {c.text: c for c in completer.get_completions(_Doc("/comp"), None)}
+    assert "compact" in comps and "compress" in comps
+    assert comps["compress"].display_meta_text == "→ /compact"
+    assert comps["compact"].display_meta_text != comps["compress"].display_meta_text
+    assert "background" in comps["compact"].display_meta_text

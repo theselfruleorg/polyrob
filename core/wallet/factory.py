@@ -71,8 +71,20 @@ def get_policy_gate() -> PolicyGate:
     global _standalone_policy
     if _standalone_policy is None:
         cfg = load_wallet_config()
+        # M3 (2026-07-15): the standalone gate guards DB-credential trading, which
+        # has no agent wallet — but it still needs the SAME durable audit sink the
+        # wallet path uses, or its rolling-24h caps + replay guard reset every
+        # restart (a mainnet prerequisite; see audit_sink module docstring).
+        # Fail-open: fall back to in-memory if the durable sink can't be created.
+        sink = None
+        try:
+            from core.wallet.audit_sink import default_audit_sink
+            sink = default_audit_sink()
+        except Exception:
+            sink = None
         _standalone_policy = PolicyGate(
             max_per_tx_usd=cfg.max_per_tx_usd,
+            audit_sink=sink,
             daily_cap_usd=cfg.daily_cap_usd,
             per_venue_daily_cap_usd=cfg.per_venue_daily_cap_usd,
             on_record=_emit_spend_to_event_log,

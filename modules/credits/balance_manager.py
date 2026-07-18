@@ -1,5 +1,6 @@
 """Credit balance manager for managing user credit balances."""
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -115,8 +116,16 @@ class CreditBalanceManager:
                 self.logger.info(f"Deducted {amount} credits from {user_id}: {reason}")
                 return True
 
-            except Exception as e:
-                # Rollback on any error
+            except (asyncio.CancelledError, Exception) as e:
+                # Rollback on any error — INCLUDING asyncio.CancelledError, which
+                # derives from BaseException (not Exception) since py3.8. A ticker
+                # force-cancel (autonomy-runtime shutdown) or an HTTP-request
+                # cancellation mid-transaction would otherwise skip the rollback
+                # and leave DatabaseConnection._in_transaction permanently True,
+                # poisoning the SHARED bot.db connection for every subsequent
+                # write until process restart. Mirrors the exact idiom
+                # modules/x402/subscriptions.py::apply_settlement uses (Task 14
+                # fix pass 3). Cancellation is re-raised, never swallowed.
                 await self.db.connection.rollback()
                 raise
 
@@ -178,7 +187,11 @@ class CreditBalanceManager:
 
                 if owns_tx:
                     await self.db.connection.commit()
-            except Exception:
+            except (asyncio.CancelledError, Exception):
+                # Roll back on any error INCLUDING asyncio.CancelledError (see the
+                # twin comment in deduct_credits): a cancellation mid-transaction
+                # must never bypass the rollback and leak _in_transaction=True on
+                # the shared bot.db connection.
                 if owns_tx:
                     await self.db.connection.rollback()
                 raise

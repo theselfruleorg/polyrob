@@ -551,3 +551,69 @@ class TestA2AIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestCurrentActivityMetadata:
+    """019 P4: get_task carries the live RunActivity snapshot in metadata."""
+
+    @pytest.fixture
+    def mock_container(self):
+        container = MagicMock()
+        task_agent = AsyncMock()
+        task_agent.session_manager = MagicMock()
+        task_agent._active_orchestrators = {}
+        container.get_agent.return_value = task_agent
+        container.get_service.return_value = task_agent.session_manager
+        return container
+
+    @pytest.fixture
+    def handler(self, mock_container):
+        return A2ATaskHandler(mock_container)
+
+    @pytest.mark.asyncio
+    async def test_get_task_metadata_current_activity(self, handler, mock_container):
+        from unittest.mock import AsyncMock
+
+        from agents.task.telemetry import run_activity
+
+        run_activity._reset_for_tests()
+        try:
+            run_activity.note_feed_event(
+                "session-act", "tool_started", {"action_name": "navigate", "call_id": "c1"},
+                step=2,
+            )
+            task_agent = mock_container.get_agent.return_value
+            task_agent.get_session_by_id = AsyncMock(return_value={
+                "id": "session-act",
+                "status": "running",
+                "user_id": "user-1",
+                "task": "Test task",
+                "created_at": datetime.now().isoformat()
+            })
+            task = await handler.get_task("session-act")
+            activity = task.metadata["current_activity"]
+            assert activity["phase"] == "tool"
+            assert activity["detail"] == "navigate"
+            assert "seconds_in_state" in activity
+        finally:
+            run_activity._reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_get_task_metadata_current_activity_none_when_unknown(
+        self, handler, mock_container
+    ):
+        from unittest.mock import AsyncMock
+
+        from agents.task.telemetry import run_activity
+
+        run_activity._reset_for_tests()
+        task_agent = mock_container.get_agent.return_value
+        task_agent.get_session_by_id = AsyncMock(return_value={
+            "id": "session-unknown",
+            "status": "running",
+            "user_id": "user-1",
+            "task": "Test task",
+            "created_at": datetime.now().isoformat()
+        })
+        task = await handler.get_task("session-unknown")
+        assert task.metadata["current_activity"] is None

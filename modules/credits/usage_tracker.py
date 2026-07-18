@@ -15,7 +15,8 @@ This tracker:
 
 INTEGRATION:
 - Uses modules.llm.TokenUsage for token data (no duplication)
-- Uses modules.llm.model_registry.calculate_cost for API pricing
+- Uses modules.credits.pricing.compute_llm_cost (G-24 single billing entry
+  point, itself backed by modules.llm.model_registry.calculate_cost) for API pricing
 - Adds configurable markup for user billing (via PRICING_MARKUP env var, default 1.0 = 0%)
 """
 
@@ -29,10 +30,10 @@ import os
 from datetime import datetime
 
 # Import LLM module's TokenUsage (don't duplicate!)
-from modules.llm import TokenUsage, calculate_cost
+from modules.llm import TokenUsage
 
 # Import pricing from THIS module (relative import to avoid circular dependencies)
-from .pricing import pricing as _pricing_config
+from .pricing import pricing as _pricing_config, compute_llm_cost
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,8 @@ class LLMUsageTracker:
         success: bool = True,
         error: Optional[str] = None,
         metadata: Optional[Dict] = None,
-        cache_creation_tokens: int = 0
+        cache_creation_tokens: int = 0,
+        request_id: Optional[str] = None
     ) -> UsageRecord:
         """
         Record LLM usage across ALL systems atomically.
@@ -251,6 +253,16 @@ class LLMUsageTracker:
             success: Whether call succeeded
             error: Error message if failed
             metadata: Additional metadata
+            request_id: G-26 FIX (Task 5c reachability): a caller-supplied STABLE
+                idempotency key for the underlying LLM completion (e.g. the
+                provider's own response id, namespaced ``resp:{provider}:{id}`` --
+                see agents/task/agent/core/aux_metering.py::extract_stable_request_id).
+                When two calls into this method pass the SAME request_id (a
+                genuine retry re-billing one completion), the partial-unique-index
+                dedup in `_write_to_database` actually fires and the second write
+                is ignored (WARN logged). When None (the caller had no stable id
+                for this path -- legacy behavior), a fresh uuid is generated per
+                call so DISTINCT completions are never falsely deduped.
 
         Returns:
             UsageRecord with complete billing information
@@ -280,8 +292,11 @@ class LLMUsageTracker:
             # 3. Calculate costs (SINGLE SOURCE OF TRUTH)
             costs = await self._calculate_costs(model, tokens)
 
-            # 4. Generate unique request ID
-            request_id = self._generate_request_id()
+            # 4. Use the caller-supplied STABLE idempotency key when given (G-26
+            # reachability fix); otherwise fall back to a fresh uuid (legacy --
+            # never dedups, exactly today's behavior for any caller that hasn't
+            # been updated to pass one).
+            request_id = request_id or self._generate_request_id()
 
             # 5. Create complete usage record
             record = UsageRecord(
@@ -307,10 +322,16 @@ class LLMUsageTracker:
             # "charged" usage_records row with no matching deduction (get_session_breakdown
             # sums that row). x402/admin ledger + budget enforcement stay AFTER the write
             # (order preserved). _deduct_from_balance records a billing_failure on failure.
+            # §6.2 metering-only mode: with no balance_manager (single-owner
+            # headless — no credit system) the tracker RECORDS usage (real
+            # api_cost_usd into usage_records, which the autonomy budget gate
+            # reads) and never deducts. Tier lookup still runs (db-only) so the
+            # x402/admin ledger + prepaid-budget legs below stay intact.
             charged_tier = None
             if costs.credits_charged > 0:
                 charged_tier = await self._get_user_tier(user_id)
-                if charged_tier not in ("x402", "admin"):
+                if charged_tier not in ("x402", "admin") \
+                        and getattr(self, "balance", None) is not None:
                     await self._deduct_from_balance(record)
 
             # 6. Write to database (primary source of truth)
@@ -369,19 +390,19 @@ class LLMUsageTracker:
         """
         Calculate costs with full transparency.
 
-        Uses modules.llm.model_registry.calculate_cost for API pricing,
-        then adds configurable markup for user billing (PRICING_MARKUP env var).
+        G-24: routes through `modules.credits.pricing.compute_llm_cost` --
+        THE single billing entry point that always forwards cached_tokens
+        AND cache_creation_tokens to `calculate_cost`. This IS the real
+        billing path (feeds credit deduction + the usage_records ledger
+        row); every other cost estimate in the codebase (display/telemetry)
+        must never fork its own formula away from this one.
+
+        Then adds configurable markup for user billing (PRICING_MARKUP env var).
 
         Returns complete breakdown: API cost → markup → credits → user cost
         """
-        # Calculate API cost using centralized registry (already imported)
-        api_cost_usd = calculate_cost(
-            model_name=model,
-            input_tokens=tokens.prompt_tokens,
-            output_tokens=tokens.completion_tokens,
-            cached_tokens=tokens.cached_tokens,
-            cache_creation_tokens=getattr(tokens, "cache_creation_tokens", 0),
-        )
+        # Calculate API cost via the single billing entry point (G-24).
+        api_cost_usd = compute_llm_cost(model, tokens)
 
         # Convert to credits with markup
         credits_raw = (api_cost_usd / self.CREDIT_VALUE_USD) * self.MARKUP
@@ -411,6 +432,24 @@ class LLMUsageTracker:
         Write complete usage record to database.
 
         Uses NEW token columns + stores full breakdown in metadata.
+
+        G-26: `request_id` is now a REAL column (not just embedded in the
+        `metadata` JSON, kept there too for back-compat readers) with a
+        partial UNIQUE index (`idx_usage_records_request_id`, NULL-exempt).
+        `INSERT OR IGNORE` means a genuine duplicate request_id (e.g. a retry
+        that re-enters this method with the same UsageRecord.request_id)
+        writes NOTHING instead of a second row -- `cursor.rowcount == 0`
+        tells us the insert was ignored, at which point we log ONE WARN
+        naming the request_id (an ignored duplicate means double-billing was
+        ATTEMPTED -- surface it, don't hide it).
+
+        HONESTY NOTE: credit deduction (`_deduct_from_balance`) already ran
+        BEFORE this write, in `record_llm_usage`. This index stops duplicate
+        ROWS / ledger inflation in `usage_records`; it does NOT stop a
+        duplicate deduction -- that dedup is still the in-process
+        `_polyrob_billed` flag on the response object (see
+        agents/task/agent/core/next_action_internal.py). Reordering
+        deduct/write is out of scope here.
         """
         # Build metadata with full cost breakdown
         metadata_dict = {
@@ -429,14 +468,15 @@ class LLMUsageTracker:
             **(record.metadata or {})
         }
 
-        await self.db.execute("""
-            INSERT INTO usage_records (
+        insert_sql = """
+            INSERT OR IGNORE INTO usage_records (
                 user_id, session_id, resource_type,
                 cost, input_tokens, output_tokens, cached_tokens,
                 api_cost_usd, markup_multiplier,
-                metadata, timestamp
-            ) VALUES (?, ?, 'llm_call', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """, (
+                request_id, metadata, timestamp
+            ) VALUES (?, ?, 'llm_call', ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """
+        insert_params = (
             record.user_id,
             record.session_id,
             record.costs.credits_charged,  # Credits charged to user
@@ -445,8 +485,65 @@ class LLMUsageTracker:
             record.tokens.cached_tokens,
             record.costs.api_cost_usd,
             record.costs.markup_multiplier,
+            record.request_id,
             json.dumps(metadata_dict)
-        ))
+        )
+        try:
+            cursor = await self.db.execute(insert_sql, insert_params)
+        except Exception as e:
+            # Proposal 009 option 3: in metering-only mode (no balance_manager —
+            # single-owner headless) the autonomous tenant has no user_profiles
+            # row, so the usage_records FK fails and EVERY metric is dropped
+            # (episodes.spend_usd stuck at 0, budget gate blind). Self-heal:
+            # ensure a minimal profile and retry ONCE. Server mode (balance
+            # manager present) is untouched — real users already have profiles,
+            # and a missing one there is a genuine error worth raising.
+            if self.balance is None and self._is_fk_violation(e) \
+                    and await self._ensure_metering_profile(record.user_id):
+                cursor = await self.db.execute(insert_sql, insert_params)
+            else:
+                raise
+
+        if getattr(cursor, "rowcount", 1) == 0:
+            self.logger.warning(
+                f"⚠️ Duplicate usage_records write ignored for request_id="
+                f"{record.request_id} (user={record.user_id}, session={record.session_id}, "
+                f"model={record.model}) -- double-billing was ATTEMPTED; deduction dedup is "
+                f"unaffected (see _polyrob_billed), only the ledger row was skipped."
+            )
+
+    @staticmethod
+    def _is_fk_violation(exc: Exception) -> bool:
+        """True when the (possibly wrapped) DB error is a FOREIGN KEY failure."""
+        return "foreign key" in str(exc).lower()
+
+    async def _ensure_metering_profile(self, user_id: str) -> bool:
+        """Idempotently create the minimal user_profiles row the usage_records
+        FK requires, for the headless autonomous tenant (metering-only mode).
+
+        wallet_address is UNIQUE NOT NULL, so a deterministic, clearly-synthetic
+        value is used ("local:<user_id>" — the same convention ensure_owner_profile
+        seeds at bootstrap, so a healed row is identical to a seeded one). Grants no balance and no entitlements;
+        metering-only never deducts. Returns False (and logs) on any error so
+        the caller re-raises the original FK failure instead of looping.
+        """
+        try:
+            await self.db.execute(
+                "INSERT OR IGNORE INTO user_profiles (user_id, wallet_address, role, tier) "
+                "VALUES (?, ?, 'user', 'free')",
+                (user_id, f"local:{user_id}"),
+            )
+            self.logger.warning(
+                f"⚠️ usage_records FK self-heal: created minimal user_profiles row for "
+                f"metering-only tenant '{user_id}' (synthetic wallet 'local:{user_id}') "
+                f"and retrying the usage insert once (proposal 009)."
+            )
+            return True
+        except Exception as heal_err:
+            self.logger.error(
+                f"usage_records FK self-heal failed for '{user_id}': {heal_err}"
+            )
+            return False
 
     async def _write_to_telemetry(self, record: UsageRecord):
         """
@@ -670,5 +767,23 @@ class LLMUsageTracker:
         return breakdown
 
 
+def build_usage_tracker(*, db, balance_manager, telemetry_manager,
+                        fail_on_insufficient: bool = None):
+    """Build a tracker from whatever services exist (§6.2 metering truth).
+
+    - db + balance_manager → full tracker (records AND bills credits);
+    - db only → METERING-ONLY tracker (records real api_cost_usd, never
+      deducts) — the single-owner headless shape, where requiring a credit
+      system left autonomous runs completely unmetered;
+    - no db → None (nothing to record into).
+    """
+    if not db:
+        return None
+    return LLMUsageTracker(db=db, balance_manager=balance_manager,
+                           telemetry_manager=telemetry_manager,
+                           fail_on_insufficient=fail_on_insufficient)
+
+
 # Export for use
-__all__ = ['LLMUsageTracker', 'UsageRecord', 'TokenUsage', 'CostBreakdown', 'InsufficientCreditsError']
+__all__ = ['LLMUsageTracker', 'UsageRecord', 'TokenUsage', 'CostBreakdown',
+           'InsufficientCreditsError', 'build_usage_tracker']

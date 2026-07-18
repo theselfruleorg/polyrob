@@ -34,7 +34,7 @@ from typing import Any, Awaitable, Callable, List, Optional
 
 from rich.text import Text
 
-from cli.ui.theme import style
+from cli.ui.theme import ICONS, style
 
 _log = logging.getLogger(__name__)
 
@@ -198,7 +198,7 @@ class ResponseBox:
         from rich.padding import Padding
 
         speaker = Text()
-        speaker.append("● ", style=style("speaker_dot"))
+        speaker.append(f"{ICONS.speaker} ", style=style("speaker_dot"))
         speaker.append(self._title, style=style("speaker_name"))
         body = Padding(Markdown("".join(self._chunks)), (0, 0, 0, 2))
         return Group(Text(""), speaker, body)

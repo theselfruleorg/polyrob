@@ -112,6 +112,11 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
         "research", # template
         "",         # owner pairing: instance id (default rob)
         "",         # owner pairing: owner user id (default rob)
+        "",         # 5/5 guardrails: local mode (default No)
+        "",         # 5/5 guardrails: autonomy budget (blank = skip)
+        "",         # 5/5 guardrails: approval preset (default No)
+        "",         # 5/5 guardrails: digest channel (blank = off)
+        "n",        # optional wallet opt-in (Task 7, default No)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
@@ -122,9 +127,11 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
 def test_interactive_piped_default_toolset(tmp_path, monkeypatch):
     """Accepting defaults (all enter) must still write toolset."""
     home = _make_home(tmp_path)
-    # 11 prompts on the all-defaults interactive path: 6 provider keys (OpenRouter-first)
-    # + model + toolset + template + owner-pairing (instance id + owner id). (+1 safety.)
-    piped = "\n" * 12  # all blanks / defaults
+    # 16 prompts on the all-defaults interactive path: 6 provider keys (OpenRouter-first)
+    # + model + toolset + template + owner-pairing (instance id + owner id)
+    # + Section 6/6 guardrails (local mode + budget + approval preset + digest)
+    # + the wallet opt-in confirm (Task 7, blank = default No). (+1 safety.)
+    piped = "\n" * 17  # all blanks / defaults
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
     env = (home / ".polyrob" / ".env").read_text()
@@ -184,6 +191,11 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
         "",           # template (default)
         "",           # owner pairing: instance id (default rob)
         "",           # owner pairing: owner user id (default rob)
+        "",           # 5/5 guardrails: local mode (default No)
+        "",           # 5/5 guardrails: autonomy budget (blank = skip)
+        "",           # 5/5 guardrails: approval preset (default No)
+        "",           # 5/5 guardrails: digest channel (blank = off)
+        "n",          # optional wallet opt-in (Task 7, default No)
     ]) + "\n"
     res = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output

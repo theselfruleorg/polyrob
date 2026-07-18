@@ -14,20 +14,26 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from core.runtime_paths import data_dir_or_home
 
 
 def _resolve_tool_list(
-    tools: Optional[str], toolset: Optional[str]
+    tools: Optional[str], toolset: Optional[str],
+    *, user_id: Optional[str] = None, home_dir=None,
 ) -> tuple[list[str], list[str]]:
     """Resolve the final CLI tool list from --tools / --toolset.
 
     Precedence: ``--tools`` (explicit comma list) > ``--toolset`` (named set) >
-    default. The final list is always pruned through ``cli_unavailable_tools`` so
-    the agent is never advertised tools the CLI container can't register.
+    a ``session.toolset`` preference (owner-UX P1 T5, only consulted when
+    ``user_id`` is given) > default. The final list is always pruned through
+    ``cli_unavailable_tools`` so the agent is never advertised tools the CLI
+    container can't register.
 
     Returns ``(tool_list, notes)`` where ``notes`` are human-readable warning
-    lines (stderr) about pruned/unavailable tools. Pure + side-effect-free so it
-    is directly unit-testable (the caller does the echoing).
+    lines (stderr) about pruned/unavailable tools. Pure + side-effect-free (the
+    optional pref read is the only I/O) so it is directly unit-testable (the
+    caller does the echoing). ``user_id``/``home_dir`` default to None, so every
+    pre-existing positional call (no pref file involved) stays byte-identical.
     """
     from agents.task.tool_defaults import cli_default_tools, resolve_toolset
     from core.bootstrap import cli_unavailable_tools
@@ -55,7 +61,28 @@ def _resolve_tool_list(
             )
         tool_list = [t for t in resolved if t not in unavail]
     else:
-        tool_list = cli_default_tools()
+        # owner-UX P1 T5: neither --tools nor --toolset given for THIS run — a
+        # "session.toolset" pref may override the default toolset NAME. Only
+        # takes effect when a pref is actually ON DISK (resolve_with_source's
+        # "pref" source); otherwise falls through to cli_default_tools()
+        # unchanged (byte-identical legacy, including its own env read + pruning).
+        tool_list = None
+        if user_id:
+            try:
+                from core.prefs import resolve_with_source
+                env_toolset = os.environ.get("POLYROB_AGENT_TOOLSET", "").strip() or None
+                pref_toolset, source = resolve_with_source(
+                    "session.toolset", user_id, data_dir_or_home(home_dir),
+                    env_value=env_toolset, default=None,
+                )
+                if source == "pref" and pref_toolset:
+                    resolved = resolve_toolset(pref_toolset)
+                    unavail = set(cli_unavailable_tools(resolved))
+                    tool_list = [t for t in resolved if t not in unavail]
+            except Exception:
+                tool_list = None
+        if tool_list is None:
+            tool_list = cli_default_tools()
 
     return tool_list, notes
 
@@ -133,7 +160,8 @@ async def _run_session(
         os.environ["TQDM_DISABLE"] = "1"
 
     # POLYROB_PLAIN env mirrors the REPL's plain toggle; --plain takes precedence.
-    plain = plain or os.environ.get("POLYROB_PLAIN", "").lower() in ("1", "true", "yes")
+    from core.env import bool_env as _bool_env
+    plain = plain or _bool_env("POLYROB_PLAIN", False)  # SSOT falsey/truthy set (incl. "on") — P4
 
     click.echo(click.style("starting…", dim=True))
 
@@ -149,9 +177,10 @@ async def _run_session(
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         sys.exit(1)
     if not verbose:
-        # Suppress records at ERROR level and below; CRITICAL (≥50) remains
-        # visible so fatal boot failures still surface.  Mirrors chat.py.
-        _logging.disable(_logging.ERROR)
+        # Lift the bootstrap-wide logging.disable(CRITICAL) now that startup is
+        # done; per-sink handler levels (console=ERROR) keep the terminal quiet.
+        # Mirrors chat.py.
+        _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -166,14 +195,21 @@ async def _run_session(
         from modules.llm.llm_client_registry import get_default_model as _registry_default
         resolved_model = _registry_default(resolved_provider)
 
+    # owner-UX P1 T5: resolved early (moved up from below _resolve_tool_list) so
+    # the "session.toolset" pref lookup below can be tenant-scoped. The rest of
+    # this function is unchanged from here down.
+    user_id = container.get_service("identity").resolve()
+    _data_home = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
+
     # Parse tools
-    # Precedence: --tools (explicit comma list) > --toolset (named set) > default.
+    # Precedence: --tools (explicit comma list) > --toolset (named set) >
+    # session.toolset pref > default.
     # B6: the CLI container deliberately skips heavy browser init (build_cli_container),
     # so a default that advertises `browser` only yields "No BrowserManager" errors.
     # Match the REPL default (filesystem, task; fast startup, no browser). Browser is
     # still opt-in via `--tools browser` or `--toolset browser` for anyone who wires
     # a BrowserManager.
-    tool_list, notes = _resolve_tool_list(tools, toolset)
+    tool_list, notes = _resolve_tool_list(tools, toolset, user_id=user_id, home_dir=_data_home)
     for note in notes:
         click.echo(note, err=True)
 
@@ -205,8 +241,6 @@ async def _run_session(
         "temperature": 0.0,
         "use_vision": True,
     }
-
-    user_id = container.get_service("identity").resolve()
 
     # Select the renderer (Rich on TTY, Plain otherwise).  one_shot=True so the
     # completion panel shows the final result (it IS the summary here).
@@ -348,7 +382,7 @@ async def _run_session(
     # the REPL path in chat.py.  Fail-open: a bad persona never blocks the run.
     try:
         from cli.persona import resolve_cli_persona
-        _p = resolve_cli_persona()
+        _p = resolve_cli_persona(user_id=user_id, home_dir=_data_home)
         if _p and orchestrator is not None:
             orchestrator._persona_block = _p
     except Exception:

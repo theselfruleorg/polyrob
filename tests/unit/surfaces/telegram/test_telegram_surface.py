@@ -10,9 +10,12 @@ class _FakeMessage:
 
 
 class _FakeBot:
-    def __init__(self, fail=False):
+    def __init__(self, fail=False, media_fail=False):
         self.sent = []
+        self.photos = []
+        self.documents = []
         self._fail = fail
+        self._media_fail = media_fail
         self._next_id = 100
 
     async def send_message(self, chat_id, text, **kwargs):
@@ -20,6 +23,20 @@ class _FakeBot:
             raise RuntimeError("telegram 400")
         self._next_id += 1
         self.sent.append({"chat_id": chat_id, "text": text, "kwargs": kwargs})
+        return _FakeMessage(self._next_id)
+
+    async def send_photo(self, chat_id, photo, **kwargs):
+        if self._media_fail:
+            raise RuntimeError("telegram media 400")
+        self._next_id += 1
+        self.photos.append({"chat_id": chat_id, "photo": photo, "kwargs": kwargs})
+        return _FakeMessage(self._next_id)
+
+    async def send_document(self, chat_id, document, **kwargs):
+        if self._media_fail:
+            raise RuntimeError("telegram media 400")
+        self._next_id += 1
+        self.documents.append({"chat_id": chat_id, "document": document, "kwargs": kwargs})
         return _FakeMessage(self._next_id)
 
 
@@ -114,3 +131,106 @@ async def test_send_splits_after_markdown_v2_escape():
     assert len(bot.sent) == 2
     assert all(len(c["text"]) <= 4096 for c in bot.sent)
     assert "".join(c["text"] for c in bot.sent) == r"\." * 4096
+
+
+def test_capabilities_media_out():
+    assert _surface().capabilities.media_out is True
+
+
+@pytest.mark.asyncio
+async def test_send_image_media_calls_photo_api_and_still_delivers_text(tmp_path):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    img = tmp_path / "card.png"
+    img.write_bytes(b"\x89PNG\r\nfake")
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="your invoice",
+        media=[{"kind": "image", "path": str(img), "caption": "Invoice #1"}],
+    )
+    res = await s.send(msg)
+    assert res.success is True
+    assert len(bot.sent) == 1 and bot.sent[0]["text"] == "your invoice"
+    assert len(bot.photos) == 1
+    assert bot.photos[0]["chat_id"] == "5"
+    assert bot.photos[0]["photo"].path == str(img)
+    assert "Invoice" in bot.photos[0]["kwargs"]["caption"]
+    assert bot.documents == []
+
+
+@pytest.mark.asyncio
+async def test_send_document_media_calls_document_api(tmp_path):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    doc = tmp_path / "report.pdf"
+    doc.write_bytes(b"%PDF-1.4 fake")
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="report attached",
+        media=[{"kind": "document", "path": str(doc), "caption": None}],
+    )
+    res = await s.send(msg)
+    assert res.success is True
+    assert len(bot.documents) == 1
+    assert bot.documents[0]["document"].path == str(doc)
+    assert bot.photos == []
+
+
+@pytest.mark.asyncio
+async def test_media_caption_falls_back_to_message_text(tmp_path):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    img = tmp_path / "card.png"
+    img.write_bytes(b"fake")
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="fallback caption text",
+        media=[{"kind": "image", "path": str(img), "caption": None}],
+    )
+    await s.send(msg)
+    assert "fallback caption text" in bot.photos[0]["kwargs"]["caption"]
+
+
+@pytest.mark.asyncio
+async def test_media_entry_without_path_is_skipped(tmp_path):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="no media here",
+        media=[{"subject": "legacy email-only entry"}],
+    )
+    res = await s.send(msg)
+    assert res.success is True
+    assert bot.photos == [] and bot.documents == []
+    assert bot.sent[0]["text"] == "no media here"
+
+
+@pytest.mark.asyncio
+async def test_media_missing_file_is_skipped_with_warn(tmp_path, caplog):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    missing = tmp_path / "nope.png"
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="text still here",
+        media=[{"kind": "image", "path": str(missing), "caption": None}],
+    )
+    with caplog.at_level("WARNING"):
+        res = await s.send(msg)
+    assert res.success is True
+    assert bot.photos == []
+    assert bot.sent[0]["text"] == "text still here"
+    assert any("media" in r.message.lower() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_media_send_failure_is_failopen_text_still_delivered(tmp_path, caplog):
+    bot = _FakeBot(media_fail=True)
+    s = TelegramSurface(bot)
+    img = tmp_path / "card.png"
+    img.write_bytes(b"fake")
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="text must survive",
+        media=[{"kind": "image", "path": str(img), "caption": None}],
+    )
+    with caplog.at_level("WARNING"):
+        res = await s.send(msg)
+    assert res.success is True
+    assert bot.sent[0]["text"] == "text must survive"
+    assert any("media" in r.message.lower() for r in caplog.records)

@@ -180,11 +180,30 @@ class DockerBackend(ExecutionBackend):
         session_id: Optional[str] = None,
         dev_mode: bool = False,
     ) -> None:
-        self.image = os.getenv("CODE_EXEC_DOCKER_IMAGE", "python:3.12-slim")
+        # 014 B1: image resolution. Explicit CODE_EXEC_DOCKER_IMAGE always wins.
+        # Dev mode (posture>=1 persistent dev container — the shell/coding/run_code-dev
+        # path) defaults to a python+node image so JS/TS toolchains (npm/npx) work;
+        # the ephemeral confined sandbox keeps the slim python-only default.
+        _explicit_image = os.getenv("CODE_EXEC_DOCKER_IMAGE")
+        if _explicit_image:
+            self.image = _explicit_image
+        elif dev_mode:
+            self.image = os.getenv(
+                "CODE_EXEC_DEV_IMAGE", "nikolaik/python-nodejs:python3.11-nodejs20")
+        else:
+            self.image = "python:3.12-slim"
         self.memory_mb = int(os.getenv("CODE_EXEC_CONTAINER_MEMORY_MB", "1024"))
         self.cpus = os.getenv("CODE_EXEC_CONTAINER_CPUS", "1.0")
         self.pids_limit = int(os.getenv("CODE_EXEC_PIDS_LIMIT", "256"))
-        self.max_timeout = float(os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC", "30"))
+        # 014 B3: explicit CODE_EXEC_MAX_TIMEOUT_SEC always wins. Unset: dev mode
+        # aligns with the shell tool's 120s foreground contract
+        # (tools/shell/tool.py::_MAX_TIMEOUT_SEC) — pre-014 the backend re-clamp
+        # silently cut shell foreground commands to 30s; the confined default stays 30.
+        _raw_max = os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC")
+        if _raw_max is not None and _raw_max.strip():
+            self.max_timeout = float(_raw_max)
+        else:
+            self.max_timeout = 120.0 if dev_mode else 30.0
         self.max_output = int(os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES", "100000"))
         # Container user precedence: explicit operator override (verbatim, even if root)
         # > non-root host uid:gid (keeps the mounted workspace writable) > forced-unprivileged
@@ -316,6 +335,20 @@ class DockerBackend(ExecutionBackend):
         if len(text) > self.max_output:
             return text[: self.max_output] + f"\n...[truncated {len(text) - self.max_output} chars]", True
         return text, False
+
+    def effective_setup_network(self) -> str:
+        """The network a run/exec on THIS backend actually experiences (014 B2).
+
+        Persistent mode: the container's own network — ``docker exec`` inherits
+        it, including the dev-mode auto-bridge below. Ephemeral mode: the
+        per-request policy (env-driven; no auto-bridge — every ``docker run``
+        resolves its own ``--network``). The run_code ``packages=`` gate probes
+        this instead of the raw env so a dev container that auto-bridged is not
+        wrongly refused pip installs.
+        """
+        if self._session_id is not None:
+            return self._resolve_setup_network()
+        return self._resolve_network(ExecutionRequest(language="bash", code="true"))
 
     def _resolve_setup_network(self) -> str:
         """Network for the persistent CONTAINER at ``docker run -d`` time.
@@ -515,16 +548,36 @@ class DockerBackend(ExecutionBackend):
         os.makedirs(fallback, exist_ok=True)
         return fallback
 
-    def _build_run_argv(self, request: ExecutionRequest, workdir: str) -> List[str]:
+    def _build_run_argv(
+        self,
+        request: ExecutionRequest,
+        workdir: str,
+        *,
+        container_name: Optional[str] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> List[str]:
         """PURE: the full ``docker run`` argv incl. the in-container command.
 
-        EPHEMERAL mode only — this is the P0 argv shape, unchanged by P1-B (this
-        method is never called from the persistent path; see ``_run_persistent``,
-        which builds its own ``docker exec`` argv sharing only ``_hardening_flags``
-        and ``_container_env_flags``).
+        EPHEMERAL mode only (see ``_run_persistent`` for the persistent ``docker
+        exec`` argv, which shares only ``_hardening_flags``/``_container_env_flags``).
+
+        SECURITY (P0 finalization): ``container_name`` + ``timeout_sec`` close the
+        orphaned-container leak. Killing the local ``docker run`` CLI on a host-side
+        timeout does NOT stop the container on the daemon, and the old ephemeral argv
+        carried no ``--name``/``--label`` so the leak was neither reap-able nor
+        removable. Passing a name+label makes it ``docker rm -f``-able and
+        ``reap_orphans()``-sweepable; wrapping the command in coreutils
+        ``timeout --signal=KILL <n>`` (as the persistent path does) makes the
+        CONTAINER self-terminate — with ``--rm`` it is then auto-removed. When both
+        are ``None`` (e.g. the pure argv unit tests) the argv is byte-identical to
+        the pre-fix P0 shape.
         """
         lang = (request.language or "").lower()
-        argv = ["docker", "run", "--rm"] + self._hardening_flags(
+        argv = ["docker", "run", "--rm"]
+        if container_name:
+            argv += ["--name", container_name, "--label", _SANDBOX_LABEL,
+                     "--label", "polyrob.ephemeral=1"]
+        argv += self._hardening_flags(
             network=self._resolve_network(request), workdir_host=workdir,
             # dev run: bind <workdir>/.pylibs as the writable /install (path built
             # here purely; _run_ephemeral pre-creates the dir before invoking).
@@ -534,6 +587,11 @@ class DockerBackend(ExecutionBackend):
             argv.append("-i")  # keep stdin open
         argv += self._container_env_flags(request)
         argv.append(self.image)
+        if timeout_sec is not None:
+            # In-container bound (the real kill path). --signal=KILL: untrusted code
+            # must not catch/ignore it. timeout puts the command in its own process
+            # group and kills the whole group.
+            argv += ["timeout", "--signal=KILL", str(timeout_sec)]
         if lang in _PY:
             # dev mode: `-s` (no user-site) instead of `-I` — `-I` implies -E and
             # would ignore the PYTHONPATH=/install that makes installs importable.
@@ -567,9 +625,17 @@ class DockerBackend(ExecutionBackend):
         os.makedirs(workdir, exist_ok=True)
         if request.dev_mode:
             self._ensure_install_dir(workdir)  # pre-create so docker doesn't root-own it
-        argv = self._build_run_argv(request, workdir)
+        # P0 finalization: a named+labeled container with an IN-CONTAINER timeout so a
+        # host-side kill can no longer orphan a still-running container on the daemon.
+        container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
+        argv = self._build_run_argv(
+            request, workdir, container_name=container_name, timeout_sec=timeout,
+        )
         env = build_child_env({})  # env for the docker CLI process itself (PATH/HOME only)
         stdin_bytes = (request.stdin or "").encode() if request.stdin else None
+        # Host-side wait is a BACKSTOP only (a hung docker CLI client) — deliberately
+        # looser than the in-container `timeout` so the container self-terminates first.
+        host_backstop = timeout + 5
         start = time.monotonic()
 
         def _run_sync():
@@ -584,9 +650,12 @@ class DockerBackend(ExecutionBackend):
             except Exception as e:
                 return b"", f"docker launch error: {type(e).__name__}: {e}".encode(), 1, False
             try:
-                out, err = proc.communicate(input=stdin_bytes, timeout=timeout)
+                out, err = proc.communicate(input=stdin_bytes, timeout=host_backstop)
                 return out, err, proc.returncode, False
             except subprocess.TimeoutExpired:
+                # The docker CLI itself hung past the in-container bound. Kill the
+                # client AND force-remove the container on the daemon — killing the
+                # client alone leaves the (unbounded) container running.
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
@@ -595,6 +664,13 @@ class DockerBackend(ExecutionBackend):
                     except Exception:
                         pass
                 try:
+                    subprocess.run(
+                        ["docker", "rm", "-f", container_name],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
+                    )
+                except Exception:
+                    pass  # reap_orphans() sweeps the label as a last resort
+                try:
                     out, err = proc.communicate(timeout=5)
                 except Exception:
                     out, err = b"", b""
@@ -602,10 +678,14 @@ class DockerBackend(ExecutionBackend):
 
         try:
             loop = asyncio.get_event_loop()
-            stdout, stderr, exit_code, timed_out = await loop.run_in_executor(None, _run_sync)
+            stdout, stderr, exit_code, host_timed_out = await loop.run_in_executor(None, _run_sync)
         finally:
             if created_tmp:
                 shutil.rmtree(workdir, ignore_errors=True)
+        # In-container `timeout --signal=KILL` exits 124/137 when it fires (the
+        # container then self-removes via --rm); map that to timed_out too, since the
+        # host wait returns normally in that case.
+        timed_out = host_timed_out or (exit_code in _TIMEOUT_EXIT_CODES)
 
         out, t1 = self._cap(stdout)
         err, t2 = self._cap(stderr)

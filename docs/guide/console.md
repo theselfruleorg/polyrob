@@ -58,7 +58,7 @@ explicitly below.
 
 ---
 
-## The 11 capabilities
+## Capabilities
 
 ### 1. Chat / live session feed
 
@@ -98,6 +98,49 @@ provider the agent's `session_search`/prefetch calls use
 (`modules/memory/*`, selected by `MEMORY_BACKEND`). An empty query browses
 most-recent entries; a non-empty query searches. No separate memory store —
 this is a read window onto the agent's real recall.
+
+### 4b. Knowledge (`/knowledge`)
+
+Read-only wiki over everything the agent knows (C2, 2026-07-12;
+`webview/knowledge.py`): curated **notes** (incl. quarantined pending ones),
+the **episode** ledger (per-run outcome/artifacts/spend — needs
+`EPISODIC_MEMORY_ENABLED`), the **skill** catalog with reuse stats + pending
+drafts, **KB** sources, and a **changes** tab filtering the durable event log
+(`self_modification` + `memory_write`). Every endpoint reuses an existing
+reader (notes verbs / `recall_episodes` / `SkillManager` / `kb_list_sources` /
+event log) — no second source of truth. Approve/reject moved to the
+Console's own **Pending review** page (4e below; same queue as `/pending`
+and `polyrob owner pending`); the export twin is
+`polyrob knowledge export` (an Obsidian-compatible vault).
+
+### 4c. Finance (`/finance`)
+
+The agent's balance sheet over a trailing window: earned / spent (LLM +
+wallet) / pending x402 invoices / net, plus display-only policy caps.
+`GET /api/webgate/ledger` reuses
+`modules.credits.unified_ledger.build_ledger` — the same core `polyrob
+finance` and the REPL `/finance` render, so the numbers can never disagree
+across surfaces. Read-only, tenant-scoped; a ledger error degrades to zeros.
+
+### 4d. Preferences (`/preferences`)
+
+The typed per-tenant preference store (`preferences.toml`), schema-driven
+from `core.prefs.PREF_SCHEMA`: every key with its type/sensitivity/applies/
+description and the EFFECTIVE value + source (`display_effective` — the same
+helper the REPL `/config` and the agent's `preferences` action use). Safe
+keys apply on change; guarded keys ask for an explicit confirm (the
+authenticated PATCH with `confirm:true` is the owner confirmation — same
+trust as `polyrob config set --confirm`). `WEBVIEW_READ_ONLY` disables all
+writes; tenant resolution is fail-closed (`_effective_user_id`).
+
+### 4e. Pending review (`/pending`)
+
+The self-evolution review queue: identity notes, authored skills, operating
+contract text and guarded preference changes the agent quarantined for owner
+review. List / show-full / **Approve** / **Reject** ride the same
+`core.self_evolution` aggregator as `polyrob owner pending/promote/reject`,
+the REPL `/pending` and Telegram `/approve` — one queue, identical effect
+from every surface. Decision verbs are blocked in `WEBVIEW_READ_ONLY`.
 
 ### 5. Autonomy (`/autonomy`)
 
@@ -140,7 +183,8 @@ This is diagnostic/legibility only, not a control surface.
   you create/edit your own custom skills (id, markdown body, trigger
   keywords/tool-ids/priority) — the same skill system the agent loads at
   session start.
-- **Preferences** — placeholder ("Coming soon") as of this writing.
+- **Preferences** — see the dedicated `/preferences` page (4d above); the
+  Settings tab remains a pointer.
 - **API Keys** — placeholder in the Settings UI ("Coming soon"); the
   underlying capability is already live as a **REST** surface, not yet
   wired into this tab: `POST/GET/DELETE /api/auth/api-keys`
@@ -249,17 +293,28 @@ never cost the platform more than it collected.
 ### c. Anonymous x402 works on A2A + `/v1` — not the REST API
 
 The pay-per-request 402-challenge handshake (`X-PAYMENT` header, Coinbase
-facilitator verify+settle) is gated to exactly four path prefixes:
-`/a2a/rpc`, `/a2a/message/stream`, `/a2a/tasks`, `/v1/chat/completions`
-(`modules/x402/middleware.py::X402_GATED_PATH_PREFIXES`). The authenticated
-`/api/task/*` REST API is intentionally **not** included — POLYROB's
-outermost `fallback_auth_middleware` already 401s anonymous callers on
-every `/api/`/`/task/` path, so an anonymous, pay-per-crypto-signature
-caller who wants access without an account should use the A2A protocol or
-the OpenAI-compatible `/v1` surface, not the REST API. A caller that
-already carries an `Authorization`/`X-API-KEY`/session cookie is never
-intercepted by the 402 challenge, regardless of path — only genuinely
-anonymous requests hitting the four gated prefixes see it.
+facilitator verify+settle) is gated to exactly four `(METHOD, path)` routes —
+the ones that actually create a new billable task/completion:
+`POST /a2a/rpc`, `POST /a2a/message/stream`, `POST /a2a/tasks`,
+`POST /v1/chat/completions` (`modules/x402/middleware.py::X402_GATED_ROUTES`).
+Gating is exact-route, not a path prefix: reads and continuations that share
+the `/a2a/tasks` path segment — `GET /a2a/tasks/{id}` (status), `GET
+/a2a/tasks` (list), `POST /a2a/tasks/{id}/send`, `POST /a2a/tasks/{id}/cancel`,
+`POST /a2a/tasks/resubscribe` — are never billed by
+`verify_payment_for_request` at the endpoint layer, so the middleware never
+402-challenges them either. The authenticated `/api/task/*` REST API is
+intentionally **not** included — POLYROB's outermost `fallback_auth_middleware`
+already 401s anonymous callers on every `/api/`/`/task/` path, so an
+anonymous, pay-per-crypto-signature caller who wants access without an
+account should use the A2A protocol or the OpenAI-compatible `/v1` surface,
+not the REST API. A caller that already carries an
+`Authorization`/`X-API-KEY`/session cookie is never intercepted by the 402
+challenge, regardless of path — only genuinely anonymous requests hitting a
+gated route see it. A request that DOES carry `X-PAYMENT` on a gated route
+but arrives while the `fastapi-x402` facilitator SDK is unavailable
+(uninstalled or failed to initialize) gets an honest `503` explaining
+settlement is unavailable, instead of being silently dropped and 401'd
+downstream.
 
 ### d. Crypto top-up via deposit addresses
 

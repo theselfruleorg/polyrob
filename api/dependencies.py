@@ -22,7 +22,8 @@ Security note:
     propagate into audit tables as NULL.  The string "unknown" is safest.
 """
 
-from typing import Optional
+import os
+from typing import FrozenSet, Optional
 
 from fastapi import HTTPException, Request
 
@@ -69,6 +70,75 @@ def get_client_ip(request: Request) -> str:
     if request.client:
         return request.client.host
     return "unknown"
+
+
+# ---------------------------------------------------------------------------
+# Un-spoofable client identity (security-sensitive keying — rate limits, abuse
+# throttles). NOT the same as get_client_ip above: that helper trusts a
+# client-supplied X-Forwarded-For verbatim, which is fine for audit-log
+# display but is a spoofable key for anything that gates behavior (see the
+# repo landmine: "never trust X-Forwarded-* in origin checks").
+# ---------------------------------------------------------------------------
+
+_DEFAULT_TRUSTED_PROXIES: FrozenSet[str] = frozenset({"127.0.0.1", "::1"})
+
+
+def _trusted_proxy_set() -> FrozenSet[str]:
+    """Loopback (always trusted) plus the ``X402_TRUSTED_PROXIES`` CSV allowlist.
+
+    Read fresh on every call (not cached at import) so tests can monkeypatch
+    the env var without needing a module reload.
+    """
+    extra = os.environ.get("X402_TRUSTED_PROXIES", "")
+    extra_ips = {ip.strip() for ip in extra.split(",") if ip.strip()}
+    return _DEFAULT_TRUSTED_PROXIES | extra_ips
+
+
+def get_trusted_client_ip(
+    request: Request, trusted_proxies: Optional[FrozenSet[str]] = None
+) -> Optional[str]:
+    """Resolve a client identity an attacker CANNOT control.
+
+    ``request.client.host`` is the real TCP peer POLYROB's process observed —
+    always un-spoofable. ``X-Forwarded-For`` is attacker-controlled UNLESS the
+    peer that set it is a proxy this deployment trusts:
+
+    1. If ``request.client.host`` is NOT a trusted proxy (a direct/unknown
+       connection), ``X-Forwarded-For`` is IGNORED ENTIRELY and the raw peer
+       is returned. This is what makes the result un-spoofable for untrusted
+       callers — no header content can override it.
+    2. If ``request.client.host`` IS a trusted proxy (loopback by default —
+       the standard nginx-loopback deployment shape — plus any IP listed in
+       ``X402_TRUSTED_PROXIES``), walk ``X-Forwarded-For`` from the RIGHT,
+       skipping entries that are themselves trusted-proxy hops, and return
+       the first non-trusted entry. nginx's ``$proxy_add_x_forwarded_for``
+       APPENDS the address it directly observed to the end of any existing
+       header, so the rightmost non-proxy entry is the one genuine, per-hop
+       fact in the chain — anything to its LEFT was supplied by the client
+       (or an earlier, less-trusted hop) and can be forged freely. If the
+       header is absent or contains only trusted-proxy entries, falls back
+       to the peer itself.
+
+    Returns ``None`` only when there is genuinely no client info at all (a
+    bare test double with no ``request.client``) — callers MUST treat that as
+    "skip enforcement", never as a shared fallback bucket key.
+    """
+    if not request.client:
+        return None
+    peer = request.client.host
+    if not peer:
+        return None
+    proxies = trusted_proxies if trusted_proxies is not None else _trusted_proxy_set()
+    if peer not in proxies:
+        return peer
+    forwarded = request.headers.get("X-Forwarded-For")
+    if not forwarded:
+        return peer
+    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    for hop in reversed(hops):
+        if hop not in proxies:
+            return hop
+    return peer
 
 
 # ---------------------------------------------------------------------------

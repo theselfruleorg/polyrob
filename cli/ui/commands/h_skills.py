@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, List
 
+from cli.ui import candy
 from cli.ui.commands.registry import CommandContext
 
 # Upper bound on how many skills we pull from the catalog. The library is small
@@ -116,7 +117,7 @@ def _cmd_list(ctx: CommandContext) -> None:
         ctx.emit(f"Could not list skills: {exc}", title="skills")
         return
     if not rows:
-        ctx.emit("No skills found.", title="skills")
+        ctx.emit(candy.empty("skills found", yet=False), title="skills")
         return
     lines = [f"{len(rows)} skill row(s):"]
     for row in rows:
@@ -125,7 +126,8 @@ def _cmd_list(ctx: CommandContext) -> None:
             extra += f" source={row['source']}"
         if row.get("sha"):
             extra += f" sha={row['sha'][:8]}"
-        lines.append(f"  {row['id']:<24} {row['scope']:<14} {row['status']:<10}{extra}")
+        text = f"{row['id']:<24} {row['scope']:<14} {row['status']:<10}{extra}"
+        lines.append(candy.status_line(row["status"], text))
     ctx.emit("\n".join(lines), title="skills")
 
 
@@ -142,8 +144,7 @@ def _cmd_info(ctx: CommandContext, rest: List[str]) -> None:
     except Exception as exc:
         ctx.emit(str(exc), title="skills")
         return
-    lines = [f"{k}: {v}" for k, v in info.items()]
-    ctx.emit("\n".join(lines), title=f"skill: {skill_id}")
+    ctx.emit(candy.kv_lines(list(info.items())), title=f"skill: {skill_id}")
 
 
 def _cmd_remove(ctx: CommandContext, rest: List[str]) -> None:
@@ -262,7 +263,7 @@ def _cmd_catalog(ctx: CommandContext) -> None:
         return
 
     if not skills:
-        ctx.emit("No skills available.", title="skills")
+        ctx.emit(candy.empty("skills available", yet=False), title="skills")
         return
 
     # Optional case-insensitive filter over id + description.
@@ -275,7 +276,7 @@ def _cmd_catalog(ctx: CommandContext) -> None:
             or query in str(getattr(s, "description", "")).lower()
         ]
         if not skills:
-            ctx.emit(f"No skills match '{ctx.args[0]}'.", title="skills")
+            ctx.emit(candy.empty(f"skills match {ctx.args[0]!r}", yet=False), title="skills")
             return
 
     # Sort readably by id (the catalog is already priority-sorted; id-sort makes
@@ -286,7 +287,7 @@ def _cmd_catalog(ctx: CommandContext) -> None:
     for s in skills:
         skill_id = str(getattr(s, "skill_id", "") or "?")
         desc = _truncate(getattr(s, "description", "") or "", _DESC_WIDTH)
-        lines.append(f"  {skill_id}" + (f" — {desc}" if desc else ""))
+        lines.append(candy.bullet(skill_id + (f" — {desc}" if desc else "")))
     lines.append("Use `load_skill(skill_id=\"<id>\")` (agent) to load a skill's full body.")
 
     # Task 10 (SK-F2 visibility): the catalog view above only ever shows

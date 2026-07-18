@@ -144,10 +144,12 @@ class PathManager:
         if data_root:
             self.data_root = Path(data_root)
         else:
-            # Get from environment or use default
-            # Default to data/task for task agent sessions (NEW structure)
-            data_root_env = os.getenv('DATA_ROOT', './data/task')
-            self.data_root = Path(data_root_env)
+            # Route through the shared resolver (DATA_ROOT → POLYROB_DATA_DIR/sessions
+            # → ./data/task) so a process that skipped build_cli_container can no
+            # longer mint a second, divergent session tree (RC-1 landmine; audit T10,
+            # 2026-07-16 — this default used to read DATA_ROOT only).
+            from core.runtime_paths import resolve_session_data_root
+            self.data_root = resolve_session_data_root()
         
         # Ensure data root exists
         self.data_root = self.data_root.resolve()

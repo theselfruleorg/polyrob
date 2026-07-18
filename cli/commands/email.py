@@ -15,6 +15,7 @@ import sys
 from typing import Optional
 
 import click
+from core.runtime_paths import data_dir_or_home
 
 
 @click.command()
@@ -66,7 +67,7 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         sys.exit(1)
     if quiet:
-        _logging.disable(_logging.ERROR)
+        _logging.disable(_logging.NOTSET)
     elif not verbose:
         for _noisy in ("httpx", "httpcore", "asyncio", "hpack"):
             _logging.getLogger(_noisy).setLevel(_logging.WARNING)
@@ -100,7 +101,7 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
     # tiers + the harness can route correspondent replies to originating sessions.
     try:
         from core.surfaces.correspondents import CorrespondentRegistry
-        _data_dir = getattr(getattr(container, "config", None), "data_dir", "data") or "data"
+        _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
         if container.get_service("correspondent_registry") is None:
             container.register_service(
                 "correspondent_registry",
@@ -118,16 +119,26 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
     poll_sec = poll_opt if poll_opt is not None else SurfaceConfig.email_imap_poll_sec()
 
     from surfaces.email.harness import build_email_harness
-    _data_dir = getattr(getattr(container, "config", None), "data_dir", "data") or "data"
+    _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
     harness = build_email_harness(container, task_agent, email_tool=email_tool,
                                   data_dir=_data_dir, poll_interval=poll_sec)
     await harness.start()
 
-    # Autonomy loops (surface GC etc) under the local profile — same shared runtime.
+    # Autonomy loops are OFF here by default (proposal 010, option A). Both systemd
+    # entrypoints used to call start_autonomy against the SAME goals.db/cron.db, so a
+    # telegram-outbound goal claimed by this email-only process (whose MessageRouter
+    # has no telegram surface) deterministically could not send. The telegram process
+    # is the single autonomy driver; EMAIL_AUTONOMY_RUNTIME=true restores the legacy
+    # dual-runtime behavior. SMTP outbound (cron deliver=email / the agent's
+    # send_email tool) is credential-driven and does NOT need this runtime.
     autonomy_handles = None
     try:
+        from core.env import bool_env
         from agents.task.constants import local_mode_enabled
-        if local_mode_enabled():
+        if not bool_env("EMAIL_AUTONOMY_RUNTIME", False):
+            _logging.getLogger(__name__).info(
+                "autonomy runtime disabled in email process (EMAIL_AUTONOMY_RUNTIME=off)")
+        elif local_mode_enabled():
             from core.autonomy_runtime import start_autonomy
             autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
     except Exception:

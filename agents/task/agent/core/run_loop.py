@@ -160,7 +160,15 @@ class RunLoopMixin:
 			
 			# Initialize step counter - will be managed by step() method
 			self.state.n_steps = 0  # Start at 0, will be incremented by step() method
-			
+			# I-6: persist the run's step budget so in-context introspection
+			# (the `agent_status` action) can report steps used/remaining.
+			# `AgentState.max_steps` existed but was never assigned before this.
+			self.state.max_steps = max_steps
+
+			# I-3 / H3 (D1): bounded verify-before-done nudge counter — reset
+			# per run() call, same lifetime as n_steps/max_steps above.
+			self._verify_nudge_count = 0
+
 			# Session-scoped setup (session-start telemetry + hierarchical memory)
 			# runs ONCE per session. Conversational turns (Conversation.respond with
 			# _continue_session=True) reuse the same agent and skip it to avoid
@@ -445,6 +453,36 @@ class RunLoopMixin:
 
 					# Check if the agent is done
 					if results and any(result.is_done for result in results):
+						# I-3 / H3 (dedup decision D1): the agent can edit code and call
+						# done() without ever re-running tests. Derive the signal from the
+						# EXISTING action ledger (agents/task/runtime/edit_verify.py, which
+						# reuses runtime/evidence.py::_walk_ledger) — no new timestamp/digest
+						# state. Bounded nudge (max 2 attempts), never a hard block: `continue`
+						# re-enters the SAME `for step_num in range(max_steps)` loop, exactly
+						# like the VALIDATE_OUTPUT precedent immediately below. Gated
+						# AutonomyConfig.verify_before_done() (env VERIFY_BEFORE_DONE, default
+						# off, ON under POLYROB_LOCAL) — off is byte-identical to legacy.
+						from agents.task.constants import AutonomyConfig
+						from agents.task.runtime.edit_verify import edited_since_last_test
+						if (AutonomyConfig.verify_before_done()
+								and self._verify_nudge_count < 2
+								and edited_since_last_test(self.orchestrator)):
+							self._verify_nudge_count += 1
+							self.message_manager.inject_user_guidance([{
+								"text": (
+									"You edited code this run but have no fresh passing test-run "
+									"in your action ledger. Run tests (run_tests) and confirm they "
+									"pass before calling done() again."
+								),
+								"kind": "intervention",
+								"metadata": {
+									"source": "verify_before_done",
+									"attempt": self._verify_nudge_count,
+								},
+							}])
+							self.state.consecutive_failures += 1
+							continue
+
 						# CO-F1: judge the FINAL answer, not an intermediate step. This
 						# replaces the old top-of-loop check (which ran before step() on
 						# the previous step's result and could never see the true final

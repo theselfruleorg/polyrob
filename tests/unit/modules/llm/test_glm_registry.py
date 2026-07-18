@@ -16,9 +16,9 @@ def test_glm_5_2_registered_with_correct_specs():
     assert cfg.name == "z-ai/glm-5.2"
     assert cfg.provider == ModelProvider.OPENROUTER
     assert cfg.context_window == 1048576
-    assert cfg.max_completion_tokens == 262144
-    assert cfg.pricing.input_price == 1.20  # OpenRouter API verified 2026-06-20
-    assert cfg.pricing.output_price == 4.10
+    assert cfg.max_completion_tokens == 32768  # OpenRouter top_provider cap (re-verified 2026-07-14)
+    assert cfg.pricing.input_price == 0.93  # OpenRouter API re-verified 2026-07-14 (was 1.20)
+    assert cfg.pricing.output_price == 3.00  # was 4.10
     assert cfg.capabilities.supports_function_calling is True
     assert cfg.capabilities.supports_tools is True
     assert cfg.capabilities.supports_json_mode is True

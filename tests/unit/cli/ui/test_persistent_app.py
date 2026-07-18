@@ -220,6 +220,24 @@ def test_persistent_ctrl_d_ignored_with_text():
     assert ev.app.exited_with == "UNSET"
 
 
+class _FakeRenderer:
+    def __init__(self) -> None:
+        self.cleared = 0
+
+    def clear(self) -> None:
+        self.cleared += 1
+
+
+def test_persistent_ctrl_l_forces_full_repaint():
+    kb = cli_app._persistent_key_bindings(on_interrupt=None)
+    ev = _FakeEvent()
+    ev.app.renderer = _FakeRenderer()
+    _binding(kb, "Keys.ControlL").handler(ev)
+    assert ev.app.renderer.cleared == 1
+    # Ctrl-L must not exit the app or touch the buffer.
+    assert ev.app.exited_with == "UNSET"
+
+
 # ---------------------------------------------------------------------------
 # Gate: persistent input is ON by default (the pinned-bottom UX); opt-OUT only
 # ---------------------------------------------------------------------------
@@ -335,4 +353,5 @@ async def test_input_region_is_compact_not_stretched():
                 if any(cell.char.strip() for cell in line.values())
             ]
             assert rows, "the bottom region rendered nothing"
-            assert max(rows) <= 6, f"input stretched — content reached row {max(rows)}"
+            # 7 = spacer + separator + input + status + autonomy + hint rows
+            assert max(rows) <= 7, f"input stretched — content reached row {max(rows)}"

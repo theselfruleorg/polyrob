@@ -42,6 +42,11 @@ from core.exceptions import (
 # Import billing exception for fail-fast handling
 from core.exceptions import InsufficientCreditsError
 
+# I-5: single source of truth for "does this look like a provider credit-death"
+# (402/insufficient_quota/billing/… — see core/credit_sentinel.py). Replaces the
+# ad-hoc substring re-derivation that missed real-shape OpenRouter 402s.
+from core.credit_sentinel import looks_like_credit_death
+
 # Import centralized utilities to avoid repeated inline imports
 from agents.task.utils_json import normalize_action_schema
 # Model limits now come from modules.llm.model_registry
@@ -136,7 +141,7 @@ def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool
 	provider swap before halting (HIGH-1). With the flag off, classification is identical
 	to the historical inline check (all billing/quota terms fatal).
 	"""
-	is_billing = 'insufficient_quota' in error_str or 'billing' in error_str
+	is_billing = looks_like_credit_death(error_str)
 	# CO-F5: bare '429'/'rate limit' are NOT fatal — they're retryable. Routing them
 	# here halted the session before `_handle_step_error` could handle them. In practice
 	# a plain-Exception '429'/'rate limit' string is caught by the generic `is_llm_error`
@@ -149,6 +154,30 @@ def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool
 		'api key' in error_str or
 		(is_billing and not billing_failover_enabled)
 	)
+
+
+def _emit_compaction_event(agent: Any, event_name: str, mode: str, **fields: Any) -> None:
+	"""019 P1: emit a compaction_started/compaction_finished feed span event.
+
+	Fail-open, flag-gated — a telemetry failure must never affect compaction.
+	"""
+	try:
+		from core.config_policy import AutonomyConfig
+		if not AutonomyConfig.run_events_enabled():
+			return
+		from agents.task.telemetry.views import (
+			CompactionFinishedEvent,
+			CompactionStartedEvent,
+		)
+		cls = CompactionStartedEvent if event_name == 'started' else CompactionFinishedEvent
+		agent.telemetry_manager.capture_event(cls(
+			agent_id=agent.agent_id,
+			step=agent.state.n_steps,
+			mode=mode,
+			**fields,
+		))
+	except Exception:
+		pass
 
 
 class StepMixin:
@@ -265,7 +294,15 @@ class StepMixin:
 				# CRITICAL: Emergency prune immediately - about to overflow.
 				# Non-LLM, always runs (the overflow safety net) - no cooldown.
 				self.logger.warning(f"🚨 Critical context: {usage_pct:.1f}% - emergency prune")
+				_c_before = self.message_manager.get_token_count()
+				_c_t0 = time.time()
+				_emit_compaction_event(self, 'started', 'emergency', tokens_before=_c_before)
 				self.message_manager.emergency_context_prune()
+				_emit_compaction_event(
+					self, 'finished', 'emergency', tokens_before=_c_before,
+					tokens_after=self.message_manager.get_token_count(),
+					duration_seconds=time.time() - _c_t0,
+				)
 			elif usage_pct >= 85:
 				# HIGH: LLM compaction to intelligently summarize.
 				# Flow-efficiency D3-a: llm_compact_history is an EXTRA LLM call. Apply a
@@ -285,7 +322,17 @@ class StepMixin:
 					# or an anti-thrash no-op returns False and is designed to retry next
 					# step — stamping the cooldown regardless delayed that retry by
 					# COMPACTION_COOLDOWN_STEPS while usage sat in the 85-95% band.
-					if await self.message_manager.llm_compact_history():
+					_c_before = self.message_manager.get_token_count()
+					_c_t0 = time.time()
+					_emit_compaction_event(self, 'started', 'llm', tokens_before=_c_before)
+					_compacted = await self.message_manager.llm_compact_history()
+					_emit_compaction_event(
+						self, 'finished', 'llm', tokens_before=_c_before,
+						tokens_after=self.message_manager.get_token_count(),
+						duration_seconds=time.time() - _c_t0,
+						success=bool(_compacted),
+					)
+					if _compacted:
 						self._last_llm_compaction_step = self.state.n_steps
 				else:
 					self.logger.info(

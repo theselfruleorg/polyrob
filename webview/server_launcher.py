@@ -5,21 +5,34 @@ import os
 import sys
 import time
 
-def load_environment():
-    """Load environment variables from /etc/webview.env if available."""
-    env_file = "/etc/webview.env"
-    if os.path.exists(env_file):
-        print(f"Loading environment from {env_file}")
+def load_environment(env_file: str = "/etc/webview.env"):
+    """Load environment variables from a deployment env file if present.
+
+    SECURITY: never prints secret VALUES. The previous hand-rolled parser did
+    ``print(f"  Set {key}={value}")`` for every line, leaking auth tokens / JWT
+    secrets / API keys in cleartext into ``journalctl -u polyrob-webview.service``
+    on every restart. Uses python-dotenv for correct quoting/escaping and logs
+    only key NAMES (which are not secret).
+    """
+    if not os.path.exists(env_file):
+        return
+    try:
+        from dotenv import dotenv_values, load_dotenv
+        keys = [k for k in dotenv_values(env_file).keys() if k]
+        load_dotenv(env_file, override=True)
+    except Exception:
+        # Value-safe fallback if python-dotenv is unavailable: parse without
+        # ever echoing a value.
+        keys = []
         with open(env_file) as f:
             for line in f:
                 line = line.strip()
-                if line and not line.startswith('#'):
-                    try:
-                        key, value = line.split('=', 1)
-                        os.environ[key] = value
-                        print(f"  Set {key}={value}")
-                    except ValueError:
-                        print(f"  Skipping malformed line: {line}")
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    key = key.strip()
+                    os.environ[key] = value.strip()
+                    keys.append(key)
+    print(f"Loaded {len(keys)} env var(s) from {env_file}: {', '.join(keys)}")
 
 def setup_logging(log_level):
     """Set up proper logging configuration."""

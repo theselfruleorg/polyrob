@@ -47,6 +47,11 @@ class MessageRetrievalMixin:
 		if getattr(self, '_runtime_identity_message', None) is not None:
 			foundation.append(self._runtime_identity_message)
 
+		# 014-C1: <environment> block (where the agent lives), pinned after runtime
+		# identity and before self-context, matching get_messages_for_llm().
+		if getattr(self, '_environment_message', None) is not None:
+			foundation.append(self._environment_message)
+
 		# polyrob Phase C: SOUL/IDENTITY self-context, pinned right after the system
 		# message (identity precedes task), matching get_messages_for_llm().
 		if getattr(self, '_self_context_message', None) is not None:
@@ -110,6 +115,20 @@ class MessageRetrievalMixin:
 			# backstop (default ON) which scrubs unregistered secrets with no allowlist.
 			if self.sensitive_data or getattr(self, "_history_secret_scrub", True):
 				message = self._filter_sensitive_data(message)
+			# B3 (2026-07-13 correspondent review): bound the one-shot queue — the HITL
+			# queue has backpressure (MAX_QUEUED_MESSAGES) but this rail had none, so a
+			# correspondent flood could inflate the next prompt without limit. Overflow
+			# drops the OLDEST entry (the newest message is the most relevant).
+			import os
+			try:
+				cap = int(os.environ.get('MAX_EPHEMERAL_MESSAGES', '30'))
+			except (TypeError, ValueError):
+				cap = 30
+			while cap > 0 and len(self._ephemeral_messages) >= cap:
+				dropped = self._ephemeral_messages.pop(0)
+				self.logger.warning(
+					f"Ephemeral queue full ({cap}); dropping oldest "
+					f"{type(dropped).__name__} to admit the new message")
 			self._ephemeral_messages.append(message)
 			self.logger.debug(f"Queued ephemeral message of type {type(message).__name__}")
 		except Exception as e:
@@ -163,6 +182,11 @@ class MessageRetrievalMixin:
 		# reading env/config. Kept out of the system prompt (cacheable). Unset => skip.
 		if getattr(self, '_runtime_identity_message', None) is not None:
 			foundation.append(self._runtime_identity_message)
+
+		# 1.1a-bis (014-C1): <environment> block — where the agent lives. Pinned
+		# after runtime identity, before self-context. Unset (server) => skipped.
+		if getattr(self, '_environment_message', None) is not None:
+			foundation.append(self._environment_message)
 
 		# 1.1b: polyrob Phase C - SOUL/IDENTITY self-context, pinned in the foundation
 		# right after the system prompt (NOT embedded in it, so the system prompt stays

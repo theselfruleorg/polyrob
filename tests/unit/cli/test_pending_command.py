@@ -147,3 +147,33 @@ def test_pending_show_renders_full_body(tmp_path, seeded_long_sm):
     ctx, rec = _ctx(tmp_path, ["show", "skill", "long-skill"])
     _h_pending(ctx)
     assert "UNIQUE-TAIL-MARKER" in rec.text
+
+
+# ------------------------------------------------------------------
+# owner-UX P2-4 final review, item 4: the REPL /pending list used to label
+# every NON-self_context proposal "[skill]" — owner_doc/contract/pref_change
+# proposals were mislabeled. Both now render with correct, kind-specific
+# labels (core.self_evolution.pending_kind_label — the shared map).
+# ------------------------------------------------------------------
+
+
+def test_pending_labels_contract_and_pref_change_correctly(tmp_path):
+    from cli.ui.commands.handlers import _h_pending
+    from core.contract_writer import ContractWriter
+    from core.prefs import propose_pref_change
+
+    ContractWriter(tmp_path, instance_id="rob").propose(
+        "Never spend more than $5 without asking.", user_id="u1",
+        created_by="user", pending=True)
+    ok, result = propose_pref_change("u1", "approvals.require", None, tmp_path,
+                                     instance_id="rob", op="remove_entry",
+                                     entry="git_push")
+    assert ok, result
+
+    ctx, rec = _ctx(tmp_path, [])
+    _h_pending(ctx)
+    assert "[contract] contract:u1" in rec.text
+    assert "[pref change] pref_change:approvals.require" in rec.text
+    # never mislabeled as the generic pre-fix fallback
+    assert "[skill] contract:" not in rec.text
+    assert "[skill] pref_change:" not in rec.text

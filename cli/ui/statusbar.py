@@ -49,8 +49,9 @@ def _autonomy_active(state: SessionState) -> bool:
     return bool(lifecycle is not None and lifecycle.autonomy_busy())
 
 
-#: The Claude-Code-style cooking glyph used when no animated spinner is supplied.
-_COOKING_GLYPH = "✱ "
+#: Rotating in-flight verbs — "cooking" first so short turns read unchanged;
+#: the verb shifts every 20 s of work-clock as a subtle long-turn liveness cue.
+_COOKING_VERBS = ("cooking", "thinking", "weaving", "crunching", "simmering")
 
 
 def _is_active(state: SessionState) -> bool:
@@ -60,18 +61,44 @@ def _is_active(state: SessionState) -> bool:
 
 
 def cooking_text(state: SessionState, spinner: str = "") -> str:
-    """The live in-flight affordance: ``✱ cooking… 7s`` (Option A, issue 1).
+    """The live in-flight affordance: ``✱ cooking… 7s`` (verb rotates on long turns).
 
     Rendered in the pinned region while the turn runs, replacing the bare status
     word + a separate elapsed segment. The ticking work clock
     (``lifecycle.active_elapsed``, frozen on idle so it shows work time not session
     age) is the liveness; an animated braille *spinner* (supplied by the persistent
-    app at 5 Hz) is used as the pulse glyph when available, else a static ``✱``.
+    app at 5 Hz) is used as the pulse glyph when available, else the cooking icon.
     """
     lifecycle = getattr(state, "lifecycle", None)
     elapsed = lifecycle.active_elapsed() if lifecycle is not None else 0.0
-    glyph = spinner if spinner else _COOKING_GLYPH
-    return f"{glyph}cooking… {_fmt_elapsed(elapsed)}"
+    glyph = spinner if spinner else f"{ICONS.cooking} "
+    verb = _COOKING_VERBS[int(elapsed // 20) % len(_COOKING_VERBS)]
+    return f"{glyph}{verb}… {_fmt_elapsed(elapsed)}"
+
+
+def _activity_segment(state: SessionState) -> str:
+    """The live current-activity segment (019) — "" when nothing to show.
+
+    While a turn runs: the in-flight tool with a ticking clock
+    (``→navigate 43s``), the thinking marker (``✱ thinking 8s``), or the
+    blocked-approval marker (``⏸ approval: send_email /pending``). Falls back
+    to the legacy last-completed tool (``→read_file``) when no span event has
+    arrived (old feeds / RUN_EVENTS_ENABLED=off — byte-identical).
+    """
+    if not _is_active(state):
+        return ""
+    kind = getattr(state, "current_activity_kind", "")
+    label = getattr(state, "current_activity", "")
+    if kind and label:
+        if kind == "approval":
+            return f"{ICONS.pause} {label}"
+        elapsed = _fmt_elapsed(state.activity_elapsed())
+        icon = ICONS.arrow if kind == "tool" else f"{ICONS.cooking} "
+        return f"{icon}{label} {elapsed}"
+    last_tool = getattr(state, "last_tool", "")
+    if last_tool:
+        return f"{ICONS.arrow}{last_tool}"
+    return ""
 
 
 def _segments(state: SessionState, spinner: str = "") -> List[str]:
@@ -84,18 +111,18 @@ def _segments(state: SessionState, spinner: str = "") -> List[str]:
     tok = f"{fmt_tokens(state.tokens_in)}{ICONS.up} {fmt_tokens(state.tokens_out)}{ICONS.down}"
     segs.append(tok)
 
-    # Live-info (D3): in-flight tool + active sub-agent count. The tool is the
-    # CURRENT action — shown only while a turn runs so it doesn't linger at the
-    # idle prompt.
-    last_tool = getattr(state, "last_tool", "")
-    if last_tool and _is_active(state):
-        segs.append(f"{ICONS.arrow}{last_tool}")
+    # Live-info (D3 + 019): the CURRENT activity — in-flight tool / thinking /
+    # blocked approval — shown only while a turn runs so it doesn't linger at
+    # the idle prompt.
+    activity = _activity_segment(state)
+    if activity:
+        segs.append(activity)
     n_sub = getattr(state, "subagents_active", 0)
     if n_sub:
         segs.append(f"{n_sub} sub-agent{'s' if n_sub != 1 else ''}")
 
     if _autonomy_active(state):
-        segs.append("⟲ autonomy")
+        segs.append(f"{ICONS.autonomy} autonomy")
 
     if state.ctx_percent:
         segs.append(f"ctx {state.ctx_percent:.0f}%")
@@ -116,13 +143,18 @@ def _segments(state: SessionState, spinner: str = "") -> List[str]:
     return segs
 
 
-def autonomy_line(state: SessionState) -> str:
+def autonomy_line(state: SessionState, *, include_model: bool = True) -> str:
     """The second pinned line: model/provider + autonomy snapshot (D4).
 
     ``glm-5.2 · openrouter    autonomy: goals 1 · cron 2 · review on`` — built
     from ``state.autonomy_snapshot`` (a slow-polled, cached dict; never read the
     goal/cron SQLite stores on the hot repaint path). Returns "" when there is no
     snapshot, so the line is hidden until autonomy data is available. Pure.
+
+    ``include_model=False`` drops the model/provider half — the persistent app
+    already shows those on the separator rule, so its autonomy row would
+    otherwise duplicate them (and it hides entirely when there is nothing
+    autonomy-specific to say).
     """
     snap = getattr(state, "autonomy_snapshot", None)
     if not snap:
@@ -136,12 +168,15 @@ def autonomy_line(state: SessionState) -> str:
         auto.append(f"cron {cron}")
     if snap.get("review"):
         auto.append("review on")
+    joined = f" {ICONS.bullet} ".join(auto)
+    if not include_model:
+        return f"autonomy: {joined}" if auto else ""
     left = state.model or "—"
     if state.provider:
         left = f"{left} {ICONS.bullet} {state.provider}"
     if not auto:
         return left
-    return f"{left}    autonomy: " + f" {ICONS.bullet} ".join(auto)
+    return f"{left}    autonomy: {joined}"
 
 
 def status_text(state: SessionState, spinner: str = "") -> str:
@@ -166,6 +201,15 @@ def _status_class(status: str) -> str:
     if s in ("ready", "completed", "done"):
         return "class:status.ok"
     return "class:status.running"
+
+
+def _ctx_class(pct: float) -> str:
+    """ctx% color thresholds: quiet under 80, warn at 80, alarm at 90."""
+    if pct >= 90:
+        return "class:toolbar.ctx.high"
+    if pct >= 80:
+        return "class:toolbar.ctx.warn"
+    return "class:toolbar.ctx"
 
 
 def status_formatted(
@@ -197,10 +241,11 @@ def status_formatted(
     )
     fragments.append(("", sep))
 
-    # Live-info (D3): in-flight tool (only while a turn runs) + sub-agent count.
-    last_tool = getattr(state, "last_tool", "")
-    if last_tool and _is_active(state):
-        fragments.append(("class:toolbar.tool", f"{ICONS.arrow}{last_tool}"))
+    # Live-info (D3 + 019): current activity (in-flight tool / thinking /
+    # blocked approval) — only while a turn runs.
+    activity = _activity_segment(state)
+    if activity:
+        fragments.append(("class:toolbar.tool", activity))
         fragments.append(("", sep))
     n_sub = getattr(state, "subagents_active", 0)
     if n_sub:
@@ -210,11 +255,11 @@ def status_formatted(
         fragments.append(("", sep))
 
     if _autonomy_active(state):
-        fragments.append(("class:toolbar.autonomy", "⟲ autonomy"))
+        fragments.append(("class:toolbar.autonomy", f"{ICONS.autonomy} autonomy"))
         fragments.append(("", sep))
 
     if state.ctx_percent:
-        fragments.append(("class:toolbar.ctx", f"ctx {state.ctx_percent:.0f}%"))
+        fragments.append((_ctx_class(state.ctx_percent), f"ctx {state.ctx_percent:.0f}%"))
         fragments.append(("", sep))
 
     fragments.append(("class:toolbar.cost", f"${state.cost_estimate_total:.4f}"))

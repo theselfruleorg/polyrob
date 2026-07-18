@@ -14,6 +14,7 @@ POLYROB is an open-source autonomous AI agent framework. The default instance is
 - [Interactive Chat](#interactive-chat)
 - [Configuration](#configuration)
 - [Where Data Lives](#where-data-lives)
+- [Updating](#updating)
 - [Troubleshooting](#troubleshooting)
 - [Next Steps](#next-steps)
 
@@ -145,7 +146,9 @@ pip install -e ".[dev,all]"
 ### Step 1: Install Browser Engine (Optional)
 
 ```bash
-python -m playwright install --with-deps chromium
+python -m playwright install chromium
+# On a fresh Linux server, also pull the system libraries (needs sudo):
+# python -m playwright install --with-deps chromium
 ```
 
 **Why?** POLYROB's default web tool (`web_fetch`) is a lightweight, no-browser HTTP
@@ -183,6 +186,21 @@ GEMINI_API_KEY=...
 > DeepSeek has no standalone bootstrap path — its direct client is disabled
 > (tool-calling is unreliable there). Use DeepSeek via
 > `OPENROUTER_API_KEY` with a `deepseek/deepseek-chat` model instead.
+
+**Skipped `polyrob init`?** You don't have to run it first. The first time you run
+`polyrob run` or `polyrob chat` interactively with no usable provider key configured,
+POLYROB runs the same OpenRouter-first key wizard inline — no separate step required.
+Once a key is saved, it asks:
+
+```
+Key saved. Finish full setup now (model, persona, autonomy — ~1 min)? [y/N]
+```
+
+Accepting bridges straight into the full `polyrob init` wizard (model, toolset,
+persona, owner pairing, autonomy guardrails, optional wallet) without re-prompting for
+the key you just entered; declining leaves a one-line reminder that `polyrob init` is
+available anytime. This inline wizard only fires on a real interactive terminal — it
+never prompts (and never blocks) in CI, scripts, or a piped/non-interactive run.
 
 ### Step 3: Verify Setup
 
@@ -289,11 +307,13 @@ This is a curated subset for everyday use — see the [full slash-command refere
 
 ### Example Session
 
+The startup banner is deliberately quiet — two lines, never competing with your first
+message:
+
 ```bash
 $ polyrob chat
-═══════════════════════════════════════════════════════════════
-  POLYROB vX.Y.Z | Instance: rob | Model: <your-model>
-═══════════════════════════════════════════════════════════════
+● polyrob v0.7.0 · claude-sonnet-4.5 (anthropic)
+  session a1b2c3d4 · tools filesystem, task · /help · /session
 
 You: I need to research quantum computing companies for an investment report.
 
@@ -341,6 +361,11 @@ Session saved to ./.polyrob/sessions/
 | `~/.polyrob/.env` | Global user configuration |
 | `./.polyrob/.env` | Project-local overrides |
 | `~/.polyrob/cli.json` | CLI preferences (default provider/model set via `model set-default`; `polyrob init` migrates old entries into `.env`) |
+| `~/.rob/.env` | Legacy pre-rename home — read-only fallback, lowest precedence of the three `.env` layers above. `polyrob` migrates it into `~/.polyrob/` once, automatically, the first time it runs; you never need to touch it by hand. |
+| `config/.env.{development,production}` | Source/server-install layer (git clone, not pipx) — read after the three layers above, so an explicit key there is only used when none of `~/.polyrob/.env`/`./.polyrob/.env`/the process env set it. |
+
+Full precedence (highest wins): process env → `./.polyrob/.env` → `~/.polyrob/.env` →
+`~/.rob/.env` (legacy) → root `.env` → `config/.env.{env}` → `config/.env.{env}.local`.
 
 ### View Configuration
 
@@ -407,6 +432,34 @@ SKILLS_WRITABLE=true  # Allow skill creation
 
 ---
 
+## Updating
+
+```bash
+polyrob update --check    # current vs latest (exit code 10 when an update exists)
+polyrob update            # status + the exact update steps for YOUR install method
+polyrob update --apply    # automated update (git/editable installs):
+                          #   snapshot → install → migrate (guarded) → verify,
+                          #   with automatic rollback on any failure
+```
+
+For pip/pipx installs, update through the package manager and then migrate (idempotent —
+a no-op when already current):
+
+```bash
+pip install -U "polyrob[all]"        # or: pipx upgrade polyrob
+python -m migrations.migrate upgrade
+```
+
+**Safety net:** every `--apply` first takes a WAL-safe snapshot of your databases,
+config, and identity. If an update misbehaves:
+
+```bash
+polyrob update --list-snapshots   # see what you can roll back to
+polyrob update --rollback         # restore the most recent full snapshot
+```
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -426,7 +479,9 @@ echo "OPENAI_API_KEY=sk-..." >> ~/.polyrob/.env
 **Solution:** Install Playwright:
 
 ```bash
-python -m playwright install --with-deps chromium
+python -m playwright install chromium
+# On Linux, if system libraries are missing (needs sudo):
+# python -m playwright install --with-deps chromium
 ```
 
 #### Issue: "Permission denied" errors

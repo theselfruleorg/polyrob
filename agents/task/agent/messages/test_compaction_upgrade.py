@@ -108,6 +108,17 @@ def test_a3_structured_template_has_sections():
         "## Remaining Work",
     ):
         assert section in prompt, f"missing template section {section!r}"
+    # I-10: the prompt must explicitly instruct
+    # the summarizer to carry resolved decisions and open threads across compaction —
+    # bare section headers alone let the agent re-ask settled questions or drop open
+    # threads once the raw history is gone.
+    assert "re-asked" in prompt and "re-litigated" in prompt, (
+        "missing instruction that resolved questions/decisions must not be re-asked "
+        "or re-litigated after compaction"
+    )
+    assert "survives compaction" in prompt, (
+        "missing instruction that pending/open questions must survive compaction"
+    )
 
 
 def test_a4_prior_summary_is_fed_back_for_update():

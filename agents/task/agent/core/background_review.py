@@ -67,6 +67,29 @@ def build_review_prompt() -> str:
     return _REVIEW_PROMPT
 
 
+def _prefs_home_dir() -> str:
+    """Data-home for pref resolution (seam kept for test monkeypatching)."""
+    from core.runtime_paths import data_dir_or_home
+    return data_dir_or_home(None)
+
+
+def effective_background_review_enabled(user_id, home_dir) -> bool:
+    """Tenant-effective background-review switch: the ``BACKGROUND_REVIEW_ENABLED``
+    env/posture default AND-merged with the ``autonomy.background_review`` pref —
+    the pref can only DISABLE the loop, never enable one the operator has off
+    (018 P0.2; this key was DEAD: settable/displayed but the mixin read the env
+    directly). No pref file present => byte-identical to
+    ``AutonomyConfig.background_review_enabled()``. Fail-open to the env value."""
+    from agents.task.constants import AutonomyConfig
+    env_on = AutonomyConfig.background_review_enabled()
+    try:
+        from core import prefs
+        return bool(prefs.resolve("autonomy.background_review", user_id, home_dir,
+                                  env_value=env_on, default=env_on))
+    except Exception:
+        return env_on
+
+
 class BackgroundReviewMixin:
     """Fire a post-turn self-improvement reviewer. Composed into Agent."""
 
@@ -74,7 +97,8 @@ class BackgroundReviewMixin:
         """Pure decision: increment the productive-turn counter and report whether the
         interval has elapsed. Resets the counter when it fires."""
         from agents.task.constants import AutonomyConfig
-        if not AutonomyConfig.background_review_enabled():
+        if not effective_background_review_enabled(
+                getattr(self, "user_id", None), _prefs_home_dir()):
             return False
         if not AutonomyConfig.skills_writable():
             # SK-F8: the reviewer's whole output rail is skill_manage(create) —
@@ -83,6 +107,17 @@ class BackgroundReviewMixin:
             return False
         if getattr(self, "_is_sub_agent", False):
             return False  # a reviewer never forks a reviewer
+        # §4.3 (intelligence-stack finalization): an AUTONOMOUS run's completion
+        # is UNVERIFIED at this point — the evidence judge runs post-run in the
+        # dispatcher — and unverified activity must not compound into durable
+        # skills. Autonomous sessions never fork the inline reviewer; verified
+        # outcomes can earn distillation via a post-judge mechanism later.
+        try:
+            from agents.task.goals.autonomy_marker import is_autonomous
+            if is_autonomous(getattr(self, "session_id", None)):
+                return False
+        except Exception:
+            pass
         if not turn_was_productive:
             return False
         interval = max(1, AutonomyConfig.bg_review_interval())

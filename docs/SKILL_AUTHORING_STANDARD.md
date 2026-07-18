@@ -72,9 +72,10 @@ When refining an **existing** skill, always read the current body before writing
 
 ```
 # Correct workflow for editing an existing skill:
-# 1. skill_manage(action="read", skill_id="my-skill") — read the current body
+# 1. load_skill(skill_id="my-skill") — read the current body
+#    (skill_manage has no "read" verb; its actions are create/patch/delete/promote)
 # 2. Plan the minimal diff
-# 3. skill_manage(action="create", ...) with the merged body
+# 3. skill_manage(action="patch", ...) or action="create" with the merged body
 ```
 
 Overwriting an active skill creates a `.pending` proposal that the owner must promote. Surface the pending ID to the user.
@@ -86,8 +87,7 @@ The threat scanner scans both the skill **body** and its **description** for inj
 - "Ignore previous instructions" or equivalents
 - System-prompt reveal requests
 - Role-reset instructions ("You are now...")
-- Invisible/zero-width unicode characters
-- Over-broad capability claims
+- Invisible/zero-width/bidi unicode characters (hidden-instruction smuggling)
 
 Write skills that describe a procedure, not one that tries to override the agent's operating context.
 

@@ -1,0 +1,134 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Knowledge{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Knowledge{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Knowledge</h2>
+        <p class="text-muted text-sm">What the agent knows: curated notes, run episodes, skills, knowledge base, and recent self-modifications.</p>
+    </div>
+
+    <div class="webgate-tabs" id="knowledge-tabs">
+        <button class="btn btn-sm" data-tab="notes">Notes</button>
+        <button class="btn btn-sm" data-tab="episodes">Episodes</button>
+        <button class="btn btn-sm" data-tab="skills">Skills</button>
+        <button class="btn btn-sm" data-tab="kb">KB</button>
+        <button class="btn btn-sm" data-tab="changes">Changes</button>
+    </div>
+
+    <div id="knowledge-body" class="webgate-list">
+        <div class="loading">Loading…</div>
+    </div>
+</div>
+
+<style>
+.webgate-tabs { display: flex; gap: .4rem; margin-bottom: .8rem; flex-wrap: wrap; }
+.webgate-tabs .btn.active { border-color: var(--accent, #4af626); }
+.knowledge-item { border: 1px solid rgba(128,128,128,.25); border-radius: 4px;
+                  padding: .5rem .7rem; margin-bottom: .5rem; }
+.knowledge-item .meta { opacity: .65; font-size: .8em; }
+.knowledge-item pre { white-space: pre-wrap; margin: .4rem 0 0; font-size: .85em; }
+.knowledge-badge { display: inline-block; padding: 0 .4em; border-radius: 3px;
+                   border: 1px solid rgba(128,128,128,.4); font-size: .75em; margin-left: .4em; }
+</style>
+
+<script>
+(function () {
+    const body = document.getElementById('knowledge-body');
+    const tabs = document.getElementById('knowledge-tabs');
+    const esc = (s) => { const d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; };
+
+    function item(html) { const div = document.createElement('div'); div.className = 'knowledge-item'; div.innerHTML = html; return div; }
+    function empty(msg) { body.innerHTML = '<div class="webgate-empty">' + esc(msg) + '</div>'; }
+    async function getJSON(url) { const r = await fetch(url); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+    async function loadNotes() {
+        const data = await getJSON('/api/webgate/knowledge/notes?status=active');
+        const pending = await getJSON('/api/webgate/knowledge/notes?status=pending').catch(() => ({items: []}));
+        body.innerHTML = '';
+        if (pending.items && pending.items.length) {
+            body.appendChild(item('<b>' + pending.items.length + ' pending note(s)</b> awaiting review (approve via CLI: <code>/pending</code>)'
+                + pending.items.map(n => '<pre>' + esc((n.title ? n.title + ': ' : '') + n.content) + '</pre>').join('')));
+        }
+        if (!data.items.length && !(pending.items || []).length) return empty('No notes yet. The agent saves notes via its memory tool.');
+        data.items.forEach(function (n) {
+            const tags = (n.tags || []).map(t => '<span class="knowledge-badge">' + esc(t) + '</span>').join('');
+            const links = (n.links || []).length ? '<div class="meta">links: ' + n.links.map(esc).join(' · ') + '</div>' : '';
+            body.appendChild(item('<b>#' + n.id + ' ' + esc(n.title || '(untitled)') + '</b>' + tags +
+                ' <span class="meta">' + esc(n.updated_day || '') + ' · ' + esc(n.created_by || '') + '</span>' +
+                '<pre>' + esc(n.content) + '</pre>' + links));
+        });
+    }
+
+    async function loadEpisodes() {
+        const data = await getJSON('/api/webgate/knowledge/episodes?limit=20');
+        if (!data.items.length) return empty('No episodes recorded (enable EPISODIC_MEMORY_ENABLED).');
+        body.innerHTML = '';
+        data.items.forEach(function (e) {
+            const arts = (e.artifacts || []).map(a => esc(a.path || a.kind || JSON.stringify(a))).join(', ');
+            body.appendChild(item('<b>' + esc(e.day) + ' · ' + esc(e.kind) + '</b>' +
+                ' <span class="knowledge-badge">' + esc(e.outcome || '?') + '</span>' +
+                ' <span class="meta">' + esc(e.session_id) + ' · ' + (e.steps || 0) + ' steps · $' + (e.spend_usd || 0).toFixed(4) + '</span>' +
+                '<pre>' + esc(e.task || '') + (e.summary ? '\n— ' + e.summary : '') + '</pre>' +
+                (arts ? '<div class="meta">artifacts: ' + arts + '</div>' : '')));
+        });
+    }
+
+    async function loadSkills() {
+        const data = await getJSON('/api/webgate/knowledge/skills');
+        body.innerHTML = '';
+        if (data.pending && data.pending.length) {
+            body.appendChild(item('<b>' + data.pending.length + ' pending skill draft(s)</b> awaiting review (approve via CLI: <code>/pending</code>)' +
+                data.pending.map(p => '<pre>' + esc(p.skill_id + ': ' + (p.preview || '')) + '</pre>').join('')));
+        }
+        if (!data.catalog.length && !(data.pending || []).length) return empty('No skills in the catalog.');
+        data.catalog.forEach(function (s) {
+            const badge = s.created_by ? '<span class="knowledge-badge">' + esc(s.created_by) + '</span>' : '';
+            body.appendChild(item('<b>' + esc(s.skill_id) + '</b>' + badge +
+                (s.load_count ? ' <span class="meta">loaded ' + s.load_count + '×</span>' : '') +
+                '<pre>' + esc(s.description || '') + '</pre>'));
+        });
+    }
+
+    async function loadKB() {
+        const data = await getJSON('/api/webgate/knowledge/kb');
+        if (!data.items.length) return empty('No KB sources ingested (see: polyrob kb add).');
+        body.innerHTML = '';
+        data.items.forEach(function (s) {
+            body.appendChild(item('<b>' + esc(s.source_path) + '</b>' +
+                ' <span class="knowledge-badge">' + esc(s.collection) + '</span>' +
+                ' <span class="meta">' + (s.chunk_count || 0) + ' chunks · ' + esc(s.mime || '') + '</span>'));
+        });
+    }
+
+    async function loadChanges() {
+        const data = await getJSON('/api/webgate/knowledge/changes?limit=50');
+        if (!data.items.length) return empty('No recorded knowledge changes yet.');
+        body.innerHTML = '';
+        data.items.forEach(function (e) {
+            const a = e.attrs || {};
+            body.appendChild(item('<b>' + esc(e.day || '') + ' · ' + esc(e.kind) + '</b>' +
+                ' <span class="knowledge-badge">' + esc(a.action || a.op || a.scope || '') + '</span>' +
+                ' <span class="meta">' + esc(a.item_id || a.kind || '') + ' · ' + esc(e.source || a.source || '') + '</span>'));
+        });
+    }
+
+    const loaders = { notes: loadNotes, episodes: loadEpisodes, skills: loadSkills, kb: loadKB, changes: loadChanges };
+
+    async function show(tab) {
+        tabs.querySelectorAll('button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+        body.innerHTML = '<div class="loading">Loading…</div>';
+        try { await loaders[tab](); }
+        catch (e) { empty('Could not load ' + tab + '.'); }
+    }
+
+    tabs.addEventListener('click', function (ev) {
+        const b = ev.target.closest('button[data-tab]');
+        if (b) show(b.dataset.tab);
+    });
+    show('notes');
+})();
+</script>
+{% endblock %}

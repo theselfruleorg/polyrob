@@ -7,6 +7,8 @@ persistently-failing job always retries instead of being silently swallowed.
 """
 import asyncio
 import os
+import sqlite3
+import time
 
 import pytest
 
@@ -18,6 +20,10 @@ from cron.wake_gate import (
     record_wake_outcome,
     should_skip_wake,
 )
+from modules.database.connection import DatabaseConnection
+from modules.database.user_profiles import UserProfiles
+from modules.database.x402_tables import X402Tables
+from modules.x402 import invoicing
 
 
 @pytest.fixture()
@@ -80,6 +86,123 @@ def test_fingerprint_fail_open_on_missing_dir():
     # nonexistent dir must still return a value (neutral), never raise
     fp = compute_wake_fingerprint("u1", data_dir="/nonexistent/nowhere")
     assert isinstance(fp, str) and fp
+
+
+# --- x402 payment-request leg (G-36, Task 12) ---------------------------------
+# A settlement/expiry/new-invoice must count as observable change, or a
+# change-gated job keyed on payment events would skip the very tick it should
+# react to.
+
+async def _setup_x402_db(data_dir: str) -> DatabaseConnection:
+    """bot.db at the SAME path modules/database/database_manager.py uses
+    (``data_dir/database/bot.db``), with the x402 tables created — mirrors
+    tests/unit/modules/x402/test_invoicing.py's ``_setup_db``."""
+    db_path = os.path.join(data_dir, "database", "bot.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    db = DatabaseConnection(db_path)
+    await db.connect()
+    await UserProfiles(db).create_table()
+    await X402Tables(db).create_tables()
+    return db
+
+
+async def _create_invoice(db: DatabaseConnection, user_id: str, amount_usd: float = 5.0):
+    return await invoicing.create_payment_request(
+        user_id=user_id, session_id="s1", amount_usd=amount_usd,
+        purpose="test invoice", db=db,
+    )
+
+
+@pytest.fixture()
+def _x402_env(monkeypatch):
+    monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0xTREASURY")
+    monkeypatch.setenv("X402_DEFAULT_CHAIN", "base")
+    for var in ("X402_INVOICE_MAX_USD", "X402_INVOICE_DAILY_MAX"):
+        monkeypatch.delenv(var, raising=False)
+
+
+def test_fingerprint_stable_with_no_bot_db(data_dir):
+    # no database/bot.db at all (invoicing never touched this data_dir)
+    fp1 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    fp2 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    assert fp1 == fp2
+
+
+def test_fingerprint_stable_with_x402_tables_present_but_empty(data_dir):
+    asyncio.run(_setup_x402_db(data_dir))
+    fp1 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    fp2 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    assert fp1 == fp2
+
+
+def test_fingerprint_x402_table_missing_but_bot_db_present(data_dir):
+    # bot.db exists (some OTHER table lives there) but x402_payment_requests
+    # was never created (invoicing disabled) — must read neutral, never raise.
+    db_path = os.path.join(data_dir, "database", "bot.db")
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)")
+    conn.commit()
+    conn.close()
+    fp1 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    fp2 = compute_wake_fingerprint("u1", data_dir=data_dir)
+    assert fp1 == fp2
+
+
+def test_fingerprint_changes_on_new_invoice(data_dir, _x402_env):
+    async def _run():
+        db = await _setup_x402_db(data_dir)
+        try:
+            fp_before = compute_wake_fingerprint("u1", data_dir=data_dir)
+            await _create_invoice(db, "u1")
+            fp_after = compute_wake_fingerprint("u1", data_dir=data_dir)
+            assert fp_before != fp_after
+        finally:
+            await db.close()
+    asyncio.run(_run())
+
+
+def test_fingerprint_changes_on_settlement(data_dir, _x402_env):
+    async def _run():
+        db = await _setup_x402_db(data_dir)
+        try:
+            inv = await _create_invoice(db, "u1")
+            fp_pending = compute_wake_fingerprint("u1", data_dir=data_dir)
+            settled = await invoicing.settle_payment_request(inv["request_id"], db=db)
+            assert settled is True
+            fp_settled = compute_wake_fingerprint("u1", data_dir=data_dir)
+            assert fp_pending != fp_settled
+        finally:
+            await db.close()
+    asyncio.run(_run())
+
+
+def test_fingerprint_changes_on_expiry(data_dir, _x402_env):
+    async def _run():
+        db = await _setup_x402_db(data_dir)
+        try:
+            await _create_invoice(db, "u1")
+            fp_pending = compute_wake_fingerprint("u1", data_dir=data_dir)
+            expired = await invoicing.expire_stale_requests(db=db, now=time.time() + 10 ** 7)
+            assert len(expired) == 1
+            fp_expired = compute_wake_fingerprint("u1", data_dir=data_dir)
+            assert fp_pending != fp_expired
+        finally:
+            await db.close()
+    asyncio.run(_run())
+
+
+def test_fingerprint_x402_tenant_scoped(data_dir, _x402_env):
+    async def _run():
+        db = await _setup_x402_db(data_dir)
+        try:
+            fp_before = compute_wake_fingerprint("u1", data_dir=data_dir)
+            await _create_invoice(db, "OTHER")
+            fp_after = compute_wake_fingerprint("u1", data_dir=data_dir)
+            assert fp_before == fp_after
+        finally:
+            await db.close()
+    asyncio.run(_run())
 
 
 # --- store -------------------------------------------------------------------

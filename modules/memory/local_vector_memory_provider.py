@@ -248,9 +248,14 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
     # ---- write --------------------------------------------------------------
     async def sync_turn(self, user_content: str, assistant_content: str, *,
                         session_id: str, user_id=None) -> None:
-        # Keyword half (inherited, unchanged) writes the FTS5 row + applies anon-block.
-        await super().sync_turn(user_content, assistant_content,
-                                session_id=session_id, user_id=user_id)
+        # Keyword half (inherited) writes the FTS5 row + applies anon-block.
+        inserted = await super().sync_turn(user_content, assistant_content,
+                                           session_id=session_id, user_id=user_id)
+        if inserted is False:
+            # B2 dup collapse: the keyword half refreshed an existing row's ts and
+            # skipped the insert — embedding it again would grow the vector sidecar
+            # with a duplicate mem_meta/mem_vec pair on every repeated finding.
+            return
         if not self._vec_ok or self._anon_blocked(user_id):
             return
         # Phase 1.1: SAME composition as the keyword half (base class) so the embedded
@@ -333,20 +338,24 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
         norm = self._norm_user(user_id)
-        kw_list = self._keyword_contents(query, norm_user=norm, limit=limit, sort=sort)
+        kw_rows = self._keyword_rows(query, norm_user=norm, limit=limit, sort=sort)
+        kw_list = [r["content"] for r in kw_rows]
+        # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
+        # aren't in the keyword row set — they render bare (fail-open).
+        ts_map = {r["content"]: r["ts"] for r in kw_rows if r.get("ts")}
         # Vector half only augments *discover* (a real query); never browse, never on
         # explicit sort (caller asked for recency, not relevance), never when degraded.
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
         if not self._vec_ok or not terms or sort:
-            return "\n".join(f"- {c}" for c in kw_list)
+            return "\n".join(self._recall_line(c, ts_map.get(c)) for c in kw_list)
         try:
             vec = await asyncio.get_event_loop().run_in_executor(
                 None, self._vector_contents, query, norm, limit)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: vector search skipped: %s", e)
-            return "\n".join(f"- {c}" for c in kw_list)
+            return "\n".join(self._recall_line(c, ts_map.get(c)) for c in kw_list)
         merged = self._rrf_merge([kw_list, vec], limit)
-        return "\n".join(f"- {c}" for c in merged)
+        return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
         # Keyword half computed DIRECTLY (not via super().prefetch — that calls
@@ -359,12 +368,14 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         norm = self._norm_user(user_id)
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
         # P2-1: exclude the CURRENT session from automatic prefetch (self-echo guard).
-        kw_list = (
-            self._keyword_contents(query, norm_user=norm, limit=self.top_k,
-                                   allow_browse=False, exclude_session_id=session_id)
+        kw_rows = (
+            self._keyword_rows(query, norm_user=norm, limit=self.top_k,
+                               allow_browse=False, exclude_session_id=session_id)
             if terms else []
         )
-        kw = "\n".join(f"- {c}" for c in kw_list)
+        kw_list = [r["content"] for r in kw_rows]
+        ts_map = {r["content"]: r["ts"] for r in kw_rows if r.get("ts")}
+        kw = "\n".join(self._recall_line(c, ts_map.get(c)) for c in kw_list)
         if not self._vec_ok or not (query or "").strip():
             return kw
         # Vector recall fires on any non-empty query (semantic), even when keyword
@@ -378,7 +389,50 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         if not vec:
             return kw
         merged = self._rrf_merge([kw_list, vec], self.top_k)
-        return "\n".join(f"- {c}" for c in merged)
+        return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
+
+    # ---- retention (B3) ------------------------------------------------------
+
+    def prune_memories(self, *, older_than_ts: int) -> int:
+        """Base FTS+provenance sweep, then the vector sidecar. mem_meta rowids
+        are a SEPARATE id space from memories rowids, so the sidecar is swept by
+        (user_id, content) of the doomed rows — collected before the base delete.
+        Fail-open on the vector half (keyword sweep already succeeded)."""
+        doomed = []
+        try:
+            from core.sqlite_util import execute_retry
+            rows = execute_retry(
+                self.db_path,
+                "SELECT m.user_id AS user_id, m.content AS content FROM memories m "
+                "JOIN mem_provenance p ON p.mem_rowid = m.rowid WHERE p.ts < ?",
+                (int(older_than_ts),), fetch="all")
+            doomed = [(r["user_id"], r["content"]) for r in (rows or [])]
+        except Exception as e:
+            logger.debug("local-vector: prune pre-scan skipped: %s", e)
+        removed = super().prune_memories(older_than_ts=older_than_ts)
+        if doomed and self._vec_ok:
+            try:
+                self._vec_prune(doomed)
+            except Exception as e:
+                logger.debug("local-vector: vector prune skipped: %s", e)
+        return removed
+
+    def _vec_prune(self, doomed) -> None:
+        if not self._ensure_vec_schema():
+            return
+        con = vec_connect(self.db_path)
+        try:
+            with con:
+                cur = con.cursor()
+                for user_id, content in doomed:
+                    meta_rows = cur.execute(
+                        "SELECT rowid FROM mem_meta WHERE user_id = ? AND content = ?",
+                        (user_id, content)).fetchall()
+                    for row in meta_rows:
+                        cur.execute("DELETE FROM mem_vec WHERE rowid = ?", (row[0],))
+                        cur.execute("DELETE FROM mem_meta WHERE rowid = ?", (row[0],))
+        finally:
+            con.close()
 
     # ---- KB (knowledge-base) vector overrides (Task 5) ----------------------
 

@@ -486,6 +486,48 @@ class TelemetryManager:
         except Exception as e:
             self.logger.error(f"Failed to capture event: {e}", exc_info=True)
 
+    def capture_tool_started(
+        self,
+        step: int,
+        tool_name: str,
+        action_name: str,
+        parameters: Dict[str, Any],
+        call_id: Optional[str] = None,
+        index: int = 0,
+        total_in_batch: int = 1
+    ) -> None:
+        """Capture a tool-dispatch span-start event (019).
+
+        Fired immediately before the action is awaited; pairs with the
+        ``tool_execution`` completion event via ``call_id``.
+
+        Args:
+            step: Current step number
+            tool_name: Name of the tool (e.g., 'filesystem', 'browser')
+            action_name: Name of the action (e.g., 'read_file', 'click')
+            parameters: Action parameters (sanitized downstream)
+            call_id: LLM tool-call id or synthesized span id
+            index: Position within the step's action batch
+            total_in_batch: Number of actions in the batch
+        """
+        try:
+            from agents.task.telemetry.views import ToolStartedEvent
+
+            event = ToolStartedEvent(
+                agent_id=self._agent_id or f"unknown_{self._session_id}",
+                step=step,
+                tool_name=tool_name,
+                action_name=action_name,
+                parameters=parameters,
+                call_id=call_id,
+                index=index,
+                total_in_batch=total_in_batch,
+                session_id=self._session_id
+            )
+            self._service.capture(event, session_id=self._session_id)
+        except Exception as e:
+            self.logger.error(f"Failed to capture tool started: {e}", exc_info=True)
+
     def capture_tool_execution(
         self,
         step: int,
@@ -497,7 +539,8 @@ class TelemetryManager:
         error: Optional[str] = None,
         result_size: Optional[int] = None,
         result_truncated: bool = False,
-        result_preview: Optional[str] = None
+        result_preview: Optional[str] = None,
+        call_id: Optional[str] = None
     ) -> None:
         """Capture a tool execution event.
 
@@ -528,7 +571,8 @@ class TelemetryManager:
                 result_size=result_size,
                 result_truncated=result_truncated,
                 result_preview=result_preview,
-                session_id=self._session_id
+                session_id=self._session_id,
+                call_id=call_id
             )
             self._service.capture(event, session_id=self._session_id)
         except Exception as e:

@@ -169,22 +169,63 @@ def build_judge_messages(acceptance: str, evidence: str, final: Optional[str]) -
     return [SystemMessage(content=_JUDGE_SYSTEM), HumanMessage(content=body)]
 
 
-async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal: Any,
-                                final: Optional[str], *,
-                                timeout: Optional[float] = None) -> Tuple[str, str]:
-    """Judge a completed goal run against ``payload.acceptance``. Fail-open.
+_EVIDENCE_JUDGE_SYSTEM = (
+    "You judge whether an autonomous agent's COMPLETION CLAIM is supported by the "
+    "framework-recorded evidence of its run. You have NO tools: you cannot read "
+    "files, fetch URLs, or inspect anything beyond the evidence in the message — "
+    "do not narrate an investigation. You receive: the goal, the agent's claim "
+    "(its done() text), an optional acceptance text, the executed-action ledger "
+    "(with error status), the artifact diff (files/outputs the framework actually "
+    "recorded), and ids/urls captured from successful tool results. Success claims "
+    "in prose are NOT proof; the ledger/artifacts are. An outcome achieved via an "
+    "alternative route still counts. "
+    'Use "unmet" ONLY when the claim is CONTRADICTED by the evidence (e.g. '
+    '"posted the thread" with no successful posting action, "saved the report" '
+    "with an empty artifact diff). "
+    'Use "met" when the evidence concretely supports the claim. '
+    'If the evidence is genuinely insufficient either way, answer "unclear". '
+    "Your ENTIRE reply must be exactly one single-line JSON object — no analysis, no "
+    'preamble, no code fences: {"verdict": "met"|"unmet"|"unclear", "reason": "<one line>"}'
+)
 
-    Returns ``(verdict, reason)`` with verdict in {met, unmet, unclear}; any
-    error/timeout/missing model yields ``unclear`` so the caller passes the run.
-    The judge model rides the existing aux seam (``_provision_aux_llm('judge')``,
-    fail-open to the run's main model) and is metered like every aux call.
-    """
+
+def build_evidence_judge_messages(goal: Any, run: Any) -> list:
+    """§4.3: the claim read AGAINST the mechanical evidence pack (RunOutcome)."""
+    from modules.llm.messages import HumanMessage, SystemMessage
+    payload = (getattr(goal, "payload", None) or {})
+    acceptance = str(payload.get("acceptance") or "").strip()
+    ev = getattr(run, "evidence", None)
+    ledger_lines = list(getattr(ev, "ledger", None) or [])
+    ledger = "\n".join(ledger_lines[:80]) or "(no action ledger available)"
+    artifacts = getattr(run, "artifacts", None) or []
+    art_lines = "\n".join(
+        f"- {a.get('path') or a.get('kind')}: {a.get('detail') or a.get('bytes')}"
+        for a in artifacts[:20] if isinstance(a, dict)) or "(no artifacts recorded)"
+    refs = ", ".join(list(getattr(ev, "captured_refs", None) or [])[:20]) or "(none)"
+    checks = getattr(ev, "checks", None) or []
+    checks_lines = "\n".join(
+        f"- {c.get('type')}: {'ok' if c.get('ok') else 'FAILED'} — {c.get('detail')}"
+        for c in checks if isinstance(c, dict)) or "(none)"
+    body = (
+        f"GOAL:\n{str(getattr(goal, 'title', ''))[:300]}\n"
+        f"{str(getattr(goal, 'body', '') or '')[:700]}\n\n"
+        + (f"ACCEPTANCE (definition of done):\n{acceptance[:1000]}\n\n" if acceptance else "")
+        + f"AGENT'S CLAIM (done() text):\n{str(getattr(run, 'done_text', '') or getattr(run, 'reply_text', ''))[:2000]}\n\n"
+        f"EXECUTED ACTIONS (framework-recorded ledger):\n{ledger}\n\n"
+        f"ARTIFACTS RECORDED BY THE FRAMEWORK:\n{art_lines}\n\n"
+        f"IDS/URLS CAPTURED FROM SUCCESSFUL RESULTS:\n{refs}\n\n"
+        f"TYPED ACCEPTANCE-CHECK RESULTS:\n{checks_lines}"
+    )
+    return [SystemMessage(content=_EVIDENCE_JUDGE_SYSTEM), HumanMessage(content=body)]
+
+
+async def _invoke_judge(task_agent: Any, session_id: Optional[str], goal: Any,
+                        msgs: list, *, purpose: str,
+                        timeout: Optional[float] = None) -> Tuple[str, str]:
+    """Shared judge invocation: provision the aux model, ask (with one
+    corrective retry), meter, parse. Fail-open to ``unclear``. Never raises."""
     try:
-        acceptance = ((getattr(goal, "payload", None) or {}).get("acceptance") or "").strip()
-        if not acceptance:
-            return (VERDICT_UNCLEAR, "no acceptance to judge against")
         orchestrator = task_agent.get_orchestrator(session_id)
-        evidence = build_action_evidence(orchestrator)
         agent = _main_agent(orchestrator)
         llm = None
         if agent is not None:
@@ -207,7 +248,6 @@ async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal
         if timeout is None:
             from agents.task.constants import AutonomyConfig
             timeout = float(AutonomyConfig.goal_judge_timeout_sec())
-        msgs = build_judge_messages(acceptance, evidence, final)
         import time as _time
         verdict, reason = VERDICT_UNCLEAR, "unparseable judge response"
         # Up to 2 attempts: some chat models narrate an "investigation" instead of
@@ -223,7 +263,7 @@ async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal
                     session_id=session_id or "",
                     agent_id=getattr(agent, "agent_id", "") or "",
                     llm=llm, response=raw, duration_seconds=_time.time() - _t0,
-                    component="judge", purpose="goal_completion",
+                    component="judge", purpose=purpose,
                 )
             except Exception:
                 logger.debug("judge metering skipped", exc_info=True)
@@ -238,10 +278,52 @@ async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal
                 from modules.llm.messages import AIMessage, HumanMessage
                 msgs = msgs + [AIMessage(content=content_str[:1000]),
                                HumanMessage(content=_JUDGE_RETRY_NUDGE)]
-        logger.info("completion judge for goal %s: %s (%s)",
-                    getattr(goal, "id", "?"), verdict, reason[:200])
+        logger.info("completion judge (%s) for goal %s: %s (%s)",
+                    purpose, getattr(goal, "id", "?"), verdict, reason[:200])
         return (verdict, reason)
     except Exception as e:
         logger.warning("completion judge failed open for goal %s: %s",
                        getattr(goal, "id", "?"), e)
         return (VERDICT_UNCLEAR, f"judge error (fail-open): {e}")
+
+
+async def judge_goal_completion(task_agent: Any, session_id: Optional[str], goal: Any,
+                                final: Optional[str], *,
+                                timeout: Optional[float] = None) -> Tuple[str, str]:
+    """Judge a completed goal run against ``payload.acceptance``. Fail-open.
+
+    Returns ``(verdict, reason)`` with verdict in {met, unmet, unclear}; any
+    error/timeout/missing model yields ``unclear`` so the caller passes the run.
+    The judge model rides the existing aux seam (``_provision_aux_llm('judge')``,
+    fail-open to the run's main model) and is metered like every aux call.
+    """
+    try:
+        acceptance = ((getattr(goal, "payload", None) or {}).get("acceptance") or "").strip()
+        if not acceptance:
+            return (VERDICT_UNCLEAR, "no acceptance to judge against")
+        orchestrator = task_agent.get_orchestrator(session_id)
+        evidence = build_action_evidence(orchestrator)
+        msgs = build_judge_messages(acceptance, evidence, final)
+    except Exception as e:
+        logger.warning("completion judge failed open for goal %s: %s",
+                       getattr(goal, "id", "?"), e)
+        return (VERDICT_UNCLEAR, f"judge error (fail-open): {e}")
+    return await _invoke_judge(task_agent, session_id, goal, msgs,
+                               purpose="goal_completion", timeout=timeout)
+
+
+async def judge_run_outcome(task_agent: Any, session_id: Optional[str], goal: Any,
+                            run: Any, *,
+                            timeout: Optional[float] = None) -> Tuple[str, str]:
+    """§4.3 evidence-grounded completion review — the CLAIM read against the
+    mechanical evidence pack (RunOutcome). Runs for autonomous completions
+    whether or not an acceptance is set. Fail-open to ``unclear`` (which the
+    caller records as done-UNVERIFIED, excluded from learning loops)."""
+    try:
+        msgs = build_evidence_judge_messages(goal, run)
+    except Exception as e:
+        logger.warning("evidence judge failed open for goal %s: %s",
+                       getattr(goal, "id", "?"), e)
+        return (VERDICT_UNCLEAR, f"judge error (fail-open): {e}")
+    return await _invoke_judge(task_agent, session_id, goal, msgs,
+                               purpose="run_outcome", timeout=timeout)

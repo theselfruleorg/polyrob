@@ -13,7 +13,7 @@ import tempfile
 import pytest
 
 from core.surfaces.correspondents import CorrespondentRegistry
-from surfaces.email.seed import maybe_seed_correspondent
+from core.surfaces.seed import maybe_seed_correspondent
 
 
 class _Container:

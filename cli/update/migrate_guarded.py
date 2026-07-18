@@ -35,17 +35,23 @@ def migrate_guarded(
     from_version: str,
     to_version: str = "",
     timestamp: Optional[str] = None,
+    snapshot: Optional[SnapshotInfo] = None,
 ) -> MigrateResult:
     """Snapshot the DBs, run ``migrate()``; restore byte-identical on failure.
 
     Never raises for a migration failure — returns ``MigrateResult(ok=False, ...)`` after
     restoring, so the caller (the update engine) can decide how to unwind the rest. A
     failure to even take the pre-migrate snapshot IS raised (we must not migrate unguarded).
+
+    ``snapshot`` — an already-taken snapshot covering the DBs (the engine's full
+    pre-update one). When given, no second snapshot is taken (U9: an --apply used to
+    snapshot every DB twice, and the newer DB-only snapshot shadowed the full one for
+    rollback selection); failure restores from the given snapshot instead.
     """
-    snap = create_snapshot(
+    snap = snapshot or create_snapshot(
         snapshots_root=snapshots_root, data_home=data_home, db_paths=db_paths,
         from_version=from_version, to_version=to_version, label="pre-migrate",
-        timestamp=timestamp,
+        timestamp=timestamp, scope="db_only",
     )
     try:
         migrate()

@@ -26,7 +26,7 @@ python-socketio>=5.11.0
 # Note: we use FastAPI's Jinja2Templates provider; Starlette brings in Jinja2
 
 # LLM providers
-openai>=1.0.0
+openai>=1.26.0
 anthropic>=0.20.0
 google-generativeai>=0.8.0  # FIX (Dec 2, 2025): Updated for better protobuf compatibility
 
@@ -72,6 +72,7 @@ markdownify>=0.11.0
 pillow>=11.0.0
 imageio>=2.37.0
 python-magic>=0.4.27  # MIME type detection for file upload security
+qrcode>=7.4  # QR codes for the invoice/presence card compositor (modules/pfp/cards.py)
 
 # NLP utilities (used in memory pipeline)
 nltk>=3.9.0

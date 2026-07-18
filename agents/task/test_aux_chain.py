@@ -1,4 +1,4 @@
-"""Per-feature aux-model slots + per-task fallback chains (B5, Hermes parity).
+"""Per-feature aux-model slots + per-task fallback chains (B5).
 
 resolve_aux_chain() wraps resolve_aux_model() to return an ORDERED list of
 provider/model candidates for an aux task (compaction/judge/reflection),

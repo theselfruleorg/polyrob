@@ -26,6 +26,17 @@ class DatabaseConnection:
         self._lock = asyncio.Lock()
         self._transaction_lock = asyncio.Lock()
         self._in_transaction = False
+        # H8 (shared-connection transaction ownership): a transaction span OWNS
+        # the single shared sqlite3 connection. `begin_transaction` records the
+        # owning asyncio task here; while a transaction is open, an `execute()`
+        # from a DIFFERENT task WAITS on `_txn_done` for that transaction to
+        # finish instead of silently joining it (a joined write's auto-commit is
+        # skipped and can then be destroyed by the owner's ROLLBACK — the H8
+        # fund-loss bug). `_txn_done` is SET whenever no transaction is open and
+        # CLEARED for the span of one.
+        self._txn_owner: Optional["asyncio.Task"] = None
+        self._txn_done = asyncio.Event()
+        self._txn_done.set()
         
     async def connect(self) -> None:
         """Establish database connection."""
@@ -128,192 +139,16 @@ class DatabaseConnection:
             # Re-enable FK even if cleanup failed
             self.connection.execute("PRAGMA foreign_keys = ON")
 
-    async def _initialize_base_schema(self) -> None:
-        """Initialize base tables schema."""
-        try:
-            # Create base tables first
-            base_tables = """
-            CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_id TEXT PRIMARY KEY,
-                is_bot BOOLEAN,
-                first_name TEXT,
-                last_name TEXT,
-                username TEXT,
-                language_code TEXT,
-                role TEXT DEFAULT 'user',
-                preferences TEXT,
-                wallet_address TEXT,
-                den_password TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-
-            CREATE TABLE IF NOT EXISTS conversation_contexts (
-                conversation_id TEXT PRIMARY KEY,
-                type TEXT NOT NULL,
-                user_id TEXT,
-                chat_id TEXT NOT NULL,
-                chat_name TEXT,
-                messages TEXT NOT NULL,
-                metadata TEXT,
-                last_interaction TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES user_profiles(user_id)
-            );
-            """
-            
-            # Execute base tables creation
-            statements = [stmt.strip() for stmt in base_tables.split(';') if stmt.strip()]
-            for statement in statements:
-                if statement:
-                    self.connection.execute(statement)
-            self.connection.commit()
-
-            # Add role column if it doesn't exist
-            try:
-                self.connection.execute("""
-                    ALTER TABLE user_profiles ADD COLUMN role TEXT DEFAULT 'user'
-                """)
-                self.connection.commit()
-            except Exception as e:
-                # Column might already exist, which is fine
-                if 'duplicate column name' not in str(e).lower():
-                    raise
-            
-        except Exception as e:
-            self.logger.error(f"Error initializing base schema: {e}")
-            raise
-
-    async def _ensure_required_columns(self) -> None:
-        """Ensure all required columns exist in tables."""
-        try:
-            # Get current columns in conversation_contexts
-            cursor = self.connection.execute("PRAGMA table_info(conversation_contexts)")
-            columns = {col[1] for col in cursor.fetchall()}
-            
-            # Add missing columns
-            required_columns = [
-                ('mode', 'TEXT DEFAULT "active"'),
-                ('mode_metadata', 'TEXT'),
-                ('keywords', 'TEXT')
-            ]
-            
-            for column, definition in required_columns:
-                if column not in columns:
-                    try:
-                        self.connection.execute(
-                            f"ALTER TABLE conversation_contexts ADD COLUMN {column} {definition}"
-                        )
-                        self.logger.debug(f"Added column {column} to conversation_contexts")
-                    except Exception as e:
-                        if "duplicate column name" not in str(e).lower():
-                            raise
-            
-            self.connection.commit()
-            
-        except Exception as e:
-            self.logger.error(f"Error ensuring required columns: {e}")
-            raise
-
-    async def _initialize_remaining_schema(self) -> None:
-        """Initialize remaining schema after base tables and columns are set up."""
-        try:
-            schema_path = Path(__file__).parent / 'schema.sql'
-            with open(schema_path, 'r') as f:
-                schema = f.read()
-            
-            # Execute remaining schema statements
-            statements = [stmt.strip() for stmt in schema.split(';') if stmt.strip()]
-            for statement in statements:
-                if statement and (
-                    statement.upper().startswith('CREATE TABLE') or 
-                    statement.upper().startswith('CREATE INDEX')
-                ):
-                    try:
-                        self.connection.execute(statement)
-                    except Exception as e:
-                        if "already exists" not in str(e):
-                            raise
-            
-            self.connection.commit()
-            self.logger.info("Remaining schema initialized successfully")
-            
-        except Exception as e:
-            self.logger.error(f"Error initializing remaining schema: {e}")
-            raise
-
-    def _split_sql_statements(self, sql: str) -> List[str]:
-        """Carefully split SQL statements preserving triggers and functions."""
-        if not sql or not isinstance(sql, str):
-            self.logger.error("❌ Invalid SQL input for splitting")
-            raise ValueError("Invalid SQL input")
-        
-        statements = []
-        current_statement = []
-        in_string = False
-        string_char = None
-        
-        try:
-            # Add check for None before processing
-            if sql is None:
-                return []
-            
-            for line in sql.splitlines():
-                line = line.strip()
-                
-                # Skip empty lines
-                if not line:
-                    continue
-                
-                # Handle comments
-                if line.startswith('--'):
-                    continue
-                
-                # Remove inline comments while preserving strings
-                cleaned_line = ''
-                i = 0
-                while i < len(line):
-                    if line[i:i+2] == '--' and not in_string:
-                        break
-                    elif line[i] in ["'", '"'] and (i == 0 or line[i-1] != '\\'):
-                        if not in_string:
-                            in_string = True
-                            string_char = line[i]
-                        elif line[i] == string_char:
-                            in_string = False
-                    cleaned_line += line[i]
-                    i += 1
-                
-                if cleaned_line:
-                    current_statement.append(cleaned_line)
-                
-                # Check if statement is complete
-                if cleaned_line.rstrip().endswith(';') and not in_string:
-                    full_statement = ' '.join(current_statement).strip()
-                    if full_statement:
-                        statements.append(full_statement)
-                    current_statement = []
-            
-            # Handle any remaining statement
-            if current_statement:
-                full_statement = ' '.join(current_statement).strip()
-                if full_statement:
-                    if not full_statement.endswith(';'):
-                        full_statement += ';'
-                    statements.append(full_statement)
-            
-            self.logger.debug(f"Successfully split SQL into {len(statements)} statements")
-            return statements
-        
-        except Exception as e:
-            self.logger.error(f"SQL splitting error: {str(e)}")
-            return []
+    # NOTE (U11, 2026-07-14 review): the legacy inline-schema initializers
+    # (_initialize_base_schema / _ensure_required_columns /
+    # _initialize_remaining_schema / _split_sql_statements) were DELETED — they
+    # had zero callers, and _initialize_base_schema created the dead singular
+    # `schema_version` table (the SSOT is `schema_versions`, plural, owned by
+    # migrations/version_manager.py). The live inline schema is created by the
+    # component table classes (auth_tables/x402_tables/user_profiles/...);
+    # tests/unit/migrations/test_inline_schema_at_head.py enforces that it
+    # matches migration HEAD. modules/database/schema.sql remains as the
+    # documented schema mirror only — nothing loads it at runtime.
 
     async def begin_transaction(self) -> None:
         """Begin a new transaction.
@@ -325,13 +160,19 @@ class DatabaseConnection:
         async with self._transaction_lock:
             if self._in_transaction:
                 raise DatabaseError("Transaction already in progress")
-            # Set flag BEFORE execute to close race window
+            # Set flag BEFORE execute to close race window. Record the owner task
+            # (H8): only this task's statements may proceed while the span is open;
+            # other tasks wait on `_txn_done` (cleared here) rather than joining.
             self._in_transaction = True
+            self._txn_owner = asyncio.current_task()
+            self._txn_done.clear()
             try:
                 await self.execute("BEGIN TRANSACTION")
             except Exception:
-                # Rollback state on failure
+                # Rollback state on failure — and release any waiters.
                 self._in_transaction = False
+                self._txn_owner = None
+                self._txn_done.set()
                 raise
 
     async def commit(self) -> None:
@@ -342,8 +183,11 @@ class DatabaseConnection:
             try:
                 await self.execute("COMMIT")
             finally:
-                # Always clear flag, even on error (transaction is no longer active)
+                # Always clear flag + release waiters, even on error (the
+                # transaction is no longer active either way).
                 self._in_transaction = False
+                self._txn_owner = None
+                self._txn_done.set()
 
     async def rollback(self) -> None:
         """Rollback the current transaction."""
@@ -353,44 +197,112 @@ class DatabaseConnection:
             try:
                 await self.execute("ROLLBACK")
             finally:
-                # Always clear flag, even on error
+                # Always clear flag + release waiters, even on error
                 self._in_transaction = False
+                self._txn_owner = None
+                self._txn_done.set()
 
     async def in_transaction(self) -> bool:
         """Check if currently in a transaction."""
         return self._in_transaction
 
     async def execute(self, query: str, params: Union[tuple, Dict[str, Any]] = ()) -> aiosqlite.Cursor:
-        """Execute SQL query."""
+        """Execute SQL query.
+
+        H8 (shared-connection transaction ownership): while a transaction is
+        open, an ``execute()`` from a task OTHER than the one that called
+        ``begin_transaction`` WAITS for that transaction to complete instead of
+        silently joining it. Statements from the owner task — and BEGIN/COMMIT/
+        ROLLBACK control statements — proceed immediately. Public API unchanged.
+        """
+        # Transaction-control statements (issued only by begin/commit/rollback,
+        # which already hold `_transaction_lock`) must never be gated — they are
+        # what ends the wait.
+        query_upper = query.strip().upper()
+        is_transaction_control = query_upper.startswith(('BEGIN', 'COMMIT', 'ROLLBACK'))
         try:
-            async with self._lock:
-                if not self.connection:
-                    await self.connect()
+            while True:
+                waiter: Optional[asyncio.Event] = None
+                async with self._lock:
+                    if not self.connection:
+                        await self.connect()
 
-                # Debug logging
-                self.logger.debug(f"Execute query: {query}")
-                self.logger.debug(f"Params before processing: {params}")
+                    must_wait = False
+                    if (not is_transaction_control and self._in_transaction
+                            and self._txn_owner is not None
+                            and asyncio.current_task() is not self._txn_owner):
+                        # A DIFFERENT task owns the open transaction.
+                        if self._txn_owner.done():
+                            # Owner task ended without commit/rollback (e.g. an
+                            # unhandled cancellation between begin and its first
+                            # statement). Never wait forever on an abandoned
+                            # transaction — reset the span and proceed.
+                            self.logger.warning(
+                                "Transaction owner task ended without commit/"
+                                "rollback — clearing abandoned transaction state "
+                                "to avoid a stuck shared connection")
+                            # H8 fix: the dead owner may have left a PARTIAL
+                            # write open at the sqlite level (e.g. a balance
+                            # UPDATE without its paired ledger INSERT). If we
+                            # only clear the Python-side flags below, the next
+                            # non-owner execute() sees `_in_transaction=False`
+                            # and auto-commits — which commits the ENTIRE
+                            # pending sqlite transaction, silently landing the
+                            # dead task's partial span too (money fails OPEN).
+                            # Discard that span BEFORE clearing state. This is
+                            # a direct call on the raw sqlite3.Connection
+                            # (self.connection), NOT the async self.rollback()
+                            # wrapper — we already hold `self._lock` here and
+                            # self.rollback() acquires `_transaction_lock` /
+                            # re-enters execute(), which would deadlock.
+                            if self.connection is not None:
+                                try:
+                                    self.connection.rollback()
+                                except Exception as rollback_exc:
+                                    # A failed rollback must not deadlock every
+                                    # other waiter on this connection — log
+                                    # and still clear state below so the
+                                    # escape hatch keeps its no-deadlock
+                                    # guarantee.
+                                    self.logger.error(
+                                        "Failed to roll back abandoned "
+                                        "transaction's sqlite-level span: %s",
+                                        rollback_exc)
+                            self._in_transaction = False
+                            self._txn_owner = None
+                            self._txn_done.set()
+                        else:
+                            must_wait = True
+                            waiter = self._txn_done
 
-                # Handle JSON serialization in parameters
-                if isinstance(params, dict):
-                    processed_params = {k: json.dumps(v) if isinstance(v, (dict, list)) else v
-                                     for k, v in params.items()}
-                else:
-                    processed_params = tuple(json.dumps(p) if isinstance(p, (dict, list)) else p
-                                         for p in params)
+                    if not must_wait:
+                        # Debug logging
+                        self.logger.debug(f"Execute query: {query}")
+                        self.logger.debug(f"Params before processing: {params}")
 
-                # Debug logging
-                self.logger.debug(f"Processed params: {processed_params}")
+                        # Handle JSON serialization in parameters
+                        if isinstance(params, dict):
+                            processed_params = {k: json.dumps(v) if isinstance(v, (dict, list)) else v
+                                             for k, v in params.items()}
+                        else:
+                            processed_params = tuple(json.dumps(p) if isinstance(p, (dict, list)) else p
+                                                 for p in params)
 
-                cursor = self.connection.execute(query, processed_params)
+                        # Debug logging
+                        self.logger.debug(f"Processed params: {processed_params}")
 
-                # Only auto-commit if NOT in an explicit transaction AND not a transaction control statement
-                query_upper = query.strip().upper()
-                is_transaction_control = query_upper.startswith(('BEGIN', 'COMMIT', 'ROLLBACK'))
-                if not self._in_transaction and not is_transaction_control:
-                    self.connection.commit()
+                        cursor = self.connection.execute(query, processed_params)
 
-                return cursor
+                        # Only auto-commit if NOT in an explicit transaction AND
+                        # not a transaction control statement.
+                        if not self._in_transaction and not is_transaction_control:
+                            self.connection.commit()
+
+                        return cursor
+                # Released the lock: wait for the owning transaction to finish,
+                # then retry the ownership check (another transaction may have
+                # started, or this one may have ended).
+                await waiter.wait()
         except Exception as e:
             self.logger.error(f"Execute error: {e} | Query: {query} | Params: {params}")
             self.logger.exception("Detailed error:")

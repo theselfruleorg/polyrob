@@ -23,12 +23,12 @@ This guide helps you transition from Hermes Agent to POLYROB, highlighting key d
 |----------------|-------------------|-------|
 | **Provider/Model** | `DEFAULT_PROVIDER`, `DEFAULT_MODEL` | Same configuration via env |
 | **Profiles** | Not directly supported | POLYROB uses tenant isolation instead |
-| **Gateway** | `polyrob gateway` / Surfaces (Telegram, WhatsApp, Email) | Similar architecture |
-| **Skills** | Skills system | Similar but different storage |
+| **Gateway** | `polyrob gateway` / Surfaces (Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | Similar architecture |
+| **Skills** | Skills system (incl. agent-authored via `SKILLS_WRITABLE`) | Similar but different storage |
 | **H-MEM** | Memory backend | POLYROB uses SQLite FTS5 by default |
 | **Cron jobs** | Cron + Goal board | More durable in POLYROB |
-| **Terminal backends** | Not supported | POLYROB runs locally only |
-| **Nous Portal** | Not supported | POLYROB is multi-provider by design |
+| **Terminal backends** | Compute-posture ladder (`AGENT_COMPUTE_POSTURE`) | Sandboxed code exec → persistent `shell`/`process` in a dev container → self-maintain verbs; Docker-backed. No SSH/Modal/Daytona remotes |
+| **Nous Portal** | Not supported | POLYROB is multi-provider by design (OpenRouter gets you one-key access) |
 
 ---
 
@@ -358,11 +358,17 @@ metadata:
 
 2. **Gateway vs API server:**
    - Hermes: `hermes gateway`
-   - POLYROB: `polyrob gateway` runs all enabled surfaces (Telegram + WhatsApp + Email) in one process, or `polyrob serve` for the REST API alone
+   - POLYROB: `polyrob gateway` runs every enabled surface (Telegram, WhatsApp, Email,
+     Discord, Slack, Signal, X) in one process, or `polyrob serve` for the REST API
+     alone. An enabled surface with missing credentials is warned about and skipped —
+     check the startup output
 
 3. **Terminal backends:**
    - Hermes supports Docker, SSH, Modal, Daytona
-   - POLYROB runs locally only (simpler, more focused)
+   - POLYROB ships a compute-posture ladder (`AGENT_COMPUTE_POSTURE` 0–3): hardened
+     Docker code-exec by default, a persistent `shell` + `process` job manager in a
+     per-session dev container at posture ≥1, and gated self-maintenance verbs at ≥2.
+     Remote execution backends (SSH/Modal/Daytona) are not supported
 
 ---
 
@@ -380,8 +386,8 @@ hermes gateway start    # Start gateway
 ### POLYROB Surfaces
 
 `polyrob gateway` is the closest direct equivalent to `hermes gateway` — it runs every
-enabled surface (Telegram + WhatsApp + Email) in one process. POLYROB also lets you run
-each surface as its own process if you'd rather keep them separate:
+enabled surface in one process. POLYROB also lets you run each surface as its own
+process if you'd rather keep them separate:
 
 ```bash
 # All enabled surfaces in one process (closest to `hermes gateway start`)
@@ -398,6 +404,12 @@ polyrob whatsapp
 # Email — IMAP poll + SMTP, no extra install needed (stdlib imaplib/smtplib)
 polyrob email
 
+# Discord / Slack / Signal / X — each also runs standalone
+polyrob discord
+polyrob slack
+polyrob signal
+polyrob x
+
 # REST API server
 polyrob serve
 
@@ -413,13 +425,19 @@ polyrob dashboard
 | **Telegram** | ✅ | ✅ |
 | **Email** | ✅ | ✅ |
 | **WhatsApp** | ✅ | ✅ |
-| **Discord** | ✅ | ❌ |
-| **Slack** | ✅ | ❌ |
-| **Signal** | ✅ | ❌ |
+| **Discord** | ✅ | ✅ (built; live-account validation pending) |
+| **Slack** | ✅ | ✅ (built; live-account validation pending) |
+| **Signal** | ✅ | ✅ via signal-cli (built; live-account validation pending) |
+| **X (DM)** | ❌ | ✅ (live-validated) |
 | **iMessage** | ✅ | ❌ |
 | **IRC** | ✅ | ❌ |
 
-**Note:** POLYROB focuses on the most commonly used platforms (CLI, Telegram, WhatsApp, Email) with plans for more based on demand.
+**Note:** Discord/Slack/Signal are real thin-client implementations against the real
+endpoints (Discord REST v10 + Gateway WS; Slack Web API + Socket Mode; signal-cli
+JSON-RPC), unit-tested with mocked transports — "validation pending" means they haven't
+been soak-tested against live accounts yet, not that they're stubs. Run them under
+`polyrob gateway` (with their flags enabled) or each as its own process
+(`polyrob discord` etc.).
 
 ---
 
@@ -428,8 +446,10 @@ polyrob dashboard
 ### Hermes Has, POLYROB Doesn't
 
 - **Nous Portal** — Single subscription for models/tools
-- **Terminal backends** — Docker, SSH, Modal, Daytona execution
-- **More messaging platforms** — Discord, Slack, Signal, iMessage, IRC, etc.
+- **Remote execution backends** — SSH, Modal, Daytona (POLYROB's compute-posture
+  ladder is Docker-on-the-local-box only)
+- **iMessage and IRC surfaces** — POLYROB covers Telegram, WhatsApp, Email, Discord,
+  Slack, Signal, and X
 - **Companion mobile apps** — iOS/Android nodes
 - **Voice modes** — Wake words, continuous voice
 
@@ -548,10 +568,14 @@ polyrob goals create "Test migration" --body "Summarize my current project conte
 Consider staying with Hermes if:
 
 - **You need Nous Portal** — Single subscription is important to you
-- **You use many messaging platforms** — Discord, Slack, Signal, iMessage, IRC, etc.
-- **You need terminal backends** — Docker, SSH, Modal execution
-- **You value the learning loop** — Agent-created skills are critical
+- **You need iMessage or IRC** — the two surfaces POLYROB doesn't cover
+  (Discord/Slack/Signal/X are covered — see the platform table above)
+- **You need remote execution backends** — SSH, Modal, Daytona (POLYROB's compute
+  ladder is local-Docker only)
 - **You want companion apps** — Mobile/desktop apps are essential
+
+(Agent-created skills are no longer a Hermes exclusive — POLYROB's learning loop ships
+behind `SKILLS_WRITABLE`, on by default under `POLYROB_LOCAL`.)
 
 ## When to Switch to POLYROB
 

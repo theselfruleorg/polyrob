@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import logging
 from typing import Dict, Any, Optional, Callable
-from collections import defaultdict, deque
 from datetime import datetime, timedelta
 
 from fastapi import Request, HTTPException, Header
@@ -14,6 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
 from api.models import ErrorResponse, RateLimitInfo
+from core.rate_limit import FixedWindowCounter, TokenBucket
 from core.permissions import Permissions
 from utils.bounded_collections import BoundedDict
 
@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 
 
 class RateLimiter:
-    """Rate limiter implementation using token bucket algorithm."""
+    """Per-user API rate limiter: a burst token bucket plus minute/hour fixed
+    windows, composed from the canonical ``core.rate_limit`` primitives (F-1,
+    2026-07-17). Decision semantics are pinned by
+    ``tests/unit/api/test_rate_limiter_semantics.py``; each primitive keeps its
+    own key space bounded via the WS-4 amortized idle-key sweep."""
 
     def __init__(
         self,
@@ -41,115 +45,60 @@ class RateLimiter:
         self.rph_limit = requests_per_hour
         self.burst_size = burst_size
 
-        # Token buckets per user
-        self.user_buckets: Dict[str, Dict[str, Any]] = defaultdict(
-            lambda: {
-                'tokens': float(burst_size),
-                'last_refill': time.monotonic(),
-                'minute_count': 0,
-                'hour_count': 0,
-                'minute_reset': time.monotonic(),
-                'hour_reset': time.monotonic()
-            }
-        )
+        # Legacy refill rate: burst_size tokens/sec — a drained burst refills in 1s.
+        self._bucket = TokenBucket(rate_per_sec=float(burst_size), burst=burst_size)
+        self._minute = FixedWindowCounter(requests_per_minute, 60.0)
+        self._hour = FixedWindowCounter(requests_per_hour, 3600.0)
 
     def check_rate_limit(self, user_id: str) -> tuple[bool, Optional[RateLimitInfo]]:
-        """Check if user is within rate limits using token bucket.
+        """Check if user is within rate limits (burst, then minute, then hour).
+
+        A denied request consumes nothing: the token and the window counters are
+        only committed once ALL three gates pass.
 
         Returns:
             Tuple of (allowed, rate_limit_info)
         """
         now = time.monotonic()
-        bucket = self.user_buckets[user_id]
 
-        # Refill tokens based on time elapsed
-        time_since_refill = now - bucket['last_refill']
-        refill_rate = self.burst_size / 1.0  # tokens per second
-        tokens_to_add = time_since_refill * refill_rate
-        bucket['tokens'] = min(self.burst_size, bucket['tokens'] + tokens_to_add)
-        bucket['last_refill'] = now
-
-        # Reset minute/hour counters if windows expired
-        if now - bucket['minute_reset'] >= 60:
-            bucket['minute_count'] = 0
-            bucket['minute_reset'] = now
-
-        if now - bucket['hour_reset'] >= 3600:
-            bucket['hour_count'] = 0
-            bucket['hour_reset'] = now
-
-        # Check if we have tokens available
-        if bucket['tokens'] < 1.0:
-            return False, self._get_rate_limit_info(user_id, "burst", bucket)
-
-        # Check minute limit
-        if bucket['minute_count'] >= self.rpm_limit:
-            return False, self._get_rate_limit_info(user_id, "minute", bucket)
-
-        # Check hour limit
-        if bucket['hour_count'] >= self.rph_limit:
-            return False, self._get_rate_limit_info(user_id, "hour", bucket)
-
-        # Consume a token and increment counters
-        bucket['tokens'] -= 1.0
-        bucket['minute_count'] += 1
-        bucket['hour_count'] += 1
-
-        return True, self._get_rate_limit_info(user_id, "ok", bucket)
-
-    def _cleanup_old_buckets(self) -> None:
-        """Clean up old user buckets to prevent memory leak."""
-        now = time.monotonic()
-        # Remove buckets not used in the last hour
-        cutoff = now - 3600
-        to_remove = [
-            user_id for user_id, bucket in self.user_buckets.items()
-            if bucket['last_refill'] < cutoff
-        ]
-        for user_id in to_remove:
-            del self.user_buckets[user_id]
-
-    def _get_rate_limit_info(self, user_id: str, status: str, bucket: Dict[str, Any]) -> RateLimitInfo:
-        """Get rate limit information for user."""
-        now = time.monotonic()
-
-        if status == "burst":
-            # Calculate when tokens will be available
-            tokens_needed = 1.0 - bucket['tokens']
-            refill_rate = self.burst_size / 1.0  # tokens per second
-            seconds_until_token = tokens_needed / refill_rate
-            return RateLimitInfo(
+        ok, wait = self._bucket.peek(user_id, now=now)
+        if not ok:
+            return False, RateLimitInfo(
                 limit=self.burst_size,
                 remaining=0,
-                reset_at=datetime.now() + timedelta(seconds=seconds_until_token),
+                reset_at=datetime.now() + timedelta(seconds=wait),
                 window="burst"
             )
-        elif status == "minute":
-            seconds_until_reset = 60 - (now - bucket['minute_reset'])
-            return RateLimitInfo(
+
+        if not self._minute.peek(user_id, now=now):
+            return False, RateLimitInfo(
                 limit=self.rpm_limit,
                 remaining=0,
-                reset_at=datetime.now() + timedelta(seconds=seconds_until_reset),
+                reset_at=datetime.now() + timedelta(
+                    seconds=self._minute.seconds_until_reset(user_id, now=now)),
                 window="minute"
             )
-        elif status == "hour":
-            seconds_until_reset = 3600 - (now - bucket['hour_reset'])
-            return RateLimitInfo(
+
+        if not self._hour.peek(user_id, now=now):
+            return False, RateLimitInfo(
                 limit=self.rph_limit,
                 remaining=0,
-                reset_at=datetime.now() + timedelta(seconds=seconds_until_reset),
+                reset_at=datetime.now() + timedelta(
+                    seconds=self._hour.seconds_until_reset(user_id, now=now)),
                 window="hour"
             )
-        else:
-            # Return current status
-            minute_remaining = max(0, self.rpm_limit - bucket['minute_count'])
-            seconds_until_reset = 60 - (now - bucket['minute_reset'])
-            return RateLimitInfo(
-                limit=self.rpm_limit,
-                remaining=minute_remaining,
-                reset_at=datetime.now() + timedelta(seconds=seconds_until_reset),
-                window="minute"
-            )
+
+        self._bucket.consume(user_id, now=now)
+        self._minute.increment(user_id, now=now)
+        self._hour.increment(user_id, now=now)
+
+        return True, RateLimitInfo(
+            limit=self.rpm_limit,
+            remaining=self._minute.remaining(user_id, now=now),
+            reset_at=datetime.now() + timedelta(
+                seconds=self._minute.seconds_until_reset(user_id, now=now)),
+            window="minute"
+        )
 
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
@@ -363,26 +312,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     self.logger.warning(f"JWT validation failed: {e}")
                     return None
             else:
-                # Non-JWT bearer token - validate with HMAC
-                try:
-                    expected = hmac.new(
-                        self.secret_key.encode(),
-                        token.encode(),
-                        hashlib.sha256
-                    ).hexdigest()
-
-                    user_info = {
-                        "user_id": token[:8],
-                        "authenticated": True,
-                        "permissions": ["read", "write"]
-                    }
-
-                    self.token_cache[token] = user_info
-                    return user_info
-
-                except Exception as e:
-                    self.logger.error(f"Token validation error: {e}")
-                    return None
+                # Non-JWT bearer token: it carries no signature we can verify
+                # against the secret, so the ONLY way it can authenticate is as a
+                # real DB-backed API key (e.g. `Authorization: Bearer rob_xxx`).
+                # SECURITY: never mint an identity from the token itself — the old
+                # code computed an HMAC, discarded it, and returned
+                # {user_id: token[:8], authenticated: True}, a full bypass.
+                return await self._validate_api_key(token)
 
         # Check API key - validate against database
         if api_key:

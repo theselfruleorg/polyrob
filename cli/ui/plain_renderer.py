@@ -43,11 +43,13 @@ from cli.ui.events import (
     Info,
     IterationDone,
     LLMCall,
+    LLMStarted,
     RenderEvent,
     SessionDone,
     SessionStart,
     Step,
     ToolExec,
+    ToolStarted,
 )
 from cli.ui.renderer import Renderer
 from cli.ui.state import SessionState
@@ -141,12 +143,33 @@ class PlainRenderer(Renderer):
         if self.verbose:
             self._handle_trace_event(event)
             return
+        # 019 span pairing: a paired completion prints ONLY the result line —
+        # and prints it even if `_should_show_tool` now says no (a printed `→`
+        # must never be left unclosed; see rich_renderer for the delegate_task
+        # case). Unpaired completions keep the legacy two-line form.
+        paired = self._consume_start_printed(event.call_id)
+        if not paired and not self._should_show_tool(event.action_name or event.tool_name):
+            return
+        if not paired:
+            self._write(blocks.tool_call_line_from_exec(event).plain.rstrip())
+        self._write(blocks.tool_result_line(event).plain.rstrip())
+
+    def _handle_tool_started(self, event: ToolStarted) -> None:
+        """Print `→ name(args)` at DISPATCH time (019); same gates as the
+        completion line."""
+        if self.verbose:
+            self._write(f"[tool] start {event.tool_name}/{event.action_name}")
+            return
         if not self._should_show_tool(event.action_name or event.tool_name):
             return
-        # Emit `→ name(args)` then `✓ …` from the tool_execution event (correct order);
-        # the terminal Step event fires after execution, which inverted the pair.
-        self._write(blocks.tool_call_line_from_exec(event).plain.rstrip())
-        self._write(blocks.tool_result_line(event).plain.rstrip())
+        self._write(blocks.tool_call_line_from_started(event).plain.rstrip())
+        self._note_start_printed(event.call_id)
+
+    def _handle_llm_started(self, event: LLMStarted) -> None:
+        """Trace-only: the plain surface has no live region to animate."""
+        if self.verbose:
+            model = event.model_name or event.provider or "llm"
+            self._write(f"[llm] start {model} attempt={event.attempt}")
 
     def _handle_error_event(self, event: ErrorEvent) -> None:
         """Dialog layer: errors always surface (no bracket prefix)."""

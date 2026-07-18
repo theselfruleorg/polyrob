@@ -76,14 +76,14 @@ def completed_via_done(orchestrator: Any) -> Optional[bool]:
         return None
 
 
-async def run_task_as_session(
+async def run_task_to_outcome(
     task_agent: Any,
     *,
     user_id: str,
     request: dict,
     autonomous: bool = False,
-) -> tuple[Optional[str], Optional[str]]:
-    """Factor the shared create_session → run_session → refusal-check flow.
+):
+    """The primary run entry (§2): create_session → run_session → RunOutcome.
 
     *task_agent* must implement:
     - ``create_session(user_id, request)`` → dict with ``"id"`` key, or falsy
@@ -93,38 +93,86 @@ async def run_task_as_session(
     in-process autonomy registry (``agents.task.goals.autonomy_marker``) so
     the goal tool can refuse objective mutations from that session later.
 
+    Returns a ``RunOutcome`` assembled while the orchestrator is still resident
+    (``session_id is None`` when no session was created; ``refusal=True`` when
+    run_session returned a known non-completion string). Consumers read the
+    done() text, BLOCKED declaration, user messages and provenance from the
+    envelope — never by re-extracting strings from message history.
+    """
+    from agents.task.runtime.run_outcome import RunOutcome, build_run_outcome
+
+    # §3.3: pre-generate + pre-mark the session id for AUTONOMOUS runs so the
+    # marker is visible DURING construction — the communication-contract block
+    # gates on it at prompt-build time. Only when the task_agent's
+    # create_session accepts a session_id (the real TaskAgent does); legacy
+    # fakes/custom agents keep the post-create marking below.
+    pre_sid = None
+    if autonomous:
+        try:
+            import inspect
+            import uuid
+            sig = inspect.signature(task_agent.create_session)
+            if "session_id" in sig.parameters or any(
+                    p.kind is inspect.Parameter.VAR_KEYWORD
+                    for p in sig.parameters.values()):
+                pre_sid = str(uuid.uuid4())
+        except Exception:
+            pre_sid = None
+        if pre_sid:
+            from agents.task.goals.autonomy_marker import mark_autonomous
+            mark_autonomous(pre_sid)
+
+    kwargs = {"session_id": pre_sid} if pre_sid else {}
+    session_info = await task_agent.create_session(
+        user_id=user_id, request=request, **kwargs)
+    session_id = (session_info or {}).get("id")
+    if not session_id:
+        return RunOutcome(session_id=None)
+    if autonomous:
+        from agents.task.goals.autonomy_marker import mark_autonomous
+        mark_autonomous(session_id)
+    status = await task_agent.run_session(user_id, session_id)
+    outcome = await build_run_outcome(task_agent, session_id, status)
+    try:
+        # Opt-in trajectory capture (TRAJECTORY_CAPTURE, datagen W1 T6).
+        # maybe_capture is fail-open internally; this guard is belt-and-braces
+        # so capture can never break a run even on import failure. Runs in a
+        # worker thread — it does sync glob/read/sqlite/write over the whole
+        # session, which on a big session stalls every other coroutine (H5,
+        # 2026-07-14 review).
+        from datagen.capture import maybe_capture, trajectory_capture_enabled
+        if trajectory_capture_enabled():
+            import asyncio
+            await asyncio.to_thread(maybe_capture, task_agent, outcome, user_id=user_id)
+    except Exception:
+        logger.debug("trajectory capture failed", exc_info=True)
+    return outcome
+
+
+async def run_task_as_session(
+    task_agent: Any,
+    *,
+    user_id: str,
+    request: dict,
+    autonomous: bool = False,
+) -> tuple[Optional[str], Optional[str]]:
+    """Legacy tuple shape over :func:`run_task_to_outcome`.
+
     Returns a ``(session_id, final)`` tuple with three shapes:
 
     - ``(None, None)``   — no session was created (create_session returned no id)
     - ``(session_id, None)``  — session created but run_session returned a known
       refusal/empty string; callers should treat this as a soft failure
     - ``(session_id, final)`` — session ran and produced a genuine result string
+
+    ``final`` is the envelope's honest ``result_text()`` (done() ledger text →
+    extracted reply → non-generic status), degrading to the raw status string
+    only when nothing else exists — never worse than the pre-§2 behavior.
     """
-    session_info = await task_agent.create_session(user_id=user_id, request=request)
-    session_id = (session_info or {}).get("id")
-    if not session_id:
+    outcome = await run_task_to_outcome(
+        task_agent, user_id=user_id, request=request, autonomous=autonomous)
+    if outcome.session_id is None:
         return (None, None)
-    if autonomous:
-        from agents.task.goals.autonomy_marker import mark_autonomous
-        mark_autonomous(session_id)
-    status = await task_agent.run_session(user_id, session_id)
-    if is_refusal(status):
-        return (session_id, None)
-    # run_session returns a generic STATUS string ("Session completed successfully"),
-    # NOT the agent's actual output — so out-of-band delivery (cron digest, goal board)
-    # was shipping that useless string to the owner (the "blind" digest) and [SILENT]
-    # could never suppress. Extract the agent's REAL reply the way chat_once / the
-    # telegram surface (004) do, and deliver THAT. Degrade to the status string only if
-    # extraction yields nothing — never worse than before. Refusals short-circuit above,
-    # so a failed run never delivers a stale prior reply.
-    final = status
-    extract = getattr(task_agent, "_extract_chat_reply", None)
-    if extract is not None:
-        try:
-            content = extract(session_id)
-        except Exception as e:  # pragma: no cover - fail-open to the status string
-            logger.debug("run_task_as_session: extract reply failed: %s", e)
-            content = None
-        if content and content.strip():
-            final = content.strip()
-    return (session_id, final)
+    if outcome.refusal:
+        return (outcome.session_id, None)
+    return (outcome.session_id, outcome.result_text() or outcome.status)

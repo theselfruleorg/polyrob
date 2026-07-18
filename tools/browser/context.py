@@ -219,7 +219,14 @@ class BrowserContext:
 			# Save trace if configured
 			if self.config.trace_path:
 				try:
-					trace_path = os.path.join(self.config.trace_path, f'{self.session_id or uuid.uuid4()}.zip')
+					# WS-3: clean the session id before it becomes a filename.
+					_stem = self.session_id or uuid.uuid4()
+					try:
+						from agents.task.path import pm as _pm
+						_stem = _pm().clean_session_id(str(_stem))
+					except Exception:
+						_stem = str(_stem)
+					trace_path = os.path.join(self.config.trace_path, f'{_stem}.zip')
 					await self.session.context.tracing.stop(path=trace_path)
 					self.logger.debug(f'Saved trace to {trace_path}')
 				except Exception as e:
@@ -1016,11 +1023,20 @@ class BrowserContext:
 					except (ImportError, ValueError, Exception) as e:
 						logger.warning(f"PathManager not available: {str(e)}")
 						
-						# Fallback to direct path construction
-						screenshots_dir = os.path.join("data", "auto", session.session_id, "screenshots")
+						# Fallback to direct path construction. WS-3: anchor to the RESOLVED session
+						# tree (never a relative "data" under the cwd) and clean the session id the
+						# same way pm() would, so a stray id can't escape the tree.
+						from core.runtime_paths import resolve_session_data_root
+						try:
+							from agents.task.path import pm as _pm
+							_sid = _pm().clean_session_id(session.session_id)
+						except Exception:
+							_sid = str(session.session_id)
+						_auto_root = os.path.join(str(resolve_session_data_root()), "auto")
+						screenshots_dir = os.path.join(_auto_root, _sid, "screenshots")
 						
 						# Check if screenshots_dir has duplicated session ID to avoid nesting
-						pattern = f"data{os.path.sep}auto{os.path.sep}{session.session_id}"
+						pattern = os.path.join(_auto_root, _sid)
 						if screenshots_dir.count(pattern) > 1:
 							# Fix path by removing the duplication
 							parts = screenshots_dir.split(pattern)
@@ -1102,11 +1118,19 @@ class BrowserContext:
 			except (ImportError, ValueError, Exception) as e:
 				logger.warning(f"PathManager not available for fullpage screenshot: {str(e)}")
 				
-				# Fallback to direct path construction
-				screenshots_dir = os.path.join("data", "auto", session.session_id, "screenshots")
+				# Fallback to direct path construction. WS-3: anchor to the RESOLVED session
+				# tree (never a relative "data" under the cwd) + clean the session id.
+				from core.runtime_paths import resolve_session_data_root
+				try:
+					from agents.task.path import pm as _pm
+					_sid = _pm().clean_session_id(session.session_id)
+				except Exception:
+					_sid = str(session.session_id)
+				_auto_root = os.path.join(str(resolve_session_data_root()), "auto")
+				screenshots_dir = os.path.join(_auto_root, _sid, "screenshots")
 				
 				# Check if screenshots_dir has duplicated session ID to avoid nesting
-				pattern = f"data{os.path.sep}auto{os.path.sep}{session.session_id}"
+				pattern = os.path.join(_auto_root, _sid)
 				if screenshots_dir.count(pattern) > 1:
 					# Fix path by removing the duplication
 					parts = screenshots_dir.split(pattern)

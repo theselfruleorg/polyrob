@@ -256,3 +256,77 @@ async def test_dm_rate_limit_independent(monkeypatch):
     assert (await t.twitter_dm(TwitterDMAction(recipient="1", text="a"))).error is None
     second = await t.twitter_dm(TwitterDMAction(recipient="1", text="b"))
     assert second.error is not None and "rate" in second.error.lower()
+
+
+# --- X-capability completion: unmute, DM reads, timeline reads ---------------
+
+
+@pytest.mark.asyncio
+async def test_unmute_gated_and_calls_client(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=True)
+    assert "twitter_unmute" in t.get_actions()
+    from tools.twitter_tool import TwitterUserAction
+    res = await t.twitter_unmute(TwitterUserAction(user="123456"))
+    assert res.error is None
+    t.client.unmute.assert_called_once_with(target_user_id="123456")
+
+
+def test_unmute_absent_when_writes_disabled(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    assert "twitter_unmute" not in t.get_actions()
+
+
+def test_dm_and_timeline_reads_always_available(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    actions = t.get_actions()
+    assert "twitter_get_dms" in actions
+    assert "twitter_get_timeline" in actions
+
+
+@pytest.mark.asyncio
+async def test_get_dms_lists_events(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    ev = MagicMock()
+    ev.data = {"id": "9001", "event_type": "MessageCreate", "text": "yo",
+               "sender_id": "42", "dm_conversation_id": "42-999",
+               "created_at": "2026-07-12T00:00:00.000Z"}
+    t.client.get_direct_message_events = MagicMock(
+        return_value=MagicMock(data=[ev]))
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(TwitterGetDMsAction())
+    assert res.error is None
+    assert "yo" in res.extracted_content
+    assert "42-999" in res.extracted_content
+    kwargs = t.client.get_direct_message_events.call_args.kwargs
+    assert kwargs["event_types"] == "MessageCreate"
+    assert "participant_id" not in kwargs
+
+
+@pytest.mark.asyncio
+async def test_get_dms_participant_filter(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    t.client.get_direct_message_events = MagicMock(
+        return_value=MagicMock(data=[]))
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(
+        TwitterGetDMsAction(participant="123456", max_results=5))
+    assert res.error is None
+    kwargs = t.client.get_direct_message_events.call_args.kwargs
+    assert kwargs["participant_id"] == "123456"
+    assert kwargs["max_results"] == 5
+
+
+@pytest.mark.asyncio
+async def test_get_timeline_renders_tweets(monkeypatch):
+    from types import SimpleNamespace
+
+    t = _tool(monkeypatch, enabled_env=False)
+    tweet = SimpleNamespace(id="77", text="hello world", created_at=None,
+                            public_metrics={"like_count": 3})
+    t.client.get_users_tweets = MagicMock(return_value=MagicMock(data=[tweet]))
+    from tools.twitter_tool import TwitterTimelineAction
+    res = await t.twitter_get_timeline(TwitterTimelineAction(user="123456"))
+    assert res.error is None
+    assert "hello world" in res.extracted_content
+    call_kwargs = t.client.get_users_tweets.call_args.kwargs
+    assert call_kwargs["id"] == "123456"

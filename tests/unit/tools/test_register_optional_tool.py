@@ -21,6 +21,17 @@ class DummyTool:
     pass
 
 
+@pytest.fixture(autouse=True)
+def _classify_test_dummies(monkeypatch):
+    """WS-2: registration now refuses an unclassified tool (the capability-table
+    guard). Classify the synthetic _test_dummy_* ids for the duration of each test —
+    exactly what a real new tool must do (add a row to TOOL_CAPABILITIES)."""
+    from core import tool_capabilities as tc
+    for name in ("_test_dummy_disabled", "_test_dummy_enabled",
+                 "_test_dummy_idempotent", "_test_dummy_force", "_test_dummy_sb01"):
+        monkeypatch.setitem(tc.TOOL_CAPABILITIES, name, frozenset())
+
+
 class TestRegisterOptionalTool:
     def test_disabled_returns_false_and_does_not_register(self):
         """When enabled_fn returns False, register_optional_tool returns False and

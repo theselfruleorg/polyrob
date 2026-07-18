@@ -15,12 +15,18 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_default_log_dir_is_absolute_under_repo_root():
-    """N1: the module-level log dir must be CWD-independent (anchored to repo)."""
+def test_default_log_dir_is_absolute_and_off_the_code_tree(monkeypatch, tmp_path):
+    """N1 (updated by T11, 2026-07-16): the log dir must be CWD-independent AND
+    never inside the install/code tree — it resolves to the data home (or the
+    POLYROB_LOG_DIR override), so a packaged/read-only install can still log."""
     import core.logging as cl
 
-    assert cl.DEFAULT_LOG_DIR.is_absolute(), cl.DEFAULT_LOG_DIR
-    assert cl.DEFAULT_LOG_DIR == REPO_ROOT / "logs"
+    monkeypatch.delenv("POLYROB_LOG_DIR", raising=False)
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    d = cl.resolve_log_dir()
+    assert d.is_absolute(), d
+    assert d == tmp_path / "logs"
+    assert REPO_ROOT not in d.parents
 
 
 def test_import_and_construct_does_not_pollute_cwd(tmp_path):

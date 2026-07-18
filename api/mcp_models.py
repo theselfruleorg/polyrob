@@ -3,7 +3,7 @@ Pydantic models for MCP server management API.
 """
 
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 import re
 
 
@@ -82,7 +82,8 @@ class AddServerRequest(BaseModel):
         description="For SSE servers: explicit POST endpoint for sending messages (if different from main URL)"
     )
 
-    @validator('server_name')
+    @field_validator('server_name')
+    @classmethod
     def validate_server_name(cls, v):
         """Validate server name format."""
         if not re.match(r'^[a-z0-9][a-z0-9-]*[a-z0-9]$', v) and len(v) > 2:
@@ -91,14 +92,16 @@ class AddServerRequest(BaseModel):
             raise ValueError('Server name must be lowercase alphanumeric')
         return v
 
-    @validator('server_type')
+    @field_validator('server_type')
+    @classmethod
     def validate_server_type(cls, v):
         """Validate server type."""
         if v not in ('sse', 'http', 'streamable_http'):
             raise ValueError('Server type must be "sse", "http", or "streamable_http" (STDIO not allowed)')
         return v
 
-    @validator('auth_method')
+    @field_validator('auth_method')
+    @classmethod
     def validate_auth_method(cls, v):
         """Validate auth method."""
         if v not in ('api_key', 'bearer', 'none'):

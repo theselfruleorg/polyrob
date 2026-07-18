@@ -179,6 +179,8 @@ class SkillCurator:
             logger.error("curator run failed: %s", e, exc_info=True)
             result["error"] = str(e)
         self._prune_episodes()
+        self._prune_memories()
+        self._consolidate_notes()
         return result
 
     def _prune_episodes(self) -> None:
@@ -197,6 +199,67 @@ class SkillCurator:
         except Exception:
             logger.warning("episodic prune skipped", exc_info=True)
 
+    def _consolidate_notes(self) -> None:
+        """C4 (2026-07-11): mechanical note consolidation — the notes twin of the
+        skill staleness loop above. Archives never-read agent-authored notes past
+        KNOWLEDGE_NOTE_STALE_DAYS and collapses exact duplicates (provider does
+        the SQL; owner-authored notes are exempt there). Archive-only, per-note
+        self_modification audit events, fail-open. Gated
+        KNOWLEDGE_CURATOR_ENABLED (safe-local group). Deliberately LLM-free —
+        the aux-model clustering/contradiction pass stays deferred until a
+        concrete merge policy exists (the CURATOR_LLM_MERGE lesson)."""
+        try:
+            from agents.task.constants import AutonomyConfig
+            if not AutonomyConfig.knowledge_curator_enabled():
+                return
+            from modules.memory.registry import get_memory_registry
+            prov = get_memory_registry().active()
+            if prov is None or not hasattr(prov, "consolidate_notes"):
+                return
+            cutoff = int(self._now()) - AutonomyConfig.knowledge_note_stale_days() * 86400
+            res = prov.consolidate_notes(stale_before_ts=cutoff)
+            for reason, key in (("stale", "archived_stale"),
+                                ("duplicate", "archived_dupes")):
+                for user_id, note_id in res.get(key, []):
+                    self._note_ev("archive", note_id, user_id, reason)
+            counts = {k: len(v) for k, v in res.items() if v}
+            if counts:
+                logger.info("curator: knowledge consolidation %s", counts)
+        except Exception:
+            logger.warning("knowledge consolidation skipped", exc_info=True)
+
+    @staticmethod
+    def _note_ev(action: str, note_id, user_id: str, reason: str) -> None:
+        """Note lifecycle transitions are self-modifications too. Fail-open."""
+        try:
+            from agents.task.telemetry.self_events import emit_self_modification
+            emit_self_modification(kind="note", action=action, item_id=str(note_id),
+                                   user_id=user_id or "", created_by="curator",
+                                   source="curator", reason=reason)
+        except Exception as e:
+            logger.debug("curator note event emit skipped: %s", e)
+
+    def _prune_memories(self) -> None:
+        """Cross-session `memories` retention sweep (B3, 2026-07-11) — same
+        contract as the episode sweep: curator cadence only, all tenants,
+        fail-open. MEMORY_RETENTION_DAYS <= 0 disables. Only rows with a B2
+        provenance stamp are age-prunable (legacy rows are exempt inside the
+        provider)."""
+        try:
+            from agents.task.constants import AutonomyConfig
+            from modules.memory.registry import get_memory_registry
+            days = AutonomyConfig.memory_retention_days()
+            if days <= 0:
+                return
+            prov = get_memory_registry().active()
+            if prov is not None and hasattr(prov, "prune_memories"):
+                cutoff = int(self._now()) - days * 86400
+                removed = prov.prune_memories(older_than_ts=cutoff)
+                if removed:
+                    logger.info("curator: pruned %d old memories", removed)
+        except Exception:
+            logger.warning("memory prune skipped", exc_info=True)
+
 
 class CuratorTicker:
     """Periodically run the curator (interval-gated). Mirrors CronTicker/GoalTicker."""
@@ -207,33 +270,32 @@ class CuratorTicker:
         self.check_interval_seconds = check_interval_seconds
         self.lock_path = lock_path
 
+    async def _tick_once(self) -> None:
+        """One curator tick: should_run gate + cross-process TickLock + run_once.
+        (P4 finalization: the loop scaffolding is now IntervalTicker's — this is
+        the curator-specific body it invokes, matching CronTicker/GoalTicker.)"""
+        if not self.curator.should_run():
+            return
+        if self.lock_path:
+            from cron.scheduler import TickLock
+            lock = TickLock(self.lock_path)
+            if not lock.acquire():
+                return  # another worker holds the tick this cycle; skip
+            try:
+                await self.curator.run_once()
+            finally:
+                lock.release()
+        else:
+            await self.curator.run_once()
+
     async def run_forever(self, stop_event=None) -> None:
-        import asyncio
-        while not (stop_event is not None and stop_event.is_set()):
-            try:
-                if self.curator.should_run():
-                    lock = None
-                    if self.lock_path:
-                        from cron.scheduler import TickLock
-                        lock = TickLock(self.lock_path)
-                        if not lock.acquire():
-                            lock = None  # another worker holds the tick this cycle; skip
-                        else:
-                            try:
-                                await self.curator.run_once()
-                            finally:
-                                lock.release()
-                    else:
-                        await self.curator.run_once()
-            except Exception as e:
-                logger.error("curator tick failed: %s", e, exc_info=True)
-            try:
-                await asyncio.wait_for(
-                    stop_event.wait() if stop_event else asyncio.sleep(self.check_interval_seconds),
-                    timeout=self.check_interval_seconds,
-                )
-            except Exception:
-                pass
+        # Delegate the loop to the shared IntervalTicker (consolidates cron/goal/
+        # curator scheduling) instead of hand-rolling an identical loop — matches
+        # how CronTicker/GoalTicker delegate.
+        from core.tickers import IntervalTicker
+        await IntervalTicker(self._tick_once, self.check_interval_seconds).run_forever(
+            stop_event=stop_event
+        )
 
 
 def build_curator_ticker(*, data_dir: str = "data", dry_run: bool = False) -> CuratorTicker:

@@ -32,6 +32,15 @@ function renderIRCSession(session) {
         : (session.runtime === 'here'
             ? `<span class="irc-runtime" title="Live in this console process">[live]</span>`
             : '');
+    // 019 P3: live-activity badge — WHAT the session is doing right now
+    // (in-process RunActivity snapshot; absent = unknown, no badge).
+    const ACTIVITY_ICONS = {
+        'thinking': '✱', 'tool': '●', 'awaiting_approval': '⏸',
+        'compacting': '📦', 'retrying': '↻', 'delegating': '⇢',
+    };
+    const activityChip = session.activity && session.activity.phase
+        ? `<span class="irc-runtime" style="color:#ffd479" title="${escapeHtml(session.activity.detail || session.activity.phase)}">[${ACTIVITY_ICONS[session.activity.phase] || '●'} ${escapeHtml(session.activity.phase)}${session.activity.detail ? ': ' + escapeHtml(session.activity.detail) : ''}]</span>`
+        : '';
     const sessionId = `<a href="/session/${session.id}" class="irc-session-id">${session.id.substring(0, 8)}</a>`;
     const feedLink = `<a href="/session/${session.id}#feed" class="irc-feed-link" title="Open the Feed tab" onclick="event.stopPropagation()">feed</a>`;
     const stepInfo = `<span class="irc-steps">(${session.steps || 0} steps)</span>`;
@@ -42,6 +51,7 @@ function renderIRCSession(session) {
             <span class="irc-timestamp">[${session.created || 'Unknown'}]</span>
             ${statusDisplay}
             ${runtimeChip}
+            ${activityChip}
             ${userChip}
             ${modelInfo}
             ${sessionId}

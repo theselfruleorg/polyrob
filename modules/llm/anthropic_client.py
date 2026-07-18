@@ -221,164 +221,20 @@ class AnthropicClient(LLMClient):
             if not self._initialized:
                 await self._initialize()
 
-            # Convert messages to Anthropic format
-            anthropic_messages = []
-            for msg in messages:
-                role = msg.get('role', '')
-                content = msg.get('content', '')
-
-                # Skip system messages as they're handled separately, BUT recover
-                # the system prompt from the message list when no explicit `system`
-                # kwarg was supplied — the agent builds the real system prompt in the
-                # message list, not via the kwarg. Without this the entire system
-                # prompt (persona/brain-state format/security/tool guidance) is
-                # silently dropped on the Anthropic native tool path.
-                if role == 'system':
-                    if system is None and isinstance(content, str) and content:
-                        system = content
-                    continue
-
-                # Map roles
-                if role == 'user':
-                    anthropic_role = 'user'
-                elif role in ['assistant', 'ai']:
-                    anthropic_role = 'assistant'
-                elif role == 'tool':
-                    # Handle tool result messages
-                    anthropic_role = 'user'
-                    # Anthropic expects tool results in a specific format
-                    tool_call_id = msg.get('tool_call_id', '')
-                    content = [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id,
-                        "content": content
-                    }]
-                else:
-                    self.logger.warning(f"Unknown role {role}, treating as user")
-                    anthropic_role = 'user'
-
-                # Handle tool calls in assistant messages
-                if role == 'assistant' and 'tool_calls' in msg:
-                    # Convert tool calls to Anthropic format
-                    content_blocks = []
-                    if content:
-                        content_blocks.append({
-                            "type": "text",
-                            "text": content
-                        })
-
-                    for tool_call in msg['tool_calls']:
-                        content_blocks.append({
-                            "type": "tool_use",
-                            "id": tool_call.get('id', ''),
-                            "name": tool_call.get('function', {}).get('name', ''),
-                            "input": json.loads(tool_call.get('function', {}).get('arguments', '{}'))
-                        })
-
-                    anthropic_messages.append({
-                        "role": anthropic_role,
-                        "content": content_blocks
-                    })
-                else:
-                    # Regular message
-                    anthropic_messages.append({
-                        "role": anthropic_role,
-                        "content": content
-                    })
-
-            # Use provided parameters or defaults
-            temp = temperature if temperature is not None else self.temperature
-
-            # Estimate input tokens (messages + system, Anthropic sends them separately)
-            estimated_input_tokens = count_messages_tokens(messages, self.model_type)
-            if system:
-                estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system}], self.model_type)
-
-            # Clamp max_tokens to model limits (single canonical logic on base)
-            max_tokens_value = self._adjust_max_tokens(
-                messages=messages,
-                max_tokens=max_tokens,
-                estimated_input_tokens=estimated_input_tokens,
+            # Param assembly extracted to _build_tool_api_params (019 P5) so the
+            # true-streaming path issues byte-identical requests.
+            api_params = self._build_tool_api_params(
+                messages, tools, system, temperature, max_tokens, kwargs
             )
-
-            # Log request
-            self.logger.info(f"Anthropic API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
-
-            # Filter kwargs - CRITICAL: Exclude 'system' to prevent override
-            supported_params = {
-                'model', 'messages', 'temperature', 'max_tokens',
-                'tools', 'tool_choice', 'metadata', 'top_p', 'top_k', 'stop_sequences'
-            }
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
-
-            # Make API request with tools
-            # Convert system to list form + add prompt-cache breakpoint (D4-a).
-            system_param = _build_cached_system_param(system)
-
-            # Build API call params - only include system if not None
-            api_params = {
-                'model': self.model_type,
-                'messages': anthropic_messages,
-                'temperature': temp,
-                'max_tokens': max_tokens_value,
-                'tools': tools,
-                'tool_choice': kwargs.get('tool_choice', {'type': 'auto'}),
-                **filtered_kwargs
-            }
-            if system_param is not None:
-                api_params['system'] = system_param
-            # B1: cache the conversation prefix (system + last 3 msgs = 4 breakpoints).
-            api_params['messages'] = _apply_conversation_cache(api_params['messages'])
-
-            # UP-07: extended-thinking block from the registry budget (gated, default OFF).
-            # Anthropic requires max_tokens > budget_tokens and temperature == 1 when
-            # thinking is enabled. Per-call override via kwargs['thinking'] wins.
-            from modules.llm.model_registry import (
-                thinking_config_enabled, get_thinking_config, get_model_config,
-            )
-            # P1-9: extended thinking + tool calls requires replaying the assistant's
-            # thinking block(s) (with their signature) ahead of tool_use on the NEXT
-            # request; this client discards thinking blocks (see response processing
-            # below) and never replays them, so the follow-up tool_result request 400s
-            # at step 2 of a tool loop. Until block-replay lands, REFUSE to enable
-            # thinking when tools are present (the agent's primary path is a tool loop).
-            # A forced non-auto tool_choice is likewise invalid with thinking — moot
-            # here since we never combine them. One-time WARN so it's visible.
-            if 'thinking' not in api_params and thinking_config_enabled():
-                if tools:
-                    if not getattr(self, '_thinking_tools_warned', False):
-                        self.logger.warning(
-                            "extended thinking is disabled for tool-calling requests in "
-                            "this build (thinking blocks are not yet replayed, which would "
-                            "400 the follow-up tool_result request). Set THINKING_CONFIG_"
-                            "ENABLED=off to silence, or use thinking only on no-tool calls."
-                        )
-                        self._thinking_tools_warned = True
-                else:
-                    tcfg = get_thinking_config(self.model_type)
-                    budget = tcfg.get('budget_tokens')
-                    if budget:
-                        # H4: clamp so max_tokens > budget AND max_tokens <= the model cap
-                        # (registry entries set budget == cap, which overran the cap -> 400).
-                        _cfg = get_model_config(self.model_type)
-                        model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
-                        budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value)
-                        if budget:
-                            api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
-                            api_params['temperature'] = 1  # required by the API when thinking is on
-                            api_params['max_tokens'] = max_tokens_value
 
             # FIXED: Use streaming for high max_tokens to avoid Anthropic SDK error
             # "Streaming is required for operations that may take longer than 10 minutes"
             # This happens when max_tokens is high (e.g., 65536). A thinking budget raises
             # max_tokens above 8192, so this path is always taken when thinking is on.
-            use_streaming = max_tokens_value > 8192
-
-            response_text = ""
-            tool_calls = []
+            use_streaming = api_params['max_tokens'] > 8192
 
             if use_streaming:
-                self.logger.debug(f"Using streaming for tool call (max_tokens={max_tokens_value})")
+                self.logger.debug(f"Using streaming for tool call (max_tokens={api_params['max_tokens']})")
                 # Use streaming to avoid timeout error
                 async with self._client.messages.stream(**api_params) as stream:
                     self.last_response = await stream.get_final_message()
@@ -388,21 +244,7 @@ class AnthropicClient(LLMClient):
             success = True
 
             # Process response - extract both content and tool calls
-            if hasattr(self.last_response, 'content') and self.last_response.content:
-                for block in self.last_response.content:
-                    if hasattr(block, 'type'):
-                        if block.type == 'text' and hasattr(block, 'text'):
-                            response_text += block.text + " "
-                        elif block.type == 'tool_use':
-                            # Convert Anthropic tool use to standard format
-                            tool_calls.append({
-                                'id': block.id,
-                                'type': 'function',
-                                'function': {
-                                    'name': block.name,
-                                    'arguments': json.dumps(block.input) if isinstance(block.input, dict) else str(block.input)
-                                }
-                            })
+            response_text, tool_calls = self._parse_agent_blocks(self.last_response)
 
             # Capture telemetry
             self._extract_usage_and_capture_telemetry(start_time, success, None, kwargs.get('metadata'))
@@ -410,7 +252,7 @@ class AnthropicClient(LLMClient):
             # Extract usage data
             usage_data = self._extract_usage_data()
 
-            return response_text.strip(), tool_calls, usage_data
+            return response_text, tool_calls, usage_data
 
         except Exception as e:
             success = False
@@ -423,14 +265,261 @@ class AnthropicClient(LLMClient):
             # Fall back to non-tool generation
             self.logger.warning(f"Falling back to non-tool generation due to error: {e}")
             response = await self._generate(messages, system, temperature, max_tokens, **kwargs)
-            # Canonical 3-tuple: usage is unavailable on this error path; use a zero/null dict
-            # consistent with _extract_usage_data()'s no-response shape.
-            fallback_usage: Dict[str, Optional[int]] = {
-                'prompt_tokens': None,
-                'completion_tokens': None,
-                'total_tokens': None,
-            }
-            return response, [], fallback_usage
+            # P1 finalization: re-extract the REAL usage from the successful fallback
+            # call (self._generate sets self.last_response) instead of fabricating an
+            # all-None dict — the old code silently dropped that turn's tokens from
+            # billing/compaction accounting.
+            return response, [], self._extract_usage_data()
+
+    def _build_tool_api_params(
+        self,
+        messages: List[Dict[str, str]],
+        tools: List[Dict[str, Any]],
+        system: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Assemble the messages.create/stream request params for the tool path.
+
+        Extracted verbatim from _generate_with_tools (019 P5) so the true-
+        streaming path (astream_agent_response) issues byte-identical requests:
+        message conversion, system recovery + cache breakpoints, max_tokens
+        clamping, and the thinking-config block.
+        """
+        # Convert messages to Anthropic format
+        anthropic_messages = []
+        for msg in messages:
+            role = msg.get('role', '')
+            content = msg.get('content', '')
+
+            # Skip system messages as they're handled separately, BUT recover
+            # the system prompt from the message list when no explicit `system`
+            # kwarg was supplied — the agent builds the real system prompt in the
+            # message list, not via the kwarg. Without this the entire system
+            # prompt (persona/brain-state format/security/tool guidance) is
+            # silently dropped on the Anthropic native tool path.
+            if role == 'system':
+                if system is None and isinstance(content, str) and content:
+                    system = content
+                continue
+
+            # Map roles
+            if role == 'user':
+                anthropic_role = 'user'
+            elif role in ['assistant', 'ai']:
+                anthropic_role = 'assistant'
+            elif role == 'tool':
+                # Handle tool result messages
+                anthropic_role = 'user'
+                # Anthropic expects tool results in a specific format
+                tool_call_id = msg.get('tool_call_id', '')
+                content = [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_call_id,
+                    "content": content
+                }]
+            else:
+                self.logger.warning(f"Unknown role {role}, treating as user")
+                anthropic_role = 'user'
+
+            # Handle tool calls in assistant messages
+            if role == 'assistant' and 'tool_calls' in msg:
+                # Convert tool calls to Anthropic format
+                content_blocks = []
+                if content:
+                    content_blocks.append({
+                        "type": "text",
+                        "text": content
+                    })
+
+                for tool_call in msg['tool_calls']:
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tool_call.get('id', ''),
+                        "name": tool_call.get('function', {}).get('name', ''),
+                        "input": json.loads(tool_call.get('function', {}).get('arguments', '{}'))
+                    })
+
+                anthropic_messages.append({
+                    "role": anthropic_role,
+                    "content": content_blocks
+                })
+            else:
+                # Regular message
+                anthropic_messages.append({
+                    "role": anthropic_role,
+                    "content": content
+                })
+
+        # Use provided parameters or defaults
+        temp = temperature if temperature is not None else self.temperature
+
+        # Estimate input tokens (messages + system, Anthropic sends them separately)
+        estimated_input_tokens = count_messages_tokens(messages, self.model_type)
+        if system:
+            estimated_input_tokens += count_messages_tokens([{"role": "system", "content": system}], self.model_type)
+
+        # Clamp max_tokens to model limits (single canonical logic on base)
+        max_tokens_value = self._adjust_max_tokens(
+            messages=messages,
+            max_tokens=max_tokens,
+            estimated_input_tokens=estimated_input_tokens,
+        )
+
+        # Log request
+        self.logger.info(f"Anthropic API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
+
+        # Filter kwargs - CRITICAL: Exclude 'system' to prevent override
+        supported_params = {
+            'model', 'messages', 'temperature', 'max_tokens',
+            'tools', 'tool_choice', 'metadata', 'top_p', 'top_k', 'stop_sequences'
+        }
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+
+        # Make API request with tools
+        # Convert system to list form + add prompt-cache breakpoint (D4-a).
+        system_param = _build_cached_system_param(system)
+
+        # Build API call params - only include system if not None
+        api_params = {
+            'model': self.model_type,
+            'messages': anthropic_messages,
+            'temperature': temp,
+            'max_tokens': max_tokens_value,
+            'tools': tools,
+            'tool_choice': kwargs.get('tool_choice', {'type': 'auto'}),
+            **filtered_kwargs
+        }
+        if system_param is not None:
+            api_params['system'] = system_param
+        # B1: cache the conversation prefix (system + last 3 msgs = 4 breakpoints).
+        api_params['messages'] = _apply_conversation_cache(api_params['messages'])
+
+        # UP-07: extended-thinking block from the registry budget (gated, default OFF).
+        # Anthropic requires max_tokens > budget_tokens and temperature == 1 when
+        # thinking is enabled. Per-call override via kwargs['thinking'] wins.
+        from modules.llm.model_registry import (
+            thinking_config_enabled, get_thinking_config, get_model_config,
+        )
+        # P1-9: extended thinking + tool calls requires replaying the assistant's
+        # thinking block(s) (with their signature) ahead of tool_use on the NEXT
+        # request; this client discards thinking blocks (see response processing
+        # below) and never replays them, so the follow-up tool_result request 400s
+        # at step 2 of a tool loop. Until block-replay lands, REFUSE to enable
+        # thinking when tools are present (the agent's primary path is a tool loop).
+        # A forced non-auto tool_choice is likewise invalid with thinking — moot
+        # here since we never combine them. One-time WARN so it's visible.
+        if 'thinking' not in api_params and thinking_config_enabled():
+            if tools:
+                if not getattr(self, '_thinking_tools_warned', False):
+                    self.logger.warning(
+                        "extended thinking is disabled for tool-calling requests in "
+                        "this build (thinking blocks are not yet replayed, which would "
+                        "400 the follow-up tool_result request). Set THINKING_CONFIG_"
+                        "ENABLED=off to silence, or use thinking only on no-tool calls."
+                    )
+                    self._thinking_tools_warned = True
+            else:
+                tcfg = get_thinking_config(self.model_type)
+                budget = tcfg.get('budget_tokens')
+                if budget:
+                    # H4: clamp so max_tokens > budget AND max_tokens <= the model cap
+                    # (registry entries set budget == cap, which overran the cap -> 400).
+                    _cfg = get_model_config(self.model_type)
+                    model_cap = getattr(_cfg, 'max_completion_tokens', None) if _cfg else None
+                    budget, max_tokens_value = _clamp_thinking(model_cap, budget, max_tokens_value)
+                    if budget:
+                        api_params['thinking'] = {'type': 'enabled', 'budget_tokens': budget}
+                        api_params['temperature'] = 1  # required by the API when thinking is on
+                        api_params['max_tokens'] = max_tokens_value
+
+        return api_params
+
+    def _parse_agent_blocks(self, response) -> Tuple[str, List[Dict[str, Any]]]:
+        """Extract (text, tool_calls) from an Anthropic message's content blocks.
+
+        Shared by the batch tool path and astream_agent_response (019 P5).
+        """
+        response_text = ""
+        tool_calls = []
+        # Process response - extract both content and tool calls
+        if hasattr(response, 'content') and response.content:
+            for block in response.content:
+                if hasattr(block, 'type'):
+                    if block.type == 'text' and hasattr(block, 'text'):
+                        response_text += block.text + " "
+                    elif block.type == 'tool_use':
+                        # Convert Anthropic tool use to standard format
+                        tool_calls.append({
+                            'id': block.id,
+                            'type': 'function',
+                            'function': {
+                                'name': block.name,
+                                'arguments': json.dumps(block.input) if isinstance(block.input, dict) else str(block.input)
+                            }
+                        })
+
+        return response_text.strip(), tool_calls
+
+    async def astream_agent_response(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        **kwargs
+    ):
+        """TRUE token streaming (019 P5): yield text deltas, then one final event.
+
+        Async generator yielding ``{"type": "text", "text": str}`` per
+        content_block text delta, then exactly one ``{"type": "final",
+        "content", "tool_calls", "usage_data", "response_id"}`` built with the
+        SAME parsing/usage extraction as generate_agent_response. The request
+        params are byte-identical to the batch path (_build_tool_api_params).
+        Only consumed when LLM_TOKEN_STREAMING is on (adapters.astream).
+        """
+        start_time = time.time()
+        if not self._initialized:
+            await self._initialize()
+
+        system = kwargs.pop('system', None)
+        temperature = kwargs.pop('temperature', None)
+        max_tokens = kwargs.pop('max_tokens', None)
+
+        api_params = self._build_tool_api_params(
+            messages, tools or [], system, temperature, max_tokens, kwargs
+        )
+        if not tools:
+            # An empty tools list with tool_choice is invalid — drop both.
+            api_params.pop('tools', None)
+            api_params.pop('tool_choice', None)
+
+        try:
+            async with self._client.messages.stream(**api_params) as stream:
+                async for event in stream:
+                    if getattr(event, 'type', '') == 'content_block_delta':
+                        delta = getattr(event, 'delta', None)
+                        if delta is not None and getattr(delta, 'type', '') == 'text_delta':
+                            text = getattr(delta, 'text', None)
+                            if text:
+                                yield {"type": "text", "text": text}
+                final = await stream.get_final_message()
+        except Exception as e:
+            self._extract_usage_and_capture_telemetry(
+                start_time, False, str(e), kwargs.get('metadata'))
+            raise
+
+        self.last_response = final
+        response_text, tool_calls = self._parse_agent_blocks(final)
+        self._extract_usage_and_capture_telemetry(
+            start_time, True, None, kwargs.get('metadata'))
+        usage_data = self._extract_usage_data()
+        yield {
+            "type": "final",
+            "content": response_text,
+            "tool_calls": tool_calls,
+            "usage_data": usage_data,
+            "response_id": getattr(final, 'id', None),
+        }
 
     # ✅ REFERENCE IMPLEMENTATION FOR ALL PROVIDERS
     # This method demonstrates the correct pattern:

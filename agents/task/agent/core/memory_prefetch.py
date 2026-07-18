@@ -253,9 +253,15 @@ class MemoryPrefetchMixin:
         """§7.5: carry recent activity INTO an autonomous goal/cron tick so it stops
         re-deriving 'nothing new' each time. Mirror-image scoping of the chat digest —
         fires ONLY for an autonomous session (never chat), first-step-only, never a
-        sub-agent. Gated AUTONOMOUS_CONTINUITY_BRIDGE (default OFF). Fail-open."""
+        sub-agent. Gated AUTONOMOUS_CONTINUITY_BRIDGE (default OFF). Fail-open.
+
+        Once per SESSION, like its siblings: a self-wake re-entry resets n_steps
+        back to 1, so without the bootstrap-done guard the continuity block would
+        be re-injected on every wake (D6)."""
         try:
             if getattr(self.state, "n_steps", 0) != 1:
+                return
+            if getattr(self, "_session_bootstrap_done", False):
                 return
             if getattr(self, "_is_sub_agent", False):
                 return

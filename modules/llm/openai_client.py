@@ -221,7 +221,7 @@ class OpenAIClient(LLMClient):
                 'model': self.model_type,
                 'max_completion_tokens': max_tokens_value
             }
-            if not (is_reasoning_model or is_temp_restricted):
+            if not openai_omits_temperature(self.model_type):
                 log_params['temperature'] = temp
             self.logger.debug(f"Final OpenAI API parameters: {log_params}")
 
@@ -233,7 +233,7 @@ class OpenAIClient(LLMClient):
             }
 
             # Only add temperature for models that support it
-            if not (is_reasoning_model or is_temp_restricted) and temp is not None:
+            if not openai_omits_temperature(self.model_type) and temp is not None:
                 request_params['temperature'] = temp
                 
             # Add other filtered parameters
@@ -485,105 +485,14 @@ class OpenAIClient(LLMClient):
         before messages reach this point.
         """
         try:
-            # WIRE-FORMAT ONLY: Convert tool calls to OpenAI nested format
-            self.logger.debug(f"Starting message formatting for OpenAI")
-            formatted_messages = []
-
-            for msg in messages:
-                formatted_msg = msg.copy()
-
-                # Only convert wire format for assistant messages with tool_calls
-                if msg["role"] == "assistant" and "tool_calls" in msg:
-                    # Ensure tool calls have proper nested format for OpenAI API
-                    tool_calls = []
-                    for tool_call in msg.get("tool_calls", []):
-                        # Convert to OpenAI wire format if needed
-                        if not isinstance(tool_call.get("function"), dict):
-                            # Convert flat format to nested OpenAI format
-                            if "name" in tool_call and "args" in tool_call:
-                                tool_calls.append({
-                                    "id": tool_call["id"],
-                                    "type": "function",
-                                    "function": {
-                                        "name": tool_call["name"],
-                                        "arguments": json.dumps(tool_call["args"]) if not isinstance(tool_call.get("args"), str) else tool_call["args"]
-                                    }
-                                })
-                            else:
-                                # Already in correct format or malformed
-                                tool_calls.append(tool_call)
-                        else:
-                            # Already in OpenAI format
-                            tool_calls.append(tool_call)
-
-                    formatted_msg["tool_calls"] = tool_calls
-
-                formatted_messages.append(formatted_msg)
-                self.logger.debug(f"Formatted message {len(formatted_messages)}: role={formatted_msg.get('role')}, has_tool_calls={bool(formatted_msg.get('tool_calls'))}")
-
-            # PREFLIGHT VALIDATION: Ensure tool calls have matching responses
-            self._validate_tool_call_pairs(formatted_messages)
-
-            # ✅ FIX: Use explicit parameters instead of burying in kwargs
-            # Use provided parameters or instance defaults
-            temp = temperature if temperature is not None else self.temperature
-            max_tokens_value = max_tokens if max_tokens is not None else self.max_tokens
-
-            # Handle system message - OpenAI expects it in the messages list
-            if system:
-                # Check if system message already in messages
-                has_system = any(msg.get("role") == "system" for msg in formatted_messages)
-                if not has_system:
-                    formatted_messages.insert(0, {"role": "system", "content": system})
-                    self.logger.debug("Injected system message into messages list")
-
-            # Clamp max_tokens to model limits (single canonical logic on base)
-            max_tokens_value = self._adjust_max_tokens(messages=formatted_messages, max_tokens=max_tokens_value)
-
-            self.logger.info(f"OpenAI API request with tools: model={self.model_type}, tools={len(tools) if tools else 0}, max_tokens={max_tokens_value}, has_system={bool(system)}")
-
-            # Filter kwargs to supported parameters
-            supported_params = {
-                'tool_choice', 'top_p', 'presence_penalty', 'frequency_penalty',
-                'logit_bias', 'user', 'seed', 'response_format', 'stop'
-            }
-            filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
-
-            # Build request parameters
-            request_params = {
-                'model': self.model_type,
-                'messages': formatted_messages,
-                'tools': tools,
-                'tool_choice': "auto" if tools else None,
-                'max_completion_tokens': max_tokens_value,
-            }
-
-            # Add temperature only for models that support it (H1: o-series + gpt-5 reject it).
-            from modules.llm.model_registry import openai_omits_temperature
-            if not openai_omits_temperature(self.model_type):
-                request_params['temperature'] = temp
-
-            request_params.update(filtered_kwargs)
-
-            # P-3: route same-prefix requests to a stable cache bucket.
-            cache_key = self._stable_prompt_cache_key(system)
-            if cache_key:
-                request_params['prompt_cache_key'] = cache_key
-
-            # UP-07: per-model reasoning_effort from the registry (gated, default OFF).
-            # Inert unless a model entry sets reasoning_effort AND the gate is on.
-            if 'reasoning_effort' not in request_params:
-                try:
-                    from modules.llm.model_registry import thinking_config_enabled, get_thinking_config
-                    if thinking_config_enabled():
-                        effort = get_thinking_config(self.model_type).get('reasoning_effort')
-                        if effort:
-                            request_params['reasoning_effort'] = effort
-                except Exception:
-                    pass
+            # Param assembly extracted to _build_tool_request_params (019 P5)
+            # so the true-streaming path issues byte-identical requests.
+            request_params = self._build_tool_request_params(
+                messages, tools, system, temperature, max_tokens, kwargs
+            )
 
             # Create completion request with tools
-            self.logger.debug(f"Calling OpenAI API with {len(formatted_messages)} messages")
+            self.logger.debug(f"Calling OpenAI API with {len(request_params['messages'])} messages")
             response = await self._client.chat.completions.create(**request_params)
             self.last_response = response  # ✅ Store for telemetry
             
@@ -628,6 +537,207 @@ class OpenAIClient(LLMClient):
         except Exception as e:
             self.logger.error(f"OpenAI tool-based generation failed: {str(e)}")
             raise LLMError(f"OpenAI generation failed: {str(e)}")
+
+    def _build_tool_request_params(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
+        system: Optional[str],
+        temperature: Optional[float],
+        max_tokens: Optional[int],
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Assemble the chat.completions.create request params for the tool path.
+
+        Extracted verbatim from _generate_with_tools (019 P5) so the true-
+        streaming path (astream_agent_response) issues byte-identical requests:
+        wire-format conversion, tool-pair preflight, system injection,
+        max_tokens clamping, cache key, and reasoning_effort.
+        """
+        # WIRE-FORMAT ONLY: Convert tool calls to OpenAI nested format
+        self.logger.debug(f"Starting message formatting for OpenAI")
+        formatted_messages = []
+
+        for msg in messages:
+            formatted_msg = msg.copy()
+
+            # Only convert wire format for assistant messages with tool_calls
+            if msg["role"] == "assistant" and "tool_calls" in msg:
+                # Ensure tool calls have proper nested format for OpenAI API
+                tool_calls = []
+                for tool_call in msg.get("tool_calls", []):
+                    # Convert to OpenAI wire format if needed
+                    if not isinstance(tool_call.get("function"), dict):
+                        # Convert flat format to nested OpenAI format
+                        if "name" in tool_call and "args" in tool_call:
+                            tool_calls.append({
+                                "id": tool_call["id"],
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call["name"],
+                                    "arguments": json.dumps(tool_call["args"]) if not isinstance(tool_call.get("args"), str) else tool_call["args"]
+                                }
+                            })
+                        else:
+                            # Already in correct format or malformed
+                            tool_calls.append(tool_call)
+                    else:
+                        # Already in OpenAI format
+                        tool_calls.append(tool_call)
+
+                formatted_msg["tool_calls"] = tool_calls
+
+            formatted_messages.append(formatted_msg)
+            self.logger.debug(f"Formatted message {len(formatted_messages)}: role={formatted_msg.get('role')}, has_tool_calls={bool(formatted_msg.get('tool_calls'))}")
+
+        # PREFLIGHT VALIDATION: Ensure tool calls have matching responses
+        self._validate_tool_call_pairs(formatted_messages)
+
+        # ✅ FIX: Use explicit parameters instead of burying in kwargs
+        # Use provided parameters or instance defaults
+        temp = temperature if temperature is not None else self.temperature
+        max_tokens_value = max_tokens if max_tokens is not None else self.max_tokens
+
+        # Handle system message - OpenAI expects it in the messages list
+        if system:
+            # Check if system message already in messages
+            has_system = any(msg.get("role") == "system" for msg in formatted_messages)
+            if not has_system:
+                formatted_messages.insert(0, {"role": "system", "content": system})
+                self.logger.debug("Injected system message into messages list")
+
+        # Clamp max_tokens to model limits (single canonical logic on base)
+        max_tokens_value = self._adjust_max_tokens(messages=formatted_messages, max_tokens=max_tokens_value)
+
+        self.logger.info(f"OpenAI API request with tools: model={self.model_type}, tools={len(tools) if tools else 0}, max_tokens={max_tokens_value}, has_system={bool(system)}")
+
+        # Filter kwargs to supported parameters
+        supported_params = {
+            'tool_choice', 'top_p', 'presence_penalty', 'frequency_penalty',
+            'logit_bias', 'user', 'seed', 'response_format', 'stop'
+        }
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in supported_params}
+
+        # Build request parameters
+        request_params = {
+            'model': self.model_type,
+            'messages': formatted_messages,
+            'tools': tools,
+            'tool_choice': "auto" if tools else None,
+            'max_completion_tokens': max_tokens_value,
+        }
+
+        # Add temperature only for models that support it (H1: o-series + gpt-5 reject it).
+        from modules.llm.model_registry import openai_omits_temperature
+        if not openai_omits_temperature(self.model_type):
+            request_params['temperature'] = temp
+
+        request_params.update(filtered_kwargs)
+
+        # P-3: route same-prefix requests to a stable cache bucket.
+        cache_key = self._stable_prompt_cache_key(system)
+        if cache_key:
+            request_params['prompt_cache_key'] = cache_key
+
+        # UP-07: per-model reasoning_effort from the registry (gated, default OFF).
+        # Inert unless a model entry sets reasoning_effort AND the gate is on.
+        if 'reasoning_effort' not in request_params:
+            try:
+                from modules.llm.model_registry import thinking_config_enabled, get_thinking_config
+                if thinking_config_enabled():
+                    effort = get_thinking_config(self.model_type).get('reasoning_effort')
+                    if effort:
+                        request_params['reasoning_effort'] = effort
+            except Exception:
+                pass
+
+        return request_params
+
+    async def astream_agent_response(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        **kwargs
+    ):
+        """TRUE token streaming (019 P5): yield text deltas, then one final event.
+
+        Async generator yielding ``{"type": "text", "text": str}`` per content
+        delta, then exactly one ``{"type": "final", "content", "tool_calls",
+        "usage_data", "response_id"}``. Tool-call fragments are assembled by
+        index (id/name arrive once, arguments concatenate); usage arrives in
+        the terminal chunk via stream_options.include_usage. Request params are
+        byte-identical to the batch path (_build_tool_request_params). Only
+        consumed when LLM_TOKEN_STREAMING is on (adapters.astream).
+        """
+        if not self._initialized:
+            await self._initialize()
+
+        system = kwargs.pop('system', None)
+        temperature = kwargs.pop('temperature', None)
+        max_tokens = kwargs.pop('max_tokens', None)
+        kwargs.pop('metadata', None)
+
+        request_params = self._build_tool_request_params(
+            messages, tools or None, system, temperature, max_tokens, kwargs
+        )
+        if not tools:
+            request_params.pop('tools', None)
+            request_params.pop('tool_choice', None)
+        request_params['stream'] = True
+        request_params['stream_options'] = {'include_usage': True}
+
+        stream = await self._client.chat.completions.create(**request_params)
+
+        content_parts: List[str] = []
+        tool_calls_by_index: Dict[int, Dict[str, Any]] = {}
+        usage_obj = None
+        response_id = None
+
+        async for chunk in stream:
+            chunk_id = getattr(chunk, 'id', None)
+            if chunk_id:
+                response_id = chunk_id
+            if getattr(chunk, 'usage', None):
+                usage_obj = chunk.usage
+            for choice in (getattr(chunk, 'choices', None) or []):
+                delta = getattr(choice, 'delta', None)
+                if delta is None:
+                    continue
+                text = getattr(delta, 'content', None)
+                if text:
+                    content_parts.append(text)
+                    yield {"type": "text", "text": text}
+                for tc in (getattr(delta, 'tool_calls', None) or []):
+                    idx = getattr(tc, 'index', 0) or 0
+                    acc = tool_calls_by_index.setdefault(idx, {
+                        "id": "", "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    })
+                    if getattr(tc, 'id', None):
+                        acc["id"] = tc.id
+                    fn = getattr(tc, 'function', None)
+                    if fn is not None:
+                        if getattr(fn, 'name', None):
+                            acc["function"]["name"] += fn.name
+                        if getattr(fn, 'arguments', None):
+                            acc["function"]["arguments"] += fn.arguments
+
+        # Reuse the canonical usage extraction over a minimal response holder.
+        from types import SimpleNamespace
+        self.last_response = SimpleNamespace(usage=usage_obj, id=response_id)
+        usage_data = self._extract_usage_data()
+
+        tool_calls_list = [
+            acc for _idx, acc in sorted(tool_calls_by_index.items())
+            if acc["function"]["name"]
+        ]
+        yield {
+            "type": "final",
+            "content": "".join(content_parts),
+            "tool_calls": tool_calls_list,
+            "usage_data": usage_data,
+            "response_id": response_id,
+        }
 
     async def generate_agent_response(
         self,

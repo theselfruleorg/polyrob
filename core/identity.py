@@ -99,11 +99,11 @@ def resolve_identity() -> str:
 # (api/task_http_api.py, api/a2a/streaming.py, api/dependencies.py) can derive a
 # wallet-scoped tenant id without importing the platform x402 tier.
 #
-# NOTE: This is the `usr_` + 12-hex variant. Two OTHER wallet->id derivations exist
-# with DIFFERENT output and are deliberately NOT touched:
+# NOTE: This is the `usr_` + 12-hex variant. Another wallet->id derivation exists
+# with DIFFERENT output and is deliberately NOT touched:
 #   modules/database/user_profiles.py   → usr_ + 16 hex  (different id space)
-#   modules/memory/user_profile_manager.py → 24 hex, no prefix (different id space)
-# Unifying them would re-tenant existing users — a data hazard.
+# Unifying them would re-tenant existing users — a data hazard. (A third variant,
+# modules/memory/user_profile_manager.py, was dead code deleted 2026-07-11.)
 def generate_user_id_from_wallet(wallet_address: str) -> str:
     """Generate a consistent user_id from a wallet address (usr_ + 12 hex chars).
 

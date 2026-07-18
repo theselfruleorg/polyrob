@@ -28,6 +28,7 @@ except ImportError:  # google-api-core not installed
 from agents.task.agent.views import ActionResult, AgentError
 from agents.task.telemetry.views import ProviderFailureEvent, ProviderFallbackSuccessEvent
 from agents.task.utils import time_execution_async
+from core.credit_sentinel import looks_like_credit_death
 from core.env import bool_env as _bool_env
 from core.exceptions import InsufficientCreditsError
 from core.exceptions import (
@@ -44,8 +45,14 @@ from core.exceptions import (
 
 
 def _billing_failover_enabled() -> bool:
-    """Whether billing errors should attempt provider fallback (default off)."""
-    return _bool_env("BILLING_FAILOVER_ENABLED", False)
+    """Whether billing errors should attempt provider fallback (default on, I-5).
+
+    Note (docs/proposals/008-llm-provider-fallback-goal-resilience.md): on a
+    single-funded-provider deployment there is nothing to fall back *to* — the flag
+    being on is necessary but not sufficient for prod resilience until a second
+    provider key is funded (owner decision, proposal 008 Lever 1).
+    """
+    return _bool_env("BILLING_FAILOVER_ENABLED", True)
 
 
 class ErrorRecoveryMixin:
@@ -107,6 +114,43 @@ class ErrorRecoveryMixin:
 		# 8. Log recovery completion
 		self.logger.info("Error recovery completed")
 
+	# Final whole-branch review, Finding 2: the trip used to run on `str(error)`
+	# for EVERY exception reaching `_handle_step_error` — step.py's catch-all
+	# `except Exception` means that is ANY step failure (tool/browser/file/parse
+	# errors included), not just LLM errors, and `_CREDIT_DEATH_MARKERS` matches a
+	# bare "402"/"billing" substring. Type-gating to the LLM exception family
+	# closes that surface: `LLMError` alone covers `LLMPermanentError`/
+	# `LLMAuthenticationError`/`LLMProviderExhaustedError` (all `LLMError`
+	# subclasses per core/exceptions.py); `InsufficientCreditsError` is the one
+	# credit-death shape that is NOT an `LLMError` (it's a `BotError`).
+	# `LLMContextLengthError` is technically also an `LLMError` subclass but never
+	# reaches this method — `_handle_step_error` returns on it earlier (see below).
+	_CREDIT_DEATH_EXCEPTION_TYPES = (LLMError, InsufficientCreditsError)
+
+	async def _trip_sentinel_if_credit_death(self, error: Exception) -> None:
+		"""Trip the provider-credit sentinel iff this error looks like credit death
+		AND is one of the LLM/credit exception types (see
+		``_CREDIT_DEATH_EXCEPTION_TYPES`` above) — a tool/browser/file/parse error
+		can no longer trip just because its text happens to contain "402" or
+		"billing" (a hex request id, a `NameError` naming a `billing_total`
+		variable, and an HTTP 500 on `/v1/items/402` all tripped before this gate).
+
+		Pure side-effect (latch + ONE owner notice). Never raises, never decides
+		control flow — the caller's branching is unaffected either way.
+		"""
+		if not isinstance(error, self._CREDIT_DEATH_EXCEPTION_TYPES):
+			return
+		if not looks_like_credit_death(str(error)):
+			return
+		try:
+			from core.credit_sentinel import trip_credit_sentinel
+			await trip_credit_sentinel(
+				str(error)[:300],
+				container=getattr(self, "container", None),
+				user_id=getattr(self, "user_id", None))
+		except Exception:
+			self.logger.debug("credit sentinel trip failed (fail-open)", exc_info=True)
+
 	async def _handle_step_error(self, error: Exception) -> list[ActionResult]:
 		"""Enhanced error handling with LLM fallback support (Dec 2025).
 
@@ -123,13 +167,49 @@ class ErrorRecoveryMixin:
 		# A context-overflow needs a SMALLER prompt, not a different provider — retrying
 		# on a fallback provider with the same oversized history just overflows again.
 		# Must run BEFORE the generic is_llm_error block below (which would otherwise
-		# route this typed error into a blind provider-fallback retry).
+		# route this typed error into a blind provider-fallback retry) AND before the
+		# credit-death sentinel trip below (final whole-branch review, Finding 2): a
+		# long session's overflow message can legitimately carry a token count that
+		# contains "402" (e.g. "however you requested 130402 tokens"), which the
+		# sentinel's bare-substring classifier would otherwise read as a billing
+		# failure and pause autonomy for CREDIT_SENTINEL_RELEASE_HOURS over a session
+		# that goes on to compact, retry, and complete fine.
 		if isinstance(error, LLMContextLengthError):
 			self.logger.warning("Context-length overflow — checkpoint + emergency prune, then retry")
 			self.message_manager.checkpoint_history()
 			self.message_manager.emergency_context_prune()
 			self.state.consecutive_failures += 1
 			return []  # retry next step with pruned history
+
+		# === CREDIT-DEATH SENTINEL — ONE universal trip site, BEFORE any branching ===
+		# §6.3/Task 10. error_recovery is on every LLM path (chat, goals, cron,
+		# sub-agents), so tripping here closes the interactive gap that let the
+		# 2026-07-16 outage pass in silence — the owner's chat turn 402'd and nothing
+		# tripped, because the only trip sites were cron/runner.py + goals/dispatcher.py
+		# (both background-only).
+		#
+		# It MUST live here, above the `is_permanent` branch below, and be gated ONLY
+		# on looks_like_credit_death (plus the exception-type gate in
+		# `_trip_sentinel_if_credit_death` — see Finding 2 above) — never nested under
+		# `is_permanent`. The real prod 402 arrives as a plain `LLMError` ("Failed to
+		# generate agent response: OpenRouter generation failed: Error code: 402 -
+		# ...requires more credits...") whose text matches NONE of the is_permanent
+		# markers (insufficient_quota / billing / invalid_api_key /
+		# account_deactivated), so a nested trip is unreachable for the exact error it
+		# exists to catch. Two independent reasons it is never typed permanent: the
+		# tool-calling generate_agent_response methods re-wrap the provider error as a
+		# generic LLMError without calling translate_llm_error (and the step loop
+		# ALWAYS passes tools=), and llm_runner.get_next_action re-raises
+		# LLMProviderExhaustedError on fallback failure. Tripping here (below the
+		# context-length return, above is_permanent) covers LLMError,
+		# LLMPermanentError, LLMProviderExhaustedError and any future wrapper alike.
+		#
+		# Mirrors step.py::_is_fatal_step_error, which likewise classifies credit death
+		# straight off the raw error string (that call site is a separate fatal/retry
+		# control-flow decision, out of scope for Finding 2's type gate). Side-effect
+		# only: fail-open (a broken sentinel must never mask the original error) and
+		# idempotent (single call site; the sentinel itself no-ops while the latch holds).
+		await self._trip_sentinel_if_credit_death(error)
 
 		# === PERMANENT/CRITICAL ERRORS - HALT IMMEDIATELY ===
 		# These errors indicate account-level issues that won't be resolved by fallback
@@ -143,8 +223,10 @@ class ErrorRecoveryMixin:
 		)
 
 		if is_permanent:
-			import os
-			is_billing = ('insufficient_quota' in error_str_lower or 'billing' in error_str_lower)
+			# NOTE: the sentinel trip used to be nested here and was unreachable for
+			# the real prod 402 (see _trip_sentinel_if_credit_death above, called before
+			# any branching). This stays purely a failover/halt decision.
+			is_billing = looks_like_credit_death(error_str_lower)
 			if is_billing and _billing_failover_enabled():
 				self.logger.warning("💳 Billing error with BILLING_FAILOVER_ENABLED — attempting provider fallback")
 				# HIGH-2: record the exhausted provider BEFORE failover so repeated billing
@@ -237,12 +319,14 @@ class ErrorRecoveryMixin:
 					self.state.reset_llm_errors()
 					return []  # Continue with new LLM
 
-			# Backoff before retry with current provider
-			import random
-			base_delay = self.retry_delay * (2 ** self.state.consecutive_failures)
-			jitter = random.uniform(0.8, 1.2)
-			delay = min(base_delay * jitter, 120)
+			# Backoff before retry with current provider (P4: shared formula).
+			from core.backoff import jittered_exponential_delay
+			delay = jittered_exponential_delay(
+				self.retry_delay, self.state.consecutive_failures,
+				multiplier=2, cap=120, cap_after_jitter=True,
+			)
 			self.logger.info(f'Waiting {delay:.1f}s before retry...')
+			self._emit_retry_wait('llm_error', delay, provider=current_provider)
 			await asyncio.sleep(delay)
 			self.state.consecutive_failures += 1
 
@@ -268,6 +352,7 @@ class ErrorRecoveryMixin:
 				# Smart backoff for parse errors
 				delay = min(self.retry_delay * (1.5 ** self.state.consecutive_failures), 30)
 				self.logger.info(f'Waiting {delay:.1f}s before retry due to parse error...')
+				self._emit_retry_wait('parse_error', delay)
 				await asyncio.sleep(delay)
 
 			self.state.consecutive_failures += 1
@@ -297,12 +382,14 @@ class ErrorRecoveryMixin:
 					self.state.reset_llm_errors()
 					return []
 
-			# Enhanced rate limit handling with jitter
-			import random
-			base_delay = self.retry_delay * (2 ** self.state.consecutive_failures)
-			jitter = random.uniform(0.8, 1.2)
-			delay = min(base_delay * jitter, 120)
+			# Enhanced rate limit handling with jitter (P4: shared formula).
+			from core.backoff import jittered_exponential_delay
+			delay = jittered_exponential_delay(
+				self.retry_delay, self.state.consecutive_failures,
+				multiplier=2, cap=120, cap_after_jitter=True,
+			)
 			self.logger.info(f'Rate limited - waiting {delay:.1f}s before retry (with jitter)')
+			self._emit_retry_wait('rate_limit', delay, provider=current_provider)
 			await asyncio.sleep(delay)
 			self.state.consecutive_failures += 1
 
@@ -323,6 +410,7 @@ class ErrorRecoveryMixin:
 			# Progressive backoff for connection errors
 			delay = min(5 * (1.5 ** self.state.consecutive_failures), 60)
 			self.logger.info(f'Connection error - waiting {delay:.1f}s before retry')
+			self._emit_retry_wait('connection_error', delay, provider=current_provider)
 			await asyncio.sleep(delay)
 			self.state.consecutive_failures += 1
 
@@ -332,10 +420,34 @@ class ErrorRecoveryMixin:
 			if self.state.consecutive_failures > 0:
 				delay = min(2 * self.state.consecutive_failures, 10)
 				self.logger.info(f'Unknown error - brief delay of {delay}s before retry')
+				self._emit_retry_wait('unknown_error', delay)
 				await asyncio.sleep(delay)
 			self.state.consecutive_failures += 1
 
 		return [ActionResult(error=error_msg, include_in_memory=True)]
+
+	def _emit_retry_wait(self, reason: str, delay: float, provider: str = '') -> None:
+		"""019 P1: emit a retry_wait feed event before a backoff sleep.
+
+		Fail-open, flag-gated — surfaces show "retrying (rate_limit) 8s"
+		instead of a silent stall while the handler sleeps.
+		"""
+		try:
+			from core.config_policy import AutonomyConfig
+			if not AutonomyConfig.run_events_enabled():
+				return
+			from agents.task.telemetry.views import RetryWaitEvent
+			self.telemetry_manager.capture_event(RetryWaitEvent(
+				agent_id=self.agent_id,
+				step=self.state.n_steps,
+				reason=reason,
+				delay_sec=float(delay),
+				attempt=int(self.state.consecutive_failures),
+				provider=provider or '',
+				session_id=self.session_id,
+			))
+		except Exception:
+			pass
 
 	async def _attempt_llm_fallback_in_handler(self, original_error_type: str) -> bool:
 		"""Attempt to switch to a fallback LLM provider.

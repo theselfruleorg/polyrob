@@ -32,3 +32,16 @@ def test_autonomous_orchestrator_is_forged():
     assert _is_forged_or_autonomous_turn(
         _ctx(role="orchestrator", is_sub=False, session_id="auto-session-c7"), None
     ) is True
+
+
+def test_autonomy_marker_probe_exception_is_forged(monkeypatch):
+    """MH1: if the autonomy-marker probe RAISES, the turn must be treated as forged
+    (fail-closed) — returning False (pre-fix) would let a forged/autonomous turn
+    slip past every gate keyed on this predicate (owner_queue approval,
+    writable-skills, message/self_context promotion)."""
+    def _boom(_sid):
+        raise RuntimeError("autonomy-marker store exploded")
+
+    monkeypatch.setattr("agents.task.goals.autonomy_marker.is_autonomous", _boom)
+    # A plain orchestrator turn (not leaf/sub/forged-kind) reaches the marker leg.
+    assert _is_forged_or_autonomous_turn(_ctx(session_id="plain-session"), None) is True

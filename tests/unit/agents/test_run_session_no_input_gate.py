@@ -54,6 +54,10 @@ def _orchestrator(queued=0, pending=None):
     inner_agent.hitl_manager = MagicMock()
     inner_agent.hitl_manager.get_queue_size.return_value = queued
     inner_agent.message_manager = MagicMock()
+    # B1 (2026-07-13): the pending-input probe now also checks the ephemeral rail;
+    # model the real contract (empty lists), not MagicMock's truthy auto-attrs.
+    inner_agent.message_manager._ephemeral_messages = []
+    inner_agent.message_manager._ephemeral_pending = []
 
     orch = MagicMock()
     orch.user_id = "u1"

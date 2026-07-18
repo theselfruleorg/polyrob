@@ -2,7 +2,7 @@ import time
 import pytest
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 import modules.memory.registry as reg
-from modules.memory.episodic import finalize_episode, parse_since
+from modules.memory.episodic import collect_provenance, finalize_episode, parse_since
 
 
 @pytest.fixture
@@ -54,6 +54,47 @@ async def test_router_noop_without_external_provider(monkeypatch):
         EpisodeRecord(ts=int(time.time()), user_id="u1", session_id="s", kind="goal"),
         session_id="s", user_id="u1")               # no crash
     assert await reg.memory_recall_episodes(user_id="u1") == []
+
+
+@pytest.mark.asyncio
+async def test_collect_provenance_wires_evidence_artifacts(monkeypatch, tmp_path):
+    """B4/D4: artifacts must come from the evidence pack's collector, not the
+    hard-coded [] the original stub shipped with."""
+    # A real file in a fake session workspace, discovered via the collector's
+    # workspace_dir override path (collect_artifacts is patched at its source
+    # module — collect_provenance must actually call it).
+    (tmp_path / "report.md").write_text("output")
+
+    import agents.task.runtime.evidence as evidence_mod
+    calls = {}
+
+    def fake_collect_artifacts(orch, **kw):
+        calls["orch"] = orch
+        return [{"path": "report.md", "bytes": 6, "mtime": int(time.time())}]
+
+    monkeypatch.setattr(evidence_mod, "collect_artifacts", fake_collect_artifacts)
+
+    class _Orch:
+        agents = {}
+        usage_tracker = None
+        session_id = "s-prov"
+
+    out = await collect_provenance(_Orch())
+    assert out["artifacts"] == [{"path": "report.md", "bytes": 6,
+                                 "mtime": calls and out["artifacts"][0]["mtime"]}]
+    assert calls["orch"].session_id == "s-prov"
+
+
+@pytest.mark.asyncio
+async def test_collect_provenance_artifacts_failopen(monkeypatch):
+    import agents.task.runtime.evidence as evidence_mod
+
+    def boom(orch, **kw):
+        raise RuntimeError("scan failed")
+
+    monkeypatch.setattr(evidence_mod, "collect_artifacts", boom)
+    out = await collect_provenance(object())
+    assert out["artifacts"] == []
 
 
 def test_parse_since():

@@ -212,13 +212,19 @@ def _default_data_dir() -> str:
     cwd. Otherwise the relative ``"data"`` default (used by the load_skill/provenance
     call sites) could resolve to a different directory than the curator's
     ``config.data_dir`` (absolute), silently splitting reuse counts from the curator
-    and /insights. Anchored at the repo root (this file is modules/skills/skill_usage.py).
+    and /insights.
+
+    WS-3 (2026-07-16): routes through the data-home SSOT (``resolve_data_home()`` —
+    ``POLYROB_DATA_DIR`` else ``cwd/.polyrob``) instead of anchoring to the repo/install
+    tree, so the usage DB lands with the other sidecar DBs (goals.db/cron.db/…) and the
+    curator/insights read the same file. The explicit ``POLYROB_DATA_DIR`` short-circuit
+    is kept for byte-identical behaviour when it is set.
     """
     env = os.getenv("POLYROB_DATA_DIR")
     if env:
         return os.path.abspath(env)
-    repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(repo_root, "data")
+    from core.runtime_paths import resolve_data_home
+    return str(resolve_data_home())
 
 
 def get_skill_usage_store(data_dir: Optional[str] = None) -> SkillUsageStore:

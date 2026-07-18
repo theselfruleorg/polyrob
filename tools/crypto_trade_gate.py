@@ -14,6 +14,7 @@ and the confirmation gate.
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -32,15 +33,60 @@ DEFAULT_LIVE_CAP_USD = 5.0
 
 def _float_env(name: str, default: float) -> float:
     try:
-        return float(os.getenv(name, str(default)))
+        value = float(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
+    # M10: a non-finite cap (nan/inf) makes `amount > cap` always False, silently
+    # voiding the per-trade cap — clamp garbage back to the safe default.
+    if not math.isfinite(value) or value <= 0:
+        return default
+    return value
 
 
 @dataclass(frozen=True)
 class TradeGateDecision:
     live: bool      # True => submit to the venue; False => dry-run / blocked
     reason: str
+
+
+def trade_turn_refusal(execution_context, tool_self) -> str | None:
+    """H11: return a refusal reason if this turn must NOT run a value-moving / mutating
+    trade verb — else None. Two independent bars (either one refuses):
+
+      1. The owner kill-switch (``AutonomyConfig.autonomy_halted()``) halts ALL agent
+         trading, exactly like x402 spend (``x402/service.py``). Applies regardless of
+         turn origin (a direct/CLI call is halted too).
+      2. A forged self-wake / async-delegation-result / leaf / autonomous turn can never
+         place/mutate an order — parity with the owner-queue payment approver
+         (``approval_queue.py``). The trade methods historically took no
+         ``execution_context`` so origin was invisible; a ``None`` context means a
+         direct/programmatic/CLI call (not an agent-loop turn), so the forged check is
+         skipped there (flag + cap gates still apply) — but the kill-switch above STILL
+         applies.
+
+    Fail CLOSED on every probe error (money-safe): if we cannot prove the turn is
+    genuine, or cannot read the kill-switch, we refuse."""
+    # (1) Owner kill-switch — refuse ALL trading while halted (parity with x402_fetch).
+    try:
+        from core.config_policy import AutonomyConfig
+        if AutonomyConfig.autonomy_halted():
+            return ("live trade refused: autonomy is HALTED (owner kill-switch) — "
+                    "the order was not submitted")
+    except Exception as e:
+        return f"live trade refused: kill-switch probe failed ({e}); failing closed"
+    # (2) Forged / autonomous turn origin — only meaningful when a context is present.
+    if execution_context is None:
+        return None
+    try:
+        from tools.controller.action_registration import _is_forged_or_autonomous_turn
+        forged = _is_forged_or_autonomous_turn(execution_context, tool_self)
+    except Exception:
+        forged = True  # cannot prove the turn is genuine → refuse
+    if forged:
+        return ("live trade refused: a forged/autonomous turn (self-wake, "
+                "delegation-result, leaf, or autonomous run) cannot place orders — "
+                "the owner must drive trades")
+    return None
 
 
 def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecision:
@@ -53,7 +99,21 @@ def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecisi
         return TradeGateDecision(False, f"live trading disabled for {venue} ({flag} off) — dry-run")
 
     cap = _float_env(_VENUE_CAPS.get(venue, ""), DEFAULT_LIVE_CAP_USD)
-    if amount_usd is not None and amount_usd > cap:
+    # M10: an unpriceable order (amount_usd is None) or a non-finite amount can't be
+    # checked against the cap — fail CLOSED (dry-run), never arm live on an unknown value.
+    if amount_usd is None or not math.isfinite(amount_usd):
+        return TradeGateDecision(False, f"order value could not be determined for {venue} — dry-run (fail-closed)")
+    if amount_usd > cap:
         return TradeGateDecision(False, f"order ${amount_usd:.2f} exceeds the {venue} live cap ${cap:.2f} — blocked")
+
+    # H5: the owner kill-switch halts ALL agent spend — including live trades, not just
+    # x402 payments. Checked only on the would-be-live path; fail CLOSED (a probe error
+    # blocks the trade). This is the single central seam that covers both venues.
+    try:
+        from core.config_policy import AutonomyConfig
+        if AutonomyConfig.autonomy_halted():
+            return TradeGateDecision(False, f"live trade refused: autonomy is HALTED (owner kill-switch) — {venue} order not submitted")
+    except Exception as e:
+        return TradeGateDecision(False, f"live trade refused: kill-switch probe failed ({e}) — failing closed")
 
     return TradeGateDecision(True, f"live trading enabled for {venue} (within ${cap:.2f} cap)")

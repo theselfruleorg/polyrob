@@ -66,6 +66,15 @@ def build_registration_file(
     # while MCP was actually running.
     from core.env import bool_env
     mcp_enabled = bool_env("MCP_ENABLED", False)
+    # Proposal 013 (T2): the same OR as core/config.py's consumer seam — under
+    # effective AUTONOMY_MODE=autonomous, MCP defaults ON here too so the agent
+    # card never disagrees with what core/config.py actually built. Lazy +
+    # guarded import (fail to False) to avoid an import cycle / hard dependency.
+    try:
+        from core.config_policy import _mode_capability_default
+        mcp_enabled = mcp_enabled or _mode_capability_default("MCP_ENABLED")
+    except Exception:
+        pass
     if mcp_enabled:
         endpoints.append(Endpoint(
             name="MCP",
@@ -118,9 +127,14 @@ def build_registration_file(
 
     registrations = []
     if onchain_enabled and config.agent_id and config.identity_registry_address:
+        # L11: EIP8004_ONCHAIN_ENABLED + agent_id/identity_registry_address are
+        # operator-supplied env config, not proof of an on-chain transaction — no
+        # code in this repo ever signs/broadcasts an Identity Registry registration.
+        # Mark the claim honestly so a consumer can't read this as code-verified.
         registrations.append(Registration(
             agentId=config.agent_id,
-            agentRegistry=f"eip155:{config.chain_id}:{config.identity_registry_address}"
+            agentRegistry=f"eip155:{config.chain_id}:{config.identity_registry_address}",
+            attestation="operator",
         ))
 
     # Build the registration file

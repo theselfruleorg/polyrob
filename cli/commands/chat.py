@@ -22,6 +22,7 @@ import click
 from cli.commands._bootstrap import suppress_bootstrap_output as _suppress_bootstrap_output
 from cli.persona import resolve_cli_persona
 from cli.ui.commands import ReplExit
+from core.runtime_paths import data_dir_or_home
 
 # Back-compat alias: existing tests import resolve_repl_persona from this module.
 resolve_repl_persona = resolve_cli_persona
@@ -201,6 +202,31 @@ async def _conversation_loop(
             sync_status(renderer)
 
 
+def _make_repl_sigint_handler(loop, counter):
+    """Build the REPL's SIGINT handler (module-level for testability).
+
+    A raw ``signal.signal`` handler runs at an arbitrary bytecode boundary —
+    including mid-escape-sequence terminal write — so it must NEVER paint
+    directly. The notice is scheduled onto the loop (dropped if no live loop);
+    the ``KeyboardInterrupt`` raise drives the actual flow, same as before.
+    """
+
+    def _handler(_sig, _frame):
+        counter["n"] += 1
+        force = counter["n"] >= 2
+        msg = "Force exit" if force else "Interrupting (Ctrl+C again to force exit)..."
+        color = "red" if force else "yellow"
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(
+                lambda m=msg, c=color: click.echo(
+                    "\n" + click.style("[polyrob] ", fg=c) + m
+                )
+            )
+        raise KeyboardInterrupt
+
+    return _handler
+
+
 def _make_default_slash_dispatch(convo, container, renderer, *, state=None, session_id="", user_id="local", task_agent=None, orchestrator=None):
     """Build the default registry-backed slash dispatcher for the REPL.
 
@@ -236,6 +262,7 @@ async def _run_persistent_app(
     poll_usage,
     *,
     completer=None,
+    background_poll=None,
 ):
     """Run the persistent bottom-anchored Application loop (POLYROB_PERSISTENT_INPUT).
 
@@ -288,6 +315,22 @@ async def _run_persistent_app(
         run_coro_factory=_factory,
         schedule=lambda coro: app.create_background_task(coro),
     )
+
+    if background_poll is not None:
+        import asyncio
+
+        async def _autonomy_poll_loop() -> None:
+            # Slow lane: refresh the cached autonomy snapshot every 20 s off the
+            # repaint path (statusbar only READS state.autonomy_snapshot at 5 Hz).
+            while True:
+                try:
+                    state.autonomy_snapshot = await asyncio.to_thread(background_poll)
+                except Exception:
+                    pass
+                await asyncio.sleep(20.0)
+
+        app.create_background_task(_autonomy_poll_loop())
+
     state._app = app  # the feed callback invalidates this to repaint live
     # Start at the lifecycle's calm idle word ("ready", no spinner) instead of the
     # bootstrap "starting" — derived from the single source of truth, not a literal.
@@ -407,7 +450,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         return
     clear_start_notice(_start_out, _start_transient)
-    _logging.disable(_logging.ERROR)
+    _logging.disable(_logging.NOTSET)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -415,6 +458,9 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         return
 
     user_id = container.get_service("identity").resolve()
+    # owner-UX P1 T5: per-tenant home dir for pref resolution (session.toolset /
+    # session.persona), same source as construction.py's SELF_CONTEXT block.
+    _data_home = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
 
     # Publish task_agent/user_id to the lifecycle ref now so the synchronous
     # SIGINT fallback in run_repl can reach the session_manager even if a Ctrl-C
@@ -437,7 +483,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     from cli.ui.events import normalize as _normalize_event
     from cli.ui.state import SessionState
 
-    plain = plain or os.environ.get("POLYROB_PLAIN", "").lower() in ("1", "true", "yes")
+    from core.env import bool_env as _bool_env
+    plain = plain or _bool_env("POLYROB_PLAIN", False)  # SSOT falsey/truthy set (incl. "on") — P4
     _cli_out = sys.stdout
     _ui_state = SessionState()
     # live_allowed=False: the REPL runs under prompt_toolkit's patch_stdout, where
@@ -488,7 +535,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         end-of-turn poll) and fail-open (poll_usage/poll never raise into the loop)."""
         _dir = _usage_dir.get("path")
         if _dir is not None:
-            _ui_state.poll_usage(_dir)
+            _ui_state.poll_usage(_dir, min_interval=0.5)
         # Feed the `ctx N%` toolbar segment live — previously only /status polled it,
         # so the segment stayed at 0% during a turn (then froze on a manual /status).
         _ag = _agent_ref.get("agent")
@@ -547,10 +594,34 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     from agents.task.constants import local_mode_enabled
     from agents.task.tool_defaults import cli_default_tools
     if toolset:
+        # Explicit --toolset for THIS invocation always wins over any pref.
         from agents.task.tool_defaults import resolve_toolset
         repl_tools = list(resolve_toolset(toolset))
     else:
-        repl_tools = list(cli_default_tools())
+        # owner-UX P1 T5: a "session.toolset" pref overrides the default toolset
+        # for a NEW session when the caller passed no --toolset. Resolved only
+        # when a pref is actually ON DISK (resolve_with_source's "pref" source) —
+        # otherwise fall through to cli_default_tools() unchanged, so an env-only
+        # POLYROB_AGENT_TOOLSET (no pref file) stays byte-identical to legacy,
+        # including its cli_unavailable_tools pruning.
+        repl_tools = None
+        try:
+            from core.prefs import resolve_with_source
+            from core.bootstrap import cli_unavailable_tools
+            from agents.task.tool_defaults import resolve_toolset
+            _env_toolset = os.environ.get("POLYROB_AGENT_TOOLSET", "").strip() or None
+            _pref_toolset, _src = resolve_with_source(
+                "session.toolset", user_id, _data_home,
+                env_value=_env_toolset, default=None,
+            )
+            if _src == "pref" and _pref_toolset:
+                _resolved = resolve_toolset(_pref_toolset)
+                _unavail = set(cli_unavailable_tools(_resolved))
+                repl_tools = [t for t in _resolved if t not in _unavail]
+        except Exception:
+            repl_tools = None
+        if repl_tools is None:
+            repl_tools = list(cli_default_tools())
     if local_mode_enabled():
         from agents.task.constants import AutonomyConfig
         from tools.cronjob_tools import cron_enabled
@@ -618,7 +689,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # Wire the init-chosen persona into <identity> via the orchestrator seam
         # that run_session/create_agent already reads (execution.py:124). Fail-open.
         try:
-            _persona_text = resolve_cli_persona()
+            _persona_text = resolve_cli_persona(user_id=user_id, home_dir=_data_home)
             if _persona_text:
                 orchestrator._persona_block = _persona_text
         except Exception:
@@ -678,7 +749,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             from agents.task.constants import local_mode_enabled
             if local_mode_enabled():
                 from core.autonomy_runtime import start_autonomy
-                _data_dir = getattr(container.config, "data_dir", "data")
+                _data_dir = data_dir_or_home(getattr(container.config, "data_dir", None))
                 _autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
         except Exception:
             pass
@@ -788,17 +859,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         except RuntimeError:
             _repl_loop = None
         _sigint_count = {"n": 0}
-
-        def _repl_sigint_handler(_sig, _frame):
-            _sigint_count["n"] += 1
-            if _sigint_count["n"] >= 2:
-                click.echo("\n" + click.style("[polyrob] ", fg="red") + "Force exit")
-                # Re-raise into the main thread so asyncio.run unwinds through the
-                # `finally` (and then run_repl's sync fallback) rather than a hard
-                # os._exit that would skip status persistence.
-                raise KeyboardInterrupt
-            click.echo("\n" + click.style("[polyrob] ", fg="yellow") + "Interrupting (Ctrl+C again to force exit)...")
-            raise KeyboardInterrupt
+        _repl_sigint_handler = _make_repl_sigint_handler(_repl_loop, _sigint_count)
 
         try:
             _prev_sigint = signal.getsignal(signal.SIGINT)
@@ -841,9 +902,23 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                         return []
 
                 _completer_p = build_completer(default_registry(), sessions_provider=_session_ids_p)
+
+                def _autonomy_poll():
+                    from cli.ui.autonomy_poll import read_autonomy_snapshot
+
+                    # Mirrors _h_autonomy's data_dir resolution (handlers.py).
+                    _data_dir = "data"
+                    try:
+                        _cfg = getattr(container, "config", None)
+                        _data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
+                    except Exception:
+                        pass
+                    return read_autonomy_snapshot(user_id or "local", _data_dir)
+
                 await _run_persistent_app(
                     convo, _ui_state, _renderer, _slash_dispatch, _poll_usage,
                     completer=_completer_p,
+                    background_poll=_autonomy_poll,
                 )
                 return
             except Exception as e:

@@ -74,6 +74,22 @@ async def test_pm_order_within_ceiling_records_audit(monkeypatch):
     assert audit[0]["amount_usd"] == pytest.approx(5.0)
 
 
+@pytest.mark.asyncio
+async def test_pm_order_refused_while_halted(monkeypatch):
+    """H11: the owner kill-switch (autonomy_halted) refuses a polymarket order at the top
+    of the verb — before the CLOB client is reached — even for a direct/CLI call."""
+    monkeypatch.setenv("AUTONOMY_HALT", "1")
+    gate = PolicyGate(max_per_tx_usd=10_000.0)
+    tool, client = _tool(monkeypatch, gate)
+    res = await tool.place_limit_order(PlaceLimitOrderParams(
+        market_id="m1", token_id="t1", side="buy", price=0.5, size_usd=5.0,
+    ))
+    assert res["success"] is False
+    assert "halt" in res["error"].lower()
+    assert client.calls == []
+    assert gate.audit_log == []
+
+
 @pytest.fixture(autouse=True)
 def _enable_live_trading(monkeypatch):
     # These tests exercise the order-submission logic, so enable the T11 live

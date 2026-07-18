@@ -127,16 +127,74 @@ def _iter_proc_cmdlines():
             yield int(entry.name), parts
 
 
+def _iter_psutil_cmdlines():
+    """Yield ``(pid, [argv...])`` via psutil (portable); empty on any failure."""
+    try:
+        import psutil
+    except Exception:
+        return
+    try:
+        for p in psutil.process_iter(["pid", "cmdline"]):
+            parts = p.info.get("cmdline") or []
+            if parts:
+                yield int(p.info["pid"]), list(parts)
+    except Exception:
+        return
+
+
+def _parse_ps_lines(output: str):
+    """Parse ``ps -axo pid=,args=`` output into ``(pid, [argv...])`` tuples."""
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        pid_str, _, rest = line.partition(" ")
+        if not pid_str.isdigit():
+            continue
+        parts = rest.strip().split()
+        if parts:
+            yield int(pid_str), parts
+
+
+def _iter_ps_cmdlines():
+    """POSIX fallback (macOS/BSD without psutil): shell out to ``ps``."""
+    import subprocess
+    try:
+        out = subprocess.run(["ps", "-axo", "pid=,args="],
+                             capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return
+    yield from _parse_ps_lines(out)
+
+
+def _iter_cmdlines():
+    """Portable process scan: /proc where it exists, else psutil, else ``ps``.
+
+    U8 (2026-07-14 review): the scan was /proc-only, so on macOS the in-use guard
+    was silently fail-open and --apply/--rollback would os.replace DBs under a
+    live agent without --force.
+    """
+    if Path("/proc").is_dir():
+        yield from _iter_proc_cmdlines()
+        return
+    try:
+        import psutil  # noqa: F401 — availability probe
+    except Exception:
+        yield from _iter_ps_cmdlines()
+        return
+    yield from _iter_psutil_cmdlines()
+
+
 def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -> bool:
     """Best-effort: is a long-running POLYROB server/agent process running on this box?
 
-    Linux ``/proc`` scan (fail-open — returns False where ``/proc`` is absent or on any
-    error). ``_cmdlines`` is injectable for tests. This is the signal that actually
+    Portable scan (``/proc`` → psutil → ``ps``; fail-open on any error).
+    ``_cmdlines`` is injectable for tests. This is the signal that actually
     protects a rollback on a server install, where the write-lock/open-fd probes clear
     against an idle-but-running service.
     """
     me = exclude_pid if exclude_pid is not None else os.getpid()
-    src = _cmdlines if _cmdlines is not None else _iter_proc_cmdlines()
+    src = _cmdlines if _cmdlines is not None else _iter_cmdlines()
     try:
         for pid, parts in src:
             if pid == me:

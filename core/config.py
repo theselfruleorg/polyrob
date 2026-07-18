@@ -6,9 +6,10 @@ import os
 from pathlib import Path
 import logging
 from typing import Any, Optional, Dict, List
-from pydantic import Field, field_validator, PrivateAttr, BaseModel
+from pydantic import Field, field_validator, model_validator, PrivateAttr, BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.config_policy import _mode_capability_default
 from core.env import parse_bool
 
 
@@ -46,7 +47,10 @@ class AgentConfig(BaseSettings):
 
     # Data paths
     data_dir: str = Field(default="data")
-    db_path: str = Field(default="data/bot.db")
+    # R-2 B1 (2026-07-17): default aligned with the file the app ACTUALLY opens
+    # (modules/database/database_manager.py derives <data_dir>/database/bot.db).
+    # The old "data/bot.db" default was a decoy nothing ever opened.
+    db_path: str = Field(default="data/database/bot.db")
 
     # Logging
     log_level: str = Field('INFO', alias='LOG_LEVEL')
@@ -122,6 +126,28 @@ class AgentConfig(BaseSettings):
                 f"Cleanup interval {v}s is very high (>1 hour)"
             )
         return v
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_bool_env_fields(cls, data):
+        """POLYROB falsey-set semantics for EVERY bool field (P0 finalization).
+
+        pydantic's native bool parser rejects the repo's own canonical falsey
+        tokens (none/off/false/0/no/''), so an env value like ``MCP_ENABLED=none``
+        crashed ServerConfig()/AgentConfig() at construction. Route every string
+        destined for a bool-annotated field through ``core.env.parse_bool``. This
+        covers ALL bool fields by annotation (not an enumerated subset), so a
+        newly-added bool can never regress the way this bug did — it supersedes the
+        old per-field ``_coerce_mem`` validator.
+        """
+        if not isinstance(data, dict):
+            return data
+        for name, field in cls.model_fields.items():
+            if field.annotation is bool:
+                for key in (name, field.alias):
+                    if key and key in data and isinstance(data[key], str):
+                        data[key] = parse_bool(data[key], False)
+        return data
 
     def available_providers(self) -> list:
         """Provider names whose API key is set on this config, in PROFILES order.
@@ -270,24 +296,15 @@ class ServerConfig(AgentConfig):
     # Memory feature flags — must be declared as real fields so pydantic-settings
     # reads the env var (getattr on an undeclared key always returns the default,
     # silently ignoring the environment — the Task 0.3 landmine).
+    # NOTE: these bool flags (like every bool field here) are coerced through the
+    # POLYROB falsey-set by AgentConfig._coerce_bool_env_fields — no per-field
+    # validator needed (that enumerated approach was the source of the "only 5
+    # fields coerced" P0).
     HIERARCHICAL_MEMORY_ENABLED: bool = True
     COMPACTION_ENABLED: bool = True
     SEMANTIC_RETRIEVAL_ENABLED: bool = True
     REFLECTION_ENABLED: bool = True
     FORGETTING_ENABLED: bool = True
-
-    @field_validator(
-        "HIERARCHICAL_MEMORY_ENABLED", "COMPACTION_ENABLED", "SEMANTIC_RETRIEVAL_ENABLED",
-        "REFLECTION_ENABLED", "FORGETTING_ENABLED", mode="before",
-    )
-    @classmethod
-    def _coerce_mem(cls, v):
-        # POLYROB falsey-set semantics (core.env.parse_bool, the repo-wide SSOT): a bool
-        # passes through unchanged; a string is True unless it is one of the falsey tokens
-        # ('none'/''/etc, which pydantic's native bool parser would otherwise reject).
-        if isinstance(v, bool):
-            return v
-        return parse_bool(v, False)
 
     # New fields from the code block
     owner_id: Optional[int] = Field(None, description="Admin user ID")
@@ -470,7 +487,15 @@ class ServerConfig(AgentConfig):
         local_servers = load_local_mcp_servers()
 
         # Only build config if MCP is enabled OR local files supplied servers.
-        if not self.mcp_enabled and not local_servers:
+        # Proposal 013 (T2): also build under effective AUTONOMY_MODE=autonomous
+        # (single-owner instance) via _mode_capability_default (top-level import
+        # since WS-1 ph4 — core.config_policy is core-tier and light). Guarded:
+        # any resolution failure must never break config construction.
+        try:
+            _mode_default = _mode_capability_default("MCP_ENABLED")
+        except Exception:
+            _mode_default = False
+        if not (self.mcp_enabled or _mode_default) and not local_servers:
             return
 
         # Priority 3: Load from config/mcp_config.json if it exists
@@ -740,20 +765,20 @@ class ServerConfig(AgentConfig):
         return {k: v for k, v in twitter_config.items() if v and v.strip()}
 
     # Collab.Land Configuration
-    collabland_api_key: str = Field("", env="COLLABLAND_API_KEY")
-    collabland_api_url: str = Field("https://api.collab.land", env="COLLABLAND_API_URL")
+    collabland_api_key: str = Field("", alias='COLLABLAND_API_KEY')
+    collabland_api_url: str = Field("https://api.collab.land", alias='COLLABLAND_API_URL')
     collabland_rules: List[Dict[str, Any]] = Field(default_factory=list)
     
     # Update with full credentials
-    collabland_id: str = Field("", env="COLLABLAND_ID") 
-    collabland_secret: str = Field("", env="COLLABLAND_SECRET")
+    collabland_id: str = Field("", alias='COLLABLAND_ID') 
+    collabland_secret: str = Field("", alias='COLLABLAND_SECRET')
     
     # Alchemy API Configuration
-    alchemy_api_key: str = Field("", env="ALCHEMY_API_KEY")
-    alchemy_api_url: str = Field("https://eth-mainnet.g.alchemy.com", env="ALCHEMY_API_URL")
+    alchemy_api_key: str = Field("", alias='ALCHEMY_API_KEY')
+    alchemy_api_url: str = Field("https://eth-mainnet.g.alchemy.com", alias='ALCHEMY_API_URL')
     
     # Den token configuration
-    den_token_contract_address: str = Field("", env="DEN_TOKEN_CONTRACT_ADDRESS")
+    den_token_contract_address: str = Field("", alias='DEN_TOKEN_CONTRACT_ADDRESS')
 
     # ============================================
     # AUTHENTICATION & CREDIT SYSTEM (FREE - No Privy!)

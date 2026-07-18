@@ -8,7 +8,6 @@ funds (`AgentWallet.address`) is exactly the address spent from.
 """
 from __future__ import annotations
 
-import hashlib
 from typing import Callable, List, Optional
 
 from core.wallet.config import WalletConfig
@@ -22,8 +21,6 @@ VENUES = frozenset({"treasury", "x402", "polymarket", "hyperliquid"})
 # generic payment sign with — and surface for funding — a non-fundable key.
 _SPEND_VENUES = frozenset({"treasury", "x402"})
 
-_PBKDF2_ITERS = 100_000
-
 
 class AgentWallet:
     def __init__(self, config: WalletConfig, audit_sink: Optional[List[dict]] = None,
@@ -33,6 +30,15 @@ class AgentWallet:
             if not config.master_seed or len(config.master_seed) < 32:
                 raise ValueError("AGENT_WALLET_MASTER_SEED must be set and >=32 chars when enabled")
         self._seed = config.master_seed or ""
+        from core.wallet import derivation as _derivation
+        self._scheme = _derivation.resolve_scheme()
+        # H1 (2026-07-15): warn loudly if a mnemonic seed is being derived as legacy
+        # with no recorded scheme (the silent address-flip footgun). Fail-open — a
+        # warning must never block wallet construction.
+        try:
+            _derivation.maybe_warn_legacy_mnemonic(self._seed, self._scheme)
+        except Exception:
+            pass
         self._signers: dict[str, LocalEoaSigner] = {}
         self._policy = PolicyGate(
             max_per_tx_usd=config.max_per_tx_usd,
@@ -43,9 +49,8 @@ class AgentWallet:
         )
 
     def _derive_key(self, venue: str) -> bytes:
-        # Domain-separated label keeps venue keys independent and recoverable.
-        label = f"agent-wallet:{venue}".encode("utf-8")
-        return hashlib.pbkdf2_hmac("sha256", self._seed.encode("utf-8"), label, _PBKDF2_ITERS, dklen=32)
+        from core.wallet import derivation as _derivation
+        return _derivation.derive_key(self._seed, venue, self._scheme)
 
     def signer_for(self, venue: str) -> LocalEoaSigner:
         if venue not in VENUES:

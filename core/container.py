@@ -29,11 +29,24 @@ class DependencyContainer:
     
     @classmethod
     def get_instance(cls, config: BotConfig = None) -> 'DependencyContainer':
-        """Singleton accessor with lazy initialization"""
+        """Singleton accessor with lazy initialization.
+
+        Process-wide singleton: the FIRST config wins. A later call that passes a
+        DIFFERENT config gets the EXISTING instance — reconfiguring a live container
+        mid-run is unsafe, so the new config is deliberately NOT applied. P1
+        finalization: warn instead of SILENTLY discarding, so a caller that expected
+        its config to take effect can see why it didn't.
+        """
         if cls._instance is None:
             if not config:
                 raise ValueError("Configuration required for first initialization")
             cls._instance = cls(config)
+        elif config is not None and config is not getattr(cls._instance, "_config", None):
+            get_component_logger("DependencyContainer").warning(
+                "get_instance() called with a config but a singleton already exists — "
+                "the passed config is IGNORED (first config wins). Reuse the existing "
+                "instance, or reset the singleton explicitly if a fresh container is intended."
+            )
         return cls._instance
 
     def __init__(self, config: BotConfig):
@@ -132,16 +145,6 @@ class DependencyContainer:
             service_type = type(instance).__name__
             optional_flag = "optional" if is_optional else "required"
             self.logger.info(f"🔧 Registered {optional_flag} service: {name} ({service_type})")
-            
-            # >>> NEW: If user_profile_manager is registered, link it to permissions
-            if name == 'user_profile_manager' and 'permissions' in self._services:
-                try:
-                    permissions_service = self._services['permissions'].instance
-                    if hasattr(permissions_service, 'set_user_profile_manager'):
-                        permissions_service.set_user_profile_manager(instance)
-                        self.logger.info("Linked user_profile_manager with permissions service")
-                except Exception as link_error:
-                    self.logger.error(f"Failed to link user_profile_manager with permissions: {link_error}")
 
     def unregister_service(self, name: str) -> bool:
         """Unregister a service by name.
@@ -451,10 +454,6 @@ class DependencyContainer:
             
             # Register in container 
             self.register_service('permissions', permissions)
-            
-            # Note: We don't need to set user_profile_manager here
-            # This happens in register_service when user_profile_manager
-            # is registered (for consistency)
             
             self.logger.info("Permissions service created")
         except Exception as e:

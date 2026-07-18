@@ -63,3 +63,21 @@ def test_does_not_redact_long_base64_blob():
 def test_passthrough_normal_prose():
     text = "The agent read the file and summarized the report in three points."
     assert scrub_secret_shapes(text) == text
+
+
+def test_redacts_prefixed_env_var_key():
+    """P1 (finalization): a `<PREFIX>_API_KEY=` shape is the single most common
+    real env-var naming, and the old `\\b`-anchored regex missed it (the `_` before
+    API is a word char, so there is no boundary). It leaked verbatim from the
+    scrubber used on PERSISTED message history / compaction checkpoints. The fix was
+    already present in the cli/ui/secrets.py twin; this asserts core parity."""
+    secret = "hunter2supersecretvalue"
+    out = scrub_secret_shapes(f"MY_CUSTOM_API_KEY={secret}")
+    assert secret not in out
+    assert "MY_CUSTOM_API_KEY" in out  # key name kept, value redacted
+
+
+def test_redacts_provider_prefixed_token():
+    secret = "abcdef1234567890xyz"
+    out = scrub_secret_shapes(f"GEMINI_AUTH_TOKEN={secret}")
+    assert secret not in out

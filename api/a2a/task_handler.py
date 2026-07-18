@@ -49,6 +49,15 @@ def _spawn_session_task(coro) -> "asyncio.Task":
     return task
 
 
+def _current_activity(session_id: str):
+    """019 P4: the session's live RunActivity snapshot (or None). Fail-open."""
+    try:
+        from agents.task.telemetry.run_activity import get_activity
+        return get_activity(session_id)
+    except Exception:
+        return None
+
+
 # =============================================================================
 # Status Mapping
 # =============================================================================
@@ -430,7 +439,12 @@ class A2ATaskHandler:
                 "created_at": session_info.get("created_at"),
                 "updated_at": session_info.get("updated_at"),
                 "model": session_info.get("config", {}).get("model"),
-                "tools": session_info.get("config", {}).get("tools", [])
+                "tools": session_info.get("config", {}).get("tools", []),
+                # 019 P4: live run activity ({phase, detail, seconds_in_state,
+                # step, call_id}) from the in-process RunActivity snapshot;
+                # None when unknown/remote — same semantics as the plain
+                # session-status API's current_activity field.
+                "current_activity": _current_activity(task_id)
             }
         )
 

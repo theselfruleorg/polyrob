@@ -130,8 +130,14 @@ class SkillWriterMixin:
         # Threat-scan is the injection-persistence tripwire. Fail-OPEN only on an
         # import error (scanner absent); if the scan itself RAISES we fail-CLOSED
         # (reject) — a write must not slip past a crashing guard.
+        # P1 finalization: scan skill body + description with the composed skill
+        # scanner (base injection patterns + invisible/zero-width/bidi unicode) so a
+        # hidden instruction set can't be smuggled past the plain-text .pending
+        # review — the docs (SKILL_AUTHORING_STANDARD §8) promise the unicode check.
         try:
-            from modules.memory.task.threat_scan import is_suspicious
+            from modules.memory.task.threat_scan import (
+                is_skill_content_suspicious as is_suspicious,
+            )
         except Exception:
             is_suspicious = None
         # Task 8: a read-only + trusted scope (today: builtin) is exempt from a
@@ -156,7 +162,7 @@ class SkillWriterMixin:
                                         errors=["content failed injection threat-scan"])
             # P3-1: the DESCRIPTION is injected verbatim into the <skill-catalog>
             # prompt for every future session — so it is an injection vector exactly
-            # like the body and must be scanned too (latent Hermes #8884). Fail-CLOSED.
+            # like the body and must be scanned too. Fail-CLOSED.
             if description:
                 try:
                     desc_flagged = is_suspicious(description)

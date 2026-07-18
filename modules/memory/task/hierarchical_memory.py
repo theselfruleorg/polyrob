@@ -310,97 +310,6 @@ class PhaseMemory(BaseModel):
         # Increment access count
         self.finding_access_count[finding_idx] += 1
 
-    def validate_parallel_arrays(self) -> tuple[bool, list[str]]:
-        """Validate all parallel arrays are in sync.
-
-        FIX (Jan 2026): Comprehensive validation of parallel array integrity.
-
-        Returns:
-            Tuple of (is_valid, list_of_errors)
-        """
-        errors = []
-        expected_len = len(self.key_findings)
-
-        arrays = [
-            ('finding_embeddings', self.finding_embeddings),
-            ('finding_importance', self.finding_importance),
-            ('finding_last_accessed', self.finding_last_accessed),
-            ('finding_access_count', self.finding_access_count),
-        ]
-
-        for name, arr in arrays:
-            if len(arr) != expected_len:
-                errors.append(
-                    f"{name}: expected {expected_len}, got {len(arr)}"
-                )
-
-        # Validate sub_memory_indices
-        for idx in self.sub_memory_indices:
-            if idx < 0 or idx >= expected_len:
-                errors.append(f"sub_memory_indices: invalid index {idx}")
-
-        if errors:
-            logger.warning(f"Parallel array validation failed for phase '{self.phase_name}': {errors}")
-
-        return len(errors) == 0, errors
-
-    def repair_parallel_arrays(self) -> int:
-        """Repair misaligned parallel arrays.
-
-        FIX (Jan 2026): Automatic repair of parallel array inconsistencies.
-        Extends short arrays with safe defaults, truncates long arrays.
-
-        Returns:
-            Number of repairs made
-        """
-        repairs = 0
-        target_len = len(self.key_findings)
-
-        # Extend short arrays with defaults
-        while len(self.finding_embeddings) < target_len:
-            self.finding_embeddings.append([])
-            repairs += 1
-
-        while len(self.finding_importance) < target_len:
-            self.finding_importance.append(0.5)  # Default importance
-            repairs += 1
-
-        while len(self.finding_last_accessed) < target_len:
-            self.finding_last_accessed.append(datetime.now())
-            repairs += 1
-
-        while len(self.finding_access_count) < target_len:
-            self.finding_access_count.append(0)
-            repairs += 1
-
-        # Truncate long arrays (should not happen, but handle it)
-        if len(self.finding_embeddings) > target_len:
-            repairs += len(self.finding_embeddings) - target_len
-            self.finding_embeddings = self.finding_embeddings[:target_len]
-
-        if len(self.finding_importance) > target_len:
-            repairs += len(self.finding_importance) - target_len
-            self.finding_importance = self.finding_importance[:target_len]
-
-        if len(self.finding_last_accessed) > target_len:
-            repairs += len(self.finding_last_accessed) - target_len
-            self.finding_last_accessed = self.finding_last_accessed[:target_len]
-
-        if len(self.finding_access_count) > target_len:
-            repairs += len(self.finding_access_count) - target_len
-            self.finding_access_count = self.finding_access_count[:target_len]
-
-        # Fix invalid sub_memory_indices
-        valid_indices = [i for i in self.sub_memory_indices if 0 <= i < target_len]
-        if len(valid_indices) != len(self.sub_memory_indices):
-            repairs += len(self.sub_memory_indices) - len(valid_indices)
-            self.sub_memory_indices = valid_indices
-
-        if repairs > 0:
-            logger.info(f"Repaired {repairs} parallel array issues in phase '{self.phase_name}'")
-
-        return repairs
-
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary with ISO timestamps."""
         return {
@@ -519,17 +428,6 @@ class HierarchicalMemory(BaseModel):
             return self.phase_memories[idx]
         return None
 
-    def get_phase_position(self, phase_name: str) -> Optional[int]:
-        """Get position index for a phase name.
-
-        Args:
-            phase_name: Phase name to look up
-
-        Returns:
-            Position index, or None if not found
-        """
-        return self.phase_index.get(phase_name)
-
     def add_step(self, step: Step, max_steps: int = 100) -> None:
         """Add a step to recent steps (rolling window).
         
@@ -637,32 +535,6 @@ class HierarchicalMemory(BaseModel):
             self.updated_at = datetime.now()
 
             logger.info(f"Completed phase '{phase_name}' at step {end_step}")
-
-    def validate_no_duplicate_phases(self) -> bool:
-        """Validate no duplicate phase names exist in phase_memories list.
-
-        This detects the critical bug where the same phase name appears multiple times,
-        causing memory fragmentation and context loss.
-
-        Returns:
-            True if no duplicates, False if duplicates found
-        """
-        phase_names = [p.phase_name for p in self.phase_memories]
-        seen = set()
-        duplicates = []
-
-        for name in phase_names:
-            if name in seen:
-                duplicates.append(name)
-            seen.add(name)
-
-        if duplicates:
-            logger.error(f"🚨 DUPLICATE PHASES DETECTED: {duplicates}")
-            logger.error(f"   Phase list: {phase_names}")
-            logger.error(f"   Phase index: {self.phase_index}")
-            return False
-
-        return True
 
     def add_finding_to_phase(
         self,
@@ -797,59 +669,6 @@ class HierarchicalMemory(BaseModel):
                 findings_dict[phase_memory.phase_name] = findings_with_embeddings
 
         return findings_dict
-
-    def get_context_summary(self, include_recent: int = 5) -> str:
-        """Get a context summary for injection.
-
-        This is a basic summary - ContextRetriever provides the full
-        formatted version with better control.
-
-        Args:
-            include_recent: Number of recent steps to include
-
-        Returns:
-            Formatted context string
-        """
-        lines = [
-            f"Session: {self.session_id}",
-            f"Task: {self.task}",
-            f"Progress: {self.progress}",
-            f"Current Phase: {self.current_phase}",
-            ""
-        ]
-
-        # Current phase info
-        current = self.get_current_phase_memory()
-        if current:
-            lines.append(f"Phase: {current.phase_name}")
-            if current.summary:
-                lines.append(f"Summary: {current.summary}")
-            if current.key_findings:
-                lines.append(f"Findings ({len(current.key_findings)}):")
-                for finding in current.key_findings[-5:]:  # Last 5
-                    lines.append(f"  - {finding}")
-            lines.append("")
-
-        # Completed phases
-        if self.phases_completed:
-            lines.append("Completed Phases:")
-            for phase in self.phases_completed:
-                if phase in self.phase_index:
-                    idx = self.phase_index[phase]
-                    pm = self.phase_memories[idx]
-                    lines.append(f"  - {phase}: {pm.summary}")
-            lines.append("")
-
-        # Recent steps
-        if self.recent_steps and include_recent > 0:
-            recent = self.recent_steps[-include_recent:]
-            lines.append(f"Recent Steps ({len(recent)}):")
-            for step in recent:
-                lines.append(f"  [{step.step}] {step.phase}: {step.action_summary}")
-                if step.finding:
-                    lines.append(f"      → {step.finding}")
-
-        return "\n".join(lines)
 
     def save(self, path: Path) -> None:
         """Save to JSON file (position-indexed format).

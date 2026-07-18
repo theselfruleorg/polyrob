@@ -20,6 +20,7 @@ import signal
 import sys
 
 import click
+from core.runtime_paths import data_dir_or_home
 
 
 @click.command()
@@ -69,7 +70,7 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
         sys.exit(1)
     if quiet:
-        _logging.disable(_logging.ERROR)
+        _logging.disable(_logging.NOTSET)
     elif not verbose:
         for _noisy in ("httpx", "httpcore", "asyncio", "hpack"):
             _logging.getLogger(_noisy).setLevel(_logging.WARNING)
@@ -101,7 +102,7 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
     # Pin harness state DBs (dedup / window) to the container's data_dir so per-instance
     # isolation holds under POLYROB_DATA_DIR (else they land in ./data).
     from surfaces.whatsapp.harness import build_whatsapp_harness
-    _data_dir = getattr(getattr(container, "config", None), "data_dir", "data") or "data"
+    _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
     harness = build_whatsapp_harness(container, task_agent, data_dir=_data_dir)
 
     # Start the outbound delivery dispatcher (if installed by the bus).
@@ -116,7 +117,7 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
         from agents.task.constants import local_mode_enabled
         if local_mode_enabled():
             from core.autonomy_runtime import start_autonomy
-            _data_dir = getattr(getattr(container, "config", None), "data_dir", "data")
+            _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
             autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
     except Exception:
         autonomy_handles = None

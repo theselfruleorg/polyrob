@@ -29,6 +29,49 @@ logging.basicConfig(
 logger = logging.getLogger('migrations')
 
 
+async def apply_pending_migrations(db, db_manager, version_mgr, migrations_dir: Path) -> list:
+    """Apply every pending migration in ``migrations_dir``; return the applied versions.
+
+    Recording is guarded with ``is_version_applied`` (mirrors ``migrations/boot.py``):
+    several shipped migrations self-record via ``INSERT OR REPLACE INTO schema_versions``,
+    and an unconditional ``record_migration`` afterwards is a plain INSERT into a UNIQUE
+    column → IntegrityError → the whole run (and `polyrob update --apply`) fails.
+    """
+    import importlib.util
+
+    pending = await version_mgr.get_pending_migrations(migrations_dir)
+    applied = []
+
+    for migration_file in pending:
+        logger.info(f"\nApplying: {migration_file.name}")
+
+        spec = importlib.util.spec_from_file_location(
+            migration_file.stem,
+            migration_file
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        start_time = time.time()
+
+        await module.upgrade(db, db_manager)
+
+        execution_time = int((time.time() - start_time) * 1000)
+
+        # Record via the SSOT exactly once (some migrations self-record).
+        if not await version_mgr.is_version_applied(module.VERSION):
+            await version_mgr.record_migration(
+                version=module.VERSION,
+                description=module.DESCRIPTION,
+                execution_time_ms=execution_time
+            )
+
+        applied.append(module.VERSION)
+        logger.info(f"✅ Applied in {execution_time}ms")
+
+    return applied
+
+
 async def run_migrations(command: str = 'upgrade'):
     """Run database migrations."""
 
@@ -110,33 +153,7 @@ async def run_migrations(command: str = 'upgrade'):
 
             logger.info(f"Found {len(pending)} pending migration(s)")
 
-            for migration_file in pending:
-                logger.info(f"\nApplying: {migration_file.name}")
-
-                # Import migration module
-                import importlib.util
-                spec = importlib.util.spec_from_file_location(
-                    migration_file.stem,
-                    migration_file
-                )
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-
-                # Run upgrade
-                start_time = time.time()
-
-                await module.upgrade(db, db_manager)
-
-                execution_time = int((time.time() - start_time) * 1000)
-
-                # Record migration
-                await version_mgr.record_migration(
-                    version=module.VERSION,
-                    description=module.DESCRIPTION,
-                    execution_time_ms=execution_time
-                )
-
-                logger.info(f"✅ Applied in {execution_time}ms")
+            await apply_pending_migrations(db, db_manager, version_mgr, migrations_dir)
 
             logger.info("\n✅ All migrations applied successfully")
 

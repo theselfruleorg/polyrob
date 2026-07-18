@@ -1,7 +1,7 @@
 """Persistent `shell` tool (computer-use parity WS-2) + `process` job manager (WS-3).
 
 A stateful shell surface for a posture-entitled OWNER session: env + cwd persist
-across `shell_run` calls (Hermes' snapshot-replay model — capture cwd/env after each
+across `shell_run` calls (a snapshot-replay model — capture cwd/env after each
 command, replay next call; NOT a long-lived interactive shell, which deadlocks).
 At AGENT_COMPUTE_POSTURE>=1 every command runs INSIDE the session's persistent docker
 sandbox container (`docker exec`); posture 3 (host) is a deliberate single-tenant-box
@@ -27,7 +27,7 @@ def shell_tools_enabled() -> bool:
     ``SHELL_TOOLS_ENABLED`` env always wins (e.g. force-off even at a raised posture).
     """
     try:
-        from agents.task.constants import compute_posture
+        from core.config_policy import compute_posture
         default = compute_posture() >= 1
     except Exception:
         default = False

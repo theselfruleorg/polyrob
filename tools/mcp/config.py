@@ -5,7 +5,7 @@ import os
 import re
 from typing import Dict, List, Optional, Any, Union
 from enum import Enum
-from pydantic import BaseModel, Field, validator, root_validator
+from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from core.exceptions import ConfigurationError
 
 logger = logging.getLogger(__name__)
@@ -42,28 +42,32 @@ class MCPServerConfig(BaseModel):
     max_concurrent_requests: int = Field(10, description="Maximum concurrent requests to this server")
     message_endpoint: Optional[str] = Field(None, description="For SSE: explicit POST endpoint for messages (FIX #7)")
 
-    @validator('command')
-    def validate_command_for_stdio(cls, v, values):
+    @field_validator('command')
+    @classmethod
+    def validate_command_for_stdio(cls, v, info: ValidationInfo):
         """Validate that command is provided for STDIO servers."""
-        if values.get('type') == MCPServerType.STDIO and not v:
+        if info.data.get('type') == MCPServerType.STDIO and not v:
             raise ValueError("command is required for STDIO servers")
         return v
     
-    @validator('url')
-    def validate_url_for_sse(cls, v, values):
+    @field_validator('url')
+    @classmethod
+    def validate_url_for_sse(cls, v, info: ValidationInfo):
         """Validate that URL is provided for SSE servers."""
-        if values.get('type') == MCPServerType.SSE and not v:
+        if info.data.get('type') == MCPServerType.SSE and not v:
             raise ValueError("url is required for SSE servers")
         return v
     
-    @validator('timeout')
+    @field_validator('timeout')
+    @classmethod
     def validate_timeout(cls, v):
         """Validate timeout is positive."""
         if v <= 0:
             raise ValueError("timeout must be positive")
         return v
     
-    @validator('retry_attempts')
+    @field_validator('retry_attempts')
+    @classmethod
     def validate_retry_attempts(cls, v):
         """Validate retry attempts is non-negative."""
         if v < 0:
@@ -83,21 +87,24 @@ class MCPConfig(BaseModel):
     auto_discover_tools: bool = Field(True, description="Whether to automatically discover and register tools")
     log_mcp_communications: bool = Field(False, description="Whether to log MCP protocol messages (debug)")
     
-    @validator('global_timeout')
+    @field_validator('global_timeout')
+    @classmethod
     def validate_global_timeout(cls, v):
         """Validate global timeout is positive."""
         if v <= 0:
             raise ValueError("global_timeout must be positive")
         return v
     
-    @validator('max_concurrent_connections')
+    @field_validator('max_concurrent_connections')
+    @classmethod
     def validate_max_concurrent_connections(cls, v):
         """Validate max concurrent connections is positive."""
         if v <= 0:
             raise ValueError("max_concurrent_connections must be positive")
         return v
     
-    @validator('cache_ttl_seconds')
+    @field_validator('cache_ttl_seconds')
+    @classmethod
     def validate_cache_ttl(cls, v):
         """Validate cache TTL is non-negative."""
         if v < 0:

@@ -141,17 +141,18 @@ class TelemetryEventLog:
     def aggregate(self, *, since_ts: Optional[float] = None,
                   user_id: Optional[str] = None) -> Dict[str, Any]:
         """Cross-session rollup: counts per kind + total wallet spend."""
+        from core.event_kinds import WALLET_SPEND
         rows = self.query(since_ts=since_ts, user_id=user_id, limit=100000)
         counts: Dict[str, int] = {}
         total_spend = 0.0
         for r in rows:
             counts[r["kind"]] = counts.get(r["kind"], 0) + 1
-            if r["kind"] == "wallet_spend":
+            if r["kind"] == WALLET_SPEND:
                 try:
                     total_spend += float(r["attrs"].get("amount_usd") or 0.0)
                 except Exception:
                     pass
-        return {"counts_by_kind": counts, "total_spend_usd": total_spend,
+        return {"counts_by_kind": counts, "wallet_spend_usd": total_spend,
                 "total_events": len(rows)}
 
 
@@ -160,16 +161,37 @@ _INSTANCES: Dict[str, TelemetryEventLog] = {}
 
 
 def get_event_log(db_path: Optional[str] = None) -> TelemetryEventLog:
-    """Get/create the shared event log. Default path lives under the data root."""
+    """Get/create the shared event log. Default path lives under the DATA HOME
+    (R-2 T1: ``core.runtime_paths.sidecar_db_path`` — the db_manifest axis, with a
+    read-both fallback to a pre-existing session-tree file).
+
+    ``TELEMETRY_EVENT_LOG_PATH`` overrides the default resolution — the seam the
+    test suite uses to keep durable telemetry (and the §3.2 delivery-rail
+    memory) out of the developer's real data home.
+    """
     if db_path is None:
+        db_path = os.getenv("TELEMETRY_EVENT_LOG_PATH") or None
+    _relocated: list = []
+    if db_path is None:
+        # R-2 T3: first default resolution in the process runs the one-shot
+        # legacy->data-home sweep BEFORE the singleton binds, so the instance
+        # starts on the new path and never forks history. Fail-open + idempotent.
         try:
-            from agents.task.path import pm
-            db_path = str(pm().data_root / "telemetry_events.db")
+            from core.sidecar_relocate import relocate_legacy_sidecars
+            _relocated = relocate_legacy_sidecars()
         except Exception:
-            db_path = os.path.join(os.getcwd(), "data", "telemetry_events.db")
+            pass
+        from core.runtime_paths import sidecar_db_path
+        db_path = str(sidecar_db_path("telemetry_events.db"))
     inst = _INSTANCES.get(db_path)
     if inst is None:
         inst = TelemetryEventLog(db_path)
+        if _relocated:
+            try:
+                from core.event_kinds import DB_RELOCATED
+                inst.record(DB_RELOCATED, attrs={"names": _relocated})
+            except Exception:
+                pass
         _INSTANCES[db_path] = inst
     return inst
 

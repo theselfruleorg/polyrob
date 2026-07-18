@@ -100,9 +100,49 @@ def test_gate_allows_message_action_when_not_tainted():
     assert hook("message", {}, None) is None
 
 
+def test_agent_status_action_is_high_impact_by_name():
+    # I-6 follow-up: agent_status is read-only but reveals wallet balance +
+    # tenant ledger — the same data the taint gate deliberately blocks via
+    # x402_pay/x402_invoice tool-id membership. Registered directly (no owning
+    # tool_id), so it must be enumerated by NAME like message/skill_manage.
+    assert is_high_impact("agent_status")
+
+
+def test_gate_blocks_agent_status_when_tainted():
+    hook = make_correspondent_gate_hook(lambda: True)
+    reason = hook("agent_status", {}, None)
+    assert reason and "correspondent" in reason.lower()
+
+
+def test_gate_allows_agent_status_when_not_tainted():
+    hook = make_correspondent_gate_hook(lambda: False)
+    assert hook("agent_status", {}, None) is None
+
+
 def test_gate_allows_low_impact_even_when_tainted():
     hook = make_correspondent_gate_hook(lambda: True)
     assert hook("filesystem", {}, None) is None
+
+
+def test_hf_deploy_verbs_are_high_impact():
+    # hf_deploy publishes/deletes a PUBLIC HF Space — enumerated by NAME (parity
+    # with shell_run/run_code) AND by tool_id, so a resolver fault can't let a
+    # tainted session ship or tear down a Space.
+    for name in ("deploy", "undeploy", "hf_deploy"):
+        assert is_high_impact(name), name
+    assert is_high_impact_call("deploy", "hf_deploy")
+    assert is_high_impact_call("undeploy", "hf_deploy")
+
+
+def test_gate_blocks_hf_deploy_when_tainted():
+    hook = make_correspondent_gate_hook(lambda: True)
+    reason = hook("deploy", {}, None)
+    assert reason and "correspondent" in reason.lower()
+
+
+def test_gate_allows_hf_deploy_when_not_tainted():
+    hook = make_correspondent_gate_hook(lambda: False)
+    assert hook("deploy", {}, None) is None
 
 
 def test_gate_fails_closed_if_taint_probe_raises():
@@ -169,6 +209,30 @@ def test_high_impact_call_blocks_crypto_trades_by_name():
                         "update_leverage", "approve_agent"):
         assert is_high_impact_call(action_name, "hyperliquid"), action_name
         assert is_high_impact_call(action_name, "polymarket"), action_name
+
+
+def test_high_impact_blocks_NAMESPACED_crypto_trade_verbs():
+    """H10 (2026-07-15): container-tool actions register NAMESPACED
+    (polymarket_place_limit_order), and that namespaced name is what reaches the
+    gate hook — but the crypto tool_ids are deliberately excluded from
+    HIGH_IMPACT_TOOL_IDS so their reads stay allowed. Matching only the bare names
+    let the real runtime name slip the gate entirely (a tainted turn could trade)."""
+    for name in ("polymarket_place_limit_order", "hyperliquid_place_limit_order",
+                 "hyperliquid_place_market_order", "polymarket_place_market_order",
+                 "hyperliquid_cancel_order", "hyperliquid_cancel_all_orders",
+                 "hyperliquid_update_leverage", "hyperliquid_approve_agent",
+                 "hyperliquid_revoke_agent"):
+        # name-only path (no tool_id) must already block — the hook can't rely on
+        # tool-id resolution for crypto (it's excluded).
+        assert is_high_impact(name), name
+        assert is_high_impact_call(name, "hyperliquid"), name
+
+
+def test_namespaced_crypto_read_verbs_stay_allowed():
+    for name in ("polymarket_get_orderbook", "hyperliquid_get_positions",
+                 "get_trade_history", "polymarket_data", "hyperliquid_data",
+                 "hyperliquid_get_open_orders"):
+        assert not is_high_impact(name), name
 
 
 def test_high_impact_call_allows_low_impact_tool_reads():
@@ -253,3 +317,95 @@ def test_gate_hook_resolver_fault_fails_closed_for_untrusted_names():
     # a plain name that only resolution would catch degrades to allowed (name-only),
     # but the resolver fault itself must never raise out of the hook
     assert hook("filesystem", {}, None) is None
+
+
+# --- D1 (2026-07-13 review): scoped reply-while-tainted exemption -------------
+# Every correspondent reply re-taints, taint blocks all outbound comms, and only
+# an owner turn clears it — so the agent could never answer the person who wrote
+# in. The exemption permits message/send_email to EXACTLY the tainting
+# (surface, address), budget-gated, flag-gated (CORRESPONDENT_REPLY_ENABLED).
+
+def _reply_hook(sources, allowed=True):
+    return make_correspondent_gate_hook(
+        lambda: True,
+        get_taint_sources=lambda: sources,
+        reply_allowed=(lambda surface, address: allowed),
+    )
+
+
+def test_reply_to_tainting_address_allowed_via_message():
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("message", {"surface": "email", "target": "John@Acme.com ",
+                            "text": "hi"}, None) is None
+
+
+def test_reply_to_other_address_still_denied():
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("message", {"surface": "email", "target": "other@x.com",
+                            "text": "hi"}, None)
+
+
+def test_reply_wrong_surface_denied():
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("message", {"surface": "telegram", "target": "john@acme.com",
+                            "text": "hi"}, None)
+
+
+def test_send_email_exemption_to_tainting_address():
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("send_email", {"to_email": "john@acme.com", "subject": "re",
+                               "body": "b"}, None) is None
+
+
+def test_send_email_with_cc_never_exempt():
+    """cc/bcc could exfiltrate to a third address — the exemption is 1:1 only."""
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("send_email", {"to_email": "john@acme.com", "cc": "evil@x.com",
+                               "subject": "re", "body": "b"}, None)
+
+
+def test_other_high_impact_tools_stay_denied_despite_exemption():
+    hook = _reply_hook({("email", "john@acme.com")})
+    assert hook("x402_pay", {}, None)
+    assert hook("run_code", {"code": "x"}, None)
+    assert hook("delegate_task", {}, None)
+
+
+def test_reply_denied_when_budget_says_no():
+    hook = _reply_hook({("email", "john@acme.com")}, allowed=False)
+    assert hook("message", {"surface": "email", "target": "john@acme.com",
+                            "text": "hi"}, None)
+
+
+def test_reply_denied_without_sources():
+    hook = make_correspondent_gate_hook(
+        lambda: True, get_taint_sources=lambda: set(),
+        reply_allowed=lambda s, a: True)
+    assert hook("message", {"surface": "email", "target": "john@acme.com",
+                            "text": "hi"}, None)
+
+
+def test_build_reply_allowed_flag_off_denies(monkeypatch):
+    from agents.task.agent.core.correspondent_gate import build_reply_allowed
+    monkeypatch.delenv("CORRESPONDENT_REPLY_ENABLED", raising=False)
+    allowed = build_reply_allowed(lambda: None, lambda: "t1")
+    assert allowed("email", "john@acme.com") is False
+
+
+def test_build_reply_allowed_rounds_budget(monkeypatch, tmp_path):
+    from agents.task.agent.core.correspondent_gate import build_reply_allowed
+    from core.surfaces.conversations import ConversationStore
+    monkeypatch.setenv("CORRESPONDENT_REPLY_ENABLED", "true")
+    monkeypatch.setenv("CORRESPONDENT_REPLY_MAX_ROUNDS", "2")
+    store = ConversationStore(str(tmp_path / "conv.db"))
+
+    class _C:
+        def get_service(self, name):
+            return store if name == "conversation_store" else None
+
+    allowed = build_reply_allowed(lambda: _C(), lambda: "t1")
+    assert allowed("email", "john@acme.com") is True
+    store.record_outbound("t1", "email", "john@acme.com", "r1")
+    assert allowed("email", "john@acme.com") is True
+    store.record_outbound("t1", "email", "john@acme.com", "r2")
+    assert allowed("email", "john@acme.com") is False, "rounds budget exhausted"

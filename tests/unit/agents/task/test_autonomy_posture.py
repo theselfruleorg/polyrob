@@ -27,8 +27,11 @@ def _clean_env(monkeypatch):
 
 def test_default_posture_is_silent_byte_identical():
     assert c.autonomy_posture() == "silent"
-    # every posture-governed flag stays OFF by default (today's behavior)
-    assert c.AutonomyConfig.goal_completion_judge() is False
+    # every posture-governed flag stays OFF by default (today's behavior).
+    # EXCEPTION (§4.3, intelligence-stack finalization 2026-07-09, owner-approved):
+    # the evidence-grounded completion judge is default ON regardless of posture —
+    # unverified completion must not silently become a success signal.
+    assert c.AutonomyConfig.goal_completion_judge() is True
     assert c.AutonomyConfig.goal_blocker_escalation() is False
     assert c.AutonomyConfig.goal_self_wake_enabled() is False
     assert c.AutonomyConfig.autonomous_continuity_bridge() is False
@@ -42,7 +45,7 @@ def test_default_posture_is_silent_byte_identical():
 def test_unknown_posture_degrades_to_silent(monkeypatch):
     monkeypatch.setenv("AUTONOMY_POSTURE", "banana")
     assert c.autonomy_posture() == "silent"
-    assert c.AutonomyConfig.goal_completion_judge() is False
+    assert c.AutonomyConfig.goal_blocker_escalation() is False
 
 
 def test_owner_visible_turns_on_the_verify_and_deliver_group(monkeypatch):

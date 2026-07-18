@@ -114,6 +114,113 @@ class TestGetClientIp:
 
 
 # ===========================================================================
+# get_trusted_client_ip — G-20 rate-limit-key regression fix.
+#
+# Unlike get_client_ip (which trusts a client-supplied X-Forwarded-For
+# verbatim), this helper must never let request headers alone determine the
+# resolved identity: only a peer this deployment actually trusts (loopback by
+# default, plus X402_TRUSTED_PROXIES) may contribute X-Forwarded-For content.
+# ===========================================================================
+
+class TestGetTrustedClientIp:
+    def test_untrusted_peer_ignores_spoofed_xff(self):
+        """A direct/unknown connection's X-Forwarded-For is attacker-supplied
+        and must be completely ignored — the real TCP peer is the identity."""
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9"},  # spoofed
+            client_host="1.2.3.4",  # real, un-spoofable peer
+        )
+        assert get_trusted_client_ip(req) == "1.2.3.4"
+
+    def test_untrusted_peer_with_no_xff_uses_peer(self):
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(client_host="5.6.7.8")
+        assert get_trusted_client_ip(req) == "5.6.7.8"
+
+    def test_trusted_loopback_peer_single_hop_xff_uses_real_client(self):
+        """Peer is the standard nginx-loopback deployment shape: XFF carries
+        exactly the one real client hop nginx observed and appended."""
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9"},
+            client_host="127.0.0.1",
+        )
+        assert get_trusted_client_ip(req) == "9.9.9.9"
+
+    def test_trusted_peer_ipv6_loopback_also_trusted(self):
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9"},
+            client_host="::1",
+        )
+        assert get_trusted_client_ip(req) == "9.9.9.9"
+
+    def test_trusted_peer_walks_past_left_spoofed_entry_to_real_rightmost_hop(self):
+        """The bucket-poison attack: attacker forges a leftmost entry claiming
+        to be the victim, but nginx APPENDS the attacker's real observed
+        address as the rightmost hop. Resolution must walk from the right and
+        return the attacker's real address, never the forged victim claim."""
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "203.0.113.9, 6.6.6.6"},  # victim(forged), attacker(real)
+            client_host="127.0.0.1",
+        )
+        assert get_trusted_client_ip(req) == "6.6.6.6"
+
+    def test_trusted_peer_skips_multiple_trusted_hops_in_chain(self):
+        """A chained-proxy deployment (e.g. CDN -> nginx): both intermediate
+        hop addresses are configured trusted via X402_TRUSTED_PROXIES, so the
+        walk must skip past ALL of them to reach the genuine client entry."""
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9, 10.0.0.5"},
+            client_host="127.0.0.1",
+        )
+        result = get_trusted_client_ip(
+            req, trusted_proxies=frozenset({"127.0.0.1", "::1", "10.0.0.5"})
+        )
+        assert result == "9.9.9.9"
+
+    def test_env_x402_trusted_proxies_extends_default_set(self, monkeypatch):
+        from api.dependencies import get_trusted_client_ip
+        monkeypatch.setenv("X402_TRUSTED_PROXIES", "10.0.0.5, 10.0.0.6")
+        req = _make_request(
+            headers={"X-Forwarded-For": "9.9.9.9, 10.0.0.5"},
+            client_host="127.0.0.1",
+        )
+        assert get_trusted_client_ip(req) == "9.9.9.9"
+
+    def test_trusted_peer_missing_xff_falls_back_to_peer(self):
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(client_host="127.0.0.1")
+        assert get_trusted_client_ip(req) == "127.0.0.1"
+
+    def test_trusted_peer_all_trusted_hops_falls_back_to_peer(self):
+        """Degenerate case: XFF contains only trusted-proxy addresses (no
+        genuine client entry survived) — never crash, fall back to the peer."""
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(
+            headers={"X-Forwarded-For": "127.0.0.1"},
+            client_host="127.0.0.1",
+        )
+        assert get_trusted_client_ip(req) == "127.0.0.1"
+
+    def test_two_real_clients_behind_trusted_proxy_get_independent_identities(self):
+        """Same proxy peer, two different genuine XFF-reported clients ->
+        two different resolved identities (independent rate-limit buckets)."""
+        from api.dependencies import get_trusted_client_ip
+        req_a = _make_request(headers={"X-Forwarded-For": "9.9.9.9"}, client_host="127.0.0.1")
+        req_b = _make_request(headers={"X-Forwarded-For": "8.8.8.8"}, client_host="127.0.0.1")
+        assert get_trusted_client_ip(req_a) != get_trusted_client_ip(req_b)
+
+    def test_no_client_returns_none(self):
+        from api.dependencies import get_trusted_client_ip
+        req = _make_request(no_client=True)
+        assert get_trusted_client_ip(req) is None
+
+
+# ===========================================================================
 # get_user_strict  (mirrors payment_endpoints.get_authenticated_user)
 # ===========================================================================
 

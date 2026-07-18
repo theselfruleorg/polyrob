@@ -6,6 +6,8 @@ so all four ticker variants share identical scheduling semantics.
 import asyncio
 import logging
 import os
+
+from core.env import int_env
 from typing import Any, Awaitable, Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -13,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def _heartbeat_interval_sec() -> int:
     try:
-        return max(30, int(os.getenv("AUTONOMY_HEARTBEAT_INTERVAL_SEC", "300")))
+        return max(30, int_env("AUTONOMY_HEARTBEAT_INTERVAL_SEC", 300))
     except Exception:
         return 300
 
@@ -120,7 +122,7 @@ class TickerSupervisor:
             # Keep the event log bounded (retention discipline; fail-open).
             try:
                 import time as _t
-                days = max(1, int(os.getenv("TELEMETRY_EVENT_LOG_RETENTION_DAYS", "30")))
+                days = max(1, int_env("TELEMETRY_EVENT_LOG_RETENTION_DAYS", 30))
                 log.prune(older_than_ts=_t.time() - days * 86400)
             except Exception:
                 pass

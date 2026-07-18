@@ -13,11 +13,13 @@
         </p>
     </div>
 
+    {% if show_avatar %}
     <div class="webgate-avatar" style="display:flex;justify-content:center;padding:8px 0 16px">
         <canvas id="agent-avatar" width="240" height="240" style="display:none" aria-label="Agent avatar"></canvas>
         <img id="agent-avatar-fallback" alt="agent avatar" width="240" height="240" style="display:none"
              onerror="this.style.display='none'">
     </div>
+    {% endif %}
 
     <div class="webgate-meta">
         <div><span class="meta-label">Instance:</span> <span id="id-instance" class="meta-value">—</span></div>
@@ -51,6 +53,7 @@
     }
     load();
 
+    {% if show_avatar %}
     // Avatar probe (P2-12): one quiet /pfp.json check decides whether an
     // avatar exists — without it, the page fired loud 404s for pfp.png,
     // pfp.json AND the engine scripts on every avatar-less instance.
@@ -68,6 +71,7 @@
         };
         document.body.appendChild(engine);
     }).catch(function () {});
+    {% endif %}
 })();
 </script>
 {% endblock %}

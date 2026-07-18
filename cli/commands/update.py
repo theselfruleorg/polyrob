@@ -1,13 +1,14 @@
-"""`polyrob update` — check for and (soon) apply POLYROB updates.
+"""`polyrob update` — check for and apply POLYROB updates.
 
-This slice ships the read-only, zero-mutation surface: ``--check`` / ``--dry-run`` /
-``--json`` plus honest per-install-method manual instructions. The snapshot/rollback
-safety net and the automated apply paths land in subsequent slices (see
-docs/plans/2026-07-01-polyrob-update-command-UPGRADE-PROPOSAL.md).
+``--check`` / ``--dry-run`` / ``--json`` report status; ``--apply`` performs the
+automated snapshot → install → guarded-migrate → verify update with auto-rollback
+(git/editable installs); ``--rollback`` / ``--list-snapshots`` manage the snapshot
+safety net. Other install methods get honest per-method manual instructions.
 """
 from __future__ import annotations
 
 import json as _json
+import os
 import sys
 import urllib.request
 
@@ -44,13 +45,57 @@ _MANUAL_STEPS = {
     GIT: f"git pull --ff-only && pip install . && {_MIGRATE}",
     PIP: f'pip install -U "polyrob[all]" && {_MIGRATE}',
     PIPX: f"pipx upgrade polyrob && {_MIGRATE}",
-    SYSTEMD: "sudo systemctl stop polyrob-api && git pull --ff-only && "
-             f"pip install . && {_MIGRATE} && "
-             "sudo systemctl start polyrob-api",
     DOCKER: "docker compose pull && docker compose up -d --build",
     UNKNOWN: "update via the package manager you installed POLYROB with, "
              f"then run: {_MIGRATE}",
 }
+
+
+def _parse_unit_files(output: str) -> list:
+    """Service names out of `systemctl list-unit-files 'polyrob*'` plain output."""
+    units = []
+    for line in output.splitlines():
+        parts = line.split()
+        if parts and parts[0].endswith(".service"):
+            units.append(parts[0])
+    return units
+
+
+def _detect_polyrob_units() -> list:
+    """Best-effort: which polyrob* systemd units exist on this box. [] on any failure."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["systemctl", "list-unit-files", "polyrob*", "--no-legend", "--plain"],
+            capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    return _parse_unit_files(out)
+
+
+def _systemd_manual_steps(units: list) -> str:
+    """Manual update steps for a systemd install, targeting the units that exist.
+
+    Historically hardcoded `polyrob-api` — a unit that doesn't exist on the headless
+    prod shape (`polyrob.service`), so following the steps never restarted the agent
+    and old code kept running (U3, 2026-07-14 review). Always includes daemon-reload.
+    """
+    if units:
+        names = " ".join(units)
+        return (f"sudo systemctl stop {names} && git pull --ff-only && "
+                f"pip install . && {_MIGRATE} && "
+                f"sudo systemctl daemon-reload && sudo systemctl start {names}")
+    # Couldn't detect the unit set — name both known shapes and say how to check.
+    return ("sudo systemctl stop polyrob.service (headless) or polyrob-api.service "
+            "(api shape) — check which exists: systemctl list-unit-files 'polyrob*' — "
+            f"then: git pull --ff-only && pip install . && {_MIGRATE} && "
+            "sudo systemctl daemon-reload && sudo systemctl start <that unit>")
+
+
+def _manual_steps_for(method: str) -> str:
+    if method == SYSTEMD:
+        return _systemd_manual_steps(_detect_polyrob_units())
+    return _MANUAL_STEPS.get(method, _MANUAL_STEPS[UNKNOWN])
 
 
 def _http_get(url: str, timeout: float = 6.0) -> str:
@@ -73,8 +118,9 @@ def _source_for(ctx) -> str:
 def _fmt_snapshot(info) -> str:
     m = info.manifest
     ver = (m.from_version if m else "?")
+    scope = f"  [{m.scope}]" if m else ""
     tag = "" if info.complete else "  (INCOMPLETE)"
-    return f"  {info.name}  v{ver}{tag}"
+    return f"  {info.name}  v{ver}{scope}{tag}"
 
 
 def _do_list_snapshots(as_json: bool) -> None:
@@ -151,7 +197,11 @@ def _do_rollback(snapshot_name: str, assume_yes: bool, as_json: bool,
     m = target.manifest
     if not as_json:
         click.echo(f"Rolling back to snapshot {target.name} (v{m.from_version if m else '?'}).")
-        click.echo("This restores your databases, config, and identity to that snapshot.")
+        if m is not None and m.scope == "db_only":
+            click.echo("This restores your databases (a db-only snapshot — config and "
+                       "identity are NOT captured in it).")
+        else:
+            click.echo("This restores your databases, config, and identity to that snapshot.")
     if not assume_yes and not click.confirm("Proceed?", default=False):
         if as_json:
             click.echo(_json.dumps({"rolled_back": False, "reason": "aborted"}))
@@ -191,7 +241,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     target_ref = status.latest if channel != "git" else None
     runners = build_runners(ctx, target_ref=target_ref)
     if runners is None:
-        manual = _MANUAL_STEPS.get(ctx.method, _MANUAL_STEPS[UNKNOWN])
+        manual = _manual_steps_for(ctx.method)
         click.echo(click.style(
             f"Automated apply isn't supported for a {ctx.method} install. Update manually:",
             fg="cyan"))
@@ -279,11 +329,22 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
     ctx = detect_install()
     source = _source_for(ctx)
     status = resolve_status(channel=channel, fetch=_http_get, source=source)
-    manual = _MANUAL_STEPS.get(ctx.method, _MANUAL_STEPS[UNKNOWN])
+    manual = _manual_steps_for(ctx.method)
+
+    # U10: surface the DB-schema-vs-code state alongside the version check —
+    # "code updated, DB never migrated" is exactly the failure this command
+    # exists to prevent. Fail-open: never let the probe break `update`.
+    try:
+        from cli.commands.doctor import schema_status_line
+        schema_line = schema_status_line(dict(os.environ))
+    except Exception:
+        schema_line = None
 
     if as_json:
         payload = {**status.as_dict(), "method": ctx.method,
                    "self_updatable": ctx.self_updatable, "manual_steps": manual}
+        if schema_line is not None:
+            payload["db_schema"] = schema_line
         click.echo(_json.dumps(payload, indent=2))
     else:
         click.echo(f"Install method : {ctx.method} ({ctx.reason})")
@@ -292,6 +353,8 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
             click.echo(f"Latest version : {status.human_note}")
         else:
             click.echo(f"Latest version : {status.latest} [{channel}]")
+        if schema_line is not None:
+            click.echo(schema_line)
         if status.update_available:
             click.echo(click.style("→ An update is available.", fg="yellow"))
         elif status.latest is not None:
@@ -301,17 +364,26 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
     if check_only:
         sys.exit(EXIT_UPDATE_AVAILABLE if status.update_available else EXIT_UP_TO_DATE)
 
-    # Apply path is not automated yet — be honest and give exact manual steps.
+    # Point at the automated path where it exists (git/editable installs have real
+    # runners); everything else gets honest per-method manual steps.
     if not as_json:
         if ctx.method in DEFER_TO_MANAGER:
             click.echo(click.style(
                 f"\nAutomated update is not available for a {ctx.method} install.", fg="cyan"))
-        elif dry_run:
-            click.echo("\nPlan (dry-run): backup → fetch → install → migrate → verify → rollback-on-failure")
-            click.echo("Automated apply is not wired in this build yet.")
+        elif ctx.method in (GIT, EDITABLE_GIT):
+            if dry_run:
+                click.echo("\nPlan (dry-run): snapshot → install → migrate (guarded) → "
+                           "verify → auto-rollback on failure")
+                click.echo("Run `polyrob update --apply` to perform it.")
+            else:
+                click.echo(click.style(
+                    "\nRun `polyrob update --apply` for the automated update "
+                    "(snapshot → install → migrate → verify, auto-rollback on failure) "
+                    "— or update manually:", fg="cyan"))
         else:
             click.echo(click.style(
-                "\nAutomated apply is coming in a later build. For now, update manually:", fg="cyan"))
+                f"\nAutomated apply isn't supported for a {ctx.method} install yet. "
+                "Update manually:", fg="cyan"))
         click.echo(f"  {manual}")
     sys.exit(EXIT_UP_TO_DATE)
 

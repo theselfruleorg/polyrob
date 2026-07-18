@@ -23,7 +23,7 @@ def require_sandbox_or_none(backend_name: str) -> Optional[str]:
     Local mode always allows. On a server the backend must advertise
     ``capabilities["sandbox"] is True``.
     """
-    from agents.task.constants import local_mode_enabled
+    from core.config_policy import local_mode_enabled
     if local_mode_enabled():
         return None
     from tools.code_exec import default_registry
@@ -50,7 +50,7 @@ def code_exec_execution_blocked_reason() -> Optional[str]:
     Local mode: always None. Server: refuse when CODE_EXEC_ENABLED is off, otherwise
     require a sandbox-capable backend.
     """
-    from agents.task.constants import local_mode_enabled
+    from core.config_policy import local_mode_enabled
     if local_mode_enabled():
         return None
     from tools.code_exec import code_exec_enabled, get_backend_name

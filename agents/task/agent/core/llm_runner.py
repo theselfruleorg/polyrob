@@ -303,10 +303,13 @@ class LLMRunnerMixin:
 				attempt_number=1
 			)
 			
-			# Try to get a fallback LLM
+			# Try to get a fallback LLM. P1 finalization: exclude the providers that
+			# already FAILED this run too (not just the current one) — the sibling
+			# generic-LLMError branch below does this, and without it this path could
+			# fall back straight to a provider we already know is dead.
 			self.logger.info(f"Attempting provider fallback after {error_type}...")
 			fallback_llm = await self._get_fallback_llm(
-				exclude_providers=[current_provider],
+				exclude_providers=[current_provider] + self.state.llm_providers_failed,
 				original_model=self.model_name
 			)
 			

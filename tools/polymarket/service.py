@@ -1450,9 +1450,17 @@ class PolymarketTool(BaseTool):
         'Place a limit order on Polymarket',
         param_model=PlaceLimitOrderParams
     )
-    async def place_limit_order(self, params: PlaceLimitOrderParams) -> Dict[str, Any]:
+    async def place_limit_order(self, params: PlaceLimitOrderParams, execution_context=None) -> Dict[str, Any]:
         """Place a limit order via authenticated CLOB API."""
         await self.ensure_initialized()
+
+        # H11: a forged/autonomous turn (self-wake, delegation-result, leaf, autonomous
+        # run) OR the owner kill-switch (autonomy_halted) blocks a live order — the owner
+        # must drive trades. Parity with x402 spend + the owner-queue approver.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
         if not CLOB_AVAILABLE:
             cap = trade_capability()
@@ -1511,112 +1519,126 @@ class PolymarketTool(BaseTool):
         # legitimately repeat, so caps/ceiling/audit apply without replay-blocking.
         from core.wallet.factory import get_policy_gate
         policy = get_policy_gate()
-        decision = policy.check(venue="polymarket", amount_usd=params.size_usd, idempotency_key=None)
-        if not decision.allowed:
-            return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
+        # M4 (2026-07-15): hold the gate's reserve lock across check -> submit -> record
+        # so two concurrent orders can't both pass a nearly-exhausted cap at the same
+        # stale rolling-spend and then both record. Mirrors x402/service.py::x402_fetch.
+        # The dry-run early-return exits the lock without recording (no spend); the CLOB
+        # submit never re-enters policy.check/record, so there is no self-deadlock.
+        async with policy.reserve():
+            decision = policy.check(venue="polymarket", amount_usd=params.size_usd, idempotency_key=None)
+            if not decision.allowed:
+                return {"success": False, "error": f"Policy gate denied: {decision.reason}"}
 
-        # T11 live kill-switch: only submit a real order when the master + venue switches
-        # are on AND within the live cap; otherwise dry-run (validated, never submitted).
-        from tools.crypto_trade_gate import evaluate_live_trade
-        gate = evaluate_live_trade("polymarket", params.size_usd)
-        if not gate.live:
-            return {
-                "success": False,
-                "dry_run": True,
-                "error": f"Order not submitted (dry-run): {gate.reason}",
-                "order_details": {
-                    "market_id": params.market_id, "token_id": params.token_id,
-                    "side": params.side, "price": params.price, "size_usd": params.size_usd,
-                },
-            }
+            # T11 live kill-switch: only submit a real order when the master + venue switches
+            # are on AND within the live cap; otherwise dry-run (validated, never submitted).
+            from tools.crypto_trade_gate import evaluate_live_trade
+            gate = evaluate_live_trade("polymarket", params.size_usd)
+            if not gate.live:
+                return {
+                    "success": False,
+                    "dry_run": True,
+                    "error": f"Order not submitted (dry-run): {gate.reason}",
+                    "order_details": {
+                        "market_id": params.market_id, "token_id": params.token_id,
+                        "side": params.side, "price": params.price, "size_usd": params.size_usd,
+                    },
+                }
 
-        # LIVE-only: enforce the cumulative per-market position cap (sell-exempt; fail
-        # closed). Placed after the dry-run gate so a dry-run never triggers a live
-        # position fetch (and never fail-closes when there is nothing to submit).
-        position_error = await self._check_position_limit(limits, params)
-        if position_error:
-            return {"success": False, "error": position_error}
+            # LIVE-only: enforce the cumulative per-market position cap (sell-exempt; fail
+            # closed). Placed after the dry-run gate so a dry-run never triggers a live
+            # position fetch (and never fail-closes when there is nothing to submit).
+            position_error = await self._check_position_limit(limits, params)
+            if position_error:
+                return {"success": False, "error": position_error}
 
-        await self.rate_limit("place_limit_order")
+            await self.rate_limit("place_limit_order")
 
-        client, error = await self._get_authenticated_client()
-        if error:
-            return {"success": False, "error": error}
+            client, error = await self._get_authenticated_client()
+            if error:
+                return {"success": False, "error": error}
 
-        try:
-            # Calculate size in shares from USD amount
-            size_shares = params.size_usd / params.price
+            try:
+                # Calculate size in shares from USD amount
+                size_shares = params.size_usd / params.price
 
-            # Build order arguments
-            order_args = OrderArgs(
-                token_id=params.token_id,
-                price=params.price,
-                size=size_shares,
-                side=params.side.upper()
-            )
+                # Build order arguments
+                order_args = OrderArgs(
+                    token_id=params.token_id,
+                    price=params.price,
+                    size=size_shares,
+                    side=params.side.upper()
+                )
 
-            # Create and post order
-            result = client.create_and_post_order(order_args)
+                # Create and post order
+                result = client.create_and_post_order(order_args)
 
-            policy.record(
-                venue="polymarket", action="place_limit_order",
-                amount_usd=params.size_usd, counterparty=params.market_id,
-                idempotency_key=None, result_ref=str(result.get("orderID"))[:80],
-            )
+                policy.record(
+                    venue="polymarket", action="place_limit_order",
+                    amount_usd=params.size_usd, counterparty=params.market_id,
+                    idempotency_key=None, result_ref=str(result.get("orderID"))[:80],
+                )
 
-            # Log to audit
-            if self.db:
-                await self.db.audit_log(
-                    self._user_id,
-                    "order_placed",
-                    tool_name="polymarket",
-                    market_id=params.market_id,
-                    details={
-                        "order_id": result.get("orderID"),
+                # Log to audit
+                if self.db:
+                    await self.db.audit_log(
+                        self._user_id,
+                        "order_placed",
+                        tool_name="polymarket",
+                        market_id=params.market_id,
+                        details={
+                            "order_id": result.get("orderID"),
+                            "side": params.side,
+                            "price": params.price,
+                            "size_usd": params.size_usd,
+                            "size_shares": size_shares
+                        }
+                    )
+
+                return {
+                    "success": True,
+                    "order_id": result.get("orderID"),
+                    "status": result.get("status", "pending"),
+                    "order_details": {
+                        "market_id": params.market_id,
+                        "token_id": params.token_id,
                         "side": params.side,
                         "price": params.price,
                         "size_usd": params.size_usd,
                         "size_shares": size_shares
                     }
-                )
-
-            return {
-                "success": True,
-                "order_id": result.get("orderID"),
-                "status": result.get("status", "pending"),
-                "order_details": {
-                    "market_id": params.market_id,
-                    "token_id": params.token_id,
-                    "side": params.side,
-                    "price": params.price,
-                    "size_usd": params.size_usd,
-                    "size_shares": size_shares
                 }
-            }
 
-        except Exception as e:
-            self.logger.error(f"Place order failed: {e}")
+            except Exception as e:
+                self.logger.error(f"Place order failed: {e}")
 
-            # Log failure
-            if self.db:
-                await self.db.audit_log(
-                    self._user_id,
-                    "order_failed",
-                    tool_name="polymarket",
-                    market_id=params.market_id,
-                    details={"error": str(e)}
-                )
+                # Log failure
+                if self.db:
+                    await self.db.audit_log(
+                        self._user_id,
+                        "order_failed",
+                        tool_name="polymarket",
+                        market_id=params.market_id,
+                        details={"error": str(e)}
+                    )
 
-            return {"success": False, "error": f"Order placement failed: {str(e)}"}
+                return {"success": False, "error": f"Order placement failed: {str(e)}"}
 
     @BaseTool.action(
         'Place a marketable order on Polymarket (crosses the spread for immediate fill)',
         param_model=PlaceMarketOrderParams
     )
-    async def place_market_order(self, params: PlaceMarketOrderParams) -> Dict[str, Any]:
+    async def place_market_order(self, params: PlaceMarketOrderParams, execution_context=None) -> Dict[str, Any]:
         """Marketable order: price aggressively across the spread, then route through the
         same gates as place_limit_order (limits, >$500 confirmation, PolicyGate, exposure)."""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch block a live order
+        # (see place_limit_order). place_limit_order re-checks too, but refuse early so a
+        # forged/halted turn never triggers a live price fetch.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
         price_res = await self.get_current_price(
             GetPriceParams(token_id=params.token_id, market_id=params.market_id)
@@ -1633,13 +1655,15 @@ class PolymarketTool(BaseTool):
         else:
             limit_price = max(0.01, round(mid * (1 - SLIPPAGE), 2))
 
+        # Forward the turn origin so place_limit_order's own H11 re-check sees the
+        # real context (defense-in-depth; this method already refused above).
         return await self.place_limit_order(PlaceLimitOrderParams(
             market_id=params.market_id,
             token_id=params.token_id,
             side=params.side,
             price=limit_price,
             size_usd=params.size_usd,
-        ))
+        ), execution_context=execution_context)
 
     @BaseTool.action(
         'Get open orders',
@@ -1761,9 +1785,17 @@ class PolymarketTool(BaseTool):
         'Cancel an order',
         param_model=CancelOrderParams
     )
-    async def cancel_order(self, params: CancelOrderParams) -> Dict[str, Any]:
+    async def cancel_order(self, params: CancelOrderParams, execution_context=None) -> Dict[str, Any]:
         """Cancel an open order via authenticated CLOB API."""
         await self.ensure_initialized()
+
+        # H11: a forged/autonomous turn OR the owner kill-switch can never mutate the
+        # owner's live orders (parity with place_*_order).
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         await self.rate_limit("cancel_order")
 
         client, error = await self._get_authenticated_client()
@@ -1798,9 +1830,16 @@ class PolymarketTool(BaseTool):
         'Cancel all orders',
         param_model=CancelAllOrdersParams
     )
-    async def cancel_all_orders(self, params: CancelAllOrdersParams) -> Dict[str, Any]:
+    async def cancel_all_orders(self, params: CancelAllOrdersParams, execution_context=None) -> Dict[str, Any]:
         """Cancel all open orders via authenticated CLOB API."""
         await self.ensure_initialized()
+
+        # H11: forged/autonomous turns OR the owner kill-switch cannot mutate live orders.
+        from tools.crypto_trade_gate import trade_turn_refusal
+        refusal = trade_turn_refusal(execution_context, self)
+        if refusal:
+            return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
         await self.rate_limit("cancel_all_orders")
 
         client, error = await self._get_authenticated_client()

@@ -191,6 +191,125 @@ class AgentConstructionMixin:
 	(in service.py) still builds AgentConfig/AgentDeps and calls cls(config, deps). Imports
 	above are service.py's full set so every name the constructor references resolves."""
 
+	def _load_project_context(self) -> None:
+		"""Auto-load the frozen PROJECT_CONTEXT foundation message (C9, P7 finalization:
+		extracted from __init__).
+		  - Local CLI single-owner: loaded TRUSTED (steering), gated on
+		    project_context_autoload() (default ON under POLYROB_LOCAL).
+		  - Server: loaded ONLY under project_context_server_mode(), then injected
+		    UNTRUSTED-WRAPPED (framed as DATA) since the repo may be one merely opened.
+		Fully fail-open — any error loads nothing. Server byte-identical by default."""
+		try:
+			from agents.task.constants import AutonomyConfig, local_mode_enabled
+			from agents.task.agent.core.project_context import build_project_context_message
+			_local = local_mode_enabled()
+			# Server tier searches the tenant's session workspace, NEVER the process
+			# CWD (install dir); on any failure leave it None so server-mode loads nothing.
+			_workspace_dir = None
+			if not _local:
+				try:
+					from agents.task.path import pm
+					_workspace_dir = str(pm().get_workspace_dir(
+						self.orchestrator.session_id,
+						getattr(self.orchestrator, "user_id", None),
+					))
+				except Exception:
+					_workspace_dir = None
+			_proj_ctx = build_project_context_message(
+				local=_local,
+				autoload=AutonomyConfig.project_context_autoload(),
+				server_mode=AutonomyConfig.project_context_server_mode(),
+				cwd=os.getcwd(),
+				workspace_dir=_workspace_dir,
+				cap_tokens=AutonomyConfig.project_context_max_tokens(),
+			)
+			self.message_manager.set_project_context_message(_proj_ctx)
+		except Exception as e:
+			self.logger.debug(f"Could not load project context (non-fatal): {e}")
+
+	def _restore_tool_call_tracker(self, orchestrator) -> None:
+		"""Restore saved tool-call-tracker state from a previous session (P7
+		finalization: extracted from __init__). Best-effort — reads self.session_id /
+		self.tool_call_tracker, fail-open on any error."""
+		if not (self.session_id and orchestrator):
+			return
+		try:
+			from agents.task.path import pm
+			tool_calls_file = pm().create_file_path(
+				session_id=self.session_id,
+				subdir_name="data",
+				filename="tool_calls.json",
+				user_id=orchestrator.user_id if hasattr(orchestrator, 'user_id') else None
+			)
+			if tool_calls_file.exists():
+				if self.tool_call_tracker.load_from_file(tool_calls_file):
+					self.logger.info("📂 Restored tool call tracker state from previous session")
+		except Exception as e:
+			self.logger.debug(f"No tool call tracker state to restore: {e}")
+
+	def _normalize_save_conversation_path(self, save_conversation_path) -> None:
+		"""Normalize + store save_conversation_path via the path manager (P7
+		finalization: extracted from __init__). Sets self.save_conversation_path to a
+		pm()-resolved logs path, or None when unset."""
+		if save_conversation_path:
+			from agents.task.path import pm
+			self.save_conversation_path = str(pm().create_file_path(
+				self.orchestrator.session_id,
+				"logs",
+				os.path.basename(save_conversation_path) or "conversation",
+				user_id=self.orchestrator.user_id,
+			))
+			self.logger.info(f"Using normalized conversation path: {self.save_conversation_path}")
+		else:
+			self.save_conversation_path = None
+
+	def _setup_memory_profiling(self) -> None:
+		"""Optional tracemalloc profiling behind PROFILE_MEM=1 (P7 finalization:
+		extracted from __init__). Self-contained — reads only self.logger and
+		registers an atexit dump; a no-op when the flag is off."""
+		if os.getenv("PROFILE_MEM") != "1":
+			return
+		try:
+			import tracemalloc
+			import atexit
+			import pprint
+
+			tracemalloc.start()
+			self.logger.info("Memory profiling enabled - tracemalloc started")
+
+			@atexit.register
+			def _dump_memory_stats():
+				try:
+					top = tracemalloc.take_snapshot().statistics("lineno")[:20]
+					self.logger.info("Top 20 memory allocations:")
+					pprint.pprint(top)
+				except Exception as e:
+					self.logger.warning(f"Error dumping memory stats: {e}")
+		except ImportError:
+			self.logger.warning("tracemalloc not available for memory profiling")
+		except Exception as e:
+			self.logger.warning(f"Failed to set up memory profiling: {e}")
+
+	@staticmethod
+	def _validate_construction_params(*, max_failures, retry_delay, max_input_tokens,
+	                                  max_actions_per_step, max_error_length, task, orchestrator):
+		"""Validate critical construction parameters (P7 finalization: extracted from
+		__init__). Pure — raises ROBValidationError on invalid input, sets no state."""
+		if not isinstance(max_failures, int) or max_failures < 0:
+			raise ROBValidationError(f"max_failures must be a non-negative integer, got {max_failures}")
+		if not isinstance(retry_delay, int) or retry_delay < 0:
+			raise ROBValidationError(f"retry_delay must be a non-negative integer, got {retry_delay}")
+		if max_input_tokens is not None and (not isinstance(max_input_tokens, int) or max_input_tokens <= 0):
+			raise ROBValidationError(f"max_input_tokens must be a positive integer or None, got {max_input_tokens}")
+		if not isinstance(max_actions_per_step, int) or max_actions_per_step <= 0:
+			raise ROBValidationError(f"max_actions_per_step must be a positive integer, got {max_actions_per_step}")
+		if not isinstance(max_error_length, int) or max_error_length <= 0:
+			raise ROBValidationError(f"max_error_length must be a positive integer, got {max_error_length}")
+		if not task or not isinstance(task, str):
+			raise ROBValidationError("task must be a non-empty string")
+		if not orchestrator:
+			raise ROBValidationError("orchestrator is required - Agent cannot run standalone")
+
 	def __init__(self, config: AgentConfig, deps: AgentDeps):
 		"""Initialize Agent from a config + deps pair.
 
@@ -237,29 +356,12 @@ class AgentConstructionMixin:
 		is_sub_agent = config.is_sub_agent
 		parent_session_id = config.parent_session_id
 		role = config.role
-		# INPUT VALIDATION: Validate critical configuration parameters
-		if not isinstance(max_failures, int) or max_failures < 0:
-			raise ROBValidationError(f"max_failures must be a non-negative integer, got {max_failures}")
-		
-		if not isinstance(retry_delay, int) or retry_delay < 0:
-			raise ROBValidationError(f"retry_delay must be a non-negative integer, got {retry_delay}")
-		
-		if max_input_tokens is not None and (not isinstance(max_input_tokens, int) or max_input_tokens <= 0):
-			raise ROBValidationError(f"max_input_tokens must be a positive integer or None, got {max_input_tokens}")
-		
-		if not isinstance(max_actions_per_step, int) or max_actions_per_step <= 0:
-			raise ROBValidationError(f"max_actions_per_step must be a positive integer, got {max_actions_per_step}")
-		
-		if not isinstance(max_error_length, int) or max_error_length <= 0:
-			raise ROBValidationError(f"max_error_length must be a positive integer, got {max_error_length}")
-
-		# Validate task is not empty
-		if not task or not isinstance(task, str):
-			raise ROBValidationError("task must be a non-empty string")
-
-		# Validate orchestrator is provided (single source of truth for session state)
-		if not orchestrator:
-			raise ROBValidationError("orchestrator is required - Agent cannot run standalone")
+		# INPUT VALIDATION (P7 finalization: extracted to _validate_construction_params).
+		self._validate_construction_params(
+			max_failures=max_failures, retry_delay=retry_delay,
+			max_input_tokens=max_input_tokens, max_actions_per_step=max_actions_per_step,
+			max_error_length=max_error_length, task=task, orchestrator=orchestrator,
+		)
 
 		# Store orchestrator reference (single source of truth for session_id and user_id)
 		# DO NOT copy session_id or user_id - use properties instead
@@ -294,23 +396,9 @@ class AgentConstructionMixin:
 		from agents.task.logging_config import get_task_logger
 		self.logger = get_task_logger(self.agent_name, self.orchestrator.session_id)
 
-		# RESTORATION: Load saved tool call tracker state from previous session
-		# NOTE: Moved after logger initialization to fix unreachable code issue
-		if self.session_id and orchestrator:
-			try:
-				from agents.task.path import pm
-				tool_calls_file = pm().create_file_path(
-					session_id=self.session_id,
-					subdir_name="data",
-					filename="tool_calls.json",
-					user_id=orchestrator.user_id if hasattr(orchestrator, 'user_id') else None
-				)
-
-				if tool_calls_file.exists():
-					if self.tool_call_tracker.load_from_file(tool_calls_file):
-						self.logger.info("📂 Restored tool call tracker state from previous session")
-			except Exception as e:
-				self.logger.debug(f"No tool call tracker state to restore: {e}")
+		# RESTORATION (P7: extracted to _restore_tool_call_tracker). Load saved
+		# tool-call-tracker state from a previous session — after logger init.
+		self._restore_tool_call_tracker(orchestrator)
 
 		# Apply profile configuration if specified (after logger is initialized)
 		if profile_id:
@@ -411,28 +499,8 @@ class AgentConstructionMixin:
 		# HRE removed - was experimental feature
 		
 		
-		# Optional memory profiling setup behind environment flag
-		if os.getenv("PROFILE_MEM") == "1":
-			try:
-				import tracemalloc
-				import atexit
-				import pprint
-				
-				tracemalloc.start()
-				self.logger.info("Memory profiling enabled - tracemalloc started")
-				
-				@atexit.register
-				def _dump_memory_stats():
-					try:
-						top = tracemalloc.take_snapshot().statistics("lineno")[:20]
-						self.logger.info("Top 20 memory allocations:")
-						pprint.pprint(top)
-					except Exception as e:
-						self.logger.warning(f"Error dumping memory stats: {e}")
-			except ImportError:
-				self.logger.warning("tracemalloc not available for memory profiling")
-			except Exception as e:
-				self.logger.warning(f"Failed to set up memory profiling: {e}")
+		# Optional memory profiling (P7 finalization: extracted to _setup_memory_profiling).
+		self._setup_memory_profiling()
 		
 		# Logger already initialized earlier, just log that we're ready
 		# (This used to be where logger was initialized, but we moved it earlier
@@ -496,21 +564,8 @@ class AgentConstructionMixin:
 		# File paths
 		self.available_file_paths = available_file_paths
 		
-		# Normalize save_conversation_path if provided
-		if save_conversation_path:
-			# Import centralized path manager
-			from agents.task.path import pm
-			
-			# Use centralized path manager to create proper file path
-			self.save_conversation_path = str(pm().create_file_path(
-				self.orchestrator.session_id,
-				"logs",
-				os.path.basename(save_conversation_path) or "conversation",
-				user_id=self.orchestrator.user_id  # Pass user_id to PM
-			))
-			self.logger.info(f"Using normalized conversation path: {self.save_conversation_path}")
-		else:
-			self.save_conversation_path = None
+		# Normalize save_conversation_path (P7: extracted to _normalize_save_conversation_path).
+		self._normalize_save_conversation_path(save_conversation_path)
 		
 		self.save_conversation_path_encoding = save_conversation_path_encoding
 		
@@ -553,23 +608,34 @@ class AgentConstructionMixin:
 		# WS-A capability gate: while the session is tainted by untrusted correspondent
 		# DATA, deny high-impact tools (money/comms/code-exec/delegation). Registered
 		# fail-CLOSED, gated on the access model + a real orchestrator taint flag. The
-		# owner clears the taint by sending a genuine turn. No-op when the flag is off.
-		try:
-			from agents.task.surface_config import SurfaceConfig
-			if SurfaceConfig.correspondent_access_enabled() and self.controller is not None \
-					and hasattr(self.controller, "register_pre_tool_call_hook"):
-				from agents.task.agent.core.correspondent_gate import (
-					build_tool_resolver, make_correspondent_gate_hook)
-				_orch = self.orchestrator
-				# Resolve each action's owning tool_id so the tool-id-level denylist
-				# actually fires — the pre-hook only ever sees the bare action name
-				# (run_code, goal_create, x402_fetch, dynamic MCP {server}_{tool}).
-				_gate = make_correspondent_gate_hook(
-					lambda: bool(getattr(_orch, "_correspondent_tainted", False)),
-					resolve_tool=build_tool_resolver(self.controller))
-				self.controller.register_pre_tool_call_hook(_gate, fail_mode="closed")
-		except Exception as e:
-			self.logger.debug(f"correspondent capability gate not registered: {e}")
+		# owner clears the taint by sending a genuine turn.
+		#
+		# SECURITY (P1 finalization): registration is NOT wrapped in a swallow-all
+		# except. When the access model is ON (an explicit opt-in), a registration
+		# failure must SURFACE — a tainted session that came up WITHOUT this
+		# fail-closed gate could run high-impact tools on untrusted correspondent
+		# DATA. When the model is OFF the `if` is false and nothing is registered.
+		from agents.task.surface_config import SurfaceConfig
+		if SurfaceConfig.correspondent_access_enabled() and self.controller is not None \
+				and hasattr(self.controller, "register_pre_tool_call_hook"):
+			from agents.task.agent.core.correspondent_gate import (
+				build_reply_allowed, build_tool_resolver, make_correspondent_gate_hook)
+			_orch = self.orchestrator
+			# Resolve each action's owning tool_id so the tool-id-level denylist
+			# actually fires — the pre-hook only ever sees the bare action name
+			# (run_code, goal_create, x402_fetch, dynamic MCP {server}_{tool}).
+			# D1 (2026-07-13): taint sources + reply budget enable the scoped
+			# reply-to-the-tainting-party exemption (CORRESPONDENT_REPLY_ENABLED,
+			# default OFF -> the exemption never fires, gate unchanged).
+			_gate = make_correspondent_gate_hook(
+				lambda: bool(getattr(_orch, "_correspondent_tainted", False)),
+				resolve_tool=build_tool_resolver(self.controller),
+				get_taint_sources=lambda: set(
+					getattr(_orch, "_correspondent_taint_sources", None) or set()),
+				reply_allowed=build_reply_allowed(
+					lambda: getattr(_orch, "container", None),
+					lambda: getattr(_orch, "user_id", "") or ""))
+			self.controller.register_pre_tool_call_hook(_gate, fail_mode="closed")
 
 		# ToolCallAdapter removed - functionality integrated into MessageManager and Registry
 		# (tool calls now flow through ToolCallBuilder + Registry).
@@ -664,7 +730,8 @@ class AgentConstructionMixin:
 			from modules.memory.backend_factory import maybe_register_memory_backend
 			_container = getattr(getattr(self, "orchestrator", None), "container", None)
 			_cfg = getattr(_container, "config", None)
-			data_dir = getattr(_cfg, "data_dir", "data") or "data"
+			from core.runtime_paths import data_dir_or_home
+			data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
 			_embedder = None
 			if _container is not None and getattr(_container, "has_service", None):
 				try:
@@ -894,7 +961,8 @@ class AgentConstructionMixin:
 										load_owner_doc, resolve_instance_id)
 			_container = getattr(getattr(self, "orchestrator", None), "container", None)
 			_cfg = getattr(_container, "config", None)
-			_data_dir = getattr(_cfg, "data_dir", "data") or "data"
+			from core.runtime_paths import data_dir_or_home
+			_data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
 			# SOUL tier (operator-only, instance-global) + the evolving SELF tier
 			# (agent-writable, per-(instance,user)). Both frozen at session start.
 			# load_self_doc applies the load-side [BLOCKED] guard; empty => omitted.
@@ -907,6 +975,26 @@ class AgentConstructionMixin:
 			_owner_doc = load_owner_doc(_data_dir, _uid, resolve_instance_id())
 			if _owner_doc:
 				_owner_doc = "## Owner facts\n\n" + _owner_doc
+			# Owner-UX Phase 2: the owner-authored operating-contract doc
+			# (contract.md, owner-review-gated via ContractWriter) + a deterministic
+			# one-line style summary from typed prefs, both injected after owner
+			# facts and before the evolving SELF doc. Gated on CONTRACT_DOC_ENABLED
+			# (default ON); absent file + no style prefs set => "" => no change to
+			# the join below (byte-identical to legacy).
+			_contract_block = ""
+			try:
+				from agents.task.constants import AutonomyConfig as _ContractAC
+				if _ContractAC.contract_doc_enabled():
+					from core.instance import load_contract_doc
+					_contract_doc = load_contract_doc(_data_dir, _uid, resolve_instance_id())
+					if _contract_doc:
+						_contract_doc = "## Operating contract\n\n" + _contract_doc
+					from core.prefs import load_preferences, render_style_line
+					_prefs = load_preferences(_data_dir, _uid, resolve_instance_id())
+					_style_line = render_style_line(_prefs)
+					_contract_block = "\n\n".join(p for p in (_contract_doc, _style_line) if p)
+			except Exception:
+				_contract_block = ""
 			# WS-A + T1-13: the owner clause ("You act on behalf of OWNER X") renders
 			# whenever a DISTINCT owner principal resolves; the correspondent-DATA frame
 			# sentence stays gated on the three-tier access model being on. With no
@@ -923,48 +1011,15 @@ class AgentConstructionMixin:
 				_awareness = owner_awareness_line(include_correspondent_frame=_corr_on)
 			except Exception:
 				_awareness = ""
-			_combined = "\n\n".join(p for p in (_awareness, _soul, _owner_doc, _self_doc) if p)
+			_combined = "\n\n".join(
+				p for p in (_awareness, _soul, _owner_doc, _contract_block, _self_doc) if p
+			)
 			self.message_manager.set_self_context_message(_combined)
 		except Exception as e:
 			self.logger.debug(f"Could not load self-context (non-fatal): {e}")
 
-		# C9 + Phase 2: auto-load project context (polyrob.md/AGENTS.md/CLAUDE.md/
-		# .cursorrules) as a frozen PROJECT_CONTEXT foundation message.
-		#   - Local CLI single-owner: loaded TRUSTED (read as steering), gated on
-		#     project_context_autoload() (default ON under POLYROB_LOCAL).
-		#   - Server: loaded ONLY when project_context_server_mode() is opted in, and
-		#     then injected UNTRUSTED-WRAPPED (framed as DATA, not instructions) since
-		#     the file may come from a repo the operator merely opened.
-		# Server stays byte-identical by default (both gates OFF). Fully fail-open —
-		# any error keeps _project_context_message=None.
-		try:
-			from agents.task.constants import AutonomyConfig, local_mode_enabled
-			from agents.task.agent.core.project_context import build_project_context_message
-			_local = local_mode_enabled()
-			# Server tier searches the tenant's session workspace, NEVER the process
-			# CWD (the install dir). Resolve it via the path manager; on any failure
-			# leave it None so server-mode loads nothing rather than the install dir.
-			_workspace_dir = None
-			if not _local:
-				try:
-					from agents.task.path import pm
-					_workspace_dir = str(pm().get_workspace_dir(
-						self.orchestrator.session_id,
-						getattr(self.orchestrator, "user_id", None),
-					))
-				except Exception:
-					_workspace_dir = None
-			_proj_ctx = build_project_context_message(
-				local=_local,
-				autoload=AutonomyConfig.project_context_autoload(),
-				server_mode=AutonomyConfig.project_context_server_mode(),
-				cwd=os.getcwd(),
-				workspace_dir=_workspace_dir,
-				cap_tokens=AutonomyConfig.project_context_max_tokens(),
-			)
-			self.message_manager.set_project_context_message(_proj_ctx)
-		except Exception as e:
-			self.logger.debug(f"Could not load project context (non-fatal): {e}")
+		# C9 + Phase 2: auto-load project context (P7: extracted to _load_project_context).
+		self._load_project_context()
 
 		# Model-identity SSOT: pin the model/provider the agent actually runs on, so
 		# it can answer "what model are you" from an authoritative foundation line
@@ -979,6 +1034,21 @@ class AgentConstructionMixin:
 			self.message_manager.set_runtime_identity(_ident_model, _ident_provider)
 		except Exception as e:
 			self.logger.debug(f"Could not pin runtime identity (non-fatal): {e}")
+
+		# 014-C1: pin the <environment> block (where the agent lives — host,
+		# workspace + persistence, posture axes, host executables). Local/autonomous
+		# only; a plain multi-tenant server session gets None => inert. Fail-open.
+		try:
+			from agents.task.agent.core.env_context import build_environment_context
+			_env_block = build_environment_context(
+				self.orchestrator.session_id,
+				getattr(self.orchestrator, "user_id", None),
+				tool_ids=getattr(self, "tool_ids", None),
+			)
+			if _env_block:
+				self.message_manager.set_environment_message(_env_block)
+		except Exception as e:
+			self.logger.debug(f"Could not pin environment context (non-fatal): {e}")
 
 		# A5: optional cheap auxiliary model for compaction only. Inert unless
 		# COMPACTION_MODEL is set; on any failure aux_llm stays None and

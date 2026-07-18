@@ -57,7 +57,8 @@ def _explicit_persona() -> Optional[str]:
 
 def _characters_dir() -> Path:
     """Mirror CharacterManager's precedence without requiring the container."""
-    data_dir = (os.environ.get("POLYROB_DATA_DIR") or "data").strip() or "data"
+    from core.runtime_paths import data_dir_or_home
+    data_dir = data_dir_or_home((os.environ.get("POLYROB_DATA_DIR") or "").strip())
     data_chars = Path(data_dir) / "characters"
     try:
         if data_chars.exists() and list(data_chars.glob("*.character.json")):

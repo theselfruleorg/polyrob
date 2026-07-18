@@ -27,6 +27,7 @@ from cli.ui.events import (
     SessionDone,
     Step,
     ToolExec,
+    ToolStarted,
 )
 from cli.ui.secrets import scrub_secrets, scrub_then_cap
 from cli.ui.theme import ICONS, fmt_tokens, style
@@ -157,6 +158,22 @@ def tool_call_line_from_exec(event: ToolExec) -> Text:
     })
 
 
+def tool_call_line_from_started(event: ToolStarted) -> Text:
+    """The ``→ name(args)`` call line built from a ``tool_started`` event (019).
+
+    Byte-identical to ``tool_call_line_from_exec`` for the same action — the
+    line simply prints at DISPATCH time instead of completion, so a long tool
+    is visible while it runs. The paired completion then prints only the
+    ``✓``/``✗`` result line.
+    """
+    return tool_call_line({
+        "action_type": event.action_name,
+        "name": event.action_name,
+        "service": event.tool_name,
+        "params": event.parameters,
+    })
+
+
 def tool_result_suffix(
     *,
     success: bool,
@@ -269,10 +286,11 @@ def step_block(
 
 
 def subagent_line(agent_name: str, step: int, summary: str = "") -> Text:
-    """One dim collapsed line for a sub-agent step (proposal §14 grouping)."""
+    """Collapsed sub-agent step: ``  └ researcher · step 3: summary`` (quiet lane)."""
     line = Text()
-    line.append(f"  {ICONS.subagent} {agent_name}", style=style("subagent"))
-    line.append(f" step {step}", style=style("subagent"))
+    line.append(f"  {ICONS.tree} ", style=style("subagent"))
+    line.append(str(agent_name), style=style("subagent_name"))
+    line.append(f" {ICONS.bullet} step {step}", style=style("subagent"))
     if summary:
         line.append(f": {_summarize(summary, limit=60)}", style=style("subagent"))
     return line
@@ -360,10 +378,14 @@ def agent_message(text: str) -> RenderableType:
     identity.  No panel border: a conversation should breathe, not stack boxes.
     """
     speaker = Text()
-    speaker.append("● ", style=style("speaker_dot"))
+    speaker.append(f"{ICONS.speaker} ", style=style("speaker_dot"))
     speaker.append(agent_display_name(), style=style("speaker_name"))
     body = Padding(Markdown((text or "").strip()), (0, 0, 0, 2))
-    return Group(Text(""), speaker, body, Text(""))
+    # Blank-BEFORE only (transcript rhythm convention): every block separates
+    # itself from the previous one; the gap below the last scrollback line is
+    # owned by the pinned region's top spacer (app.py), so the input box never
+    # reads glued or double-spaced regardless of which block printed last.
+    return Group(Text(""), speaker, body)
 
 
 def user_message(text: str) -> Optional[RenderableType]:
@@ -395,7 +417,7 @@ def working_notice() -> Text:
     above the prompt as they arrive.
     """
     line = Text()
-    line.append("⋯ ", style=style("meta"))
+    line.append(f"{ICONS.working} ", style=style("meta"))
     line.append(agent_display_name(), style=style("speaker_name"))
     line.append(f" {ICONS.bullet} working…", style=style("meta"))
     return line
@@ -413,10 +435,10 @@ def no_final_message_notice(planning: Optional[str] = None) -> RenderableType:
     last doing.
     """
     speaker = Text()
-    speaker.append("● ", style=style("speaker_dot"))
+    speaker.append(f"{ICONS.speaker} ", style=style("speaker_dot"))
     speaker.append(agent_display_name(), style=style("speaker_name"))
     notice = Text()
-    notice.append("⚠ ", style=style("error_text"))
+    notice.append(f"{ICONS.error} ", style=style("error_text"))
     notice.append("finished without a final message", style=style("meta"))
     parts: List[RenderableType] = [Text(""), speaker, Padding(notice, (0, 0, 0, 2))]
     if planning and planning.strip():
@@ -424,7 +446,6 @@ def no_final_message_notice(planning: Optional[str] = None) -> RenderableType:
         ctx.append("last goal: ", style=style("meta"))
         ctx.append(_summarize(planning.strip(), limit=120), style=style("memory"))
         parts.append(Padding(ctx, (0, 0, 0, 2)))
-    parts.append(Text(""))
     return Group(*parts)
 
 
@@ -441,18 +462,19 @@ def turn_summary_line(
     cost: float = 0.0,
     elapsed_seconds: float = 0.0,
     failed: bool = False,
-) -> Text:
+) -> RenderableType:
     """``● 3 steps · 2 tools · 14.2k tok · $0.0040 · 28s`` — the activity layer's
     one-line residue of a completed turn.  Zero-valued segments are omitted.
+    Leading blank per the blank-BEFORE-only rhythm (it follows the agent bubble).
     """
     parts = dialog.summary_segments(
         steps=steps, tools=tools, tokens=tokens, cost=cost,
         elapsed_seconds=elapsed_seconds, failed=failed,
     )
     line = Text()
-    line.append("● ", style=style("tool_fail") if failed else style("meta"))
+    line.append(f"{ICONS.speaker} ", style=style("tool_fail") if failed else style("meta"))
     line.append(f" {ICONS.bullet} ".join(parts) or "done", style=style("meta"))
-    return line
+    return Group(Text(""), line)
 
 
 # ---------------------------------------------------------------------------

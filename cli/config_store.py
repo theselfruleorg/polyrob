@@ -75,6 +75,18 @@ def set_default_model(provider: str, model: str) -> None:
     cfg["default_provider"] = provider
     cfg["default_model"] = model
     save_cli_config(cfg)
+    # SSOT fix (G11, 2026-07-14): `polyrob init` persists DEFAULT_* env pins
+    # (precedence 2) which silently override this cli.json default (precedence 3).
+    # Keep the pin in lockstep so "/model … set-default" is what a fresh session
+    # actually picks. Fail-open: a write failure must never break the swap.
+    try:
+        from core.paths import polyrob_home
+        from cli.commands.config import _upsert_env   # local: avoid import cycle
+        env_path = polyrob_home() / ".env"
+        _upsert_env(env_path, "DEFAULT_PROVIDER", provider, secure=True)
+        _upsert_env(env_path, "DEFAULT_MODEL", model, secure=True)
+    except Exception:
+        pass
 
 
 def get_default_model() -> Tuple[Optional[str], Optional[str]]:
@@ -128,7 +140,7 @@ def _provider_for_model(model: Optional[str]) -> Optional[str]:
 def resolve_model_alias(name: Optional[str]) -> Optional[Tuple[Optional[str], Optional[str]]]:
     """Expand a ``model_aliases`` entry from the CLI config to ``(provider, model)``.
 
-    Hermes-style QoL alias, e.g. ``model_aliases: {"fav": "anthropic/claude-sonnet-4-5"}``
+    A QoL alias, e.g. ``model_aliases: {"fav": "anthropic/claude-sonnet-4-5"}``
     in ``cli.json`` so ``/model fav`` and ``-m fav`` shortcut a full provider/model pair.
     The stored value may be:
       - a ``"provider/model"`` slug

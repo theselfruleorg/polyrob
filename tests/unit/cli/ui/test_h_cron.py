@@ -70,7 +70,7 @@ def test_cron_scopes_to_user(monkeypatch, tmp_path):
     h_cron(ctx)
     out = buf.getvalue()
 
-    assert "No cron jobs scheduled." in out
+    assert "no cron jobs scheduled" in out
     assert "deadbeef" not in out
 
 
@@ -83,7 +83,7 @@ def test_cron_empty_store_is_graceful(monkeypatch, tmp_path):
 
     ctx, buf = _plain_ctx(user_id="local")
     h_cron(ctx)
-    assert "No cron jobs scheduled." in buf.getvalue()
+    assert "no cron jobs scheduled" in buf.getvalue()
 
 
 def test_cron_missing_db_is_graceful(monkeypatch, tmp_path):
@@ -93,7 +93,8 @@ def test_cron_missing_db_is_graceful(monkeypatch, tmp_path):
     ctx, buf = _plain_ctx(user_id="local")
     h_cron(ctx)
     out = buf.getvalue()
-    assert "Cron not enabled" in out
+    assert "no cron jobs scheduled" in out
+    assert "not enabled" in out
     assert "cron" in out.lower()
 
 

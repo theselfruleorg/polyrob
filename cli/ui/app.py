@@ -216,6 +216,10 @@ def toolbar_style():
             "toolbar.model": "bold",
             "toolbar.tokens": "",
             "toolbar.ctx": "",
+            "toolbar.ctx.warn": "ansiyellow",
+            "toolbar.ctx.high": "ansired bold",
+            "toolbar.tool": "ansicyan",
+            "toolbar.subagents": "ansimagenta",
             "toolbar.cost": "",
             "toolbar.elapsed": "",
             "toolbar.autonomy": "ansibrightblack",
@@ -227,7 +231,13 @@ def toolbar_style():
             "prompt.caret": "ansicyan bold",
             "prompt.rprompt": "ansibrightblack",
             "prompt.hint": "ansibrightblack",
+            "prompt.hint.tip": "ansibrightblack italic",
             "prompt.frame.title": "ansicyan bold",
+            # Slash-command input highlighting (cli/ui/slash_highlight.py).
+            "prompt.slash.valid": "ansicyan bold",
+            "prompt.slash.partial": "",
+            "prompt.slash.unknown": "ansiyellow",
+            "prompt.slash.arg": "ansigreen",
             # The bordered input box (opencode-style) — cyan edge, default body.
             "frame.border": "ansicyan",
             "frame.label": "ansicyan bold",
@@ -237,6 +247,12 @@ def toolbar_style():
             "picker.group": "ansicyan bold",
             "picker.row": "",
             "picker.sel": "reverse bold",
+            # Completion menu (the slash-command palette).
+            "completion-menu": "",
+            "completion-menu.completion": "",
+            "completion-menu.completion.current": "reverse bold",
+            "completion-menu.meta.completion": "ansibrightblack",
+            "completion-menu.meta.completion.current": "ansibrightblack reverse",
         }
     )
 
@@ -360,14 +376,20 @@ def build_app(
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
-    from prompt_toolkit.filters import Condition
+    from prompt_toolkit.filters import Condition, has_completions
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.key_binding import merge_key_bindings
-    from prompt_toolkit.layout import HSplit, Layout, VSplit, Window
-    from prompt_toolkit.layout.containers import ConditionalContainer
+    from prompt_toolkit.layout import Dimension, HSplit, Layout, VSplit, Window
+    from prompt_toolkit.layout.containers import (
+        ConditionalContainer,
+        Float,
+        FloatContainer,
+    )
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.layout.menus import CompletionsMenu
 
     from cli.ui.model_selector import ReplPicker
+    from cli.ui.slash_highlight import SlashHighlightProcessor
 
     def _accept(buff: Any) -> bool:
         text = buff.text
@@ -380,7 +402,15 @@ def build_app(
         multiline=False,
         accept_handler=_accept,
         completer=completer,
-        complete_while_typing=False,
+        # Live palette: the menu opens while typing a slash command ONLY — plain
+        # chat typing never triggers completion. `picker` is defined below (after
+        # this Buffer) but the lambda late-binds it, and it's only ever evaluated
+        # on a keystroke once build_app has finished wiring both — so referencing
+        # it here is safe. Gated on `not picker.is_active()` so the completion
+        # menu doesn't fight the /model picker while it borrows this buffer.
+        complete_while_typing=Condition(
+            lambda: input_buffer.text.startswith("/") and not picker.is_active()
+        ),
     )
 
     # The arrow-key model selector (/model) renders as a conditional list ABOVE
@@ -420,15 +450,21 @@ def build_app(
         return FormattedText([("", " ")] + list(status))
 
     def _hint() -> Any:
-        # A quiet keybinding hint line (opencode/Claude-Code parity).
-        return FormattedText(
-            [("class:prompt.hint",
-              f" ⏎ send  {ICONS.bullet}  ⌥⏎ newline  {ICONS.bullet}  ^C stop  "
-              f"{ICONS.bullet}  /help")]
-        )
+        # Context-aware hint row (cli/ui/hints.py): idle keys + rotating tip,
+        # a known /cmd's usage while typing it, ^C stop mid-turn. While the
+        # /model picker is active it renders its own hint line (it borrows this
+        # buffer), so the normal "⏎ send" hint here would be misleading.
+        if picker.is_active():
+            return FormattedText([])
+        from cli.ui import hints
+
+        return FormattedText(hints.hint_fragments(state, input_buffer.text, clock()))
 
     input_window = Window(
-        BufferControl(buffer=input_buffer, input_processors=[]),
+        BufferControl(
+            buffer=input_buffer,
+            input_processors=[SlashHighlightProcessor(gate=picker.is_active)],
+        ),
         get_line_prefix=lambda *a, **k: _caret_prefix(),
         height=_input_height,
         # Without this the input window is GREEDY: in the bottom region it absorbs
@@ -456,23 +492,57 @@ def build_app(
         Window(
             FormattedTextControl(
                 lambda: FormattedText(
-                    [("", " "), ("class:prompt.rprompt", statusbar.autonomy_line(state))]
+                    [
+                        ("", " "),
+                        (
+                            "class:prompt.rprompt",
+                            # Model/provider already live on the separator rule —
+                            # repeat only the autonomy half here (no duplication).
+                            statusbar.autonomy_line(state, include_model=False),
+                        ),
+                    ]
                 )
             ),
             height=1,
         ),
-        filter=Condition(lambda: bool(statusbar.autonomy_line(state))),
+        filter=Condition(
+            lambda: bool(statusbar.autonomy_line(state, include_model=False))
+        ),
     )
 
+    _MENU_ROWS = 10
+    # Reserve rows under the input while the menu is open (PromptSession's
+    # reserve_space_for_menu pattern) — floats don't add preferred height, so
+    # without this the bottom-anchored region has no room for the menu.
+    menu_space = ConditionalContainer(
+        Window(height=Dimension(min=0, max=_MENU_ROWS, preferred=_MENU_ROWS)),
+        filter=has_completions,
+    )
+    body = HSplit([
+        # One empty row above the rule: the region owns its breathing room, so
+        # the last scrollback line (user echo, tool line, bubble, summary) is
+        # never glued to the input box — transcript blocks emit a blank BEFORE
+        # themselves only (see blocks.py rhythm note).
+        Window(height=1),
+        picker.container(),
+        separator,
+        input_window,
+        menu_space,
+        status_window,
+        autonomy_window,
+        hint_window,
+    ])
     layout = Layout(
-        HSplit([
-            picker.container(),
-            separator,
-            input_window,
-            status_window,
-            autonomy_window,
-            hint_window,
-        ])
+        FloatContainer(
+            content=body,
+            floats=[
+                Float(
+                    xcursor=True,
+                    ycursor=True,
+                    content=CompletionsMenu(max_height=_MENU_ROWS, scroll_offset=1),
+                )
+            ],
+        )
     )
 
     kb = merge_key_bindings([
@@ -503,6 +573,7 @@ def _persistent_key_bindings(*, on_interrupt: Optional[Callable[[], None]] = Non
     - ``Meta+Enter`` inserts a newline (multi-line input).
     - ``Ctrl-C`` calls ``on_interrupt`` (cancel the in-flight turn) without exiting.
     - ``Ctrl-D`` on an empty buffer exits the app (EOF).
+    - ``Ctrl-L`` clears the screen and forces a full repaint (corruption recovery).
 
     ``is_picker_active`` gates every binding on ``~active`` so that while the
     arrow-key model selector is open, Enter/Ctrl-C/Ctrl-D route to the picker's
@@ -534,5 +605,13 @@ def _persistent_key_bindings(*, on_interrupt: Optional[Callable[[], None]] = Non
     def _(event: Any) -> None:
         if not event.current_buffer.text:
             event.app.exit(exception=EOFError)
+
+    @kb.add("c-l")
+    def _(event: Any) -> None:
+        # Full clear + repaint (standard shell affordance). Recovers a corrupted
+        # scroll region — e.g. a frame stranded by an uncoordinated raw write —
+        # without restarting the REPL. Unfiltered: also safe while the picker is
+        # open (the repaint redraws the whole layout, picker included).
+        event.app.renderer.clear()
 
     return kb

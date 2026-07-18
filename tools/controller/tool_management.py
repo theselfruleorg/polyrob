@@ -281,7 +281,15 @@ class ToolManagementMixin:
 
 			# Remove actions from Registry (single source of truth)
 			for action_name in tool_info.actions:
-				full_name = f"{name}_{action_name}"
+				# P2 finalization: compute the SAME namespaced key registration used
+				# (see add_tool ~line 176). remove_tool used to unconditionally prefix
+				# `{name}_{action}`, so a tool whose action is ALREADY tool-prefixed
+				# (e.g. perplexity / perplexity_search) was never actually removed —
+				# list_tools reported it gone while its actions stayed callable.
+				if action_name == name or action_name.startswith(f"{name}_"):
+					full_name = action_name
+				else:
+					full_name = f"{name}_{action_name}"
 				# Use Registry's thread-safe remove method
 				if hasattr(self.registry, 'remove_action'):
 					self.registry.remove_action(full_name)

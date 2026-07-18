@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
+from core.exceptions import LLMPermanentError
 
 
 class _State:
@@ -35,12 +36,44 @@ def _billing_error():
     return Exception("Error code 402: insufficient_quota / billing hard limit reached")
 
 
-def test_billing_halts_by_default(monkeypatch):
-    monkeypatch.delenv("BILLING_FAILOVER_ENABLED", raising=False)
+def _real_openrouter_402_error():
+    # I-5: the real prod shape (2026-07-09 outage) — contains "402"/"credits" but NEITHER
+    # "insufficient_quota" NOR "billing". In production this reaches _handle_step_error
+    # already wrapped as LLMPermanentError (modules/llm/llm_client.py::translate_llm_error
+    # matches "402" and raises LLMPermanentError before the raw exception ever gets here),
+    # so we construct the same typed shape here rather than a bare Exception.
+    return LLMPermanentError(
+        'from OpenRouterClient: 402 "This request requires more credits, or fewer '
+        'max_tokens. visit https://openrouter.ai/settings/credits and add more credits"'
+    )
+
+
+def test_billing_halts_when_failover_disabled(monkeypatch):
+    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "false")
     host = _Host(fallback_ok=True)
     res = asyncio.run(host._handle_step_error(_billing_error()))
     assert host.state.stopped is True
     assert "PERMANENT" in (res[0].error or "")
+
+
+def test_billing_fails_over_by_default(monkeypatch):
+    # I-5: BILLING_FAILOVER_ENABLED now defaults ON — this locks the new default in.
+    monkeypatch.delenv("BILLING_FAILOVER_ENABLED", raising=False)
+    host = _Host(fallback_ok=True)
+    res = asyncio.run(host._handle_step_error(_billing_error()))
+    assert host.state.stopped is False
+    assert res == []          # empty result = continue with new provider
+
+
+def test_real_openrouter_402_fails_over_when_enabled(monkeypatch):
+    # I-5 acceptance criterion: the real prod-shape 402 (no literal "insufficient_quota"/
+    # "billing") is detected as billing and attempts fallback when the flag is on.
+    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "true")
+    host = _Host(fallback_ok=True)
+    res = asyncio.run(host._handle_step_error(_real_openrouter_402_error()))
+    assert host.state.stopped is False
+    assert res == []
+    assert ("billing", "openai") in host.state.tracked
 
 
 def test_billing_fails_over_when_enabled(monkeypatch):

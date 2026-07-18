@@ -27,9 +27,9 @@ def _agent_with_reply(reply_text, *, is_done_text=None):
     msgs = [_managed(HumanMessage(content="hi")), _managed(AIMessage(content=reply_text))]
     agent.message_manager.history.messages = msgs
     if is_done_text is not None:
-        agent.state.history.final_result.return_value = is_done_text
+        agent.history.final_result.return_value = is_done_text
     else:
-        agent.state.history.final_result.return_value = None
+        agent.history.final_result.return_value = None
     return agent
 
 
@@ -235,8 +235,8 @@ def test_extract_reply_skips_brain_json_leak():
         _managed(AIMessage(content="✅ Task Complete\n\nHere is your clean answer.")),
         _managed(AIMessage(content=brain)),  # raw brain-JSON is LAST
     ]
-    agent.state.history.is_done.return_value = True
-    agent.state.history.final_result.return_value = "Here is your clean answer."
+    agent.history.is_done.return_value = True
+    agent.history.final_result.return_value = "Here is your clean answer."
     orch = MagicMock()
     orch.agents = {"a1": agent}
     ta._registry.get.return_value = orch
@@ -255,8 +255,8 @@ def test_extract_reply_conversational_skips_brain_and_takes_clean_aimessage():
         _managed(AIMessage(content="Hey there, happy to help!")),
         _managed(AIMessage(content=brain)),
     ]
-    agent.state.history.is_done.return_value = False
-    agent.state.history.final_result.return_value = None
+    agent.history.is_done.return_value = False
+    agent.history.final_result.return_value = None
     orch = MagicMock()
     orch.agents = {"a1": agent}
     ta._registry.get.return_value = orch
@@ -270,7 +270,7 @@ def test_chat_once_done_path_uses_final_result():
     ta = _bare_taskagent()
     agent = MagicMock()
     agent.message_manager.history.messages = []  # no AIMessage
-    agent.state.history.final_result.return_value = "the done answer"
+    agent.history.final_result.return_value = "the done answer"
     orch = MagicMock()
     orch.agents = {"a1": agent}
     ta._registry.get.return_value = orch

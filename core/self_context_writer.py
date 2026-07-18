@@ -11,7 +11,7 @@ self-definition, so it is a prompt-injection **persistence** vector — guarded 
 3. **Identity-scanned fail-CLOSED** — ``is_identity_suspicious`` (self-voice
    subversion + invisible-unicode + base instruction-override) rejects before
    persist; a *raising* scanner also rejects.
-4. **Over-cap ERRORS** (Hermes parity) — an over-cap ``propose`` returns an
+4. **Over-cap ERRORS** — an over-cap ``propose`` returns an
    actionable "consolidate then retry" error instead of silently truncating.
 5. **Quarantined** — a normal author follows ``SELF_CONTEXT_REQUIRE_REVIEW``; a
    forged (sub-agent / self-wake / background-review) turn is **always** ``.pending``
@@ -33,6 +33,7 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
+from core.config_policy import AutonomyConfig
 from core.instance import (
     DEFAULT_INSTANCE_ID,
     SELF_DOC_MAX_CHARS,
@@ -67,6 +68,18 @@ class SelfContextWriteResult:
 class SelfContextWriter:
     """Create / patch / promote the evolving SELF doc for a tenant."""
 
+    # Template-method knobs — subclasses (ContractWriter/OwnerDocWriter) override
+    # these instead of copy-pasting the propose/promote/archive bodies (audit T4,
+    # 2026-07-16: the identity write gate is a SECURITY guard; three drifting
+    # copies were a bypass waiting to happen).
+    _DOC_KIND = "self_context"
+    _LOG_LABEL = "self-context"
+    _MAX_CHARS = SELF_DOC_MAX_CHARS
+    _CAP_NOUN = "self-context"
+    _CAP_HINT = "consolidate (merge/shorten overlapping notes), then retry"
+    _ARCHIVE_PREFIX = "self"
+    _REJECTED_PREFIX = "rejected"
+
     def __init__(self, home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID):
         self.home_dir = Path(home_dir)
         self.instance_id = instance_id or DEFAULT_INSTANCE_ID
@@ -100,7 +113,6 @@ class SelfContextWriter:
         if pending is not None:
             base = pending
         else:
-            from agents.task.constants import AutonomyConfig
             base = AutonomyConfig.self_context_require_review()
         # Hard rule: a forged author can NEVER auto-activate.
         if created_by in _NON_USER_AUTHORS:
@@ -120,39 +132,48 @@ class SelfContextWriter:
         except Exception:
             return ""
 
+    def _scan_body(self, uid: str, body: str) -> Optional[SelfContextWriteResult]:
+        """Identity scan, fail-CLOSED on EVERY failure mode: a flagged body, a raising
+        scan, OR an unavailable scanner all reject (an identity write must never slip
+        past a missing/broken guard — matches load_self_doc's read-side posture).
+        Returns a rejection result, or None when the body is clean. This is the ONE
+        shared gate for all three identity-doc writers."""
+        try:
+            from modules.memory.task.threat_scan import is_identity_suspicious
+        except Exception as e:
+            logger.warning("%s write rejected (scanner unavailable, fail-closed): %s: %s",
+                           self._LOG_LABEL, uid, e)
+            return SelfContextWriteResult(False, errors=["identity scanner unavailable (rejected)"])
+        try:
+            flagged = is_identity_suspicious(body)
+        except Exception as e:
+            logger.warning("%s write rejected (scan error, fail-closed): %s: %s",
+                           self._LOG_LABEL, uid, e)
+            return SelfContextWriteResult(False, errors=["identity scan error (rejected)"])
+        if flagged:
+            logger.warning("%s write rejected (identity scan): %s", self._LOG_LABEL, uid)
+            return SelfContextWriteResult(False, errors=["content failed identity safety scan"])
+        return None
+
     def propose(self, content: str, *, user_id: str,
                 created_by: str = PROVENANCE_AGENT,
                 pending: Optional[bool] = None) -> SelfContextWriteResult:
-        """Author/replace the SELF doc (validated, scanned, atomically written)."""
+        """Author/replace the doc (validated, scanned, atomically written)."""
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused (tenant scope)"])
 
         body = content or ""
-        # Over-cap ERRORS (Hermes) — never silently truncate the SELF doc.
-        if len(body) > SELF_DOC_MAX_CHARS:
+        # Over-cap ERRORS — never silently truncate an identity doc.
+        if len(body) > self._MAX_CHARS:
             return SelfContextWriteResult(False, errors=[
-                f"self-context is {len(body)}/{SELF_DOC_MAX_CHARS} chars — consolidate "
-                f"(merge/shorten overlapping notes), then retry"])
+                f"{self._CAP_NOUN} is {len(body)}/{self._MAX_CHARS} chars — {self._CAP_HINT}"])
         if not body.strip():
             return SelfContextWriteResult(False, errors=["empty content"])
 
-        # Identity scan, fail-CLOSED on EVERY failure mode: a flagged body, a raising
-        # scan, OR an unavailable scanner all reject (an identity write must never slip
-        # past a missing/broken guard — matches load_self_doc's read-side posture).
-        try:
-            from modules.memory.task.threat_scan import is_identity_suspicious
-        except Exception as e:
-            logger.warning("self-context write rejected (scanner unavailable, fail-closed): %s: %s", uid, e)
-            return SelfContextWriteResult(False, errors=["identity scanner unavailable (rejected)"])
-        try:
-            flagged = is_identity_suspicious(body)
-        except Exception as e:
-            logger.warning("self-context write rejected (scan error, fail-closed): %s: %s", uid, e)
-            return SelfContextWriteResult(False, errors=["identity scan error (rejected)"])
-        if flagged:
-            logger.warning("self-context write rejected (identity scan): %s", uid)
-            return SelfContextWriteResult(False, errors=["content failed identity safety scan"])
+        rejection = self._scan_body(uid, body)
+        if rejection is not None:
+            return rejection
 
         quarantine = self._resolve_pending(created_by, pending)
         target = self._pending_file(uid) if quarantine else self._active_file(uid)
@@ -160,10 +181,11 @@ class SelfContextWriter:
             if not quarantine:
                 self._archive_existing(uid)
             self._atomic_write(target, body)
-            logger.info("self-context %s written (%s)", uid, "pending" if quarantine else "active")
+            logger.info("%s %s written (%s)", self._LOG_LABEL, uid,
+                        "pending" if quarantine else "active")
             return SelfContextWriteResult(True, pending=quarantine, path=str(target))
         except Exception as e:
-            logger.error("self-context write failed for %s: %s", uid, e, exc_info=True)
+            logger.error("%s write failed for %s: %s", self._LOG_LABEL, uid, e, exc_info=True)
             return SelfContextWriteResult(False, errors=[f"write failed: {e}"])
 
     def patch(self, *, user_id: str, old_string: str, new_string: str,
@@ -227,7 +249,7 @@ class SelfContextWriter:
         if len(preview) > 280:
             preview = preview[:277] + "…"
         return {
-            "kind": "self_context",
+            "kind": self._DOC_KIND,
             "user_id": uid,
             "preview": preview,
             "chars": len(body),
@@ -246,24 +268,26 @@ class SelfContextWriter:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
         pending_f = self._pending_file(uid)
         if not pending_f.is_file():
-            return SelfContextWriteResult(False, errors=["no pending self-context to reject"])
+            return SelfContextWriteResult(
+                False, errors=[f"no pending {self._CAP_NOUN} to reject"])
         try:
             self._archive_pending(uid, pending_f)
             os.remove(str(pending_f))
-            logger.info("self-context %s pending draft rejected (archived)", uid)
+            logger.info("%s %s pending draft rejected (archived)", self._LOG_LABEL, uid)
             return SelfContextWriteResult(True, path=str(pending_f))
         except Exception as e:
-            logger.error("self-context reject failed for %s: %s", uid, e, exc_info=True)
+            logger.error("%s reject failed for %s: %s", self._LOG_LABEL, uid, e, exc_info=True)
             return SelfContextWriteResult(False, errors=[f"reject failed: {e}"])
 
     def promote(self, *, user_id: str) -> SelfContextWriteResult:
-        """Move the .pending self.md into active use (the owner-review gate)."""
+        """Move the .pending doc into active use (the owner-review gate)."""
         uid = self._require_user(user_id)
         if uid is None:
             return SelfContextWriteResult(False, errors=["empty user_id refused"])
         pending_f = self._pending_file(uid)
         if not pending_f.is_file():
-            return SelfContextWriteResult(False, errors=["no pending self-context to promote"])
+            return SelfContextWriteResult(
+                False, errors=[f"no pending {self._CAP_NOUN} to promote"])
         try:
             content = pending_f.read_text(encoding="utf-8")
         except Exception as e:
@@ -288,11 +312,11 @@ class SelfContextWriter:
         archive_dir.mkdir(parents=True, exist_ok=True)
         # monotonic index (no wall-clock dependency); pick the next free slot.
         n = 0
-        while (archive_dir / f"self.{n}.md").exists():
+        while (archive_dir / f"{self._ARCHIVE_PREFIX}.{n}.md").exists():
             n += 1
         try:
             import shutil
-            shutil.copy2(str(active), str(archive_dir / f"self.{n}.md"))
+            shutil.copy2(str(active), str(archive_dir / f"{self._ARCHIVE_PREFIX}.{n}.md"))
         except Exception:
             pass  # archival is best-effort; never block a write on it
 
@@ -301,11 +325,11 @@ class SelfContextWriter:
         archive_dir = self._root(uid) / ".archived"
         archive_dir.mkdir(parents=True, exist_ok=True)
         n = 0
-        while (archive_dir / f"rejected.{n}.md").exists():
+        while (archive_dir / f"{self._REJECTED_PREFIX}.{n}.md").exists():
             n += 1
         try:
             import shutil
-            shutil.copy2(str(pending_f), str(archive_dir / f"rejected.{n}.md"))
+            shutil.copy2(str(pending_f), str(archive_dir / f"{self._REJECTED_PREFIX}.{n}.md"))
         except Exception:
             pass  # archival is best-effort; never block a reject on it
 

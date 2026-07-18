@@ -6,6 +6,8 @@ This provides a single source of truth for history management, trimming, and mem
 import os
 
 from core.env import bool_env as _core_bool_env
+from core.env import float_env as _core_float_env
+from core.env import int_env as _core_int_env
 
 # Token counting defaults - Use modules.llm.token_counter for actual counting
 # IMG_TOKENS kept for backward compatibility but should use token_counter._count_multimodal_tokens
@@ -31,13 +33,13 @@ class LoopDetectionConfig:
 
     # Use tighter thresholds in development for faster debugging
     if IS_DEVELOPMENT:
-        MAX_REPETITIONS = int(os.getenv('MAX_REPETITIONS', '2'))  # FIX 4: Aggressive loop detection
-        UNCHANGED_STATE_THRESHOLD = int(os.getenv('UNCHANGED_STATE_THRESHOLD', '3'))  # FIX 4: Aggressive
+        MAX_REPETITIONS = _core_int_env('MAX_REPETITIONS', 2)  # FIX 4: Aggressive loop detection
+        UNCHANGED_STATE_THRESHOLD = _core_int_env('UNCHANGED_STATE_THRESHOLD', 3)  # FIX 4: Aggressive
         STATE_CHANGE_THRESHOLD = 3  # FIX 4: Detect loops after 2-3 repetitions
         MAX_ALLOWED_REPETITIONS = 2  # FIX 4: Catch loops after just 2 repetitions
     else:
-        MAX_REPETITIONS = int(os.getenv('MAX_REPETITIONS', '3'))  # FIX 4: Stricter for production
-        UNCHANGED_STATE_THRESHOLD = int(os.getenv('UNCHANGED_STATE_THRESHOLD', '4'))  # FIX 4: Stricter
+        MAX_REPETITIONS = _core_int_env('MAX_REPETITIONS', 3)  # FIX 4: Stricter for production
+        UNCHANGED_STATE_THRESHOLD = _core_int_env('UNCHANGED_STATE_THRESHOLD', 4)  # FIX 4: Stricter
         STATE_CHANGE_THRESHOLD = 4  # FIX 4: Lower threshold
         MAX_ALLOWED_REPETITIONS = 3  # FIX 4: Catch loops faster in production
 
@@ -53,13 +55,13 @@ class LoopDetectionConfig:
 class MemoryConfig:
     """Memory optimization settings for AutoV2 - Optimized for performance"""
     MAX_SCREENSHOTS_IN_GIF = 10  # Reduced to prevent OOM
-    MAX_HISTORY_SIZE = int(os.getenv('MAX_MEMORY_CACHE_SIZE', '30'))  # Configurable via env
-    SCREENSHOT_JPEG_QUALITY = int(os.getenv('SCREENSHOT_JPEG_QUALITY', '70'))  # Configurable
+    MAX_HISTORY_SIZE = _core_int_env('MAX_MEMORY_CACHE_SIZE', 30)  # Configurable via env
+    SCREENSHOT_JPEG_QUALITY = _core_int_env('SCREENSHOT_JPEG_QUALITY', 70)  # Configurable
     ENABLE_GIF_CREATION = _core_bool_env('ENABLE_GIF_CREATION', False)  # Disabled by default
     CLEAR_SCREENSHOTS_AFTER_GIF = True  # Remove base64 data after GIF creation
     MAX_SCREENSHOT_SIZE_MB = 3  # Reduced max size per screenshot
     # UNIFIED: Single source from environment, default 50
-    CLEANUP_INTERVAL = int(os.getenv('MEMORY_CLEANUP_INTERVAL', '50'))  # Clean every N operations
+    CLEANUP_INTERVAL = _core_int_env('MEMORY_CLEANUP_INTERVAL', 50)  # Clean every N operations
 
 # History and Message Management
 MAX_HISTORY_SIZE = 30  # Maximum number of messages to keep in history
@@ -179,7 +181,7 @@ def _parse_provider_model(token, default_provider=None):
 def resolve_aux_chain(task, provider=None):
     """Ordered aux-model candidates for `task` (primary first, then per-task fallbacks).
 
-    B5 (Hermes `auxiliary.<task>.fallback_chain` parity): each of the 3 real aux
+    B5: each of the 3 real aux
     call sites (compaction/judge/reflection) can be pointed at its own model+
     provider plus an ordered fallback list, instead of a single model string.
     Empty list => caller uses the main model (unchanged runtime contract).
@@ -264,747 +266,27 @@ def reflection_llm_enabled_default() -> bool:
     return val not in ("none", "off", "false", "0", "no", "")
 
 
-# --- Autonomy & continuous-learning loops (Reference-parity, 2026-06-16) ---------
-#
-# Shared flag helpers for the four loops POLYROB lacked: self-wake re-entry,
-# writable-skills + background-review, cron run-loop+delivery, durable goal board,
-# and the curator. SINGLE SOURCE OF TRUTH for the falsey-set semantics, mirroring
-# reflection_llm_enabled_default() above. All loops default-OFF + fail-open except
-# MEMORY_SEARCH_TOOL (read-only, tenant-scoped) and CRON_RUN_LOOP (fixes a live bug
-# where cron built a session but never ran the agent loop).
-
-_FALSEY = ("none", "off", "false", "0", "no", "")
-
-
-def _bool_env(name: str, default: bool) -> bool:
-    """Read a boolean env var with POLYROB's falsey-set semantics.
-
-    Delegates to the repo-wide SSOT (``core.env.bool_env``) so this module shares
-    one parser with everything else instead of reimplementing it (the reflection-gate
-    bug was a parser/source mismatch). Kept as a thin wrapper so in-module callers
-    (and this module's public ``_bool_env`` symbol) are unaffected.
-    """
-    return _core_bool_env(name, default)
-
-
-def _int_env(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-
-
-# --- Local (terminal-native, single-user) profile -------------------------
-# When POLYROB_LOCAL is truthy, the *safe* autonomy/learning flags default ON as a
-# group, so a terminal user gets the W1-W7 loops without setting ~6 env vars.
-# Multi-tenant server entry (main.py / uvicorn) never sets POLYROB_LOCAL, so its
-# defaults are unchanged. An explicit per-flag value (e.g. GOALS_ENABLED=off)
-# still wins — only the *default* moves.
-#
-# Excludes anything with a multi-tenant blast radius even on one machine:
-# CODE_EXEC_ENABLED (not a sandbox) and the sub-agent concurrency caps.
-_SAFE_LOCAL_FLAGS = frozenset({
-    "SELF_WAKE_ENABLED",
-    "SKILLS_WRITABLE",
-    "SELF_CONTEXT_WRITABLE",
-    # Bounded owner-facts doc (USER.md-equivalent): safe on a single-user CLI
-    # (own tenant, quarantine-then-promote); multi-tenant server stays OFF.
-    "OWNER_DOC_WRITABLE",
-    "BACKGROUND_REVIEW_ENABLED",
-    "GOALS_ENABLED",
-    "CURATOR_ENABLED",
-    "INSIGHTS_TOOL",
-    "CODING_TOOLS_ENABLED",
-    # P0-D: structured git over the confined workspace. Safe on a single-user CLI
-    # (own repo); multi-tenant server stays OFF by default. git_push is separately
-    # approval-gated + leaf-blocked (Task 9).
-    "GIT_TOOLS_ENABLED",
-    # NOTE (FL-D9): SKILL_CATALOG_INCLUDE_ALL was here, but its resolver
-    # (skill_catalog_include_all(), below) hardcodes `_bool_env("SKILL_CATALOG_INCLUDE_ALL",
-    # True)` directly and never consults `_safe_autonomy_default`/this set — the entry
-    # was dead (default is already ON everywhere). Removed 2026-07 (behavior-neutral).
-    # KB (knowledge-base) feature: safe on a single-user CLI (read/write own KB),
-    # multi-tenant default stays OFF until per-tenant isolation is verified.
-    "KB_ENABLED",
-    # C1: context-reference expansion (@file/@folder/@diff/@url). Safe on a single-user
-    # CLI where the workspace is trusted; multi-tenant server stays OFF by default so
-    # accidental file-inclusion from a shared workspace is not the default.
-    "CONTEXT_REFERENCES_ENABLED",
-    # C9: auto-load CLAUDE.md/AGENTS.md/.cursorrules as a PROJECT_CONTEXT foundation
-    # message. Safe on a single-user CLI (reads from cwd/git-root); server stays OFF
-    # (multi-tenant workspaces may not have a project context file).
-    "PROJECT_CONTEXT_AUTOLOAD",
-    # T13: KB auto-prefetch — inject KB recall alongside memory recall at step start.
-    # Safe on a single-user CLI (reads own KB); multi-tenant server stays OFF by default
-    # because KB_ENABLED itself is also local-only by default.
-    "KB_AUTO_PREFETCH",
-    # Task 2/3/4: episodic activity ledger — durable per-run provenance rows +
-    # digest injection + continuity bridge. Safe on a single-user CLI (own
-    # tenant); multi-tenant server stays OFF by default.
-    "EPISODIC_MEMORY_ENABLED",
-    "EPISODIC_DIGEST_INJECT",
-    "CONTINUITY_BRIDGE_ENABLED",
-    # AU-F1.1: the goal-board dispatcher ticks under POLYROB_LOCAL (GOALS_ENABLED is
-    # in this set), but without the planner nothing ever proposes an objective's next
-    # goal -- the board sits idle even though the ticker runs (the "idle since Jul 1"
-    # incident). Safe on a single-user CLI (own tenant's own objectives); multi-tenant
-    # server stays OFF by default. Existing gates (GOALS_ENABLED, an active objective,
-    # a thin ready-queue, the planner cooldown) still apply regardless of this default.
-    "GOAL_PLANNER_ENABLED",
-    # §7.1: self-evolution transparency — proactively notify the owner of a pending
-    # identity/skill proposal + expose the approve/reject/list surface. Safe on a
-    # single-user CLI (own tenant); multi-tenant server stays OFF by default (an
-    # unsolicited push to a shared owner channel is opt-in there).
-    "SELF_EVOLUTION_TRANSPARENCY",
-    # Task 5: gated `message` action (owner/allowlist -> MessageRouter send). Safe
-    # on a single-user CLI (own tenant, own owner-bound targets); multi-tenant
-    # server stays OFF by default (arbitrary outbound send is opt-in there).
-    "MESSAGE_TOOL_ENABLED",
-})
-
-
-def local_mode_enabled() -> bool:
-    """True when running as the single-user terminal-native agent.
-
-    Canonical flag: ``POLYROB_LOCAL``. ``ROB_LOCAL`` is accepted as a deprecated
-    back-compat alias (older docs/scripts referenced it) — either being truthy
-    enables local mode, so a doc that still says ``ROB_LOCAL`` isn't a silent no-op.
-    """
-    return _bool_env("POLYROB_LOCAL", False) or _bool_env("ROB_LOCAL", False)
-
-
-def message_tool_enabled() -> bool:
-    """Whether the gated `message` action (owner/allowlist -> MessageRouter) is
-    registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the
-    _SAFE_LOCAL_FLAGS group. An explicit MESSAGE_TOOL_ENABLED always wins.
-    """
-    return _bool_env("MESSAGE_TOOL_ENABLED", _safe_autonomy_default("MESSAGE_TOOL_ENABLED"))
-
-
-def task_personality_block_enabled() -> bool:
-    """Whether the persona/<identity> block is injected into the task agent.
-
-    S1 (chat consolidation): injects the chat agent's character/personality into
-    the unified Task agent's <identity> block so chat-mode carries persona without
-    a separate ChatAgent. The persona TEXT is rendered from a Character via the
-    pure agents/personality/persona_render.render_persona_block; the task-agent
-    core only ever sees a str (it never imports the chat stack). This access-time
-    gate is the live seam — the module-level TASK_PERSONALITY_BLOCK constant that
-    used to exist was a dead decoy.
-
-    Access-time (not import-time) so it sees POLYROB_LOCAL set via
-    os.environ.setdefault in bootstrap. Defaults ON under local mode (single-user
-    CLI wants its persona; persona_block resolves to "" when OFF => byte-identical
-    system prompt), OFF on the multi-tenant server. An explicit
-    TASK_PERSONALITY_BLOCK env always wins.
-    """
-    raw = os.getenv("TASK_PERSONALITY_BLOCK")
-    if raw is None or raw.strip() == "":
-        return local_mode_enabled()
-    return _bool_env("TASK_PERSONALITY_BLOCK", False)
-
-
-def memory_prefetch_cadence(autonomous: bool = False) -> int:
-    """Steps between automatic memory re-prefetch (Phase 1.3).
-
-    0 = prefetch on the FIRST step only (legacy, prod-safe). N>0 = ALSO prefetch
-    every N steps so a long task keeps re-recalling phase-relevant memory instead of
-    recalling once at step 1 and never again.
-
-    Resolved at ACCESS time (not import) so it sees POLYROB_LOCAL even though that is
-    set via os.environ.setdefault in bootstrap, which may run after this module is
-    first imported. Defaults to 3 under local mode AND for an autonomous session
-    (SA-06 — a server goal/cron run otherwise recalled once at step 1, where the
-    brain enrichment is dead, and never again); 0 for server chat. An explicit
-    ``MEMORY_PREFETCH_CADENCE`` (incl. ``0``) always wins.
-    """
-    return _int_env("MEMORY_PREFETCH_CADENCE",
-                    3 if (local_mode_enabled() or autonomous) else 0)
-
-
-def hmem_tail_placement() -> bool:
-    """Whether in-session hierarchical memory is placed as a dynamic SUFFIX after the
-    conversation (Phase 0.1) instead of in the foundation ahead of it.
-
-    The H-MEM block changes every step; in the foundation prefix it invalidated the
-    prompt cache for everything after it (skills tail + all conversation) on every
-    step. As a tail suffix, the stable foundation + growing conversation form a
-    cacheable prefix and only the small H-MEM suffix is reprocessed.
-
-    Resolved at access time. Default ON everywhere (T1-09, 2026-07-06): it soaked
-    locally since 2026-06 with no regressions, while the OFF server default broke the
-    server prompt cache every step. Explicit ``HMEM_TAIL_PLACEMENT=false`` restores
-    the legacy foundation placement.
-    """
-    return _bool_env("HMEM_TAIL_PLACEMENT", True)
-
-
-def ticker_idle_backoff_enabled() -> bool:
-    """Whether idle background tickers (cron, goal dispatch) back off their poll
-    interval when a tick finds no due work, instead of firing at a fixed cadence
-    forever.
-
-    A fixed 60s ticker costs nothing on a multi-tenant server with steady job
-    volume, but on a single-user local CLI (POLYROB_LOCAL) it is close to the
-    only thing keeping the process from ever going idle -- a real contributor
-    to laptop battery drain. Backoff only kicks in on demonstrably idle ticks
-    (nothing ran, nothing failed) and resets to the base interval the moment
-    work resumes, so responsiveness is unaffected once something is actually
-    happening.
-
-    Resolved at access time. Defaults ON under POLYROB_LOCAL, OFF on the
-    multi-tenant server (byte-identical fixed-cadence legacy) so a precisely
-    time-scheduled cron job on a shared server never slips. Explicit
-    ``TICKER_IDLE_BACKOFF_ENABLED`` always wins.
-    """
-    return _bool_env("TICKER_IDLE_BACKOFF_ENABLED", local_mode_enabled())
-
-
-def ticker_idle_backoff_max_multiplier() -> int:
-    """Cap on how many multiples of a ticker's base interval an idle backoff may
-    reach (e.g. 5x a 60s base = 300s = 5 minutes worst-case staleness before a
-    newly-due job is noticed). Explicit ``TICKER_IDLE_BACKOFF_MAX_MULTIPLIER``
-    always wins; default 5.
-    """
-    return _int_env("TICKER_IDLE_BACKOFF_MAX_MULTIPLIER", 5)
-
-
-def embedder_needed() -> bool:
-    """Whether this deployment actually needs the sentence-transformers embedder (torch).
-
-    SSOT for both the CLI (maybe_register_cli_embedder) and the server (initialize_modules):
-    only build the heavy embedder when KB is enabled, MEMORY_BACKEND=local_vector (hybrid
-    vector recall), or local mode. The default MEMORY_BACKEND=sqlite uses FTS5 keyword recall
-    and needs no embeddings. See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P1-EMB).
-    """
-    return (
-        AutonomyConfig.kb_enabled()
-        or os.getenv("MEMORY_BACKEND", "sqlite").lower() == "local_vector"
-        or local_mode_enabled()
-    )
-
-
-def _safe_autonomy_default(flag_name: str) -> bool:
-    """Default for a safe autonomy flag: ON under local mode, else OFF."""
-    return local_mode_enabled() if flag_name in _SAFE_LOCAL_FLAGS else False
-
-
-# --- W1-1: AUTONOMY_POSTURE — one coherent switch for the shipped-but-dark loops ----
-#
-# Five autonomy flags shipped wired but default-OFF in BOTH modes, each behind its own
-# env var, so making an instance actually verify + report its autonomous work meant
-# flipping five independent flags with no single lever (the "activation, not machinery"
-# gap). AUTONOMY_POSTURE is a second axis (orthogonal to _SAFE_LOCAL_FLAGS) that moves
-# the DEFAULTS of that group together. An explicit per-flag env ALWAYS wins (only the
-# default moves), and the unset/`silent` posture is byte-identical to today.
-#
-#   silent        (default) — today's behavior: autonomy runs but is unverified + silent.
-#   owner-visible — the agent's autonomous work becomes VERIFIED + owner-visible:
-#                   completion judge, blocker->owner escalation (+ ask), self-wake
-#                   delivery, continuity bridge. Safe for single-user local; on a
-#                   multi-tenant server it is an opt-in (unsolicited pushes / aux cost).
-#   full          — owner-visible PLUS time-based initiative (cron ticker).
-_POSTURE_OWNER_VISIBLE_FLAGS = frozenset({
-    "GOAL_COMPLETION_JUDGE",
-    "GOAL_BLOCKER_ESCALATION",
-    "GOAL_SELF_WAKE_ENABLED",
-    "AUTONOMOUS_CONTINUITY_BRIDGE",
-    # Continuity/learning trio: ON under the local profile, and an owner-visible
-    # posture also turns it on server-side (memory + verification, no
-    # unsolicited-cost initiative). Explicit env wins.
-    "EPISODIC_MEMORY_ENABLED",
-    "EPISODIC_DIGEST_INJECT",
-    "REFLECTION_ON_SESSION_CLOSE",
-    # Budget-aware dispatch: protective + owner-legible (raises an ask, holds spend).
-    "BUDGET_AWARE_AUTONOMY",
-})
-_POSTURE_FULL_FLAGS = _POSTURE_OWNER_VISIBLE_FLAGS | {"CRON_ENABLED", "WAKE_CHANGE_GATE"}
-_AUTONOMY_POSTURES = ("silent", "owner-visible", "full")
-
-
-def autonomy_posture() -> str:
-    """Resolved AUTONOMY_POSTURE (silent|owner-visible|full).
-
-    Default `silent` in BOTH modes (byte-identical to pre-W1-1). An unknown value
-    degrades to `silent` so a typo never silently activates autonomy. Access-time so
-    tests/bootstrap env changes are seen.
-    """
-    raw = (os.getenv("AUTONOMY_POSTURE") or "").strip().lower()
-    return raw if raw in _AUTONOMY_POSTURES else "silent"
-
-
-def _posture_autonomy_default(flag_name: str) -> bool:
-    """Default for a posture-governed autonomy flag, given the resolved posture."""
-    posture = autonomy_posture()
-    if posture == "full":
-        return flag_name in _POSTURE_FULL_FLAGS
-    if posture == "owner-visible":
-        return flag_name in _POSTURE_OWNER_VISIBLE_FLAGS
-    return False  # silent: today's defaults
-
-
-# --- AGENT_COMPUTE_POSTURE — the compute-capability ladder (computer-use parity) ----
-#
-# A THIRD capability axis, orthogonal to POLYROB_LOCAL (single-user trust profile)
-# and AUTONOMY_POSTURE (which autonomy loops run): how much host/compute capability
-# the agent has.
-#
-#   0  confined      (default) — today's docker sandbox, no persistent shell.
-#   1  sandbox-dev   — persistent networked sandbox + importable pip installs +
-#                      `shell` scoped INTO the container + loopback port-publish.
-#   2  self-maintain — posture 1 + the approval-gated `self_env` verbs.
-#   3  host          — Hermes-parity host access; requires POLYROB_LOCAL and a
-#                      single-tenant box (refused on network-facing surfaces).
-#
-# SECURITY CONTRACT:
-# - Default CLOSED: unset/garbage/out-of-range -> 0. Garbage NEVER rounds up —
-#   only the literal values 0|1|2|3 are accepted (a typo'd "9" must not grant the
-#   host tier).
-# - FROZEN AT IMPORT: the value is snapshotted once at module import so a
-#   mid-process env mutation (e.g. a prompt-injected write that reached an
-#   env-mutating surface) can never raise the running posture. Operators set it
-#   in real process env (systemd EnvironmentFile / shell / dotenv loaded at
-#   process start, see main.py) — never at runtime.
-# - The posture is the "may" side only; the existing correspondent-taint gate and
-#   delegation blocklist stay the "never" side. `compute_posture_allows` is the
-#   ONE predicate every posture-gated capability must call.
-
-def _resolve_compute_posture(raw) -> int:
-    """PURE: parse one env value -> posture int. Only literal 0|1|2|3 accepted;
-    anything else (unset/garbage/out-of-range) degrades CLOSED to 0."""
-    try:
-        val = int(str(raw).strip())
-    except (TypeError, ValueError):
-        return 0
-    return val if val in (0, 1, 2, 3) else 0
-
-
-_COMPUTE_POSTURE_FROZEN = _resolve_compute_posture(os.getenv("AGENT_COMPUTE_POSTURE"))
-
-
-def compute_posture() -> int:
-    """Resolved AGENT_COMPUTE_POSTURE (0-3), FROZEN at import (see block comment)."""
-    return _COMPUTE_POSTURE_FROZEN
-
-
-def _refreeze_compute_posture_for_tests() -> int:
-    """TEST-ONLY seam: re-snapshot the frozen posture from the current env.
-
-    Production code must never call this — the freeze is the security property.
-    """
-    global _COMPUTE_POSTURE_FROZEN
-    _COMPUTE_POSTURE_FROZEN = _resolve_compute_posture(os.getenv("AGENT_COMPUTE_POSTURE"))
-    return _COMPUTE_POSTURE_FROZEN
-
-
-# Turn kinds that mark a forged (non-user) re-entry — kept in sync lazily with
-# agents.task.agent.core.self_wake.FORGED_TURN_KINDS (the SSOT, stdlib-only module);
-# this literal fallback only serves if that import ever fails, and failing CLOSED
-# here means "treat as forged", never "let it through".
-_FORGED_TURN_KINDS_FALLBACK = ("self_wake", "delegation_result")
-
-
-def compute_posture_allows(execution_context, min_posture: int) -> bool:
-    """THE single gate predicate for posture-gated compute capabilities.
-
-    True only when ALL hold:
-      (a) frozen ``compute_posture() >= min_posture``;
-      (b) the session tenant is the OWNER — ``is_owner_local_safe`` (principal
-          match always wins; the POLYROB_LOCAL bypass is honored ONLY for the
-          CLI's ``local`` operator tenant, so a forgeable network sender under
-          POLYROB_LOCAL=1 on a public surface is never auto-owned);
-      (c) not a leaf/sub-agent context;
-      (d) not a forged self-wake/delegation-result re-entry turn (the
-          ``metadata["turn_kind"]`` stamp, SK-F10).
-
-    An autonomous goal/cron session of the owner tenant PASSES (no forged stamp;
-    role is orchestrator) — deliberate: WS-8 provisions those runs with the
-    compute toolset, and the correspondent-taint gate + delegation blocklist
-    remain the independent "never" side. ``min_posture <= 0`` is the
-    unconditional baseline (posture-0 capabilities keep their own gates).
-    Fail-CLOSED: any fault in resolution denies.
-    """
-    if min_posture <= 0:
-        return True
-    try:
-        if compute_posture() < min_posture:
-            return False
-        if execution_context is None:
-            return False
-        if getattr(execution_context, "is_sub_agent", False):
-            return False
-        if getattr(execution_context, "role", "leaf") != "orchestrator":
-            return False
-        metadata = getattr(execution_context, "metadata", None) or {}
-        try:
-            from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as _kinds
-        except Exception:
-            _kinds = _FORGED_TURN_KINDS_FALLBACK
-        if metadata.get("turn_kind") in _kinds:
-            return False
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        return is_owner_local_safe(
-            getattr(execution_context, "user_id", None),
-            owner_principal=resolve_owner_principal(),
-            local_enabled=local_mode_enabled(),
-        )
-    except Exception:
-        return False  # fail-closed: can't prove entitlement -> deny
-
-
-class AutonomyConfig:
-    """Feature flags + caps for the autonomy/continuous-learning loops.
-
-    Read through this class (not raw os.getenv) so every loop shares one parser and
-    the defaults are documented in one place. Evaluated at access time (classmethod /
-    property-free) so tests can monkeypatch env between calls.
-    """
-
-    # W1 — self-wake rail
-    @staticmethod
-    def self_wake_enabled() -> bool:
-        return _bool_env("SELF_WAKE_ENABLED", _safe_autonomy_default("SELF_WAKE_ENABLED"))
-
-    @staticmethod
-    def self_wake_max_reentries() -> int:
-        return _int_env("SELF_WAKE_MAX_REENTRIES", 3)
-
-    @staticmethod
-    def self_wake_idle_backoff_sec() -> float:
-        try:
-            return float(os.getenv("SELF_WAKE_IDLE_BACKOFF_SEC", "30"))
-        except (TypeError, ValueError):
-            return 30.0
-
-    # W2 — writable skills + background review
-    @staticmethod
-    def skills_writable() -> bool:
-        return _bool_env("SKILLS_WRITABLE", _safe_autonomy_default("SKILLS_WRITABLE"))
-
-    @staticmethod
-    def skills_writable_require_review() -> bool:
-        return _bool_env("SKILLS_WRITABLE_REQUIRE_REVIEW", True)
-
-    @staticmethod
-    def skill_overwrite_protect() -> bool:
-        # An agent/background overwrite of an existing ACTIVE skill becomes a .pending
-        # proposal (owner promotes); all overwrites archive the prior body. Default ON.
-        return _bool_env("SKILL_OVERWRITE_PROTECT", True)
-
-    # polyrob C-write — evolving SELF identity (agent-writable per-(instance,user) doc)
-    @staticmethod
-    def self_context_writable() -> bool:
-        return _bool_env("SELF_CONTEXT_WRITABLE", _safe_autonomy_default("SELF_CONTEXT_WRITABLE"))
-
-    @staticmethod
-    def self_context_require_review() -> bool:
-        return _bool_env("SELF_CONTEXT_REQUIRE_REVIEW", True)
-
-    # Bounded owner-facts doc (USER.md-equivalent) — agent-maintained per-(instance,
-    # user) document of durable owner facts/preferences, injected on the SELF/SOUL
-    # seam. Same quarantine-then-promote model as SELF; ON under the local profile.
-    @staticmethod
-    def owner_doc_writable() -> bool:
-        return _bool_env("OWNER_DOC_WRITABLE", _safe_autonomy_default("OWNER_DOC_WRITABLE"))
-
-    @staticmethod
-    def owner_doc_require_review() -> bool:
-        return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
-
-    # §7.1 — self-evolution transparency + owner control loop
-    @staticmethod
-    def self_evolution_transparency() -> bool:
-        return _bool_env("SELF_EVOLUTION_TRANSPARENCY",
-                         _safe_autonomy_default("SELF_EVOLUTION_TRANSPARENCY"))
-
-    @staticmethod
-    def background_review_enabled() -> bool:
-        return _bool_env("BACKGROUND_REVIEW_ENABLED", _safe_autonomy_default("BACKGROUND_REVIEW_ENABLED"))
-
-    @staticmethod
-    def bg_review_interval() -> int:
-        return _int_env("BG_REVIEW_INTERVAL", 10)
-
-    @staticmethod
-    def bg_review_max_steps() -> int:
-        return _int_env("BG_REVIEW_MAX_STEPS", 8)
-
-    # W3 — cron run-loop + delivery
-    @staticmethod
-    def cron_run_loop() -> bool:
-        return _bool_env("CRON_RUN_LOOP", True)
-
-    @staticmethod
-    def cron_delivery_enabled() -> bool:
-        return _bool_env("CRON_DELIVERY_ENABLED", False)
-
-    # Owner daily digest: a cron job carrying payload.digest is composed
-    # deterministically ($0, no model turn) from the ledger + event log + open
-    # asks and pushed via the cron delivery rail. Default OFF.
-    @staticmethod
-    def owner_digest_enabled() -> bool:
-        return _bool_env("OWNER_DIGEST_ENABLED", False)
-
-    # W4 — durable goal board
-    @staticmethod
-    def goals_enabled() -> bool:
-        return _bool_env("GOALS_ENABLED", _safe_autonomy_default("GOALS_ENABLED"))
-
-    @staticmethod
-    def goal_max_retries() -> int:
-        return _int_env("GOAL_MAX_RETRIES", 2)
-
-    @staticmethod
-    def goal_claim_ttl_sec() -> int:
-        return _int_env("GOAL_CLAIM_TTL_SEC", 900)
-
-    @staticmethod
-    def goal_max_run_seconds() -> int:
-        """H11: hard wall-clock cap on a single goal run (mirrors cron's per-job cap).
-        A goal is otherwise bounded only by max_steps, so one hung step (tool/LLM/browser)
-        blocks forever and permanently occupies a GOAL_MAX_CONCURRENT slot."""
-        return _int_env("GOAL_MAX_RUN_SECONDS", 1800)
-
-    @staticmethod
-    def goal_dispatch_interval_sec() -> int:
-        return _int_env("GOAL_DISPATCH_INTERVAL_SEC", 60)
-
-    @staticmethod
-    def goal_max_concurrent() -> int:
-        return _int_env("GOAL_MAX_CONCURRENT", 2)
-
-    @staticmethod
-    def goal_dedup_threshold() -> float:
-        try:
-            return float(os.getenv("GOAL_DEDUP_THRESHOLD", "0.6"))
-        except (TypeError, ValueError):
-            return 0.6
-
-    @staticmethod
-    def goal_planner_enabled() -> bool:
-        return _bool_env("GOAL_PLANNER_ENABLED", _safe_autonomy_default("GOAL_PLANNER_ENABLED"))
-
-    @staticmethod
-    def goal_planner_min_ready() -> int:
-        return _int_env("GOAL_PLANNER_MIN_READY", 2)
-
-    @staticmethod
-    def goal_planner_cooldown_sec() -> int:
-        return _int_env("GOAL_PLANNER_COOLDOWN_SEC", 3600)
-
-    @staticmethod
-    def goal_planner_history_n() -> int:
-        return _int_env("GOAL_PLANNER_HISTORY_N", 10)
-
-    @staticmethod
-    def goal_daily_quota() -> int:
-        """Max goal runs started per trailing 24h; <=0 disables the rail."""
-        return _int_env("GOAL_DAILY_QUOTA", 6)
-
-    @staticmethod
-    def goal_self_wake_enabled() -> bool:
-        # Was unconditional; redundant-cost finding (grok livetest 2026-06-27).
-        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("GOAL_SELF_WAKE_ENABLED",
-                         _posture_autonomy_default("GOAL_SELF_WAKE_ENABLED"))
-
-    # Budget-aware dispatch: before claiming a goal, consult the unified ledger for
-    # the tenant's trailing spend; over budget -> raise an owner-visible ask and
-    # hold the goal instead of burning credits. Default governed by AUTONOMY_POSTURE
-    # (owner-visible/full) — a protective, owner-legible behavior. Explicit env wins.
-    @staticmethod
-    def budget_aware_autonomy() -> bool:
-        return _bool_env("BUDGET_AWARE_AUTONOMY",
-                         _posture_autonomy_default("BUDGET_AWARE_AUTONOMY"))
-
-    @staticmethod
-    def autonomy_budget_usd() -> float:
-        """Trailing-window spend ceiling for autonomous goal dispatch (USD).
-        <=0 disables the ceiling (never over budget)."""
-        try:
-            return float(os.getenv("AUTONOMY_BUDGET_USD", "10"))
-        except (TypeError, ValueError):
-            return 10.0
-
-    @staticmethod
-    def autonomy_budget_window_days() -> int:
-        return _int_env("AUTONOMY_BUDGET_WINDOW_DAYS", 1)
-
-    # §3.2 (goal-completion-verification, 2026-07-05) — judge a completed goal's
-    # acceptance with a cheap aux model. 'unmet' -> record_failure, 'unclear'/error/
-    # timeout -> pass (fail-open). W1-1: default governed by AUTONOMY_POSTURE.
-    @staticmethod
-    def goal_completion_judge() -> bool:
-        return _bool_env("GOAL_COMPLETION_JUDGE",
-                         _posture_autonomy_default("GOAL_COMPLETION_JUDGE"))
-
-    @staticmethod
-    def goal_judge_timeout_sec() -> int:
-        return _int_env("GOAL_JUDGE_TIMEOUT_SEC", 60)
-
-    # Wake change-gate: a change-gated cron review
-    # tick skips the paid model call when the tenant's observable state hasn't
-    # moved since the last tick (cron/wake_gate.py). Posture `full` turns it on
-    # by default — it pairs with CRON_ENABLED; per-job opt-in via
-    # payload.change_gated, delivery jobs never gated.
-    @staticmethod
-    def wake_change_gate() -> bool:
-        return _bool_env("WAKE_CHANGE_GATE",
-                         _posture_autonomy_default("WAKE_CHANGE_GATE"))
-
-    # §7.2 — blocker → owner escalation. When a goal trips the circuit breaker
-    # (status='blocked') OR the pipeline drains, surface a concrete ask to the owner
-    # instead of dying silently. Default OFF (an unsolicited owner push is opt-in).
-    @staticmethod
-    def goal_blocker_escalation() -> bool:
-        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("GOAL_BLOCKER_ESCALATION",
-                         _posture_autonomy_default("GOAL_BLOCKER_ESCALATION"))
-
-    @staticmethod
-    def goal_empty_pipeline_escalate_after() -> int:
-        """Consecutive planner runs that leave the ready queue EMPTY before the
-        stall escalates to the owner (rides GOAL_BLOCKER_ESCALATION)."""
-        return _int_env("GOAL_EMPTY_PIPELINE_ESCALATE_AFTER", 2)
-
-    # §7.5 — autonomous continuity bridge. Carry a recent-activity summary INTO a
-    # goal/cron tick (opposite scoping to the chat digest) so autonomous runs stop
-    # re-deriving "nothing new" every tick. Default OFF (additive context; verify
-    # token cost before flipping on).
-    @staticmethod
-    def autonomous_continuity_bridge() -> bool:
-        # W1-1: default governed by AUTONOMY_POSTURE (owner-visible/full turn it on).
-        return _bool_env("AUTONOMOUS_CONTINUITY_BRIDGE",
-                         _posture_autonomy_default("AUTONOMOUS_CONTINUITY_BRIDGE"))
-
-    # W5 — curator
-    @staticmethod
-    def curator_enabled() -> bool:
-        return _bool_env("CURATOR_ENABLED", _safe_autonomy_default("CURATOR_ENABLED"))
-
-    @staticmethod
-    def curator_interval_hours() -> int:
-        return _int_env("CURATOR_INTERVAL_HOURS", 168)
-
-    @staticmethod
-    def curator_stale_days() -> int:
-        return _int_env("CURATOR_STALE_DAYS", 30)
-
-    @staticmethod
-    def curator_archive_days() -> int:
-        return _int_env("CURATOR_ARCHIVE_DAYS", 90)
-
-    # (curator_llm_merge / CURATOR_LLM_MERGE removed 2026-06-29 — the Phase-2 merge step
-    #  it gated was a logged no-op with no merge policy. Re-add under its own flag when a
-    #  concrete policy exists.)
-
-    # W6 — cross-session search tool (read-only, default-on)
-    @staticmethod
-    def memory_search_tool() -> bool:
-        return _bool_env("MEMORY_SEARCH_TOOL", True)
-
-    # W7 — insights tool (read-only authored-skill reuse metric)
-    @staticmethod
-    def insights_tool() -> bool:
-        return _bool_env("INSIGHTS_TOOL", _safe_autonomy_default("INSIGHTS_TOOL"))
-
-    # KB — knowledge-base feature gate (Task 2 / local_vector prerequisite)
-    @staticmethod
-    def kb_enabled() -> bool:
-        return _bool_env("KB_ENABLED", _safe_autonomy_default("KB_ENABLED"))
-
-    # C1 — context-reference expansion (@file/@folder/@diff/@url)
-    # Default ON under POLYROB_LOCAL (single-user CLI), OFF on the server.
-    @staticmethod
-    def context_references_enabled() -> bool:
-        return _bool_env(
-            "CONTEXT_REFERENCES_ENABLED",
-            _safe_autonomy_default("CONTEXT_REFERENCES_ENABLED"),
-        )
-
-    # C9 — auto-load CLAUDE.md/AGENTS.md/.cursorrules as a PROJECT_CONTEXT foundation
-    # message. Default ON under POLYROB_LOCAL (single-user CLI), OFF on the server.
-    @staticmethod
-    def project_context_autoload() -> bool:
-        return _bool_env(
-            "PROJECT_CONTEXT_AUTOLOAD",
-            _safe_autonomy_default("PROJECT_CONTEXT_AUTOLOAD"),
-        )
-
-    @staticmethod
-    def project_context_max_tokens() -> int:
-        return _int_env("PROJECT_CONTEXT_MAX_TOKENS", 20000)
-
-    # Phase 2 — server-side project-context opt-in. When ON (and NOT local mode),
-    # the loader runs on the server and the file is injected UNTRUSTED-WRAPPED
-    # (framed as DATA, not instructions). Default OFF and deliberately NOT a
-    # safe-local flag — POLYROB_LOCAL must not flip it on, so the multi-tenant
-    # server stays byte-identical unless an operator explicitly opts in.
-    @staticmethod
-    def project_context_server_mode() -> bool:
-        return _bool_env("PROJECT_CONTEXT_SERVER_MODE", False)
-
-    # T13 — KB auto-prefetch (inject KB recall alongside memory recall at step start)
-    # Default ON under POLYROB_LOCAL (single-user CLI), OFF on multi-tenant server.
-    @staticmethod
-    def kb_auto_prefetch() -> bool:
-        return _bool_env("KB_AUTO_PREFETCH", _safe_autonomy_default("KB_AUTO_PREFETCH"))
-
-    # Task 2 — episodic activity ledger (durable per-run provenance rows).
-    # Default ON under POLYROB_LOCAL (single-user CLI) OR AUTONOMY_POSTURE
-    # owner-visible/full (verified + owner-visible autonomy implies a durable
-    # activity ledger, so episodic is part of the posture group).
-    @staticmethod
-    def episodic_memory_enabled() -> bool:
-        return _bool_env("EPISODIC_MEMORY_ENABLED",
-                         _safe_autonomy_default("EPISODIC_MEMORY_ENABLED")
-                         or _posture_autonomy_default("EPISODIC_MEMORY_ENABLED"))
-
-    # Task 3 — inject a recent-episodes digest into the session.
-    @staticmethod
-    def episodic_digest_inject() -> bool:
-        return _bool_env("EPISODIC_DIGEST_INJECT",
-                         _safe_autonomy_default("EPISODIC_DIGEST_INJECT")
-                         or _posture_autonomy_default("EPISODIC_DIGEST_INJECT"))
-
-    # Session-close reflection (consolidate a short session's findings
-    # at close; one extra aux call per closed session). Posture-governed so an
-    # owner-visible instance actually learns from its autonomous runs. Consumer:
-    # modules/memory/task/task_context_manager.py (reads this resolver lazily).
-    @staticmethod
-    def reflection_on_session_close() -> bool:
-        return _bool_env("REFLECTION_ON_SESSION_CLOSE",
-                         _posture_autonomy_default("REFLECTION_ON_SESSION_CLOSE"))
-
-    # Restart-durable autonomy state (background delegations + reentry
-    # budgets in autonomy_state.db). Default ON; off restores volatile registries.
-    @staticmethod
-    def autonomy_state_durable() -> bool:
-        return _bool_env("AUTONOMY_STATE_DURABLE", True)
-
-    # Task 4 — cross-session continuity bridge (thread_key stitching).
-    @staticmethod
-    def continuity_bridge_enabled() -> bool:
-        return _bool_env("CONTINUITY_BRIDGE_ENABLED", _safe_autonomy_default("CONTINUITY_BRIDGE_ENABLED"))
-
-    # Task 4 — LLM-generated continuity summary at reset. Intentionally NOT in
-    # _SAFE_LOCAL_FLAGS: OFF everywhere by default (adds latency at reset).
-    @staticmethod
-    def continuity_llm_summary() -> bool:
-        return _bool_env("CONTINUITY_LLM_SUMMARY", False)  # OFF everywhere (latency at reset)
-
-    # Task 2 — episodic row retention window (days); pruning consumer TBD.
-    @staticmethod
-    def episodic_retention_days() -> int:
-        return _int_env("EPISODIC_RETENTION_DAYS", 90)
-
-    # T16 — interrupt-and-redirect: Ctrl-C mid-turn prompts for a redirect instruction
-    # that becomes the next turn instead of silently aborting. Default OFF; NOT in
-    # _SAFE_LOCAL_FLAGS (must be opt-in — changes SIGINT UX for all local users).
-    @staticmethod
-    def interrupt_redirect_enabled() -> bool:
-        return _bool_env("INTERRUPT_REDIRECT", False)
-
+# WS-1 (2026-07-16): the autonomy/mode/posture/payment-policy cluster + AutonomyConfig
+# were relocated to the core tier (core/config_policy/policy.py) to break the
+# core<->agents.task import cycle. They are re-exported here UNCHANGED so every existing
+# `from agents.task.constants import ...` keeps working. See
+# docs/plans/2026-07-16-ws1-config-relocation.md. New code imports from core.config_policy.
+from core.config_policy import *  # noqa: F401,F403
+from core.config_policy import (  # noqa: F401  (underscored + module-scope-used names)
+    _FALSEY,
+    _MODE_CAPABILITY_FLAGS,
+    _POSTURE_FULL_FLAGS,
+    _POSTURE_OWNER_VISIBLE_FLAGS,
+    _SAFE_LOCAL_FLAGS,
+    _bool_env,
+    _int_env,
+    _mode_capability_default,
+    _posture_autonomy_default,
+    _refreeze_compute_posture_for_tests,
+    _refreeze_payment_approval_flags_for_tests,
+    _safe_autonomy_default,
+    reset_autonomy_mode_warnings,
+)
 
 class TimeoutConfig:
     """Centralized timeout configuration - SINGLE SOURCE OF TRUTH.
@@ -1034,11 +316,11 @@ class TimeoutConfig:
     # ========== TOOL EXECUTION TIMEOUTS ==========
     # These are applied in controller/service.py multi_act()
     TOOL_TIMEOUTS = {
-        'mcp': int(os.getenv('MCP_TIMEOUT_SECONDS', '180')),       # MCP: network/subprocess latency
-        'browser': int(os.getenv('BROWSER_TIMEOUT_SECONDS', '120')),   # Browser: page loads, DOM operations
-        'filesystem': int(os.getenv('FILESYSTEM_TIMEOUT_SECONDS', '30')),  # Filesystem: fast local I/O
-        'polymarket': int(os.getenv('POLYMARKET_TIMEOUT_SECONDS', '60')),  # Polymarket API
-        'default': int(os.getenv('DEFAULT_TOOL_TIMEOUT_SECONDS', '60')),   # Default for unknown tools
+        'mcp': _core_int_env('MCP_TIMEOUT_SECONDS', 180),       # MCP: network/subprocess latency
+        'browser': _core_int_env('BROWSER_TIMEOUT_SECONDS', 120),   # Browser: page loads, DOM operations
+        'filesystem': _core_int_env('FILESYSTEM_TIMEOUT_SECONDS', 30),  # Filesystem: fast local I/O
+        'polymarket': _core_int_env('POLYMARKET_TIMEOUT_SECONDS', 60),  # Polymarket API
+        'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 60),   # Default for unknown tools
     }
 
     # ========== SUB-AGENT CONTROLS ==========
@@ -1069,7 +351,7 @@ class TimeoutConfig:
         config = cls._get_config()
         if config:
             return config.sub_agent_timeout
-        return int(os.getenv('SUB_AGENT_TIMEOUT_SECONDS', '600'))
+        return _core_int_env('SUB_AGENT_TIMEOUT_SECONDS', 600)
 
     @classmethod
     def get_parallel_subtasks_timeout(cls) -> int:
@@ -1077,7 +359,7 @@ class TimeoutConfig:
         config = cls._get_config()
         if config:
             return config.parallel_subtasks_timeout
-        return int(os.getenv('PARALLEL_SUBTASKS_TIMEOUT_SECONDS', '900'))
+        return _core_int_env('PARALLEL_SUBTASKS_TIMEOUT_SECONDS', 900)
 
     @classmethod
     def get_max_concurrent_sub_agents(cls) -> int:
@@ -1085,7 +367,7 @@ class TimeoutConfig:
         config = cls._get_config()
         if config:
             return config.max_concurrent_sub_agents
-        return int(os.getenv('MAX_CONCURRENT_SUB_AGENTS', '3'))
+        return _core_int_env('MAX_CONCURRENT_SUB_AGENTS', 3)
 
     @classmethod
     def get_max_sub_agent_depth(cls) -> int:
@@ -1093,7 +375,7 @@ class TimeoutConfig:
         config = cls._get_config()
         if config:
             return config.max_sub_agent_depth
-        return int(os.getenv('MAX_SUB_AGENT_DEPTH', '1'))
+        return _core_int_env('MAX_SUB_AGENT_DEPTH', 1)
 
     @classmethod
     def get_max_async_sub_agents(cls) -> int:
@@ -1104,7 +386,7 @@ class TimeoutConfig:
         same SubAgentManager semaphore, so the background cap must not exceed the total).
         Env: MAX_ASYNC_SUB_AGENTS (default 2).
         """
-        raw = int(os.getenv('MAX_ASYNC_SUB_AGENTS', '2'))
+        raw = _core_int_env('MAX_ASYNC_SUB_AGENTS', 2)
         ceiling = cls.get_max_concurrent_sub_agents()
         return max(1, min(raw, ceiling))
 
@@ -1117,19 +399,19 @@ class TimeoutConfig:
     MAX_SUB_AGENT_DEPTH = 1
 
     # ========== STEP/SESSION TIMEOUTS ==========
-    STEP_TIMEOUT = float(os.getenv('STEP_TIMEOUT_SECONDS', '300'))       # 5 min per step
-    STALL_TIMEOUT = float(os.getenv('STALL_TIMEOUT_SECONDS', '300'))     # 5 min stall detection
+    STEP_TIMEOUT = _core_float_env('STEP_TIMEOUT_SECONDS', 300)       # 5 min per step
+    STALL_TIMEOUT = _core_float_env('STALL_TIMEOUT_SECONDS', 300)     # 5 min stall detection
 
     # ========== LLM REQUEST TIMEOUTS ==========
-    LLM_REQUEST_TIMEOUT = int(os.getenv('LLM_REQUEST_TIMEOUT_SECONDS', '120'))   # Standard LLM request
-    LLM_STREAM_TIMEOUT = int(os.getenv('LLM_STREAM_TIMEOUT_SECONDS', '300'))     # Streaming needs longer
-    LLM_BASE_TIMEOUT = float(os.getenv('LLM_BASE_TIMEOUT_SECONDS', '30'))        # Base (adjusted by tokens)
+    LLM_REQUEST_TIMEOUT = _core_int_env('LLM_REQUEST_TIMEOUT_SECONDS', 120)   # Standard LLM request
+    LLM_STREAM_TIMEOUT = _core_int_env('LLM_STREAM_TIMEOUT_SECONDS', 300)     # Streaming needs longer
+    LLM_BASE_TIMEOUT = _core_float_env('LLM_BASE_TIMEOUT_SECONDS', 30)        # Base (adjusted by tokens)
 
     # ========== BROWSER CLEANUP TIMEOUTS ==========
-    BROWSER_CLOSE = float(os.getenv('BROWSER_CLOSE_TIMEOUT', '3.0'))
-    BROWSER_CONTEXT_CLOSE = float(os.getenv('BROWSER_CONTEXT_CLOSE_TIMEOUT', '8.0'))
-    BROWSER_INSTANCE_CLOSE = float(os.getenv('BROWSER_INSTANCE_CLOSE_TIMEOUT', '5.0'))
-    PROCESS_KILL = float(os.getenv('PROCESS_KILL_TIMEOUT', '2.0'))
+    BROWSER_CLOSE = _core_float_env('BROWSER_CLOSE_TIMEOUT', 3.0)
+    BROWSER_CONTEXT_CLOSE = _core_float_env('BROWSER_CONTEXT_CLOSE_TIMEOUT', 8.0)
+    BROWSER_INSTANCE_CLOSE = _core_float_env('BROWSER_INSTANCE_CLOSE_TIMEOUT', 5.0)
+    PROCESS_KILL = _core_float_env('PROCESS_KILL_TIMEOUT', 2.0)
 
     @classmethod
     def get_tool_timeout(cls, tool_name: str) -> int:
@@ -1173,30 +455,47 @@ DEFAULT_MAX_ERROR_LENGTH = 400  # Maximum length for error messages
 DEFAULT_MAX_ACTIONS_PER_STEP = 10  # Maximum actions per step
 DEFAULT_MIN_INPUT_TOKENS = 1000  # Minimum safe input tokens
 
+# The safe-minimum toolset every agent always needs (SSOT — was spelled out as a
+# literal in orchestrator.py, goals/dispatcher.py and cron/runner.py; a shared
+# constant stops those three from silently diverging). Immutable tuple — callers
+# that need a mutable list do list(BASE_DEFAULT_TOOLS).
+BASE_DEFAULT_TOOLS = ("filesystem", "task")
+
+# The full autonomous grant under AUTONOMY_MODE=autonomous (proposal 013 §2.3):
+# every research/content/comms/coding/receivables tool. NEVER money-spend
+# (x402_pay/wallet/hyperliquid/polymarket) and NEVER host/compute tools
+# (code_execution/shell/self_env — those ride AGENT_COMPUTE_POSTURE).
+AUTONOMOUS_MODE_TOOLS = (
+    "filesystem", "task", "web_fetch", "knowledge",
+    "twitter", "email", "anysite", "perplexity",
+    "browser", "mcp", "coding", "x402_invoice",
+    "goal", "cronjob",
+)
+
 # MCP Tool Throttling (single source of truth)
 # MCP actions (scraping, searches, APIs) are expensive and execute SEQUENTIALLY
 # Each MCP action takes 30-180 seconds. Limiting prevents timeout cascades.
-MAX_MCP_PER_STEP = int(os.getenv('MAX_MCP_PER_STEP', '3'))  # Configurable via env
+MAX_MCP_PER_STEP = _core_int_env('MAX_MCP_PER_STEP', 3)  # Configurable via env
 
 # Context-compaction hysteresis (flow-efficiency D3-a)
 # LLM compaction (llm_compact_history) is an EXTRA LLM call. Without a cooldown it
 # re-fires every step once usage stays >=85% (a single large MCP result can re-cross
 # the line each step), doubling call cost on long runs. Enforce a minimum step gap
 # between LLM compactions; the >=95% emergency prune (non-LLM) remains the safety net.
-COMPACTION_COOLDOWN_STEPS = int(os.getenv('COMPACTION_COOLDOWN_STEPS', '3'))
+COMPACTION_COOLDOWN_STEPS = _core_int_env('COMPACTION_COOLDOWN_STEPS', 3)
 
 # Compaction payload tuning (Reference-parity context upgrade, 2026-06).
 # These govern HOW the LLM compaction summarizes, not WHEN it fires (the tiered
 # thresholds in CompactionManager own the trigger). Previously the summary input
 # was silently truncated to the last 50 messages, each clipped to 500 chars, with
 # tool results dropped entirely -> the summary lost most of what it claimed to keep.
-COMPACTION_KEEP_RECENT = int(os.getenv('COMPACTION_KEEP_RECENT', '10'))  # min recent msgs kept verbatim
-COMPACTION_TAIL_TOKEN_RATIO = float(os.getenv('COMPACTION_TAIL_TOKEN_RATIO', '0.20'))  # C3: tail kept by token budget too
-COMPACTION_PER_MSG_CHARS = int(os.getenv('COMPACTION_PER_MSG_CHARS', '3000'))  # A2: per-message head+tail budget into summarizer
-COMPACTION_TOOL_RESULT_CHARS = int(os.getenv('COMPACTION_TOOL_RESULT_CHARS', '2000'))  # A2: tool-result budget (was: dropped)
-COMPACTION_MAX_SUMMARY_TOKENS = int(os.getenv('COMPACTION_MAX_SUMMARY_TOKENS', '12000'))  # A3: ceiling for summary budget
-COMPACTION_MIN_SUMMARY_TOKENS = int(os.getenv('COMPACTION_MIN_SUMMARY_TOKENS', '2000'))  # A3: floor for summary budget
-COMPACTION_MIN_SAVINGS_PCT = float(os.getenv('COMPACTION_MIN_SAVINGS_PCT', '10.0'))  # B4: anti-thrash back-off threshold
+COMPACTION_KEEP_RECENT = _core_int_env('COMPACTION_KEEP_RECENT', 10)  # min recent msgs kept verbatim
+COMPACTION_TAIL_TOKEN_RATIO = _core_float_env('COMPACTION_TAIL_TOKEN_RATIO', 0.20)  # C3: tail kept by token budget too
+COMPACTION_PER_MSG_CHARS = _core_int_env('COMPACTION_PER_MSG_CHARS', 3000)  # A2: per-message head+tail budget into summarizer
+COMPACTION_TOOL_RESULT_CHARS = _core_int_env('COMPACTION_TOOL_RESULT_CHARS', 2000)  # A2: tool-result budget (was: dropped)
+COMPACTION_MAX_SUMMARY_TOKENS = _core_int_env('COMPACTION_MAX_SUMMARY_TOKENS', 12000)  # A3: ceiling for summary budget
+COMPACTION_MIN_SUMMARY_TOKENS = _core_int_env('COMPACTION_MIN_SUMMARY_TOKENS', 2000)  # A3: floor for summary budget
+COMPACTION_MIN_SAVINGS_PCT = _core_float_env('COMPACTION_MIN_SAVINGS_PCT', 10.0)  # B4: anti-thrash back-off threshold
 COMPACTION_CHECKPOINT = _core_bool_env('COMPACTION_CHECKPOINT', True)  # C2: dump pre-compaction trajectory
 # A5: route the (expensive, repeated) summarization call to a cheaper auxiliary model.
 # Empty -> use the main model (backward-compatible). Format: "provider:model" or "model".
@@ -1207,7 +506,7 @@ COMPACTION_AUX_MODEL = os.getenv('COMPACTION_AUX_MODEL', '')
 # "planning" turns to be treated as legitimate (gentle nudge) rather than a hard
 # error on the very first empty response. The 3-consecutive thinking-loop
 # escalation remains the hard backstop, so the loop bound is unchanged.
-ALLOWED_REASONING_TURNS = int(os.getenv('ALLOWED_REASONING_TURNS', '1'))
+ALLOWED_REASONING_TURNS = _core_int_env('ALLOWED_REASONING_TURNS', 1)
 
 # S-1: progressive skill disclosure. When ON (the DEFAULT — see the function below),
 # only a compact <skill-catalog> (ids + one-line descriptions, ~0.15k) is injected and

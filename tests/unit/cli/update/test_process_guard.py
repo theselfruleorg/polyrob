@@ -115,6 +115,54 @@ def test_active_use_reasons_flags_running_server(monkeypatch):
     assert any("server" in r.lower() or "running" in r.lower() for r in reasons)
 
 
+# ---------------------------------------------------------------------------
+# U8 (2026-07-14 review): the process scan must not be /proc-only — on macOS
+# (no /proc) the in-use guard was fail-open and --apply/--rollback would
+# os.replace DBs under a live agent without --force.
+# ---------------------------------------------------------------------------
+
+def test_cmdline_scan_not_empty_on_this_platform():
+    """The default scan yields processes on EVERY supported platform (this test
+    runs on macOS in dev and Linux in CI — both must produce a non-empty scan)."""
+    from cli.update.process_guard import _iter_cmdlines
+    assert any(True for _ in _iter_cmdlines()), (
+        "process scan is empty — the in-use guard is fail-open on this platform")
+
+
+def test_ps_output_parsing():
+    from cli.update.process_guard import _parse_ps_lines
+    out = (
+        "  123 /opt/polyrob/venv/bin/polyrob telegram\n"
+        "  456 python -m uvicorn api.app:app\n"
+        "notapid junk line\n"
+        "\n"
+    )
+    parsed = list(_parse_ps_lines(out))
+    assert (123, ["/opt/polyrob/venv/bin/polyrob", "telegram"]) in parsed
+    assert (456, ["python", "-m", "uvicorn", "api.app:app"]) in parsed
+    assert len(parsed) == 2
+
+
+def test_live_scan_detects_spawned_polyrob_lookalike(tmp_path):
+    """End-to-end on the real platform scanner: spawn a process whose argv looks
+    like the prod agent (`polyrob telegram`) and require the guard to see it."""
+    import subprocess
+    import sys
+    import time as _time
+
+    from cli.update.process_guard import server_process_alive
+
+    fake = tmp_path / "polyrob"
+    fake.write_text("import time\ntime.sleep(30)\n")
+    proc = subprocess.Popen([sys.executable, str(fake), "telegram"])
+    try:
+        _time.sleep(0.3)  # let the scanner see it
+        assert server_process_alive() is True
+    finally:
+        proc.kill()
+        proc.wait()
+
+
 def test_update_lock_serializes(tmp_path):
     with update_lock(tmp_path):
         with pytest.raises(UpdateLockHeld):

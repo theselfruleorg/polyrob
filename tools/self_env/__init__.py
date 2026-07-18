@@ -26,7 +26,7 @@ def self_env_enabled() -> bool:
     An explicit ``SELF_ENV_ENABLED`` always wins (e.g. force-off at a raised posture).
     """
     try:
-        from agents.task.constants import compute_posture
+        from core.config_policy import compute_posture
         default = compute_posture() >= 2
     except Exception:
         default = False

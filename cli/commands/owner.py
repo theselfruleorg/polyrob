@@ -5,9 +5,12 @@ correspondents the agent is talking to, and approve a pending one. This is the s
 admin seam for the WS-A three-tier access model (owner can command; correspondents are
 DATA-only; unknown senders are denied).
 """
+import logging
 import os
 
 import click
+
+logger = logging.getLogger(__name__)
 
 
 def _registry(data_dir: str):
@@ -37,16 +40,15 @@ def _do_allowlist(allowlist, user_id):
 
 
 def _data_dir() -> str:
-    """Resolve the SAME data home the surface daemons use (build_cli_container's
-    _resolve_cli_data_home = <cwd>/.polyrob by default, or POLYROB_DATA_DIR).
-
-    The old `POLYROB_DATA_DIR or "data"` pointed owner admin at ./data while the
-    daemon wrote to <cwd>/.polyrob/correspondents.db — so `owner correspondents/
-    approve/invite` silently operated on a DB the surface never read.
+    """Resolve the SAME data home the surface daemons use — via the ONE core
+    policy seam ``core.runtime_paths.resolve_data_home`` (POLYROB_DATA_DIR wins,
+    else <cwd>/.polyrob). The old `POLYROB_DATA_DIR or "data"` pointed owner
+    admin at ./data while the daemon wrote to <cwd>/.polyrob/correspondents.db —
+    so `owner correspondents/approve/invite` silently operated on a DB the
+    surface never read. Never re-implement resolution here.
     """
-    from core.bootstrap import _resolve_cli_data_home
-    data_home, _, _ = _resolve_cli_data_home()
-    return str(data_home)
+    from core.runtime_paths import resolve_data_home
+    return str(resolve_data_home())
 
 
 @click.group()
@@ -70,12 +72,50 @@ def show():
     s = owner_access_summary()
     op = s["owner_principal"] or click.style("(unbound — set POLYROB_OWNER_USER_ID)", fg="yellow")
     click.echo(click.style("owner: ", bold=True) + str(op))
+    from agents.task.constants import autonomy_mode_display
+    click.echo(f"autonomy mode: {autonomy_mode_display()}")
     click.echo(f"correspondent access: {'on' if s['correspondent_access_enabled'] else 'off'}"
                f"  (require approval: {'yes' if s['require_approval'] else 'no'},"
                f" cap/day: {s['max_new_correspondents_per_day']})")
     click.echo(f"owner-by-email: {'on' if s['owner_by_email'] else 'off (v1: forgeable From:)'}")
     surf = ", ".join(f"{k}={'on' if v else 'off'}" for k, v in s["surfaces"].items())
     click.echo(f"surfaces: {surf}")
+
+
+@owner.command("halt")
+def halt_cmd():
+    """Kill-switch: stop ALL autonomous dispatch + agent spend (no restart needed).
+
+    Writes an AUTONOMY_HALT file to the resolved data home; every autonomous loop,
+    trade, and payment refuses while it exists. Clear it with `polyrob owner resume`.
+    """
+    import os
+    base = _data_dir()
+    os.makedirs(base, exist_ok=True)
+    path = os.path.join(base, "AUTONOMY_HALT")
+    with open(path, "w") as fh:
+        fh.write("halted by `polyrob owner halt`\n")
+    click.echo(click.style("⛔ Autonomy HALTED", fg="red", bold=True)
+               + f" — wrote {path}.")
+    click.echo("No autonomous dispatch, trade, or agent spend will run until "
+               "`polyrob owner resume`.")
+
+
+@owner.command("resume")
+def resume_cmd():
+    """Clear the kill-switch set by `polyrob owner halt`."""
+    import os
+    path = os.path.join(_data_dir(), "AUTONOMY_HALT")
+    if os.path.exists(path):
+        os.remove(path)
+        click.echo(click.style("✅ Autonomy RESUMED", fg="green", bold=True)
+                   + f" — removed {path}.")
+    else:
+        click.echo("Autonomy was not halted (no halt file).")
+    if (os.environ.get("AUTONOMY_HALT") or "").strip():
+        click.echo(click.style(
+            "⚠ AUTONOMY_HALT is still set in the environment — that ALSO halts. "
+            "Unset it in your env file to fully resume.", fg="yellow"))
 
 
 @owner.command("correspondents")
@@ -109,7 +149,7 @@ def invite(surface, address, session_id, user, thread):
     import os
     os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
     from core.instance import resolve_owner_principal
-    from surfaces.email.seed import maybe_seed_correspondent
+    from core.surfaces.seed import maybe_seed_correspondent
 
     tenant = user or resolve_owner_principal() or "local"
 
@@ -150,24 +190,76 @@ def _allowlist_tenant(user) -> str:
     return user or resolve_identity()
 
 
+def _money_tenant(user) -> str:
+    """M16 (2026-07-15): the ONE tenant resolver for the money listings
+    (`owner sub`, and shared with `polyrob finance`).
+
+    The agent's money rows (x402 invoices, subscriptions) are created under the
+    runtime session's user_id = ``core.identity.resolve_identity()`` (owner-if-
+    bound else "local") — the SAME resolver `polyrob finance` uses. `_owner_tenant`
+    resolves to the instance id ("rob") when unbound, which reads a DIFFERENT
+    bucket, so the sibling money views disagreed on an unbound install. Use THIS
+    for money listings so finance and `owner sub` agree; print the scope so the
+    owner always sees which tenant a listing is for.
+    """
+    from core.identity import resolve_identity
+    return user or resolve_identity()
+
+
+def _pending_correspondent_items(registry, tenant):
+    """Pure handler (unit-testable without click): pending correspondent bindings
+    for TENANT as owner-pending items (E5 — previously invisible outside
+    `owner correspondents`, so replies silently DENIED until manual approval)."""
+    items = []
+    try:
+        for r in registry.list(user_id=tenant):
+            if r.get("state") != "pending":
+                continue
+            items.append({
+                "kind": "correspondent",
+                "id": f"{r['surface']}:{r['address']}",
+                "chars": 0,
+                "preview": (f"{r['surface']}:{r['address']} -> session "
+                            f"{r['session_id']}  (approve: polyrob owner approve "
+                            f"{r['surface']} {r['address']})"),
+            })
+    except Exception:
+        # L10 (2026-07-15): was a silent `except: pass` — a broken correspondent
+        # registry would hide pending contacts with no trace. Log it (the pending
+        # listing still degrades gracefully to whatever was collected).
+        logger.warning("owner pending: correspondent registry read failed", exc_info=True)
+    return items
+
+
 @owner.command("pending")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def pending(user):
-    """List the agent's PENDING self-evolution proposals (identity notes + skills).
+    """List the agent's PENDING self-evolution proposals (identity notes + skills),
+    queued tool-approval requests (Task 9 / G-2 — PAYMENT_APPROVAL_MODE=approve),
+    AND pending correspondent bindings (their replies are unroutable until approved).
 
-    These are things the agent learned and quarantined for your review — they change
-    nothing until you `owner promote` them.
+    These are things the agent learned/asked and quarantined for your review — they
+    change nothing until you `owner promote` (or reject) them.
     """
     from core import self_evolution
+    from tools.controller.approval_queue import list_pending_tool_approvals
     tenant = _owner_tenant(user)
     items = self_evolution.list_pending(tenant, home_dir=_data_dir(),
                                         instance_id=_instance_id())
+    items = items + list_pending_tool_approvals(_goal_board(), tenant)
+    items = items + _pending_correspondent_items(_registry(_data_dir()), tenant)
     if not items:
         click.echo(click.style("no pending proposals", dim=True))
         return
     click.echo(click.style(f"{len(items)} pending proposal(s) for tenant {tenant}:", bold=True))
     for it in items:
-        label = "identity" if it["kind"] == "self_context" else "skill"
+        # The shared self-evolution label map (owner-UX P2-4 final review, item 4)
+        # covers the five self-evolution kinds; "correspondent"/"tool_approval"
+        # ride separate, non-self-evolution pipelines aggregated into this same
+        # list, so they keep their own labels rather than falling back to "skill".
+        label = {"correspondent": "contact",
+                 "tool_approval": "approval"}.get(
+            it["kind"], self_evolution.pending_kind_label(it["kind"]))
         click.echo(f"  {click.style(label.ljust(8), fg='yellow')} "
                    f"{click.style(it['kind'] + ':' + str(it['id']), bold=True)}"
                    f"  ({it['chars']} chars)")
@@ -204,9 +296,18 @@ def show_pending(kind, item_id, user):
 @click.argument("item_id")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def promote(kind, item_id, user):
-    """Promote a PENDING proposal to active. KIND is 'self_context' or 'skill'."""
-    from core import self_evolution
+    """Promote a PENDING proposal to active, or APPROVE a queued tool-approval
+    request. KIND is 'self_context', 'skill', or 'tool_approval' (Task 9 / G-2 —
+    ITEM_ID is the tap-<id> shown by `owner pending`)."""
     tenant = _owner_tenant(user)
+    if kind == "tool_approval":
+        from tools.controller.approval_queue import decide_tool_approval
+        ok, msg = decide_tool_approval(_goal_board(), item_id, user_id=tenant, approved=True)
+        click.echo(click.style(msg, fg="green" if ok else "yellow"))
+        if not ok:
+            raise SystemExit(1)
+        return
+    from core import self_evolution
     ok, msg = self_evolution.promote(kind, item_id, user_id=tenant,
                                      home_dir=_data_dir(), instance_id=_instance_id())
     click.echo(click.style(msg, fg="green" if ok else "yellow"))
@@ -219,9 +320,18 @@ def promote(kind, item_id, user):
 @click.argument("item_id")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def reject(kind, item_id, user):
-    """Reject (archive-then-discard) a PENDING proposal. KIND is 'self_context' or 'skill'."""
-    from core import self_evolution
+    """Reject (archive-then-discard) a PENDING proposal, or DECLINE a queued
+    tool-approval request. KIND is 'self_context', 'skill', or 'tool_approval'
+    (Task 9 / G-2 — ITEM_ID is the tap-<id> shown by `owner pending`)."""
     tenant = _owner_tenant(user)
+    if kind == "tool_approval":
+        from tools.controller.approval_queue import decide_tool_approval
+        ok, msg = decide_tool_approval(_goal_board(), item_id, user_id=tenant, approved=False)
+        click.echo(click.style(msg, fg="green" if ok else "yellow"))
+        if not ok:
+            raise SystemExit(1)
+        return
+    from core import self_evolution
     ok, msg = self_evolution.reject(kind, item_id, user_id=tenant,
                                     home_dir=_data_dir(), instance_id=_instance_id())
     click.echo(click.style(msg, fg="green" if ok else "yellow"))
@@ -243,10 +353,15 @@ def asks(user):
 
     Fulfil one with `polyrob owner fulfill <id>` after providing what it asks for;
     that flips its blocked goals back to ready so work resumes.
+
+    Tool-approval requests (Task 9 / G-2) have their OWN surface — see
+    `polyrob owner pending` / `owner promote tool_approval <id>` — and are
+    excluded here so one isn't shown twice under two different id shapes.
     """
     from agents.task.goals.board import ASK_OPEN
     tenant = _owner_tenant(user)
-    rows = _goal_board().asks(user_id=tenant, status=ASK_OPEN)
+    rows = [a for a in _goal_board().asks(user_id=tenant, status=ASK_OPEN)
+            if (a.payload or {}).get("ask_kind") != "tool_approval"]
     if not rows:
         click.echo(click.style("no open asks", dim=True))
         return
@@ -274,13 +389,53 @@ def fulfill(ask_id, user):
         f"ask {ask_id} fulfilled — {unblocked} goal(s) unblocked", fg="green"))
 
 
+def _do_approve_all(registry, user_id=None, surface=None):
+    """Pure handler (unit-testable without click): approve every PENDING binding
+    (optionally scoped to one tenant and/or one surface). Returns the count.
+    Approvals go row-by-row with each row's OWN tenant, so the cross-tenant
+    promotion guard in registry.approve is never bypassed."""
+    approved = 0
+    try:
+        for r in registry.list(user_id=user_id):
+            if r.get("state") != "pending":
+                continue
+            if surface and r.get("surface") != surface:
+                continue
+            if registry.approve(surface=r["surface"], address=r["address"],
+                                thread_id=r.get("thread_id") or None,
+                                user_id=r["user_id"]):
+                approved += 1
+    except Exception:
+        # L10 (2026-07-15): was a silent `except: pass` — a mid-loop registry
+        # error would silently under-approve with no signal. Log it; the count
+        # returned reflects what actually succeeded.
+        logger.warning("owner approve --all: bulk approve failed mid-loop", exc_info=True)
+    return approved
+
+
 @owner.command("approve")
-@click.argument("surface")
-@click.argument("address")
+@click.argument("surface", required=False)
+@click.argument("address", required=False)
+@click.option("--all", "approve_all", is_flag=True, default=False,
+              help="Approve ALL pending correspondents (optionally filtered by "
+                   "SURFACE argument / --user)")
 @click.option("--thread", default=None, help="Thread id (if the correspondent has several)")
 @click.option("--user", default=None, help="Scope to one tenant user_id (multi-tenant safety)")
-def approve(surface, address, thread, user):
-    """Approve a PENDING correspondent so their replies route as DATA."""
+def approve(surface, address, approve_all, thread, user):
+    """Approve a PENDING correspondent so their replies route as DATA.
+
+    Single: polyrob owner approve <surface> <address>
+    Bulk:   polyrob owner approve --all [<surface>] [--user tenant]
+    """
+    if approve_all:
+        n = _do_approve_all(_registry(_data_dir()), user_id=user, surface=surface)
+        color = "green" if n else "yellow"
+        click.echo(click.style(f"approved {n} pending correspondent(s)", fg=color))
+        return
+    if not surface or not address:
+        click.echo(click.style(
+            "usage: polyrob owner approve <surface> <address>  (or --all)", fg="yellow"))
+        raise SystemExit(1)
     ok = _registry(_data_dir()).approve(surface=surface, address=address,
                                         thread_id=thread, user_id=user)
     if ok:
@@ -377,21 +532,33 @@ def invoices(user, status):
         from modules.x402.invoicing import list_payment_requests
         if user:
             return await list_payment_requests(user_id=user, status=status, db=db)
+        # L10 (2026-07-15): apply the --status filter IN SQL, before LIMIT 50 —
+        # filtering in Python after the LIMIT silently dropped older matching rows
+        # (e.g. an old pending invoice past 50 newer completed ones vanished).
+        params = ['%"kind": "agent_invoice"%']
+        status_clause = ""
+        if status:
+            status_clause = "AND status = ? "
+            params.append(status)
         rows = await db.fetch_all(
             "SELECT * FROM x402_payment_requests WHERE metadata LIKE ? "
-            "ORDER BY created_at DESC LIMIT 50",
-            ('%"kind": "agent_invoice"%',))
+            f"{status_clause}ORDER BY created_at DESC LIMIT 50",
+            tuple(params))
         import json as _json
         out = []
         for r in rows or []:
-            try:
-                meta = _json.loads(r.get("metadata") or "{}")
-            except Exception:
-                meta = {}
-            if status and r.get("status") != status:
-                continue
+            # DatabaseConnection.fetch_* auto-parses JSON-looking TEXT columns,
+            # so `metadata` may already be a dict here (json.loads(dict) raises
+            # TypeError, not JSONDecodeError — must check isinstance first).
+            meta = r.get("metadata")
+            if not isinstance(meta, dict):
+                try:
+                    meta = _json.loads(meta or "{}")
+                except Exception:
+                    meta = {}
             out.append({"request_id": r["id"], "amount_usd": r.get("amount_usd"),
                         "status": r.get("status"), "purpose": meta.get("purpose"),
+                        "payer_contact": meta.get("payer_contact") or meta.get("payer_hint"),
                         "created_at": r.get("created_at")})
         return out
 
@@ -399,22 +566,36 @@ def invoices(user, status):
     if not ok:
         click.echo(click.style(str(rows), fg="yellow"))
         return
+    # M16 (2026-07-15): always print the tenant scope so the owner is never confused
+    # about which bucket a listing is for (sibling money views default to different
+    # scopes — finance/sub resolve one tenant, `owner invoices` no-`--user` = ALL).
+    scope = f"tenant {user}" if user else "ALL tenants (use --user to scope)"
+    click.echo(click.style(f"invoices — scope: {scope}"
+                           + (f" · status={status}" if status else ""), dim=True))
     if not rows:
         click.echo(click.style("no invoices", dim=True))
         return
     for r in rows:
         color = {"pending": "yellow", "completed": "green", "expired": "red"}.get(r["status"], "white")
-        click.echo(f"{click.style(str(r['status']).ljust(10), fg=color)} "
-                   f"{r['request_id']}  ${float(r['amount_usd'] or 0):.2f}  "
-                   f"{r.get('purpose') or '(no purpose)'}  ({r.get('created_at')})")
+        line = (f"{click.style(str(r['status']).ljust(10), fg=color)} "
+               f"{r['request_id']}  ${float(r['amount_usd'] or 0):.2f}  "
+               f"{r.get('purpose') or '(no purpose)'}  ({r.get('created_at')})")
+        if r.get("payer_contact"):
+            line += f"  billed to: {r['payer_contact']}"
+        click.echo(line)
 
 
 @owner.command("settle")
 @click.argument("request_id")
 @click.option("--tx-hash", default=None, help="On-chain tx hash, if any")
 def settle(request_id, tx_hash):
-    """Attest an invoice as PAID (pending -> completed). The settlement watcher
-    then wakes the originating session and emits payment_settled."""
+    """Attest an invoice as PAID (pending -> completed).
+
+    The originating session is woken (payment_settled) ONLY when the settlement
+    watcher is actually running — i.e. ``X402_INVOICE_ENABLED=true`` AND a live
+    polyrob process is up. This command flips the DB row regardless; if the
+    watcher is off, the row is marked completed but no session wake fires until a
+    watcher next ticks (L10)."""
     import asyncio
 
     async def run(db):
@@ -426,6 +607,183 @@ def settle(request_id, tx_hash):
         click.echo(click.style(str(settled), fg="yellow"))
     elif settled:
         click.echo(click.style(f"settled {request_id}", fg="green"))
+        from modules.x402.invoicing import x402_invoicing_enabled
+        _wake_on = x402_invoicing_enabled()
+        if _wake_on:
+            click.echo(click.style(
+                "  the settlement watcher will wake the originating session "
+                "(if a polyrob process is running).", dim=True))
+        else:
+            click.echo(click.style(
+                "  note: X402_INVOICE_ENABLED is off — the row is completed but NO "
+                "session wake will fire until a watcher runs.", fg="yellow"))
     else:
         click.echo(click.style(
             f"{request_id} not settled (unknown id or not pending)", fg="yellow"))
+
+
+# --- Task 14 (Phase 3 R5): watchtower subscriptions ---------------------
+
+@owner.group("sub")
+def sub():
+    """Manage watchtower subscriptions (prepaid periods gating a cron job).
+
+    Renewal invoices + the active/grace/suspended lifecycle are driven
+    automatically by the settlement watcher (SUBSCRIPTIONS_ENABLED); this
+    group is read/admin only.
+    """
+
+
+@sub.command("list")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def sub_list(user):
+    """List this tenant's watchtower subscriptions."""
+    import asyncio
+    # M16: money listings share ONE resolver with `polyrob finance` (resolve_identity
+    # → owner-if-bound else "local"), NOT the instance-id `_owner_tenant` — so the
+    # two money views can't disagree on which tenant they read.
+    tenant = _money_tenant(user)
+
+    async def run(db):
+        from modules.x402 import subscriptions as subs
+        return await subs.list_subscriptions(user_id=tenant, db=db)
+
+    ok, rows = asyncio.run(_with_bot_db(run))
+    if not ok:
+        click.echo(click.style(str(rows), fg="yellow"))
+        return
+    # M16: always print the tenant scope on the listing.
+    click.echo(click.style(f"subscriptions — scope: tenant {tenant}", dim=True))
+    if not rows:
+        click.echo(click.style("no subscriptions", dim=True))
+        return
+    color_by_status = {"active": "green", "grace": "yellow",
+                       "suspended": "red", "canceled": "white"}
+    for r in rows:
+        color = color_by_status.get(r["status"], "white")
+        click.echo(
+            f"{click.style(str(r['status']).ljust(10), fg=color)} "
+            f"{r['id']}  ${float(r['amount_usd']):.2f}/{r['period_days']}d  "
+            f"cron={r['cron_job_id']}  "
+            f"{r['correspondent_surface']}:{r['correspondent_address']}  "
+            f"paid_through={r['paid_through']}"
+        )
+
+
+@sub.command("cancel")
+@click.argument("subscription_id")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def sub_cancel(subscription_id, user):
+    """Cancel a subscription — its cron job then $0-skips (subscription_lapsed)."""
+    import asyncio
+    tenant = _money_tenant(user)  # M16: same money resolver as sub_list / finance
+
+    async def run(db):
+        from modules.x402 import subscriptions as subs
+        return await subs.cancel_subscription(subscription_id, user_id=tenant, db=db)
+
+    ok, canceled = asyncio.run(_with_bot_db(run))
+    if not ok:
+        click.echo(click.style(str(canceled), fg="yellow"))
+        return
+    if canceled:
+        click.echo(click.style(f"canceled {subscription_id}", fg="green"))
+    else:
+        click.echo(click.style(
+            f"no active subscription '{subscription_id}' for tenant {tenant}", fg="yellow"))
+
+
+# --- W3: group-chat ingress allowlist (GROUP_CHAT_ENABLED) ---
+
+def _group_allowlist():
+    from core.surfaces.group_allowlist import GroupAllowlist
+    import os as _os
+    return GroupAllowlist(_os.path.join(_data_dir(), "group_allowlist.db"))
+
+
+@owner.group("groups")
+def groups():
+    """Manage which group/channel chats the agent may join (default-DENY)."""
+
+
+@groups.command("allow")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.option("--note", default="", help="Label, e.g. 'dev server #general'")
+def groups_allow(surface, chat_id, note):
+    """Allow a group chat: polyrob owner groups allow discord <channel_id>."""
+    _group_allowlist().allow(surface, chat_id, note=note)
+    click.echo(click.style(f"allowed {surface}:{chat_id}", fg="green"))
+
+
+@groups.command("deny")
+@click.argument("surface")
+@click.argument("chat_id")
+def groups_deny(surface, chat_id):
+    """Revoke a group chat."""
+    if _group_allowlist().revoke(surface, chat_id):
+        click.echo(click.style(f"revoked {surface}:{chat_id}", fg="green"))
+    else:
+        click.echo(click.style(f"{surface}:{chat_id} was not active", fg="yellow"))
+
+
+@groups.command("list")
+def groups_list():
+    """List group-chat allowlist entries."""
+    rows = _group_allowlist().list_all()
+    if not rows:
+        click.echo("no group chats allowed (default-DENY)")
+        return
+    for r in rows:
+        click.echo(f"{r['status']:8} {r['surface']}:{r['chat_id']}"
+                   + (f"  — {r['note']}" if r.get("note") else ""))
+
+
+# ---------------------------------------------------------------------------
+# DM pairing (POLYROB_REQUIRE_PAIRING) — 3.11/O5, 2026-07-14 review.
+# core/pairing.py issues one-time codes to unknown senders; these commands are
+# the operator-side approval path that previously DIDN'T EXIST (the docstring
+# pointed at a phantom `rob pair approve`). Same PairingStore + data home the
+# surface dispatcher uses.
+# ---------------------------------------------------------------------------
+
+def _pairing_store():
+    import os as _os
+
+    from core.pairing import PairingStore
+    return PairingStore(_os.path.join(_data_dir(), "pairing.db"))
+
+
+@owner.group("pair")
+def pair():
+    """Approve/inspect DM pairing requests (POLYROB_REQUIRE_PAIRING)."""
+
+
+@pair.command("pending")
+def pair_pending():
+    """List users waiting for pairing approval (with their codes)."""
+    rows = _pairing_store().list_pending()
+    if not rows:
+        click.echo("no pending pairing requests")
+        return
+    for user_id, code in rows:
+        click.echo(f"pending  {user_id}  code={code}"
+                   "  (approve: polyrob owner pair approve <code>)")
+
+
+@pair.command("approve")
+@click.argument("code")
+def pair_approve(code):
+    """Approve the pairing request holding CODE."""
+    uid = _pairing_store().approve(code)
+    if uid is None:
+        raise click.ClickException(f"no pending pairing request with code {code!r}")
+    click.echo(click.style(f"paired {uid}", fg="green"))
+
+
+@pair.command("revoke")
+@click.argument("user_id")
+def pair_revoke(user_id):
+    """Revoke a paired (or pending) user."""
+    _pairing_store().revoke(user_id)
+    click.echo(click.style(f"revoked {user_id}", fg="green"))
