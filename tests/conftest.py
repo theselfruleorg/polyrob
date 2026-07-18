@@ -161,6 +161,29 @@ def _isolate_path_manager():
 
 
 @pytest.fixture(autouse=True)
+def _credit_sentinel_off():
+    """Default the provider-credit sentinel OFF per-test (mirrors
+    ``_isolate_autonomy_state_store`` below).
+
+    Any test that drives a fake 402/credit-death through the REAL
+    error-recovery/trip path writes a fresh ``CREDIT_SENTINEL`` file under the
+    shared data home; every later goals/cron test then honestly refuses to
+    dispatch ("provider-credit sentinel active") — this is what turned the
+    public 0.8.0 CI red across 31 unrelated tests. Sentinel-behavior tests
+    opt back in with ``monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")``
+    (plus a tmp ``POLYROB_DATA_DIR``)."""
+    prev = os.environ.get("CREDIT_SENTINEL_ENABLED")
+    os.environ["CREDIT_SENTINEL_ENABLED"] = "off"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("CREDIT_SENTINEL_ENABLED", None)
+        else:
+            os.environ["CREDIT_SENTINEL_ENABLED"] = prev
+
+
+@pytest.fixture(autouse=True)
 def _isolate_autonomy_state_store():
     """Keep restart-durable autonomy state OUT of the developer's real data home.
 

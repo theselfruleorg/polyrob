@@ -18,6 +18,9 @@ import pytest
 @pytest.fixture()
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    # conftest defaults the sentinel OFF for every test; this suite tests the
+    # sentinel itself, so opt back in (individual tests may re-disable).
+    monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")
     return tmp_path
 
 

@@ -111,7 +111,10 @@ def rail(tmp_path, monkeypatch):
 
 def _run(coro):
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # asyncio.run (not get_event_loop): after any pytest-asyncio test the main
+    # thread has no current loop, so get_event_loop() raises RuntimeError —
+    # this file then fails whenever it runs after an async suite.
+    return asyncio.run(coro)
 
 
 def test_hold_inside_window_then_release_after(rail, monkeypatch):
