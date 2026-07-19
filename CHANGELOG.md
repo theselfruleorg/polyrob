@@ -282,7 +282,7 @@ All notable changes to POLYROB are documented here. The format is based on
   the `core/config_policy/policy.py` 9-submodule split is scoped and deferred
   to its own session; prod sidecar relocation VERIFIED live (`db_relocated`
   2026-07-17 14:19Z) — the legacy read-both fallback is removable one release
-  later. Full record: `docs/plans/2026-07-17-f3-final-sweep-adjudication.md`.
+  later.
 
 ### Structural F-1: rate limiters consolidated onto core/rate_limit.py (2026-07-17)
 
@@ -389,8 +389,7 @@ exposes one; unknown now renders as omitted, never a misleading `$0.00`.
 
 ### Structural-wave verification & completion pass (2026-07-16)
 
-Cleanup-and-completion over the WS-1..WS-7 wave (handoff
-`docs/ops/HANDOFF-structural-verification-2026-07-16.md`); zero behavior change except
+Cleanup-and-completion over the WS-1..WS-7 wave; zero behavior change except
 where marked.
 
 - **refactor(core):** the data-home resolver trio is ONE rule — verified
@@ -453,8 +452,7 @@ at 370843bd before fixing.
 
 ### Structural upgrade WS-2..WS-7 slices (2026-07-16)
 
-Same-day continuation of the WS-1 wave (handoff
-`docs/ops/HANDOFF-structural-upgrade-2026-07-16.md`); every item ratchet- or parity-tested.
+Same-day continuation of the WS-1 wave; every item ratchet- or parity-tested.
 
 - **WS-2 (tool capabilities):** ONE per-tool capability table (`core/tool_capabilities.py`;
   orthogonal dimensions `money`/`high_impact`/`delegate_blocked`/`exec`/
@@ -488,9 +486,7 @@ Same-day continuation of the WS-1 wave (handoff
 
 ### WS-1 — config-layer relocation: core↔agents.task cycle broken (2026-07-16)
 
-Deep structural wave following T1–T12; plan in
-`docs/plans/2026-07-16-ws1-config-relocation.md`, handoff
-`docs/ops/HANDOFF-structural-upgrade-2026-07-16.md`.
+Deep structural wave following T1–T12.
 
 - **refactor(core):** relocated the cross-cutting autonomy/mode/posture/payment-policy cluster +
   `AutonomyConfig` (≈1230 lines) from `agents/task/constants.py` into the new core-tier package
@@ -507,7 +503,7 @@ Deep structural wave following T1–T12; plan in
 ### Structural cleanup wave T1–T12 (2026-07-16)
 
 Twelve fixes from the 2026-07-16 four-way structural audit (duplication / path handling /
-layering / sources-of-truth); plan in `docs/plans/2026-07-16-structural-cleanup-wave.md`.
+layering / sources-of-truth).
 
 - **T1 (data-loss fix):** 10 sidecar DBs (`slack/signal/discord/x` dedup, `wa_window`,
   `group_allowlist`, `conversations`, `outbox`, `surface_state`, `deployed_apps`) registered in
@@ -608,8 +604,7 @@ table. Rollout to prod (T12) is owner-gated and not part of this wave.
 
 ### Capability completion — exec everywhere it should be, agent knows where it lives (2026-07-16)
 
-Proposal 014 (from the Remotion-incident investigation,
-`docs/reviews/2026-07-15-remotion-incident-tooling-env-awareness.md`): closes the
+Proposal 014 (from an incident investigation): closes the
 session-entry toolset gaps 013 left, makes the posture≥1 dev sandbox Node-capable, and
 gives the agent an in-context answer to "where do I live". Everything is gated — a
 deployment with nothing set is byte-identical.
@@ -643,8 +638,8 @@ deployment with nothing set is byte-identical.
 
 ### Wallet / crypto security hardening wave (2026-07-15)
 
-A 7-way security + UX review of the wallet/x402/trading stack
-(`docs/reviews/`, 2026-07-15) followed by a same-day fix wave: 2 Critical and all
+A 7-way security + UX review of the wallet/x402/trading stack (2026-07-15)
+followed by a same-day fix wave: 2 Critical and all
 14 High findings closed, plus most Medium/Low.
 
 - **C1 — pay-side fund-drain closed:** the x402 payment gate now authorizes at the
@@ -732,7 +727,7 @@ secret rotation).
 - **`polyrob gateway` launches every surface (H2)** — Discord/Slack/Signal/X now start
   under the gateway when their flags are on (previously silently ignored); an enabled
   surface with missing credentials is WARNED about and skipped. `SurfaceConfig` gains
-  the four flag helpers; from-hermes.md gateway caveats removed.
+  the four flag helpers; stale gateway caveats removed from the migration guide.
 - **Inline-schema == migration-HEAD contract (U4)** — a new CI test builds a fresh DB
   through the real component creators, stamps at HEAD via the real boot path, and
   requires every shipped migration's `verify()` to pass. It immediately caught a real
@@ -760,10 +755,10 @@ secret rotation).
 - **Portal workflow self-gating (D11)** — skips deploy (green) when Cloudflare
   secrets are unconfigured, for whenever Actions is re-enabled.
 
-### Update / infra / Hermes-migration / onboarding fix wave (2026-07-14)
+### Update / infra / migration-guide / onboarding fix wave (2026-07-14)
 
-Implements Waves 1–2 (+ selected Wave-3 hardening) of the 2026-07-14 review
-(`docs/reviews/2026-07-14-update-infra-hermes-onboarding-review.md`) — the connective
+Implements Waves 1–2 (+ selected Wave-3 hardening) of a 2026-07-14 internal
+review — the connective
 tissue around the good engines: the migration runner, deploy paths, updater safety net,
 first-run toolset, and the flagship docs.
 
@@ -792,14 +787,14 @@ first-run toolset, and the flagship docs.
   posture-aware (detect `polyrob*` units + `daemon-reload`; no more phantom
   `polyrob-api`), and the stale "automated apply not wired yet" messaging now
   advertises `--apply` (U3/U6).
-- **Hermes migration guide un-staled (H1/H2, P1)** — Discord/Slack/Signal/X marked
+- **Migration guide un-staled (H1/H2, P1)** — Discord/Slack/Signal/X marked
   shipped (with honest validation status), compute-posture ladder replaces "not
   supported", learning-loop claim fixed, and every `polyrob gateway` mention carries
   the "doesn't launch Discord/Slack/Signal/X yet" caveat. `tests/test_doc_consistency.py`
   guards the platform claims against re-diverging.
-- **Provenance process fix (H4, P1)** — `docs/reviews/2026-07-14-hermes-parity-SSOT.md`
-  reconstructs the lost Hermes-parity design record; the 7 still-recoverable referenced
-  plan docs are committed; a contract test now requires any `docs/plans|reviews/*.md`
+- **Provenance process fix (H4, P1)** — the lost cross-agent-parity design record
+  was reconstructed; the 7 still-recoverable referenced
+  plan docs are committed; a contract test now requires any internal plan/review doc
   referenced from a committed doc to be committed itself (21 already-lost files
   grandfathered by name).
 - **Onboarding docs (O8/O9/O10, P1/P2)** — getting-started.md gains an "Updating"
