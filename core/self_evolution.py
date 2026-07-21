@@ -414,7 +414,9 @@ def _record_owner_notice(text: str) -> None:
         pass
 
 
-async def _push_owner_message_outcome(container, text: Optional[str]) -> Optional[str]:
+async def _push_owner_message_outcome(container, text: Optional[str],
+                                      attachments: Optional[list] = None,
+                                      priority: Optional[str] = None) -> Optional[str]:
     """Rail outcome of a proactive owner push, or ``None`` when nothing entered
     the rail (empty text / no container / resolver crash). Shared by
     :func:`push_owner_message` (bool facade) and
@@ -435,13 +437,16 @@ async def _push_owner_message_outcome(container, text: Optional[str]) -> Optiona
         except Exception:
             owner = ""
         return await deliver_user_message(
-            container, owner, str(text), source="self_evolution")
+            container, owner, str(text), source="self_evolution",
+            attachments=attachments, priority=priority)
     except Exception as e:  # never let a notification failure break a write
         logger.debug("self_evolution: owner notify failed (fail-open): %s", e)
         return None
 
 
-async def push_owner_message(container, text: Optional[str]) -> bool:
+async def push_owner_message(container, text: Optional[str],
+                             attachments: Optional[list] = None,
+                             priority: Optional[str] = None) -> bool:
     """Best-effort proactive push to the owner's Telegram (fail-open).
 
     Reuses the same sink + owner-chat resolution as ``cron/delivery`` so a
@@ -452,8 +457,16 @@ async def push_owner_message(container, text: Optional[str]) -> bool:
     flag defaults ON but no sink exists, so every escalation/self-evolution push
     vanished. Now a push that can't be delivered live is persisted as a durable
     ``owner_notice`` event instead, so the owner is never left in the dark.
+
+    ``attachments`` (QW-1): pre-validated media entries riding the same rail
+    (see ``core.surfaces.attachments``); omitted => byte-identical legacy push.
+
+    ``priority`` (2026-07-20): pass ``"low"`` for chatter that must never
+    out-compete a completion, a digest, or a halt notice for the daily cap —
+    see ``core.surfaces.user_delivery``. Omitted => ``normal``, unchanged.
     """
-    return (await _push_owner_message_outcome(container, text)) == "sent"
+    return (await _push_owner_message_outcome(
+        container, text, attachments=attachments, priority=priority)) == "sent"
 
 
 async def maybe_notify_owner_pending(container, user_id: str, *, home_dir: Path | str,

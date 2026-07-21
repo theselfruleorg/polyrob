@@ -140,12 +140,27 @@ class ErrorRecoveryMixin:
 		"""
 		if not isinstance(error, self._CREDIT_DEATH_EXCEPTION_TYPES):
 			return
-		if not looks_like_credit_death(str(error)):
+		# Walk the cause/context chain, not just the top message: llm_runner
+		# re-wraps the 402 as LLMProviderExhaustedError("No fallback available
+		# after LLMPermanentError") — a message with ZERO billing text — so a
+		# top-string-only check misses the exact prod shape (live finding
+		# 2026-07-18: two deploys, still no trip). Python auto-chains the
+		# original error as __context__ even without `raise ... from`.
+		matched = None
+		seen: set = set()
+		e: Exception | None = error
+		while e is not None and id(e) not in seen and len(seen) < 8:
+			seen.add(id(e))
+			if looks_like_credit_death(str(e)):
+				matched = str(e)
+				break
+			e = e.__cause__ or e.__context__
+		if matched is None:
 			return
 		try:
 			from core.credit_sentinel import trip_credit_sentinel
 			await trip_credit_sentinel(
-				str(error)[:300],
+				matched[:300],
 				container=getattr(self, "container", None),
 				user_id=getattr(self, "user_id", None))
 		except Exception:

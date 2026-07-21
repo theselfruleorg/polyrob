@@ -65,6 +65,7 @@ class TelegramSurface(Surface):
     def __init__(self, bot: Any) -> None:
         super().__init__()
         self._bot = bot
+        self.bot_username: Optional[str] = None
 
     @property
     def surface_id(self) -> str:

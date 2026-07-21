@@ -6,6 +6,18 @@ from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
 from core.exceptions import LLMPermanentError
 
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _isolate_data_home(tmp_path, monkeypatch):
+    """These tests drive _handle_step_error with realistic 402 text, which (since
+    the universal trip site) writes a REAL CREDIT_SENTINEL latch — without this
+    isolation it lands in the developer's .polyrob/ and silently pauses every
+    dispatcher test on the box (live pollution incident, 2026-07-18)."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
+
 class _State:
     def __init__(self):
         self.consecutive_failures = 0
@@ -99,3 +111,93 @@ def test_billing_still_halts_if_no_fallback(monkeypatch):
     host = _Host(fallback_ok=False)
     res = asyncio.run(host._handle_step_error(_billing_error()))
     assert host.state.stopped is True
+
+
+def test_trip_sentinel_fires_on_real_402_permanent_error(monkeypatch):
+    """The sentinel trip itself must accept the real prod shape (LLMPermanentError
+    carrying 402/credits text)."""
+    calls = []
+
+    async def fake_trip(reason, **k):
+        calls.append(reason)
+
+    import core.credit_sentinel as cs
+    monkeypatch.setattr(cs, "trip_credit_sentinel", fake_trip)
+    host = _Host(fallback_ok=False)
+    err = LLMPermanentError(
+        "OpenRouter: Error code: 402 - This request requires more credits")
+    asyncio.run(host._trip_sentinel_if_credit_death(err))
+    assert calls, "sentinel must trip on a 402 LLMPermanentError"
+    assert "402" in calls[0]
+
+
+def test_fatal_halt_branch_trips_credit_sentinel_source():
+    """2026-07-18 live finding: with billing failover OFF (the default) a
+    credit-death error is classified FATAL and the step loop returns BEFORE
+    _handle_step_error — so the 'ONE universal trip site' was unreachable for
+    the exact prod 402 it exists to catch (a full day of 402 storms, zero
+    trips). The fatal branch must trip the sentinel itself before halting."""
+    import inspect
+    import re
+    import agents.task.agent.core.step as step_mod
+    src = inspect.getsource(step_mod)
+    assert "if is_fatal_error:" in src
+    fatal_block = src.split("if is_fatal_error:", 1)[1]
+    trip_pos = fatal_block.find("await self._trip_sentinel_if_credit_death")
+    ret = re.search(r"^\s*return\s*$", fatal_block, re.MULTILINE)
+    assert trip_pos != -1, "fatal branch must call _trip_sentinel_if_credit_death"
+    assert ret is not None and trip_pos < ret.start(), \
+        "trip must happen before the fatal-branch return statement"
+
+
+def test_trip_sentinel_walks_wrapper_context_chain(monkeypatch):
+    """Live 2026-07-18 shape: llm_runner re-wraps the 402 as
+    LLMProviderExhaustedError('No fallback available after LLMPermanentError')
+    — no billing text on the wrapper. The trip classifier must walk
+    __cause__/__context__ to find the 402 underneath."""
+    from core.exceptions import LLMProviderExhaustedError
+
+    calls = []
+
+    async def fake_trip(reason, **k):
+        calls.append(reason)
+
+    import core.credit_sentinel as cs
+    monkeypatch.setattr(cs, "trip_credit_sentinel", fake_trip)
+    host = _Host(fallback_ok=False)
+    try:
+        try:
+            raise LLMPermanentError(
+                "OpenRouter: Error code: 402 - This request requires more credits")
+        except LLMPermanentError:
+            # deliberately NO `from` — relies on implicit __context__, the
+            # historical raise shape
+            raise LLMProviderExhaustedError(
+                "No fallback available after LLMPermanentError")
+    except LLMProviderExhaustedError as wrapper:
+        asyncio.run(host._trip_sentinel_if_credit_death(wrapper))
+    assert calls, "sentinel must trip via the exception chain"
+    assert "402" in calls[0], "latch reason must carry the matched billing text"
+
+
+def test_trip_sentinel_ignores_benign_wrapper_chain(monkeypatch):
+    """A wrapper whose whole chain is billing-free must NOT trip."""
+    from core.exceptions import LLMProviderExhaustedError
+
+    calls = []
+
+    async def fake_trip(reason, **k):
+        calls.append(reason)
+
+    import core.credit_sentinel as cs
+    monkeypatch.setattr(cs, "trip_credit_sentinel", fake_trip)
+    host = _Host(fallback_ok=False)
+    try:
+        try:
+            raise LLMPermanentError("model not found on this endpoint")
+        except LLMPermanentError:
+            raise LLMProviderExhaustedError(
+                "No fallback available after LLMPermanentError")
+    except LLMProviderExhaustedError as wrapper:
+        asyncio.run(host._trip_sentinel_if_credit_death(wrapper))
+    assert not calls

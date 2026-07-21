@@ -527,9 +527,16 @@ class GoalDispatcher:
             try:
                 from core.self_evolution import push_owner_message
                 _title = (goal.title or goal.body or "")[:120]
+                # priority="low" (2026-07-20): a start ping is the least
+                # valuable thing on the rail — on 07-19 these plus other
+                # chatter spent the whole daily cap by 17:33Z, and every goal
+                # COMPLETION (with its deliverables), both digests, and the
+                # credit-sentinel halt notice were capped for the next 12h.
+                # The reserved slice keeps that headroom for what matters.
                 await push_owner_message(
                     getattr(self.task_agent, "container", None),
-                    f"▶ goal started: {_title} ({goal.id[:8]})")
+                    f"▶ goal started: {_title} ({goal.id[:8]})",
+                    priority="low")
             except Exception:
                 logger.debug("goal start notice failed for %s", goal.id, exc_info=True)
         try:
@@ -767,7 +774,8 @@ class GoalDispatcher:
             if effective_goal_notify_on_done(goal.user_id, self._home_dir()) \
                     and not run.user_messages:
                 await self._notify_owner_done(goal, session_id, result_record,
-                                              verified=run.verified if judge_on else "verified")
+                                              verified=run.verified if judge_on else "verified",
+                                              artifacts=run.artifacts)
             # §4.3: an UNVERIFIED completion earns nothing downstream — no
             # self-wake re-entry. With the judge disabled, legacy behavior holds.
             if AutonomyConfig.goal_self_wake_enabled() and \
@@ -949,14 +957,23 @@ class GoalDispatcher:
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
-    def _completion_text(self, goal: Goal, final: str, verified: str = "verified") -> str:
+    def _completion_text(self, goal: Goal, final: str, verified: str = "verified",
+                         deliverable_lines: Optional[list] = None,
+                         session_link: Optional[str] = None) -> str:
         # §4.3: the ✅ is EARNED — an unverified completion is labeled honestly,
         # never pushed as a green checkmark on an unchecked claim.
         if verified == "verified":
             head = f"✅ Background goal '{goal.title}' completed."
         else:
             head = f"Background goal '{goal.title}' finished — done (unverified)."
-        return f"{head}\nResult:\n{str(final)[:1500]}"
+        parts = [f"{head}\nResult:\n{str(final)[:1500]}"]
+        # QW-1 (proposal 021): every artifact the run produced is accounted for
+        # — attached (rail media) or listed server-only — never a bare filename.
+        if deliverable_lines:
+            parts.append("Deliverables:\n" + "\n".join(deliverable_lines))
+        if session_link:
+            parts.append(f"Console: {session_link}")
+        return "\n".join(parts)
 
     def _mark_episode_surfaced(self, goal: Goal, session_id: str) -> None:
         """Mark this goal's episode surfaced so the session-start digest doesn't repeat
@@ -972,7 +989,8 @@ class GoalDispatcher:
             logger.debug("goal surfaced-mark skipped for %s", goal.id, exc_info=True)
 
     async def _notify_owner_done(self, goal: Goal, session_id: str, final: str,
-                                 verified: str = "verified") -> bool:
+                                 verified: str = "verified",
+                                 artifacts: Optional[list] = None) -> bool:
         """Tell the OWNER a background goal COMPLETED — surface-independent + durable.
 
         This is the completion-communication rail, DECOUPLED from the self-wake
@@ -985,9 +1003,50 @@ class GoalDispatcher:
         owner_told = False
         try:
             from core.self_evolution import push_owner_message
-            owner_told = await push_owner_message(
-                getattr(self.task_agent, "container", None),
-                self._completion_text(goal, final, verified=verified))
+            # QW-1 (proposal 021): build the deliverables block + attachments
+            # from the run's artifact registry. Attaching is flag-gated
+            # (DELIVERABLES_ATTACH_ENABLED, ON under POLYROB_LOCAL); the honest
+            # text listing rides regardless. Fail-open to the legacy text push.
+            deliverable_lines: list = []
+            attachments: list = []
+            if artifacts:
+                try:
+                    from core.config_policy import AutonomyConfig as _AC
+                    from agents.task.goals.deliverables import build_deliverables
+                    attachments, deliverable_lines = build_deliverables(
+                        artifacts, session_id, goal.user_id,
+                        attach=_AC.deliverables_attach_enabled())
+                except Exception:
+                    logger.debug("deliverables build skipped for %s", goal.id,
+                                 exc_info=True)
+            # Security review F4: the push delivers to the INSTANCE OWNER
+            # principal — if the goal's tenant is a DIFFERENT known principal,
+            # media must never ride (cross-tenant artifact leak). The text
+            # lines keep the files reachable (they carry server paths).
+            if attachments:
+                try:
+                    from core.instance import resolve_owner_principal
+                    _owner = str(resolve_owner_principal() or "")
+                    if _owner and str(goal.user_id or "") and \
+                            str(goal.user_id) != _owner:
+                        attachments = []
+                except Exception:
+                    attachments = []  # unknown => fail-closed for media
+            session_link = None
+            try:
+                from core.surfaces.deep_link import webview_session_link
+                session_link = webview_session_link(session_id)
+            except Exception:
+                pass
+            text = self._completion_text(goal, final, verified=verified,
+                                         deliverable_lines=deliverable_lines,
+                                         session_link=session_link)
+            container = getattr(self.task_agent, "container", None)
+            if attachments:
+                owner_told = await push_owner_message(container, text,
+                                                      attachments=attachments)
+            else:
+                owner_told = await push_owner_message(container, text)
         except Exception:
             logger.debug("goal completion owner-push skipped for %s", goal.id, exc_info=True)
         if owner_told:

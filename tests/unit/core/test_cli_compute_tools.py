@@ -27,6 +27,16 @@ def _clean(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     c._refreeze_compute_posture_for_tests()
     yield
+    # Teardown-order landmine: this fixture's post-yield code runs BEFORE the
+    # monkeypatch fixture's env undo (a fixture finalizes before its dependencies),
+    # so a test's `monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")` was STILL SET
+    # here — the refreeze froze posture 1 into the process and every later test in
+    # the run (e.g. test_goal_dispatcher's narrow-fallback case) saw the widened
+    # compute toolset. Pop the envs explicitly before refreezing; monkeypatch's own
+    # undo afterwards is harmless (restores the pre-test state).
+    import os as _os
+    for k in ("AGENT_COMPUTE_POSTURE", "SHELL_TOOLS_ENABLED", "SELF_ENV_ENABLED"):
+        _os.environ.pop(k, None)
     c._refreeze_compute_posture_for_tests()
 
 

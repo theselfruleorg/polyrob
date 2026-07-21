@@ -583,3 +583,107 @@ async def test_telegram_bot_sink_splits_long_out_of_band_message():
     assert ok is True
     assert len(sent) > 1
     assert all(len(text) <= 500 for _, text in sent)
+
+
+@pytest.mark.asyncio
+async def test_telegram_bot_sink_sends_media_documents_and_photos(tmp_path):
+    """QW-1 (2026-07-19): the out-of-band sink carries attachments — a goal
+    completion's deliverables ride the SAME sink cron/self-evolution use."""
+    from surfaces.telegram.harness import TelegramBotSink
+    doc = tmp_path / "report.md"
+    doc.write_text("# findings")
+    img = tmp_path / "card.png"
+    img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    sent, docs, photos = [], [], []
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw): sent.append((chat_id, text))
+        async def send_document(self, chat_id, file, **kw): docs.append((chat_id, file))
+        async def send_photo(self, chat_id, file, **kw): photos.append((chat_id, file))
+    sink = TelegramBotSink(_Bot())
+    ok = await sink.send_message("555", "done — files attached", media=[
+        {"kind": "document", "path": str(doc), "caption": None},
+        {"kind": "image", "path": str(img), "caption": None},
+    ])
+    assert ok is True
+    assert sent and sent[0][1] == "done — files attached"
+    assert len(docs) == 1 and len(photos) == 1
+
+
+@pytest.mark.asyncio
+async def test_telegram_bot_sink_media_failure_never_kills_text(tmp_path):
+    from surfaces.telegram.harness import TelegramBotSink
+    sent = []
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw): sent.append((chat_id, text))
+        async def send_document(self, chat_id, file, **kw): raise RuntimeError("boom")
+    doc = tmp_path / "report.md"
+    doc.write_text("x")
+    sink = TelegramBotSink(_Bot())
+    ok = await sink.send_message("555", "text lands anyway", media=[
+        {"kind": "document", "path": str(doc), "caption": None},
+        {"kind": "document", "path": str(tmp_path / "missing.md"), "caption": None},
+    ])
+    assert ok is True
+    assert sent
+
+
+@pytest.mark.asyncio
+async def test_telegram_bot_sink_truncates_long_caption(tmp_path):
+    """Telegram caption hard limit is 1024 — the sink must truncate, mirroring
+    TelegramSurface._caption_for (review Minor #6)."""
+    from surfaces.telegram.harness import TelegramBotSink
+    doc = tmp_path / "r.md"
+    doc.write_text("x")
+    caps = []
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw): pass
+        async def send_document(self, chat_id, file, caption=None, **kw):
+            caps.append(caption)
+    sink = TelegramBotSink(_Bot())
+    ok = await sink.send_message("5", "t", media=[
+        {"kind": "document", "path": str(doc), "caption": "c" * 5000}])
+    assert ok is True
+    assert caps and len(caps[0]) <= 1024
+
+
+# --- TelegramHarness.start(): bot_username resolution (2026-07-19) ----------
+# Previously `bot_username` was read via getattr(self, "bot_username", None)
+# for group-mention detection but NEVER assigned anywhere — always None, so
+# mention detection (and the message-send own-handle owner-alias) were dead
+# in production. start() now resolves it once via bot.get_me().
+
+class _GetMeBot(_PollBot):
+    def __init__(self, username="testbot"):
+        super().__init__()
+        self._username = username
+
+    async def get_me(self):
+        return type("Me", (), {"username": self._username})()
+
+
+@pytest.mark.asyncio
+async def test_start_resolves_bot_username_onto_harness_and_surface():
+    bot = _GetMeBot(username="tmachinroBot")
+    h = _harness(bot, _FakeTaskAgent())
+    await h.start()
+    assert h.bot_username == "tmachinroBot"
+    assert h.surface.bot_username == "tmachinroBot"
+
+
+@pytest.mark.asyncio
+async def test_start_is_fail_open_when_get_me_unavailable():
+    bot = _PollBot()  # no get_me method at all
+    h = _harness(bot, _FakeTaskAgent())
+    await h.start()  # must not raise
+    assert h.bot_username is None
+    assert h.surface.bot_username is None
+
+
+@pytest.mark.asyncio
+async def test_start_is_fail_open_when_get_me_raises():
+    class _BoomBot(_PollBot):
+        async def get_me(self):
+            raise RuntimeError("network down")
+    h = _harness(_BoomBot(), _FakeTaskAgent())
+    await h.start()  # must not raise
+    assert h.bot_username is None

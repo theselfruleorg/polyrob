@@ -213,7 +213,14 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/bootstrap.py', 'modules.llm.llm_manager'),
     ('core/bootstrap.py', 'modules.llm.profiles'),
     ('core/bootstrap.py', 'tools.anysite'),
+    # S3 dynamic tool rig (2026-07-19/20): the CLI registrar's browser special-case
+    # (function-level import, mirrors core/initialization.py's server special-case)
+    # and the mcp gate's local-server-files probe. Same class as the tools.anysite/
+    # tools.descriptors seams above — register_cli_tools IS the tools-touching
+    # module in core by design.
+    ('core/bootstrap.py', 'tools.browser.browser_manager'),
     ('core/bootstrap.py', 'tools.descriptors'),
+    ('core/bootstrap.py', 'tools.mcp.config'),
     ('core/config.py', 'modules.llm.profiles'),
     ('core/config.py', 'tools.mcp.config'),
     ('core/container.py', 'modules.llm'),

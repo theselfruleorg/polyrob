@@ -89,6 +89,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_initial_task_tokens',  # Token count for initial task message
 		'_skill_message',  # PR13: skills injected as a pinned foundation user message (not in system prompt)
 		'_skill_message_tokens',  # Token cost of the pinned skill message
+		'_tool_catalog_message',  # S1 dynamic tool rig: honest <tool-catalog> foundation block
+		'_tool_catalog_tokens',  # Token cost of the pinned tool-catalog message
 		'_self_context_message',     # polyrob: frozen SOUL/identity doc pinned in the foundation
 		'_self_context_tokens',     # Token cost of the pinned self-context message
 		'_project_context_message', # C9: auto-loaded CLAUDE.md/AGENTS.md frozen foundation message
@@ -273,6 +275,11 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# Token cost of the pinned skill message, kept in the foundation totals so
 		# compaction/overflow math sees skills (which left the system prompt in PR13).
 		self._skill_message_tokens: int = 0
+
+		# S1 (dynamic tool rig): the honest <tool-catalog> block is pinned as a
+		# foundation user message (set later), same rationale as skills. Empty => inert.
+		self._tool_catalog_message: Optional[BaseMessage] = None
+		self._tool_catalog_tokens: int = 0
 
 		# polyrob Phase C: SOUL/IDENTITY self-context is pinned as a frozen foundation
 		# user message (set later), NOT embedded in the system prompt — same rationale
@@ -670,6 +677,22 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		else:
 			self._skill_message = None
 			self._skill_message_tokens = 0
+
+	def set_tool_catalog_message(self, content: Optional[str]) -> None:
+		"""S1 (dynamic tool rig): pin the honest <tool-catalog> block as a foundation
+		user message instead of the system prompt.
+
+		Stored as a TOOL_CATALOG-origin control message and injected in the
+		foundation (right after skills) by get_messages()/get_messages_for_llm().
+		Keeps the system prompt stable for prompt caching. Set at session start;
+		pass falsy content to clear (the inert default when the flag is off).
+		"""
+		if content and content.strip():
+			self._tool_catalog_message = make_control_message(content, MessageOrigin.TOOL_CATALOG)
+			self._tool_catalog_tokens = self._count_message_tokens(self._tool_catalog_message)
+		else:
+			self._tool_catalog_message = None
+			self._tool_catalog_tokens = 0
 
 	def set_self_context_message(self, content: Optional[str]) -> None:
 		"""polyrob Phase C: pin the SOUL/IDENTITY self-context as a frozen foundation

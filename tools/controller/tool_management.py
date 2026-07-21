@@ -340,3 +340,17 @@ class ToolManagementMixin:
 			if self._tool_list_cache is None:
 				self._tool_list_cache = list(self._tools.keys())
 			return self._tool_list_cache.copy()
+
+	def render_tool_catalog(self, *, is_leaf: bool = False) -> str:
+		"""S1 (dynamic tool rig): the honest <tool-catalog> block for this session.
+
+		Exposed on the Controller so the agents tier can pin the catalog via the
+		injected controller object without importing the tools tier (layering
+		ratchet: core <- modules <- agents <- tools).
+		"""
+		from tools.tool_disclosure import render_tool_catalog
+		return render_tool_catalog(
+			container=self.container,
+			loaded_ids=set(self.list_tools()),
+			is_leaf=is_leaf,
+		)

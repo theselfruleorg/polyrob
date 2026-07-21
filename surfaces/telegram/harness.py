@@ -112,13 +112,16 @@ _HELP = (
     "/prefs — your effective preferences (read-only)\n"
     "/config — read or set preferences (safe keys write immediately; "
     "guarded keys queue for /pending review)\n"
+    "/kb <query> — search my knowledge base\n"
+    "/files [n] — recent files I produced (default 10)\n"
     "/help — show this help\n"
     "Or just send a message to talk to ROB."
 )
 
 _OWNER_ADMIN_COMMANDS = ("/pending", "/approve", "/reject", "/asks", "/fulfill",
                          "/allow", "/deny", "/allowlist",
-                         "/status", "/recap", "/journey", "/goals", "/prefs", "/config")
+                         "/status", "/recap", "/journey", "/goals", "/prefs", "/config",
+                         "/kb", "/files")
 
 
 def owner_allowed(tg_user_id) -> Optional[bool]:
@@ -530,6 +533,82 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
     return f"Set {key} = {value} (applies: {spec.applies})."
 
 
+async def _kb_reply(user_id: str, query: str) -> str:
+    """QW-4 (proposal 021): owner KB read from the phone — the same
+    ``modules.memory.registry.kb_search`` primitive ``polyrob kb search`` uses.
+    Before this verb, "ingested into KB" was write-only theatre from the
+    owner's seat (assessment 2026-07-19 §2 touchpoint 4)."""
+    from agents.task.constants import AutonomyConfig
+    if not AutonomyConfig.kb_enabled():
+        return "Knowledge base is disabled (KB_ENABLED=off)."
+    import modules.memory.registry as _reg
+    try:
+        result = await _reg.kb_search(query, user_id=user_id, limit=5)
+    except Exception as e:
+        return f"KB search failed: {e}"
+    text = str(result or "").strip()
+    if not text:
+        return f"No results for {query!r}."
+    return text[:3500] + ("…" if len(text) > 3500 else "")
+
+
+async def _files_reply(user_id: str, args) -> str:
+    """QW-4: recent run artifacts from the episode registry — the owner's file
+    view over what background runs actually produced. Artifact rows may be
+    JSON strings (older writes) or lists — both are handled."""
+    try:
+        n = max(1, min(int(args[0]), 30)) if args else 10
+    except (TypeError, ValueError):
+        n = 10
+    import json
+    import modules.memory.registry as _reg
+    try:
+        # window scales with the ask so /files 30 can actually find 30 distinct
+        # files across episodes (review Minor #8)
+        rows = await _reg.memory_recall_episodes(
+            user_id=user_id, limit=max(30, min(n * 5, 100)), order="newest")
+    except Exception as e:
+        return f"Could not read episodes: {e}"
+    seen: set = set()
+    lines: list = []
+    for r in rows or []:
+        get = (r.get if isinstance(r, dict) else lambda k, d=None: getattr(r, k, d))
+        arts = get("artifacts") or []
+        if isinstance(arts, str):
+            try:
+                arts = json.loads(arts)
+            except (ValueError, TypeError):
+                arts = []
+        sid = str(get("session_id") or "")
+        for a in arts if isinstance(arts, list) else []:
+            if not isinstance(a, dict) or not a.get("path"):
+                continue
+            path = str(a["path"])
+            if path in seen:
+                continue
+            seen.add(path)
+            size = a.get("bytes")
+            size_s = (f" ({float(size) / 1024:.1f} KB)"
+                      if isinstance(size, (int, float)) else "")
+            lines.append(f"• {path}{size_s}"
+                         + (f" — session {sid[:8]}" if sid else ""))
+            if len(lines) >= n:
+                break
+        if len(lines) >= n:
+            break
+    if not lines:
+        return "No file artifacts recorded yet."
+    out = ["Recent artifacts (newest first):"] + lines
+    try:
+        from core.surfaces.deep_link import webview_public_url
+        base = webview_public_url()
+        if base:
+            out.append(f"Console: {base}")
+    except Exception:
+        pass
+    return "\n".join(out)
+
+
 async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) -> str:
     """§7.1 missing hop + §7.2b: /pending /approve /reject /asks /fulfill.
     owner-UX P4 T2 adds the read-only /status /recap /goals /prefs verbs.
@@ -564,6 +643,14 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
 
     if cmd == "/config":
         return _config_reply(user_id, data_dir, instance_id, args)
+
+    if cmd == "/kb":
+        if not args:
+            return "Usage: /kb <query> — search the knowledge base"
+        return await _kb_reply(user_id, " ".join(args))
+
+    if cmd == "/files":
+        return await _files_reply(user_id, args)
 
     if cmd == "/pending":
         from tools.controller.approval_queue import list_pending_tool_approvals
@@ -875,6 +962,7 @@ class TelegramHarness:
         self.poll_timeout = poll_timeout
         self.typing_interval = typing_interval
         self._running = False
+        self.bot_username: Optional[str] = None
         from surfaces.telegram.surface import TelegramSurface
         self.surface = TelegramSurface(bot)
 
@@ -925,6 +1013,16 @@ class TelegramHarness:
         from core.surfaces.transcription import log_transcription_readiness
         register_surface(self.container, self.surface)
         log_transcription_readiness(self.container)
+        try:
+            me = await self.bot.get_me()
+            username = getattr(me, "username", None)
+            if username:
+                self.bot_username = username
+                self.surface.bot_username = username
+        except Exception as e:  # fail-open: group-mention detection and the
+            # own-handle owner-alias (message_send.py) just stay inert, same
+            # as today, if getMe() is unavailable (e.g. a test double Bot).
+            logger.debug("telegram get_me (bot_username resolve) failed: %s", e)
         if self.webhook_base:
             url = self.webhook_base.rstrip("/") + derive_webhook_path()
             await self.bot.set_webhook(url)
@@ -1280,20 +1378,54 @@ class TelegramBotSink:
 
     Registered as the container service ``telegram_sink``. ``send_message`` is async
     (aiogram's Bot.send_message is a coroutine); cron delivery awaits it.
+
+    ``media`` (QW-1, 2026-07-19): optional list of pre-validated attachment
+    entries (``core.surfaces.attachments`` shape: kind/path/caption) sent as
+    photos/documents ON TOP of the text — per-entry fail-open, a media fault
+    never takes the delivered text down with it (mirrors
+    ``TelegramSurface._send_media``).
     """
 
     def __init__(self, bot):
         self._bot = bot
 
-    async def send_message(self, chat_id, text) -> bool:
+    async def send_message(self, chat_id, text, media=None) -> bool:
         try:
             cid = int(chat_id) if str(chat_id).isdigit() else chat_id
             await _send_telegram_text(self._bot, cid, text)
-            return True
         except Exception:  # fail-open: delivery must never crash the caller
             logger.warning("TelegramBotSink.send_message failed for chat %s", chat_id,
                            exc_info=True)
             return False
+        if media:
+            await self._send_media(cid, media)
+        return True
+
+    async def _send_media(self, chat_id, media: list) -> None:
+        try:
+            from aiogram.types import FSInputFile
+        except ImportError:
+            FSInputFile = None
+        for entry in media:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if not path or not (os.path.isfile(path) and os.access(path, os.R_OK)):
+                logger.warning("TelegramBotSink: media path missing/unreadable, "
+                               "skipping: %s", path)
+                continue
+            try:
+                file = (FSInputFile(path, filename=os.path.basename(path))
+                        if FSInputFile is not None else path)
+                caption = entry.get("caption") or None
+                if caption:
+                    caption = str(caption)[:1024]  # Telegram caption hard cap
+                if entry.get("kind") == "image":
+                    await self._bot.send_photo(chat_id, file, caption=caption)
+                else:
+                    await self._bot.send_document(chat_id, file, caption=caption)
+            except Exception as e:  # per-entry fail-open
+                logger.warning("TelegramBotSink: failed to send media %s: %s", path, e)
 
 
 def build_telegram_harness(container, task_agent, *, token, webhook_base=None, bot=None,

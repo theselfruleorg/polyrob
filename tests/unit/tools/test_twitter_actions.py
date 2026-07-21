@@ -13,12 +13,27 @@ from unittest.mock import MagicMock
 import pytest
 
 from tools.base_tool import ToolStatus
+from tools.controller.execution_context import ActionExecutionContext
 from tools.twitter_tool import (
     TwitterTool,
     TwitterPostAction,
     TwitterReplyAction,
     TwitterThreadAction,
 )
+
+
+@pytest.fixture
+def _pm(tmp_path):
+    """A real PathManager so media-path workspace resolution has somewhere to
+    resolve against (mirrors tests/unit/tools/test_filesystem_write_verbatim.py)."""
+    from agents.task.path import PathManager, set_path_manager
+    pm = PathManager(data_root=str(tmp_path / "data"))
+    set_path_manager(pm)
+    return pm
+
+
+def _ctx(session_id="s1", user_id="u1"):
+    return ActionExecutionContext(session_id=session_id, user_id=user_id)
 
 
 def _resp(tid="111", text="hi"):
@@ -98,22 +113,65 @@ async def test_post_calls_create_tweet(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_post_with_media_uploads_then_attaches(monkeypatch):
+async def test_post_with_media_uploads_then_attaches(monkeypatch, _pm):
     t = _tool(monkeypatch)
     t.api_v1.media_upload.return_value = MagicMock(media_id=999)
     t.client.create_tweet.return_value = _resp()
-    await t.twitter_post(TwitterPostAction(text="pic", media_paths=["/tmp/a.png"]))
+    ws = _pm.get_workspace_dir("s1", "u1")
+    (ws / "a.png").write_bytes(b"fake-png")
+    res = await t.twitter_post(
+        TwitterPostAction(text="pic", media_paths=["a.png"]), execution_context=_ctx()
+    )
+    assert res.error is None
     t.api_v1.media_upload.assert_called_once()
     assert t.client.create_tweet.call_args.kwargs["media_ids"] == ["999"]
+    uploaded_path = t.api_v1.media_upload.call_args.kwargs["filename"]
+    assert uploaded_path == str(ws / "a.png")
 
 
 @pytest.mark.asyncio
-async def test_post_with_media_fails_open_when_v1_client_missing(monkeypatch):
+async def test_post_with_media_collapses_container_workspace_prefix(monkeypatch, _pm):
+    """The agent knows a file it just wrote inside the docker sandbox by the
+    CONTAINER's own mount-point convention (`/workspace/foo.png`), not by the real
+    host path — live prod hit exactly this ('No such file or directory:
+    /workspace/video-first-post.mp4') even though the file existed and was
+    readable via the filesystem tool moments earlier. Media upload must collapse
+    that leading segment the same way FileSystem._normalize_path already does."""
+    t = _tool(monkeypatch)
+    t.api_v1.media_upload.return_value = MagicMock(media_id=999)
+    t.client.create_tweet.return_value = _resp()
+    ws = _pm.get_workspace_dir("s1", "u1")
+    (ws / "video.mp4").write_bytes(b"fake-mp4")
+    res = await t.twitter_post(
+        TwitterPostAction(text="vid", media_paths=["/workspace/video.mp4"]),
+        execution_context=_ctx(),
+    )
+    assert res.error is None
+    uploaded_path = t.api_v1.media_upload.call_args.kwargs["filename"]
+    assert uploaded_path == str(ws / "video.mp4")
+
+
+@pytest.mark.asyncio
+async def test_post_with_media_no_session_workspace_fails_cleanly(monkeypatch, _pm):
+    """No resolvable session workspace (e.g. no execution_context) → a clean
+    ActionResult error, never a bare tweepy FileNotFoundError from a raw path."""
+    t = _tool(monkeypatch)
+    res = await t.twitter_post(TwitterPostAction(text="pic", media_paths=["a.png"]))
+    assert res.error is not None
+    assert "workspace" in res.error
+    t.api_v1.media_upload.assert_not_called()
+    t.client.create_tweet.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_with_media_fails_open_when_v1_client_missing(monkeypatch, _pm):
     """No v1.1 API client (no OAuth1.0a media path) → a media post returns a clean
     error ActionResult, never raises, and does NOT silently post text-only."""
     t = _tool(monkeypatch)
     t.api_v1 = None  # v1.1 media-upload client unavailable
-    res = await t.twitter_post(TwitterPostAction(text="pic", media_paths=["/tmp/a.png"]))
+    res = await t.twitter_post(
+        TwitterPostAction(text="pic", media_paths=["/tmp/a.png"]), execution_context=_ctx()
+    )
     assert res.error is not None  # surfaced cleanly, not an exception
     t.client.create_tweet.assert_not_called()  # upload failed before composing
 
@@ -330,3 +388,15 @@ async def test_get_timeline_renders_tweets(monkeypatch):
     assert "hello world" in res.extracted_content
     call_kwargs = t.client.get_users_tweets.call_args.kwargs
     assert call_kwargs["id"] == "123456"
+
+
+def test_media_paths_description_warns_against_live_debug_posts():
+    """2026-07-20: 13+ debug-scratch posts ("Testing Twitter media upload with
+    absolute path", etc.) leaked onto the live public account while a session
+    iterated on a media_paths bug (docs/ops/inbox.md, ~10:12Z). There's no staging
+    account, so the fix is a schema-level steer: the LLM sees this description on
+    every media_paths field before it ever calls the action."""
+    for cls in (TwitterPostAction, TwitterReplyAction, TwitterThreadAction):
+        desc = cls.model_fields["media_paths"].description
+        assert "LIVE public account" in desc
+        assert "verify" in desc.lower()

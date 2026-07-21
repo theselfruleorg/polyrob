@@ -39,6 +39,59 @@ DELIVERY_EVENT_KIND = USER_DELIVERY
 # Outcomes that consumed the content (count toward dedup/rate windows).
 _CONSUMED_OUTCOMES = ("sent", "fallback")
 
+# --- priority lanes (2026-07-20 overnight incident) ------------------------
+# The cap was a flat FIFO across every source, so whoever spoke FIRST won the
+# day regardless of what they had to say. Live consequence on 2026-07-19: the
+# 30 slots were spent by 17:33Z on routine chatter, and for the next 12h every
+# goal completion (99), both daily digests, and — at 01:38:15Z — the credit
+# sentinel's own "autonomy paused" notice were dropped. The owner messaged Rob
+# at 02:35Z not knowing it had stopped. Two lanes close that class.
+PRIORITY_CRITICAL = "critical"
+PRIORITY_NORMAL = "normal"
+PRIORITY_LOW = "low"
+
+#: Sources whose messages are safety-bearing: the owner learning that autonomy
+#: STOPPED is never optional, so these bypass the daily cap and the hourly rate
+#: limit. They stay subject to content dedup, so a byte-identical re-trip can't
+#: become a spam channel (proposal 020 stamps the trip time to keep genuine
+#: re-trips distinct). Quiet hours still apply — that gate DEFERS rather than
+#: drops, so the notice survives either way.
+_CRITICAL_SOURCES = frozenset({"credit_sentinel", "halt", "security"})
+
+
+def _reserved_slots() -> int:
+    """Slots of the daily cap that ``priority="low"`` traffic may not consume."""
+    return int_env("USER_DELIVERY_RESERVED_SLOTS", 8)
+
+
+def resolve_priority(source: str, priority: Optional[str]) -> str:
+    """Explicit *priority* wins; otherwise derive it from *source*.
+
+    Deriving from source means the credit sentinel needed no call-site change —
+    it already sends with ``source="credit_sentinel"``.
+    """
+    if priority in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW):
+        return priority
+    if str(source or "") in _CRITICAL_SOURCES:
+        return PRIORITY_CRITICAL
+    return PRIORITY_NORMAL
+
+
+def effective_cap_for_priority(cap: int, priority: str) -> int:
+    """The daily allowance this *priority* may spend out of *cap*.
+
+    ``low`` gets ``cap - reserved`` so chatter leaves headroom for completions
+    and the digest; the reserve is clamped to leave at least one slot, so a
+    misconfigured ``USER_DELIVERY_RESERVED_SLOTS >= cap`` can never silence low
+    traffic entirely. Every other priority keeps the full cap, which is what
+    makes this a pure demotion of explicitly-low traffic rather than a new
+    restriction on existing senders.
+    """
+    if priority != PRIORITY_LOW:
+        return cap
+    reserved = max(0, min(_reserved_slots(), max(0, cap - 1)))
+    return max(0, cap - reserved)
+
 
 def send_message_user_delivery_enabled() -> bool:
     """§3.1 gate: route autonomous send_message through the rail (default ON)."""
@@ -103,13 +156,17 @@ def _default_event_log():
 
 
 def _record(event_log: Any, user_id: str, session_id: Optional[str], source: str,
-            outcome: str, content_hash: str, text: Optional[str] = None) -> None:
+            outcome: str, content_hash: str, text: Optional[str] = None,
+            attachments: Optional[list] = None) -> None:
     if event_log is None:
         return
     try:
         attrs = {"outcome": outcome, "content_hash": content_hash}
         if text is not None:
             attrs["text"] = str(text)[:500]
+        if attachments:
+            attrs["attachments"] = [str(e.get("path") or "")
+                                    for e in attachments][:5]
         event_log.record(DELIVERY_EVENT_KIND, user_id=str(user_id or ""),
                          session_id=str(session_id or ""), source=source, attrs=attrs)
     except Exception:
@@ -165,6 +222,8 @@ _resolve_recipient = resolve_telegram_recipient
 async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                source: str = "agent", session_id: Optional[str] = None,
                                recipient_override: Optional[str] = None,
+                               attachments: Optional[list] = None,
+                               priority: Optional[str] = None,
                                event_log: Any = ...) -> str:
     """Deliver *text* to *user_id*'s principal through the one rail.
 
@@ -172,6 +231,18 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     ``capped`` (suppressed by the daily cap, durably recorded as an
     owner_notice — 019 #2) | ``fallback`` (durably recorded, no live sink /
     send failed) | ``empty``. Never raises.
+
+    ``attachments`` (QW-1, 2026-07-19): pre-validated media entries
+    (``core.surfaces.attachments`` shapes — the caller does confinement +
+    screening; the rail only transports). Passed to the sink as ``media=``;
+    a legacy sink without that kwarg still gets the text (fail-open to
+    text-only, never a lost message).
+
+    ``priority`` (2026-07-20): ``critical`` bypasses the daily cap and hourly
+    rate limit (dedup still applies) so a halt/security notice can never be
+    starved by chatter; ``low`` may only spend ``cap - USER_DELIVERY_RESERVED_SLOTS``;
+    ``normal`` (the default for every existing caller) is unchanged. Omitted =>
+    derived from *source* (see ``resolve_priority``).
     """
     body = (text or "").strip()
     if not body:
@@ -214,7 +285,10 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                  exc_info=True)
                 return "quiet_held"
             day = [e for e in consumed if e.get("ts", 0) >= now - 86400]
-            if len(day) >= effective_daily_cap(uid, _home_dir):
+            lane = resolve_priority(source, priority)
+            allowance = effective_cap_for_priority(
+                effective_daily_cap(uid, _home_dir), lane)
+            if lane != PRIORITY_CRITICAL and len(day) >= allowance:
                 # 019 #2: a capped message must not be silently lost — unlike
                 # its siblings ("fallback" writes a durable owner_notice,
                 # "quiet_held" persists held_text), "capped" used to drop the
@@ -227,10 +301,11 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                     f"[suppressed by daily proactive-message cap; "
                     f"source={source}] {body}")
                 _record(event_log, uid, session_id, source, "capped", h,
-                        text=body)
+                        text=body, attachments=attachments)
                 return "capped"
             hour = [e for e in day if e.get("ts", 0) >= now - 3600]
-            if len(hour) >= effective_rate_per_hour(uid, _home_dir):
+            if lane != PRIORITY_CRITICAL and \
+                    len(hour) >= effective_rate_per_hour(uid, _home_dir):
                 _record(event_log, uid, session_id, source, "rate_limited", h)
                 return "rate_limited"
     except Exception:
@@ -248,7 +323,14 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             except Exception:
                 sink = None
         if sink is not None and chat_id:
-            res = sink.send_message(str(chat_id), body)
+            if attachments:
+                try:
+                    res = sink.send_message(str(chat_id), body, media=attachments)
+                except TypeError:
+                    # pre-QW-1 sink shape (no media kwarg): text still delivers
+                    res = sink.send_message(str(chat_id), body)
+            else:
+                res = sink.send_message(str(chat_id), body)
             if hasattr(res, "__await__"):
                 res = await res
             sent = bool(res)
@@ -257,11 +339,13 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
         sent = False
 
     if sent:
-        _record(event_log, uid, session_id, source, "sent", h)
+        _record(event_log, uid, session_id, source, "sent", h,
+                attachments=attachments)
         return "sent"
     # Durable fallback — the message is never silently lost.
     _record_notice(event_log, uid, body)
-    _record(event_log, uid, session_id, source, "fallback", h, text=body)
+    _record(event_log, uid, session_id, source, "fallback", h, text=body,
+            attachments=attachments)
     return "fallback"
 
 

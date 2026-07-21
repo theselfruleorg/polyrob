@@ -379,9 +379,10 @@ class LLMRunnerMixin:
 					f"❌ No fallback provider available after {error_type} from {current_provider}"
 				)
 				raise LLMProviderExhaustedError(
-					f"No fallback available after {error_type} from {current_provider}",
+					f"No fallback available after {error_type} from {current_provider}: "
+					f"{str(llm_error)[:200]}",
 					providers_tried=[current_provider]
-				)
+				) from llm_error
 		
 		except LLMContextLengthError as context_error:
 			# Context too long - this is handled separately (truncation, not provider fallback)
@@ -436,9 +437,10 @@ class LLMRunnerMixin:
 			else:
 				self.logger.error(f"❌ No fallback available for {error_type}")
 				raise LLMProviderExhaustedError(
-					f"No fallback available after {error_type}",
+					f"No fallback available after {error_type}: "
+					f"{str(generic_llm_error)[:200]}",
 					providers_tried=list(self.state.llm_providers_failed)
-				)
+				) from generic_llm_error
 		
 		except asyncio.TimeoutError:
 			# Clear LLM call tracking on timeout

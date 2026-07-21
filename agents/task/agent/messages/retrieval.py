@@ -70,6 +70,11 @@ class MessageRetrievalMixin:
 		if getattr(self, '_skill_message', None) is not None:
 			foundation.append(self._skill_message)
 
+		# S1 (dynamic tool rig): <tool-catalog> pinned after skills, matching
+		# get_messages_for_llm().
+		if getattr(self, '_tool_catalog_message', None) is not None:
+			foundation.append(self._tool_catalog_message)
+
 		# Get conversation messages from history (recent messages in deque)
 		conversation_messages = [m.message for m in self.history.messages]
 
@@ -207,6 +212,11 @@ class MessageRetrievalMixin:
 		# system prompt stays stable/cacheable and skills read as a distinct block.
 		if getattr(self, '_skill_message', None) is not None:
 			foundation.append(self._skill_message)
+
+		# 1.2c: S1 dynamic tool rig - the honest <tool-catalog> block, pinned after
+		# skills for the same cacheability rationale. Empty/unset => skipped.
+		if getattr(self, '_tool_catalog_message', None) is not None:
+			foundation.append(self._tool_catalog_message)
 
 		# 1.3: Hierarchical memory.
 		# Placement (Phase 0.1): legacy = pinned in the foundation ahead of the

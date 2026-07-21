@@ -314,3 +314,21 @@ async def test_ledger_seam_works_inside_running_loop(monkeypatch):
     # we are already inside a running loop (pytest.mark.asyncio)
     result = digest._ledger("u1", 1)
     assert result.get("earned_usd") == 9.0
+
+
+# --- console deep link (QW-3, 2026-07-19) -----------------------------------
+
+@pytest.mark.asyncio
+async def test_digest_appends_console_link_when_public_url_set(monkeypatch):
+    monkeypatch.setenv("WEBVIEW_PUBLIC_URL", "https://app.example.com")
+    from cron import digest
+    text = await digest.compose_digest("u1", days=1)
+    assert "https://app.example.com" in text
+
+
+@pytest.mark.asyncio
+async def test_digest_no_link_without_public_url(monkeypatch):
+    monkeypatch.delenv("WEBVIEW_PUBLIC_URL", raising=False)
+    from cron import digest
+    text = await digest.compose_digest("u1", days=1)
+    assert "https://" not in text

@@ -951,6 +951,22 @@ class AgentConstructionMixin:
 		# prompt. get_messages_for_llm() injects this; the system prompt stays stable.
 		self.message_manager.set_skill_message(skill_content)
 
+		# S1 (dynamic tool rig, 2026-07-19): pin the honest <tool-catalog> as a
+		# foundation block — every known tool with loaded/loadable/gated:<reason>
+		# status — so the agent asks/loads instead of researching around a missing
+		# tool in silence. Statuses are as-of-session-start; a load_tool call is the
+		# live authority (its schemas appear next step). Rendered by the injected
+		# controller (tools tier) — no tools import here (layering ratchet).
+		# Fail-open: a render error never blocks construction.
+		try:
+			from core.config_policy import tool_progressive_disclosure
+			if (tool_progressive_disclosure()
+					and hasattr(self.controller, 'render_tool_catalog')):
+				self.message_manager.set_tool_catalog_message(
+					self.controller.render_tool_catalog(is_leaf=(self._role == "leaf")))
+		except Exception as _cat_err:
+			self.logger.debug(f"tool-catalog render skipped (non-fatal): {_cat_err}")
+
 		# polyrob Phase C: pin operator-authored SOUL/IDENTITY self-context as a frozen
 		# foundation message, read ONCE at session start from <data_dir>/identity/. This
 		# is operator-write-only (the agent never authors it in this cut). Empty/absent
