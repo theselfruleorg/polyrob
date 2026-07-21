@@ -96,6 +96,36 @@ def test_goal_create_explicit_tools_get_baseline_union(tmp_path):
     assert "twitter" in txt and "filesystem" in txt and "task" in txt
 
 
+# --- S4 (dynamic tool rig, 2026-07-20): create-time inference stops NARROWING ---
+
+def test_goal_create_no_inferred_narrowing_under_tool_disclosure(tmp_path, monkeypatch):
+    """With TOOL_PROGRESSIVE_DISCLOSURE on, an inference-only goal stays tools-less:
+    payload.tools would short-circuit dispatch's WIDE autonomous default, and the
+    S1 catalog + load_tool make create-time keyword guesses obsolete (dispatch-time
+    inference remains, as a widening hint)."""
+    monkeypatch.setenv("TOOL_PROGRESSIVE_DISCLOSURE", "true")
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="Publish queued OSS launch X thread",
+                         body="post the tweet thread", acceptance="live tweet url"),
+        _Ctx(),
+    ))
+    assert "tools=" not in res.extracted_content
+
+
+def test_goal_create_explicit_tools_still_written_under_tool_disclosure(tmp_path, monkeypatch):
+    """Explicit tools remain a deliberate narrowing/grant — unchanged by the flag."""
+    monkeypatch.setenv("TOOL_PROGRESSIVE_DISCLOSURE", "true")
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest explicit under disclosure", body="b",
+                         tools=["twitter"]),
+        _Ctx(),
+    ))
+    txt = res.extracted_content
+    assert "twitter" in txt and "filesystem" in txt
+
+
 def test_goal_create_inference_never_grants_money_spend(tmp_path):
     tool = _make_tool(tmp_path)
     res = asyncio.run(tool.goal_create(

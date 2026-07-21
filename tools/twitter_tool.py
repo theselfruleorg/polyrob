@@ -54,12 +54,25 @@ _AUTOTHREAD_NOTE = (
     "as a numbered thread."
 )
 
+#: 2026-07-20: 13+ debug-scratch posts ("Testing Twitter media upload with absolute
+#: path", etc.) landed on the LIVE public account while a session iterated on a
+#: media_paths bug — several stayed live for hours before the owner caught it
+#: (docs/ops/inbox.md, 2026-07-20 ~10:12Z). There's no staging account to redirect
+#: to, so the fix is steering: verify a path with a read-only tool BEFORE trying it
+#: here, since every call here is a real, public, undeletable-by-default post.
+_MEDIA_VERIFY_NOTE = (
+    " This is the LIVE public account — verify a path exists (e.g. via the "
+    "filesystem tool) before attaching it here; don't post debug/test text to "
+    "check whether an upload path resolves."
+)
+
 
 class TwitterPostAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     text: str = Field(..., min_length=1, max_length=_TWEET_MAX_INPUT,
                       description="Tweet text. ≤280 chars posts a single tweet." + _AUTOTHREAD_NOTE)
-    media_paths: Optional[List[str]] = Field(None, description="Local image/video file paths to upload + attach.")
+    media_paths: Optional[List[str]] = Field(
+        None, description="Local image/video file paths to upload + attach." + _MEDIA_VERIFY_NOTE)
     poll_options: Optional[List[str]] = Field(None, description="2-4 poll choices (creates a poll).")
     poll_duration_minutes: Optional[int] = Field(None, ge=5, le=10080, description="Poll duration in minutes.")
 
@@ -69,7 +82,8 @@ class TwitterReplyAction(BaseModel):
     tweet_id: str = Field(..., description="ID of the tweet to reply to.")
     text: str = Field(..., min_length=1, max_length=_TWEET_MAX_INPUT,
                       description="Reply text. ≤280 chars posts a single reply." + _AUTOTHREAD_NOTE)
-    media_paths: Optional[List[str]] = Field(None, description="Local file paths to upload + attach.")
+    media_paths: Optional[List[str]] = Field(
+        None, description="Local file paths to upload + attach." + _MEDIA_VERIFY_NOTE)
 
 
 class TwitterQuoteAction(BaseModel):
@@ -82,7 +96,8 @@ class TwitterQuoteAction(BaseModel):
 class TwitterThreadAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     texts: List[str] = Field(..., min_length=1, description="Ordered tweet texts; chained as a thread.")
-    media_paths: Optional[List[str]] = Field(None, description="Local file paths attached to the FIRST tweet.")
+    media_paths: Optional[List[str]] = Field(
+        None, description="Local file paths attached to the FIRST tweet." + _MEDIA_VERIFY_NOTE)
 
 
 class TwitterDeleteAction(BaseModel):
@@ -1587,12 +1602,56 @@ class TwitterTool(BaseTool):
 
     # --- internal write helpers -----------------------------------------
 
-    async def _upload_media(self, media_paths: List[str]) -> List[str]:
+    @staticmethod
+    def _collapse_workspace_prefix(raw: str, workspace_dir: str) -> str:
+        """An agent that just wrote a file INSIDE the docker sandbox knows it by
+        the container's own mount-point convention (`/workspace/foo.mp4`), not by
+        the real host path — that literal string doesn't exist on the host, so
+        passing it straight through hard-fails. Collapse a leading '/workspace/'
+        or 'workspace/' segment to a plain relative path first, mirroring
+        `FileSystem._normalize_path`'s identical convenience (tools/filesystem.py)
+        for the exact same convention."""
+        if os.path.basename(os.path.normpath(workspace_dir)) != "workspace":
+            return raw
+        parts = raw.replace("\\", "/").lstrip("/").split("/", 1)
+        if len(parts) == 2 and parts[0] == "workspace":
+            return parts[1]
+        return raw
+
+    def _resolve_media_paths(self, media_paths: List[str], execution_context) -> List[str]:
+        """Resolve agent-given media paths against the REAL session workspace
+        before handing them to tweepy — reuses the same confinement contract the
+        (proven-working) `message` tool uses, rather than passing a raw string
+        straight through. Without this, any relative OR container-mount-style
+        path the agent supplies fails with a bare 'No such file or directory'
+        deep inside tweepy — live-observed burning 25+ steps on a real, freshly
+        rendered video the agent could already read fine via the filesystem tool.
+        Raises RuntimeError with a clear, actionable message on any bad path
+        (never silently drops a file)."""
+        from tools.controller.message_send import _resolve_session_workspace
+        from core.surfaces.attachments import validate_media_paths
+
+        session_id = getattr(execution_context, "session_id", None) if execution_context else None
+        user_id = getattr(execution_context, "user_id", None) if execution_context else None
+        workspace_dir = _resolve_session_workspace(session_id, user_id)
+        if not workspace_dir:
+            raise RuntimeError(
+                "media upload failed: no session workspace available to resolve "
+                f"media_paths against ({media_paths!r})"
+            )
+        collapsed = [self._collapse_workspace_prefix(p, workspace_dir) for p in media_paths]
+        validated, err = validate_media_paths(collapsed, workspace_dir)
+        if err:
+            raise RuntimeError(f"media upload failed: {err}")
+        return validated
+
+    async def _upload_media(self, media_paths: List[str], execution_context=None) -> List[str]:
         """Upload local media via v1.1 and return media_id strings."""
         if not getattr(self, "api_v1", None):
             raise RuntimeError("media upload requires the v1.1 API client (OAuth1.0a creds)")
+        resolved_paths = self._resolve_media_paths(media_paths, execution_context)
         ids: List[str] = []
-        for path in media_paths:
+        for path in resolved_paths:
             media = await self._make_request(
                 func=self.api_v1.media_upload, endpoint_type="media", filename=path
             )
@@ -1613,10 +1672,11 @@ class TwitterTool(BaseTool):
                              poll_options: Optional[List[str]] = None,
                              poll_duration_minutes: Optional[int] = None,
                              in_reply_to_tweet_id: Optional[str] = None,
-                             quote_tweet_id: Optional[str] = None) -> Dict[str, Any]:
+                             quote_tweet_id: Optional[str] = None,
+                             execution_context=None) -> Dict[str, Any]:
         kwargs: Dict[str, Any] = {"text": text}
         if media_paths:
-            kwargs["media_ids"] = await self._upload_media(media_paths)
+            kwargs["media_ids"] = await self._upload_media(media_paths, execution_context)
         if poll_options:
             kwargs["poll_options"] = list(poll_options)
             if poll_duration_minutes:
@@ -1679,7 +1739,8 @@ class TwitterTool(BaseTool):
                               in_reply_to_tweet_id: Optional[str] = None,
                               quote_tweet_id: Optional[str] = None,
                               poll_options: Optional[List[str]] = None,
-                              poll_duration_minutes: Optional[int] = None) -> List[str]:
+                              poll_duration_minutes: Optional[int] = None,
+                              execution_context=None) -> List[str]:
         """Post ``parts`` as a chained thread; media/poll/quote ride the head tweet."""
         prev_id = in_reply_to_tweet_id
         ids: List[str] = []
@@ -1691,6 +1752,7 @@ class TwitterTool(BaseTool):
                 poll_duration_minutes=poll_duration_minutes if i == 0 else None,
                 quote_tweet_id=quote_tweet_id if i == 0 else None,
                 in_reply_to_tweet_id=prev_id,
+                execution_context=execution_context,
             )
             prev_id = tweet.get("id")
             ids.append(str(prev_id))
@@ -1725,11 +1787,13 @@ class TwitterTool(BaseTool):
                 tweet = await self._compose_tweet(
                     text=parts[0], media_paths=params.media_paths,
                     poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
+                    execution_context=execution_context,
                 )
                 return self._ok(f"🐦 Posted tweet {tweet.get('id')}")
             ids = await self._compose_thread(
                 parts, media_paths=params.media_paths,
                 poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
+                execution_context=execution_context,
             )
             return self._ok(
                 f"🐦 Text exceeded 280 chars — posted as a {len(ids)}-tweet thread: {', '.join(ids)}"
@@ -1751,11 +1815,13 @@ class TwitterTool(BaseTool):
                 tweet = await self._compose_tweet(
                     text=parts[0], media_paths=params.media_paths,
                     in_reply_to_tweet_id=params.tweet_id,
+                    execution_context=execution_context,
                 )
                 return self._ok(f"🐦 Replied with tweet {tweet.get('id')}")
             ids = await self._compose_thread(
                 parts, media_paths=params.media_paths,
                 in_reply_to_tweet_id=params.tweet_id,
+                execution_context=execution_context,
             )
             return self._ok(
                 f"🐦 Reply exceeded 280 chars — posted as a {len(ids)}-tweet reply thread: {', '.join(ids)}"
@@ -1800,6 +1866,7 @@ class TwitterTool(BaseTool):
                     text=text,
                     media_paths=params.media_paths if i == 0 else None,
                     in_reply_to_tweet_id=prev_id,
+                    execution_context=execution_context,
                 )
                 prev_id = tweet.get("id")
                 ids.append(str(prev_id))

@@ -4,7 +4,7 @@ Two quiet lines printed once per process at session start on BOTH surfaces
 (REPL + one-shot ``polyrob run``).  The banner is context, not content — it must
 never compete visually with the first message of the conversation:
 
-    ● polyrob v0.8.0 · gemini-2.5-flash (gemini)
+    ● polyrob v0.8.1 · gemini-2.5-flash (gemini)
       session 7a95c9a2 · tools filesystem, task · /help for commands
 
 Design constraints (mirrors ``blocks.py``):
@@ -114,7 +114,7 @@ def banner_panel(
     """Build the Rich first-run banner: two quiet lines (+ optional third).
 
     The banner must never compete with the first message — one identity line
-    (``● polyrob v0.8.0 · model (provider)``) and one dim context line (session,
+    (``● polyrob v0.8.1 · model (provider)``) and one dim context line (session,
     tools, optional ``/help`` hint).  When session-info kwargs (``framework`` /
     ``instance_id`` / …) are supplied, an OPT-IN dim third line surfaces the
     polyrob-framework / instance distinction + user / memory / autonomy.

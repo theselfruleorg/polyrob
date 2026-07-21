@@ -22,17 +22,23 @@ import pytest
 from tools import TOOL_COMPONENTS  # noqa: F401  (import for side effect)
 from tools.descriptors import get_tool_init_order
 
-from core.bootstrap import register_cli_tools, _CLI_REGISTERABLE_TOOLS
+from core.bootstrap import register_cli_tools, _CLI_REGISTERABLE_TOOLS, cli_unavailable_tools
 
 
 # Tools that legitimately CANNOT run in the lightweight CLI container — they need the
-# heavy server container (browser/Chromium, MCP clients, or paid-API creds baked into
-# server config). Hardcoded independently of core.bootstrap._CLI_INCOMPATIBLE so a
-# change to that (security-relevant) exclusion set has to be reconciled here too.
+# heavy server container (MCP clients, or paid-API creds baked into server config).
+# Hardcoded independently of core.bootstrap._CLI_INCOMPATIBLE so a change to that
+# (security-relevant) exclusion set has to be reconciled here too.
 # "email" was moved OUT (2026-07-14): EmailTool's __init__ has no heavy-server
 # dependency (see the matching note in core/bootstrap.py).
+# "browser"/"browser_manager" moved OUT (2026-07-19): the actual Chromium/playwright
+# launch was already lazy; browser_manager just needed a special-case constructor call
+# (BaseComponent, not BaseTool shape) — see the matching note in core/bootstrap.py.
+# "mcp" was moved OUT (2026-07-20, S3): MCPTool's __init__ is config parsing only —
+# server connections live in the deferred initialize() (see the matching note in
+# core/bootstrap.py); registration is MCP_ENABLED-gated via _cli_extra_gate.
 SERVER_ONLY = {
-    "browser_manager", "browser", "mcp", "perplexity",
+    "perplexity",
     "collabland", "alchemy",
     "polymarket", "polymarket_data", "hyperliquid", "hyperliquid_data",
 }
@@ -67,7 +73,7 @@ _ALL_FLAGS = [
     "CODING_TOOLS_ENABLED", "ANYSITE_TOOL_ENABLED", "GIT_TOOLS_ENABLED",
     "GITHUB_TOOL_ENABLED", "SHELL_TOOLS_ENABLED", "SELF_ENV_ENABLED", "KB_ENABLED",
     "X402_CLIENT_ENABLED", "X402_INVOICE_ENABLED", "AGENT_WALLET_ENABLED",
-    "HF_DEPLOY_ENABLED",
+    "HF_DEPLOY_ENABLED", "MCP_ENABLED",
 ]
 
 
@@ -121,13 +127,15 @@ def test_every_enabled_tool_resolves_to_a_container_service(monkeypatch):
 
 def test_registerable_vocabulary_matches_descriptors(monkeypatch):
     """_CLI_REGISTERABLE_TOOLS must stay a DERIVED VIEW of the descriptors: with all
-    gates on it equals get_tool_init_order() minus the server-only set. This is what
-    stops it drifting into an independently-maintained vocabulary — add a descriptor
-    tool without wiring it into the CLI (or SERVER_ONLY) and this test goes red."""
+    gates on it equals get_tool_init_order() minus the server-only set, PLUS the one
+    documented non-derived exception ("browser" — a runtime alias registered once
+    browser_manager initializes, never a descriptor of its own). This is what stops
+    the vocabulary drifting unnoticed — add a descriptor tool without wiring it into
+    the CLI (or SERVER_ONLY) and this test goes red."""
     _enable_everything(monkeypatch)
     c = _FakeContainer()
     asyncio.run(register_cli_tools(c))  # materializes the optional descriptors
-    derived = {t for t in get_tool_init_order() if t not in SERVER_ONLY}
+    derived = {t for t in get_tool_init_order() if t not in SERVER_ONLY} | {"browser"}
     assert _CLI_REGISTERABLE_TOOLS == derived, (
         "CLI capability vocabulary drifted from the tool descriptors: "
         f"only-in-vocab={sorted(_CLI_REGISTERABLE_TOOLS - derived)} "
@@ -143,3 +151,19 @@ def test_money_tools_specifically_register(monkeypatch):
     asyncio.run(register_cli_tools(c))
     assert c.has_service("x402_pay"), "x402_pay must resolve to a container service when enabled"
     assert c.has_service("x402_invoice"), "x402_invoice must resolve to a container service when enabled"
+
+
+def test_browser_tool_specifically_registers(monkeypatch):
+    """The 2026-07-19 regression: BrowserManager is a bare BaseComponent
+    (`__init__(self, config=None)`), not a BaseTool, so it does NOT fit the generic
+    loop's `cls(name, config, container)` calling convention — that mismatch silently
+    swallowed by the loop's per-tool try/except made `browser` look identical to a
+    genuinely-excluded tool (autonomous goals repeatedly cited "browser tool loaded"
+    as a blocker: sessions 53c43cad, 64e9088f, a7ea136f3c9e). Both the manager AND the
+    `browser` alias a session actually requests via tool_ids must resolve."""
+    c = _FakeContainer()
+    asyncio.run(register_cli_tools(c))
+    assert c.has_service("browser_manager"), "browser_manager must resolve to a container service"
+    assert c.has_service("browser"), "the 'browser' alias tool_ids actually request must resolve"
+    assert "browser" not in cli_unavailable_tools(["browser"]), (
+        "cli_unavailable_tools() must not falsely report 'browser' as CLI-unavailable")

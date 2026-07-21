@@ -76,3 +76,15 @@ def test_set_outcome_on_done_goal(tmp_path):
     b.record_success(g.id, result="OUTCOME: x")
     assert b.set_outcome(g.id, "x") is True
     assert b.get(g.id).payload["outcome"] == "x"
+
+
+# --- QW-2 (2026-07-19, proposal 021): attach guidance in the run prompt -----
+
+def test_goal_run_task_teaches_deliverable_attachment():
+    """The agent-messaged-first case suppresses the framework completion push
+    (`not run.user_messages`), so the AGENT itself must know to attach files —
+    today's x402-recon flow sent `media_paths=None` while naming the file."""
+    from agents.task.goals.board import Goal
+    from agents.task.goals.context import build_goal_run_task
+    text = build_goal_run_task(Goal(id="g", user_id="u", title="t"), None)
+    assert "media_paths" in text

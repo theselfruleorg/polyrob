@@ -210,11 +210,18 @@ class DockerBackend(ExecutionBackend):
         # when the HOST process itself is root (prod systemd runs User=root — never let that
         # silently become uid 0 *inside* the sandbox container) > Windows fallback.
         env_user = os.getenv("CODE_EXEC_DOCKER_USER", "")
+        # Set whenever the forced-unprivileged branch below fires: the container user
+        # then can't be the host workspace dir's owner (it's owned by the root process
+        # that created it), so the bind-mounted workspace needs an explicit best-effort
+        # writable chmod (see `_ensure_workspace_writable`) or every in-container write
+        # to /workspace hard-fails EACCES regardless of dev mode.
+        self._workspace_needs_chmod = False
         if env_user:
             self.user = env_user
         elif hasattr(os, "getuid"):
             if os.getuid() == 0:
                 self.user = "65534:65534"  # nobody:nogroup
+                self._workspace_needs_chmod = True
                 logging.getLogger(__name__).warning(
                     "code_exec docker backend: host process is running as root (uid 0) and "
                     "CODE_EXEC_DOCKER_USER is not set; forcing the sandbox container user to "
@@ -264,6 +271,8 @@ class DockerBackend(ExecutionBackend):
             if self._container is not None:  # lost a setup() race to another waiter
                 return
             workdir = self._resolve_persistent_workdir()
+            if self._workspace_needs_chmod:
+                self._ensure_workspace_writable(workdir)
             network = self._resolve_setup_network()
             container_name = f"polyrob-sbx-{uuid.uuid4().hex}"
             install_host = self._ensure_install_dir(workdir) if self._dev_mode else None
@@ -413,11 +422,16 @@ class DockerBackend(ExecutionBackend):
         flags += ["-w", "/workspace"]
         return flags
 
-    #: Env a sandbox-dev run gets by default: a writable HOME (pip cache/config),
+    #: Env a sandbox-dev run gets by default: HOME points at /install (NOT /workspace —
+    #: /workspace is the host bind-mount, owned by whatever host user ran docker, and
+    #: the container runs as an unprivileged fixed uid that is neither its owner nor
+    #: group, so it has no write bit there; every npm/pip/etc. tool that stages its
+    #: cache/config under $HOME then hard-fails EACCES. /install is the ONE dir this
+    #: backend guarantees 0o777 for exactly this reason (`_ensure_install_dir`)).
     #: PYTHONPATH so /install packages import under `python -s`, and PIP_TARGET so a
     #: bare `pip install X` lands in /install without the agent spelling --target.
     _DEV_ENV_DEFAULTS = {
-        "HOME": "/workspace",
+        "HOME": "/install",
         "PYTHONPATH": "/install",
         "PIP_TARGET": "/install",
     }
@@ -502,6 +516,45 @@ class DockerBackend(ExecutionBackend):
             except ValueError:
                 continue
         return mapping
+
+    @staticmethod
+    def _ensure_workspace_writable(workdir_host: str) -> None:
+        """Best-effort chmod so the FORCED-unprivileged container uid (65534, see
+        `_workspace_needs_chmod`) can write directly into the bind-mounted /workspace
+        tree — not just its top level or the `.pylibs` install dir. `pm().
+        get_workspace_dir()` creates the session workspace as the (root) host
+        process, mode 0o755; a HOST-side tool (e.g. `filesystem`'s create_directory,
+        or write_file's parent-dir auto-create) can likewise scaffold new
+        subdirectories under it AFTER container setup — still root-owned/0o755 —
+        so a container-side `mkdir` one level deeper than any already-fixed
+        directory hard-fails EACCES again (observed live: `mkdir
+        .../videos/rob-reboot/node_modules'`). Recurses, but PRUNES into any
+        directory already owned by a non-root uid (i.e. created by the container's
+        own forced uid) — those and everything below are already writable by that
+        same uid, so this stays cheap even once a large `node_modules` tree exists,
+        instead of re-chmod'ing thousands of entries on every call. Mirrors
+        `_ensure_install_dir`'s existing 0o777/best-effort tradeoff — the dir is
+        already session-confined, so this doesn't cross a tenant boundary.
+        """
+        try:
+            os.chmod(workdir_host, 0o777)
+        except Exception:
+            logger.warning("could not chmod workspace dir writable: %s", workdir_host, exc_info=True)
+            return
+        for root, dirs, _files in os.walk(workdir_host, topdown=True):
+            keep = []
+            for d in dirs:
+                path = os.path.join(root, d)
+                try:
+                    if os.stat(path).st_uid == 0:
+                        os.chmod(path, 0o777)
+                        keep.append(d)
+                    # else: already owned by a non-root (container) uid — that uid
+                    # can already write its own subtree, so don't descend further.
+                except Exception:
+                    logger.warning("could not chmod workspace subdir writable: %s", path, exc_info=True)
+                    keep.append(d)  # best-effort — still try descendants
+            dirs[:] = keep
 
     @staticmethod
     def _ensure_install_dir(workdir_host: str) -> str:
@@ -623,6 +676,8 @@ class DockerBackend(ExecutionBackend):
         workdir = request.workdir or tempfile.mkdtemp(prefix="rob_docker_")
         created_tmp = request.workdir is None
         os.makedirs(workdir, exist_ok=True)
+        if self._workspace_needs_chmod:
+            self._ensure_workspace_writable(workdir)
         if request.dev_mode:
             self._ensure_install_dir(workdir)  # pre-create so docker doesn't root-own it
         # P0 finalization: a named+labeled container with an IN-CONTAINER timeout so a
@@ -725,6 +780,11 @@ class DockerBackend(ExecutionBackend):
             )
         if self._container is None:
             await self.setup()
+        elif self._workspace_needs_chmod and self._workdir:
+            # setup() already fixed the tree once; re-check per exec too — a
+            # HOST-side tool (filesystem/coding) can scaffold new subdirectories
+            # under this same workspace between calls on a long-lived session.
+            self._ensure_workspace_writable(self._workdir)
         clamped_sec = self._clamp_timeout(request.timeout)
 
         argv = ["exec"]

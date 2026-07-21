@@ -127,11 +127,25 @@ async def trip_credit_sentinel(reason: str, *, container: Any = None,
             pass
         try:
             import core.surfaces.user_delivery as _ud
-            text = (f"⛔ Autonomy paused: provider credit failure — {str(reason)[:300]}. "
+            # 020 #1: stamp the trip time into the text so a RE-trip within the
+            # rail's 24h content-dedup window is byte-distinct — the recurring
+            # 402 produces an identical reason, and the 6h release cycle sits
+            # well inside the dedup window, so pauses #2/#3 were silently
+            # absorbed (live 2026-07-18/19: 3 trips, 1 delivered notice).
+            trip_stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+            text = (f"⛔ Autonomy paused ({trip_stamp}): provider credit failure — "
+                    f"{str(reason)[:300]}. "
                     f"Goal dispatch and LLM cron ticks resume automatically in "
                     f"{_release_hours()}h (or remove {_sentinel_path()} after topping up).")
-            await _ud.deliver_user_message(container, str(user_id or ""), text,
-                                           source="credit_sentinel")
+            outcome = await _ud.deliver_user_message(container, str(user_id or ""), text,
+                                                     source="credit_sentinel")
+            # 020 #3: a deduped sentinel notice means the owner was NOT told
+            # about a genuinely new pause — with the stamp above this should
+            # never happen; WARN loudly if it ever does.
+            if outcome == "deduped":
+                logger.warning(
+                    "credit sentinel: pause notice was DEDUPED by the delivery "
+                    "rail — owner was not informed of this re-trip (proposal 020)")
         except Exception:
             logger.debug("credit sentinel: notice failed (durable fallback already "
                          "handled by the rail)", exc_info=True)

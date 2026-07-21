@@ -17,6 +17,13 @@ def _clean(monkeypatch):
         monkeypatch.delenv(k, raising=False)
     c._refreeze_compute_posture_for_tests()
     yield
+    # LIFO landmine (see the docker-test twins + inbox 2026-07-14): this teardown
+    # runs BEFORE monkeypatch reverts env, so refreezing first re-snapshots a
+    # test's posture and leaks it into every later test in the process. Pop the
+    # envs explicitly, THEN refreeze.
+    import os as _os
+    _os.environ.pop("AGENT_COMPUTE_POSTURE", None)
+    _os.environ.pop("SHELL_TOOLS_ENABLED", None)
     c._refreeze_compute_posture_for_tests()
 
 

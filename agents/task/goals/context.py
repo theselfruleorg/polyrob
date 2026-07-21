@@ -113,6 +113,11 @@ def stamp_artifact_references(text: str, workspace_root: Optional[Path] = None) 
 
 
 _OUTCOME_INSTRUCTION = (
+    "DELIVERABLES REACH THE OWNER, NOT THE SERVER (usability contract): a bare "
+    "filename in a chat message is unreachable for the owner. When you report "
+    "a produced file to the owner via the message tool, ATTACH it: "
+    "message(..., media_paths=[\"<file>\"]) — small docs/images/reports always; "
+    "oversized or refused files: give the full server path instead.\n\n"
     "When you are finished, end your final message with ONE line:\n"
     "OUTCOME: <the concrete ids/paths/urls you produced, or NONE plus why>\n"
     "If the acceptance requires an external action you cannot or should not execute "

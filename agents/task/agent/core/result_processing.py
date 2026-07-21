@@ -50,6 +50,27 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None):
 			return (content, False)
 		if ar.is_done:
 			return ("Task marked as complete", False)
+		# 2026-07-19 fabrication incident: a MONEY verb that returns no error and
+		# no content (x402_fetch on a free-tier endpoint — nothing charged,
+		# nothing failed) used to render as the literal "Action completed
+		# successfully". The agent read that as payment confirmation and
+		# published "First x402 micro-transaction completed!" publicly and to its
+		# owner, having moved no money. The tool itself is fixed, but for a money
+		# path "no output" must never be phrased as success at the framework
+		# level either — the next such tool would recreate the incident.
+		if source_for is not None and tc_id is not None:
+			try:
+				_, tool = source_for(tc_id)
+				# ids_with("money") is the SSOT derivation (core/tool_capabilities.py);
+				# there is no pre-built MONEY_TOOLS constant exported there.
+				from core.tool_capabilities import ids_with
+				if tool in ids_with("money"):
+					return ("Action returned no output. This is NOT confirmation "
+					        "that any payment, transfer, or charge occurred — "
+					        "verify against a wallet/ledger read before stating "
+					        "or publishing that it did.", False)
+			except Exception:
+				logger.debug("money-result classification failed", exc_info=True)
 		return ("Action completed successfully", False)
 
 	results = result or []

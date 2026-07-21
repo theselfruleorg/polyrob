@@ -87,6 +87,10 @@ _SAFE_LOCAL_FLAGS = frozenset({
     # message. Safe on a single-user CLI (reads from cwd/git-root); server stays OFF
     # (multi-tenant workspaces may not have a project context file).
     "PROJECT_CONTEXT_AUTOLOAD",
+    # QW-1 (proposal 021): goal/cron completion pushes attach their file
+    # deliverables (screened + capped) to the OWNER chat. Safe single-owner
+    # (owner rail only, secret/threat-screened); multi-tenant server stays OFF.
+    "DELIVERABLES_ATTACH_ENABLED",
     # T13: KB auto-prefetch — inject KB recall alongside memory recall at step start.
     # Safe on a single-user CLI (reads own KB); multi-tenant server stays OFF by default
     # because KB_ENABLED itself is also local-only by default.
@@ -134,6 +138,13 @@ _SAFE_LOCAL_FLAGS = frozenset({
     # stays OFF by default (extra render cost/surface per invoice is opt-in
     # there).
     "INVOICE_CARD_ENABLED",
+    # Dynamic tool rig (S1+S2, 2026-07-19): honest <tool-catalog> foundation
+    # block + load_tool self-serve for container-servable tools. Safe on a
+    # single-owner deploy (money tools stay explicit-grant-only; leaf blocklist,
+    # taint/posture/approval gates unchanged at load AND execution time);
+    # multi-tenant server stays OFF by default (a tenant self-widening its
+    # session toolset is opt-in there).
+    "TOOL_PROGRESSIVE_DISCLOSURE",
 })
 
 
@@ -169,6 +180,21 @@ def message_autonomous_allowlisted() -> bool:
     """
     return _bool_env("MESSAGE_AUTONOMOUS_ALLOWLISTED",
                       _mode_capability_default("MESSAGE_AUTONOMOUS_ALLOWLISTED"))
+
+
+def tool_progressive_disclosure() -> bool:
+    """Whether the dynamic tool rig is on: the honest ``<tool-catalog>`` foundation
+    block (S1) + the ``load_tool`` self-serve action (S2, container-servable tools
+    only). Default OFF; ON under POLYROB_LOCAL via the _SAFE_LOCAL_FLAGS group. An
+    explicit TOOL_PROGRESSIVE_DISCLOSURE always wins.
+
+    Hard lines regardless of this flag: money tools are never loadable via
+    load_tool (explicit owner/goal grant only), delegate-blocked ids stay blocked
+    for leaves, and correspondent-taint/posture/approval gates apply unchanged —
+    loading only registers schemas (tools/tool_disclosure.py).
+    """
+    return _bool_env("TOOL_PROGRESSIVE_DISCLOSURE",
+                      _safe_autonomy_default("TOOL_PROGRESSIVE_DISCLOSURE"))
 
 
 def prefs_tool_enabled() -> bool:
@@ -775,6 +801,12 @@ class AutonomyConfig:
             return float(os.getenv("SELF_WAKE_IDLE_BACKOFF_SEC", "30"))
         except (TypeError, ValueError):
             return 30.0
+
+    # QW-1 (proposal 021) — completion deliverables attach to the owner chat
+    @staticmethod
+    def deliverables_attach_enabled() -> bool:
+        return _bool_env("DELIVERABLES_ATTACH_ENABLED",
+                         _safe_autonomy_default("DELIVERABLES_ATTACH_ENABLED"))
 
     # W2 — writable skills + background review
     @staticmethod

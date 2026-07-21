@@ -79,3 +79,71 @@ def test_pfp_data_dir_matches_the_cli_writer(monkeypatch, tmp_path):
     # no env, no local .polyrob -> falls back to the generic webview data home
     monkeypatch.chdir(tmp_path / ".polyrob")   # a dir with no nested .polyrob
     assert pages._pfp_data_dir() == pages._data_dir()
+
+
+# ---- web setup routes: the same one-time draft -> randomize -> keep contract ----
+
+def _fast_render(monkeypatch):
+    """Skip Chromium in tests: fake the exact-engine renderer (store falls through
+    to it first); the pure meta/lock mechanics are what's under test."""
+    from modules.pfp import store
+    from pathlib import Path
+
+    def fake(config, out_png, *, size=None):
+        Path(out_png).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_png).write_bytes(b"\x89PNG\r\n\x1a\nweb")
+    monkeypatch.setattr(store, "render_still", fake)
+
+
+def test_web_setup_generate_randomize_keep_flow(monkeypatch, tmp_path):
+    _fast_render(monkeypatch)
+    c = _client(monkeypatch, tmp_path)
+
+    r = c.post("/api/pfp/generate")                       # mint a random draft
+    body = r.json()
+    assert r.status_code == 200 and body["ok"], body
+    assert body["meta"]["locked"] is False
+    first_variant = body["meta"]["variant"]
+    assert first_variant.startswith("#")
+
+    r = c.post("/api/pfp/randomize", json={"what": "all"})  # re-roll while draft
+    body = r.json()
+    assert body["ok"], body
+    assert body["meta"]["variant"] != first_variant
+
+    r = c.post("/api/pfp/randomize", json={"what": "voice"})  # voice only
+    body = r.json()
+    assert body["ok"] and "voice" in body["meta"]["override"]
+    kept_variant = body["meta"]["variant"]
+
+    r = c.post("/api/pfp/keep")                           # accept forever
+    body = r.json()
+    assert body["ok"] and body["meta"]["locked"] is True
+
+    r = c.post("/api/pfp/randomize", json={"what": "all"})  # setup is over
+    body = r.json()
+    assert body["ok"] is False and "once" in body["message"]
+    from core.instance import load_pfp_meta
+    assert load_pfp_meta(tmp_path, "rob")["variant"] == kept_variant   # unchanged
+
+
+def test_web_setup_generate_is_idempotent(monkeypatch, tmp_path):
+    _fast_render(monkeypatch)
+    c = _client(monkeypatch, tmp_path)
+    v1 = c.post("/api/pfp/generate").json()["meta"]["variant"]
+    body = c.post("/api/pfp/generate").json()             # second call: no new roll
+    assert body["ok"] and body["meta"]["variant"] == v1
+
+
+def test_web_setup_refused_in_read_only_console(monkeypatch, tmp_path):
+    monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
+    c = _client(monkeypatch, tmp_path)
+    assert c.post("/api/pfp/generate").status_code == 403
+    assert c.post("/api/pfp/randomize").status_code == 403
+    assert c.post("/api/pfp/keep").status_code == 403
+
+
+def test_web_keep_without_avatar_is_a_soft_error(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path)
+    body = c.post("/api/pfp/keep").json()
+    assert body["ok"] is False and "generate" in body["message"]

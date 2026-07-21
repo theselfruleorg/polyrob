@@ -176,3 +176,43 @@ def test_sentinel_path_fallback_honors_polyrob_data_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "sessions"))
     p = cs._sentinel_path()
     assert p == str(tmp_path / "home" / "CREDIT_SENTINEL")
+
+
+def test_retrip_notice_text_is_byte_distinct(data_dir, monkeypatch):
+    """020 #1: a re-trip after auto-release must produce byte-distinct notice
+    text (trip timestamp stamped in), or the rail's 24h content dedup silently
+    eats every pause notice after the first."""
+    import core.credit_sentinel as cs
+    sent = []
+
+    async def _fake_deliver(container, user_id, text, **kw):
+        sent.append(text)
+        return "sent"
+
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
+
+    fake_now = [time.struct_time((2026, 7, 19, 8, 16, 0, 5, 200, 0))]
+    monkeypatch.setattr(time, "gmtime", lambda *a: fake_now[0])
+
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+    os.remove(cs._sentinel_path())  # simulate auto-release
+    fake_now[0] = time.struct_time((2026, 7, 19, 14, 16, 0, 5, 200, 0))
+    asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+
+    assert len(sent) == 2
+    assert sent[0] != sent[1], "re-trip notice must be byte-distinct from the first"
+    assert "08:16" in sent[0] and "14:16" in sent[1]
+
+
+def test_deduped_sentinel_notice_warns(data_dir, monkeypatch, caplog):
+    """020 #3: if a sentinel pause notice is ever deduped anyway, WARN loudly."""
+    import logging
+    import core.credit_sentinel as cs
+
+    async def _fake_deliver(container, user_id, text, **kw):
+        return "deduped"
+
+    monkeypatch.setattr("core.surfaces.user_delivery.deliver_user_message", _fake_deliver)
+    with caplog.at_level(logging.WARNING, logger=cs.logger.name):
+        asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
+    assert any("DEDUPED" in r.getMessage() for r in caplog.records)

@@ -190,6 +190,15 @@ class ReadFileAction(BaseModel):
 		return v
 
 
+def _coerce_write_content(v):
+	"""LLMs frequently pass structured content (dict/list) for JSON-ish files
+	instead of a pre-serialized string; JSON-encode rather than hard-failing."""
+	if isinstance(v, (dict, list)):
+		import json
+		return json.dumps(v, indent=2)
+	return v
+
+
 class WriteFileAction(BaseModel):
 	"""Model for writing content to a file in the workspace"""
 	model_config = ConfigDict(extra='forbid', populate_by_name=True)
@@ -204,9 +213,10 @@ class WriteFileAction(BaseModel):
 			return str(Path(v.strip()))
 		return v
 
-	@field_validator('content')
+	@field_validator('content', mode='before')
 	@classmethod
 	def normalize_content(cls, v):
+		v = _coerce_write_content(v)
 		return str(v) if v is not None else ""
 
 
@@ -224,9 +234,10 @@ class AppendFileAction(BaseModel):
 			return str(Path(v.strip()))
 		return v
 
-	@field_validator('content')
+	@field_validator('content', mode='before')
 	@classmethod
 	def normalize_content(cls, v):
+		v = _coerce_write_content(v)
 		return str(v) if v is not None else ""
 
 

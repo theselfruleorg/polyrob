@@ -214,10 +214,24 @@ class GoalTool(BaseTool):
                 logger.info("goal_create: dropped non-allowlisted tools %s (kept %s)", dropped, allowed)
         inferred: set = set()
         if not allowed:
-            # Proposal 009 option B: no (valid) explicit tools — infer from the goal's own text.
-            inferred = _infer_tools_from_text(params.title, params.body, params.acceptance)
-            if inferred:
-                logger.info("goal_create: inferred tools %s from goal text", sorted(inferred))
+            # S4 (dynamic tool rig, 2026-07-20): under progressive tool disclosure an
+            # inference-only goal stays TOOLS-LESS — a written payload.tools would
+            # short-circuit dispatch's wide autonomous default (the create-time
+            # keyword guess was the last narrowing site), and the S1 catalog +
+            # load_tool cover anything the guess would have added. Dispatch-time
+            # inference (dispatcher._resolve_goal_tools) remains as a WIDENING hint.
+            # Flag off => legacy Proposal-009 inference, byte-identical.
+            _disclosure_on = False
+            try:
+                from core.config_policy import tool_progressive_disclosure
+                _disclosure_on = tool_progressive_disclosure()
+            except Exception:
+                _disclosure_on = False
+            if not _disclosure_on:
+                # Proposal 009 option B: no (valid) explicit tools — infer from the goal's own text.
+                inferred = _infer_tools_from_text(params.title, params.body, params.acceptance)
+                if inferred:
+                    logger.info("goal_create: inferred tools %s from goal text", sorted(inferred))
         if allowed or inferred:
             payload["tools"] = sorted(set(allowed) | inferred | set(_SELF_GOAL_BASELINE_TOOLS))
         board = self._resolve_board()

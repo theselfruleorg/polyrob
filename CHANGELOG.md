@@ -6,6 +6,154 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-07-21
+
+### 2026-07-20 — Reliability & honesty fixes (live battle-test hardening)
+
+- **Financial-language honesty**: an unpaid fetch / x402 attempt now explicitly
+  states it did NOT pay (the proximate cause of a fabricated "payment sent" claim),
+  and the agent is steered to `x402_quote` instead of a rejected `max_amount_usd=0`.
+- **Owner-delivery priority lanes**: the user-delivery rail is now priority-ordered
+  so a credit-death / halt notice can no longer be starved behind ordinary chatter
+  under the flat FIFO send cap.
+- **Credit-death sentinel reachability**: the fatal-halt branch the sentinel needs
+  was unreachable — it now walks the exception chain to recover the 402's billing
+  text, and re-trip notices no longer self-dedupe (each trip carries its timestamp).
+- **Message tool**: results acknowledge attached media (killing a retry-to-`BLOCKED`
+  loop), carry real content evidence + the true error for the completion judge, and
+  resolve `owner` as a target alias before access-tier resolution.
+- **Code execution (docker)**: the sandbox workspace bind-mount is writable by the
+  forced uid, and `chmod` recurses into pre-existing subdirs.
+- **Filesystem tool**: `write_file`/`append_file` coerce dict/list content to JSON
+  instead of erroring.
+- **Surfaces / Twitter**: a goal's owner-notify message is no longer literally
+  addressed to the bot's own handle; Twitter `media_paths` resolve against the real
+  session workspace; and the agent is steered away from posting debug-scratch text
+  to the live account.
+
+### 2026-07-20 — Dynamic tool rig S3+S4: mcp un-exclusion + create-time narrowing removed
+
+- **`mcp` registers in the CLI/headless container** (S3 tail; browser was un-excluded
+  by the maint loop @14381f62): `MCPTool.__init__` is config parsing only, so it left
+  `_CLI_INCOMPATIBLE`; registration is gated by explicit `MCP_ENABLED`, the
+  autonomous-mode capability default, or local server files (`_cli_extra_gate`).
+  Missing gateway secrets (`MCP_GATEWAY_TOKEN`/`ANYSITE_JWT`) now fail loudly at
+  load/connect time — an owner ask — never a silent "not found in container".
+- **`goal_create` stops narrowing** (S4): under `TOOL_PROGRESSIVE_DISCLOSURE`, an
+  inference-only goal no longer writes keyword-guessed `payload.tools` (which
+  short-circuited dispatch's wide `default_goal_tools()`); dispatch-time inference
+  remains as a widening hint, explicit tools + baseline union unchanged, flag off =
+  byte-identical. Seeding doctrine ("omit payload.tools unless deliberately
+  narrowing or granting a money verb") stamped into `scripts/seed_goal.py`.
+
+### 2026-07-19 — Dynamic tool rig S1+S2: honest `<tool-catalog>` + self-serve `load_tool` (progressive tool disclosure)
+
+- **Every session can now SEE the whole tool universe and self-serve what it needs**
+  (owner directive: the static, silently-narrowed toolset was the rigidity behind
+  the "17 steps researching around a missing browser" failure). Gated
+  `TOOL_PROGRESSIVE_DISCLOSURE` (default OFF; **ON under `POLYROB_LOCAL`**).
+- **S1 `<tool-catalog>` foundation block** (`tools/tool_disclosure.py`, pinned as a
+  `TOOL_CATALOG`-origin control message like skills): one line per known tool with
+  an HONEST status — `loaded`, `loadable — load_tool("<id>")`, or `gated:<reason>`
+  with the remedy channel (`money` explicit-grant-only / `leaf-blocked` /
+  `unavailable-on-this-deploy` naming the missing config). Pure render over the
+  existing SSOTs (`tools/descriptors.py` + `core/tool_capabilities.py` + the
+  container); the system prompt stays byte-stable/cacheable.
+- **S2 `load_tool(tool_id)` action**: materializes a `loadable` tool mid-session
+  through the SAME `load_tools_from_container` path session creation uses — its
+  schemas appear on the next step (registry cache self-busts). Money tools are
+  NEVER loadable (explicit owner/goal grant only); delegate-blocked ids refused
+  for leaf/sub-agent turns (honors the `DELEGATE_BLOCKED_TOOLS` env override);
+  correspondent-taint/posture/approval gates unchanged — loading registers
+  schemas, it grants no execution rights. Refusals are STRUCTURED
+  (`gated:<reason>` + remedy), killing the silent-drop failure mode.
+- S3 (lazy construction for `_CLI_INCOMPATIBLE` heavy tools, browser first) and
+  S4 (`goal_create` stops writing narrow inferred `payload.tools`) shipped
+  alongside — see the S3+S4 entry above.
+
+### 2026-07-19 — Deliverable reachability: completions attach their files, console deep links, /kb + /files (proposal 021)
+
+- **Goal/cron completion pushes now carry their deliverables.** The owner push is
+  built from the run's artifact registry (`agents/task/goals/deliverables.py`):
+  files attach to the Telegram message as documents/photos (screened + capped),
+  everything else is listed honestly as `server-only: <path> (<reason>)` — never
+  again a bare filename the owner can't open. Attaching is gated
+  `DELIVERABLES_ATTACH_ENABLED` (ON under `POLYROB_LOCAL`), capped by
+  `DELIVERABLES_ATTACH_MAX_MB` (10) / `DELIVERABLES_ATTACH_MAX_FILES` (3).
+- **One shared attach-eligibility seam** (`core/surfaces/attachments.py`):
+  workspace confinement (relocated from the `message` tool), per-file size cap,
+  secret-shaped-filename refusal, bounded prompt-injection threat scan
+  (fail-closed on scanner error). The `message` tool's `media_paths` now rides
+  the same screen; the delivery rail (`deliver_user_message`) and the
+  out-of-band `TelegramBotSink` gained media transport (per-entry fail-open —
+  a media fault never takes the text down).
+- **Console deep links** (`WEBVIEW_PUBLIC_URL`): completions append the
+  owner-auth webview `/session/<id>` link; the daily digest appends a console
+  line. Unset ⇒ byte-identical.
+- **Webview browses the agent's ACTUAL workspace root:** with
+  `POLYROB_PROJECT_DIR` set the agent runs pm() in project-root mode but the
+  webview's own process didn't — its file browser showed the EMPTY per-session
+  dir while artifacts sat in the project dir. Startup now applies the same
+  mode, single-tenant postures only.
+- **Telegram `/kb <query>` and `/files [n]` owner verbs** — the phone-first
+  owner's read path into the knowledge base and the artifact registry
+  (previously CLI-only; "ingested into KB" was write-only theatre from chat).
+- **Goal-run prompt teaches attachment:** report a produced file to the owner
+  WITH `message(media_paths=[...])`; oversized/refused files get the full
+  server path instead.
+- **Same-day review fix wave** (two independent review passes):
+  layering-ratchet repair (threat scanner dependency-injected out of core),
+  content-level secret refusal via `core/secret_scrub` (text AND binary heads),
+  write-attribution widened to all ledger output kinds + unattributed files
+  listed (never dropped), attached lines carry the absolute server path (text-only
+  re-deliveries stay reachable) + `attachments` attrs on `user_delivery` events,
+  `MESSAGE_MEDIA_MAX_MB` (45) decouples the explicit `message`-tool cap from the
+  10 MB auto-attach cap, cross-tenant media guard in `_notify_owner_done`,
+  webview file endpoints refuse credential-shaped files, sink caption truncation,
+  `/files` episode window scaling.
+
+### 2026-07-19 — Avatar pipeline: one-time random setup, native headless renderer, voice surfaced
+
+- **Avatar setup is now a ONE-TIME flow: draft → randomize → keep.**
+  `pfp generate` mints a RANDOM DRAFT identity (fresh shuffle variant → new face +
+  voice per instance) instead of silently freezing the committed stock face every
+  install; `pfp randomize [face|voice]` re-rolls the draft (everything / face-only /
+  voice-only, studio shuffle semantics); `pfp keep` (or `pfp pick`'s save) accepts it
+  and locks the identity PERMANENTLY. A kept identity cannot be changed by any verb —
+  `modules/pfp/store.py` raises `PfpLockedError` on any identity-changing write
+  (pixels-only re-render of the same identity stays allowed); `pfp push` requires a
+  kept identity; a pre-lock-era `pfp.json` is treated as kept. REPL: `/pfp generate` /
+  `/pfp randomize [face|voice]` / `/pfp keep`. `--stock` reproduces the committed
+  identity, `--seed`/`--variant` pin a specific roll, `--config` keeps the
+  frozen-blob path.
+- **Native headless renderer (`modules/pfp/still.py`):** the Mindprint dot pass
+  ported to Pillow/numpy over the parity-tested field port. Render chain is now
+  Chromium (exact engine) → native mesh renderer (same face, no browser) →
+  committed reference (STOCK identity only). A randomized identity can no longer
+  be silently replaced by the reference PNG's pixels.
+- **Setup lets you SEE and HEAR the identity on both surfaces.** CLI/REPL: every
+  setup step renders the face inline (truecolor TTY) and the new
+  `polyrob pfp say [text]` / `/pfp say` speaks the voice signature through the
+  native TTS engine (`modules/pfp/voice.py` — macOS `say` with timbre→clear-voice
+  mapping + semitone pitch shift, `espeak-ng`/`espeak`, Windows SAPI SSML;
+  fail-open with web pointers when no engine exists). Web: the webview /identity
+  page now runs the full setup — live face, DRAFT/KEPT state, 🔊 hear-voice
+  (browser speechSynthesis, studio timbre mapping), and draft-only
+  re-roll/keep controls over `POST /api/pfp/{generate,randomize,keep}`
+  (403 read-only; store-enforced lock contract). Config-shuffle helpers moved to
+  `modules/pfp/identity.py` (CLI re-exports them unchanged).
+- **`pfp pick` freezes into the instance identity home** (renders png + meta that
+  the webview /identity page, invoice cards, and `pfp push` actually read) instead
+  of writing the repo's `avatar/config/rob.json` (read-only under pip installs;
+  changes never propagated without a manual `generate --force`). `--out` exports
+  the chosen config JSON.
+- **Generate/randomize now report the full identity + next steps** (face traits,
+  the voice signature, and view/re-roll/push/console pointers) instead of a bare
+  PNG path; `/pfp status` shows traits + voice too.
+- **`pfp push --discord` (flag `PFP_PUSH_DISCORD`, default OFF):** sets the Discord
+  bot avatar live via `PATCH /users/@me` (`DISCORD_BOT_TOKEN`, hash-idempotent,
+  fail-open) — Discord was the one API-capable surface with no avatar push.
+
 ## [0.8.0] — 2026-07-19
 
 ### 2026-07-18 — Proposal wave 010A/012/015/016/019-cap: outage honesty + delivery-cap starvation + acceptance gap

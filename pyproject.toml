@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "0.8.0"
+version = "0.8.1"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -49,7 +49,7 @@ Issues = "https://github.com/theselfruleorg/polyrob/issues"
 polyrob = "cli.polyrob:main"
 
 [tool.setuptools.packages.find]
-include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","datagen*","data"]
+include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","datagen*","data","assets*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json","*.txt","*.md"]
@@ -67,3 +67,8 @@ include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*",
 # Built webgate bundle (produced by doc 03). Matches nothing until the bundle is
 # built, so it's inert today — no behavior change. core/assets.py resolves it.
 "polyrob" = ["web_dist/**/*"]
+# Bundled fonts (DejaVu, permissive Bitstream Vera license) — modules/pfp/cards.py
+# reads assets/fonts/dejavu/*.ttf by path at runtime to render invoice/PFP cards
+# in Pillow (no headless browser). Without this the wheel omits them and card
+# rendering silently degrades to PIL's default font. Ship the TTFs + LICENSE.
+"assets" = ["fonts/**/*"]

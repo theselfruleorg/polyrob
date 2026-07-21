@@ -55,3 +55,18 @@ async def test_append_file_preserves_indentation(_pm, monkeypatch):
 
 async def _noop():
     return None
+
+
+def test_write_file_action_coerces_dict_content_to_json():
+    """LLMs routinely pass structured content (a dict) when writing JSON-ish
+    files like package.json instead of pre-serializing it themselves. Before
+    this fix, Pydantic's strict string_type check rejected the dict outright
+    (the field_validator never got a chance to run), so every such write_file
+    call failed validation and the agent looped."""
+    a = WriteFileAction(file_path="package.json", content={"name": "foo", "version": "1.0.0"})
+    assert a.content == '{\n  "name": "foo",\n  "version": "1.0.0"\n}'
+
+
+def test_append_file_action_coerces_list_content_to_json():
+    a = AppendFileAction(file_path="data.json", content=[1, 2, 3])
+    assert a.content == "[\n  1,\n  2,\n  3\n]"

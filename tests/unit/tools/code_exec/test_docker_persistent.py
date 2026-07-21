@@ -607,6 +607,42 @@ async def test_real_persistent_state_survives_across_run_calls(tmp_path, monkeyp
 
 @_needs_docker
 @pytest.mark.asyncio
+async def test_real_persistent_host_created_subdir_writable_on_next_exec(tmp_path, monkeypatch):
+    """A long-lived session container's workspace isn't static: a HOST-side tool
+    (filesystem/coding) can scaffold a new subdirectory INTO it between two
+    `run()` calls on the SAME persistent container (e.g. goal step N creates
+    `videos/rob-reboot/`, step N+1 runs npm inside it). setup() only fixes the
+    tree once; each exec must re-check for newly-appeared root-owned dirs too —
+    live prod hit exactly this (`mkdir EACCES` on a dir created after setup())."""
+    monkeypatch.delenv("CODE_EXEC_NETWORK", raising=False)
+    monkeypatch.delenv("CODE_EXEC_DOCKER_USER", raising=False)
+    _pin_workdir(monkeypatch, str(tmp_path))
+    session_id = f"live-{uuid.uuid4().hex[:8]}"
+    b = DockerBackend(session_id=session_id)
+    try:
+        await b.setup()
+        # Simulate a host-side tool (running as root, same as this test process)
+        # scaffolding a new directory AFTER the container/workspace was set up.
+        (tmp_path / "videos" / "rob-reboot").mkdir(parents=True)
+
+        result = await b.run(ExecutionRequest(
+            language="python",
+            code=(
+                "import os; os.mkdir('/workspace/videos/rob-reboot/node_modules'); "
+                "print('mkdir-ok')"
+            ),
+            timeout=20,
+        ))
+        assert result.exit_code == 0 and "mkdir-ok" in result.stdout, (
+            f"expected a host-created subdir to be writable on the next exec: "
+            f"exit={result.exit_code} stdout={result.stdout!r} stderr={result.stderr!r}"
+        )
+    finally:
+        await b.teardown()
+
+
+@_needs_docker
+@pytest.mark.asyncio
 async def test_real_persistent_timeout_kills_in_container_process_not_just_client(tmp_path, monkeypatch):
     """P1-B review, Important #1 — the core regression test.
 
