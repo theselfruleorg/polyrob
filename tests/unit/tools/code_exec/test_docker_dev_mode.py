@@ -3,7 +3,7 @@
 At AGENT_COMPUTE_POSTURE >= 1 an entitled session gets an INSTALLABLE sandbox:
 a writable `/install` dir (session-bound `<workspace>/.pylibs` bind), `python -s`
 with `PYTHONPATH=/install` instead of the env-ignoring `python -I`, and
-`HOME=/workspace` + `PIP_TARGET=/install` so a plain `pip install X` lands
+`HOME=/install` + `PIP_TARGET=/install` so a plain `pip install X` lands
 somewhere importable. The posture-0 path must stay BYTE-IDENTICAL (python -I,
 no extra mounts, no extra env) — `-I` is load-bearing for untrusted exec.
 
@@ -69,14 +69,14 @@ def test_dev_argv_uses_python_s_with_install_mount_and_env():
     argv = _argv(ExecutionRequest(language="python", code="print(1)", dev_mode=True))
     assert argv[-4:] == ["python", "-s", "-c", "print(1)"]
     assert "-v" in argv and "/tmp/ws/.pylibs:/install" in argv
-    for expected in ("HOME=/workspace", "PYTHONPATH=/install", "PIP_TARGET=/install"):
+    for expected in ("HOME=/install", "PYTHONPATH=/install", "PIP_TARGET=/install"):
         assert expected in argv, f"missing -e {expected}"
 
 
 def test_dev_argv_bash_gets_env_but_plain_bash_command():
     argv = _argv(ExecutionRequest(language="bash", code="pip install x", dev_mode=True))
     assert argv[-3:] == ["bash", "-c", "pip install x"]
-    assert "PIP_TARGET=/install" in argv and "HOME=/workspace" in argv
+    assert "PIP_TARGET=/install" in argv and "HOME=/install" in argv
 
 
 def test_dev_env_caller_override_wins_over_defaults():
@@ -147,7 +147,7 @@ async def test_persistent_dev_exec_uses_python_s_and_env(monkeypatch, tmp_path):
     ex = next(a for a in fake.log if a and a[0] == "exec")
     joined = ex
     assert "python" in joined and "-s" in joined and "-I" not in joined
-    for expected in ("HOME=/workspace", "PYTHONPATH=/install", "PIP_TARGET=/install"):
+    for expected in ("HOME=/install", "PYTHONPATH=/install", "PIP_TARGET=/install"):
         assert expected in joined
 
 

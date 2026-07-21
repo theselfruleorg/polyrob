@@ -255,3 +255,162 @@ def test_routing_fail_open(monkeypatch):
         _orch(_Boom(), user_id="1"), "sess-goal", "text", event_log=_EvLog()))
     assert out in ("failed", "fallback")
     _SESSIONS.clear()
+
+
+# --- attachments on the rail (QW-1, 2026-07-19) -----------------------------
+
+class _MediaSink:
+    """Sink that accepts the media kwarg (MessageRouter shape)."""
+
+    def __init__(self, ok=True):
+        self.sent = []
+        self._ok = ok
+
+    async def send_message(self, chat_id, text, surface_id="telegram", media=None):
+        self.sent.append((chat_id, text, media))
+        return self._ok
+
+
+def test_attachments_threaded_to_media_capable_sink():
+    sink, ev = _MediaSink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    entries = [{"kind": "document", "path": "/ws/x402-recon.md", "caption": None}]
+    out = _deliver(c, "12345", "done, report attached", event_log=ev,
+                   attachments=entries)
+    assert out == "sent"
+    assert sink.sent == [("12345", "done, report attached", entries)]
+
+
+def test_attachments_fall_back_to_text_on_legacy_sink():
+    """A sink without a media kwarg (the pre-QW-1 shape) still delivers text."""
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    out = _deliver(c, "12345", "done, report attached", event_log=ev,
+                   attachments=[{"kind": "document", "path": "/ws/a.md",
+                                 "caption": None}])
+    assert out == "sent"
+    assert sink.sent == [("12345", "done, report attached")]
+
+
+def test_no_attachments_keeps_legacy_two_arg_call():
+    sink, ev = _MediaSink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    out = _deliver(c, "12345", "plain", event_log=ev)
+    assert out == "sent"
+    assert sink.sent == [("12345", "plain", None)]
+
+
+def test_attachment_paths_recorded_in_delivery_event():
+    """Review Important #3 observability: the user_delivery event must show WHICH
+    files rode (or were meant to ride) the message."""
+    sink, ev = _MediaSink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    out = _deliver(c, "12345", "with file", event_log=ev,
+                   attachments=[{"kind": "document", "path": "/ws/a.md",
+                                 "caption": None}])
+    assert out == "sent"
+    sent_ev = [e for e in ev.events
+               if e["kind"] == "user_delivery" and e["attrs"].get("outcome") == "sent"]
+    assert sent_ev and sent_ev[0]["attrs"].get("attachments") == ["/ws/a.md"]
+
+
+# --------------------------------------------------------------------------
+# Priority lanes (2026-07-20 overnight incident).
+#
+# The live failure: the daily cap is a flat FIFO across every source. On the
+# night of 07-19 its 30 slots were consumed between 15:01Z and 17:33Z by
+# routine chatter (self_evolution goal-start pings 14 + agent_send 11 +
+# outbound_open_send 2). From 17:33Z onward EVERYTHING was capped for 12h —
+# 99 goal completions (with their 021 deliverables), 2 daily digests, and, at
+# 01:38:15Z, the credit sentinel's own "autonomy paused" notice. The owner
+# messaged Rob at 02:35Z with no idea it had stopped.
+#
+# Two lanes fix that class: a CRITICAL lane that the cap cannot touch, and a
+# reserved slice that low-value chatter may not consume.
+# --------------------------------------------------------------------------
+
+
+def test_critical_source_bypasses_daily_cap(monkeypatch):
+    """The exact 2026-07-20 01:38Z failure: the halt notice must land even when
+    routine traffic has already burned every slot in the daily cap."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "2")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    assert _deliver(c, "1", "chatter one", event_log=ev) == "sent"
+    assert _deliver(c, "1", "chatter two", event_log=ev) == "sent"
+    assert _deliver(c, "1", "chatter three", event_log=ev) == "capped"
+    out = _deliver(c, "1", "⛔ Autonomy paused: provider credit failure",
+                   event_log=ev, source="credit_sentinel")
+    assert out == "sent"
+    assert sink.sent[-1][1].startswith("⛔ Autonomy paused")
+
+
+def test_critical_source_bypasses_rate_limit(monkeypatch):
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "1")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "100")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    assert _deliver(c, "1", "first", event_log=ev) == "sent"
+    assert _deliver(c, "1", "second", event_log=ev) == "rate_limited"
+    assert _deliver(c, "1", "⛔ Autonomy paused: credit failure",
+                    event_log=ev, source="credit_sentinel") == "sent"
+
+
+def test_critical_source_is_still_deduped(monkeypatch):
+    """Bypassing the cap must not turn the critical lane into a spam channel:
+    a byte-identical re-trip inside the dedup window is still suppressed
+    (proposal 020 stamps the trip time to keep genuine re-trips distinct)."""
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "100")
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    text = "⛔ Autonomy paused (2026-07-20 01:38 UTC): provider credit failure"
+    assert _deliver(c, "1", text, event_log=ev, source="credit_sentinel") == "sent"
+    assert _deliver(c, "1", text, event_log=ev, source="credit_sentinel") == "deduped"
+    assert len(sink.sent) == 1
+
+
+def test_low_priority_cannot_consume_reserved_slots(monkeypatch):
+    """Goal-start pings (low) must leave headroom for completions/digest."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "5")
+    monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "2")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    # low-priority traffic may use cap - reserved = 3 slots
+    for i in range(3):
+        assert _deliver(c, "1", f"▶ goal started: task {i}", event_log=ev,
+                        source="self_evolution", priority="low") == "sent"
+    assert _deliver(c, "1", "▶ goal started: task 4", event_log=ev,
+                    source="self_evolution", priority="low") == "capped"
+    # ...and the reserved slots remain available to normal-priority traffic
+    assert _deliver(c, "1", "✅ Background goal completed. Deliverables: …",
+                    event_log=ev, source="self_evolution") == "sent"
+    assert _deliver(c, "1", "daily digest: 3 goals done", event_log=ev,
+                    source="cron") == "sent"
+
+
+def test_reserved_slots_never_starve_low_priority_entirely(monkeypatch):
+    """A reserve >= cap would silence low traffic completely; it is clamped so
+    at least one slot always remains."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "2")
+    monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "50")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    assert _deliver(c, "1", "low one", event_log=ev, priority="low") == "sent"
+    assert _deliver(c, "1", "low two", event_log=ev, priority="low") == "capped"
+
+
+def test_normal_priority_default_is_unchanged_by_the_reserve(monkeypatch):
+    """Regression guard: default-priority senders keep the full cap, so the
+    reserve is purely a demotion of explicitly-low traffic."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "3")
+    monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "2")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    for i in range(3):
+        assert _deliver(c, "1", f"normal {i}", event_log=ev) == "sent"
+    assert _deliver(c, "1", "normal 4", event_log=ev) == "capped"

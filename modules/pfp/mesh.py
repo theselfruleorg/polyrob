@@ -275,12 +275,20 @@ class Mesh:
         if color:
             hs = hex2hs(color)
             hue, sat = hs["h"], hs["s"]
+        shape_idx = o["shape"] if o.get("shape") is not None else p["shapeIdx"]
         return {
             "hue": hue,
             "sat": sat,
             "mode": o["mode"] if o.get("mode") is not None else p["mode"],
             "grain": o["grain"] if o.get("grain") is not None else p["grainAuto"],
+            "dens": o["dens"] if o.get("dens") is not None else p["densAuto"],
+            "shape": SHAPES[shape_idx] if 0 <= shape_idx < len(SHAPES) else SHAPES[0],
         }
+
+    @property
+    def render_cfg(self) -> Dict[str, Any]:
+        """The resolved render config (hue/sat/mode/grain/dens/shape) — mirrors JS ``cfg()``."""
+        return dict(self._cfg)
 
     # -- public readouts --
     def traits(self) -> Dict[str, Any]:

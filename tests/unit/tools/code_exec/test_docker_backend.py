@@ -45,6 +45,20 @@ def test_env_default_network_egress_maps_to_bridge(monkeypatch):
     assert argv[argv.index("--network") + 1] == "bridge"
 
 
+def test_env_network_bridge_is_an_egress_alias(monkeypatch):
+    """Prod 2026-07-06: operator set CODE_EXEC_NETWORK=bridge (the docker network
+    name) and the policy silently degraded to 'none' — the agent's pip failed with
+    name-resolution errors and a whole build goal blocked. 'bridge' must alias
+    'egress', not silently mean no-network."""
+    argv = _argv(monkeypatch, ExecutionRequest(language="bash", code="true"), CODE_EXEC_NETWORK="bridge")
+    assert argv[argv.index("--network") + 1] == "bridge"
+
+
+def test_unknown_network_policy_still_denies(monkeypatch):
+    argv = _argv(monkeypatch, ExecutionRequest(language="bash", code="true"), CODE_EXEC_NETWORK="banana")
+    assert argv[argv.index("--network") + 1] == "none"
+
+
 def test_pids_image_and_user_from_env(monkeypatch):
     argv = _argv(
         monkeypatch,

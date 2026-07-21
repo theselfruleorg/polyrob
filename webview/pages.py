@@ -360,6 +360,83 @@ async def avatar_live():
     return FileResponse(str(p), media_type="application/javascript")
 
 
+# --- avatar SETUP (web) — the same one-time draft→randomize→keep contract the CLI
+# enforces. All three routes are 403 in read-only consoles, and the lock contract is
+# enforced by modules/pfp/store (PfpLockedError) regardless of the caller — these
+# routes surface it as {ok:false} rather than a 500.
+def _pfp_setup_refused() -> None:
+    if webgate.read_only():
+        raise HTTPException(status_code=403, detail="read-only console")
+
+
+@router.post("/api/pfp/generate")
+async def api_pfp_generate():
+    """Start setup: mint a RANDOM draft identity (no-op if an avatar already exists)."""
+    _pfp_setup_refused()
+    from modules.pfp import store
+    from modules.pfp.identity import random_config
+    home, instance_id = _pfp_data_dir(), resolve_instance_id()
+    try:
+        existing = load_pfp_meta(home, instance_id)
+        if existing is not None:
+            return JSONResponse({"ok": True, "meta": existing,
+                                 "message": "avatar already exists"})
+        meta = store.generate_pfp(home, instance_id, config=random_config())
+        return JSONResponse({"ok": True, "meta": meta})
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": str(e)})
+
+
+@router.post("/api/pfp/randomize")
+async def api_pfp_randomize(request: Request):
+    """Re-roll the DRAFT (body: {"what": "all"|"face"|"voice"}). Refused once kept."""
+    _pfp_setup_refused()
+    from modules.pfp import store
+    from modules.pfp.config import load_frozen_config
+    from modules.pfp.identity import core_config, default_config, shuffle_face, shuffle_voice
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    what = body.get("what") if body.get("what") in ("all", "face", "voice") else "all"
+    home, instance_id = _pfp_data_dir(), resolve_instance_id()
+    try:
+        meta = load_pfp_meta(home, instance_id)
+        if meta is not None and store.is_locked(meta):
+            return JSONResponse({"ok": False,
+                                 "message": "the identity is kept — setup happens once"})
+        try:
+            current = core_config(load_frozen_config(meta)) if meta else default_config()
+        except Exception:
+            current = default_config()
+        if what == "voice":
+            config = shuffle_voice(current)
+        elif what == "face":
+            config = shuffle_face(current)
+        else:
+            config = shuffle_face(current)
+            config["override"].pop("voice", None)
+        new_meta = store.generate_pfp(home, instance_id, config=config, force=True)
+        return JSONResponse({"ok": True, "meta": new_meta})
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": str(e)})
+
+
+@router.post("/api/pfp/keep")
+async def api_pfp_keep():
+    """Accept the draft — lock the identity PERMANENTLY (one-way)."""
+    _pfp_setup_refused()
+    from modules.pfp import store
+    home, instance_id = _pfp_data_dir(), resolve_instance_id()
+    try:
+        meta = store.keep_pfp(home, instance_id)
+        return JSONResponse({"ok": True, "meta": meta})
+    except FileNotFoundError:
+        return JSONResponse({"ok": False, "message": "no avatar to keep — generate first"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "message": str(e)})
+
+
 def _empty_ledger(user_id: str, days: int) -> dict:
     """The all-zero ledger shape — returned when the ledger read fails so the
     Finance page shows zeros rather than a 500 (every ledger leg fail-opens too).
@@ -815,6 +892,7 @@ async def identity_page(request: Request):
     except Exception:
         show_avatar = True
     ctx["show_avatar"] = show_avatar
+    ctx["read_only"] = webgate.read_only()
     return _TEMPLATES.TemplateResponse("identity.html", ctx)
 
 

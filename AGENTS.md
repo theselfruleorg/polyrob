@@ -205,6 +205,30 @@ one accessor).
   pulls a skill's full body on demand via the `load_skill(skill_id)` tool
   (`Controller.build_load_skill_result`, wired in `core/construction.py`). Off = legacy eager
   full-body injection, byte-identical.
+- **Progressive tool disclosure (dynamic tool rig, S1+S2)** — mirror of the skills S-1
+  pattern for TOOLS, gated `TOOL_PROGRESSIVE_DISCLOSURE` (default OFF; **ON under
+  `POLYROB_LOCAL`**). `tools/tool_disclosure.py` renders an honest `<tool-catalog>`
+  foundation block (origin `TOOL_CATALOG`, pinned after skills via
+  `MessageManager.set_tool_catalog_message`; rendered by
+  `Controller.render_tool_catalog` so the agents tier never imports tools — layering
+  ratchet): one line per known tool with status `loaded` / `loadable` /
+  `gated:<reason>` + remedy, resolved from the existing SSOTs (`tools/descriptors.py`
+  + `core/tool_capabilities.py` + the container). The `load_tool(tool_id)` action
+  (`action_registration.py`, decision logic in
+  `tool_disclosure.py::perform_load_tool`) materializes a `loadable` tool mid-session
+  via the SAME `load_tools_from_container` path session creation uses. Hard lines:
+  money tools NEVER loadable (explicit owner/goal grant only), delegate-blocked ids
+  refused for leaves (`get_blocked_child_tools`, env-override honored),
+  taint/posture/approval gates unchanged (loading registers schemas only); refusals
+  are structured (`gated:<reason>` + remedy channel), never silent. S3 landed too:
+  the CLI/headless container registers `browser` (eager BrowserManager wrapper init
+  + `browser` alias @14381f62; Chromium stays lazy in `get_playwright_browser`) and
+  `mcp` (`_cli_extra_gate` — MCP_ENABLED / autonomous-mode default / local server
+  files; connections still need the gateway secrets). S4: under the flag,
+  `goal_create` no longer writes keyword-inferred `payload.tools` (an
+  inference-only goal stays tools-less → dispatch's wide `default_goal_tools()`
+  applies; dispatch-time inference remains as a widening hint; explicit tools
+  unchanged). History: `docs/ops/HANDOFF-dynamic-tool-rig-2026-07-19.md`.
 - **Typed message origin** — injected control content (interventions, H-MEM, skills) carries a
   `MessageOrigin` + envelope (`modules/llm/messages.py` `make_control_message`), distinguishable
   from genuine user turns. Don't cram new system-injected content into a bare `HumanMessage`.

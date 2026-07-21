@@ -36,7 +36,8 @@ logger = logging.getLogger(__name__)
 _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/pending", "/approve", "/reject", "/asks", "/fulfill",
              "/allow", "/deny", "/allowlist",
-             "/status", "/recap", "/journey", "/goals", "/prefs", "/config")
+             "/status", "/recap", "/journey", "/goals", "/prefs", "/config",
+             "/kb", "/files")
 
 ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 

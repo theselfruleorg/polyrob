@@ -29,7 +29,14 @@ class FetchParams(BaseModel):
     url: str = Field(..., description="URL to fetch; pays via x402 if it returns 402")
     method: str = Field("GET", description="HTTP method")
     body: Optional[str] = Field(None, description="Optional request body")
-    max_amount_usd: float = Field(..., gt=0, description="Max USD you authorize for this single fetch")
+    max_amount_usd: float = Field(
+        ..., gt=0,
+        description=(
+            "Max USD you authorize for this single fetch — MUST be greater than 0 "
+            "(there is no $0/free/discovery mode for this action). To see a "
+            "resource's price WITHOUT paying, call x402_quote first instead."
+        ),
+    )
 
 
 class EmptyWalletParams(BaseModel):
@@ -90,7 +97,11 @@ class X402PayTool(BaseTool):
             logging.getLogger(__name__).error(f"x402_quote failed: {e}")
             return self._ar(error=f"x402_quote failed: {e}")
 
-    @BaseTool.action("Fetch a resource, auto-paying via x402 up to max_amount_usd", param_model=FetchParams)
+    @BaseTool.action(
+        "Fetch a resource, auto-paying via x402 up to max_amount_usd (which must be "
+        "> 0 — use x402_quote instead if you only want the price, not to pay).",
+        param_model=FetchParams,
+    )
     async def x402_fetch(self, params: FetchParams, execution_context=None):
         wallet = self._get_wallet()
         if wallet is None:
@@ -180,7 +191,20 @@ class X402PayTool(BaseTool):
                 estimate_marker = " (estimated)" if res.amount_is_estimate else ""
                 header = f"[paid ${res.amount_usd:.4f}{estimate_marker} to {res.pay_to}, tx {res.tx_hash}]\n"
             else:
-                header = ""
+                # 2026-07-19 fabrication incident: this branch used to emit an
+                # EMPTY header, so an unpaid fetch was indistinguishable from a
+                # paid one — and when the body was empty too, the whole content
+                # was "", which the framework's fallback rewrites to the literal
+                # "Action completed successfully" (result_processing.py). The
+                # agent read that as payment confirmation and published
+                # "First x402 micro-transaction completed!" to X and to the
+                # owner, having never moved a cent. A money verb must state
+                # NON-action as loudly as action: the absence of a marker is not
+                # something a model reliably notices.
+                header = ("[NO PAYMENT MADE: the resource returned no x402 "
+                          "challenge (free/unpriced), so nothing was charged and "
+                          "no transaction exists. Do NOT report this as a "
+                          "completed payment.]\n")
         return self._ar(content=f"{header}{res.body}")
 
     @BaseTool.action("Show the agent wallet: address, ON-CHAIN USDC/gas balance, spend caps, and payment audit", param_model=EmptyWalletParams)

@@ -34,6 +34,20 @@ def _tool(client):
     return X402PayTool(wallet=_wallet(), client=client)
 
 
+def test_fetch_params_rejects_zero_amount_with_actionable_message():
+    """Live-observed: the agent repeatedly tried max_amount_usd=0 (as a "just
+    discover the price, don't pay" idiom) — rejected by design (gt=0, there is
+    no $0/free mode), but the retry loop cost 17 steps + token-overflowed
+    before giving up. The field + action descriptions now point the agent at
+    x402_quote for that case; guard both stay in sync with this test."""
+    with pytest.raises(Exception) as exc_info:
+        FetchParams(url="http://paid", max_amount_usd=0)
+    assert "greater_than" in str(exc_info.value) or "gt" in str(exc_info.value).lower()
+    field_desc = FetchParams.model_fields["max_amount_usd"].description
+    assert "greater than 0" in field_desc
+    assert "x402_quote" in field_desc
+
+
 @pytest.mark.asyncio
 async def test_quote_reports_price():
     tool = _tool(FakeX402Client(price_usd=0.25, pay_to="0xR", paid_body="X"))
@@ -262,3 +276,59 @@ async def test_header_omits_estimated_marker_when_confirmed():
     assert res.error is None
     assert "(estimated)" not in res.extracted_content
     assert "[paid $0.0600 to 0xR, tx 0xTXHASH]" in res.extracted_content
+
+
+# --------------------------------------------------------------------------
+# Unpaid-fetch honesty (2026-07-19 fabrication incident).
+#
+# Live: session eba6dd96 called x402_fetch on a Quicknode endpoint that has a
+# free tier, so no x402 challenge was issued -> res.paid=False, empty body.
+# The old code emitted header="" and content=f"{header}{res.body}" == "", which
+# is falsy, so the framework's generic fallback turned the result into the
+# literal string "Action completed successfully". The agent read that as payment
+# confirmation, then published "🚀 First x402 micro-transaction completed!" to X
+# and to the owner. Its own write-up recorded every disconfirming signal
+# ("did not trigger x402 challenges", "No immediate transaction hash returned",
+# 'Payment completion confirmation was generic "Action completed successfully"')
+# and still asserted success.
+#
+# A money verb must never be silent about NOT having moved money.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unpaid_fetch_says_so_explicitly():
+    """price_usd=None == no x402 challenge (free resource): the result must
+    STATE that no payment happened, not merely omit the [paid ...] header."""
+    tool = _tool(FakeX402Client(price_usd=None, pay_to=None, paid_body="FREE-DATA"))
+    res = await tool.x402_fetch(FetchParams(url="http://free", max_amount_usd=1.0))
+    assert res.error is None
+    content = res.extracted_content or ""
+    assert "no payment" in content.lower()
+    assert "FREE-DATA" in content          # the body still reaches the agent
+    assert "paid $" not in content          # and is never mislabeled as paid
+
+
+@pytest.mark.asyncio
+async def test_unpaid_fetch_with_empty_body_is_never_silent():
+    """The exact live shape: unpaid AND empty body. Content must stay non-empty
+    so it can never fall through to the framework's generic
+    'Action completed successfully' (agents/task/agent/core/result_processing.py)."""
+    tool = _tool(FakeX402Client(price_usd=None, pay_to=None, paid_body=""))
+    res = await tool.x402_fetch(FetchParams(url="http://free", max_amount_usd=1.0))
+    assert res.error is None
+    content = res.extracted_content or ""
+    assert content.strip(), "unpaid fetch returned empty content — the generic " \
+                            "success fallback would claim the payment succeeded"
+    assert "no payment" in content.lower()
+
+
+@pytest.mark.asyncio
+async def test_paid_fetch_still_reports_the_payment_header():
+    """Regression guard: the paid path is unchanged."""
+    tool = _tool(FakeX402Client(price_usd=0.25, pay_to="0xR", paid_body="SECRET-DATA"))
+    res = await tool.x402_fetch(FetchParams(url="http://paid", max_amount_usd=1.0))
+    content = res.extracted_content or ""
+    assert "paid $0.2500" in content and "0xfake" in content
+    assert "no payment" not in content.lower()
+    assert "SECRET-DATA" in content

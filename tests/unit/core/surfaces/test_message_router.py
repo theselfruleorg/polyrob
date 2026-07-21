@@ -123,3 +123,22 @@ def test_capabilities_returns_subscribed_surface_caps(router):
 def test_capabilities_returns_none_for_unknown_surface(router):
     r, reg = router
     assert r.capabilities("nope") is None
+
+
+def test_bot_username_returns_subscribed_surface_handle(router):
+    r, reg = router
+    surf = _RecordingSurface()
+    surf.bot_username = "tmachinroBot"
+    r.subscribe("telegram", surf)
+    assert r.bot_username("telegram") == "tmachinroBot"
+
+
+def test_bot_username_returns_none_for_unknown_surface(router):
+    r, reg = router
+    assert r.bot_username("nope") is None
+
+
+def test_bot_username_returns_none_when_surface_lacks_attribute(router):
+    r, reg = router
+    r.subscribe("telegram", _RecordingSurface())
+    assert r.bot_username("telegram") is None

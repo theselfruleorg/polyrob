@@ -6,11 +6,16 @@ import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from core.surfaces.attachments import (
+    _IMAGE_EXTS,  # re-export (legacy import site)
+    media_entries_from_paths,
+    message_media_max_mb,
+    screen_attachment_path,
+    validate_media_paths,
+)
 from core.surfaces.outbound_target import resolve_target_tier
 
 logger = logging.getLogger(__name__)
-
-_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 
 
 def _pref_home_dir(container) -> Optional[str]:
@@ -42,46 +47,14 @@ def _resolve_session_workspace(session_id: Optional[str], user_id: Optional[str]
 
 
 def _validate_media_paths(paths: List[str], workspace_dir: Optional[str]) -> Tuple[Optional[List[str]], Optional[str]]:
-    """Every media path must resolve INSIDE the session workspace: reject '..'
-    components, absolute paths outside the workspace, and symlink escapes (checked via
-    a resolved-realpath prefix check). Returns (validated_realpaths, None) on success,
-    or (None, error_message) — the whole call is rejected on ANY bad path.
-
-    Path normalization (os.path.realpath) can raise on malformed input (e.g. an
-    embedded null byte -> ValueError). Any such failure is caught and turned into
-    the same graceful (None, error) rejection every other bad path gets, rather
-    than letting an unhandled exception escape into the Controller action."""
-    if not workspace_dir:
-        return None, "no session workspace available to validate media paths"
-    try:
-        ws_real = os.path.realpath(workspace_dir)
-    except (ValueError, OSError) as e:
-        return None, f"invalid session workspace: {e}"
-    validated: List[str] = []
-    for raw in paths:
-        if not raw or not isinstance(raw, str):
-            return None, f"invalid media path: {raw!r}"
-        if any(part == ".." for part in Path(raw).parts):
-            return None, f"media path escapes the workspace (contains '..'): {raw}"
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = Path(workspace_dir) / candidate
-        try:
-            real = os.path.realpath(str(candidate))
-        except (ValueError, OSError) as e:
-            return None, f"invalid media path: {raw!r} ({e})"
-        if real != ws_real and not real.startswith(ws_real + os.sep):
-            return None, f"media path outside session workspace: {raw}"
-        validated.append(real)
-    return validated, None
+    """Confinement contract relocated to ``core.surfaces.attachments`` (QW-1)
+    so the core delivery rail shares it; this name stays as the import site
+    existing callers/tests use."""
+    return validate_media_paths(paths, workspace_dir)
 
 
 def _media_entries_from_paths(paths: List[str]) -> list:
-    entries = []
-    for p in paths:
-        kind = "image" if Path(p).suffix.lower() in _IMAGE_EXTS else "document"
-        entries.append({"kind": kind, "path": p, "caption": None})
-    return entries
+    return media_entries_from_paths(paths)
 
 
 def _surface_media_out(router, surface_id: str) -> bool:
@@ -97,11 +70,50 @@ def _surface_media_out(router, surface_id: str) -> bool:
     return bool(getattr(caps, "media_out", False)) if caps is not None else False
 
 
+#: Human-friendly aliases an agent naturally types for "the bound owner" — it has
+#: no other way to learn the raw chat_id/address, since that's deliberately never
+#: surfaced to it. Resolved to the REAL owner_targets[surface] value before tier
+#: resolution; live-observed (`target='owner'`) reaching the Telegram API verbatim
+#: and failing 'chat not found' under OUTBOUND_POLICY=open (AUTONOMY_MODE=autonomous),
+#: where the tier gate no longer catches an unresolved literal target.
+_OWNER_ALIASES = {"owner", "the owner", "me"}
+
+
+def _matches_own_bot_username(router, surface: str, target: str) -> bool:
+    """True when `target` (with or without a leading '@') is the surface's OWN
+    bot handle. Live-observed (2026-07-19): a goal-completion `message` action
+    used its own `@<bot>` Telegram handle as the target instead of 'owner',
+    which Telegram rejects outright ("the bot can't send messages to the
+    bot") — silently dropping what was meant to be an owner notification. A
+    bot can never legitimately be its own message recipient, so this can only
+    ever mean "notify my owner"; safe to alias without hardcoding any
+    deployment-specific username (resolved from the live surface, not a
+    literal string)."""
+    get_username = getattr(router, "bot_username", None)
+    if not callable(get_username):
+        return False
+    try:
+        own = get_username(surface)
+    except Exception:
+        return False
+    if not own:
+        return False
+    return target.strip().lstrip("@").lower() == str(own).strip().lstrip("@").lower()
+
+
 async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                surface, target, text, action="send", reply_to=None,
                                message_id=None, media_paths=None, session_id=None,
                                container=None) -> dict:
     from core.surfaces.outbound_policy import resolve_outbound_daily_cap, resolve_outbound_policy
+
+    if isinstance(target, str) and (
+        target.strip().lower() in _OWNER_ALIASES
+        or _matches_own_bot_username(router, surface, target)
+    ):
+        resolved = (owner_targets or {}).get(surface)
+        if resolved:
+            target = resolved
 
     home_dir = _pref_home_dir(container)
     policy, domains = resolve_outbound_policy(user_id or "", surface, home_dir=home_dir)
@@ -183,6 +195,21 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         if err:
             return {"success": False, "tier": tier, "surface": surface, "target": target,
                     "error": f"media rejected: {err}"}
+        # QW-1 (2026-07-19): attach-eligibility screen — size cap (the larger
+        # MESSAGE_MEDIA_MAX_MB, this is an explicit owner-directed send),
+        # secret filename+content, injection scan (resolved HERE — the core
+        # module never imports modules.*, layering ratchet). Rejects loudly so
+        # the agent can react (vs the completion producer's listed-not-attached).
+        try:
+            from modules.memory.task.threat_scan import is_suspicious as _scanner
+        except ImportError:
+            _scanner = None
+        for real in validated:
+            reason = screen_attachment_path(real, max_mb=message_media_max_mb(),
+                                            scanner=_scanner)
+            if reason:
+                return {"success": False, "tier": tier, "surface": surface, "target": target,
+                        "error": f"media rejected: {Path(real).name}: {reason}"}
         if _surface_media_out(router, surface):
             media = _media_entries_from_paths(validated)
         else:
@@ -216,6 +243,11 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
 
     result = {"success": bool(ok), "tier": tier, "surface": surface, "target": target,
             "error": None if ok else "send returned false"}
+    # Overnight 2026-07-19 finding: an attachment-blind result ("... OK") made
+    # the agent retry the same send ~12x and declare BLOCKED — the result must
+    # ACKNOWLEDGE what rode the message so success is legible.
+    if ok and media:
+        result["media_attached"] = [Path(e["path"]).name for e in media]
     if seed_state in ("pending", "active"):
         result["correspondent"] = seed_state
         if seed_state == "pending":

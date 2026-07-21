@@ -790,6 +790,13 @@ class StepMixin:
 			if is_fatal_error:
 				# Log fatal error and mark session as failed
 				self.logger.error(f"❌ FATAL ERROR - Core component failure, halting session: {e}")
+				# A fatal halt caused by credit death is exactly when the sentinel
+				# must latch: with billing failover OFF (the default) this branch
+				# returns before _handle_step_error's "ONE universal trip site" is
+				# ever reached — which is why a full day of 402 storms never
+				# tripped it (live finding, 2026-07-18). Type+text gated, never
+				# raises, fail-open.
+				await self._trip_sentinel_if_credit_death(e)
 				self.state.consecutive_failures = self.max_failures  # Force max failures
 				self.state.stopped = True  # Mark session as stopped
 

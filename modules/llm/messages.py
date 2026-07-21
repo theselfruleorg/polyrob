@@ -42,6 +42,8 @@ class MessageOrigin:
     MEMORY = "memory"             # injected hierarchical/session memory (in-session H-MEM)
     RECALL = "recall"             # cross-session recall from past sessions (distinct from in-session MEMORY)
     SKILL = "skill"               # injected skills (kept out of the system prompt)
+    TOOL_CATALOG = "tool_catalog" # S1 dynamic tool rig: honest <tool-catalog> block
+                                  # (loaded/loadable/gated per tool), foundation-pinned
     SELF_CONTEXT = "self_context"       # frozen SOUL/identity doc pinned in the foundation
     PROJECT_CONTEXT = "project_context" # auto-loaded CLAUDE.md/AGENTS.md for CLI mode
     SYSTEM_NOTE = "system_note"         # other system-generated notice
@@ -69,6 +71,7 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.MEMORY: "session-memory",
     MessageOrigin.RECALL: "recalled-from-past-sessions",
     MessageOrigin.SKILL: "available-skills",
+    MessageOrigin.TOOL_CATALOG: "available-tools",
     MessageOrigin.SELF_CONTEXT: "self-context",
     MessageOrigin.PROJECT_CONTEXT: "project-context",
     MessageOrigin.SYSTEM_NOTE: "system-note",

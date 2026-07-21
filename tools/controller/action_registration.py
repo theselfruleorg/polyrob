@@ -110,6 +110,49 @@ def _autonomous_message_refusal(execution_context, controller_self):
 		include_in_memory=True)
 
 
+_MESSAGE_TEXT_PREVIEW_CHARS = 200
+
+
+def _message_action_result(res: dict, surface: str, target: str, text: str) -> "ActionResult":
+	"""Build the `message` action's ActionResult from `perform_message_send`'s
+	return dict (2026-07-19 fix).
+
+	The completion judge's evidence pack (agents/task/runtime/evidence.py) is built
+	straight from ActionResult.extracted_content/error — there is no separate
+	content-tracking path. Before this fix, `extracted_content` carried only a
+	generic "OK"/"FAILED" template with no reference to what was actually sent, and
+	`error` was never set on failure either (a failed send looked identical to a
+	success in the ledger). Live-observed: a goal whose acceptance criteria
+	referenced the message's CONTENT was rejected as "no successful message action
+	... with the changelog content recorded" despite the send genuinely succeeding
+	— the evidence pack had no content signal to match against at all.
+
+	Success now carries a bounded preview of the sent text; failure now sets a real
+	`error` so it can no longer be mistaken for a success in the ledger.
+	"""
+	from tools.controller.types import ActionResult
+
+	note = f" [{res['note']}]" if res.get('note') else ""
+	# Overnight 2026-07-19 sibling fix: an attachment-blind result made the agent
+	# resend ~12x and declare BLOCKED — success must NAME what rode the message.
+	attached = (f" [attached {len(res['media_attached'])} file(s): "
+	            f"{', '.join(res['media_attached'])}]"
+	            if res.get('media_attached') else "")
+	if res['success']:
+		preview = (text or "")[:_MESSAGE_TEXT_PREVIEW_CHARS]
+		if len(text or "") > _MESSAGE_TEXT_PREVIEW_CHARS:
+			preview += "…"
+		return ActionResult(
+			extracted_content=(
+				f"message[{res['tier']}] -> {surface}:{target} OK{attached}{note} | text: {preview!r}"),
+			include_in_memory=True)
+	return ActionResult(
+		extracted_content=(
+			f"message[{res['tier']}] -> {surface}:{target} FAILED: {res.get('error') or ''}{note}"),
+		error=res.get('error') or 'message send failed',
+		include_in_memory=True)
+
+
 class ActionRegistrationMixin:
 	def _register_default_actions(self):
 		"""Register core 'done' action for task completion.
@@ -526,6 +569,30 @@ class ActionRegistrationMixin:
 				if not ok:
 					return ActionResult(error=content, include_in_memory=True)
 				return ActionResult(extracted_content=content, include_in_memory=True)
+
+		# S2 (dynamic tool rig, 2026-07-19): self-serve tool loading. The honest
+		# <tool-catalog> foundation block (S1) advertises every known tool with a
+		# status; this action materializes a `loadable` one mid-session through the
+		# SAME load_tools_from_container path session creation uses. Decision logic
+		# (money never loadable, leaf blocklist, structured refusals with remedy)
+		# lives in tools/tool_disclosure.py::perform_load_tool — the closure stays
+		# thin, mirroring the `message` action.
+		from core.config_policy import tool_progressive_disclosure
+		if tool_progressive_disclosure():
+			class LoadToolAction(BaseModel):
+				tool_id: str = Field(
+					..., description="Tool id from <tool-catalog> to load into this session")
+
+			@self.registry.action(
+				"Load a [loadable] tool from the <tool-catalog> into this session — its "
+				"actions become available from the next step. Gated tools return the "
+				"reason and the remedy channel instead of loading.",
+				param_model=LoadToolAction,
+			)
+			async def load_tool(params: LoadToolAction, execution_context=None):
+				from tools.tool_disclosure import perform_load_tool
+				return await perform_load_tool(
+					self, params.tool_id, execution_context=execution_context)
 
 		# P0-1: agent-callable cross-session recall. Registered only when an external
 		# memory provider is active (MEMORY_BACKEND=sqlite); inert in the default config
@@ -1209,11 +1276,7 @@ class ActionRegistrationMixin:
 				text=params.text, action=params.action, reply_to=params.reply_to,
 				message_id=params.message_id, media_paths=params.media_paths,
 				session_id=session_id, container=container)
-			note = f" [{res['note']}]" if res.get('note') else ""
-			return ActionResult(extracted_content=(
-				f"message[{res['tier']}] -> {params.surface}:{params.target} "
-				f"{'OK' if res['success'] else 'FAILED: ' + (res.get('error') or '')}{note}"),
-				include_in_memory=True)
+			return _message_action_result(res, params.surface, params.target, params.text)
 
 	def _register_contact_history_action(self):
 		"""Register the read-only `contact_history` action (E3, 2026-07-13 review):

@@ -35,6 +35,14 @@ class MessageRouter:
         surface = self._surfaces.get(surface_id)
         return getattr(surface, "capabilities", None) if surface is not None else None
 
+    def bot_username(self, surface_id: str):
+        """The subscribed surface's own bot handle (no ``@``), or None if unknown.
+        Lets a caller recognize "the agent addressed its own handle" (e.g. an
+        owner-notify `message` action that mistakenly used its own @username as
+        the target) without hardcoding any deployment-specific username."""
+        surface = self._surfaces.get(surface_id)
+        return getattr(surface, "bot_username", None) if surface is not None else None
+
     async def publish(self, msg: OutboundMessage) -> None:
         try:
             scrubbed = scrub_brain_blocks(msg.text)

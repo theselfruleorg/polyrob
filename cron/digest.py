@@ -141,6 +141,15 @@ async def compose_digest(user_id: str, *, days: int = 1,
             lines.append(f"   - {title}")
     else:
         lines.append("• Pending approvals: none")
+    # QW-3 (proposal 021): hand the owner the console — WEBVIEW_PUBLIC_URL
+    # unset (no public console) keeps the digest byte-identical.
+    try:
+        from core.surfaces.deep_link import webview_public_url
+        base = webview_public_url()
+        if base:
+            lines.append(f"• Console: {base}")
+    except Exception:
+        pass
     return "\n".join(lines)
 
 

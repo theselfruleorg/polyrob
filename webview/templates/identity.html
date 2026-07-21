@@ -8,16 +8,35 @@
     <div class="webgate-header">
         <h2>Identity</h2>
         <p class="text-muted text-sm">
-            Read-only view. SOUL is operator-authored and frozen; SELF is the agent's evolving doc.
+            SOUL is operator-authored and frozen; SELF is the agent's evolving doc.
             Editing stays owner-gated via the <code>self_context_manage</code> action — there is no web write path.
+            Avatar setup happens ONCE: roll a draft, re-roll until it feels right, then keep it forever.
         </p>
     </div>
 
     {% if show_avatar %}
-    <div class="webgate-avatar" style="display:flex;justify-content:center;padding:8px 0 16px">
+    <div class="webgate-avatar" style="display:flex;justify-content:center;padding:8px 0 4px">
         <canvas id="agent-avatar" width="240" height="240" style="display:none" aria-label="Agent avatar"></canvas>
         <img id="agent-avatar-fallback" alt="agent avatar" width="240" height="240" style="display:none"
              onerror="this.style.display='none'">
+    </div>
+    <div id="pfp-panel" style="text-align:center;padding:0 0 16px">
+        <div id="pfp-state" class="text-muted text-sm"></div>
+        <div id="pfp-voice" class="text-muted text-sm"></div>
+        <div id="pfp-actions" style="display:none;padding-top:8px">
+            <button id="pfp-hear" class="btn btn-sm" type="button">🔊 hear voice</button>
+            <span id="pfp-setup-actions" style="display:none">
+                <button id="pfp-reroll" class="btn btn-sm" type="button">🎲 new face + voice</button>
+                <button id="pfp-reroll-face" class="btn btn-sm" type="button">🎲 face only</button>
+                <button id="pfp-reroll-voice" class="btn btn-sm" type="button">🎲 voice only</button>
+                <button id="pfp-keep" class="btn btn-sm" type="button">✓ keep forever</button>
+            </span>
+        </div>
+        <div id="pfp-start" style="display:none;padding-top:8px">
+            <span class="text-muted text-sm">no avatar yet — setup happens once:</span>
+            <button id="pfp-generate" class="btn btn-sm" type="button">✨ start setup (random draft)</button>
+        </div>
+        <div id="pfp-msg" class="text-muted text-sm"></div>
     </div>
     {% endif %}
 
@@ -57,20 +76,109 @@
     // Avatar probe (P2-12): one quiet /pfp.json check decides whether an
     // avatar exists — without it, the page fired loud 404s for pfp.png,
     // pfp.json AND the engine scripts on every avatar-less instance.
-    fetch('/pfp.json').then(function (r) {
-        if (!r.ok) return; // no avatar — leave canvas/img hidden, load nothing
-        var img = document.getElementById('agent-avatar-fallback');
-        img.src = '/pfp.png';
-        img.style.display = '';
-        var engine = document.createElement('script');
-        engine.src = '/avatar/mindprint.js';
-        engine.onload = function () {
-            var live = document.createElement('script');
-            live.src = '/avatar/avatar-live.js';
-            document.body.appendChild(live);
-        };
-        document.body.appendChild(engine);
-    }).catch(function () {});
+    var READ_ONLY = {{ 'true' if read_only else 'false' }};
+    var pfpMeta = null;
+
+    function pfpProbe() {
+        fetch('/pfp.json').then(function (r) {
+            if (!r.ok) { pfpRender(null); return; } // no avatar yet
+            r.json().then(function (meta) {
+                pfpMeta = meta;
+                pfpRender(meta);
+                var img = document.getElementById('agent-avatar-fallback');
+                img.src = '/pfp.png?t=' + Date.now();
+                img.style.display = '';
+                var engine = document.createElement('script');
+                engine.src = '/avatar/mindprint.js';
+                engine.onload = function () {
+                    var live = document.createElement('script');
+                    live.src = '/avatar/avatar-live.js';
+                    document.body.appendChild(live);
+                };
+                document.body.appendChild(engine);
+            });
+        }).catch(function () {});
+    }
+
+    function pfpRender(meta) {
+        var state = document.getElementById('pfp-state');
+        var voiceEl = document.getElementById('pfp-voice');
+        var actions = document.getElementById('pfp-actions');
+        var setup = document.getElementById('pfp-setup-actions');
+        var start = document.getElementById('pfp-start');
+        if (!meta) {
+            state.textContent = '';
+            voiceEl.textContent = '';
+            actions.style.display = 'none';
+            start.style.display = READ_ONLY ? 'none' : '';
+            return;
+        }
+        var locked = meta.locked !== false;   // legacy meta (no key) = kept
+        var tr = meta.traits || {};
+        state.textContent = (locked ? 'KEPT — this identity is permanent' :
+                                      'DRAFT — setup is still open') +
+            ' · ' + (meta.seed_hex || '') + ' · ' + (tr.tier || '') + ' · eyes ' +
+            (tr.eyes || '?') + ' · mouth ' + (tr.mouth || '?');
+        var v = meta.voice || {};
+        voiceEl.textContent = 'voice: pitch ' + v.pitch + ' · rate ' + v.rate +
+            ' · timbre ' + v.timbre;
+        start.style.display = 'none';
+        actions.style.display = '';
+        setup.style.display = (!locked && !READ_ONLY) ? '' : 'none';
+    }
+
+    // ---- hear the voice (same clear-English mapping as the studio) ----
+    var NOVELTY = /\b(albert|bad news|bahh|bells|boing|bubbles|cellos|deranged|good news|jester|organ|superstar|trinoids|whisper|wobble|zarvox|flo|grandma|grandpa|reed|rocko|sandy|shelley|eddy|junior|kathy|princess|ralph)\b/i;
+    var synth = window.speechSynthesis;
+    if (synth) { synth.getVoices(); }   // warm the voice list (async on some browsers)
+    function speakSignature() {
+        var v = (pfpMeta && pfpMeta.voice) || {pitch: 1, rate: 1, timbre: 0.5};
+        var msg = document.getElementById('pfp-msg');
+        if (!synth) { msg.textContent = 'this browser has no speech synthesis'; return; }
+        synth.cancel();
+        var u = new SpeechSynthesisUtterance('Hello! This is my voice — pleased to meet you.');
+        var en = synth.getVoices().filter(function (x) { return /^en(-|_|$)/i.test(x.lang || ''); });
+        var pool = en.filter(function (x) { return !NOVELTY.test(x.name || ''); });
+        if (!pool.length) pool = en;
+        pool.sort(function (a, b) { return (a.name || '').localeCompare(b.name || ''); });
+        if (pool.length) {
+            u.voice = pool[Math.floor(v.timbre * pool.length) % pool.length];
+            msg.textContent = 'speaking as ' + u.voice.name;
+        }
+        u.lang = (u.voice && u.voice.lang) || 'en-US';
+        u.pitch = v.pitch; u.rate = v.rate;
+        u.onend = function () { msg.textContent = ''; };
+        synth.speak(u);
+    }
+
+    // ---- setup actions (draft only; the server enforces the lock contract) ----
+    function pfpPost(url, body) {
+        var msg = document.getElementById('pfp-msg');
+        msg.textContent = '…';
+        fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(body || {})})
+            .then(function (r) { return r.json(); })
+            .then(function (res) {
+                if (res.ok) { location.reload(); }
+                else { msg.textContent = res.message || 'refused'; }
+            })
+            .catch(function () { msg.textContent = 'request failed'; });
+    }
+    function bind(id, fn) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('click', fn);
+    }
+    bind('pfp-hear', speakSignature);
+    bind('pfp-generate', function () { pfpPost('/api/pfp/generate'); });
+    bind('pfp-reroll', function () { pfpPost('/api/pfp/randomize', {what: 'all'}); });
+    bind('pfp-reroll-face', function () { pfpPost('/api/pfp/randomize', {what: 'face'}); });
+    bind('pfp-reroll-voice', function () { pfpPost('/api/pfp/randomize', {what: 'voice'}); });
+    bind('pfp-keep', function () {
+        if (confirm('Keep this identity FOREVER? Setup happens once — it cannot be changed afterwards.'))
+            pfpPost('/api/pfp/keep');
+    });
+
+    pfpProbe();
     {% endif %}
 })();
 </script>

@@ -198,11 +198,9 @@ async def build_container(
 # =============================================================================
 
 # Tools the lightweight CLI container CANNOT provide — they need the heavy server
-# container (browser/Chromium, MCP clients, or paid-API creds baked into server
-# config). This is the SSOT of CLI exclusions: the generic registrar skips exactly
-# these; everything else in the tool descriptors is CLI-registerable. ("browser" is
-# the runtime alias BrowserManager registers on the server path; it never appears in
-# get_tool_init_order(), but is listed here defensively.)
+# container (MCP clients, or paid-API creds baked into server config). This is the
+# SSOT of CLI exclusions: the generic registrar skips exactly these; everything else
+# in the tool descriptors is CLI-registerable.
 # NOTE (2026-07-14): "email" was removed from this set — EmailTool's __init__ only
 # touches config attrs (no network I/O; SMTP is tested lazily in the async
 # _initialize(), which the CLI already defers until a session first loads the tool),
@@ -213,8 +211,28 @@ async def build_container(
 # `cli/commands/email.py`) worked fine — every goal requesting `tools=["email"]` hit
 # "✗ Tool 'email' not found in container" and reported a false "no credential"
 # blocker (see docs/ops/rob-backlog.md 2026-07-14 ~07:1x tick).
+# NOTE (2026-07-19): "browser"/"browser_manager" removed from this set for the SAME
+# false-blocker reason — the actual Chromium/playwright launch was ALREADY lazy
+# (`Browser._initialize()`'s own docstring: "browser instance will start on first
+# use"), so excluding it bought nothing except a silent, misleading "browser tool not
+# available" for every session that requested it (autonomous goals citing this as a
+# blocker: sessions 53c43cad, 64e9088f, and the still-open a7ea136f3c9e). The real
+# obstacle was structural, not weight: BrowserManager is a bare BaseComponent
+# (`__init__(self, config=None)`), not a BaseTool, so it doesn't fit the generic
+# loop's `cls(name, config, container)` calling convention — see the dedicated
+# special-case block in `register_cli_tools` below (mirrors the identical special
+# case already in `core/initialization.py::initialize_tools` on the server path,
+# which is how this was confirmed safe rather than assumed).
+# NOTE (2026-07-20, S3 dynamic tool rig — same precedent again): "mcp" removed.
+# MCPTool.__init__ is config parsing only (attrs + `${VAR}` placeholder resolution,
+# fail-open to defaults; server CONNECTIONS live in the deferred async initialize(),
+# which the CLI already defers until a session first loads the tool). Registration
+# is gated by _cli_extra_gate below (explicit MCP_ENABLED / autonomous-mode
+# capability default / local server files) — absent secrets make the affected
+# server connections fail loudly at load time (an owner ask), never a silent
+# "not found in container".
 _CLI_INCOMPATIBLE = {
-    "browser_manager", "browser", "mcp", "perplexity",
+    "perplexity",
     "collabland", "alchemy",
     "polymarket", "polymarket_data", "hyperliquid", "hyperliquid_data",
 }
@@ -246,7 +264,8 @@ _CLI_OPTIONAL_REGISTRARS = (
 # tools that are in tools/descriptors.py unconditionally. Kept explicit to avoid
 # importing the heavy tools package at bootstrap import; the parity test asserts this
 # stays == get_tool_init_order() - _CLI_INCOMPATIBLE once all descriptors materialize.
-_CLI_STATIC_TOOLS = {"filesystem", "task", "web_fetch", "twitter", "anysite", "email"}
+_CLI_STATIC_TOOLS = {"filesystem", "task", "web_fetch", "twitter", "anysite", "email",
+                     "browser_manager", "mcp"}
 
 # Service names produced by the optional registrars (derived from the one table above).
 _CLI_OPTIONAL_TOOLS = {svc for _mod, _fn, services in _CLI_OPTIONAL_REGISTRARS for svc in services}
@@ -255,8 +274,13 @@ _CLI_OPTIONAL_TOOLS = {svc for _mod, _fn, services in _CLI_OPTIONAL_REGISTRARS f
 # from the two sources above (no independently-maintained flat list). Used by
 # cli_unavailable_tools() for honest "tool not available on the CLI" feedback and by the
 # startup self-check. Flag-INDEPENDENT (lists a tool even when its flag is currently off,
-# so the user gets "enable the flag" rather than "not available").
-_CLI_REGISTERABLE_TOOLS = set(_CLI_STATIC_TOOLS) | set(_CLI_OPTIONAL_TOOLS)
+# so the user gets "enable the flag" rather than "not available"). The one non-derived
+# addition: "browser" itself is never a descriptor in get_tool_init_order() (only
+# "browser_manager" is — "browser" is the runtime alias the special-case block above
+# registers once browser_manager initializes), so without this explicit addition an
+# agent requesting tool_ids=["browser"] would get a false "not available on the CLI"
+# from cli_unavailable_tools() even though it now actually registers.
+_CLI_REGISTERABLE_TOOLS = set(_CLI_STATIC_TOOLS) | set(_CLI_OPTIONAL_TOOLS) | {"browser"}
 
 
 def _materialize_cli_optional_descriptors() -> set:
@@ -295,6 +319,9 @@ def _cli_extra_gate(name: str) -> bool:
         valid creds; writes stay TWITTER_ENABLED-gated per-action. Without creds the tool
         is dead weight, so we don't register a useless service (matches the pre-I-1 block).
       - anysite: gated by ``anysite_cli_enabled()`` (ANYSITE_TOOL_ENABLED, default on).
+      - mcp (S3, 2026-07-20): mirrors ``BotConfig._maybe_build_mcp``'s enablement —
+        explicit MCP_ENABLED, else the autonomous-mode capability default, else the
+        presence of local server files.
 
     Every other tool returns True — its presence in the init order already IS its gate
     (the optional ones are only inserted when enabled; the remaining static ones are
@@ -308,6 +335,20 @@ def _cli_extra_gate(name: str) -> bool:
             return anysite_cli_enabled()
         except Exception:
             return False
+    if name == "mcp":
+        try:
+            from core.env import bool_env
+            from core.config_policy import _mode_capability_default
+            try:
+                _mode_default = _mode_capability_default("MCP_ENABLED")
+            except Exception:
+                _mode_default = False
+            if bool_env("MCP_ENABLED", _mode_default):
+                return True
+            from tools.mcp.config import load_local_mcp_servers
+            return bool(load_local_mcp_servers())
+        except Exception:
+            return False
     return True
 
 
@@ -317,11 +358,12 @@ async def register_cli_tools(container) -> None:
     A session's controller pulls tools via ``load_tools_from_container(tool_ids)``;
     anything not registered here is silently absent, leaving only the core
     ``done``/``send_message`` actions. ``build_cli_container`` skips heavy init
-    (embeddings/RAG/browser), so this registers every tool descriptor that is NOT in
+    (embeddings/RAG), so this registers every tool descriptor that is NOT in
     ``_CLI_INCOMPATIBLE`` — mirroring the server path (``initialize_tools``) but WITHOUT
     calling ``initialize()`` (the CLI defers tool init for fast startup; a tool inits
     lazily when a session first loads it). Per-tool fail-open: a broken optional tool
-    must never break CLI startup.
+    must never break CLI startup. ``browser_manager`` is the one deliberate exception
+    to "no eager initialize()" — see the special-case block below.
     """
     from utils.rate_limit_manager import RateLimitManager
     from tools.descriptors import get_tool_init_order, get_tool_class
@@ -335,6 +377,29 @@ async def register_cli_tools(container) -> None:
         rlm = RateLimitManager(name="rate_limit_manager", config=container.config)
         await rlm.initialize()
         container.register_service("rate_limit_manager", rlm)
+
+    # browser_manager special-case (2026-07-19, mirrors core/initialization.py's
+    # identical special-case on the server path): BrowserManager is a bare
+    # BaseComponent (`__init__(self, config=None)`), not a BaseTool, so it doesn't fit
+    # the generic loop's `cls(name, config, container)` calling convention below (that
+    # call would raise TypeError, silently caught by the loop's per-tool try/except —
+    # indistinguishable from "not registered" without reading the debug log). Must
+    # `await bm.initialize()` here (constructs a `Browser` wrapper object only — the
+    # actual Chromium/playwright launch stays lazy per `Browser._initialize()`'s own
+    # docstring, "browser instance will start on first use") so `bm.browser` is
+    # populated and the `browser` alias below actually resolves, exactly like the
+    # server does.
+    if not container.has_service("browser_manager"):
+        try:
+            from tools.browser.browser_manager import BrowserManager
+            bm = BrowserManager(config=container.config)
+            await bm.initialize()
+            container.register_service("browser_manager", bm)
+            browser = getattr(bm, "browser", None)
+            if browser is not None:
+                container.register_service("browser", browser)
+        except Exception as e:
+            log.debug("Could not register CLI browser tool: %s", e)
 
     # Materialize the enabled optional descriptors (self-gating) so the loop below can
     # see them via get_tool_init_order(), and capture the freshly-evaluated enabled set.

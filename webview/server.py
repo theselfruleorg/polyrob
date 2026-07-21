@@ -206,6 +206,49 @@ async def api_status(request: Request) -> Response:
     })
 
 
+def _served_file_refusal(file_path) -> Optional[str]:
+    """Refusal reason when a workspace file must never be SERVED (else None).
+
+    Under project-root workspace mode the browsable tree is the whole project
+    dir, which can legitimately contain a top-level ``.env`` — the traversal
+    guards don't catch a plain credential-shaped basename (2026-07-19 review
+    Minor #9). Fail-open on import error (guard unavailable ≠ outage)."""
+    try:
+        from pathlib import Path as _P
+        from core.security.secret_guard import is_credential_file
+        if is_credential_file(_P(str(file_path))):
+            return "credential-shaped file"
+    except ImportError:
+        pass
+    return None
+
+
+def _workspace_mode_kwargs() -> dict:
+    """Extra get_path_manager kwargs so the webview browses the SAME workspace
+    root the agent writes to (QW-3, assessment 2026-07-19 §3.3).
+
+    With POLYROB_PROJECT_DIR set the agent process (core/bootstrap) puts pm()
+    into project-root mode — every session's workspace IS the project dir. The
+    webview runs in its own process and never took that mode, so its file
+    browser resolved the EMPTY per-session default. Gate: single-tenant
+    postures only (local/own_ops) — in multitenant one shared project root
+    would leak files cross-tenant.
+    """
+    try:
+        if webgate.posture() == "multitenant":
+            return {}
+        env_project = (os.environ.get("POLYROB_PROJECT_DIR") or "").strip()
+        if not env_project:
+            return {}
+        from pathlib import Path
+        return {"workspace_is_project_root": True,
+                "project_root": str(Path(env_project).resolve())}
+    except Exception:
+        logger.warning("workspace-mode resolution failed — using per-session "
+                       "default", exc_info=True)
+        return {}
+
+
 @_fastapi.on_event("startup")
 async def startup_event():
     """Initialize all services before accepting requests."""
@@ -224,8 +267,11 @@ async def startup_event():
         from core.runtime_paths import resolve_session_data_root
         from agents.task.path import get_path_manager, set_path_manager
         _session_root = resolve_session_data_root()
-        set_path_manager(get_path_manager(data_root=str(_session_root)))
-        logger.info(f"✅ Session data root: {_session_root}")
+        _ws_mode = _workspace_mode_kwargs()
+        set_path_manager(get_path_manager(data_root=str(_session_root), **_ws_mode))
+        logger.info(f"✅ Session data root: {_session_root}"
+                    + (f" (project-root workspace: {_ws_mode.get('project_root')})"
+                       if _ws_mode else ""))
     except Exception as e:
         logger.error(f"❌ Failed to install session data root — pm() will use "
                      f"its legacy default and may browse the WRONG tree: {e}",
@@ -1854,7 +1900,10 @@ async def api_workspace_file(request: Request, path: str, clean_id: str = Depend
 
     if not file_path.is_file():
         raise HTTPException(400, "Not a file")
-        
+
+    if _served_file_refusal(file_path):
+        raise HTTPException(403, "Forbidden: credential-shaped file")
+
     # FIXED: Enhanced file size and type checking for security
     try:
         file_size = file_path.stat().st_size
@@ -1982,6 +2031,9 @@ async def api_workspace_serve(request: Request, path: str, clean_id: str = Depen
 
     if not file_path.is_file():
         raise HTTPException(404, "File not found")
+
+    if _served_file_refusal(file_path):
+        raise HTTPException(403, "Forbidden: credential-shaped file")
 
     # Get content type
     content_type, _ = mimetypes.guess_type(str(file_path))
