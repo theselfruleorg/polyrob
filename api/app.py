@@ -715,6 +715,20 @@ def create_app() -> FastAPI:
     except ImportError as e:
         logger.warning(f"OpenAI-compatible endpoints not available: {e}")
 
+    # Mount MCP-server /mcp router (gated; default OFF). Reuses POLYROB auth
+    # (get_user_permissive) — Rob acting as an MCP SERVER for external clients
+    # (Claude Desktop/Cursor), the opposite direction from tools/mcp/ (Rob as
+    # MCP client). Read-only v1 (T2.3).
+    try:
+        from api.mcp_serve.router import router as mcp_serve_router, mcp_serve_enabled
+        if mcp_serve_enabled():
+            app.include_router(mcp_serve_router)
+            logger.info("✅ MCP-server endpoints registered at /mcp")
+        else:
+            logger.debug("MCP-server /mcp endpoint disabled (MCP_SERVE_ENABLED off)")
+    except ImportError as e:
+        logger.warning(f"MCP-server endpoints not available: {e}")
+
     # Mount KB (knowledge-base) /api/kb router (gated; default OFF). Reuses POLYROB
     # auth (get_user_id dependency) — multi-tenant-safe; user_id never from body.
     try:

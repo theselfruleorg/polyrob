@@ -213,6 +213,8 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_ready(goal_id: str, as_json: bool):
     """Mark a triage/blocked goal as ready."""
+    from core.identity import resolve_identity
+
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -225,7 +227,7 @@ def goals_ready(goal_id: str, as_json: bool):
                    f"goal is {goal.status}, only triage/blocked goals can be marked ready")
         sys.exit(1)
 
-    success = board.update_status(goal_id, STATUS_READY)
+    success = board.update_status(goal_id, STATUS_READY, user_id=resolve_identity())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -242,6 +244,8 @@ def goals_ready(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_pause(goal_id: str, as_json: bool):
     """Pause a goal (move to blocked status)."""
+    from core.identity import resolve_identity
+
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -253,7 +257,7 @@ def goals_pause(goal_id: str, as_json: bool):
         click.echo(click.style("[polyrob] WARNING: ", fg="yellow") +
                    "goal is currently running — pause may not take effect immediately")
 
-    success = board.update_status(goal_id, STATUS_BLOCKED)
+    success = board.update_status(goal_id, STATUS_BLOCKED, user_id=resolve_identity())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -270,6 +274,8 @@ def goals_pause(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_resume(goal_id: str, as_json: bool):
     """Resume a paused/blocked goal."""
+    from core.identity import resolve_identity
+
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -282,7 +288,7 @@ def goals_resume(goal_id: str, as_json: bool):
                    f"goal is {goal.status}, only blocked goals can be resumed")
         sys.exit(1)
 
-    success = board.update_status(goal_id, STATUS_READY)
+    success = board.update_status(goal_id, STATUS_READY, user_id=resolve_identity())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -333,6 +339,8 @@ def goals_cancel(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_retry(goal_id: str, as_json: bool):
     """Retry a blocked/failed goal (resets failures)."""
+    from core.identity import resolve_identity
+
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -346,7 +354,8 @@ def goals_retry(goal_id: str, as_json: bool):
         sys.exit(1)
 
     # Reset to ready and clear failures
-    success = board.update_status(goal_id, STATUS_READY, reset_failures=True)
+    success = board.update_status(goal_id, STATUS_READY, reset_failures=True,
+                                  user_id=resolve_identity())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -413,12 +422,13 @@ def objective_add(title, body, priority, force):
 def objective_list(status):
     from core.identity import resolve_identity
     board = _get_board()
-    objs = board.objectives(user_id=resolve_identity(), status=status)
+    user_id = resolve_identity()
+    objs = board.objectives(user_id=user_id, status=status)
     if not objs:
         click.echo("No objectives.")
         return
     for o in objs:
-        kids = board.children(o.id)
+        kids = board.children(o.id, user_id=user_id)
         counts = {}
         for k in kids:
             counts[k.status] = counts.get(k.status, 0) + 1

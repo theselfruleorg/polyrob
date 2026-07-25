@@ -138,9 +138,21 @@ def test_flag_default_off_on_server(monkeypatch):
     assert AutonomyConfig.self_evolution_transparency() is False
 
 
-def test_flag_on_under_local(monkeypatch):
+def test_flag_off_under_local_without_autonomy(monkeypatch):
+    # 0.9.0: SELF_EVOLUTION_TRANSPARENCY is in the AUTONOMY bucket — POLYROB_LOCAL
+    # alone no longer flips it on (autonomy is OFF by default for new installs).
+    monkeypatch.delenv("SELF_EVOLUTION_TRANSPARENCY", raising=False)
+    monkeypatch.delenv("AUTONOMY_ENABLED", raising=False)
+    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
+    monkeypatch.setenv("POLYROB_LOCAL", "true")
+    from agents.task.constants import AutonomyConfig
+    assert AutonomyConfig.self_evolution_transparency() is False
+
+
+def test_flag_on_under_local_and_autonomy(monkeypatch):
     monkeypatch.delenv("SELF_EVOLUTION_TRANSPARENCY", raising=False)
     monkeypatch.setenv("POLYROB_LOCAL", "true")
+    monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     from agents.task.constants import AutonomyConfig
     assert AutonomyConfig.self_evolution_transparency() is True
 

@@ -3,7 +3,9 @@ import asyncio
 
 import pytest
 
-from agents.task.goals.board import GoalBoard, STATUS_DONE, STATUS_READY, STATUS_BLOCKED
+from agents.task.goals.board import (
+    GoalBoard, STATUS_DONE, STATUS_READY, STATUS_BLOCKED, STATUS_WAITING,
+)
 from agents.task.goals.dispatcher import GoalDispatcher
 
 
@@ -487,3 +489,59 @@ async def test_completed_goal_pushes_result_to_owner(tmp_path, monkeypatch):
     assert pushed, "a completed goal must push its result to the owner"
     assert "Post the announcement" in pushed[0]
     assert "Posted the thread" in pushed[0]
+
+
+# --- T2.1 Task 5: dispatcher e2e — a dependent goal never dispatches before
+#     its prerequisite completes, and auto-dispatches the very next tick after
+#     the completion sweep flips it ready. -------------------------------------
+
+@pytest.mark.asyncio
+async def test_dependent_waits_then_dispatches_after_prerequisite_completes(board, monkeypatch):
+    monkeypatch.setenv("GOALS_ENABLED", "true")
+    monkeypatch.setenv("GOAL_COMPLETION_JUDGE", "false")  # test the DAG rail itself, not the judge
+    monkeypatch.setenv("GOAL_MAX_CONCURRENT", "5")
+    monkeypatch.setenv("GOAL_SELF_WAKE_ENABLED", "false")
+
+    prereq = board.create(user_id="u1", title="prerequisite P")
+    dependent = board.create(user_id="u1", title="dependent D", depends_on=[prereq.id])
+
+    # D was created waiting on an unresolved dep — never claimable.
+    assert board.get(dependent.id).status == STATUS_WAITING
+
+    agent = _FakeAgent(final="P done")
+    d = GoalDispatcher(board, agent)
+
+    # --- tick 1: only P is ready; D is waiting and this tick never claims it. ---
+    n1 = await d.dispatch_once()
+    assert n1 == 1  # exactly P claimed/dispatched this tick, never D
+    await asyncio.sleep(0.05)  # let the fire-and-forget _run_goal finish
+
+    assert agent.ran == [("u1", "sess-u1")]  # exactly one run so far: P's
+    assert board.get(prereq.id).status == STATUS_DONE
+
+    # D was never claimed/dispatched BY tick 1 itself — the only thing that
+    # touched it is the completion sweep, fired as a side effect of P's own
+    # run finishing (record_success -> _sweep_dependents_on_completion),
+    # ahead of any second tick.
+    d_kinds_after_tick1 = [e["kind"] for e in board.events(dependent.id)]
+    assert "claimed" not in d_kinds_after_tick1
+    assert "deps_satisfied" in d_kinds_after_tick1
+    ready_after_sweep = board.get(dependent.id)
+    assert ready_after_sweep.status == STATUS_READY  # flipped by the sweep
+    assert ready_after_sweep.claim_lock is None       # but not yet claimed
+    assert ready_after_sweep.started_at is None        # nor ever actually run
+
+    # --- tick 2: D is now ready and gets claimed/dispatched. ---
+    n2 = await d.dispatch_once()
+    assert n2 == 1
+    await asyncio.sleep(0.05)
+
+    assert agent.ran == [("u1", "sess-u1"), ("u1", "sess-u1")]  # P then D, in order
+    got_d = board.get(dependent.id)
+    assert got_d.status == STATUS_DONE
+    assert got_d.result == "P done"
+
+    # D's own event order proves the claim happened strictly AFTER the
+    # completion sweep unblocked it — never before (i.e. never in tick 1).
+    d_kinds_final = [e["kind"] for e in board.events(dependent.id)]
+    assert d_kinds_final.index("deps_satisfied") < d_kinds_final.index("claimed")

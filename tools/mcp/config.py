@@ -41,6 +41,16 @@ class MCPServerConfig(BaseModel):
     auto_reconnect: bool = Field(True, description="Whether to auto-reconnect on failure")
     max_concurrent_requests: int = Field(10, description="Maximum concurrent requests to this server")
     message_endpoint: Optional[str] = Field(None, description="For SSE: explicit POST endpoint for messages (FIX #7)")
+    auth: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "OAuth config for this server (T2.4, unwired — no code reads this yet). "
+            "Recognized keys match GenericOAuth2Provider's config shape: 'provider' "
+            "(only 'generic_oauth2' in v1), 'client_id', 'client_secret', 'auth_url', "
+            "'token_url', 'scopes', 'redirect_uri'. String values support ${VAR} "
+            "substitution via resolve_config_environment_variables, same as url/headers."
+        ),
+    )
 
     @field_validator('command')
     @classmethod
@@ -207,6 +217,24 @@ def resolve_config_environment_variables(config: MCPConfig) -> MCPConfig:
             for arg in server_dict['args']:
                 resolved_args.append(resolve_environment_variables(arg))
             server_dict['args'] = resolved_args
+
+        # Resolve auth block if present (T2.4): every string value gets ${VAR}
+        # substitution, same fault-isolation as url/headers — a missing var here
+        # raises ConfigurationError, caught by the per-server try/except below so
+        # only THIS server is dropped, never the whole MCP config.
+        if server_dict.get('auth'):
+            resolved_auth: Dict[str, Any] = {}
+            for key, value in server_dict['auth'].items():
+                if isinstance(value, str):
+                    resolved_auth[key] = resolve_environment_variables(value)
+                elif isinstance(value, list):
+                    resolved_auth[key] = [
+                        resolve_environment_variables(item) if isinstance(item, str) else item
+                        for item in value
+                    ]
+                else:
+                    resolved_auth[key] = value
+            server_dict['auth'] = resolved_auth
 
         # Recreate the server config with resolved values
         return MCPServerConfig(**server_dict)

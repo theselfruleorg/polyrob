@@ -105,6 +105,8 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     # --- Outbound dispatcher ---
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     # --- Autonomy background loops (cron / goals / curator / surface GC) ---

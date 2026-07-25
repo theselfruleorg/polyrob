@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from core.config_policy import AutonomyConfig, _mode_capability_default
+from core.config_policy import AutonomyConfig, _mode_capability_default, autonomy_enabled
 from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
@@ -374,6 +374,9 @@ def _schedule_hf_deploy_reconcile() -> None:
 class AutonomyHandles:
     def __init__(self) -> None:
         self._entries: List[Tuple[str, asyncio.Task, asyncio.Event]] = []
+        #: Resolved AUTONOMY_ENABLED master at start (0.9.0). Query point for the
+        #: awareness surfaces; the per-flag gates are the authoritative loop gate.
+        self.autonomy_enabled: bool = True
 
     def _add(self, name: str, ticker) -> None:
         stop = asyncio.Event()
@@ -410,6 +413,26 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     from core.runtime_paths import data_dir_or_home
     data_dir = data_dir_or_home(data_dir)
     handles = AutonomyHandles()
+
+    # 0.9.0 legibility: the AUTONOMY_ENABLED master governs the self-directed loop
+    # DEFAULTS (via T1's per-flag gates). Record + log it as the single query point
+    # for the awareness surfaces. NOTE: we deliberately do NOT return early here —
+    # start_autonomy also runs one-shot recovery sweeps (owner-profile seed, boot
+    # migrations, delegation/orphan recovery) and independently-gated NON-autonomy
+    # loops (x402 settlement watcher, surface GC, quiet-release), and it must still
+    # honor an explicit per-loop opt-in (e.g. CRON_ENABLED=true) even when the master
+    # is off. The per-flag gates below (_cron_enabled/_goals_enabled/_curator_enabled,
+    # already False under T1 when autonomy is off) are the authoritative gate; this is
+    # the visible signal, not a second mechanism.
+    try:
+        handles.autonomy_enabled = autonomy_enabled()
+    except Exception:
+        handles.autonomy_enabled = True  # fail-open: never block startup on this probe
+    if not handles.autonomy_enabled:
+        logger.info(
+            "autonomy disabled (AUTONOMY_ENABLED off) — self-directed loops "
+            "(cron/goal/curator) will not start unless individually enabled")
+
     try:
         # D2: self-heal the DB schema on every posture (the API lifespan already
         # migrates awaited; here it's a scheduled idempotent no-op). One-shot.

@@ -17,7 +17,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
-from tools.coding.edit import apply_str_replace, apply_patch, EditError
+from tools.coding.edit import apply_str_replace_ex, apply_patch, EditError
 from tools.coding.search import search_files
 
 
@@ -294,7 +294,7 @@ class CodingTool(BaseTool):
             with open(target, "r", encoding="utf-8") as f:
                 content = f.read()
             try:
-                updated = apply_str_replace(
+                updated, rung = apply_str_replace_ex(
                     content, params.old_string, params.new_string, params.replace_all
                 )
             except EditError as e:
@@ -303,7 +303,10 @@ class CodingTool(BaseTool):
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
             n = content.count(params.old_string) if params.replace_all else 1
-            msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
+            if rung == "exact" or params.replace_all:
+                msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
+            else:
+                msg = f"Edited {params.file_path} (1 replacement, via {rung} match)."
             return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:
             return self._err(str(e))

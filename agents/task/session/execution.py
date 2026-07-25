@@ -39,6 +39,25 @@ def _result_session_status(result) -> str:
     return "completed"
 
 
+def _terminal_error_text(result) -> Optional[str]:
+    """Extract the terminal step's error text from an ``agent.run()`` result.
+
+    Final-review fix (T1.1): the success-path branch of ``execute_session``
+    stored an "error"-status result with no ``error`` key, so the run loop's
+    terminal error text (e.g. the RUN_BUDGET_USD halt marker, or
+    error_recovery's PERMANENT ERROR text) never left the loop —
+    ``task_agent_lite._run_session_impl`` fell back to
+    ``agent_result.get('error', 'Unknown error')`` and reported
+    "Session failed: Unknown error". Mirrors the same try/except shape as
+    ``_result_session_status`` above.
+    """
+    try:
+        last = result.history[-1].result[-1]
+        return getattr(last, "error", None)
+    except (AttributeError, IndexError, TypeError):
+        return None
+
+
 class SessionExecutionMixin:
     """Agent creation + session execution for SessionOrchestrator."""
 
@@ -269,10 +288,12 @@ class SessionExecutionMixin:
                     self.track_agent_execution(agent_id, agent_type, start_time, end_time)
 
                     # Store result
+                    err_text = _terminal_error_text(result)
                     results[agent_id] = {
                         "status": _result_session_status(result),
                         "result": result,
-                        "execution_time": end_time - start_time
+                        "execution_time": end_time - start_time,
+                        "error": err_text or "terminal step error (see history)",
                     }
 
                     self.logger.info(f"Agent {agent_id} completed with status: {results[agent_id]['status']}")

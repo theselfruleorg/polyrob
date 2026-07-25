@@ -126,6 +126,56 @@ def test_goal_create_explicit_tools_still_written_under_tool_disclosure(tmp_path
     assert "twitter" in txt and "filesystem" in txt
 
 
+# --- T2.1 Task 4: depends_on through goal_create ----------------------------
+
+def test_goal_create_action_accepts_depends_on():
+    action = GoalCreateAction(title="a valid dependent title", depends_on=["g1", "g2"])
+    assert action.depends_on == ["g1", "g2"]
+
+
+def test_goal_create_action_without_depends_on_defaults_none():
+    action = GoalCreateAction(title="a valid title, no deps")
+    assert action.depends_on is None
+
+
+def test_goal_create_action_still_forbids_unknown_fields():
+    import pytest
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        GoalCreateAction(title="a valid title", depends_on=["g1"], bogus_field="nope")
+
+
+def test_goal_create_via_tool_with_open_dep_lands_waiting(tmp_path):
+    tool = _make_tool(tmp_path)
+    board = tool._goal_board
+    dep = board.create(user_id="tester", title="prerequisite goal entirely")
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="dependent goal entirely", body="b", depends_on=[dep.id]),
+        _Ctx(),
+    ))
+    assert not res.error
+    assert "status=waiting" in res.extracted_content
+    dependent = next(g for g in board.list(user_id="tester") if g.title == "dependent goal entirely")
+    assert dependent.status == "waiting"
+    assert board.dependencies(dependent.id) == [dep.id]
+
+
+def test_goal_create_via_tool_cross_tenant_dep_errors_no_orphan_row(tmp_path):
+    tool = _make_tool(tmp_path)
+    board = tool._goal_board
+    other = board.create(user_id="someone-else", title="not testers goal at all")
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="dependent goal blocked by other tenant", body="b",
+                         depends_on=[other.id]),
+        _Ctx(),
+    ))
+    assert res.error
+    assert "Cannot create goal" in res.error
+    # all-or-nothing: board.create validates BEFORE the row is written, so the
+    # rejected create must leave zero orphan rows for this tenant.
+    assert board.list(user_id="tester") == []
+
+
 def test_goal_create_inference_never_grants_money_spend(tmp_path):
     tool = _make_tool(tmp_path)
     res = asyncio.run(tool.goal_create(

@@ -269,6 +269,17 @@ class AsyncDelegationRegistry:
                 "async delegation %s finished (%s) but delivery failed: %s",
                 rec.delegation_id, status, e,
             )
+        # Review fix (T1.6 CRITICAL finding): delivered_at is stamped on DRAIN
+        # (autonomy_state.stamp_delivered_from_drain, called from
+        # agent/core/user_ingress.py::_drain_user_messages) — NOT here. A
+        # successful self._deliver() above only means submit_user_message
+        # PARKED this completion block in the target session's in-memory HITL
+        # queue; that is not "delivered." A crash in the unbounded window
+        # between "parked" and "some later run actually drains it" used to
+        # leave the row falsely marked delivered with the result never
+        # surfaced — exactly the failure mode this durable table exists to
+        # close. See stamp_delivered_from_drain's docstring for the full
+        # rationale and the CAS that makes a duplicate drain stamp once.
 
     @staticmethod
     def _extract_output(result: Any) -> str:

@@ -23,7 +23,8 @@ def home(tmp_path):
 def _clean_env(monkeypatch):
     # Keys under test must have their env flags unset so the fallback path runs.
     for var in ("GOAL_DAILY_QUOTA", "GOAL_NOTIFY_ON_DONE", "SELF_WAKE_ENABLED",
-                "POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_POSTURE"):
+                "POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_POSTURE",
+                "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -34,12 +35,16 @@ def test_env_backed_key_shows_catalog_default_when_unset(home):
 
 
 def test_dynamic_default_is_posture_aware(home, monkeypatch):
-    # SELF_WAKE_ENABLED is in _SAFE_LOCAL_FLAGS: OFF on a server, ON under local.
+    # SELF_WAKE_ENABLED is in the AUTONOMY bucket (0.9.0 split): OFF on a server,
+    # OFF under POLYROB_LOCAL alone, ON only when AUTONOMY_ENABLED is also set.
     val, src = display_effective("autonomy.self_wake", "u1", home)
     assert val is False and src.startswith("default(")
     monkeypatch.setenv("POLYROB_LOCAL", "1")
     val, src = display_effective("autonomy.self_wake", "u1", home)
-    assert val is True and "local=ON" in src
+    assert val is False and "autonomy=off" in src
+    monkeypatch.setenv("AUTONOMY_ENABLED", "1")
+    val, src = display_effective("autonomy.self_wake", "u1", home)
+    assert val is True and "autonomy=ON" in src
 
 
 def test_pure_pref_key_shows_static_default(home):

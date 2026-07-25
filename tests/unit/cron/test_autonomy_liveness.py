@@ -10,14 +10,24 @@ from agents.task.constants import AutonomyConfig
 
 
 # ---------------------------------------------------------------------------
-# AU-F1.1 — GOAL_PLANNER_ENABLED joins the POLYROB_LOCAL safe group.
+# AU-F1.1 — GOAL_PLANNER_ENABLED is in the local AUTONOMY group (0.9.0): ON under
+# POLYROB_LOCAL only when AUTONOMY_ENABLED is also set.
 # ---------------------------------------------------------------------------
 
 
-def test_goal_planner_enabled_defaults_on_under_local(monkeypatch):
+def test_goal_planner_enabled_defaults_on_under_local_autonomy(monkeypatch):
     monkeypatch.delenv("GOAL_PLANNER_ENABLED", raising=False)
     monkeypatch.setenv("POLYROB_LOCAL", "1")
+    monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     assert AutonomyConfig.goal_planner_enabled() is True
+
+
+def test_goal_planner_enabled_off_under_local_without_autonomy(monkeypatch):
+    monkeypatch.delenv("GOAL_PLANNER_ENABLED", raising=False)
+    monkeypatch.delenv("AUTONOMY_ENABLED", raising=False)
+    monkeypatch.delenv("AUTONOMY_POSTURE", raising=False)
+    monkeypatch.setenv("POLYROB_LOCAL", "1")
+    assert AutonomyConfig.goal_planner_enabled() is False
 
 
 def test_goal_planner_enabled_defaults_off_without_local(monkeypatch):

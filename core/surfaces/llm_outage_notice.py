@@ -4,9 +4,10 @@
 Telegram, OpenRouter 402'd, retries exhausted ("ALL LLM PROVIDERS EXHAUSTED"),
 session 4883c075 ended failed — and ZERO outbound sends happened. The owner got
 nothing: no reply, no error. This module supplies the LLM-independent pieces of
-the fix: the kill-switch flag, the outage classifier (reusing the credit-death
-SSOT ``core.credit_sentinel.looks_like_credit_death``), the static notice text,
-and a per-(surface+chat) cooldown so a 402 storm sends at most ONE notice per
+the fix: the kill-switch flag, the outage classifier (delegating to the
+structured error-classifier SSOT ``core.error_classifier.classify_text``, the
+same taxonomy the step loop uses), the static notice text, and a
+per-(surface+chat) cooldown so a 402 storm sends at most ONE notice per
 window.
 
 Send-site: ``surfaces/telegram/harness.py::_run_and_deliver`` — the ONE shared
@@ -30,7 +31,6 @@ import logging
 import time
 from typing import Dict, Optional
 
-from core.credit_sentinel import looks_like_credit_death
 from core.env import bool_env
 
 logger = logging.getLogger(__name__)
@@ -48,27 +48,6 @@ OUTAGE_NOTICE_TEXT = (
     "notified."
 )
 
-# Exhaustion strings the credit-death SSOT does NOT match. Sources (verified):
-# - "All LLM providers exhausted: [...]" — execute_session's
-#   LLMProviderExhaustedError catch (agents/task/session/execution.py) → the
-#   run_session status string "Session failed: All LLM providers exhausted: …";
-# - "All LLM providers failed. Tried: [...]" — the terminal ActionResult from
-#   error_recovery._handle_step_error's provider-exhausted branch;
-# - "No fallback available after …" — llm_runner's raised
-#   LLMProviderExhaustedError message;
-# - "Permanent LLM error: …" — execute_session's LLMPermanentError catch;
-# - "PERMANENT ERROR: …" — the terminal ActionResult from the is_permanent halt
-#   branch (only ever minted for LLM-permanent/auth/billing errors).
-_EXHAUSTION_MARKERS = (
-    "all llm providers",
-    "providers exhausted",
-    "no fallback available",
-    "permanent llm error",
-    "permanent error",
-    "llmpermanenterror",
-    "llmproviderexhaustederror",
-)
-
 # key -> monotonic-ish wall-clock timestamp of the last notice sent.
 _last_notice_at: Dict[str, float] = {}
 
@@ -79,22 +58,13 @@ def llm_outage_notice_enabled() -> bool:
 
 
 def looks_like_llm_outage(*texts: Optional[str]) -> bool:
-    """Does any of these framework strings look like total LLM-provider failure?
-
-    Called on run_session status strings ("Session failed: …") and terminal
-    ActionResult errors — never on agent prose. Reuses the credit-death SSOT
-    (402/insufficient_quota/billing/…) and adds the provider-exhaustion shapes
-    it doesn't cover (see ``_EXHAUSTION_MARKERS``).
-    """
-    for text in texts:
-        if not text:
-            continue
-        low = str(text).lower()
-        if looks_like_credit_death(low):
-            return True
-        if any(m in low for m in _EXHAUSTION_MARKERS):
-            return True
-    return False
+    """True if any status/error text indicates a provider outage (credit-death,
+    auth-permanent, or exhaustion). Detection is the SSOT core.error_classifier —
+    the same taxonomy the step loop uses (P0)."""
+    from core.error_classifier import FailoverReason, classify_text
+    outage = {FailoverReason.CREDIT_DEATH, FailoverReason.AUTH_PERMANENT,
+              FailoverReason.PROVIDER_EXHAUSTED}
+    return any(classify_text(t) in outage for t in texts if t)
 
 
 def should_send_llm_outage_notice(key: str, now: Optional[float] = None) -> bool:

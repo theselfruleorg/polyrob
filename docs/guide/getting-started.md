@@ -212,7 +212,7 @@ This checks:
 - ✅ Which provider API keys are present and usable
 - ✅ The provider/model `polyrob run` will actually resolve to
 - ✅ The active memory backend + optional vector-search dependencies
-- ✅ Workspace isolation and the `POLYROB_LOCAL` autonomy-flag footgun
+- ✅ Workspace isolation, the `POLYROB_LOCAL` footgun, and the `autonomy:` state (OFF by default)
 - ✅ Skill library compliance
 
 **Fix any issues before proceeding.**
@@ -312,7 +312,7 @@ message:
 
 ```bash
 $ polyrob chat
-● polyrob v0.7.0 · claude-sonnet-4.5 (anthropic)
+● polyrob v0.8.1 · claude-sonnet-4.5 (anthropic)
   session a1b2c3d4 · tools filesystem, task · /help · /session
 
 You: I need to research quantum computing companies for an investment report.
@@ -389,10 +389,16 @@ polyrob model set-default <provider> <model>
 
 ```bash
 # Edit ~/.polyrob/.env
-POLYROB_LOCAL=true    # Enable safe autonomy features
-GOALS_ENABLED=true    # Enable goal board
-SKILLS_WRITABLE=true  # Allow skill creation
+POLYROB_LOCAL=true    # Enable interactive local tools (coding, git, KB, RAG)
+AUTONOMY_ENABLED=true # Enable the self-directed autonomy loops (OFF by default)
+GOALS_ENABLED=true    # (optional) force-enable just the goal board
+SKILLS_WRITABLE=true  # (optional) force-enable just skill creation
 ```
+
+> **Autonomy is OFF by default.** Out of the box the agent only acts on your
+> messages. `POLYROB_LOCAL` turns on the interactive tools; the self-directed loops
+> (goals, self-wake, curator, self-editing) need `AUTONOMY_ENABLED=true` (or an
+> `AUTONOMY_MODE`/`AUTONOMY_POSTURE`). Run `polyrob doctor` to see the current state.
 
 ---
 

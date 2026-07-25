@@ -64,3 +64,25 @@ def test_purge_stale_none_to_purge_returns_zero(tmp_path):
     reg.bind("fresh", "sess_fresh", "u_abc", "telegram", "2")
     assert reg.purge_stale(older_than_secs=3600) == 0
     assert reg.resolve("fresh") is not None
+
+
+def test_resolve_by_session_id_multi_binding_newest_wins(tmp_path):
+    """Multi-binding hardening: when multiple session_keys bind to the same session_id,
+    resolve_by_session_id returns the newest (ORDER BY updated_at DESC)."""
+    import time
+    from core.sqlite_util import execute_retry
+
+    reg = SessionChatRegistry(str(tmp_path / "chat.db"))
+    reg.bind("key_a", "sess-1", "u_abc", "telegram", "555")
+    reg.bind("key_b", "sess-1", "u_abc", "telegram", "666")
+
+    # Force key_b to have a later updated_at (matching test_purge_stale pattern).
+    execute_retry(reg.db_path,
+                  "UPDATE session_chat_map SET updated_at = ? WHERE session_key = ?",
+                  (time.time() + 1, "key_b"))
+
+    # resolve_by_session_id should return the newest binding (key_b)
+    row = reg.resolve_by_session_id("sess-1")
+    assert row is not None
+    assert row["session_key"] == "key_b"
+    assert row["chat_id"] == "666"  # key_b's chat_id, not key_a's

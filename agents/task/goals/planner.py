@@ -24,6 +24,53 @@ def planner_session_tools() -> list:
     return tools
 
 
+def _is_live_waiting_goal(board, goal_id: str, _visited: Optional[set] = None) -> bool:
+    """True iff every currently-unsatisfied prerequisite of a ``waiting`` goal is
+    itself still in flight (``ready``/``running``) or ``waiting`` on a chain that
+    is ITSELF live — recursive, since a waiting-on-waiting chain is fine as long
+    as it bottoms out on live work rather than dead work.
+
+    T2.1 review (Critical): board.py's ``_cascade_dep_failed`` flips a dependent
+    straight to ``blocked`` when a prerequisite is cancelled or the circuit
+    breaker trips it to ``blocked`` — but NOT when the prerequisite is flipped to
+    ``blocked`` via ``block_from_ready`` (agent-declared ``OUTCOME: BLOCKED``,
+    dispatcher's ``_fail_run(block=True)``), which is deliberately NOT cascaded
+    (agent-declared blocks are owner-recoverable; cascading would force a double
+    owner-unblock). So a dependent can sit in ``waiting`` on a dead prerequisite
+    forever with no board-side signal. Treating "any waiting goal exists" as
+    "board is fine" (the pre-fix suppression) silently reproduces the documented
+    14h-idle stall shape. A ``blocked``/``cancelled`` prerequisite anywhere in the
+    chain makes the whole chain dead.
+    """
+    if _visited is None:
+        _visited = set()
+    if goal_id in _visited:
+        # T2.1 final-review Fix 4: a revisit is NOT a cycle — cycles are
+        # impossible at write time (add_dependencies rejects them), so a
+        # revisit means a diamond (two branches share a prerequisite) and
+        # this node was already found live (or is still being explored,
+        # which — absent an actual cycle — only happens on a shared
+        # ancestor already proven live by the frame that visited it first).
+        # Returning False here was a false negative that could sink an
+        # otherwise fully-live diamond's STALLED-suppression check.
+        return True
+    _visited.add(goal_id)
+    for dep_id in board.dependencies(goal_id):
+        dep = board.get(dep_id)
+        if dep is None:
+            return False
+        if dep.status == "done":
+            continue
+        if dep.status in ("ready", "running"):
+            continue
+        if dep.status == "waiting":
+            if not _is_live_waiting_goal(board, dep_id, _visited):
+                return False
+            continue
+        return False  # blocked / cancelled / anything else terminal-bad
+    return True
+
+
 def list_deliverables(root: Path, max_files: int = 40) -> List[Dict[str, Any]]:
     """name (relative), mtime iso, first markdown heading — depth <=2, dotfiles skipped."""
     out: List[Dict[str, Any]] = []
@@ -67,6 +114,15 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
                if g.kind == "goal"]
     ready = [g for g in board.list(user_id=user_id, status="ready", limit=20)
              if g.kind == "goal"]
+    # T2.1 Task 4 (review-fixed, Critical): a goal in 'waiting' status does NOT
+    # always have a live prerequisite — `block_from_ready` (agent-declared
+    # OUTCOME: BLOCKED) is deliberately NOT cascaded, so a waiting goal can sit
+    # behind a dead prerequisite indefinitely. `_is_live_waiting_goal` re-checks
+    # the chain fresh every prompt build (never cached) to tell "will self-heal"
+    # apart from "silently dead" — only the former should suppress STALLED.
+    waiting = [g for g in board.list(user_id=user_id, status="waiting", limit=20)
+               if g.kind == "goal"]
+    live_waiting = [g for g in waiting if _is_live_waiting_goal(board, g.id)]
 
     sections = ["You are planning your own work queue. Create goals that genuinely "
                 "advance a standing objective below. If you create nothing, there are "
@@ -114,10 +170,20 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
     if ready:
         sections.append("ALREADY QUEUED (ready):\n" + "\n".join(f"- {g.title}" for g in ready))
 
+    if waiting:
+        sections.append("WAITING ON DEPENDENCIES (will auto-ready when their "
+                        "prerequisite completes; do NOT recreate):\n" + "\n".join(
+            f"- {g.title} (waiting on: {', '.join(board.dependencies(g.id))})"
+            for g in waiting))
+
     # Board-stall guard: 0 ready + blocked goals means the instance goes IDLE. "queue
     # healthy" is NOT valid here — it was the observed 14h-quiet stall (blocked -> ask ->
     # "queue healthy" -> idle). Force NEW achievable work or a single concrete owner-blocker.
-    if not ready and blocked:
+    # T2.1 Task 4 (review-fixed): only a LIVE waiting goal (see `_is_live_waiting_goal`)
+    # suppresses this — a waiting goal stuck behind a block_from_ready'd (agent-declared
+    # BLOCKED) prerequisite is just as dead-in-the-water as the classic 0-ready+blocked
+    # shape, so it must NOT silently suppress the stall banner.
+    if not ready and blocked and not live_waiting:
         sections.append(
             f"⚠️ STALLED BOARD: 0 ready goals, {len(blocked)} blocked. If you add nothing the "
             "instance goes idle — that is a FAILURE, not 'queue healthy'. You MUST create 1-3 "
@@ -157,7 +223,9 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
     sections.append(
         "INSTRUCTIONS:\n"
         "- Create 1-3 goals with goal_create; each MUST set objective_id, tools, and "
-        "acceptance (what 'done' must prove: ids/paths/urls).\n"
+        "acceptance (what 'done' must prove: ids/paths/urls). Sequence dependent work "
+        "with depends_on=[goal_id,...] instead of writing one mega-goal or "
+        "duplicating steps.\n"
         "- When the outcome is mechanically checkable, ALSO set acceptance_checks "
         "(typed, framework-executed) — a passed check is proof, prose is not. The ONLY "
         "valid check types are 'artifact_glob' ({'type':'artifact_glob','pattern':'*.md'}), "
@@ -168,8 +236,9 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
         "- Tools by shape: research -> ['web_fetch','anysite','filesystem','task']; "
         "drafting -> ['filesystem','task','web_fetch']; posting/engagement -> "
         "['twitter','filesystem','task']. At most ONE goal may include 'twitter'.\n"
-        "- Never exceed 5 ready goals total. A rejected duplicate means: extend the "
-        "matched goal's work instead of retrying a rename.\n"
+        "- Never exceed 5 ready goals total (a goal waiting on depends_on does NOT "
+        "count toward this ceiling — it isn't ready yet). A rejected duplicate means: "
+        "extend the matched goal's work instead of retrying a rename.\n"
         "- If progress is blocked on something only the owner can provide (credentials, "
         "a decision, access), SAY SO explicitly and specifically — a concrete ask beats "
         "inventing busywork.\n"

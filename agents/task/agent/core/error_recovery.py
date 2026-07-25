@@ -226,6 +226,9 @@ class ErrorRecoveryMixin:
 		# idempotent (single call site; the sentinel itself no-ops while the latch holds).
 		await self._trip_sentinel_if_credit_death(error)
 
+		from core.error_classifier import FailoverReason, classify_error
+		classified = classify_error(error)
+
 		# === PERMANENT/CRITICAL ERRORS - HALT IMMEDIATELY ===
 		# These errors indicate account-level issues that won't be resolved by fallback
 		is_permanent = (
@@ -261,6 +264,22 @@ class ErrorRecoveryMixin:
 				include_in_memory=True
 			)]
 		
+		# A 402 that llm_runner re-wrapped as LLMProviderExhaustedError carries no billing
+		# text on its top message, so the is_permanent branch above misses it and it would
+		# halt here without ever trying a still-funded provider. classify_error walked the
+		# __cause__/__context__ chain and found the inner 402 → attempt billing failover
+		# first (P0 taxonomy). Plain-LLMError 402s never reach here (not this isinstance),
+		# so their existing is_llm_error path is unchanged.
+		if (isinstance(error, LLMProviderExhaustedError)
+				and classified.reason is FailoverReason.CREDIT_DEATH
+				and _billing_failover_enabled()):
+			self.logger.warning("💳 Re-wrapped 402 detected via cause chain — attempting provider fallback")
+			self.state.track_llm_error("billing", self._get_provider_from_model(self.model_name))
+			if await self._attempt_llm_fallback_in_handler("billing"):
+				self.state.reset_llm_errors()
+				return []
+			# else: fall through to the exhausted-halt below (no funded provider left)
+
 		# === PROVIDER EXHAUSTED - All fallbacks failed ===
 		if isinstance(error, LLMProviderExhaustedError):
 			self.logger.error(f"❌ ALL LLM PROVIDERS EXHAUSTED: {error}")

@@ -926,9 +926,9 @@ def _session_info_rows(ctx: CommandContext) -> list:
 
     autonomy_on = False
     try:
-        from agents.task.constants import local_mode_enabled
+        from agents.task.constants import autonomy_enabled
 
-        autonomy_on = bool(local_mode_enabled())
+        autonomy_on = bool(autonomy_enabled())
     except Exception:
         pass
 
@@ -982,7 +982,7 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     grammar) so both read the same snapshot without duplicating the store reads.
     """
     import os
-    from agents.task.constants import AutonomyConfig, local_mode_enabled
+    from agents.task.constants import AutonomyConfig, autonomy_enabled, local_mode_enabled
 
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
@@ -1012,6 +1012,7 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
 
     return {
         "local_mode": local_mode_enabled(),
+        "autonomy_enabled": autonomy_enabled(),
         "flags": flags,
         "cron_jobs": cron_jobs,
         "cron_error": cron_error,
@@ -1031,6 +1032,7 @@ def autonomy_status_lines(user_id: str, data_dir: str = "data") -> list:
     snap = _autonomy_snapshot(user_id, data_dir)
 
     lines = [f"local mode (POLYROB_LOCAL): {'on' if snap['local_mode'] else 'off'}"]
+    lines.append(f"autonomy (AUTONOMY_ENABLED): {'on' if snap['autonomy_enabled'] else 'off'}")
     lines.append("loops: " + ", ".join(f"{n}={'on' if v else 'off'}" for n, v in snap["flags"]))
 
     if snap["cron_error"] is not None:
@@ -1063,7 +1065,8 @@ def _h_autonomy(ctx: CommandContext) -> None:
 
     snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
 
-    rows = [("local mode", "on" if snap["local_mode"] else "off")]
+    rows = [("local mode", "on" if snap["local_mode"] else "off"),
+            ("autonomy", "on" if snap["autonomy_enabled"] else "off")]
     rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
     lines = [candy.kv_lines(rows), ""]
 

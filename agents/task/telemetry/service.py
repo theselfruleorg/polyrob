@@ -933,12 +933,18 @@ class ProductTelemetry:
 					temp_path = usage_path.with_suffix('.tmp')
 					lock_path = usage_path.with_suffix('.lock')
 					
+					# The lock file lives INSIDE llm_usage_dir — the dir must exist
+					# BEFORE the lock can be created. Creating it inside the locked
+					# block made the first write for any session without the
+					# pre-created standard subtree fail ENOENT on lock acquire,
+					# swallowed at DEBUG level (2026-07-23 validation, the
+					# "telemetry path flake").
+					llm_usage_dir.mkdir(parents=True, exist_ok=True)
+
 					# Use filelock for thread safety
 					with SafeFileLock(str(lock_path)):
 						try:
-							# Ensure directory exists
-							llm_usage_dir.mkdir(parents=True, exist_ok=True)
-							
+
 							# Write to temporary file with proper serialization
 							with open(temp_path, 'w') as f:
 								json.dump(self._sanitize_telemetry_data(event_data), f, indent=2, default=self._json_serializable)

@@ -120,6 +120,65 @@ def test_goal_show_exposes_attempts_and_acceptance(board):
 # §5.3 blocked stewardship: unblock verb + visible aging
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# T2.1 Task 4: goal_show renders DAG edges (waiting on / blocks)
+# ---------------------------------------------------------------------------
+
+def test_goal_show_renders_waiting_on_and_blocks(board):
+    from tools.goal_tools import GoalTool, GoalShowAction
+
+    dep = board.create(user_id="u1", title="prerequisite work")
+    g = board.create(user_id="u1", title="dependent work", depends_on=[dep.id])
+
+    tool = GoalTool.__new__(GoalTool)
+    tool._resolve_board = lambda: board
+    tool._user = lambda ec: "u1"
+
+    dep_res = asyncio.run(GoalTool.goal_show(tool, GoalShowAction(goal_id=dep.id)))
+    dep_text = dep_res.extracted_content or ""
+    assert "blocks:" in dep_text
+    blocks_line = [ln for ln in dep_text.splitlines() if ln.startswith("blocks:")][0]
+    assert g.id in blocks_line and "dependent work" in blocks_line
+
+    g_res = asyncio.run(GoalTool.goal_show(tool, GoalShowAction(goal_id=g.id)))
+    g_text = g_res.extracted_content or ""
+    assert "waiting on:" in g_text
+    assert dep.id in g_text and "prerequisite work" in g_text
+
+
+def test_goal_show_no_edge_lines_when_no_deps(board):
+    from tools.goal_tools import GoalTool, GoalShowAction
+
+    g = board.create(user_id="u1", title="standalone goal")
+    tool = GoalTool.__new__(GoalTool)
+    tool._resolve_board = lambda: board
+    tool._user = lambda ec: "u1"
+    res = asyncio.run(GoalTool.goal_show(tool, GoalShowAction(goal_id=g.id)))
+    text = res.extracted_content or ""
+    assert "waiting on:" not in text
+    assert "blocks:" not in text
+
+
+def test_goal_show_caps_edge_listing_at_ten(board):
+    """T2.1 review Minor: mirrors the attempts[-5:] compact-tail precedent — a
+    wide fan-out must not blow the goal_show message out."""
+    from tools.goal_tools import GoalTool, GoalShowAction
+
+    hub = board.create(user_id="u1", title="hub goal")
+    deps = [board.create(user_id="u1", title=f"dependent {i}", depends_on=[hub.id], force=True)
+            for i in range(12)]
+
+    tool = GoalTool.__new__(GoalTool)
+    tool._resolve_board = lambda: board
+    tool._user = lambda ec: "u1"
+    res = asyncio.run(GoalTool.goal_show(tool, GoalShowAction(goal_id=hub.id)))
+    text = res.extracted_content or ""
+    blocks_line = next(ln for ln in text.splitlines() if ln.startswith("blocks:"))
+    shown = sum(1 for d in deps if d.id in blocks_line)
+    assert shown == 10
+    assert "(+2 more)" in blocks_line
+
+
 def test_unblock_requeues_with_rationale(board):
     g = board.create(user_id="u1", title="blocked goal", max_retries=1)
     assert board.claim(g.id, "w1", ttl_seconds=900)

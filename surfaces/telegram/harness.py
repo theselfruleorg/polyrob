@@ -220,6 +220,24 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
     # the deliberate busy-session silence.
     failed = str(status or "").startswith(("Session failed:", "Session suspended:"))
 
+    # T1.1 enable-blocker (validated 2026-07-23): a RUN_BUDGET_USD halt on a
+    # CONTINUED session ends the turn before any new step, so the extraction
+    # below would surface the PREVIOUS turn's reply as if it answered this
+    # message. run_session's return IS the honest halt text for exactly this
+    # case (mirrors chat_once's marker branch) — deliver it and stop. Scoped
+    # to the budget marker; every other failure keeps the notice/extraction rail.
+    if failed:
+        try:
+            from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
+        except ImportError:  # pragma: no cover - core-only install
+            RUN_BUDGET_MARKER = "run_budget_exhausted"
+        if RUN_BUDGET_MARKER in str(status):
+            try:
+                await deliver(f"⚠️ {status}")
+            except Exception as e:
+                logger.error("telegram reply delivery failed: %s", e, exc_info=True)
+            return
+
     if not failed:
         # C10: when Singular Chat is bound, the send_message / done router mirror
         # already delivered the reply LIVE (MarkdownV2) for a SUCCESSFUL run.
@@ -271,12 +289,14 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         # Fail-open: any error in classification falls through to the legacy
         # generic notice below, never into the error path.
         try:
+            from core.surfaces.error_notices import notice_for_texts
             from core.surfaces.llm_outage_notice import (
                 OUTAGE_NOTICE_TEXT,
                 looks_like_llm_outage,
                 should_send_llm_outage_notice,
             )
-            if looks_like_llm_outage(status, _last_error_text(task_agent, session_id)):
+            last_err = _last_error_text(task_agent, session_id)
+            if looks_like_llm_outage(status, last_err):
                 if not should_send_llm_outage_notice(notice_key or session_id):
                     # Flag off, or within the cooldown window: deliberately
                     # silent (the failure itself is logged above; the first
@@ -286,7 +306,15 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
                         "(flag off or cooldown)", session_id,
                     )
                     return
-                reply = OUTAGE_NOTICE_TEXT
+                # T1.2: append a reason-specific phrase (from the SAME
+                # classify_text SSOT looks_like_llm_outage just used) on top
+                # of the generic notice — never raw provider/model text, only
+                # one of the fixed sentences in core.surfaces.error_notices.
+                notice = OUTAGE_NOTICE_TEXT
+                phrase = notice_for_texts(status, last_err)
+                if phrase:
+                    notice = f"{OUTAGE_NOTICE_TEXT}\n{phrase}"
+                reply = notice
         except Exception:
             logger.debug("llm outage notice classification failed (fail-open)",
                          exc_info=True)
@@ -815,7 +843,14 @@ async def act_on_inbound(
     surface holds its own KeyedLock upstream; nesting is safe — consistent order,
     per-key granularity.)
     """
-    key = getattr(result.decision, "session_key", "") or ""
+    # T1.4 alias-safe lease: aliased routing keys (e.g. two thread-suffixed keys
+    # for one correspondent) can resolve to ONE session; lock on the resolved
+    # session so the resolve/create/inject phase serializes per session. Cold
+    # paths (no resolved session yet) keep the chat routing key — byte-identical
+    # to the B6 cold-create protection. "sid:" prefix keeps the two bucket
+    # namespaces disjoint.
+    _sid = getattr(result.decision, "session_id", None)
+    key = f"sid:{_sid}" if _sid else (getattr(result.decision, "session_key", "") or "")
     async with _INBOUND_LOCK.for_key(key):
         return await _act_on_inbound_locked(task_agent, result, spawn=spawn,
                                             deliver=deliver)

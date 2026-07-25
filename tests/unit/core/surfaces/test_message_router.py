@@ -1,4 +1,5 @@
 import pytest
+from core.surfaces.dead_targets import DeadTargetStore
 from core.surfaces.message_router import MessageRouter
 from core.surfaces.session_chat_registry import SessionChatRegistry
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
@@ -142,3 +143,184 @@ def test_bot_username_returns_none_when_surface_lacks_attribute(router):
     r, reg = router
     r.subscribe("telegram", _RecordingSurface())
     assert r.bot_username("telegram") is None
+
+
+# ---------------------------------------------------------------------------
+# T1.5: dead-target gate on the direct-send path
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_publish_skips_send_for_dead_target(router, tmp_path):
+    """A target already marked dead is never handed to the surface (direct path)."""
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    store.mark("telegram", "555", "blocked")  # chat_id from the router fixture's binding
+    r.attach_dead_targets(store)
+    await r.publish(OutboundMessage(session_key="k1", text="hello", partial=False))
+    assert surf.sent == []
+    assert surf.streamed == []
+
+
+@pytest.mark.asyncio
+async def test_publish_marks_target_dead_on_forbidden_failure(router, tmp_path):
+    """A direct send that fails with a classifiable ('Forbidden: bot was blocked...')
+    error marks the target dead — same classify+mark contract as the dispatcher."""
+    r, _ = router
+
+    class _Forbidden(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="Forbidden: bot was blocked by the user")
+
+    surf = _Forbidden()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    await r.publish(OutboundMessage(session_key="k1", text="hi", partial=False))
+    assert len(surf.sent) == 1          # the send was actually attempted (not pre-marked)
+    assert store.is_dead("telegram", "555") is True
+
+
+@pytest.mark.asyncio
+async def test_publish_transient_failure_not_marked_dead(router, tmp_path):
+    """An unclassified (transient) failure must NOT mark the target dead."""
+    r, _ = router
+
+    class _Flaky(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="timeout contacting provider")
+
+    surf = _Flaky()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    await r.publish(OutboundMessage(session_key="k1", text="hi", partial=False))
+    assert store.is_dead("telegram", "555") is False
+
+
+@pytest.mark.asyncio
+async def test_publish_dead_target_gate_fail_open_on_corrupted_store(router, tmp_path):
+    """A store that fails to read (corrupted db) must never block a send — mirrors
+    DeadTargetStore's own fail-open contract (test_dead_targets.py)."""
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    db = str(tmp_path / "dead.db")
+    store = DeadTargetStore(db)
+    r.attach_dead_targets(store)
+    with open(db, "wb") as f:
+        f.write(b"not a sqlite database at all" * 50)
+    await r.publish(OutboundMessage(session_key="k1", text="still works", partial=False))
+    assert len(surf.sent) == 1
+
+
+# ---------------------------------------------------------------------------
+# Final-review fixes (T1.5): send_message gate + result-blindness, mark misattribution
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_send_message_skips_dead_target_without_calling_surface(router, tmp_path):
+    """A provably-dead target is skipped by send_message before the surface is ever
+    invoked (mirrors the publish() direct-path gate)."""
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    store.mark("telegram", "555", "blocked")
+    r.attach_dead_targets(store)
+    result = await r.send_message(chat_id="555", text="hi", surface_id="telegram")
+    assert result is False
+    assert surf.sent == []
+
+
+@pytest.mark.asyncio
+async def test_send_message_marks_dead_and_returns_false_on_forbidden(router, tmp_path):
+    """A classifiable send failure (e.g. 'Forbidden: bot was blocked...') marks the
+    target dead AND returns False — a proactive send failure must be visible to the
+    caller, not swallowed as a silent True."""
+    r, _ = router
+
+    class _Forbidden(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="Forbidden: bot was blocked by the user")
+
+    surf = _Forbidden()
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    result = await r.send_message(chat_id="555", text="hi", surface_id="telegram")
+    assert result is False
+    assert len(surf.sent) == 1  # send was attempted (not pre-marked)
+    assert store.is_dead("telegram", "555") is True
+
+
+@pytest.mark.asyncio
+async def test_send_message_returns_true_on_successful_send_result(router, tmp_path):
+    """A successful SendResult still returns True, unchanged (with the dead-target
+    store attached — the gate must not regress the happy path)."""
+    r, _ = router
+    surf = _RecordingSurface()  # returns SendResult(success=True)
+    r.subscribe("telegram", surf)
+    store = DeadTargetStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    result = await r.send_message(chat_id="555", text="hi", surface_id="telegram")
+    assert result is True
+    assert len(surf.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_send_message_mark_fault_does_not_flip_returned_result(router, tmp_path):
+    """A dead-target STORE fault while marking a failed send must not change the
+    (already-False) result returned to the caller — the send outcome is still
+    reported honestly even though telemetry-adjacent bookkeeping broke."""
+    r, _ = router
+
+    class _Forbidden(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="Forbidden: bot was blocked by the user")
+
+    class _BoomStore(DeadTargetStore):
+        def mark(self, surface, address, reason):
+            raise RuntimeError("disk full")
+
+    surf = _Forbidden()
+    r.subscribe("telegram", surf)
+    store = _BoomStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    result = await r.send_message(chat_id="555", text="hi", surface_id="telegram")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_publish_mark_fault_not_misattributed_to_surface(router, tmp_path, caplog):
+    """Fix 3: a dead-target STORE fault while marking a failed send in publish()'s
+    direct-send path must be logged as a mark failure, NEVER folded into the
+    generic 'surface ... raised' fail-open log (misattribution) — the surface itself
+    did not raise; its SendResult just carried success=False."""
+    import logging
+    r, _ = router
+
+    class _Forbidden(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="Forbidden: bot was blocked by the user")
+
+    class _BoomStore(DeadTargetStore):
+        def mark(self, surface, address, reason):
+            raise RuntimeError("disk full")
+
+    surf = _Forbidden()
+    r.subscribe("telegram", surf)
+    store = _BoomStore(str(tmp_path / "dead.db"))
+    r.attach_dead_targets(store)
+    with caplog.at_level(logging.ERROR):
+        await r.publish(OutboundMessage(session_key="k1", text="hi", partial=False))
+    assert len(surf.sent) == 1
+    assert not any("surface" in rec.getMessage() and "raised" in rec.getMessage()
+                   for rec in caplog.records)
+    assert any("dead-target mark failed" in rec.getMessage() for rec in caplog.records)

@@ -196,7 +196,9 @@ class UserMCPService:
             )
             
             # Test MCP protocol
-            test_result = await self._test_mcp_protocol_with_config(temp_config)
+            test_result = await self._test_mcp_protocol_with_config(
+                temp_config, user_id=user_id, server_name=server_name
+            )
             
             if not test_result.success:
                 return AddServerResult(
@@ -259,30 +261,54 @@ class UserMCPService:
 
     async def _test_mcp_protocol_with_config(
         self,
-        config: MCPServerConfig
+        config: MCPServerConfig,
+        user_id: str = "",
+        server_name: str = "(unsaved)"
     ) -> TestConnectionResult:
-        """Test MCP protocol with a config object (for verification before saving)."""
+        """Test MCP protocol with a config object (for verification before saving).
+
+        Args:
+            config: Server config to test
+            user_id: Owner's user ID (T2.4: honest tenant for OAuth token
+                lookup — this method runs inside a request already scoped to a
+                real user_id, via ``add_server``; see
+                ``tools/mcp/oauth_bridge.py`` module docstring.
+            server_name: The server name being verified (used to key the
+                OAuth provider registration; the server isn't persisted yet
+                at this point, hence "unsaved" default). ``config.auth`` is
+                always ``None`` on this path today (no caller sets it), so
+                the bridge call is a no-op in practice until a future task
+                extends the per-user server schema/API to accept one.
+        """
         import time
         import asyncio
         from tools.mcp.protocol import MCPClient, MCPSSETransport, MCPHTTPTransport
+        from tools.mcp.oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
 
         client = None
         start = time.time()
-        
+
         try:
+            resolved_headers = await apply_oauth_headers(config, user_id, server_name)
+            on_auth_refresh = (
+                make_auth_refresh_callback(user_id, server_name)
+                if oauth_applies_to(config) else None
+            )
             if config.type == MCPServerType.SSE:
                 transport = MCPSSETransport(
                     url=config.url,
-                    headers=config.headers,
+                    headers=resolved_headers,
                     timeout=min(config.timeout, 30),
-                    validate_ssrf=True  # SSRF: user-supplied URL
+                    validate_ssrf=True,  # SSRF: user-supplied URL
+                    on_auth_refresh=on_auth_refresh
                 )
             elif config.type == MCPServerType.HTTP:
                 transport = MCPHTTPTransport(
                     url=config.url,
-                    headers=config.headers,
+                    headers=resolved_headers,
                     timeout=min(config.timeout, 30),
-                    validate_ssrf=True  # SSRF: user-supplied URL
+                    validate_ssrf=True,  # SSRF: user-supplied URL
+                    on_auth_refresh=on_auth_refresh
                 )
             else:
                 return TestConnectionResult(
@@ -581,23 +607,36 @@ class UserMCPService:
         import time
         import asyncio
         from tools.mcp.protocol import MCPClient, MCPSSETransport, MCPHTTPTransport
+        from tools.mcp.oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
 
         client = None
         try:
+            # T2.4: OAuth header injection — real user_id/server_name are both
+            # already in scope here (see tools/mcp/oauth_bridge.py module
+            # docstring). config.auth is always None on this path today (the
+            # per-user DB-backed server schema has no OAuth column yet), so
+            # this is a no-op in practice.
+            resolved_headers = await apply_oauth_headers(config, user_id, server_name)
+            on_auth_refresh = (
+                make_auth_refresh_callback(user_id, server_name)
+                if oauth_applies_to(config) else None
+            )
             # Create appropriate transport based on server type
             if config.type == MCPServerType.SSE:
                 transport = MCPSSETransport(
                     url=config.url,
-                    headers=config.headers,
+                    headers=resolved_headers,
                     timeout=min(config.timeout, 30),  # Cap at 30s for test
-                    validate_ssrf=True  # SSRF: user-supplied URL
+                    validate_ssrf=True,  # SSRF: user-supplied URL
+                    on_auth_refresh=on_auth_refresh
                 )
             elif config.type == MCPServerType.HTTP:
                 transport = MCPHTTPTransport(
                     url=config.url,
-                    headers=config.headers,
+                    headers=resolved_headers,
                     timeout=min(config.timeout, 30),
-                    validate_ssrf=True  # SSRF: user-supplied URL
+                    validate_ssrf=True,  # SSRF: user-supplied URL
+                    on_auth_refresh=on_auth_refresh
                 )
             else:
                 return TestConnectionResult(

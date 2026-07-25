@@ -21,13 +21,13 @@ This guide helps you transition from OpenClaw to POLYROB, highlighting key diffe
 
 | OpenClaw Concept | POLYROB Equivalent | Notes |
 |------------------|-------------------|-------|
-| **Gateway** | `polyrob gateway` / Surfaces (Telegram, WhatsApp, Email) | Similar multi-platform support |
+| **Gateway** | `polyrob gateway` / Surfaces (Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | Runs all enabled chat surfaces in one process |
 | **Channels** | Surfaces | POLYROB has fewer platforms currently |
 | **Workspace** | Sessions | Similar concept, different structure |
 | **Skills** | Skills system | Different frontmatter format (agentskills.io) |
 | **SOUL.md** | SOUL/SELF identity docs (`/self` in chat) | Different storage path and frontmatter-free format |
 | **DM pairing** | Correspondent access model | Similar security approach |
-| **Sandbox** | Not supported | POLYROB uses least-privilege delegation (narrowed child toolset) instead of container/VM sandboxing |
+| **Sandbox** | Docker / SSH code-exec backends + `AGENT_COMPUTE_POSTURE` ladder | POLYROB ships a hardened Docker backend and an SSH backend (opt-in via `CODE_EXEC_ENABLED`), plus a 0–3 compute-posture capability ladder; least-privilege delegation narrows child toolsets on top |
 | **Onboard** | `polyrob init` | Similar setup experience |
 
 ---
@@ -162,8 +162,9 @@ relative to your current project directory for the local CLI.
         └── SKILL.md
 ```
 
-There is no project-local `./skills/` read path today — a per-repo skill-discovery path is reserved
-for a future release but not yet wired up for loading.
+Per-repo skill discovery is wired up: POLYROB reads `.agents/skills/` and `.claude/skills/` from your
+project directory automatically (default-on in local mode via `POLYROB_TRUST_PROJECT_SKILLS`). Only a
+bare project-local `./skills/` (without the `.agents/` or `.claude/` prefix) is not read.
 
 ### Skill Format
 
@@ -306,12 +307,14 @@ POLYROB currently supports:
 - **Telegram** — Via aiogram (local long-polling)
 - **WhatsApp** — Cloud API webhook
 - **Email** — IMAP/SMTP
+- **Discord / Slack / Signal / X** — additional chat surfaces
 - **REST API** — FastAPI server
 - **Web Dashboard** — Local-first UI, single-user by default with an optional multitenant posture
 
-`polyrob gateway` runs Telegram + WhatsApp + Email together in one process, the closest analog to
-OpenClaw's gateway daemon; each surface can also be run standalone (`polyrob telegram`, `polyrob
-whatsapp`, `polyrob email`).
+`polyrob gateway` runs all seven enabled chat surfaces (Telegram, WhatsApp, Email, Discord, Slack,
+Signal, X) together in one process, the closest analog to OpenClaw's gateway daemon; each surface can
+also be run standalone (`polyrob telegram`, `polyrob whatsapp`, `polyrob email`, `polyrob discord`,
+`polyrob slack`, `polyrob signal`, `polyrob x`).
 
 ### Setting Up Telegram
 
@@ -392,16 +395,18 @@ polyrob email
 - **Companion apps** — Windows Hub, macOS menu bar, iOS/Android
 - **Live Canvas** — Agent-driven visual workspace
 - **Voice modes** — Wake words, continuous voice
-- **Sandboxing** — Docker/SSH/OpenShell execution backends
+- **Turnkey per-session sandboxing** — non-main sessions run sandboxed by default (Docker/SSH/OpenShell); POLYROB has Docker/SSH backends too, but code execution is opt-in rather than on by default
 - **Node.js ecosystem** — For users who prefer JavaScript
 
 ### POLYROB Has, OpenClaw Doesn't
 
-- **Multi-provider automatic failover** — Switch providers on errors
-- **Durable goal board** — Goals survive restarts with CAS claims
-- **Multi-tenant architecture** — Built for team/business use
-- **Three-tier access model** — OWNER/CORRESPONDENT/DENIED
-- **Capability gates** — Block high-impact tools for correspondents
+- **Economic agency** — built-in agent wallet, x402 payments, and invoicing (OpenClaw has none)
+- **Durable goal board** — background goals survive restarts with atomic CAS claims
+- **Proactive self-wake** — the agent can re-enter idle sessions on its own when observable state changes
+- **Multi-tenant architecture** — built for team/business use, `user_id`-scoped
+- **Three-tier access model** — OWNER/CORRESPONDENT/DENIED with origin taint and capability gates
+- **Durable owner-approval queue** — remotely approvable and restart-surviving human-in-the-loop
+- **MCP server surface** — expose POLYROB's own tools to MCP clients like Claude Desktop / Cursor (OpenClaw is MCP client-only)
 - **A2A protocol** — Google's agent interoperability standard
 - **REST API** — Built-in HTTP endpoints
 - **Python ecosystem** — For users who prefer Python
@@ -565,8 +570,11 @@ CORRESPONDENT_REQUIRE_APPROVAL=true
 # (e.g. a numeric Telegram user id, not a phone number)
 polyrob owner approve telegram 123456789
 
-# Note: POLYROB doesn't have sandboxing yet
-# Use least-privilege delegation instead
+# Code execution is off by default; when you enable it, prefer the hardened
+# Docker backend on any shared/network host:
+CODE_EXEC_ENABLED=true
+CODE_EXEC_BACKEND=docker
+# See docs/guide/security-model.md for what the sandbox does and doesn't cover.
 ```
 
 ---
@@ -578,7 +586,7 @@ Consider staying with OpenClaw if:
 - **You need omni-channel presence** — 20+ platforms is critical
 - **You value companion apps** — Mobile/desktop apps are essential
 - **You prefer Node.js** — Your stack is JavaScript-focused
-- **You need sandboxing** — Isolated execution is required
+- **You want sandboxing on by default** — non-main sessions sandboxed out of the box (POLYROB has Docker/SSH backends, but code execution is opt-in)
 - **You use Live Canvas** — Visual workspace is important
 
 ## When to Switch to POLYROB

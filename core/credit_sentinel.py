@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from typing import Any, Optional
 
@@ -32,13 +33,22 @@ logger = logging.getLogger(__name__)
 SENTINEL_FILENAME = "CREDIT_SENTINEL"
 
 _CREDIT_DEATH_MARKERS = (
-    "402",
     "insufficient_quota",
     "insufficient credits",
     "payment required",
     "billing",
     "credit balance",
 )
+
+# "402" needs word boundaries, not bare-substring matching: the bare form
+# tripped on formatted spend amounts ("$0.4020"), token counts ("requested
+# 130402 tokens") and hex request ids ("req_9f402ab13c7e") — the 2026-07-18
+# sentinel false-positive class, reproduced again by the 2026-07-23 validation
+# in the chain-aware classifier (a coincidental chained "402" flipped a
+# retryable step fatal with billing failover off). \b keeps every real
+# provider shape matching: "Error code: 402", "HTTP/1.1 402", "(402)",
+# "status_code=402" all carry non-word neighbors.
+_CREDIT_DEATH_402_RE = re.compile(r"\b402\b")
 
 
 def credit_sentinel_enabled() -> bool:
@@ -74,7 +84,9 @@ def looks_like_credit_death(text: Optional[str]) -> bool:
     if not text:
         return False
     low = str(text).lower()
-    return any(m in low for m in _CREDIT_DEATH_MARKERS)
+    if any(m in low for m in _CREDIT_DEATH_MARKERS):
+        return True
+    return bool(_CREDIT_DEATH_402_RE.search(low))
 
 
 def credit_sentinel_active() -> bool:

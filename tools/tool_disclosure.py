@@ -149,7 +149,9 @@ def render_tool_catalog(
         "session. A [loadable] tool is one load_tool(\"<id>\") call away — its "
         "actions appear on the next step. A [gated:...] tool names the reason and "
         "the remedy channel; ask/act on it instead of working around a missing "
-        "tool in silence.",
+        "tool in silence. Use tool_search(\"<keyword>\") to find a tool by name "
+        "(including the tools behind connected MCP servers, which are NOT listed "
+        "here) and tool_describe(\"<id>\") for its parameters.",
     ]
     seen = set()
     for name in get_tool_init_order():

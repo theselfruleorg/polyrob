@@ -6,6 +6,137 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-07-25
+
+Reliability, autonomy, and honesty hardening across the agent loop, plus two new
+interoperability surfaces (an inbound MCP server and dependency-ordered goals).
+
+### Added
+
+- **Per-session spend budget (`RUN_BUDGET_USD`, default `0` = off):** set a dollar
+  ceiling and a run halts honestly the moment its summed real provider cost reaches
+  the cap — reported as a stopped run with a budget marker, never a fabricated
+  "completed". The cap counts real provider cost (not the marked-up user price);
+  sub-agents ride the parent's budget. Surfaced in the agent's environment block so
+  the model can pace itself, and delivered honestly over chat and Telegram.
+- **Inbound MCP server surface (`MCP_SERVE_ENABLED`, default off):** polyrob can now
+  act as an MCP *server*, so an MCP client (Claude Desktop, Cursor) can connect to it
+  as a tool provider over `POST /mcp` (JSON-RPC-over-POST). v1 is read-only and
+  exposes five tenant-scoped tools — `rob_usage_summary`, `rob_goals_list`,
+  `rob_goal_show`, `rob_conversations`, `rob_pending_approvals` — authenticated with
+  the same `X-API-KEY` / bearer-JWT / x402 policy as the A2A surface. This is the
+  inbound counterpart to the existing outbound MCP *client* (`MCP_ENABLED`).
+- **Query-based tool discovery (`tool_search` / `tool_describe`):** the agent can now
+  search every tool the deployment knows about by keyword — built-in tools *and* the
+  tools behind connected MCP servers (dozens-to-hundreds, previously reachable only
+  through the single `mcp` tool) — and get full detail (parameters, capability
+  dimensions, honest load/gate status, and how to invoke) for any one of them. Both
+  actions are read-only, deterministic (no LLM/embeddings), and reuse the same honest
+  status the `<tool-catalog>` renders — money tools are searchable but never shown as
+  self-serve-loadable, and delegated sub-agents see the same structured refusals. Rides
+  the existing progressive-disclosure gate (`TOOL_PROGRESSIVE_DISCLOSURE`, on under
+  `POLYROB_LOCAL`).
+- **Dependency-ordered goals:** the durable goal board now supports dependency edges.
+  The agent's `goal_create` tool accepts `depends_on: [<goal_id>, …]`, and a goal
+  with unmet prerequisites waits until they complete before it becomes eligible to
+  run. Block reasons are now typed (`provider_outage` / `needs_input` / `dep_failed`),
+  and a goal blocked by a transient provider outage self-heals after
+  `GOAL_BLOCKED_PROVIDER_RETRY_MIN` (default 30 min) instead of aging out like a
+  stuck goal.
+- **SSH code-execution backend (`CODE_EXEC_BACKEND=ssh`):** run `run_code` on a remote
+  host over your system `ssh` (`CODE_EXEC_SSH_HOST` / `_USER` / `_PORT` / `_KEY`). It
+  is honestly reported as **not** a sandbox by default — a generic remote host runs
+  agent code with the SSH user's full privileges — so a server refuses it unless you
+  attest the host is hardened/disposable with `CODE_EXEC_SSH_SANDBOXED=true`.
+- **OAuth for outbound MCP connections (`MCP_OAUTH_ENABLED`, default off):** SSE/HTTP
+  MCP servers whose config declares an `auth: {provider: generic_oauth2, …}` block get
+  an injected `Authorization` header, with token minting/refresh persisted
+  (Fernet-encrypted) and a single automatic retry on a 401. Forward-looking
+  scaffolding; no shipped server declares `auth` yet.
+- **Security & trust-model guide page** ([docs/guide/security-model.md](docs/guide/security-model.md)):
+  one honest, consolidated answer to "what actually stops the agent from doing
+  something bad?" — which gates are in-process heuristics vs. the OS/container
+  boundary, where code runs unsandboxed today, and recommendations by deployment
+  shape.
+- **`AUTONOMY_ENABLED` master switch:** one owner-legible flag that turns the
+  self-directed autonomy loops on. Default off for a new local install; on
+  automatically under `AUTONOMY_MODE=autonomous` or `AUTONOMY_POSTURE`
+  owner-visible/full. First run prints a one-time posture notice (autonomy on/off +
+  where data and config live), and `polyrob doctor` gains an `autonomy:` line
+  alongside the data dir and active config file.
+
+### Changed
+
+- **Autonomy is now OFF by default for new local installs (default change):** the local
+  CLI profile still enables the *interactive* tools (coding, git, knowledge base, memory,
+  project-context); the self-directed loops (self-wake, goal board + planner, curator,
+  background-review, episodic continuity, self-editing) now require `AUTONOMY_ENABLED=true`
+  (or `AUTONOMY_MODE=autonomous` / an `AUTONOMY_POSTURE`). A first run no longer silently
+  starts a background agent that schedules goals and rewrites its own skills — it prints
+  the active posture and where data/config live instead. Multi-tenant server behavior is
+  unchanged. Check state anytime with `polyrob doctor` or `/autonomy`.
+- **Dead-target delivery hygiene, now on by default (`DEAD_TARGET_REGISTRY`):** the
+  agent stops burning outbound sends on provably-dead targets (a chat you've been
+  blocked from, or a deleted conversation) and automatically revives the target the
+  next time it hears from it. Only definitively-classified failures are suppressed;
+  ambiguous errors are unaffected.
+- **Anti-injection framing on context compaction, now on by default
+  (`COMPACTION_PROMPT_GUARD`):** the summarizer prompt and the prior-summary block it
+  rebuilds are framed so adversarial text captured in a long conversation can't hijack
+  the compaction step.
+- **Reason-specific outage notices:** the owner-facing "all providers are down" notice
+  (rides `LLM_OUTAGE_NOTICE`) now distinguishes the cause — out of credits vs. an auth
+  failure vs. every provider exhausted — instead of one generic message.
+- **Coding tool tolerates near-miss edits:** `str_replace` now falls back through a
+  small ladder of whitespace-tolerant matches (blank-line edges, interior spacing) when
+  an exact match fails, and reports which rung matched so the edit stays auditable.
+- **Cross-session search paging and ranking:** `session_search` supports
+  `before_id` pagination under newest-first sort, and de-prioritizes automation
+  (goal/cron) sessions in results so human conversations rank first.
+- **Background delegations survive a restart:** a detached (`background=true`)
+  delegation that completed while the process was down is now delivered back into its
+  session after restart, rather than being silently lost.
+
+### Fixed
+
+- **Chain-aware LLM error classification:** a single structured error taxonomy
+  (`core/error_classifier.py`) now drives the loop's fatal-vs-retry and
+  billing-vs-transient decisions by walking the full exception chain, so a billing
+  failure wrapped inside another error is no longer misread as a generic failure.
+- **Goal board correctness under contention:** atomic claim/completion is
+  compare-and-swap guarded against double-processing, dependency cycles are rejected at
+  creation, and a raced dependency edge is repaired on the next tick.
+- **Telemetry write no longer errors on first use:** the per-session LLM-usage log
+  handles a missing directory on its very first write instead of failing.
+- **Per-session turn serialization:** inbound messages that resolve to the same session
+  through different address aliases are now serialized on the resolved session id, so
+  two near-simultaneous arrivals can't race.
+- **Invoice listing paginates correctly:** a status-filtered invoice list now applies the
+  filter in SQL *before* the row limit, so filtered results beyond the first page are no
+  longer dropped.
+
+### Security
+
+- **Log redaction gaps closed:** the secret-scrubbing filter is now attached to the two
+  log surfaces that were bypassing it, and a hole where secrets in a marker-less shape
+  (e.g. a bare token value) slipped past the marker gate is fixed. Real log calls are
+  now covered.
+- **No raw exception text echoed to callers:** the A2A JSON-RPC internal-error response
+  and the inbound MCP-server error paths no longer echo raw exception strings (which can
+  carry internal detail) — they return a generic message and log the detail server-side.
+- **Credit-death detection is precise:** the sentinel that recognizes an unrecoverable
+  "out of funds" `402` now matches the code on a word boundary, so an unrelated number
+  that merely contains `402` no longer trips it.
+- **Inbound MCP server fails closed on an unresolved caller:** a `tools/call` with no
+  resolvable principal is refused rather than served.
+- **Coding tool's type-checker no longer inherits secrets:** the LSP diagnostics
+  subprocess (pyright/tsc) now runs with a scrubbed environment allowlist, so provider
+  keys and other secrets in the process environment are never exposed to it.
+- **Correspondent-tainted sessions can't read the financial ledger:** the read-only
+  `accounting` / `x402_invoices` verbs are now name-gated with the money verbs, so a
+  session tainted by a third-party correspondent can no longer read treasury balances,
+  income, or invoice history.
+
 ## [0.8.1] — 2026-07-21
 
 ### 2026-07-20 — Reliability & honesty fixes (live battle-test hardening)

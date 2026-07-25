@@ -94,6 +94,8 @@ async def _run_discord(token_opt: Optional[str], verbose: bool):
     install_surface_bus(container)
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     from surfaces.discord.harness import build_discord_harness

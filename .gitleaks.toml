@@ -24,6 +24,9 @@ paths = [
     '''tests/unit/core/test_env_key_backfill\.py''',
     '''tests/unit/core/test_redaction_predicate\.py''',
     '''tests/config/test_agent_server_config_split\.py''',
+    '''tests/unit/core/test_security_logging_filter\.py''',
+    '''tests/unit/surfaces/test_error_notices\.py''',
+    '''tests/unit/tools/oauth/test_oauth_manager\.py''',
 ]
 regexes = [
     # public on-chain token contract address (public by definition, not a secret)

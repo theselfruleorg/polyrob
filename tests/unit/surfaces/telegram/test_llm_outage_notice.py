@@ -8,10 +8,22 @@ an owner-facing chat-surface turn dies of total LLM-provider failure,
 originating surface — kill-switch ``LLM_OUTAGE_NOTICE`` (default ON), 30-min
 per-surface+chat cooldown, and structurally never for goal/cron runs (those
 call ``run_session`` directly, bypassing this seam).
+
+T1.2 (2026-07-22): the delivered notice is now OUTAGE_NOTICE_TEXT PLUS a
+reason-specific phrase from ``core.surfaces.error_notices`` (see
+``test_error_notices.py`` for the phrase truth-table). Every test below whose
+failure scenario classifies as an outage-class ``FailoverReason`` necessarily
+gets that phrase appended -- there is no path where the notice fires without
+one, since ``looks_like_llm_outage`` and ``error_notices.notice_for`` are
+gated on the identical 3-reason set from the shared ``classify_text`` SSOT.
+The three assertions updated below only ever asserted the OLD bare-text
+contract; they are updated here to the new contract, not weakened.
 """
 import pytest
 
+from core.error_classifier import FailoverReason
 from core.surfaces import llm_outage_notice
+from core.surfaces.error_notices import notice_for
 from core.surfaces.llm_outage_notice import (
     LLM_OUTAGE_COOLDOWN_SEC,
     OUTAGE_NOTICE_TEXT,
@@ -20,6 +32,13 @@ from core.surfaces.llm_outage_notice import (
     should_send_llm_outage_notice,
 )
 from surfaces.telegram import harness
+
+#: The two phrases exercised by this file's existing fixtures (EXHAUSTED_STATUS
+#: classifies as PROVIDER_EXHAUSTED; the "Error code: 402" ledger text below
+#: classifies as CREDIT_DEATH). Sourced from error_notices, not re-typed, so
+#: this file can never drift from the phrase SSOT.
+PROVIDER_EXHAUSTED_NOTICE = f"{OUTAGE_NOTICE_TEXT}\n{notice_for(FailoverReason.PROVIDER_EXHAUSTED)}"
+CREDIT_DEATH_NOTICE = f"{OUTAGE_NOTICE_TEXT}\n{notice_for(FailoverReason.CREDIT_DEATH)}"
 
 
 @pytest.fixture(autouse=True)
@@ -69,7 +88,7 @@ async def test_exhaustion_failure_sends_exactly_one_static_notice():
     """A chat-surface turn ending in provider exhaustion produces exactly one
     outbound static notice on the originating surface."""
     sent = await _drive(_FakeAgent())
-    assert sent == [OUTAGE_NOTICE_TEXT]
+    assert sent == [PROVIDER_EXHAUSTED_NOTICE]
     # Clearly NOT an agent reply: ⚠️-prefixed and self-labelled.
     assert sent[0].startswith("⚠️")
     assert "not a reply" in sent[0]
@@ -81,7 +100,7 @@ async def test_second_failure_within_cooldown_sends_nothing():
     key = "agent:main:telegram:dm:42:rob"
     first = await _drive(_FakeAgent(), notice_key=key)
     second = await _drive(_FakeAgent(), notice_key=key)
-    assert first == [OUTAGE_NOTICE_TEXT]
+    assert first == [PROVIDER_EXHAUSTED_NOTICE]
     assert second == []
 
 
@@ -150,7 +169,22 @@ async def test_unknown_error_status_classified_via_terminal_action_result():
         "This request requires more credits. Session halted."
     )
     sent = await _drive(_FakeAgent(status="Session failed: Unknown error", orch=orch))
-    assert sent == [OUTAGE_NOTICE_TEXT]
+    assert sent == [CREDIT_DEATH_NOTICE]
+
+
+@pytest.mark.asyncio
+async def test_notice_includes_reason_phrase_for_402_shaped_status():
+    """T1.2: the delivered notice is OUTAGE_NOTICE_TEXT + the CREDIT_DEATH
+    reason phrase for a 402-shaped terminal status, classified directly from
+    ``status`` (no ledger fallback needed here)."""
+    status = "Session failed: OpenRouter generation failed: Error code: 402 - insufficient credits"
+    sent = await _drive(_FakeAgent(status=status))
+    assert sent == [CREDIT_DEATH_NOTICE]
+    assert sent[0] == (
+        OUTAGE_NOTICE_TEXT + "\n" +
+        "The model provider reports the account is out of credits — top up or "
+        "switch provider, then send another message."
+    )
 
 
 @pytest.mark.asyncio
@@ -185,3 +219,14 @@ def test_cooldown_window_expires():
     assert should_send_llm_outage_notice("agent:main:slack:dm:7:rob", now=1000.0 + 100)
     # The original chat frees up after the window.
     assert should_send_llm_outage_notice(key, now=1000.0 + LLM_OUTAGE_COOLDOWN_SEC + 1)
+
+
+def test_looks_like_llm_outage_delegates_to_classifier():
+    from core.surfaces.llm_outage_notice import looks_like_llm_outage
+    # credit-death shape and exhaustion shape both classify as outage via the SSOT
+    assert looks_like_llm_outage("Session failed: ... Error code: 402 ...") is True
+    assert looks_like_llm_outage("All LLM providers failed. Tried: [openrouter]") is True
+    assert looks_like_llm_outage("done: wrote report.md") is False
+    # Proof it delegates: the module no longer defines its own _EXHAUSTION_MARKERS.
+    import core.surfaces.llm_outage_notice as m
+    assert not hasattr(m, "_EXHAUSTION_MARKERS")

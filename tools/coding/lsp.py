@@ -34,6 +34,19 @@ _TSC_ERROR_RE = re.compile(
 )
 
 
+# Scrubbed subprocess env for the external checker: an allowlist mirroring
+# tools/coding/snapshot.py::_env / tools/git/tool.py — PATH/HOME/LANG/LC_ALL only.
+# A static checker (pyright/tsc) needs none of our secrets, and passing the full
+# os.environ would hand every ``*_API_KEY``/token to a checker plugin/config
+# living in the workspace. Allowlist, not blocklist, so a new secret env var is
+# excluded by default.
+_CHECKER_ENV_KEYS = ("PATH", "HOME", "LANG", "LC_ALL")
+
+
+def _checker_env() -> dict:
+    return {k: os.environ[k] for k in _CHECKER_ENV_KEYS if k in os.environ}
+
+
 def default_runner(cmd, cwd, timeout_sec):
     """Default ``runner``: invoke an external checker with a wall-clock timeout.
 
@@ -41,10 +54,12 @@ def default_runner(cmd, cwd, timeout_sec):
     errors exits nonzero by design, that is not a runner failure. Referenced
     as a module attribute (not bound as a parameter default) so tests can
     monkeypatch ``tools.coding.lsp.default_runner`` and have every call inside
-    ``diagnose_file`` that doesn't pass its own ``runner`` pick it up.
+    ``diagnose_file`` that doesn't pass its own ``runner`` pick it up. Runs with
+    a scrubbed env (:func:`_checker_env`) so secrets never reach the checker.
     """
     return subprocess.run(
         cmd, cwd=cwd, timeout=timeout_sec, capture_output=True, text=True, check=False,
+        env=_checker_env(),
     )
 
 

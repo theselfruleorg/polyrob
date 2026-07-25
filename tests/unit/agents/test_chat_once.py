@@ -289,6 +289,57 @@ def test_chat_once_done_path_uses_final_result():
     assert reply == "the done answer"
 
 
+def test_chat_once_returns_run_budget_halt_text_not_stale_extraction():
+    # Final-review fix (T1.1): a RUN_BUDGET_USD halt must surface its own
+    # honest text, not the extractor's fallback (which would return the
+    # PREVIOUS turn's reply here, proving the bug if this assertion fails).
+    ta = _bare_taskagent()
+    orch = MagicMock()
+    orch.agents = {"a1": _agent_with_reply("stale reply from a previous turn")}
+    ta._registry.get.return_value = orch
+    halt_text = (
+        "Session failed: run_budget_exhausted: session provider spend "
+        "$0.25 reached RUN_BUDGET_USD $0.10; halting before the next step "
+        "(raise the budget or start a new session to continue)"
+    )
+
+    async def fake_create_session(user_id, request, **kw):
+        return {"id": "sess-1"}
+
+    async def fake_run_session(user_id, session_id):
+        return halt_text
+
+    ta.create_session = fake_create_session
+    ta.run_session = fake_run_session
+    ta.session_manager.get_session_info.return_value = {"id": "sess-1"}
+
+    reply = asyncio.run(ta.chat_once("u1", "hi", chat_id="c1"))
+    assert reply == halt_text
+    assert reply != "stale reply from a previous turn"
+
+
+def test_chat_once_extracts_reply_for_normal_completion_not_the_generic_string():
+    # Non-budget-halt failures/completions are untouched: chat_once still
+    # falls through to _extract_chat_reply (widening is out of scope here).
+    ta = _bare_taskagent()
+    orch = MagicMock()
+    orch.agents = {"a1": _agent_with_reply("the real reply")}
+    ta._registry.get.return_value = orch
+
+    async def fake_create_session(user_id, request, **kw):
+        return {"id": "sess-1"}
+
+    async def fake_run_session(user_id, session_id):
+        return "Session failed: some other unrelated error"
+
+    ta.create_session = fake_create_session
+    ta.run_session = fake_run_session
+    ta.session_manager.get_session_info.return_value = {"id": "sess-1"}
+
+    reply = asyncio.run(ta.chat_once("u1", "hi", chat_id="c1"))
+    assert reply == "the real reply"
+
+
 def test_chat_once_concurrent_same_key_serializes_no_duplicate_session():
     """Two concurrent turns for the SAME (user_id, chat_id) must not both create a
     session — the per-chat-key lock serializes them so the second reuses the first."""

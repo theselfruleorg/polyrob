@@ -5,7 +5,7 @@ import json
 import socket
 import uuid
 import time
-from typing import Dict, Any, Optional, List, Union, AsyncIterator, Callable
+from typing import Dict, Any, Optional, List, Union, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 import aiohttp
@@ -169,32 +169,107 @@ class MCPNotification(MCPMessage):
     id: Optional[Union[str, int]] = None  # Notifications don't have IDs
 
 
+class _MCPUnauthorized(Exception):
+    """Internal signal only — a send attempt got HTTP 401.
+
+    Used exclusively by :meth:`MCPTransport._send_with_auth_retry` to trigger
+    one refresh+retry cycle; it never escapes that method. It always carries
+    the SAME :class:`~core.exceptions.MCPProtocolError` the transport would
+    have raised without the retry helper, so a caller with no
+    ``on_auth_refresh`` configured (the default) sees byte-identical error
+    text to pre-401-retry behaviour.
+    """
+
+    def __init__(self, protocol_error: MCPProtocolError) -> None:
+        super().__init__(str(protocol_error))
+        self._protocol_error = protocol_error
+
+    def as_protocol_error(self) -> MCPProtocolError:
+        return self._protocol_error
+
+
 class MCPTransport:
     """Base transport for MCP communication."""
 
-    def __init__(self, timeout: int = 180):
+    def __init__(
+        self,
+        timeout: int = 180,
+        on_auth_refresh: Optional[Callable[[], Awaitable[Optional[str]]]] = None,
+    ):
         self.timeout = timeout
         self.logger = get_component_logger(self.__class__.__name__)
         self._closed = False
+        # T2.4: optional 401-retry-once callback. None (the default, and the
+        # only value every non-OAuth call site ever passes) preserves legacy
+        # behaviour byte-for-byte — see _send_with_auth_retry.
+        self._on_auth_refresh = on_auth_refresh
         # Log timeout for debugging
         self.logger.info(f"🔧 {self.__class__.__name__} initialized with {timeout}s timeout")
-    
+
     async def send_message(self, message: MCPMessage) -> None:
         """Send a message through the transport."""
         raise NotImplementedError
-    
+
     async def receive_message(self) -> Optional[MCPMessage]:
         """Receive a message from the transport."""
         raise NotImplementedError
-    
+
     async def close(self) -> None:
         """Close the transport."""
         self._closed = True
-    
+
     @property
     def is_closed(self) -> bool:
         """Check if transport is closed."""
         return self._closed
+
+    async def _send_with_auth_retry(self, do_send: Callable[[], Awaitable[None]]) -> None:
+        """Run ``do_send()`` once; on a 401 (signalled via ``_MCPUnauthorized``),
+        refresh the Authorization header exactly once and retry exactly once.
+
+        - No ``on_auth_refresh`` configured (the default) → the 401 is
+          converted to its normal :class:`MCPProtocolError` immediately —
+          byte-identical to a transport with no retry support at all.
+        - ``on_auth_refresh`` configured → it is awaited once. On success, the
+          new header value is applied to both ``self.headers`` (read by every
+          transport's per-request header merge) and, if present,
+          ``self.session.headers`` (aiohttp bakes default headers into the
+          session at ``connect()`` time for the streamable transport, which
+          builds no per-request Authorization header) — then ``do_send()`` is
+          retried exactly once. A second 401, or a raising/no-op refresh,
+          surfaces the original 401's :class:`MCPProtocolError`.
+
+        Any exception other than ``_MCPUnauthorized`` propagates unchanged —
+        this helper only ever intercepts 401s.
+        """
+        try:
+            await do_send()
+            return
+        except _MCPUnauthorized as first:
+            if self._on_auth_refresh is None:
+                raise first.as_protocol_error()
+            self.logger.warning(
+                f"{self.__class__.__name__}: got 401, refreshing auth and retrying once"
+            )
+            try:
+                new_auth = await self._on_auth_refresh()
+            except Exception as refresh_exc:
+                self.logger.error(f"MCP auth refresh failed: {refresh_exc}")
+                raise first.as_protocol_error()
+            if new_auth:
+                headers = getattr(self, "headers", None)
+                if headers is not None:
+                    headers["Authorization"] = new_auth
+                session = getattr(self, "session", None)
+                if session is not None:
+                    try:
+                        session.headers["Authorization"] = new_auth
+                    except Exception:
+                        pass
+            try:
+                await do_send()
+            except _MCPUnauthorized as second:
+                raise second.as_protocol_error()
 
 
 class MCPStdioTransport(MCPTransport):
@@ -522,9 +597,10 @@ class MCPSSETransport(MCPTransport):
         timeout: int = 180,
         message_endpoint: Optional[str] = None,  # FIX #7: Explicit POST endpoint
         allow_http: bool = False,  # SSRF: only relax HTTPS for local dev
-        validate_ssrf: bool = False  # SSRF: pin+validate at connect (user servers)
+        validate_ssrf: bool = False,  # SSRF: pin+validate at connect (user servers)
+        on_auth_refresh: Optional[Callable[[], Awaitable[Optional[str]]]] = None,  # T2.4: 401-retry-once
     ):
-        super().__init__(timeout)
+        super().__init__(timeout, on_auth_refresh=on_auth_refresh)
         self.url = url
         self.headers = headers or {}
         self.message_endpoint = message_endpoint  # User-provided or auto-derived
@@ -706,25 +782,33 @@ class MCPSSETransport(MCPTransport):
                 post_url = f"{post_url}{separator}sessionId={self._session_id}"
             
             self.logger.debug(f"Sending message to POST endpoint: {post_url}")
-            
+
             # Send via POST with proper headers
             # SECURITY: don't follow redirects (would bypass the pinned connector).
-            async with self.session.post(
-                post_url,
-                json=message_dict,
-                headers={**self.headers, 'Content-Type': 'application/json'},
-                allow_redirects=False
-            ) as response:
-                if response.status not in (200, 202, 204):
-                    response_text = await response.text()
-                    self.logger.error(
-                        f"Failed to send message - Status: {response.status}, "
-                        f"Body: {response_text[:200]}"
-                    )
-                    raise MCPProtocolError(
-                        f"Failed to send message, status: {response.status}, body: {response_text[:100]}"
-                    )
-            
+            async def _attempt() -> None:
+                async with self.session.post(
+                    post_url,
+                    json=message_dict,
+                    headers={**self.headers, 'Content-Type': 'application/json'},
+                    allow_redirects=False
+                ) as response:
+                    if response.status == 401:
+                        response_text = await response.text()
+                        raise _MCPUnauthorized(MCPProtocolError(
+                            f"Failed to send message, status: 401, body: {response_text[:100]}"
+                        ))
+                    if response.status not in (200, 202, 204):
+                        response_text = await response.text()
+                        self.logger.error(
+                            f"Failed to send message - Status: {response.status}, "
+                            f"Body: {response_text[:200]}"
+                        )
+                        raise MCPProtocolError(
+                            f"Failed to send message, status: {response.status}, body: {response_text[:100]}"
+                        )
+
+            await self._send_with_auth_retry(_attempt)
+
             self.logger.debug(f"✅ Sent MCP message to {post_url}: {message_dict.get('method', 'response')}")
             
         except aiohttp.ClientError as e:
@@ -777,8 +861,16 @@ class MCPSSETransport(MCPTransport):
 class MCPHTTPTransport(MCPTransport):
     """HTTP JSON-RPC transport for MCP (request-response, no streaming)."""
 
-    def __init__(self, url: str, headers: Optional[Dict[str, str]] = None, timeout: int = 180, allow_http: bool = False, validate_ssrf: bool = False):
-        super().__init__(timeout)
+    def __init__(
+        self,
+        url: str,
+        headers: Optional[Dict[str, str]] = None,
+        timeout: int = 180,
+        allow_http: bool = False,
+        validate_ssrf: bool = False,
+        on_auth_refresh: Optional[Callable[[], Awaitable[Optional[str]]]] = None,  # T2.4: 401-retry-once
+    ):
+        super().__init__(timeout, on_auth_refresh=on_auth_refresh)
         self.url = url
         self.headers = headers or {}
         self.allow_http = allow_http  # SSRF: only relax HTTPS for local dev
@@ -824,36 +916,44 @@ class MCPHTTPTransport(MCPTransport):
                     message_dict["params"] = message.params
             
             self.logger.debug(f"📤 HTTP POST {message_dict.get('method', 'response')}")
-            
+
             # Send via POST and get immediate response
             # SECURITY: don't follow redirects (would bypass the pinned connector).
-            async with self.session.post(
-                self.url,
-                json=message_dict,
-                headers={**self.headers, 'Content-Type': 'application/json'},
-                allow_redirects=False
-            ) as response:
-                if response.status not in (200, 202):
-                    response_text = await response.text()
-                    self.logger.error(
-                        f"HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
+            async def _attempt() -> None:
+                async with self.session.post(
+                    self.url,
+                    json=message_dict,
+                    headers={**self.headers, 'Content-Type': 'application/json'},
+                    allow_redirects=False
+                ) as response:
+                    if response.status == 401:
+                        response_text = await response.text()
+                        raise _MCPUnauthorized(MCPProtocolError(
+                            f"HTTP failed, status: 401, body: {response_text[:100]}"
+                        ))
+                    if response.status not in (200, 202):
+                        response_text = await response.text()
+                        self.logger.error(
+                            f"HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
+                        )
+                        raise MCPProtocolError(
+                            f"HTTP failed, status: {response.status}, body: {response_text[:100]}"
+                        )
+
+                    # Parse and queue response
+                    response_data = await response.json()
+                    response_msg = MCPResponse(
+                        id=response_data.get("id"),
+                        result=response_data.get("result"),
+                        error=response_data.get("error")
                     )
-                    raise MCPProtocolError(
-                        f"HTTP failed, status: {response.status}, body: {response_text[:100]}"
-                    )
-                
-                # Parse and queue response
-                response_data = await response.json()
-                response_msg = MCPResponse(
-                    id=response_data.get("id"),
-                    result=response_data.get("result"),
-                    error=response_data.get("error")
-                )
-                
-                # Queue the response for receive_message to pick up
-                await self._message_queue.put(response_msg)
-                self.logger.debug(f"📥 HTTP response queued")
-            
+
+                    # Queue the response for receive_message to pick up
+                    await self._message_queue.put(response_msg)
+                    self.logger.debug(f"📥 HTTP response queued")
+
+            await self._send_with_auth_retry(_attempt)
+
         except aiohttp.ClientError as e:
             self.logger.error(f"Network error in HTTP transport: {e}")
             raise MCPProtocolError(f"Network error: {e}")
@@ -900,9 +1000,10 @@ class MCPStreamableHTTPTransport(MCPTransport):
         headers: Optional[Dict[str, str]] = None,
         timeout: int = 180,
         allow_http: bool = False,  # SSRF: only relax HTTPS for local dev
-        validate_ssrf: bool = False  # SSRF: pin+validate at connect (user servers)
+        validate_ssrf: bool = False,  # SSRF: pin+validate at connect (user servers)
+        on_auth_refresh: Optional[Callable[[], Awaitable[Optional[str]]]] = None,  # T2.4: 401-retry-once
     ):
-        super().__init__(timeout)
+        super().__init__(timeout, on_auth_refresh=on_auth_refresh)
         self.url = url
         self.headers = headers or {}
         self.allow_http = allow_http
@@ -983,57 +1084,71 @@ class MCPStreamableHTTPTransport(MCPTransport):
                     message_dict["error"] = message.error
             
             self.logger.debug(f"📤 Streamable POST {message_dict.get('method', 'response')}")
-            
+
             # Send POST and read SSE response
             # SECURITY: don't follow redirects (would bypass the pinned connector).
-            async with self.session.post(self.url, json=message_dict, headers=request_headers, allow_redirects=False) as response:
-                # Capture session ID from response headers (servers send it on initialize)
-                if 'mcp-session-id' in response.headers:
-                    self._session_id = response.headers['mcp-session-id']
-                    self.logger.info(f"📋 MCP Session ID captured: {self._session_id[:20]}...")
-                
-                if response.status not in (200, 202):
-                    response_text = await response.text()
-                    self.logger.error(
-                        f"Streamable HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
-                    )
-                    raise MCPProtocolError(
-                        f"Streamable HTTP failed, status: {response.status}"
-                    )
-                
-                # Read response as SSE stream
-                content_type = response.headers.get('Content-Type', '')
-                
-                if 'text/event-stream' in content_type:
-                    # Parse SSE response - may have multiple events
-                    async for line in response.content:
-                        line_str = line.decode('utf-8').strip()
-                        
-                        if line_str.startswith('data: '):
-                            data = line_str[6:]  # Remove 'data: ' prefix
-                            try:
-                                response_data = json.loads(data)
-                                response_msg = MCPResponse(
-                                    id=response_data.get("id"),
-                                    result=response_data.get("result"),
-                                    error=response_data.get("error")
-                                )
-                                await self._message_queue.put(response_msg)
-                                self.logger.debug(f"📥 Streamable response queued")
-                                break  # Got our response
-                            except json.JSONDecodeError as e:
-                                self.logger.warning(f"Invalid JSON in SSE data: {e}")
-                else:
-                    # Plain JSON response
-                    response_data = await response.json()
-                    response_msg = MCPResponse(
-                        id=response_data.get("id"),
-                        result=response_data.get("result"),
-                        error=response_data.get("error")
-                    )
-                    await self._message_queue.put(response_msg)
-                    self.logger.debug(f"📥 HTTP response queued")
-            
+            async def _attempt() -> None:
+                attempt_headers = dict(request_headers)
+                if self._session_id:
+                    attempt_headers['mcp-session-id'] = self._session_id
+                async with self.session.post(self.url, json=message_dict, headers=attempt_headers, allow_redirects=False) as response:
+                    # Capture session ID from response headers (servers send it on initialize)
+                    if 'mcp-session-id' in response.headers:
+                        self._session_id = response.headers['mcp-session-id']
+                        self.logger.info(f"📋 MCP Session ID captured: {self._session_id[:20]}...")
+
+                    if response.status == 401:
+                        response_text = await response.text()
+                        self.logger.error(
+                            f"Streamable HTTP failed - Status: 401, Body: {response_text[:200]}"
+                        )
+                        raise _MCPUnauthorized(MCPProtocolError(
+                            f"Streamable HTTP failed, status: 401"
+                        ))
+                    if response.status not in (200, 202):
+                        response_text = await response.text()
+                        self.logger.error(
+                            f"Streamable HTTP failed - Status: {response.status}, Body: {response_text[:200]}"
+                        )
+                        raise MCPProtocolError(
+                            f"Streamable HTTP failed, status: {response.status}"
+                        )
+
+                    # Read response as SSE stream
+                    content_type = response.headers.get('Content-Type', '')
+
+                    if 'text/event-stream' in content_type:
+                        # Parse SSE response - may have multiple events
+                        async for line in response.content:
+                            line_str = line.decode('utf-8').strip()
+
+                            if line_str.startswith('data: '):
+                                data = line_str[6:]  # Remove 'data: ' prefix
+                                try:
+                                    response_data = json.loads(data)
+                                    response_msg = MCPResponse(
+                                        id=response_data.get("id"),
+                                        result=response_data.get("result"),
+                                        error=response_data.get("error")
+                                    )
+                                    await self._message_queue.put(response_msg)
+                                    self.logger.debug(f"📥 Streamable response queued")
+                                    break  # Got our response
+                                except json.JSONDecodeError as e:
+                                    self.logger.warning(f"Invalid JSON in SSE data: {e}")
+                    else:
+                        # Plain JSON response
+                        response_data = await response.json()
+                        response_msg = MCPResponse(
+                            id=response_data.get("id"),
+                            result=response_data.get("result"),
+                            error=response_data.get("error")
+                        )
+                        await self._message_queue.put(response_msg)
+                        self.logger.debug(f"📥 HTTP response queued")
+
+            await self._send_with_auth_retry(_attempt)
+
         except aiohttp.ClientError as e:
             self.logger.error(f"Network error in Streamable HTTP transport: {e}")
             raise MCPProtocolError(f"Network error: {e}")

@@ -333,29 +333,41 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         return ranked[:limit]
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
-                     limit: int = 5, sort: str = None) -> str:
+                     limit: int = 5, sort: str = None, before_id: int = None,
+                     with_ids: bool = False) -> str:
         if self._anon_blocked(user_id):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
         norm = self._norm_user(user_id)
-        kw_rows = self._keyword_rows(query, norm_user=norm, limit=limit, sort=sort)
+        kw_rows = self._keyword_rows(query, norm_user=norm, limit=limit, sort=sort,
+                                     before_id=before_id)
         kw_list = [r["content"] for r in kw_rows]
         # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
         # aren't in the keyword row set — they render bare (fail-open).
         ts_map = {r["content"]: r["ts"] for r in kw_rows if r.get("ts")}
+        # T2.6: rowid, when known (with_ids), for the SAME "keyword-only rows have
+        # it, vector-only hits don't" reason as ts_map — an RRF-merged content
+        # string has no single stable rowid, so a vector-only line renders without
+        # an `(id N)` suffix (honest: we don't know its id) rather than a guessed one.
+        rowid_map = ({r["content"]: r["rowid"] for r in kw_rows} if with_ids else {})
+        def _line(c: str) -> str:
+            return self._recall_line(c, ts_map.get(c), rowid_map.get(c))
         # Vector half only augments *discover* (a real query); never browse, never on
-        # explicit sort (caller asked for recency, not relevance), never when degraded.
+        # explicit sort (caller asked for recency, not relevance), never when degraded,
+        # and never when paginating (before_id) — an unfiltered vector KNN pass has no
+        # rowid-cursor concept, so mixing it in would silently re-surface rows already
+        # seen on an earlier page. Cursored pagination is keyword-only, like `sort`.
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
-        if not self._vec_ok or not terms or sort:
-            return "\n".join(self._recall_line(c, ts_map.get(c)) for c in kw_list)
+        if before_id is not None or not self._vec_ok or not terms or sort:
+            return "\n".join(_line(c) for c in kw_list)
         try:
             vec = await asyncio.get_event_loop().run_in_executor(
                 None, self._vector_contents, query, norm, limit)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: vector search skipped: %s", e)
-            return "\n".join(self._recall_line(c, ts_map.get(c)) for c in kw_list)
+            return "\n".join(_line(c) for c in kw_list)
         merged = self._rrf_merge([kw_list, vec], limit)
-        return "\n".join(self._recall_line(c, ts_map.get(c)) for c in merged)
+        return "\n".join(_line(c) for c in merged)
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
         # Keyword half computed DIRECTLY (not via super().prefetch — that calls

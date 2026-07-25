@@ -3,9 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from agents.task.goals.board import GoalBoard
+from agents.task.goals.board import GoalBoard, STATUS_BLOCKED, STATUS_WAITING
 from agents.task.goals.dispatcher import GoalDispatcher
-from agents.task.goals.planner import build_planner_prompt, list_deliverables
+from agents.task.goals.planner import (
+    _is_live_waiting_goal, build_planner_prompt, list_deliverables,
+)
 
 
 @pytest.fixture
@@ -85,6 +87,79 @@ def test_prompt_surfaces_objective_success_criteria(board, tmp_path):
                                payload={"success_criteria": "500 followers by Q3"})
     p = build_planner_prompt(board, "rob", None)
     assert "500 followers by Q3" in p
+
+
+# --- T2.1 Task 4: planner sequencing guidance -------------------------------
+
+def test_prompt_encourages_depends_on_sequencing(board, tmp_path):
+    o, done, blocked, d = _seed(board, tmp_path)
+    p = build_planner_prompt(board, "rob", d)
+    assert "depends_on" in p
+    assert "mega-goal" in p
+
+
+def test_prompt_notes_waiting_goals_excluded_from_ready_ceiling(board, tmp_path):
+    o, done, blocked, d = _seed(board, tmp_path)
+    p = build_planner_prompt(board, "rob", d)
+    low = p.lower()
+    assert "5 ready goals" in low
+    assert "does not count toward this ceiling" in low
+
+
+def test_prompt_lists_waiting_goals_with_their_dependency(board, tmp_path):
+    o, done, blocked, d = _seed(board, tmp_path)
+    dep = board.create(user_id="rob", title="prerequisite for waiting goal")
+    board.create(user_id="rob", title="a goal waiting on a prerequisite", depends_on=[dep.id])
+    p = build_planner_prompt(board, "rob", d)
+    assert "WAITING ON DEPENDENCIES" in p
+    assert "a goal waiting on a prerequisite" in p
+
+
+# --- T2.1 final-review Fix 4: diamond false-negative ------------------------
+
+def test_is_live_waiting_goal_true_for_fully_live_diamond(board):
+    """A shared prerequisite reached via two branches must not be misread as
+    a cycle. Cycles are impossible at write time (add_dependencies rejects
+    them), so `dep_id in _visited` on a still-in-progress live traversal can
+    only mean the shared node was already proven live by the branch that hit
+    it first — the pre-fix `return False` on revisit was a false negative
+    that could sink an otherwise fully-live diamond's leaf.
+
+    Shape: e (ready) <- d (waiting on e) <- {b1, b2} (both waiting on d) <-
+    leaf (waiting on b1 AND b2). d is only reached via a `waiting` edge (so
+    it gets memoized in `_visited`) from BOTH b1 and b2, reproducing the
+    revisit exactly.
+    """
+    e = board.create(user_id="u1", title="live root")  # ready — genuinely live
+    d = board.create(user_id="u1", title="shared waiting prereq", depends_on=[e.id])
+    assert d.status == STATUS_WAITING
+    # force=True: "branch1"/"branch2" trigram-overlap enough to trip the
+    # near-duplicate dedup guard — irrelevant to what this test exercises.
+    b1 = board.create(user_id="u1", title="branch1", depends_on=[d.id], force=True)
+    b2 = board.create(user_id="u1", title="branch2", depends_on=[d.id], force=True)
+    leaf = board.create(user_id="u1", title="leaf", depends_on=[b1.id, b2.id])
+    assert leaf.status == STATUS_WAITING
+
+    assert _is_live_waiting_goal(board, leaf.id) is True
+
+
+def test_is_live_waiting_goal_false_when_diamond_shared_prereq_is_dead(board):
+    """Sanity check on the OTHER side: a genuinely dead shared prerequisite
+    must still read as dead through a diamond (the fix must not turn EVERY
+    revisit into a false positive)."""
+    dead = board.create(user_id="u1", title="dead root", max_retries=1)
+    board.claim(dead.id, "w", ttl_seconds=900)
+    board.record_failure(dead.id, error="boom")  # trips breaker -> blocked
+    assert board.get(dead.id).status == STATUS_BLOCKED
+
+    d = board.create(user_id="u1", title="shared waiting prereq", depends_on=[dead.id])
+    assert d.status == STATUS_BLOCKED  # creation-time terminal-bad-dep closure
+    b1 = board.create(user_id="u1", title="branch1", depends_on=[d.id], force=True)
+    b2 = board.create(user_id="u1", title="branch2", depends_on=[d.id], force=True)
+    leaf = board.create(user_id="u1", title="leaf", depends_on=[b1.id, b2.id])
+    assert leaf.status == STATUS_WAITING
+
+    assert _is_live_waiting_goal(board, leaf.id) is False
 
 
 def test_list_deliverables(tmp_path):

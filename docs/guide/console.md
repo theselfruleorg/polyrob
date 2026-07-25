@@ -115,8 +115,10 @@ and `polyrob owner pending`); the export twin is
 
 ### 4c. Finance (`/finance`)
 
-The agent's balance sheet over a trailing window: earned / spent (LLM +
-wallet) / pending x402 invoices / net, plus display-only policy caps.
+The agent's balance sheet over a trailing window, shown as **two blocks that
+are never summed**: **Treasury** (the agent's own money — income / spend /
+pending x402 invoices / net) and **Runtime cost** (the owner's LLM compute
+spend), plus display-only policy caps.
 `GET /api/webgate/ledger` reuses
 `modules.credits.unified_ledger.build_ledger` — the same core `polyrob
 finance` and the REPL `/finance` render, so the numbers can never disagree

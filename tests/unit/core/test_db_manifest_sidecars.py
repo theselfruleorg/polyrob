@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[3]
 EXPECTED_NEW = {
     "slack_dedup.db", "signal_dedup.db", "discord_dedup.db", "x_dedup.db",
     "wa_window.db", "group_allowlist.db", "conversations.db", "outbox.db",
-    "surface_state.db", "deployed_apps.db",
+    "surface_state.db", "deployed_apps.db", "dead_targets.db",
 }
 
 

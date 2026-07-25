@@ -240,6 +240,38 @@ async def test_list_is_tenant_scoped(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_status_filter_applied_before_limit(tmp_path):
+    """The status filter must run in SQL (before LIMIT), not in Python after it.
+    Otherwise, once a tenant has more invoices than `limit`, a `status=pending`
+    query can report "none" while older UNPAID pending invoices exist — the SQL
+    would have grabbed only the newest `limit` rows (all non-pending) and the
+    Python filter then discards them all."""
+    db = await _setup_db(tmp_path)
+    try:
+        old = await invoicing.create_payment_request(
+            user_id="rob", session_id="s1", amount_usd=1.0, purpose="old pending", db=db)
+        new = await invoicing.create_payment_request(
+            user_id="rob", session_id="s2", amount_usd=2.0, purpose="new settled", db=db)
+        # Force deterministic ordering + make the NEWEST row non-pending.
+        await db.execute(
+            "UPDATE x402_payment_requests SET created_at = ? WHERE id = ?",
+            ("2026-01-01 00:00:01", old["request_id"]))
+        await db.execute(
+            "UPDATE x402_payment_requests SET created_at = ?, status = 'completed' WHERE id = ?",
+            ("2026-01-01 00:00:02", new["request_id"]))
+        # limit=1 grabs the newest row first; that row is 'completed', so a
+        # post-LIMIT Python filter would drop it and return [] — hiding the
+        # older still-pending invoice.
+        pending = await invoicing.list_payment_requests(
+            user_id="rob", status="pending", limit=1, db=db)
+        assert len(pending) == 1, "older pending invoice must survive the status+limit"
+        assert pending[0]["purpose"] == "old pending"
+        assert pending[0]["status"] == "pending"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
 async def test_list_tenant_match_does_not_wildcard_leak(tmp_path):
     """G-14: the tenant leg used `metadata LIKE '%"tenant_id": "<id>"%'` — SQLite
     LIKE treats `_`/`%` as wildcards, and real tenant ids contain underscores

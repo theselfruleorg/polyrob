@@ -221,6 +221,46 @@ GET  /api/mcp/available                   # List available MCP servers and their
 
 ---
 
+## MCP server (inbound)
+
+polyrob can also act as an MCP *server* itself, so an MCP client (Claude Desktop, Cursor) can connect to it as a tool provider. This is distinct from [MCP server management](#mcp-server-management) above, which is the *outbound* side — the agent connecting OUT to external MCP servers. It is **off by default** — enable with `MCP_SERVE_ENABLED=true` (see [../CONFIGURATION.md](../CONFIGURATION.md)).
+
+```
+POST /mcp   # JSON-RPC 2.0: initialize, tools/list, tools/call
+```
+
+Auth is the same `X-API-KEY` / `Authorization: Bearer <jwt>` / x402 policy as A2A. v1 is read-only and exposes five tenant-scoped tools:
+
+- `rob_usage_summary` — the caller's LLM usage (cost, credits, call count)
+- `rob_goals_list` — the caller's autonomy goals
+- `rob_goal_show` — one goal by id
+- `rob_conversations` — the caller's recent correspondent conversations
+- `rob_pending_approvals` — the caller's pending tool-approval requests
+
+```bash
+curl -X POST http://localhost:9000/mcp \
+  -H "X-API-KEY: rob_xxx..." \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc": "2.0", "method": "tools/list", "id": 1}'
+```
+
+To connect Claude Desktop or Cursor, point their HTTP MCP client config at `http://localhost:9000/mcp` with an `X-API-KEY` header carrying your polyrob API key:
+
+```json
+{
+  "mcpServers": {
+    "polyrob": {
+      "url": "http://localhost:9000/mcp",
+      "headers": { "X-API-KEY": "rob_xxx..." }
+    }
+  }
+}
+```
+
+(The exact field names in the client config vary by MCP client — the endpoint is a JSON-RPC-over-POST `/mcp`.)
+
+---
+
 ## OpenAI-compatible API
 
 polyrob exposes a drop-in OpenAI-style surface so existing OpenAI SDK clients can talk to it. It is **off by default** — enable with `OPENAI_COMPAT_API_ENABLED=true` (see [../CONFIGURATION.md](../CONFIGURATION.md)).

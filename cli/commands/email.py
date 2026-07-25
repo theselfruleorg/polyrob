@@ -95,6 +95,8 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
     # replies enqueue and NEVER send. Mirrors telegram.py: sync start(), async stop().
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     # Register the correspondent registry on the container so the dispatcher can resolve

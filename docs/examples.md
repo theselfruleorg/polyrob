@@ -557,6 +557,36 @@ jobs:
 
 ---
 
+### Expose polyrob to Claude Desktop / Cursor (MCP server)
+
+polyrob can act as an MCP *server* so an MCP client — Claude Desktop, Cursor, or any
+HTTP MCP client — can call it as a read-only tool provider. It's off by default:
+
+```bash
+MCP_SERVE_ENABLED=true
+polyrob serve            # REST + MCP server on http://localhost:9000
+```
+
+Point your MCP client's HTTP config at the `/mcp` endpoint with a polyrob API key
+(create one with `POST /api/auth/api-keys` — see [guide/api.md](guide/api.md)):
+
+```json
+{
+  "mcpServers": {
+    "polyrob": {
+      "url": "http://localhost:9000/mcp",
+      "headers": { "X-API-KEY": "rob_xxx..." }
+    }
+  }
+}
+```
+
+v1 exposes five read-only, tenant-scoped tools — `rob_usage_summary`, `rob_goals_list`,
+`rob_goal_show`, `rob_conversations`, `rob_pending_approvals` — over a JSON-RPC-over-POST
+`/mcp` endpoint. (The exact field names in the client config vary by MCP client.)
+
+---
+
 ## Advanced Workflows
 
 ### Multi-Agent Research
@@ -619,6 +649,59 @@ Start a project launch:
 8. Compile feedback into project plan
 "
 ```
+
+---
+
+## Cost control, goal dependencies & remote execution
+
+### Cap what a single run can spend
+
+Set a per-session dollar ceiling and a run stops **honestly** the moment its real
+provider cost reaches the cap — reported as a stopped run, never a fabricated "done":
+
+```bash
+RUN_BUDGET_USD=0.50 polyrob run "Research the top 20 vector databases and write a comparison"
+```
+
+The remaining budget is surfaced to the agent so it can prioritize; sub-agents share
+the parent run's budget.
+
+### Dependency-ordered goals
+
+The durable goal board lets one goal wait for others. Ask the agent to create goals
+with dependencies and it wires them through its `goal_create` tool (`depends_on`), so a
+dependent goal only becomes eligible once its prerequisites finish:
+
+```bash
+polyrob chat
+> Create three goals: (1) "Scrape competitor pricing pages", (2) "Normalize the
+> pricing data into a table", and (3) "Write the pricing comparison report" — make
+> goal 2 depend on goal 1, and goal 3 depend on goal 2.
+```
+
+The `polyrob goals create` CLI command sets title / body / priority / parent; the
+dependency *edges* are set through the agent's goal tool as above. Requires
+`GOALS_ENABLED=true` (on by default under `POLYROB_LOCAL`).
+
+### Run code on a remote host (ssh backend)
+
+Point code execution at a remote machine over your system `ssh` binary:
+
+```bash
+CODE_EXEC_ENABLED=true
+CODE_EXEC_BACKEND=ssh
+CODE_EXEC_SSH_HOST=build-box.internal
+CODE_EXEC_SSH_USER=agent
+CODE_EXEC_SSH_KEY=~/.ssh/agent_id_ed25519
+
+# The ssh backend is NOT a sandbox by default — agent code runs with the SSH user's
+# full privileges. On a server it is refused unless you attest the host is
+# hardened/disposable:
+CODE_EXEC_SSH_SANDBOXED=true
+```
+
+See [guide/security-model.md](guide/security-model.md) before enabling code execution
+anywhere shared.
 
 ---
 

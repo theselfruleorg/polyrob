@@ -598,14 +598,25 @@ mechanisms.**
 `docs/plans/2026-06-17-terminal-native-consolidation.md`):** closes the "built but not wired" gap so
 `rob` (the terminal-native agent) actually runs what the server runs. Three structural moves, all
 additive/seam-level:
-- **`POLYROB_LOCAL` local profile** (`agents/task/constants.py` `local_mode_enabled()` +
-  `_SAFE_LOCAL_FLAGS`): for the single-user CLI, the *safe* autonomy flags
-  (`SELF_WAKE`/`SKILLS_WRITABLE`/`SELF_CONTEXT_WRITABLE`/`BACKGROUND_REVIEW`/`GOALS`/`CURATOR`/
-  `INSIGHTS`/`CODING_TOOLS_ENABLED`/`SKILL_CATALOG_INCLUDE_ALL`/`KB_ENABLED`/`KB_AUTO_PREFETCH`/
-  `CONTEXT_REFERENCES_ENABLED`/`PROJECT_CONTEXT_AUTOLOAD`) default **ON as a
-  group** instead of OFF — without touching multi-tenant server defaults (server never sets
-  `POLYROB_LOCAL`). An explicit per-flag value still wins (only the default moves). `CODE_EXEC_ENABLED` and
-  sub-agent caps are deliberately excluded. Set by `build_cli_container` (`os.environ.setdefault`).
+- **`POLYROB_LOCAL` local profile — two buckets** (`core/config_policy/policy.py`
+  `local_mode_enabled()`): the single-user CLI profile is split into an INTERACTIVE bucket
+  (`_SAFE_LOCAL_FLAGS`) and an AUTONOMY bucket (`_AUTONOMY_LOCAL_FLAGS`). The **interactive** tools a
+  user drives (`CODING_TOOLS_ENABLED`/`GIT_TOOLS_ENABLED`/`KB_ENABLED`/`KB_AUTO_PREFETCH`/
+  `CONTEXT_REFERENCES_ENABLED`/`PROJECT_CONTEXT_AUTOLOAD`/`MESSAGE_TOOL_ENABLED`/`AGENT_STATUS_TOOL`/
+  `VERIFY_BEFORE_DONE`/`PREFS_TOOL_ENABLED`/`INVOICE_CARD_ENABLED`/`TOOL_PROGRESSIVE_DISCLOSURE`)
+  default **ON as a group** under `POLYROB_LOCAL`. The self-directed **autonomy** loops
+  (`SELF_WAKE`/`BACKGROUND_REVIEW`/`GOALS`/`GOAL_PLANNER`/`CURATOR`/`KNOWLEDGE_CURATOR`/`INSIGHTS`/
+  `EPISODIC_MEMORY`/`EPISODIC_DIGEST_INJECT`/`CONTINUITY_BRIDGE`/`SELF_EVOLUTION_TRANSPARENCY`/
+  `SKILLS_WRITABLE`/`SELF_CONTEXT_WRITABLE`/`OWNER_DOC_WRITABLE`/`DELIVERABLES_ATTACH`) default **OFF
+  for a new install** and require the `AUTONOMY_ENABLED` master (`autonomy_enabled()` /
+  `_autonomy_group_default` = `local_mode_enabled() AND autonomy_enabled()`), which itself defaults ON
+  only under `AUTONOMY_MODE=autonomous` (effective) or `AUTONOMY_POSTURE` owner-visible/full. So a
+  first-run local user is interactive-only until they opt into autonomy — a background agent never
+  starts scheduling goals or rewriting its own skills unasked. Multi-tenant server defaults are
+  untouched (server never sets `POLYROB_LOCAL` → both buckets off, byte-identical). An explicit
+  per-flag value still wins (only the default moves). `CODE_EXEC_ENABLED` and sub-agent caps are
+  deliberately excluded from both. `POLYROB_LOCAL` is set by `build_cli_container`
+  (`os.environ.setdefault`).
 - **Local vector RAG in the task agent** (`MEMORY_BACKEND=local_vector`): `LocalVectorMemoryProvider`
   (`modules/memory/local_vector_memory_provider.py`) does hybrid keyword+vector recall over a compact
   local sqlite-vec store in `memory.db` — Pinecone/Chroma were retired. `local_vector` is the

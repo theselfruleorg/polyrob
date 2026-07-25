@@ -14,6 +14,7 @@ from core.logging import get_component_logger
 from .config import MCPServerConfig, MCPServerType, resolve_environment_variables
 from .subscriptions import ResourceSubscriptionRegistry
 from .protocol import MCPClient, MCPStdioTransport, MCPSSETransport, MCPHTTPTransport, MCPStreamableHTTPTransport
+from .oauth_bridge import apply_oauth_headers, make_auth_refresh_callback, oauth_applies_to
 from utils.circuit_breaker import CircuitBreaker, get_circuit_breaker_registry, CircuitBreakerError
 
 
@@ -532,6 +533,26 @@ class MCPServerManager:
             # global servers (anysite/dev) keep legacy behavior.
             is_user_server = connection.name.startswith("user_") and "::" in connection.name
 
+            # T2.4: OAuth header injection (flag-gated, no-op unless this
+            # server's config carries an `auth` block — see
+            # tools/mcp/oauth_bridge.py module docstring). user_id: a
+            # user-registered connection name is `user_{user_id}::{server_name}`
+            # (the SAME parsing add_server's FIX #13 per-user-connection-limit
+            # check already does); the global-config path has no per-tenant
+            # identity at connect time, so it resolves to the instance-scoped
+            # "" bucket (documented, not an oversight).
+            oauth_user_id = (
+                connection.name.split("::")[0].replace("user_", "", 1)
+                if is_user_server else ""
+            )
+            resolved_headers = await apply_oauth_headers(
+                connection.config, oauth_user_id, connection.name
+            )
+            on_auth_refresh = (
+                make_auth_refresh_callback(oauth_user_id, connection.name)
+                if oauth_applies_to(connection.config) else None
+            )
+
             # Create transport based on server type
             if connection.config.type == MCPServerType.STDIO:
                 self.logger.debug(f"Creating STDIO transport for '{connection.name}'")
@@ -544,26 +565,29 @@ class MCPServerManager:
                 self.logger.debug(f"Creating SSE transport for '{connection.name}' at {connection.config.url}")
                 transport = MCPSSETransport(
                     url=connection.config.url,
-                    headers=connection.config.headers,
+                    headers=resolved_headers,
                     timeout=connection.config.timeout,
                     message_endpoint=getattr(connection.config, 'message_endpoint', None),  # FIX #7
-                    validate_ssrf=is_user_server
+                    validate_ssrf=is_user_server,
+                    on_auth_refresh=on_auth_refresh
                 )
             elif connection.config.type == MCPServerType.HTTP:
                 self.logger.debug(f"Creating HTTP JSON-RPC transport for '{connection.name}' at {connection.config.url}")
                 transport = MCPHTTPTransport(
                     url=connection.config.url,
-                    headers=connection.config.headers,
+                    headers=resolved_headers,
                     timeout=connection.config.timeout,
-                    validate_ssrf=is_user_server
+                    validate_ssrf=is_user_server,
+                    on_auth_refresh=on_auth_refresh
                 )
             elif connection.config.type == MCPServerType.STREAMABLE_HTTP:
                 self.logger.debug(f"Creating Streamable HTTP transport for '{connection.name}' at {connection.config.url}")
                 transport = MCPStreamableHTTPTransport(
                     url=connection.config.url,
-                    headers=connection.config.headers,
+                    headers=resolved_headers,
                     timeout=connection.config.timeout,
-                    validate_ssrf=is_user_server
+                    validate_ssrf=is_user_server,
+                    on_auth_refresh=on_auth_refresh
                 )
             else:
                 raise MCPConnectionError(f"Unsupported server type: {connection.config.type}")

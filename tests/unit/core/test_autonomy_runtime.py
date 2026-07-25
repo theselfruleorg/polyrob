@@ -357,6 +357,42 @@ async def test_start_autonomy_starts_settlement_watcher_when_enabled(monkeypatch
     assert watcher.stopped
 
 
+# --------------------------------------------------------------------------
+# 0.9.0 — AUTONOMY_ENABLED legibility: start_autonomy records the master state
+# as handles.autonomy_enabled and logs when off, but must NOT early-return — the
+# per-flag gates are authoritative, and the recovery sweeps + non-autonomy loops
+# (x402 settlement watcher, surface GC, quiet-release) still run regardless.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_autonomy_master_off_records_flag_and_does_not_gate_non_autonomy(monkeypatch):
+    for v in ("POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_ENABLED",
+              "AUTONOMY_POSTURE", "AUTONOMY_MODE"):
+        monkeypatch.delenv(v, raising=False)
+    watcher = _FakeTicker()
+    monkeypatch.setattr(ar, "_build_settlement_watcher", lambda ta: watcher)
+    monkeypatch.setattr(ar, "_x402_invoicing_enabled", lambda: True)
+    _disable_other_loops(monkeypatch)
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.01)
+    assert handles.autonomy_enabled is False   # master recorded as off
+    assert watcher.started                      # but a non-autonomy loop still ran
+    await handles.stop()
+    assert watcher.stopped
+
+
+@pytest.mark.asyncio
+async def test_autonomy_master_on_recorded_under_posture(monkeypatch):
+    for v in ("POLYROB_LOCAL", "ROB_LOCAL", "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("AUTONOMY_POSTURE", "full")
+    _disable_other_loops(monkeypatch)
+    monkeypatch.setattr(ar, "_x402_invoicing_enabled", lambda: False)
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    assert handles.autonomy_enabled is True
+    await handles.stop()
+
+
 @pytest.mark.asyncio
 async def test_start_autonomy_settlement_watcher_off_by_default(monkeypatch):
     monkeypatch.delenv("X402_INVOICE_ENABLED", raising=False)

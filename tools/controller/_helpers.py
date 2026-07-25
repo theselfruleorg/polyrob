@@ -11,6 +11,7 @@ Pure code-motion — bodies are verbatim.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict
 
@@ -104,6 +105,37 @@ def read_skill_resource_confined(skill_dir, rel_path: str, *, max_bytes: int = 2
     except OSError as e:
         return False, f"read failed: {e}"
     return True, wrap_untrusted("skill_resource", content)
+
+
+def build_session_search_hint(recalled: str, limit: int, sort: str = None) -> str:
+    """T2.6 (review fix): pagination hint from the `(id N)` tags a with_ids=True
+    provider result embeds (SqliteMemoryProvider/LocalVectorMemoryProvider). ''
+    when no tags are present (a legacy provider/test-double, or the KB
+    collection path, neither of which embed ids) or the page wasn't full —
+    "full page" is a heuristic (returned-id count >= the [1,20]-clamped limit),
+    not an exact "more rows exist" check.
+
+    The `before_id=<smallest id>` suggestion is advertised ONLY for
+    sort="newest" — the one lossless forward-pagination mode (rowid DESC, so
+    `rowid < before_id` is exactly "continue where this page stopped"). Proven
+    lossy for rank sort (the default): `before_id` narrows MATCH candidates
+    BEFORE ranking, so a page1 of rank-ordered ids like [2, 4] would suggest
+    before_id=2 and permanently strand any id (e.g. 3, 5) that ranked between
+    them but below the returned page — a real match silently unreachable. Rank
+    sort gets an honest "refine or switch to newest" nudge instead; "oldest"
+    gets nothing (its filter runs the SAME direction as the ascending ORDER
+    BY, so a "page further" suggestion would be actively misleading, not just
+    lossy).
+    """
+    ids = [int(m) for m in re.findall(r"\(id (\d+)\)", recalled or "")]
+    effective_limit = max(1, min(20, limit))
+    if not ids or len(ids) < effective_limit:
+        return ""
+    if sort == "newest":
+        return f"\nMore available: pass before_id={min(ids)} to page further."
+    if sort is None:
+        return "\nRefine the query or use sort='newest' with before_id to page chronologically."
+    return ""  # sort == "oldest": no forward-pagination story exists
 
 
 def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=None) -> ActionResult:

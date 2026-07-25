@@ -63,6 +63,22 @@ def test_message_manager_has_environment_setter():
     assert MessageOrigin.ENVIRONMENT == "environment"
 
 
+def test_budget_line_present_when_flag_set(monkeypatch, tmp_path):
+    _local(monkeypatch, tmp_path)
+    monkeypatch.setenv("RUN_BUDGET_USD", "1.50")
+    from agents.task.agent.core.env_context import build_environment_context
+    text = build_environment_context(session_id="s1", user_id="rob")
+    assert text is not None and "Run budget: RUN_BUDGET_USD=$1.50" in text
+
+
+def test_budget_line_absent_when_disabled(monkeypatch, tmp_path):
+    _local(monkeypatch, tmp_path)
+    monkeypatch.delenv("RUN_BUDGET_USD", raising=False)
+    from agents.task.agent.core.env_context import build_environment_context
+    text = build_environment_context(session_id="s1", user_id="rob")
+    assert text is not None and "Run budget:" not in text
+
+
 def test_retrieval_injects_environment_between_identity_and_self_context():
     # Foundation-order contract without constructing a full MessageManager:
     # both retrieval paths must reference the environment slot, and the

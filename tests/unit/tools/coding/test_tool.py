@@ -180,6 +180,47 @@ async def test_str_replace_flag_off_byte_identical_no_subprocess(tmp_path, monke
     assert calls == []  # zero subprocess spawns
 
 
+# --- T2.2 rung surfacing ------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_str_replace_exact_match_legacy_message_bytes(tmp_path):
+    """Exact rung: success message stays byte-identical to the pre-ladder text
+    (no rung suffix)."""
+    (tmp_path / "x.py").write_text("a = 1\nb = 2\n")
+    t = _tool(tmp_path)
+    res = await t.str_replace(StrReplaceParams(file_path="x.py", old_string="a = 1", new_string="a = 99"))
+    assert getattr(res, "error", None) in (None, "")
+    assert res.extracted_content == "Edited x.py (1 replacement)."
+    assert (tmp_path / "x.py").read_text() == "a = 99\nb = 2\n"
+
+
+@pytest.mark.asyncio
+async def test_str_replace_interior_whitespace_rung_names_match(tmp_path):
+    """A drifted old_string (interior-whitespace only) has ZERO exact matches
+    against the file — assert that trap first — but the action still succeeds
+    via the interior-whitespace rung and names it in the message."""
+    (tmp_path / "x.py").write_text("a = 1\n")
+    content = (tmp_path / "x.py").read_text()
+    old_string = "a  =  1"  # collapsed-whitespace drift vs the file's "a = 1"
+    assert content.count(old_string) == 0  # the trap: confirm no exact match
+    t = _tool(tmp_path)
+    res = await t.str_replace(StrReplaceParams(file_path="x.py", old_string=old_string, new_string="a = 2"))
+    assert getattr(res, "error", None) in (None, "")
+    assert "via interior-whitespace match" in res.extracted_content
+    assert (tmp_path / "x.py").read_text() == "a = 2\n"
+
+
+@pytest.mark.asyncio
+async def test_str_replace_not_found_error_unchanged(tmp_path):
+    """Genuinely-absent old_string: error text stays byte-identical (no rung
+    leakage) and the file is untouched."""
+    (tmp_path / "x.py").write_text("a = 1\n")
+    t = _tool(tmp_path)
+    res = await t.str_replace(StrReplaceParams(file_path="x.py", old_string="nope", new_string="q"))
+    assert res.error == "old_string not found in file"
+    assert (tmp_path / "x.py").read_text() == "a = 1\n"
+
+
 def test_confine_blocks_git_directory(tmp_path):
     """P1 (finalization): the coding tool must refuse to touch .git/* (a patched
     .git/config hooksPath or .git/hooks/* is an RCE persistence vector), parity

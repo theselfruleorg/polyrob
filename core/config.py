@@ -592,6 +592,18 @@ class ServerConfig(AgentConfig):
         )
         file_handler.setFormatter(console_formatter)
         
+        # This logger owns its handlers and never propagates to root, so it
+        # bypasses setup_logging's handler-level SecretScrubbingFilter — attach
+        # the same filter here (validated 2026-07-23: this was an undisclosed
+        # unfiltered surface; it logs presence-only today, but keep it closed).
+        try:
+            from core.security_logging_filter import SecretScrubbingFilter
+            _scrub = SecretScrubbingFilter()
+            console_handler.addFilter(_scrub)
+            file_handler.addFilter(_scrub)
+        except Exception:
+            pass
+
         # Configure logger
         self._logger.setLevel(getattr(logging, self.log_level.upper()))
         if not self._logger.handlers:

@@ -301,15 +301,49 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     except Exception:
         lines.append("autonomy mode: unknown")
 
+    # 0.9.0: the AUTONOMY_ENABLED master switch — OFF by default for new local
+    # installs. Say so plainly + what autonomy would add, so a new user knows the
+    # agent is interactive-only until they opt in (live process env, like the mode).
+    try:
+        from agents.task.constants import autonomy_enabled as _auton
+        _on = _auton()
+        lines.append(f"autonomy: {'ON' if _on else 'OFF'} (AUTONOMY_ENABLED)")
+        if not _on:
+            lines.append("  self-directed loops (self-wake / goals + planner / curator / "
+                         "background-review / self-editing) are OFF — the agent acts only "
+                         "on your messages. Enable: AUTONOMY_ENABLED=true (or `polyrob init`).")
+    except Exception:
+        lines.append("autonomy: unknown (AUTONOMY_ENABLED)")
+
+    # Where this instance's data + config live — new-user orientation ("what's
+    # running and where"). Data home mirrors schema_status_line's resolution.
+    _data_home = (env.get("POLYROB_DATA_DIR") or "").strip()
+    if not _data_home:
+        try:
+            from core.runtime_paths import resolve_data_home
+            _data_home = str(resolve_data_home())
+        except Exception:
+            _data_home = "data"
+    lines.append(f"data dir: {_data_home}")
+    try:
+        from core.paths import env_file_candidates
+        _local = local_flag_on(env, absent_means_on=local_absent_means_on)
+        _cfg = next((str(c.path) for c in env_file_candidates(local_mode=_local)
+                     if c.path.exists()), None)
+        lines.append(f"config file: {_cfg or '(none found — using process env / defaults)'}")
+    except Exception:
+        pass
+
     # The CLI (build_cli_container) does os.environ.setdefault("POLYROB_LOCAL", "1"),
     # so for run/chat an ABSENT value means ON — report that honestly (surfacing this
     # footgun is doctor's job). An explicitly-falsey value still reads off.
     rob_local = local_flag_on(env, absent_means_on=local_absent_means_on)
     lines.append(f"POLYROB_LOCAL: {'ON' if rob_local else 'off'}")
     if rob_local:
-        lines.append("  ! POLYROB_LOCAL ON flips safe autonomy flags (self-wake/goals/"
-                     "curator/skills-writable…) ON by default — intended for the "
-                     "single-user CLI, NOT a multi-tenant server.")
+        lines.append("  ! POLYROB_LOCAL ON flips the INTERACTIVE tools (coding/git/KB/"
+                     "RAG/project-context…) ON by default — intended for the single-user "
+                     "CLI, NOT a multi-tenant server. The self-directed autonomy loops are "
+                     "separate: they need AUTONOMY_ENABLED (see the `autonomy:` line above).")
 
     # Workspace-isolation invariant: the agent's writable workspace must NOT live
     # under the install/code tree (which also holds config/.env.* secrets). The

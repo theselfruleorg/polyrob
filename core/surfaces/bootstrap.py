@@ -32,6 +32,36 @@ def _ensure_conversation_store(container, db_path: str) -> None:
         logger.debug("conversation store unavailable: %s", e)
 
 
+def _ensure_dead_targets(container, db_path: str):
+    """T1.5 Task 4: register the dead-target registry alongside the bus.
+
+    Built unconditionally (not gated on OUTBOUND_QUEUE_ENABLED) because
+    MessageRouter's direct-send path (``attach_dead_targets``) and
+    ``core/surfaces/dispatcher.py``'s revive-on-inbound lookup
+    (``container.get_service("dead_targets")``) both need the store regardless
+    of whether the durable outbound queue is enabled. Usage is separately gated
+    by the ``DEAD_TARGET_REGISTRY`` flag at each read/write call site, so
+    constructing the store here is inert (just a CREATE TABLE) when the flag is
+    off. Idempotent + fail-open, mirrors ``_ensure_conversation_store``.
+    Returns the store (existing or newly built), or None on construction
+    failure.
+    """
+    try:
+        existing = container.get_service("dead_targets")
+        if existing is not None:
+            return existing
+        import os as _os
+        from core.surfaces.dead_targets import DeadTargetStore
+        dt_db = _os.path.join(_os.path.dirname(db_path) or ".", "dead_targets.db")
+        dt = DeadTargetStore(dt_db)
+        container.register_service("dead_targets", dt)
+        logger.info("surface bus: dead-target registry installed (%s)", dt_db)
+        return dt
+    except Exception as e:
+        logger.debug("dead-target registry unavailable: %s", e)
+        return None
+
+
 def install_surface_bus(container, db_path: str = None) -> bool:
     """Build SessionChatRegistry + MessageRouter and register them on ``container``.
 
@@ -57,6 +87,9 @@ def install_surface_bus(container, db_path: str = None) -> bool:
     existing = container.get_service("message_router")
     if existing is not None:
         _ensure_conversation_store(container, db_path)
+        dt = _ensure_dead_targets(container, db_path)
+        if dt is not None:
+            existing.attach_dead_targets(dt)
         return True
 
     try:
@@ -73,6 +106,10 @@ def install_surface_bus(container, db_path: str = None) -> bool:
 
         _ensure_conversation_store(container, db_path)
 
+        dt = _ensure_dead_targets(container, db_path)
+        if dt is not None:
+            router.attach_dead_targets(dt)
+
         if SurfaceConfig.outbound_queue_enabled():
             import os
             from core.surfaces.outbound_queue import OutboundDeliveryQueue
@@ -85,8 +122,16 @@ def install_surface_bus(container, db_path: str = None) -> bool:
                 os.path.join(os.path.dirname(db_path) or ".", "surface_state.db")
             )
             circuit = SurfaceCircuitBreaker(store=circuit_store)
+            # event_log is deliberately left unwired here: no core-tier handle to
+            # agents.task.telemetry.event_log exists on this path, and adding one
+            # would require a new core/surfaces/bootstrap.py -> agents.task.telemetry
+            # .event_log edge to tests/test_layering_ratchet.py's frozen allowlist,
+            # which may only shrink (never grow). The dispatcher's event_log param
+            # defaults to None and its emit helper is already a no-op in that case
+            # (see OutboundDispatcher._emit_dead_target_event) — dead-target skip/mark
+            # still logs at INFO either way, only the telemetry event is absent.
             dispatcher = OutboundDispatcher(q, lambda sid: router._surfaces.get(sid),
-                                            circuit=circuit)
+                                            circuit=circuit, dead_targets=dt)
             container.register_service("outbound_queue", q)
             container.register_service("outbound_dispatcher", dispatcher)
             container.register_service("surface_circuit_breaker", circuit)

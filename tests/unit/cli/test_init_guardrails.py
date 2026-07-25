@@ -54,10 +54,11 @@ def _read_env(home: Path) -> dict:
 _PRE_SECTION5_BLANKS = ["" for _ in range(11)]
 
 
-def _full_flow_input(*, local="", preset="", digest="", wallet="n") -> str:
-    # Task 7 added an "Optional: agent crypto wallet" confirm after Section 6/6
-    # (still inside the non-quick interactive block) — default answer: No.
-    return "\n".join(_PRE_SECTION5_BLANKS + [local, preset, digest, wallet]) + "\n"
+def _full_flow_input(*, local="", autonomy="", preset="", digest="", wallet="n") -> str:
+    # Section 6/6 order (0.9.0): interactive-local-tools confirm (default YES),
+    # autonomy confirm (default NO), approval preset, digest. Then Task 7's
+    # "Optional: agent crypto wallet" confirm (default No).
+    return "\n".join(_PRE_SECTION5_BLANKS + [local, autonomy, preset, digest, wallet]) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -66,13 +67,15 @@ def _full_flow_input(*, local="", preset="", digest="", wallet="n") -> str:
 
 def test_full_flow_writes_expected_keys(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
-    piped = _full_flow_input(local="y", preset="y", digest="telegram")
+    piped = _full_flow_input(local="y", autonomy="y", preset="y", digest="telegram")
     res, proj = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
     assert "Section 6/6: Autonomy & guardrails" in res.output
 
     env = _read_env(home)
     assert env.get("POLYROB_LOCAL") == "1"
+    # 0.9.0: the autonomy prompt is separate — answering yes writes the master flag.
+    assert env.get("AUTONOMY_ENABLED") == "true"
     assert env.get("APPROVAL_REQUIRED_TOOLS") == ",".join(DEFAULT_APPROVAL_REQUIRED_TOOLS)
     assert env.get("APPROVAL_PROVIDER") == "interactive_cli"
     # digest goes through prefs (owner uid "rob" known from Owner pairing defaults),
@@ -94,17 +97,23 @@ def test_final_summary_mentions_self_capability(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Blank answers skip every Section 6/6 write.
+# Blank answers take each Section 6/6 prompt's default (0.9.0): the interactive
+# local-tools prompt defaults YES (writes POLYROB_LOCAL), autonomy defaults NO,
+# and the approval preset / digest still skip on blank.
 # ---------------------------------------------------------------------------
 
-def test_blanks_skip_all_guardrail_writes(tmp_path, monkeypatch):
+def test_blanks_take_section6_defaults(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
     piped = _full_flow_input()  # every Section 6/6 prompt left blank
     res, proj = _invoke([], home, monkeypatch, input_text=piped)
     assert res.exit_code == 0, res.output
 
     env = _read_env(home)
-    assert "POLYROB_LOCAL" not in env
+    # interactive-local-tools prompt defaults YES -> POLYROB_LOCAL written
+    assert env.get("POLYROB_LOCAL") == "1"
+    # autonomy prompt defaults NO -> master NOT written
+    assert "AUTONOMY_ENABLED" not in env
+    # approval preset + digest still skip on blank
     assert "APPROVAL_REQUIRED_TOOLS" not in env
     assert "APPROVAL_PROVIDER" not in env
     assert "OWNER_DIGEST_ENABLED" not in env
@@ -171,8 +180,9 @@ def test_digest_with_explicit_owner_flag_writes_that_owners_prefs(tmp_path, monk
     # --owner/--instance-id pre-supplied => Owner-pairing's two prompts are
     # skipped (`if instance_id is None`/`if owner_user_id is None` are both
     # False), leaving 9 prompts (6 provider keys + model + toolset + template)
-    # before Section 6/6's 3 prompts + the wallet opt-in confirm (Task 7, "n").
-    piped = "\n".join(_PRE_SECTION5_BLANKS[:9] + ["", "", "email", "n"]) + "\n"
+    # before Section 6/6's 4 prompts (interactive, autonomy, preset, digest) +
+    # the wallet opt-in confirm (Task 7, "n").
+    piped = "\n".join(_PRE_SECTION5_BLANKS[:9] + ["", "", "", "email", "n"]) + "\n"
     res, proj = _invoke(
         ["--owner", "alice", "--instance-id", "alice"],
         home, monkeypatch, input_text=piped,

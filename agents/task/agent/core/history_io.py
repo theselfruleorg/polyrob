@@ -126,6 +126,24 @@ class HistoryIOMixin:
         except Exception as e:
             self.logger.warning(f"Error saving history: {e}")
 
+    def append_terminal_error_item(self, error_msg: str) -> List[ActionResult]:
+        """Append a loop-level terminal error to in-memory history so the session
+        status reader (agents/task/session/execution.py::_result_session_status,
+        which inspects history[-1].result[-1].error) reports an honest 'error'
+        instead of 'completed' when the loop halts outside the step pipeline
+        (e.g. the RUN_BUDGET_USD gate). Lives here, not in run_loop, because the
+        blank BrowserStateHistory needs this module's tools.browser.views import
+        (a new agents->tools edge in run_loop would fail the layering ratchet).
+        In-memory only: the per-step history file is written by _make_history_item.
+        """
+        result = [ActionResult(error=error_msg, include_in_memory=True)]
+        self.history.history.append(AgentHistory(
+            model_output=None,
+            result=result,
+            state=BrowserStateHistory(url="", title="", tabs=[], interacted_element=[None]),
+        ))
+        return result
+
     def save_history(self, file_path: Optional[str | Path] = None) -> None:
         """Save the history to a file"""
         if not file_path:

@@ -41,6 +41,11 @@ default_registry.register("local_subprocess", LocalSubprocessBackend)
 from tools.code_exec.backends.docker import DockerBackend  # noqa: E402
 default_registry.register("docker", DockerBackend)
 
+# T2.7: ssh backend (honest NOT-a-sandbox by default; stdlib only). Ephemeral-only —
+# see tools/code_exec/backends/ssh.py for the trust-domain rationale.
+from tools.code_exec.backends.ssh import SshBackend  # noqa: E402
+default_registry.register("ssh", SshBackend)
+
 
 def code_exec_enabled() -> bool:
     return _bool_env("CODE_EXEC_ENABLED", False)

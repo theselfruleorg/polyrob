@@ -51,7 +51,7 @@ The five money organs and where they live:
 | **Agent receivables** (invoicing) | `modules/x402/` | What the agent is owed: invoices, settlement, subscriptions |
 | **Platform billing** (credits) | `modules/credits/` | What users owe the platform per LLM call; balances, deposits |
 | **Metering** (measurement) | `usage_records` | Per-call cost measurement, tenant-scoped |
-| **Accounting** (read-only join) | `unified_ledger.py` | earned / pending / spent / net across the above |
+| **Accounting** (read-only join) | `unified_ledger.py` | Treasury (income / spend / pending / net) + Runtime compute cost, as two blocks that are never summed |
 
 ---
 
@@ -480,16 +480,23 @@ set.
 
 ## 11. Accounting — the unified ledger (`modules/credits/unified_ledger.py`)
 
-One read-only model joins three legs, tenant-scoped, each fail-open:
+One read-only model joins **two ledgers that are never summed**, tenant-scoped,
+each fail-open:
 
-- **Costs** — `SUM(api_cost_usd)` from `usage_records`.
-- **Spent** — `wallet_spend` events (the wallet audit).
-- **Earned / pending** — settled and pending `x402_payment_requests`.
+- **Treasury** — the agent's *own* money (USDC): `income_usd` / `spend_usd` /
+  `pending_usd` / `net_usd` (where `net = income − spend`), drawn from settled and
+  pending `x402_payment_requests` and the wallet audit (`wallet_spend` events).
+- **Runtime cost** — the *owner's* compute spend: LLM `api_cost_usd` from
+  `usage_records`, with call counts. It has **no** `net` — there is nothing to net
+  compute cost against.
 
-It reports `earned / pending / spent / net`. Owner-facing surfaces that read it:
-the agent-callable `accounting` and `agent_status` actions, the CLI `/journey` ("Earned"
-line) and `polyrob finance`, the webview `/finance` page, the owner digest's Money line,
-and Telegram `/recap`.
+The two blocks stay separate on purpose: the agent's earnings and the owner's
+provider bill are different money, and the legacy top-level `earned_usd` / `net_usd` /
+`total_spend_usd` fields were removed with no alias so a straggler consumer fails
+loudly rather than silently reading a merged figure. Owner-facing surfaces that read
+it: the agent-callable `accounting` and `agent_status` actions, the CLI `/journey`
+("Income" line) and `polyrob finance`, the webview `/finance` page, the owner digest's
+Money line, and Telegram `/recap`.
 
 ---
 

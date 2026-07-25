@@ -5,6 +5,7 @@ tests are skipped if apsw / sqlite-vec aren't installed (so the file is importab
 everywhere) — but in this repo they ARE deps, so they run.
 """
 import os
+import re
 
 import pytest
 
@@ -17,6 +18,10 @@ pytestmark = pytest.mark.asyncio
 
 requires_vec = pytest.mark.skipif(not _vec_available(),
                                   reason="apsw / sqlite-vec not installed")
+
+
+def _ids(text: str) -> list:
+    return [int(m) for m in re.findall(r"\(id (\d+)\)", text)]
 
 
 class FakeEmbedder:
@@ -216,3 +221,73 @@ def test_p2_6_probe_deferred_until_first_vec_op(db_path):
     before = emb.calls
     assert p._ensure_vec_schema() is True
     assert emb.calls == before
+
+
+# --------------------------------------------------------------------------------- #
+# T2.6 — before_id / with_ids shape (review fix): documents the contract even under
+# a healthy vector store — with_ids tags only the keyword-matched rows within the
+# hybrid result (a vector-only hit has no stable rowid to tag), and before_id forces
+# a keyword-only fallback (mirrors the existing explicit-`sort` precedent), since an
+# unfiltered vector KNN pass has no rowid-cursor concept and would silently
+# re-surface already-seen rows across pages.
+# --------------------------------------------------------------------------------- #
+
+@requires_vec
+async def test_with_ids_tags_keyword_matched_rows(db_path):
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    await p.sync_turn("postgres tuning notes", "x", session_id="s1", user_id="u1")
+    out = await p.search("postgres", user_id="u1", limit=5, with_ids=True)
+    assert _ids(out), "keyword-matched row must carry an (id N) tag"
+
+
+@requires_vec
+async def test_with_ids_default_false_keeps_legacy_hybrid_format(db_path):
+    """with_ids defaults False -> byte-identical hybrid output, no id tags — the
+    default (no before_id, no with_ids) session_search path is unaffected."""
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    await p.sync_turn("postgres tuning notes", "x", session_id="s1", user_id="u1")
+    out = await p.search("postgres", user_id="u1", limit=5)
+    assert "(id" not in out
+
+
+@requires_vec
+async def test_before_id_forces_keyword_only_no_vector_call(db_path, monkeypatch):
+    """before_id must skip the vector KNN pass entirely — an unfiltered vector
+    result has no rowid-cursor concept and would leak already-seen rows across
+    pages if merged in."""
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    await p.sync_turn("postgres tuning notes", "x", session_id="s1", user_id="u1")
+    await p.sync_turn("postgres backup strategy", "x", session_id="s2", user_id="u1")
+
+    calls = {"n": 0}
+    orig = p._vector_contents
+
+    def spy(*a, **k):
+        calls["n"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(p, "_vector_contents", spy)
+    full = await p.search("postgres", user_id="u1", limit=5, with_ids=True)
+    ids = _ids(full)
+    assert ids
+    after_first_call = calls["n"]  # the plain (no before_id) call IS hybrid -> vector ran
+    out = await p.search("postgres", user_id="u1", limit=5,
+                         before_id=max(ids), with_ids=True)
+    assert calls["n"] == after_first_call, "before_id must not trigger a vector KNN pass"
+    assert all(i < max(ids) for i in _ids(out))
+
+
+@requires_vec
+async def test_before_id_pagination_narrows_result_set(db_path):
+    p = LocalVectorMemoryProvider(db_path, embedding_model=FakeEmbedder())
+    for i in range(4):
+        await p.sync_turn(f"postgres note {i}", "x", session_id="s1", user_id="u1")
+    page1 = await p.search("postgres", user_id="u1", limit=2,
+                           sort="newest", with_ids=True)
+    ids1 = _ids(page1)
+    assert len(ids1) == 2
+    page2 = await p.search("postgres", user_id="u1", limit=2, sort="newest",
+                           before_id=min(ids1), with_ids=True)
+    ids2 = _ids(page2)
+    assert ids2 and set(ids1).isdisjoint(ids2)
+    assert all(i < min(ids1) for i in ids2)

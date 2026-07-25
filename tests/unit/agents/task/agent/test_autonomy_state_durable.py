@@ -80,6 +80,56 @@ def test_registry_persists_dispatch_and_terminal(store):
     assert "child output" in (row["result_text"] or "")
 
 
+def test_registry_park_without_drain_leaves_delivered_at_null(store):
+    """CRITICAL finding fix (2026-07-22): a successful deliver() call only
+    means submit_user_message PARKED the completion block in the target
+    session's in-memory HITL queue — that is not "delivered." Simulates the
+    crash window this closes: the process could die here, between park and
+    drain, and the row must stay recoverable (delivered_at NULL), not be
+    falsely marked delivered. (delivered_at is now stamped ONLY on drain —
+    see stamp_delivered_from_drain / test_delegation_delivery_sweep.py's
+    drain-path tests for that half of the contract.)"""
+    async def deliver(rec, block):
+        pass  # succeeds — i.e. the message was parked, nothing more
+
+    reg = AsyncDelegationRegistry(
+        _Manager(), deliver=deliver, store=store, session_id="s1", user_id="u1",
+    )
+
+    async def run():
+        await reg.dispatch(goal="g", parent_agent_id="a1")
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    row = store.get("s1", "deleg_0001")
+    assert row["status"] == "completed"
+    assert row["delivered_at"] is None
+    # ... and the completed-undelivered sweep correctly still sees it as
+    # undelivered (recoverable) even though the live delivery "succeeded".
+    assert len(store.list_completed_undelivered()) == 1
+
+
+def test_registry_does_not_stamp_delivered_at_when_delivery_fails(store):
+    """A raising deliver() must leave delivered_at NULL — the cold-start sweep
+    is the recoverable backstop for exactly this case."""
+    async def boom_deliver(rec, block):
+        raise RuntimeError("queue full")
+
+    reg = AsyncDelegationRegistry(
+        _Manager(), deliver=boom_deliver, store=store, session_id="s1", user_id="u1",
+    )
+
+    async def run():
+        await reg.dispatch(goal="g", parent_agent_id="a1")
+        await asyncio.sleep(0.05)
+
+    asyncio.run(run())
+    row = store.get("s1", "deleg_0001")
+    assert row["status"] == "completed"
+    assert row["delivered_at"] is None
+    assert len(store.list_completed_undelivered()) == 1
+
+
 def test_registry_counter_seeded_from_store(store):
     # Seeding is LAZY (first dispatch, under the lock) so orchestrator
     # construction costs zero sqlite I/O — the restarted session still never

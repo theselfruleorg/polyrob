@@ -82,6 +82,27 @@ async def route_inbound(
     session_key = build_session_key(inbound.identity.source, user_id)
     text = (inbound.text or "").strip()
 
+    # 0-revive) T1.5: ANY inbound message revives a previously dead-marked target —
+    # receiving proves the sender is reachable again. Clears both identity tuples
+    # (outbound dest for telegram is the CHAT id; inbound sender is the USER id —
+    # they coincide for DMs, differ for groups). Idempotent no-op if never marked.
+    # Fully fail-open: any lookup/store fault must never block routing, and this
+    # runs before every other gate below so a revive never depends on tier/pairing
+    # outcomes.
+    try:
+        from core.config_policy import dead_target_registry_enabled
+        if dead_target_registry_enabled():
+            dead_targets = container.get_service("dead_targets") if container else None
+            if dead_targets is not None:
+                _surface_id = getattr(inbound.identity.source, "surface_id", None)
+                _chat_id = getattr(inbound.identity.source, "chat_id", None)
+                _sender_id = inbound.identity.raw_user_id or user_id
+                if _surface_id:
+                    dead_targets.clear(_surface_id, _chat_id or "")
+                    dead_targets.clear(_surface_id, _sender_id or "")
+    except Exception as e:  # never block routing on a revive fault
+        logger.debug("route_inbound dead-target revive skipped: %s", e)
+
     # 0) ACCESS GATE (polyrob D3) — when POLYROB_REQUIRE_PAIRING is on, an unpaired
     #    non-owner is denied (and issued a pairing code). Fail-open + default-off, so
     #    this is byte-identical until an operator opts into pairing.

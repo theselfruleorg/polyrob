@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Service
 
-_Last reviewed: 2026-06-30. For the authoritative architecture see ../../AGENTS.md; for env flags see ../../docs/CONFIGURATION.md._
+_Last reviewed: 2026-07-23. For the authoritative architecture see ../../AGENTS.md; for env flags see ../../docs/CONFIGURATION.md._
 
 ## Overview
 
@@ -125,6 +125,63 @@ example_server = create_stdio_server(
 )
 config = add_mcp_server(config, "example-server", example_server)
 ```
+
+#### OAuth Authentication (SSE / HTTP / Streamable servers)
+
+_T2.4 — off by default, purely forward-looking scaffolding: no shipped MCP
+server uses this yet. See `../../docs/CONFIGURATION.md` for the flag row._
+
+An SSE/HTTP/Streamable server (never STDIO — env is the stdio auth channel)
+can declare an `auth` block instead of (or alongside) static `headers`. When
+`MCP_OAUTH_ENABLED=true`, the connection is minted/refreshed an
+`Authorization` header from a real OAuth2 token instead of a static value:
+
+```json
+{
+  "oauth-server": {
+    "type": "sse",
+    "url": "https://mcp.example.com/sse",
+    "auth": {
+      "provider": "generic_oauth2",
+      "client_id": "your-client-id",
+      "client_secret": "${OAUTH_CLIENT_SECRET}",
+      "auth_url": "https://idp.example.com/oauth/authorize",
+      "token_url": "https://idp.example.com/oauth/token",
+      "scopes": ["mcp.read", "mcp.write"]
+    },
+    "enabled": true
+  }
+}
+```
+
+```bash
+MCP_ENABLED=true
+MCP_OAUTH_ENABLED=true
+OAUTH_CLIENT_SECRET=your-actual-client-secret
+```
+
+Recognized `auth` keys match `GenericOAuth2Provider`'s config shape:
+`provider` (only `"generic_oauth2"` in v1), `client_id`, `client_secret`,
+`auth_url`, `token_url`, `scopes`, `redirect_uri`. Every string value (and
+each string inside `scopes`) supports `${VAR}` substitution, resolved the
+same way as `url`/`headers` — a missing required var drops only that server
+(loud log), never the whole MCP config.
+
+Notes:
+- The library only mints tokens for an ALREADY-obtained refresh token today —
+  `manager.get_token(...)` refreshes an expired token via the provider, but
+  nothing in this integration drives the initial authorize-code exchange yet.
+  Seed the first token via `OAuthManager.store_token(user_id, provider_name,
+  OAuthToken(...))` (provider_name is `mcp:<server-name>`) until an
+  interactive `authorize_url`/`exchange_code` CLI verb lands.
+- Tokens persist across restarts in `<data_home>/.mcp_oauth_tokens.json`
+  (`tools/oauth/file_store.py::FileTokenStore`), Fernet-encrypted with the
+  same `MCP_ENCRYPTION_KEY` as the rest of the MCP secret store.
+- On an HTTP 401, the connection refreshes the token and retries the request
+  ONCE (`MCPTransport._send_with_auth_retry`); a second 401 raises as before.
+  Refreshes are serialized per `(user_id, provider)`, so concurrent 401s on
+  the same connection never race each other into double-refreshing (and
+  potentially burning a single-use `refresh_token`).
 
 ### Example: Configuring an stdio MCP server
 

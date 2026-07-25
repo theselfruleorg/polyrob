@@ -19,6 +19,13 @@ colorama_init()
 MAX_BYTES = 10 * 1024 * 1024  # 10MB
 BACKUP_COUNT = 5
 
+# T2.5 (2026-07-23): ONE shared filter instance, attached directly to every
+# Handler this module creates (root's file/console/httpx handlers, per-component
+# file handlers, and the exception-path fallback handler) — see the wiring note
+# in setup_logging(). A Filter is stateless/reentrant-safe, so one instance
+# shared across every handler is fine.
+_SECURITY_FILTER = SecretScrubbingFilter()
+
 
 def resolve_log_dir() -> Path:
     """Runtime log directory: ``POLYROB_LOG_DIR`` → ``<data_home>/logs``.
@@ -349,6 +356,17 @@ def setup_logging(
             # Clear any pre-existing handlers to start from a clean state
             root_logger.handlers.clear()
 
+            # T2.5 (2026-07-23): the security filter MUST be attached to every
+            # individual Handler, not (only) to the root Logger object.
+            # logging.Filter objects on a Logger are consulted ONLY inside that
+            # exact logger's own Logger.handle() call — never for records that
+            # originate on a named child logger (i.e. virtually every real
+            # ``logging.getLogger(__name__)`` call site) and never via
+            # Handler.filter(). A root-logger-only filter is silently dead for
+            # real application logging; see
+            # tests/unit/core/test_security_logging_filter.py.
+            security_filter = _SECURITY_FILTER
+
             # Create file handler for bot.log that will capture ALL messages
             log_path = log_dir / "bot.log"
 
@@ -361,6 +379,7 @@ def setup_logging(
             file_handler.setFormatter(standard_formatter)
             file_handler.setLevel(numeric_level)
             file_handler._polyrob_sink = 'file'
+            file_handler.addFilter(security_filter)
             root_logger.addHandler(file_handler)
 
             # Console handler with standard formatter (late-binding stderr)
@@ -371,6 +390,7 @@ def setup_logging(
             # httpx records have a dedicated handler below — without this filter
             # every visible request line was emitted twice (F7).
             console_handler.addFilter(lambda record: record.name != 'httpx')
+            console_handler.addFilter(security_filter)
             root_logger.addHandler(console_handler)
 
             # Special handler for httpx logs (late-binding stderr)
@@ -379,10 +399,13 @@ def setup_logging(
             httpx_handler.addFilter(lambda record: record.name == 'httpx')
             httpx_handler.setLevel(console_numeric)
             httpx_handler._polyrob_sink = 'httpx'
+            httpx_handler.addFilter(security_filter)
             root_logger.addHandler(httpx_handler)
 
-            # Add security filter to root logger to scrub secrets
-            security_filter = SecretScrubbingFilter()
+            # Also on the root Logger itself, for defense-in-depth on any call
+            # that originates AT the root logger directly (e.g. bare
+            # ``logging.info(...)``) — a genuine (if narrow) case where the
+            # Logger-level filter above actually does fire.
             root_logger.addFilter(security_filter)
 
             # Pin noisy libraries at first config — the CLI never runs the
@@ -419,6 +442,7 @@ def setup_logging(
                 )
                 component_file_handler.setFormatter(standard_formatter)
                 component_file_handler.setLevel(numeric_level)
+                component_file_handler.addFilter(_SECURITY_FILTER)
                 logger.addHandler(component_file_handler)
 
     except Exception as e:
@@ -427,6 +451,7 @@ def setup_logging(
             basic_handler = DynamicStderrHandler()
             basic_formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
             basic_handler.setFormatter(basic_formatter)
+            basic_handler.addFilter(_SECURITY_FILTER)
             logger.addHandler(basic_handler)
 
 def get_component_logger(

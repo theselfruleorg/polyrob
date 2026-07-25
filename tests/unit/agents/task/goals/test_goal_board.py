@@ -115,3 +115,49 @@ def test_ready_ordered_by_priority(board):
     board.create(user_id="u1", title="high", priority=9)
     ready = board.ready(limit=10)
     assert ready[0].title == "high"
+
+
+# --- T2.1 Task 5: update_status / children tenant guards --------------------
+
+
+def test_update_status_no_user_id_is_legacy_byte_identical(board):
+    """The default (user_id=None) is every pre-existing internal caller — no
+    tenant filter, exactly today's contract."""
+    g = board.create(user_id="u1", title="t")
+    assert board.update_status(g.id, STATUS_BLOCKED) is True
+    assert board.get(g.id).status == STATUS_BLOCKED
+
+
+def test_update_status_wrong_user_id_is_noop(board):
+    g = board.create(user_id="u1", title="t")
+    assert board.update_status(g.id, STATUS_BLOCKED, user_id="u2") is False
+    assert board.get(g.id).status == STATUS_READY  # untouched
+    kinds = [e["kind"] for e in board.events(g.id)]
+    assert f"status_{STATUS_BLOCKED}" not in kinds
+
+
+def test_update_status_correct_user_id_applies(board):
+    g = board.create(user_id="u1", title="t")
+    assert board.update_status(g.id, STATUS_BLOCKED, user_id="u1") is True
+    assert board.get(g.id).status == STATUS_BLOCKED
+
+
+def test_children_no_user_id_is_legacy_cross_tenant(board):
+    """The default (user_id=None) lists children regardless of tenant — today's
+    contract, used by the objective->children rollup that already tenant-scopes
+    the parent objective lookup itself."""
+    o1 = board.create_objective(user_id="u1", title="obj1")
+    g1 = board.create(user_id="u1", title="g1", parent_id=o1.id)
+    # a second tenant's goal parented to the SAME objective id (edge case /
+    # corrupted or malicious parent_id) still shows up with no filter.
+    g2 = board.create(user_id="u2", title="g2", parent_id=o1.id)
+    ids = {c.id for c in board.children(o1.id)}
+    assert ids == {g1.id, g2.id}
+
+
+def test_children_user_id_filters_to_tenant(board):
+    o1 = board.create_objective(user_id="u1", title="obj1")
+    g1 = board.create(user_id="u1", title="g1", parent_id=o1.id)
+    board.create(user_id="u2", title="g2", parent_id=o1.id)
+    ids = {c.id for c in board.children(o1.id, user_id="u1")}
+    assert ids == {g1.id}

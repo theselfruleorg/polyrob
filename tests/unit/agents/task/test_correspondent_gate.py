@@ -46,6 +46,22 @@ def test_egress_and_money_verbs_are_high_impact():
         assert is_high_impact(name), name
 
 
+def test_x402_read_verbs_are_high_impact_by_name():
+    # The x402_invoice tool's READ verbs (accounting = full treasury/runtime ledger,
+    # x402_invoices = invoice list incl. payer contacts) must be gated by NAME — same
+    # defense-in-depth as x402_request/agent_status/usage_summary — so a resolver fault
+    # (get_action_details -> None) can't let a tainted session fish the financial ledger.
+    for name in ("accounting", "x402_invoices"):
+        assert is_high_impact(name), name
+
+
+def test_x402_read_verbs_blocked_when_tainted_even_without_resolver():
+    hook = make_correspondent_gate_hook(lambda: True)
+    for name in ("accounting", "x402_invoices"):
+        reason = hook(name, {}, None)  # no resolver → name-only path
+        assert reason and "correspondent" in reason.lower(), name
+
+
 def test_egress_money_verbs_blocked_via_tool_id_resolution():
     # Same coverage through the full is_high_impact_call path (name + owning tool_id).
     assert is_high_impact_call("x402_request", "x402_invoice")

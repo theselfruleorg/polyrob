@@ -20,6 +20,7 @@ GOAL_COMPLETION = "goal_completion"          # consumed by cron/digest rollup
 SELF_WAKE = "self_wake"
 SELF_MODIFICATION = "self_modification"
 DELEGATION_INTERRUPTED = "delegation_interrupted"
+DELEGATION_DELIVERED = "delegation_delivered"   # T1.6: completed-undelivered drain stamp
 RUN_OUTCOME_DEGRADED = "run_outcome_degraded"
 CREDIT_SENTINEL = "credit_sentinel"
 
