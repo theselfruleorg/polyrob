@@ -56,6 +56,7 @@ SIDECAR_DB_NAMES = (
     "outbox.db",            # core/surfaces/bootstrap.py (durable outbound queue)
     "surface_state.db",     # core/surfaces/bootstrap.py (surface cursor/state KV)
     "deployed_apps.db",     # tools/hf_deploy/registry.py
+    "dead_targets.db",      # core/surfaces/bootstrap.py (DeadTargetStore, T1.5)
 )
 
 _PathLike = Union[str, Path]

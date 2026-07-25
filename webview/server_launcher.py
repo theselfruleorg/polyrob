@@ -55,9 +55,21 @@ def setup_logging(log_level):
     file_handler = logging.FileHandler(log_file)
     file_handler.setLevel(numeric_level)
     file_handler.setFormatter(logging.Formatter(log_format, date_format))
-    
+
     # Add the file handler to the root logger
     logging.getLogger('').addHandler(file_handler)
+
+    # This process never calls core.setup_logging, so its handlers carry no
+    # SecretScrubbingFilter (validated 2026-07-23: undisclosed unfiltered
+    # surface — an exc_info start-failure could embed a secret). Attach the
+    # filter to every root handler, including basicConfig's console handler.
+    try:
+        from core.security_logging_filter import SecretScrubbingFilter
+        _scrub = SecretScrubbingFilter()
+        for _h in logging.getLogger('').handlers:
+            _h.addFilter(_scrub)
+    except Exception:
+        pass
     
     # Log startup information
     logger = logging.getLogger("webview.launcher")

@@ -99,6 +99,10 @@ class GoalCreateAction(BaseModel):
                      "are inferred from the goal text and a safe baseline is applied."),
     )
     objective_id: Optional[str] = Field(None, description="Parent objective this goal advances.")
+    depends_on: Optional[List[str]] = Field(
+        None,
+        description="Goal ids that must complete first — the goal waits until they are done.",
+    )
     acceptance: Optional[str] = Field(None, description="What 'done' must prove (ids/paths/urls).")
     acceptance_checks: Optional[List[Any]] = Field(
         None,
@@ -255,6 +259,7 @@ class GoalTool(BaseTool):
             goal = board.create(
                 user_id=user_id, title=params.title, body=params.body, priority=params.priority,
                 parent_id=parent_id, payload=payload or None,
+                depends_on=params.depends_on,
             )
         except DuplicateGoalError as e:
             return ActionResult(
@@ -262,9 +267,14 @@ class GoalTool(BaseTool):
                        f"(similarity {e.similarity:.2f}). Extend that goal instead, or change scope."),
                 include_in_memory=True)
         except ValueError as e:
+            # T2.1 Task 4: board.create validates depends_on BEFORE the row is
+            # written (all-or-nothing), so a bad dep (unknown id / cross-tenant /
+            # wrong kind) never leaves an orphan goal row — this surfaces as a
+            # plain error result, same as any other create-time ValueError.
             return ActionResult(error=f"Cannot create goal: {e}", include_in_memory=True)
         tool_note = f" tools={payload['tools']}" if payload.get("tools") else ""
-        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}: {goal.title}",
+        dep_note = f" depends_on={board.dependencies(goal.id)}" if params.depends_on else ""
+        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}",
                             include_in_memory=True)
 
     @BaseTool.action("List your durable goals (optionally filtered by status).",
@@ -305,6 +315,27 @@ class GoalTool(BaseTool):
             for a in attempts[-5:]:
                 if isinstance(a, dict):
                     lines.append(f"  - {str(a.get('error') or '')[:200]}")
+        # T2.1 Task 4: surface DAG edges (when any exist) — what this goal is
+        # still waiting on, and what it in turn blocks. Capped at 10 ids (review
+        # Minor; mirrors the attempts[-5:] compact-tail precedent above) so a
+        # goal with a wide fan-out never blows the message out.
+        def _id_title_list(ids: List[str]) -> str:
+            capped = ids[:10]
+            parts = []
+            for dep_id in capped:
+                dep_goal = board.get(dep_id)
+                parts.append(f"{dep_id} ({dep_goal.title if dep_goal else '?'})")
+            text = ", ".join(parts)
+            if len(ids) > len(capped):
+                text += f" (+{len(ids) - len(capped)} more)"
+            return text
+
+        deps = board.dependencies(g.id)
+        if deps:
+            lines.append("waiting on: " + _id_title_list(deps))
+        blocks = board.dependents(g.id)
+        if blocks:
+            lines.append("blocks: " + _id_title_list(blocks))
         return ActionResult(extracted_content="\n".join(lines), include_in_memory=True)
 
     @BaseTool.action("Requeue a BLOCKED goal with a rationale (§5.3 stewardship; "

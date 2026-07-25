@@ -16,11 +16,14 @@ its static defaults and this changes no behavior anywhere.
 from typing import Optional
 
 from core.config_policy.policy import (
+    _AUTONOMY_LOCAL_FLAGS,
     _POSTURE_FULL_FLAGS,
     _POSTURE_OWNER_VISIBLE_FLAGS,
     _SAFE_LOCAL_FLAGS,
+    _autonomy_group_default,
     _posture_autonomy_default,
     _safe_autonomy_default,
+    autonomy_enabled,
     autonomy_posture,
     compute_posture,
     local_mode_enabled,
@@ -30,14 +33,18 @@ from core.config_policy.policy import (
 def dynamic_flag_default(name: str) -> Optional[tuple]:
     """Live default for posture/local-governed flags; None = use static default."""
     in_local_group = name in _SAFE_LOCAL_FLAGS
+    in_autonomy_group = name in _AUTONOMY_LOCAL_FLAGS
     in_posture_group = name in _POSTURE_FULL_FLAGS or name in _POSTURE_OWNER_VISIBLE_FLAGS
-    if in_local_group or in_posture_group:
+    if in_local_group or in_autonomy_group or in_posture_group:
         local_default = _safe_autonomy_default(name) if in_local_group else False
+        autonomy_default = _autonomy_group_default(name) if in_autonomy_group else False
         posture_default = _posture_autonomy_default(name) if in_posture_group else False
-        value = local_default or posture_default
+        value = local_default or autonomy_default or posture_default
         labels = []
         if in_local_group:
             labels.append(f"local={'ON' if local_mode_enabled() else 'off'}")
+        if in_autonomy_group:
+            labels.append(f"autonomy={'ON' if autonomy_enabled() else 'off'}")
         if in_posture_group:
             labels.append(f"posture:{autonomy_posture()}")
         return value, f"default({', '.join(labels)})"
@@ -46,6 +53,10 @@ def dynamic_flag_default(name: str) -> Optional[tuple]:
         return compute_posture(), "default(frozen-at-import)"
     if name == "AUTONOMY_POSTURE":
         return autonomy_posture(), "default"
+    if name == "AUTONOMY_ENABLED":
+        # Master switch for the local autonomy-loop group (T1) — report the live
+        # resolved value so `doctor --flags` shows OFF/ON honestly.
+        return autonomy_enabled(), "default"
     if name in ("POLYROB_LOCAL", "ROB_LOCAL"):
         return local_mode_enabled(), "default(process)"
     if name in _LOCAL_DERIVED_EXTRAS:

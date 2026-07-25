@@ -27,7 +27,7 @@ This guide helps you transition from Hermes Agent to POLYROB, highlighting key d
 | **Skills** | Skills system (incl. agent-authored via `SKILLS_WRITABLE`) | Similar but different storage |
 | **H-MEM** | Memory backend | POLYROB uses SQLite FTS5 by default |
 | **Cron jobs** | Cron + Goal board | More durable in POLYROB |
-| **Terminal backends** | Compute-posture ladder (`AGENT_COMPUTE_POSTURE`) | Sandboxed code exec → persistent `shell`/`process` in a dev container → self-maintain verbs; Docker-backed. No SSH/Modal/Daytona remotes |
+| **Terminal backends** | Compute-posture ladder (`AGENT_COMPUTE_POSTURE`) | Sandboxed code exec → persistent `shell`/`process` in a dev container → self-maintain verbs; Docker-backed. `CODE_EXEC_BACKEND=ssh` runs on a remote host too, but non-sandboxed by default (see `tools/code_exec/SANDBOX_SECURITY.md`); no Modal/Daytona remotes |
 | **Nous Portal** | Not supported | POLYROB is multi-provider by design (OpenRouter gets you one-key access) |
 
 ---
@@ -175,9 +175,10 @@ current project directory for the local CLI (`polyrob chat`/`polyrob run`) — t
 The skills bundled with POLYROB itself ship separately, read-only, in the installed package's
 `data/prompts/skills/` — that's not where you copy your own skills.
 
-> A per-repo skill-discovery path (`.agents/skills/`-style, no copying needed) is reserved in the
-> storage-scope precedence order but not yet wired up for loading — a plain project-local `./skills/`
-> is not read today.
+> Per-repo skill discovery **is** wired up: POLYROB reads `.agents/skills/` and `.claude/skills/`
+> from your project directory automatically (default-on in local mode, gated by
+> `POLYROB_TRUST_PROJECT_SKILLS`), so a repo's skills load with no copying. Only a bare
+> project-local `./skills/` (without the `.agents/` or `.claude/` prefix) is not read.
 
 ### Skill Format
 
@@ -368,7 +369,13 @@ metadata:
    - POLYROB ships a compute-posture ladder (`AGENT_COMPUTE_POSTURE` 0–3): hardened
      Docker code-exec by default, a persistent `shell` + `process` job manager in a
      per-session dev container at posture ≥1, and gated self-maintenance verbs at ≥2.
-     Remote execution backends (SSH/Modal/Daytona) are not supported
+     A remote `ssh` execution backend (`CODE_EXEC_BACKEND=ssh`,
+     `CODE_EXEC_SSH_HOST`/`_USER`/`_PORT`/`_KEY`) is supported with a caveat: it is
+     honestly non-sandboxed by default (agent code runs with the SSH user's full
+     privileges on the remote host) and is refused on a server unless the operator
+     attests the remote is hardened/disposable via `CODE_EXEC_SSH_SANDBOXED=true` —
+     see `tools/code_exec/SANDBOX_SECURITY.md` ("SSH backend"). Modal/Daytona remain
+     unsupported
 
 ---
 
@@ -446,8 +453,9 @@ been soak-tested against live accounts yet, not that they're stubs. Run them und
 ### Hermes Has, POLYROB Doesn't
 
 - **Nous Portal** — Single subscription for models/tools
-- **Remote execution backends** — SSH, Modal, Daytona (POLYROB's compute-posture
-  ladder is Docker-on-the-local-box only)
+- **Modal/Daytona execution backends** — POLYROB's compute-posture ladder covers
+  local Docker plus a remote `ssh` backend (non-sandboxed by default, see
+  `tools/code_exec/SANDBOX_SECURITY.md`); Modal and Daytona are not supported
 - **iMessage and IRC surfaces** — POLYROB covers Telegram, WhatsApp, Email, Discord,
   Slack, Signal, and X
 - **Companion mobile apps** — iOS/Android nodes
@@ -455,13 +463,18 @@ been soak-tested against live accounts yet, not that they're stubs. Run them und
 
 ### POLYROB Has, Hermes Doesn't
 
-- **Multi-provider automatic failover** — Switch providers on errors
-- **Durable goal board** — Goals survive restarts with CAS claims
-- **Multi-tenant architecture** — Built for team/business use
-- **Three-tier access model** — OWNER/CORRESPONDENT/DENIED
-- **Capability gates** — Block high-impact tools for correspondents
-- **A2A protocol** — Google's agent interoperability standard
+- **Economic agency** — built-in agent wallet, x402 payments, and invoicing (Hermes has none)
+- **Proactive self-wake** — the agent re-enters idle sessions on its own when observable state changes (Hermes' autonomy is cron / queue / completion-driven)
+- **Multi-tenant architecture** — `user_id`-scoped, built for team/business use (Hermes authorization is single-operator)
+- **Three-tier access model** — OWNER/CORRESPONDENT/DENIED with origin taint and capability gates
+- **Durable owner-approval queue** — remotely approvable and restart-surviving (Hermes' approvals are in-memory and lost on restart)
+- **A2A protocol** — Google's agent interoperability standard (Hermes exposes ACP to editors, not A2A)
 - **REST API** — Built-in HTTP endpoints for programmatic access
+
+> Both frameworks now have provider failover (POLYROB fails over across providers on
+> billing/rate-limit errors; Hermes pools and rotates credentials) and a durable
+> task/goal board (POLYROB's goal board; Hermes' kanban board with DAG
+> decomposition) — those are no longer POLYROB-only.
 
 ---
 
@@ -570,8 +583,9 @@ Consider staying with Hermes if:
 - **You need Nous Portal** — Single subscription is important to you
 - **You need iMessage or IRC** — the two surfaces POLYROB doesn't cover
   (Discord/Slack/Signal/X are covered — see the platform table above)
-- **You need remote execution backends** — SSH, Modal, Daytona (POLYROB's compute
-  ladder is local-Docker only)
+- **You need Modal or Daytona execution backends** — POLYROB's compute ladder
+  covers local Docker plus a remote `ssh` backend (non-sandboxed by default —
+  see `tools/code_exec/SANDBOX_SECURITY.md`), but not Modal/Daytona
 - **You want companion apps** — Mobile/desktop apps are essential
 
 (Agent-created skills are no longer a Hermes exclusive — POLYROB's learning loop ships
@@ -581,9 +595,10 @@ behind `SKILLS_WRITABLE`, on by default under `POLYROB_LOCAL`.)
 
 Consider switching to POLYROB if:
 
-- **You need provider redundancy** — Automatic failover is valuable
+- **You want economic agency** — a built-in wallet, x402 payments, and invoicing (Hermes has none)
 - **You run in production** — Multi-tenant architecture and durability matter
-- **You value security** — Access control and capability gates are important
+- **You value security** — Multi-tenant access control, origin taint, and capability gates are important
+- **You want proactive autonomy** — self-wake and a durable, remotely-approvable owner-approval queue
 - **You want A2A interoperability** — Agent-to-agent communication is needed
 - **You need a REST API** — Programmatic access is required
 

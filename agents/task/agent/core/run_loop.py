@@ -102,6 +102,7 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
+from agents.task.agent.core.run_budget import check_run_budget
 from tools.browser.context import BrowserContext
 from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
@@ -399,6 +400,17 @@ class RunLoopMixin:
 					if self._too_many_failures():
 						max_failures_reached = True
 						self.logger.warning(f"Too many consecutive failures ({self.state.consecutive_failures}/{self.max_failures})")
+						break
+
+					# T1.1: session $-budget gate — halt honestly BEFORE the next paid
+					# step once cumulative provider spend reaches RUN_BUDGET_USD.
+					# check_run_budget is fail-open (None on any probe error) and skips
+					# sub-agents/anonymous/flag-off, so the default path is untouched.
+					budget_halt = await check_run_budget(self)
+					if budget_halt is not None:
+						self.logger.warning(f"💸 {budget_halt}")
+						self.state.stopped = True
+						self._last_result = self.append_terminal_error_item(budget_halt)
 						break
 
 					if await self._handle_control_flags():

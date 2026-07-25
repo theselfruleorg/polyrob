@@ -156,6 +156,20 @@ def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool
 	)
 
 
+def _is_fatal_step_exc(error, billing_failover_enabled: bool) -> bool:
+	"""Exception-level fatal check (chain-aware). Reproduces _is_fatal_step_error's
+	top-string truth table, then ALSO catches a credit-death 402 that llm_runner
+	re-wrapped one frame deep (str(error) has no billing text) — the classifier walks
+	__cause__/__context__. Only credit-death detection gains chain-awareness; auth/quota
+	string quirks are unchanged."""
+	from core.error_classifier import FailoverReason, classify_error
+	if _is_fatal_step_error(str(error).lower(), billing_failover_enabled):
+		return True
+	if classify_error(error).reason is FailoverReason.CREDIT_DEATH:
+		return not billing_failover_enabled  # billing halts only when failover is off
+	return False
+
+
 def _emit_compaction_event(agent: Any, event_name: str, mode: str, **fields: Any) -> None:
 	"""019 P1: emit a compaction_started/compaction_finished feed span event.
 
@@ -780,12 +794,11 @@ class StepMixin:
 			self.message_manager.remove_last_state_message()
 
 			# CRITICAL: Detect fatal errors that should stop execution immediately
-			error_str = str(e).lower()
 			# HIGH-1: when billing failover is enabled, let billing/quota errors reach
 			# _handle_step_error (which tries a provider swap) instead of halting here.
 			from agents.task.agent.core.error_recovery import _billing_failover_enabled
 			_billing_failover = _billing_failover_enabled()
-			is_fatal_error = _is_fatal_step_error(error_str, _billing_failover)
+			is_fatal_error = _is_fatal_step_exc(e, _billing_failover)  # chain-aware (P0 taxonomy)
 
 			if is_fatal_error:
 				# Log fatal error and mark session as failed
@@ -802,7 +815,12 @@ class StepMixin:
 
 				# Create error result for user visibility
 				self._last_result = [ActionResult(
-					error=f"FATAL ERROR: {str(e)[:400]}. The session has been halted due to a critical error. Please check your API configuration and billing status.",
+					# Boilerplate must stay classification-neutral: classify_text reads
+					# this whole string and checks credit-death markers FIRST, so a
+					# literal "billing" here made every auth-caused fatal halt deliver
+					# the "out of credits — top up" owner phrase (T1.2 validation).
+					# The embedded str(e) carries the real markers when they apply.
+					error=f"FATAL ERROR: {str(e)[:400]}. The session has been halted due to a critical error. Please check your API configuration and provider account status.",
 					include_in_memory=True
 				)]
 

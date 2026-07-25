@@ -260,8 +260,6 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
 
     outcome = RunOutcome(session_id=session_id, status=(status or None),
                          refusal=is_refusal(status))
-    if outcome.refusal:
-        return outcome
 
     orch = None
     try:
@@ -270,6 +268,22 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
             orch = get_orch(session_id)
     except Exception:
         orch = None
+
+    if outcome.refusal:
+        # T1.1 validation fix (2026-07-23): a refusal is not always pre-loop —
+        # a RUN_BUDGET_USD halt refuses AFTER paid steps, and zeroing its
+        # provenance recorded 0.0/0 for a run that burned the whole budget.
+        # Collect the cheap mechanical steps/spend before the short-circuit;
+        # every other refusal semantic (no done/reply/evidence) is unchanged,
+        # and a genuinely pre-loop refusal still reads honest zeros.
+        try:
+            from modules.memory.episodic import collect_provenance
+            prov = await collect_provenance(orch)
+            outcome.steps = int(prov.get("steps", 0) or 0)
+            outcome.spend_usd = float(prov.get("spend_usd", 0.0) or 0.0)
+        except Exception:
+            pass
+        return outcome
 
     outcome.done_called = completed_via_done(orch)
     outcome.done_text = extract_done_text(orch)

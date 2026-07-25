@@ -52,8 +52,8 @@ def build_environment_context(session_id: str, user_id: Optional[str],
     try:
         if not _enabled():
             return None
-        from agents.task.constants import (autonomy_mode_display, autonomy_posture,
-                                           compute_posture)
+        from agents.task.constants import (autonomy_enabled, autonomy_mode_display,
+                                           autonomy_posture, compute_posture)
         from agents.task.path import pm
         from core.instance import resolve_instance_id
 
@@ -80,11 +80,20 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             f"Capability axes: compute posture {compute_posture()} "
             f"(0=confined, 1=sandbox-dev, 2=self-maintain, 3=host), "
             f"autonomy mode '{autonomy_mode_display()}', "
-            f"autonomy posture '{autonomy_posture()}'.",
+            f"autonomy posture '{autonomy_posture()}', "
+            f"self-directed autonomy loops "
+            f"{'ENABLED' if autonomy_enabled() else 'OFF'} (AUTONOMY_ENABLED) — "
+            f"when OFF you act only on the user's messages (no self-wake, goal "
+            f"scheduling, or skill self-editing).",
             f"Host executables visible to enabled exec tools: {_host_capabilities()}.",
             "For live status (steps/tools/context/budget) call agent_status.",
             "</environment>",
         ]
+        from core.config_policy.policy import run_budget_usd
+        _budget = run_budget_usd()
+        if _budget > 0:
+            lines.insert(-2, f"Run budget: RUN_BUDGET_USD=${_budget:.2f} session provider-spend "
+                             "ceiling — the run halts at the cap (value at session start).")
         if tool_ids:
             # Positive tool list (018 P4): <tool-availability> enumerates only
             # ABSENT tools; the loaded set previously cost an agent_status call.

@@ -56,9 +56,10 @@ polyrob dashboard --multitenant
 
 `polyrob dashboard` is also aliased as `polyrob webgate`. It launches a
 viewer + chat UI only — it does **not** run the autonomy loops (cron/goals/
-curator). Goals/cron created from its pages execute only when a worker with
-the autonomy runtime is up (`polyrob serve` / `polyrob gateway` / the REPL
-under `POLYROB_LOCAL`), not from the dashboard process alone.
+curator). Goals/cron created from its pages execute only when a worker with the
+autonomy runtime is up **and the relevant loop is enabled** (`polyrob serve` /
+`polyrob gateway`, or the REPL under `POLYROB_LOCAL` + `AUTONOMY_ENABLED` — autonomy
+is OFF by default), not from the dashboard process alone.
 
 ### Safe-by-default guarantees
 

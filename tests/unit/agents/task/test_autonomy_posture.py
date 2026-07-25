@@ -16,7 +16,8 @@ import tools.cronjob_tools as cj
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    for k in ("AUTONOMY_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL",
+    for k in ("AUTONOMY_POSTURE", "AUTONOMY_MODE", "AUTONOMY_ENABLED",
+              "POLYROB_LOCAL", "ROB_LOCAL",
               "GOAL_COMPLETION_JUDGE", "GOAL_BLOCKER_ESCALATION",
               "GOAL_SELF_WAKE_ENABLED", "AUTONOMOUS_CONTINUITY_BRIDGE", "CRON_ENABLED",
               "WAKE_CHANGE_GATE", "EPISODIC_MEMORY_ENABLED", "EPISODIC_DIGEST_INJECT",
@@ -64,13 +65,24 @@ def test_owner_visible_turns_on_the_verify_and_deliver_group(monkeypatch):
     assert c.AutonomyConfig.reflection_on_session_close() is True
 
 
-def test_local_mode_still_flips_episodic_under_silent(monkeypatch):
+def test_local_mode_with_autonomy_flips_episodic_under_silent(monkeypatch):
+    # 0.9.0: episodic is in the AUTONOMY bucket, so under a silent posture the
+    # local profile flips it on only when AUTONOMY_ENABLED is also set.
     monkeypatch.setenv("POLYROB_LOCAL", "1")
+    monkeypatch.setenv("AUTONOMY_ENABLED", "1")
     assert c.autonomy_posture() == "silent"
     assert c.AutonomyConfig.episodic_memory_enabled() is True
     assert c.AutonomyConfig.episodic_digest_inject() is True
-    # reflection-on-close is posture-only (not in the safe-local group)
+    # reflection-on-close is posture-only (not in the local autonomy group)
     assert c.AutonomyConfig.reflection_on_session_close() is False
+
+
+def test_local_mode_without_autonomy_keeps_episodic_off_under_silent(monkeypatch):
+    # POLYROB_LOCAL alone (autonomy off) no longer flips episodic — new-install default.
+    monkeypatch.setenv("POLYROB_LOCAL", "1")
+    assert c.autonomy_enabled() is False
+    assert c.AutonomyConfig.episodic_memory_enabled() is False
+    assert c.AutonomyConfig.episodic_digest_inject() is False
 
 
 def test_full_adds_cron_on_top(monkeypatch):

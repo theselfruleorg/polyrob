@@ -96,6 +96,8 @@ async def _run_x(verbose: bool):
     install_surface_bus(container)
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     from surfaces.x.harness import build_x_harness

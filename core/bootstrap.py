@@ -555,8 +555,11 @@ async def build_cli_container(
     _cap_set_at_launch = "MAX_SESSIONS_PER_USER" in os.environ
 
     load_env(env, local_mode=True)
-    # Terminal-native, single-user: mark the process local so the SAFE autonomy/
-    # learning flags default ON as a group (core.config_policy._SAFE_LOCAL_FLAGS).
+    # Terminal-native, single-user: mark the process local so the INTERACTIVE tools
+    # default ON as a group (core.config_policy._SAFE_LOCAL_FLAGS — coding/git/KB/
+    # RAG/project-context/…). The self-directed AUTONOMY loops
+    # (_AUTONOMY_LOCAL_FLAGS) stay OFF for a new install until AUTONOMY_ENABLED is
+    # set (or an autonomous posture/mode) — see core.config_policy.autonomy_enabled.
     # setdefault so an explicit `POLYROB_LOCAL=0 rob ...` can still opt out.
     os.environ.setdefault("POLYROB_LOCAL", "1")
     console_level = log_level or os.environ.get("LOG_LEVEL", "ERROR")

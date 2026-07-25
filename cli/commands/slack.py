@@ -85,6 +85,8 @@ async def _run_slack(bot_opt, app_opt, verbose: bool):
     install_surface_bus(container)
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     from surfaces.slack.harness import build_slack_harness

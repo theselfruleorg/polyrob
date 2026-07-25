@@ -44,6 +44,38 @@ def test_refusal_string_is_recorded_as_failure_not_success():
     assert board.failures[0][0] == "g1"
 
 
+def test_budget_halt_refusal_records_greppable_marker():
+    """T1.1 validation fix (2026-07-23): a RUN_BUDGET_USD halt was recorded as
+    the generic 'run did not complete (refusal or empty)' — indistinguishable
+    on the board from any other refusal. The marker must prefix
+    goals.last_failure_error, and it must NOT be labeled a provider outage
+    (the halt text embeds dollar amounts that can satisfy the credit-death
+    classifier, e.g. a $402 budget)."""
+
+    class _BudgetAgent:
+        async def create_session(self, *, user_id, request):
+            return {"id": "s-budget"}
+
+        async def run_session(self, user_id, session_id):
+            return ("Session failed: run_budget_exhausted: session provider "
+                    "spend $402.0000 reached RUN_BUDGET_USD $402.00; halting "
+                    "before the next step")
+
+        deliver_self_wake = None
+
+    board = _FakeBoard()
+    disp = GoalDispatcher(board, _BudgetAgent())
+    goal = Goal(id="g-budget", user_id="u1", title="budget goal")
+    asyncio.run(disp._run_goal(goal))
+    assert not board.successes
+    assert board.failures, "a budget halt must be recorded as failure"
+    gid, error = board.failures[0]
+    assert gid == "g-budget"
+    assert error.startswith("run_budget_exhausted:"), error
+    assert not error.startswith("llm_provider_exhausted"), (
+        "a budget halt must never be labeled a provider outage: %s" % error)
+
+
 def test_genuine_result_is_recorded_as_success():
     """Sanity: a real result string still goes to record_success (regression guard)."""
 

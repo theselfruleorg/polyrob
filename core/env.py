@@ -1,4 +1,5 @@
 """Canonical env-flag parser for the whole repo. One falsey-set, one parser."""
+import math
 import os
 
 _FALSEY = ("none", "off", "false", "0", "no", "")
@@ -34,14 +35,21 @@ def bool_env(name: str, default: bool) -> bool:
 def float_env(name: str, default: float) -> float:
     """Float twin of :func:`int_env` (018 P5a — there was NO float SSOT; every
     float flag was a raw crash-prone ``float(os.getenv(...))``). Unset, blank,
-    or unparsable (incl. the ``"none"``/``"off"`` disable idioms) => *default*."""
+    unparsable (incl. the ``"none"``/``"off"`` disable idioms), or non-finite
+    => *default*. Non-finite matters: ``"inf"``/``"nan"`` parse as valid
+    floats, and a NaN/inf threshold turns a gate (e.g. RUN_BUDGET_USD) into a
+    silent never-trips while the operator believes it is active (2026-07-23
+    validation)."""
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
         return default
     try:
-        return float(str(raw).strip())
+        val = float(str(raw).strip())
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(val):
+        return default
+    return val
 
 
 def int_env(name: str, default: int) -> int:

@@ -176,3 +176,135 @@ def test_apply_patch_pure_addition():
     content = "x\ny\n"
     patch = "@@ -1,2 +1,3 @@\n x\n+new\n y\n"
     assert apply_patch(content, patch) == "x\nnew\ny\n"
+
+
+# ---------------------------------------------------------------------------
+# T2.2 — fuzzy-edit rung ladder (apply_str_replace_ex)
+# ---------------------------------------------------------------------------
+# Ladder, strictest-first: exact -> whitespace -> blank-edge ->
+# interior-whitespace. Every rung is unique-or-fail; replace_all skips ALL
+# fuzzy rungs. Per the :41-48 trap above, every fixture here is verified to
+# force a genuine 0-exact-match (no substring-shift coincidence).
+from tools.coding.edit import apply_str_replace_ex  # noqa: E402
+
+
+def test_apply_str_replace_ex_reports_exact_rung():
+    out, rung = apply_str_replace_ex("hello world", "world", "there")
+    assert out == "hello there"
+    assert rung == "exact"
+
+
+def test_apply_str_replace_ex_reports_whitespace_rung():
+    # content is LESS indented than old_string, so old_string can't be a
+    # shifted substring of it (the :41-48 trap only bites the other way,
+    # content MORE indented than old_string) -> genuine 0-exact-match.
+    content = "def f():\n    return 1\n"
+    out, rung = apply_str_replace_ex(content, "        return 1", "        return 2")
+    assert content.count("        return 1") == 0
+    assert out == "def f():\n    return 2\n"
+    assert rung == "whitespace"
+
+
+def test_apply_str_replace_wrapper_returns_plain_string_unchanged():
+    out = apply_str_replace("hello world", "world", "there")
+    assert out == "hello there"
+    assert isinstance(out, str)
+
+
+def test_blank_edge_reproduces_documented_false_negative_then_matches():
+    # Reproduces the edit.py :71-76 false-negative: old_string's trailing
+    # "\n" gains a trailing empty-string "line" on .split("\n"), so the
+    # plain whitespace rung (2) requires content to have a matching blank
+    # line immediately after the block. Neither occurrence here is followed
+    # by a blank line (both are followed by another "def"), so rung 2 finds
+    # ZERO matches even though the meaningful 2 lines line up uniquely with
+    # the "def f():" block. Multi-line + differing indent (4-space old_string
+    # vs 8-space content) rules out the single-line substring-shift
+    # coincidence from the :41-48 trap. Rung 3 (blank-edge) must trim the
+    # trailing blank line from old_string's window and find the unique hit.
+    content = (
+        "def f():\n"
+        "        x = 1\n"
+        "        y = 2\n"
+        "def g():\n"
+        "        x = 9\n"
+        "        y = 9\n"
+    )
+    old_string = "    x = 1\n    y = 2\n"  # trailing "\n" -> blank edge line
+    new_string = "    x = 10\n    y = 20"  # no trailing blank edge (author intent)
+    assert content.count(old_string) == 0  # genuine 0-exact-match
+    out, rung = apply_str_replace_ex(content, old_string, new_string)
+    assert rung == "blank-edge"
+    assert out == (
+        "def f():\n"
+        "        x = 10\n"
+        "        y = 20\n"
+        "def g():\n"
+        "        x = 9\n"
+        "        y = 9\n"
+    )
+
+
+def test_blank_edge_ambiguous_after_trim_fails_loudly():
+    # Two structurally-identical blocks, neither followed by a blank line
+    # (a trailing "def h()" prevents content's own end-of-string blank line
+    # from making the SECOND occurrence spuriously unique at rung 2). Rung 2
+    # finds 0 matches; rung 3's blank-edge trim finds BOTH occurrences ->
+    # must fail loudly, never guess which one.
+    content = (
+        "def f():\n"
+        "        x = 1\n"
+        "        y = 2\n"
+        "def g():\n"
+        "        x = 1\n"
+        "        y = 2\n"
+        "def h():\n"
+        "        return 0\n"
+    )
+    old_string = "    x = 1\n    y = 2\n"
+    assert content.count(old_string) == 0
+    with pytest.raises(EditError, match="not unique"):
+        apply_str_replace_ex(content, old_string, "    x = 10\n    y = 20")
+
+
+def test_interior_whitespace_collapse_matches_multiline_window():
+    # old_string carries extra interior spaces around `=` on both lines;
+    # rung 2's per-line .strip() only trims edges, so this is a genuine
+    # 0-exact-match that also misses rung 2 entirely, forcing rung 4's
+    # interior-whitespace collapse (" ".join(line.split())).
+    content = "def f():\n    a = 1\n    b = 2\n"
+    old_string = "    a  =  1\n    b  =  2"
+    new_string = "    a = 10\n    b = 20"
+    assert content.count(old_string) == 0
+    out, rung = apply_str_replace_ex(content, old_string, new_string)
+    assert rung == "interior-whitespace"
+    assert out == "def f():\n    a = 10\n    b = 20\n"
+
+
+def test_interior_whitespace_ambiguous_after_collapse_fails_loudly():
+    # old_string's interior spacing (triple space around `=`) matches
+    # neither content line exactly nor after edge-strip (rung 2 finds 0),
+    # but collapses to "x = 1" for BOTH content lines -> rung 4 must fail
+    # loudly rather than guess.
+    content = "if a:\n    x = 1\nif b:\n    x  =  1\n"
+    old_string = "x   =   1"
+    assert content.count(old_string) == 0
+    with pytest.raises(EditError, match="not unique"):
+        apply_str_replace_ex(content, old_string, "x = 2")
+
+
+def test_genuinely_absent_final_error_byte_identical_to_today():
+    content = "def f():\n    return 1\n"
+    with pytest.raises(EditError) as excinfo:
+        apply_str_replace_ex(content, "totally_absent_symbol_xyz", "x")
+    assert str(excinfo.value) == "old_string not found in file"
+
+
+def test_replace_all_skips_blank_edge_and_interior_whitespace_rungs():
+    # A drift that would resolve via rung 4 (interior-whitespace) must still
+    # fail loudly under replace_all=True — fuzzy rungs are single-replace
+    # only (existing invariant, extended to the two new rungs).
+    content = "def f():\n    a = 1\n    b = 2\n"
+    old_string = "    a  =  1\n    b  =  2"
+    with pytest.raises(EditError, match="not found"):
+        apply_str_replace_ex(content, old_string, "    a = 10\n    b = 20", replace_all=True)

@@ -18,13 +18,13 @@ from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 from surfaces.telegram.inbound import InboundResult
 
 
-def _result(session_key: str, text: str = "hello") -> InboundResult:
+def _result(session_key: str, text: str = "hello", session_id: str = None) -> InboundResult:
     src = SessionSource(surface_id="telegram", chat_id="c1", chat_type="dm")
     ident = Identity(user_id="u1", source=src, raw_user_id="42")
     inbound = InboundMessage(text=text, identity=ident)
     return InboundResult(
         inbound=inbound,
-        decision=RouteDecision(RouteKind.TASK_AGENT, session_key),
+        decision=RouteDecision(RouteKind.TASK_AGENT, session_key, session_id=session_id),
     )
 
 
@@ -60,3 +60,33 @@ async def test_different_chats_still_run_concurrently(monkeypatch):
         harness.act_on_inbound(object(), _result("chat-B")),
     )
     assert tracker.max_active == 2, "distinct chats must not serialize on each other"
+
+
+@pytest.mark.asyncio
+async def test_aliased_keys_same_session_serialize(monkeypatch):
+    """T1.4: two DIFFERENT session_keys that resolve to the SAME session_id must
+    serialize — the lock buckets on the resolved session, not the routing key."""
+    tracker = _Tracker()
+    monkeypatch.setattr(harness, "_start_task_session", tracker.run)
+    r1 = _result("sk:email:dm:alice:thread:1", "m1", session_id="sess-X")
+    r2 = _result("sk:email:dm:alice:thread:2", "m2", session_id="sess-X")
+    await asyncio.gather(
+        harness.act_on_inbound(object(), r1),
+        harness.act_on_inbound(object(), r2),
+    )
+    assert tracker.max_active == 1, "aliased keys resolving to one session must not interleave"
+
+
+@pytest.mark.asyncio
+async def test_distinct_sessions_still_concurrent(monkeypatch):
+    """T1.4: distinct resolved session_ids must still run concurrently, even with
+    differing session_keys."""
+    tracker = _Tracker()
+    monkeypatch.setattr(harness, "_start_task_session", tracker.run)
+    r1 = _result("sk:email:dm:alice:thread:1", "m1", session_id="sess-X")
+    r2 = _result("sk:email:dm:bob:thread:9", "m2", session_id="sess-Y")
+    await asyncio.gather(
+        harness.act_on_inbound(object(), r1),
+        harness.act_on_inbound(object(), r2),
+    )
+    assert tracker.max_active == 2, "distinct resolved sessions must not serialize on each other"

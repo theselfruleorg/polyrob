@@ -34,6 +34,28 @@ def test_looks_like_credit_death_matches_provider_shapes():
     assert looks_like_credit_death(None) is False
 
 
+def test_402_marker_requires_word_boundary():
+    """Validation fix (2026-07-23): bare-substring "402" tripped on formatted
+    amounts, token counts and hex request ids. Real provider shapes carry
+    non-word neighbors around 402 and must keep matching — pinned to the
+    captured prod payload class (Task 10 lesson: pin REAL shapes)."""
+    from core.credit_sentinel import looks_like_credit_death
+    # real provider shapes still match
+    assert looks_like_credit_death(
+        "Error code: 402 - This request requires more credits, or fewer "
+        "max_tokens. You requested up to 8192 tokens, but can only afford 1591") is True
+    assert looks_like_credit_death("HTTP/1.1 402 Payment Required") is True
+    assert looks_like_credit_death("status_code=402") is True
+    assert looks_like_credit_death("(402)") is True
+    # digit-run / identifier coincidences must NOT match
+    assert looks_like_credit_death(
+        "run_budget_exhausted: session provider spend $0.4020 reached "
+        "RUN_BUDGET_USD $0.40") is False
+    assert looks_like_credit_death("requested 130402 tokens, max is 128000") is False
+    assert looks_like_credit_death(
+        "upstream call failed (request_id: req_9f402ab13c7e)") is False
+
+
 def test_trip_activates_and_auto_releases(data_dir, monkeypatch):
     from core.credit_sentinel import (credit_sentinel_active, trip_credit_sentinel,
                                       _sentinel_path)

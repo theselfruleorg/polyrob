@@ -109,12 +109,14 @@ async def a2a_rpc_endpoint(
         )
     except Exception as e:
         logger.error(f"A2A RPC error: {e}", exc_info=True)
+        # No data=str(e): raw exception text can carry DB paths/internals into
+        # the HTTP response (validated 2026-07-23, same fix as api/mcp_serve).
+        # The full traceback is already in the server log above.
         return JSONRPCResponse(
             id=request_id,
             error=JSONRPCError(
                 code=A2AErrorCode.INTERNAL_ERROR,
-                message="Internal error",
-                data=str(e)
+                message="Internal error"
             )
         )
 

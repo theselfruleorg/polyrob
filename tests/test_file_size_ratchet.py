@@ -32,7 +32,12 @@ CEILINGS = {
     "tools/controller/action_registration.py": 2571,
     "api/task_http_api.py": 1876,
     "cli/ui/commands/handlers.py": 1905,
-    "core/config_policy/policy.py": 1278,
+    # Re-baselined 2026-07-23: policy.py is the designated flag-accessor SSOT
+    # (core/config_policy/) — this wave added run_budget_usd/_float_env,
+    # compaction_prompt_guard, dead_target_registry_enabled, goal-blocked retry,
+    # and related accessors, growing the file doing its designated job (see
+    # AGENTS.md core/config_policy note). Not an extraction candidate.
+    "core/config_policy/policy.py": 1341,
 }
 
 # A ceiling may sit at most this many lines above the real size before the

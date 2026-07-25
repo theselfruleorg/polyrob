@@ -57,6 +57,40 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
             pass
 
 
+def _stamp_delegation_deliveries(agent, messages: List[Dict[str, Any]]) -> None:
+    """T1.6 review fix (CRITICAL finding): stamp ``delivered_at`` for any
+    drained message that is an async-delegation completion or a cold-start
+    completed-undelivered recovery.
+
+    This is the ONE point a delegation result is guaranteed to be handed to
+    ``inject_user_guidance()`` — by this call's caller, synchronously, right
+    after drain — and so has ACTUALLY entered the turn's message history.
+    Contrast with submit/park time (``orchestrator._deliver_async_delegation`` /
+    ``TaskAgent.deliver_self_wake``), which only places the message in the
+    in-memory HITL queue; a crash before this drain must leave the row
+    recoverable, not falsely marked delivered.
+
+    Fail-open throughout — never allowed to block message delivery.
+    """
+    if not messages:
+        return
+    session_id = getattr(agent, "session_id", "") or ""
+    if not session_id:
+        return
+    user_id = getattr(agent, "user_id", "") or ""
+    try:
+        from agents.task.agent.autonomy_state import stamp_delivered_from_drain
+    except Exception:
+        return
+    for msg in messages:
+        try:
+            stamp_delivered_from_drain(
+                session_id, user_id, msg.get("kind", ""), msg.get("metadata"),
+            )
+        except Exception:
+            pass
+
+
 class UserIngressMixin:
     """User-message queueing, approval shims, and TODO status for Agent."""
 
@@ -79,6 +113,14 @@ class UserIngressMixin:
         # batch's kinds, fail-open (never let this break message delivery).
         try:
             _update_forged_turn_marker(getattr(self, 'orchestrator', None), messages)
+        except Exception:
+            pass
+
+        # T1.6 review fix: stamp delivered_at for any drained delegation-result /
+        # completed-undelivered-recovery message. Must run here (the drain
+        # point), not at submit/park time — see _stamp_delegation_deliveries.
+        try:
+            _stamp_delegation_deliveries(self, messages)
         except Exception:
             pass
 

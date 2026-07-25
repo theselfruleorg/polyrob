@@ -15,6 +15,29 @@ import os
 import sys
 
 
+def attach_dispatcher_event_log(dispatcher) -> None:
+    """Best-effort wiring: give a started ``OutboundDispatcher`` the durable telemetry
+    event log so ``dead_target_skipped``/``dead_target_marked`` are actually recorded
+    outside tests.
+
+    Bootstrap (``core/surfaces/bootstrap.py``) deliberately constructs the dispatcher
+    with ``event_log=None`` — the core tier must never import ``agents.*``. The CLI
+    tier sits above ``agents`` in the layering (tier 4 -> tier 2, a downward import),
+    so it is the seam that closes the gap. Called from every ``dispatcher.start()``
+    site under ``cli/commands/``. Fail-open: telemetry must never block a surface
+    from starting, so any import/lookup error is swallowed silently.
+    """
+    try:
+        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+    except Exception:
+        return
+    try:
+        if event_log_enabled():
+            dispatcher.attach_event_log(get_event_log())
+    except Exception:
+        pass
+
+
 @contextlib.contextmanager
 def suppress_bootstrap_output():
     """Silence Python-level stdout/stderr plus OS fd 2 for a bootstrap window.

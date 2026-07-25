@@ -233,6 +233,37 @@ def test_build_run_outcome_refusal_short_circuits():
     assert o.result_text() == ""
 
 
+def test_build_run_outcome_refusal_keeps_provenance():
+    """T1.1 validation fix (2026-07-23): a RUN_BUDGET_USD halt refuses AFTER
+    paid steps — the refusal short-circuit must still record honest
+    steps/spend provenance instead of zeroing a max-spend run."""
+    from agents.task.runtime.run_outcome import build_run_outcome
+
+    class _State:
+        n_steps = 7
+
+    class _MainAgent:
+        _is_sub_agent = False
+        state = _State()
+
+    class _Tracker:
+        async def get_session_breakdown(self, sid):
+            return {"total_user_cost_usd": 0.42}
+
+    class _ProvOrch:
+        agents = {"main": _MainAgent()}
+        usage_tracker = _Tracker()
+        session_id = "s1"
+
+    ta = _FakeTaskAgent(_ProvOrch(), reply="stale")
+    o = asyncio.run(build_run_outcome(
+        ta, "s1", "Session failed: run_budget_exhausted: spend reached budget"))
+    assert o.refusal is True
+    assert o.result_text() == ""          # refusal semantics unchanged
+    assert o.steps == 7
+    assert o.spend_usd == 0.42
+
+
 def test_build_run_outcome_outcome_line_falls_back_to_reply():
     """Legacy compat: agents that put the OUTCOME line in a reply (not done())
     keep their BLOCKED declarations honored."""

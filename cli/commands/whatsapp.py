@@ -108,6 +108,8 @@ async def _run_whatsapp(port: int, verbose: bool) -> None:
     # Start the outbound delivery dispatcher (if installed by the bus).
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     # Start the autonomy background loops (cron/goals/curator) under the local profile —

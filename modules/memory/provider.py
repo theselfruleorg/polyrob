@@ -74,11 +74,13 @@ class MemoryProvider(ABC):
 
     async def search(self, query: str, *, user_id: Optional[str] = None,
                      session_id: Optional[str] = None, limit: int = 5,
-                     sort: Optional[str] = None) -> str:
+                     sort: Optional[str] = None, before_id: Optional[int] = None,
+                     with_ids: bool = False) -> str:
         """Agent-callable recall (UP-09). Default implementation delegates to
-        ``prefetch`` (ignoring limit/sort/browse) so providers that don't override it
-        still work. Backends with a richer store (SQLite FTS) override this to support
-        bounded result counts, sort, and browse-on-empty-query.
+        ``prefetch`` (ignoring limit/sort/browse/before_id/with_ids) so providers
+        that don't override it still work. Backends with a richer store (SQLite
+        FTS) override this to support bounded result counts, sort,
+        browse-on-empty-query, and (T2.6) rowid-cursor pagination + id display.
         """
         return await self.prefetch(query, session_id=session_id or "", user_id=user_id)
 

@@ -1,6 +1,14 @@
 # POLYROB vs Other Agent Frameworks
 
-A comprehensive comparison of POLYROB with major AI agent frameworks as of 2026.
+A comparison of POLYROB with two other prominent open-source agent projects,
+**Hermes** ([NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent))
+and **OpenClaw** ([openclaw/openclaw](https://github.com/openclaw/openclaw)).
+
+> **Verified as of 2026-07-23.** The claims below were checked against each project's
+> live upstream repository on that date (Hermes at its v0.19.0 release; OpenClaw on
+> `main`). Both are fast-moving projects — treat the ✅/⚠️/❌ marks as a snapshot, and
+> check the upstream repos for anything load-bearing to your decision. Where we could
+> not verify a claim on the live repo, it is marked ❓ rather than guessed.
 
 ---
 
@@ -9,34 +17,71 @@ A comprehensive comparison of POLYROB with major AI agent frameworks as of 2026.
 | Feature | POLYROB | Hermes | OpenClaw |
 |---------|---------|--------|----------|
 | **License** | MIT | MIT | MIT |
-| **Language** | Python | Python | TypeScript/Node |
-| **Primary Focus** | Production autonomy | Self-improving agent | Personal assistant |
-| **Multi-Provider LLM** | ✅ 6+ providers | ✅ via OpenRouter | ✅ Multiple |
-| **Auto Failover** | ✅ Built-in | ❌ | ❌ |
-| **Native Tool Calling** | ✅ Per-provider | ✅ | ✅ |
-| **Persistent Memory** | ✅ SQLite + Vector | ✅ FTS5 + H-MEM | ✅ FTS5 |
-| **Durable Goals** | ✅ Goal board + Cron | ✅ Cron only | ❌ |
-| **Skills System** | ✅ agentskills.io `SKILL.md` + install pipeline (local/git/URL, scanned & quarantined) | ✅ Learning loop | ✅ Workspace skills |
-| **Multi-Surface** | ✅ 10+ (CLI, API, Web, Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | ✅ 6+ platforms | ✅ 20+ channels |
-| **A2A Protocol** | ✅ Google spec | ❌ | ❌ |
-| **MCP Support** | ✅ Full client | ✅ | ✅ |
-| **Delegation** | ✅ Sub-agents, least-privilege (task-split; not model-ensemble) | ✅ RPC scripts | ✅ Multi-agent |
-| **Security Model** | ✅ 3-tier access gates | ✅ Pairing only | ✅ Sandboxing |
-| **Tenant Isolation** | ✅ Multi-tenant | ❌ Single-user | ❌ Single-user |
-| **Self-Hosted** | ✅ Full control | ✅ | ✅ |
-| **Production Ready** | ✅ Durable, multi-tenant | ⚠️ Single-user | ⚠️ Single-user |
-| **Browser Automation** | ✅ Playwright | ✅ | ✅ |
-| **REST API** | ✅ Built-in | ❌ | ❌ |
-| **Streaming** | ✅ SSE + Surface streaming | ✅ | ✅ |
+| **Language** | Python | Python | TypeScript / Node (native macOS/iOS in Swift) |
+| **Primary focus** | Durable, self-hosted autonomy that scales to multi-tenant | Self-improving single-operator agent | Omni-channel personal assistant |
+| **Multi-provider LLM** | ✅ 6 providers | ✅ 300+ models (portal / OpenRouter / own endpoint) | ✅ Claude, OpenAI, Gemini, DeepSeek |
+| **Provider failover** | ✅ Automatic cross-provider | ✅ Credential pooling + rotation | ✅ Across auth profiles |
+| **Native tool calling** | ✅ Per-provider | ✅ | ✅ |
+| **Persistent memory** | ✅ SQLite FTS5 + optional vector | ✅ FTS5 + reflective/curated, pluggable providers | ⚠️ Session history + workspace files (no dedicated vector RAG) |
+| **Durable task/goal board** | ✅ Goal board + cron | ✅ Kanban board with DAG decomposition | ❌ (cron + sessions only) |
+| **Proactive self-wake** | ✅ Self-wake + change-gate | ❌ | ❌ |
+| **Skills system** | ✅ `SKILL.md` + install pipeline (local/git/URL, scanned & quarantined) | ✅ Autonomous skill creation / learning loop | ✅ Workspace skills |
+| **Messaging channels** | 7 (Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | ~30 (adds WeChat, Feishu, LINE, Matrix, iMessage, …) | ~23 + native mobile/desktop apps |
+| **REST API** | ✅ Built-in | ❌ (gateway / web, not a documented REST session API) | ❌ |
+| **A2A protocol** | ✅ Google spec | ❌ (exposes ACP to editors) | ❌ |
+| **MCP client** | ✅ | ✅ | ✅ |
+| **MCP server (inbound)** | ✅ `POST /mcp`, 5 read-only tools | ✅ (`mcp_serve.py`; not headlined) | ❌ (community/requested) |
+| **Delegation / multi-agent** | ✅ Least-privilege sub-agents | ✅ RPC + kanban swarm | ✅ Multi-agent routing |
+| **Economic agency (wallet / payments)** | ✅ Wallet + x402 + invoicing | ❌ | ❌ |
+| **Tenant isolation** | ✅ Multi-tenant (single-process, `user_id`-scoped) | ❌ Single-operator | ❌ Single-operator |
+| **Access model** | ✅ 3-tier OWNER / CORRESPONDENT / DENIED + origin taint | ⚠️ Binary authorized/not + DM pairing | ⚠️ DM pairing + allowlists |
+| **Owner-approval queue (HITL)** | ✅ Durable, remotely-approvable | ⚠️ In-memory (lost on restart) | ⚠️ Pairing = channel access, not per-tool |
+| **Code-exec sandboxing** | ✅ Docker (opt-in); local / ssh backends | ✅ 6 backends (local, Docker, SSH, Singularity, Modal, Daytona) | ✅ Docker / SSH / OpenShell |
+| **Self-hosted** | ✅ | ✅ | ✅ |
 
-**Legend:** ✅ Supported | ⚠️ Partial/Limited | ❌ Not Supported
+**Legend:** ✅ Supported · ⚠️ Partial / with caveats · ❌ Not supported · ❓ Unverified
 
-> **On licensing:** every framework above is permissively licensed (MIT), so license is not a
-> differentiator — it's table stakes. POLYROB ships the **full engine under MIT, self-hosted**: free
-> forever, yours to fork and run, with no limited "open core" held back behind a paid cloud. The
-> POLYROB and Selfrule *names* are trademarks (see [TRADEMARK.md](../TRADEMARK.md)) — fork the code
-> freely, just rename your distribution. What actually separates the frameworks is the capability and
-> architecture rows below.
+> **On licensing:** all three frameworks are permissively MIT-licensed, so license is
+> not a differentiator — it's table stakes. POLYROB ships the **full engine under MIT,
+> self-hosted**: free forever, yours to fork and run, with no limited "open core" held
+> back behind a paid cloud. The POLYROB and Selfrule *names* are trademarks (see
+> [TRADEMARK.md](../TRADEMARK.md)) — fork the code freely, just rename your
+> distribution. What actually separates the frameworks is the capability and
+> architecture rows above.
+
+---
+
+## What actually sets POLYROB apart
+
+Two of the three projects here are larger and more established than POLYROB (both
+Hermes and OpenClaw are among the most-starred agent repos on GitHub as of
+2026-07-23). POLYROB does **not** compete on channel breadth or community size. What
+it has that neither upstream does, verified against their live repos:
+
+- **Economic agency.** POLYROB has a built-in agent wallet, x402 pay-per-request (in
+  and out), invoicing with branded QR cards, and rolling spend caps. **Neither Hermes
+  nor OpenClaw has any payment, wallet, or monetization capability.** This is
+  POLYROB's clearest single differentiator.
+- **Multi-tenancy with an origin-taint access model.** POLYROB resolves every inbound
+  message to one of three tiers — **OWNER** steers, **CORRESPONDENT** (a third party
+  the agent itself contacted) can only return *data*, **DENIED** is blocked — and
+  gates high-impact tools off while a session is correspondent-tainted. Both upstreams
+  are single-operator: Hermes' authorization is a binary "is this user allowed", and
+  its own security docs recommend running separate instances for isolation.
+- **Proactive self-wake.** POLYROB can re-enter an idle session on its own when
+  observable state changes (with depth/backoff guards and a change-gate to avoid
+  paying for no-op wakes). Both upstreams are reactive — proactivity comes from cron,
+  a task queue, or a completion callback; **neither has a self-wake primitive.**
+- **A durable, remotely-approvable owner-approval queue.** High-impact and money
+  actions route through a persisted approval queue that survives a restart and can be
+  approved from your phone. Hermes' approval is pattern-based and in-memory (in-flight
+  approvals are lost on restart); OpenClaw's pairing gates *channel access*, not
+  per-tool actions.
+
+Where POLYROB **lags**, honestly: **channel breadth** (7 messaging channels vs
+Hermes' ~30 and OpenClaw's ~23, and OpenClaw's native mobile/desktop apps),
+**code-exec backend variety** (Hermes offers serverless backends like Modal and
+Daytona), and **community/ecosystem size** (POLYROB is the newer project).
 
 ---
 
@@ -44,78 +89,79 @@ A comprehensive comparison of POLYROB with major AI agent frameworks as of 2026.
 
 ### POLYROB
 
-**Best for:** Running your own durable, self-hosted autonomous agent — one you control end to end. Personal-first, and it scales to multi-tenant + billing when you need it.
+**Best for:** Running your own durable, self-hosted autonomous agent that you control
+end to end — personal-first, scaling to multi-tenant + billing when you need it.
 
-**Unique Strengths:**
-- **Truly open** — MIT-licensed, self-hosted, fork-friendly; the full engine, free forever, not a limited open core
-- **Durable autonomy** — Goal board and cron survive process restarts
-- **Security model** — Three-tier access (OWNER/CORRESPONDENT/DENIED) with capability gates
-- **Skill marketplace pipeline** — install skills from a local folder, GitHub repo, or a `SKILL.md` URL; every install is threat-scanned and quarantined until you explicitly approve it
-- **Provider redundancy** — Automatic failover across 6+ LLM providers
-- **A2A protocol** — Google's agent interoperability standard
-- **Self-contained** — No external agent framework dependencies
-- **Scales to teams** — single-user by default; multi-tenant isolation, metering and credits are in the core when you want them
+**Unique strengths:**
+- **Economic agency** — agent wallet, x402 payments (charge and pay), invoicing, spend caps
+- **Multi-tenant + origin-taint security** — OWNER/CORRESPONDENT/DENIED tiers with capability gates
+- **Durable autonomy** — goal board, cron, and self-wake all survive process restarts
+- **Durable owner-approval queue** — remotely approvable, restart-surviving human-in-the-loop
+- **Interoperability** — MCP client *and* server, plus Google's A2A protocol and a REST/OpenAI-compatible API
+- **Self-contained** — a native LLM layer, no third-party agent framework dependency
 
 **Trade-offs:**
-- More complex configuration than single-user alternatives
-- Heavier install for full feature set
-- Newer ecosystem (smaller community than established frameworks)
+- Fewer messaging channels than the omni-channel alternatives
+- More configuration surface than a single-user assistant
+- Newer project — smaller community and ecosystem than the two established ones
 
 **When to choose POLYROB:**
-- You value **self-hosted control** — your keys, your data, your machine; no vendor lock-in
-- You want **durable autonomy** — goals that survive restarts and deliver results unattended
-- You want **provider redundancy** — automatic failover if a provider has issues
-- You need **security by default** — correspondent gates and capability controls when others are in the loop
-- You're **building on it** — multi-tenant, metering, and A2A interoperability are there when you grow into them
+- You want an agent that can **transact** — quote, invoice, get paid, and pay for resources
+- You expect **more than one person** to interact with it, and need stranger input treated as data
+- You want **durable, proactive autonomy** — goals and self-wake that survive restarts
+- You want **self-hosted control** — your keys, your data, your machine, MIT-licensed
 
 ---
 
 ### Hermes Agent
 
-**Best for:** Personal use with a focus on learning and skill development.
+**Best for:** A single operator who wants a self-improving agent with broad channel
+reach and a large model/tool catalog. *(Live upstream: v0.19.0, 2026-07-20.)*
 
-**Unique Strengths:**
-- **Learning loop** — Agent improves from experience, creates skills
-- **Nous Portal** — Single subscription for 300+ models + tools
-- **Skills ecosystem** — Community skills hub with sharing
-- **Rich CLI** — Full TUI with multiline editing and autocomplete
-- **Multi-platform gateway** — Runs on $5 VPS or GPU clusters
+**Unique strengths:**
+- **Broad channel reach** — ~30 connectors, including heavy CN/enterprise (WeChat, Feishu, LINE, Matrix, iMessage)
+- **Large model catalog** — 300+ models via Nous Portal / OpenRouter / your own endpoint, with credential pooling and rotation
+- **Learning loop** — autonomous skill creation; skills self-improve during use
+- **Kanban swarm** — a multi-worker task board with DAG decomposition for parallel workstreams
+- **Serverless code-exec** — six terminal backends including Modal and Daytona (idle-hibernating)
+- **Also an MCP server** — ships an `mcp_serve.py` surface (not foregrounded in its README)
 
 **Trade-offs:**
-- Single-user focused — not designed for multi-tenant deployment
-- Manual provider management — no automatic failover
-- Learning curve for skills system
+- **Single-operator** — authorization is binary; its own security docs suggest separate instances for isolation
+- **No economic agency** — no wallet, payments, or monetization
+- **No self-wake** — proactivity is cron / queue / completion-driven
+- **In-memory approvals** — in-flight human-in-the-loop state is lost across a restart
 
 **When to choose Hermes:**
-- You want a **personal assistant that learns** from your interactions
-- You prefer **curated models and tools** via one subscription
-- You value **community skills** and sharing
-- You're running **single-user** on modest hardware
+- You want the **widest channel and model reach** for a single-user setup
+- You value a **skill learning loop** and a kanban-style task swarm
+- You want **serverless sandbox** backends (Modal, Daytona)
 
 ---
 
 ### OpenClaw
 
-**Best for:** Personal assistants across many messaging platforms with companion apps.
+**Best for:** An omni-channel personal assistant with first-class native apps.
+*(Formerly Warelay → CLAWDIS → Clawdbot → Moltbot → OpenClaw; live upstream on `main`,
+2026-07-23.)*
 
-**Unique Strengths:**
-- **Massive channel support** — 20+ platforms (WhatsApp, Telegram, Slack, Discord, iMessage, etc.)
-- **Companion apps** — Windows Hub, macOS menu bar, iOS/Android nodes
-- **Live Canvas** — Agent-driven visual workspace
-- **Voice mode** — Wake words and continuous voice on mobile
-- **Sandboxing** — Docker/SSH/OpenShell backends for isolation
+**Unique strengths:**
+- **Massive channel support** — ~23 messaging platforms (WhatsApp, Telegram, Slack, Discord, iMessage, Signal, Matrix, Feishu, LINE, WeChat, and more)
+- **Native companion apps** — macOS app and iOS/Android nodes
+- **Subscription-auth providers** — sign in with ChatGPT/Codex OAuth, with model failover across auth profiles
+- **Sandboxing** — Docker (default), SSH, and OpenShell backends, with per-mode allow/deny tool lists
+- **Voice mode** — wake words and continuous voice
 
 **Trade-offs:**
-- Node.js/TypeScript stack — different from Python ecosystem
-- Single-user focused
-- No built-in provider failover
-- Steeper learning curve for configuration
+- **Node.js / TypeScript stack** — different from the Python ecosystem
+- **Single-operator** — pairing gates channel access, not per-tool actions
+- **No economic agency**, no built-in provider-agnostic REST API, no dedicated vector RAG
+- **MCP client only** — exposing OpenClaw's own tools as an MCP server is a community/requested feature, not native
 
 **When to choose OpenClaw:**
-- You need **omni-channel presence** across many platforms
-- You want **companion apps** for mobile/desktop
-- You prefer **Node.js** over Python
-- You need **sandboxing** for safety
+- You need **omni-channel presence** across many messaging platforms
+- You want **native mobile/desktop apps** and voice mode
+- You prefer a **Node.js/TypeScript** stack
 
 ---
 
@@ -125,30 +171,30 @@ A comprehensive comparison of POLYROB with major AI agent frameworks as of 2026.
 
 | Requirement | Why POLYROB |
 |-------------|--------------|
-| **Self-hosted control** | Full data ownership, your keys and machine, no vendor lock-in |
-| **Truly open** | MIT-licensed, fork-friendly — the full engine, not a limited open core |
-| **Durable autonomy** | Goals and cron survive restarts, deliver results asynchronously |
-| **Provider redundancy** | Automatic failover keeps you running during provider outages |
-| **Multi-provider flexibility** | Switch between OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NIM dynamically |
-| **Room to grow** | Multi-user security, multi-tenant + billing, and A2A interoperability when you need them |
+| **Economic agency** | Built-in wallet, x402 payments, invoicing, spend caps — neither alternative has any |
+| **Multi-user safety** | 3-tier access + origin taint keeps a stranger's message as data, not a command |
+| **Durable, proactive autonomy** | Goals, cron, and self-wake survive restarts and act unattended |
+| **Restart-safe approvals** | A durable, remotely-approvable owner-approval queue for high-impact actions |
+| **Interoperability** | MCP client + server, A2A, and a REST/OpenAI-compatible API |
+| **Self-hosted control** | Full data ownership, your keys and machine, MIT-licensed, no vendor lock-in |
 
 ### Choose Hermes if you need:
 
 | Requirement | Why Hermes |
 |-------------|------------|
-| **Personal learning** | Agent improves from experience, creates skills |
-| **Curated experience** | Nous Portal provides 300+ models and tools via one subscription |
-| **Community skills** | Share and discover skills via Skills Hub |
-| **Modest hardware** | Runs on $5 VPS |
+| **Widest channel/model reach** | ~30 connectors, 300+ models, credential pooling |
+| **A skill learning loop** | Autonomous skill creation that improves with use |
+| **Serverless sandboxes** | Modal / Daytona backends that hibernate when idle |
+| **Kanban task swarm** | Multi-worker board with DAG decomposition |
 
 ### Choose OpenClaw if you need:
 
 | Requirement | Why OpenClaw |
 |-------------|--------------|
-| **Omni-channel presence** | 20+ messaging platforms supported |
-| **Companion apps** | Native mobile/desktop experiences |
+| **Omni-channel + native apps** | ~23 platforms plus macOS/iOS/Android companions |
+| **Voice-first interaction** | Wake words and continuous voice |
 | **Node.js preference** | TypeScript stack instead of Python |
-| **Visual workspace** | Live Canvas for agent-driven UI |
+| **Subscription-auth providers** | Sign in with ChatGPT/Codex OAuth |
 
 ---
 
@@ -165,39 +211,53 @@ See the migration guide directory for detailed paths from each framework:
 
 ### Multi-Provider LLM Support
 
-| Framework | Providers Supported | Auto Failover | Hot-Swap |
-|-----------|-------------------|---------------|----------|
-| **POLYROB** | OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NIM | ✅ Built-in | ✅ Live (CLI `/model`, API per-request) |
-| **Hermes** | 200+ via OpenRouter | ❌ | ✅ Config restart |
-| **OpenClaw** | OpenAI, Anthropic, others | ❌ | ✅ Config |
+| Framework | Providers | Failover | Hot-swap |
+|-----------|-----------|----------|----------|
+| **POLYROB** | OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NIM | ✅ Automatic cross-provider (on billing/rate-limit errors) | ✅ Live (CLI `/model`, API per-request) |
+| **Hermes** | 300+ via portal / OpenRouter / own endpoint | ✅ Credential pooling + rotation | ✅ `hermes model` switch |
+| **OpenClaw** | Claude, OpenAI, Gemini, DeepSeek | ✅ Across auth profiles | ✅ Config |
 
-Note: a cross-provider live swap resets the prompt cache (any model change breaks the cached prefix); the running conversation is preserved in place.
+Note: a cross-provider live swap resets the prompt cache (any model change breaks the
+cached prefix); the running conversation is preserved in place.
 
 ### Memory Systems
 
-| Framework | Keyword Search | Vector Search | Cross-Session | Tenant Scoped |
+| Framework | Keyword search | Vector search | Cross-session | Tenant scoped |
 |-----------|---------------|--------------|---------------|---------------|
-| **POLYROB** | ✅ SQLite FTS5 | ✅ sqlite-vec | ✅ | ✅ |
-| **Hermes** | ✅ FTS5 | ✅ Embeddings | ✅ | ❌ |
-| **OpenClaw** | ✅ FTS5 | ✅ Optional | ✅ | ❌ |
+| **POLYROB** | ✅ SQLite FTS5 | ✅ sqlite-vec (optional) | ✅ | ✅ |
+| **Hermes** | ✅ FTS5 | ✅ Pluggable providers | ✅ | ❌ |
+| **OpenClaw** | ⚠️ Session history + workspace files | ❌ (none documented) | ✅ | ❌ |
 
 ### Security Models
 
-| Framework | Access Control | Input Sanitization | Capability Gates | Sandboxing |
-|-----------|----------------|-------------------|------------------|------------|
-| **POLYROB** | ✅ 3-tier (OWNER/CORRESPONDENT/DENIED) | ✅ Untrusted wrapping | ✅ High-impact tool blocking | ✅ Docker sandbox (opt-in code execution) |
-| **Hermes** | ✅ Pairing codes | ⚠️ Basic | ❌ | ⚠️ Optional |
-| **OpenClaw** | ✅ Allowlists | ⚠️ Basic | ✅ Per-session | ✅ Docker/SSH |
+| Framework | Access control | Input sanitization | Capability gates | Tenant isolation | Sandboxing |
+|-----------|----------------|-------------------|------------------|------------------|------------|
+| **POLYROB** | ✅ 3-tier + origin taint | ✅ Untrusted wrapping | ✅ High-impact tool blocking | ✅ `user_id`-scoped (single process) | ✅ Docker (opt-in code exec) |
+| **Hermes** | ⚠️ Binary + DM pairing | ⚠️ Basic | ❌ | ❌ Single-operator | ✅ Multiple backends |
+| **OpenClaw** | ⚠️ Pairing + allowlists | ⚠️ Basic | ⚠️ Per-session tool lists | ❌ Single-operator | ✅ Docker / SSH / OpenShell |
+
+> POLYROB's tenant isolation is enforced by `user_id`-scoped software checks inside a
+> single shared process — real and load-bearing, but a software boundary, not an OS
+> one. For genuinely adversarial multi-tenancy, run separate instances. See
+> [security-model.md](guide/security-model.md) for the full honest treatment of what
+> is and isn't a hard boundary.
 
 ---
 
 ## Conclusion
 
-POLYROB occupies a unique position in the agent framework landscape:
+POLYROB occupies a specific niche among open-source agents: it is the one built for an
+agent that **transacts, serves more than one person, and acts on its own** — safely.
 
-- **More durable and secure** than personal-focused alternatives (Hermes, OpenClaw) — goals survive restarts, and untrusted input is treated as data, not instructions
-- **Truly open and crypto-native** — MIT-licensed and self-hosted, with a built-in agent wallet, x402 payments, and A2A interoperability
+- **Economic** — the only one of the three with a wallet, payments, and invoicing.
+- **Multi-tenant and secure** — an origin-taint access model and durable approval
+  queue, where the alternatives are single-operator.
+- **Proactively autonomous** — goals, cron, and self-wake that survive restarts.
 
-Choose POLYROB when you want a **durable, secure, self-hosted autonomous agent you control** — personal-first, MIT-licensed, and ready to scale to multi-tenant production when you are.
+It is **not** the broadest in channels (Hermes and OpenClaw both have more) or the
+largest community. Choose POLYROB when you want a **durable, secure, self-hosted agent
+you control** — personal-first, MIT-licensed, and ready to grow into multi-tenant,
+transacting production.
 
-For framework-specific recommendations, see the decision matrix above or the detailed migration guides.
+For framework-specific recommendations, see the decision matrix above or the detailed
+migration guides.

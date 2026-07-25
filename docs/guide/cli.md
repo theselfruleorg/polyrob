@@ -268,8 +268,8 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 
 | Command | Description |
 |---------|-------------|
-| `polyrob journey` | Timeline recap: what the agent did, learned, earned, changed (`--since 24h\|7d`) |
-| `polyrob finance` | Balance sheet over the unified ledger: earned, spent, pending invoices, net (`--days`) |
+| `polyrob journey` | Timeline recap: what the agent did, learned, its income/spend, and what changed (`--since 24h\|7d`) |
+| `polyrob finance` | The unified ledger: **Treasury** (income/spend/pending/net) and **Runtime** compute cost, shown as two blocks that are never summed (`--days`) |
 | `polyrob wallet` | Agent wallet: addresses/balances/caps; `set-cap daily\|per-tx` writes the money-authoritative env caps |
 | `polyrob approvals` | Manage the approval-gated action set: `list`, `add`, `remove` |
 | `polyrob knowledge` | `export` the notes/episodes/skills/identity/goals knowledge vault (Obsidian-compatible) |
@@ -289,8 +289,8 @@ Inside the interactive REPL, commands are prefixed with `/`. Type `/help` to lis
 | `/status` | Live session status (tokens, cost, context) |
 | `/usage` (`/cost`) | Authoritative usage breakdown (DB / estimate) |
 | `/telemetry [window]` | Cross-session event counts + wallet spend (e.g. `/telemetry 24h`) |
-| `/journey [window]` (`/recap`) | Timeline: what the agent did, learned, earned, changed |
-| `/finance [days]` | Balance sheet: earned, spent, pending invoices, net |
+| `/journey [window]` (`/recap`) | Timeline: what the agent did, learned, its income/spend, and what changed |
+| `/finance [days]` | The unified ledger: Treasury (income/spend/pending/net) + Runtime compute cost, never summed |
 | `/learn <description>` | Describe a procedure; distill it into a pending skill for review |
 | `/tools` | List the agent's registered tools/actions |
 | `/toolset [name]` | List named toolsets, or set the default toolset for new sessions (persists `session.toolset`; applies next session — no live tool re-registration) |

@@ -80,7 +80,7 @@ class GenericOAuth2Provider(OAuthProvider):
     @staticmethod
     def _token_from_response(resp: Dict[str, Any]) -> OAuthToken:
         if not resp or "access_token" not in resp:
-            raise OAuthError(f"token endpoint returned no access_token: {resp}")
+            raise OAuthError(GenericOAuth2Provider._describe_missing_access_token(resp))
         expires_at = None
         if "expires_in" in resp:
             try:
@@ -94,3 +94,26 @@ class GenericOAuth2Provider(OAuthProvider):
             token_type=resp.get("token_type", "Bearer"),
             scope=resp.get("scope"),
         )
+
+    @staticmethod
+    def _describe_missing_access_token(resp: Dict[str, Any]) -> str:
+        """Build a safe error message for a token-endpoint response with no
+        ``access_token`` (T2.4 review fast-follow).
+
+        NEVER interpolates raw response values — a token endpoint is not a
+        trusted-to-echo-safely source (a misbehaving/malicious one could
+        reflect back a client_secret, a partial token, or other sensitive
+        fields), and this message can surface in logs/exceptions upstream
+        (``tools/mcp/oauth_bridge.py`` wraps it into a ``ConfigurationError``).
+        Only the OAuth2-standard ``error``/``error_description`` fields
+        (RFC 6749 §5.2 — meant to be human-readable, non-secret) are
+        surfaced verbatim; every other key is NAMED, never valued.
+        """
+        detail = ["token endpoint returned no access_token"]
+        if isinstance(resp, dict):
+            if resp.get("error"):
+                detail.append(f"error={resp['error']!r}")
+            if resp.get("error_description"):
+                detail.append(f"error_description={resp['error_description']!r}")
+            detail.append(f"(response keys: {sorted(resp.keys())})")
+        return ", ".join(detail)

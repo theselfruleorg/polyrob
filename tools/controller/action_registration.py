@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from tools.controller.types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
-from tools.controller._helpers import build_load_skill_result, read_skill_resource_confined
+from tools.controller._helpers import build_load_skill_result, build_session_search_hint, read_skill_resource_confined
 from modules.llm.messages import AIMessage
 from core.security.forged_turns import FORGED_TURN_KINDS as _FORGED_TURN_KINDS
 
@@ -579,20 +579,12 @@ class ActionRegistrationMixin:
 		# thin, mirroring the `message` action.
 		from core.config_policy import tool_progressive_disclosure
 		if tool_progressive_disclosure():
-			class LoadToolAction(BaseModel):
-				tool_id: str = Field(
-					..., description="Tool id from <tool-catalog> to load into this session")
-
-			@self.registry.action(
-				"Load a [loadable] tool from the <tool-catalog> into this session — its "
-				"actions become available from the next step. Gated tools return the "
-				"reason and the remedy channel instead of loading.",
-				param_model=LoadToolAction,
-			)
-			async def load_tool(params: LoadToolAction, execution_context=None):
-				from tools.tool_disclosure import perform_load_tool
-				return await perform_load_tool(
-					self, params.tool_id, execution_context=execution_context)
+			# load_tool (S2) + tool_search/tool_describe (Tier-3 item 1) share one
+			# thin registration seam, extracted to tool_search_actions.py so this
+			# god-file (size ratchet) does not grow. Logic: tool_disclosure.py /
+			# tool_search.py.
+			from tools.controller.tool_search_actions import register_dynamic_tool_actions
+			register_dynamic_tool_actions(self)
 
 		# P0-1: agent-callable cross-session recall. Registered only when an external
 		# memory provider is active (MEMORY_BACKEND=sqlite); inert in the default config
@@ -681,13 +673,13 @@ class ActionRegistrationMixin:
 			limit: int = 5                       # provider clamps to [1, 20]
 			sort: Optional[str] = None           # "newest" | "oldest" | None (rank)
 			collection: Optional[str] = None     # set to search a named knowledge-base collection instead of past sessions
-
+			before_id: Optional[int] = Field(default=None, ge=1)  # T2.6: rowid cursor — pass the smallest id from a previous result to page further back
 		_SEARCH_DESC = (
 			"Recall your durable memory of PAST sessions. WHEN TO USE: reach for this "
 			"BEFORE web/filesystem on 'what did we do about X', 'where did we leave Y', "
 			"or 'what was I working on'. Two shapes: pass a `query` to DISCOVER relevant "
 			"past work (facts, decisions); leave `query` empty to BROWSE your most-recent "
-			"sessions. Optional `limit` (1-20) and `sort` ('newest'/'oldest'). "
+			"sessions. Optional `limit` (1-20) and `sort` ('newest'/'oldest'); each result line is tagged `(id N)` — with sort='newest', pass `before_id=<smallest id>` to page further back (in relevance-ranked mode, refine the query or switch to sort='newest' instead). "
 			"Optional `collection`: set to search a named knowledge-base collection instead "
 			"of past sessions (requires KB to be enabled)."
 		)
@@ -736,7 +728,7 @@ class ActionRegistrationMixin:
 				from modules.memory.registry import memory_search
 				recalled = await memory_search(
 					params.query, session_id=session_id, user_id=user_id,
-					limit=params.limit, sort=params.sort,
+					limit=params.limit, sort=params.sort, before_id=params.before_id, with_ids=True,
 				)
 			except Exception as e:
 				self.logger.debug(f"session_search failed: {e}")
@@ -757,8 +749,8 @@ class ActionRegistrationMixin:
 				pass  # fail-open: never block recall on a wrap import error
 			header = ("## Recalled from past sessions" if params.query
 			          else "## Your most-recent sessions")
-			return ActionResult(
-				extracted_content=f"{header}\n{recalled}",
+			return ActionResult(  # T2.6: hint from the `(id N)` tags recalled already carries
+				extracted_content=f"{header}\n{recalled}{build_session_search_hint(recalled, params.limit, params.sort)}",
 				include_in_memory=True,
 			)
 

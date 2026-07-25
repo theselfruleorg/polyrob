@@ -8,7 +8,8 @@ from cli.commands.doctor import doctor, flags_report
 @pytest.fixture(autouse=True)
 def _clean_posture_env(monkeypatch):
     # dynamic defaults read the process env via agents.task.constants helpers
-    for var in ("AUTONOMY_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL", "GOAL_COMPLETION_JUDGE"):
+    for var in ("AUTONOMY_POSTURE", "POLYROB_LOCAL", "ROB_LOCAL", "GOAL_COMPLETION_JUDGE",
+                "AUTONOMY_ENABLED", "AUTONOMY_MODE"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -60,13 +61,16 @@ def test_flags_report_cli_context_matches_doctor_report(monkeypatch):
     flags report must resolve the local-derived defaults the same way."""
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     monkeypatch.delenv("ROB_LOCAL", raising=False)
+    # KB_ENABLED is an INTERACTIVE local flag (ON under POLYROB_LOCAL, no
+    # AUTONOMY_ENABLED needed) so it exercises local-derived-default parity
+    # independent of the 0.9.0 autonomy split.
     lines = flags_report({}, local_absent_means_on=True)
-    goals = next(ln for ln in lines if "GOALS_ENABLED" in ln)
-    assert "True" in goals and "local=ON" in goals
+    kb = next(ln for ln in lines if ln.strip().startswith("KB_ENABLED "))
+    assert "True" in kb and "local=ON" in kb
     # and the server context resolves them OFF
     lines = flags_report({}, local_absent_means_on=False)
-    goals = next(ln for ln in lines if "GOALS_ENABLED" in ln)
-    assert "False" in goals
+    kb = next(ln for ln in lines if ln.strip().startswith("KB_ENABLED "))
+    assert "False" in kb
 
 
 def test_flags_report_local_derived_extras(monkeypatch):

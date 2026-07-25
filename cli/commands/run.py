@@ -314,6 +314,11 @@ async def _run_session(
 
         from cli.ui.banner import print_banner
         from core.instance import FRAMEWORK_NAME, resolve_instance_id
+        try:
+            from agents.task.constants import autonomy_enabled as _ae
+            _autonomy_on = _ae()
+        except Exception:
+            _autonomy_on = None
         print_banner(
             _renderer,
             version=_ROB_VERSION,
@@ -325,9 +330,16 @@ async def _run_session(
             framework=FRAMEWORK_NAME,
             instance_id=resolve_instance_id(),
             user_id=user_id,
+            autonomy_on=_autonomy_on,
         )
     except Exception:
         # Banner is cosmetic; never block the run on it.
+        pass
+    # 0.9.0: one-time posture notice (autonomy on/off + data/config location).
+    try:
+        from cli.ui.first_run_notice import maybe_print_first_run_notice
+        maybe_print_first_run_notice(_renderer)
+    except Exception:
         pass
 
     # Resolve the session dir so we can poll llm_usage for live tokens/cost (the

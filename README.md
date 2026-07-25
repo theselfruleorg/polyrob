@@ -73,6 +73,7 @@ One agent core, many front doors:
 - **Web dashboard** — a real-time Socket.IO console: watch the agent work, browse its workspace, preview files and browser screenshots, inspect memory and the goal board.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
+- **MCP server** — expose polyrob to Claude Desktop, Cursor, or any MCP client as a read-only tool provider (`POST /mcp`, off by default) — it's an MCP client *and* server.
 - **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, and X (Twitter) DMs.
 
 ## 🧠 Multi-provider intelligence
@@ -215,6 +216,7 @@ snapshot → guarded migrate → verify → **auto-rollback** on failure).
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
 | MCP client | STDIO / SSE / HTTP / Streamable HTTP, live resource subscriptions |
+| MCP server | expose polyrob's read-only tools to Claude Desktop / Cursor (`POST /mcp`, off by default) |
 | Chat surfaces | Telegram, email, WhatsApp, Discord, Slack, Signal, X DMs — one agent core, many channels |
 
 ---
@@ -243,6 +245,7 @@ treats untrusted input as data — never as commands — with the core protectio
 | **SSRF confinement** | `web_fetch` re-validates every redirect hop; blocks loopback/metadata/private targets | **On** |
 | **Self-modification review** | New skills / identity edits are quarantined and reviewed before taking effect | **On** |
 | **Code-exec isolation** | Subprocess (or hardened Docker) isolation, no inherited API keys | On when code-exec enabled |
+| **Run budget** | Cap a session's provider spend; the run halts honestly at the ceiling rather than claiming success | Opt-in (`RUN_BUDGET_USD`) |
 | **3-tier access** | OWNER / CORRESPONDENT / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`) |
 | **Memory threat-scan** | Rejects injected jailbreak/persona-rewrite patterns on write | Opt-in (`MEMORY_THREAT_SCAN`) |
 
@@ -381,6 +384,7 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/self-hosting.md](docs/guide/self-hosting.md) | Self-hosting / deployment |
 | [docs/guide/deployment-postures.md](docs/guide/deployment-postures.md) | Deployment postures (local / own_ops / multitenant) |
 | [docs/guide/console.md](docs/guide/console.md) | Web dashboard — capabilities & payments |
+| [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment-flag reference (SSOT) |

@@ -19,6 +19,7 @@ import uuid
 from dataclasses import dataclass
 
 from agents.base_agent import BaseAgent
+from agents.task.conversation_resume import ConversationResumeMixin
 from agents.task.session_registry import SessionRegistry
 from agents.task.tool_defaults import default_session_tools
 from core.exceptions import AgentError, SessionOwnershipError
@@ -105,7 +106,7 @@ def _resolve_chat_runtime(env=None):
     return provider, model
 
 
-class TaskAgent(BaseAgent):
+class TaskAgent(ConversationResumeMixin, BaseAgent):
     """Minimal task automation wrapper.
 
     Core responsibilities:
@@ -168,6 +169,10 @@ class TaskAgent(BaseAgent):
         # Session execution locks for concurrency control
         self._session_execution_locks = {}  # session_id → asyncio.Lock
         self._recreate_locks = {}  # session_id → asyncio.Lock (serializes orchestrator recreation)
+        # dead_session_id → asyncio.Lock (T1.4: serializes _try_conversation_resume so two
+        # concurrent correspondent replies for the same dead session can't both mint a
+        # replacement session / double-rebind the correspondent registry).
+        self._resume_locks = {}
 
         # Compatibility attributes for API
         self.active_sessions = {}  # Will be populated from SessionManager
@@ -1747,7 +1752,24 @@ class TaskAgent(BaseAgent):
             if orch and persona:
                 orch._persona_block = persona
 
-        await self.run_session(user_id, session_id)
+        run_result = await self.run_session(user_id, session_id)
+        # Final-review fix (T1.1): a RUN_BUDGET_USD halt ends the turn BEFORE
+        # any step runs (or right after one), so `_extract_chat_reply`'s
+        # fallback (last AIMessage / final_result) would return the reply to
+        # the PREVIOUS turn — or "" — instead of the honest halt text.
+        # run_session's return string IS that honest text
+        # ("Session failed: run_budget_exhausted: ...") for exactly this
+        # case; surface it directly rather than falling through to the
+        # (now-stale) extraction. Scoped to the budget-halt marker only —
+        # other failure strings keep their pre-existing (stale-extraction)
+        # behavior, which is out of scope here.
+        if isinstance(run_result, str) and run_result.startswith("Session failed:"):
+            try:
+                from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
+            except ImportError:
+                RUN_BUDGET_MARKER = "run_budget_exhausted"
+            if RUN_BUDGET_MARKER in run_result:
+                return run_result
         return self._extract_chat_reply(session_id) or ""
 
     async def deliver_self_wake(
@@ -1921,95 +1943,6 @@ class TaskAgent(BaseAgent):
             return True
         except Exception as e:
             logger.error(f"correspondent delivery failed for {session_id}: {e}", exc_info=True)
-            return False
-
-    async def _try_conversation_resume(
-        self,
-        dead_session_id: str,
-        source: str,
-        text: str,
-        metadata: Optional[Dict[str, Any]] = None,
-        *,
-        surface: Optional[str] = None,
-        store: Optional[Any] = None,
-    ) -> bool:
-        """E6/A6: replace a dead originating session instead of dropping the reply.
-
-        Creates a fresh session for the binding's TENANT (never the correspondent),
-        re-points the correspondent registry + conversation store at it, injects the
-        reply as correspondent DATA (with the durable conversation context), and
-        spawns the run. Gated ``CONVERSATION_RESUME_ENABLED`` (default ON). Returns
-        True iff the reply was delivered into the replacement session.
-        """
-        from agents.task.surface_config import SurfaceConfig
-        if not SurfaceConfig.conversation_resume_enabled() or not surface:
-            return False
-        try:
-            container = getattr(self, "container", None)
-            registry = (container.get_service("correspondent_registry")
-                        if container else None)
-            if registry is None:
-                return False
-            row = registry.resolve(surface=surface, address=source)
-            user_id = (row or {}).get("user_id")
-            if not user_id:
-                return False
-            ctx = ""
-            if store is not None:
-                try:
-                    ctx = store.format_context(user_id, surface, source)
-                except Exception:
-                    ctx = ""
-            task_text = (
-                f"[conversation-resume] {surface}:{source} sent a message to a "
-                f"conversation whose original session ({dead_session_id}) is no longer "
-                "available. Their message arrives as correspondent DATA in this "
-                "session; review the conversation context and respond appropriately.")
-            info = await self.create_session(user_id, task_text)
-            new_sid = (info or {}).get("session_id")
-            if not new_sid:
-                return False
-            orch = self._registry.get(new_sid)
-            if orch is None:
-                orch = await self._resolve_or_recreate(
-                    new_sid, self.session_manager.get_session_info(new_sid) or {})
-            if orch is None:
-                return False
-            text_to_inject = f"{ctx}\n\n[new message]\n{text}" if ctx else text
-            delivered = orch.inject_correspondent_message(
-                text_to_inject, source, metadata, surface=surface, address=source)
-            if not delivered:
-                return False
-            try:
-                registry.rebind_session(surface=surface, address=source,
-                                        user_id=user_id, new_session_id=new_sid)
-            except Exception:
-                pass
-            if store is not None:
-                try:
-                    store.rebind_session(user_id, surface, source, new_sid)
-                    store.record_inbound(user_id, surface, source, text,
-                                         mid=(metadata or {}).get("message_id"),
-                                         session_id=new_sid)
-                except Exception:
-                    pass
-            _spawn_detached(self.run_session(user_id, new_sid))
-            logger.warning(
-                f"correspondent conversation resumed: {surface}:{source} re-pointed "
-                f"from dead session {dead_session_id} to new session {new_sid}")
-            try:
-                from agents.task.telemetry.event_log import (event_log_enabled,
-                                                             get_event_log)
-                if event_log_enabled():
-                    get_event_log().record(
-                        "correspondent_resumed", user_id=user_id, session_id=new_sid,
-                        source=surface,
-                        attrs={"address": source, "dead_session": dead_session_id})
-            except Exception:
-                pass
-            return True
-        except Exception as e:
-            logger.error(f"conversation resume failed for {source}: {e}", exc_info=True)
             return False
 
     async def _recreate_orchestrator(
@@ -2415,6 +2348,7 @@ class TaskAgent(BaseAgent):
         self._session_last_activity.clear()
         self._session_execution_locks.clear()
         self._recreate_locks.clear()  # a3: don't leak recreate locks across shutdown
+        self._resume_locks.clear()
         logger.info("TaskAgent cleanup complete")
 
     # Required abstract methods from BaseAgent

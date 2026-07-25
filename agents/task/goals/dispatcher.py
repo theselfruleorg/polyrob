@@ -50,6 +50,14 @@ def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
 # "run did not complete (refusal or empty)" without grepping journald.
 LLM_EXHAUSTED_MARKER = "llm_provider_exhausted"
 
+# T1.1 validation fix (2026-07-23): the RUN_BUDGET_USD halt marker, greppable
+# in goals.last_failure_error just like LLM_EXHAUSTED_MARKER — a budget-halted
+# goal was previously indistinguishable from any other refusal on the board.
+try:
+    from agents.task.agent.core.run_budget import RUN_BUDGET_MARKER
+except ImportError:  # pragma: no cover - core-only install
+    RUN_BUDGET_MARKER = "run_budget_exhausted"
+
 # Provider-exhaustion phrasings the credit-death markers don't cover: the
 # LLMProviderExhaustedError halt strings ("ALL LLM PROVIDERS EXHAUSTED" /
 # "All LLM providers failed. Tried: [...]") carry no 402/billing text.
@@ -350,6 +358,18 @@ class GoalDispatcher:
         except Exception:
             logger.debug("blocked-goal aging skipped", exc_info=True)
 
+        # T2.1 final-review Fix 3: reconcile any stranded 'waiting' row —
+        # same unconditional-maintenance-sweep placement as reclaim_stale/
+        # age_out_blocked above (before the enabled-gate so a stranded row
+        # doesn't stay stuck forever just because GOALS_ENABLED was
+        # temporarily flipped off). Self-contained retry-safe SQL, cheap.
+        try:
+            reconciled = self.board.reconcile_waiting()
+            if reconciled:
+                logger.info("goal dispatch: reconciled %d stranded waiting goal(s)", reconciled)
+        except Exception:
+            logger.debug("waiting-goal reconciliation skipped", exc_info=True)
+
         if not AutonomyConfig.goals_enabled():
             return 0
 
@@ -609,11 +629,25 @@ class GoalDispatcher:
                 # "ALL LLM PROVIDERS EXHAUSTED") gets the distinct marker so
                 # a provider outage never hides inside the generic refusal.
                 error = "run did not complete (refusal or empty)"
-                if _is_llm_provider_exhausted(run.status):
+                block_kind_hint = None
+                # Budget marker FIRST: the halt text embeds dollar amounts, and
+                # a large-enough budget (e.g. "$402.00") would satisfy the
+                # credit-death classifier inside _is_llm_provider_exhausted —
+                # a budget halt must never be labeled a provider outage.
+                if RUN_BUDGET_MARKER in str(run.status or ""):
+                    error = f"{RUN_BUDGET_MARKER}: {str(run.status)[:400]}"
+                elif _is_llm_provider_exhausted(run.status):
                     error = f"{LLM_EXHAUSTED_MARKER}: {str(run.status)[:400]}"
+                    block_kind_hint = "provider_outage"
                 _g = self.board.record_failure(
                     goal.id, error=error, session_id=session_id)
-                await self._maybe_escalate_blocked(_g)
+                # T2.1 Task-3 review fix (finding #1, CRITICAL): this path never
+                # goes through _fail_run, so it must pass the SAME classification
+                # as a hint into _maybe_escalate_blocked (the single block_kind
+                # stamping choke point) — otherwise a genuine provider outage
+                # here lands the generic needs_input kind, which kind-aware
+                # aging never auto-heals (worse than before block kinds existed).
+                await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
                 try:
                     from modules.memory.episodic import finalize_episode
                     # 012 #1: thread the envelope's real provenance (zeros for a
@@ -787,12 +821,17 @@ class GoalDispatcher:
             # LLMPermanentError → "ALL LLM PROVIDERS EXHAUSTED") gets the
             # distinct greppable marker in goals.last_failure_error.
             error_text = str(e)
+            block_kind_hint = None
             if _is_llm_provider_exhausted(e):
                 error_text = f"{LLM_EXHAUSTED_MARKER}: {error_text}"[:2000]
+                block_kind_hint = "provider_outage"
             _goal_ev(goal, "failed", reason=error_text[:200], session_id=session_id)
             try:
                 _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id)
-                await self._maybe_escalate_blocked(_g)
+                # T2.1 Task-3 review fix (finding #1, CRITICAL): this path also
+                # never goes through _fail_run — same hint mechanism, same
+                # rationale as the refusal-status site above.
+                await self._maybe_escalate_blocked(_g, block_kind_hint=block_kind_hint)
             except Exception:
                 pass
             if session_id and not recorded_success:
@@ -860,6 +899,18 @@ class GoalDispatcher:
                     _g = self.board.get(goal.id) or _g
             except Exception:
                 logger.debug("block_from_ready failed for %s", goal.id, exc_info=True)
+        # T2.1 Task 3 (review-fixed, finding #1): classify the failure ONCE (do
+        # not re-derive downstream) and pass it as a HINT into
+        # _maybe_escalate_blocked — the SINGLE block_kind stamping choke point.
+        # Stamping directly here (the original shape) was a SECOND, inconsistent
+        # mechanism: the refusal-status and top-level exception call sites in
+        # _run_goal never route through _fail_run at all (they call
+        # record_failure/_maybe_escalate_blocked directly), so a real provider
+        # death reaching THOSE call sites was silently mis-stamped the generic
+        # `needs_input` instead — worse than pre-block-kinds behavior, since
+        # kind-aware `age_out_blocked` never auto-heals `needs_input`. One
+        # mechanism, used everywhere `_maybe_escalate_blocked` is called.
+        block_kind_hint = "provider_outage" if _is_llm_provider_exhausted(error) else None
         # T4-03: surface the verified-failure outcome (blocked vs failed) in the durable
         # event log so `polyrob telemetry` reflects it, not just the episodes table.
         _goal_ev(goal, "blocked" if getattr(_g, "status", None) == STATUS_BLOCKED else "failed",
@@ -869,7 +920,8 @@ class GoalDispatcher:
                 self.board.set_outcome(goal.id, outcome)
             except Exception:
                 logger.debug("set_outcome failed for %s", goal.id, exc_info=True)
-        await self._maybe_escalate_blocked(_g, agent_reported=agent_reported)
+        await self._maybe_escalate_blocked(_g, agent_reported=agent_reported,
+                                           block_kind_hint=block_kind_hint)
         if session_id:
             try:
                 from modules.memory.episodic import finalize_episode
@@ -924,14 +976,24 @@ class GoalDispatcher:
             return sorted(set(base) | inferred)
         return base
 
-    async def _maybe_escalate_blocked(self, goal, *, agent_reported: bool = False) -> None:
+    async def _maybe_escalate_blocked(self, goal, *, agent_reported: bool = False,
+                                      block_kind_hint: Optional[str] = None) -> None:
         """§7.2: when record_failure tripped the breaker (goal now 'blocked'), surface
         a concrete ask to the owner instead of letting it die silently. Fail-open.
 
         §3.4: the escalation PUSH is a safety net — when the agent itself already
         reported the block to its user during the run (``agent_reported``, from
         RunOutcome.user_messages), the push is skipped; the durable ask below is
-        ALWAYS left either way."""
+        ALWAYS left either way.
+
+        T2.1 Task-3 review fix (finding #1, CRITICAL): this is the SINGLE
+        block_kind stamping choke point. ``block_kind_hint`` lets a caller that
+        already classified the failure (``_fail_run``, plus the two call sites
+        that bypass it entirely — the refusal-status path and the top-level
+        ``except Exception`` handler in ``_run_goal``) stamp that classification
+        here, ``only_if_absent`` — BEFORE the generic ``needs_input`` fallback
+        below, so a real provider death is never mis-labeled ``needs_input``
+        (which kind-aware aging leaves blocked with no auto-requeue at all)."""
         if not agent_reported:
             try:
                 from agents.task.goals import escalation as _escalation
@@ -948,6 +1010,24 @@ class GoalDispatcher:
         try:
             from agents.task.goals.board import STATUS_BLOCKED
             if getattr(goal, "status", None) == STATUS_BLOCKED:
+                # T2.1 Task 3 (review-fixed): stamp the CALLER's own
+                # classification first (only_if_absent — never clobbers a more
+                # specific kind a producer already stamped, e.g. dep_failed
+                # from the DAG cascade), THEN fall back to the generic "needs
+                # an owner decision" kind only if still nothing more specific
+                # is set. Both stamps are only_if_absent, so this NEVER clobbers.
+                if block_kind_hint:
+                    try:
+                        self.board.stamp_block_kind(
+                            goal.id, block_kind_hint, only_if_absent=True)
+                    except Exception:
+                        logger.debug("block_kind hint stamp skipped for %s",
+                                     goal.id, exc_info=True)
+                try:
+                    self.board.stamp_block_kind(
+                        goal.id, "needs_input", only_if_absent=True)
+                except Exception:
+                    logger.debug("needs_input stamp skipped for %s", goal.id, exc_info=True)
                 self.board.create_ask(
                     user_id=goal.user_id,
                     what=f"Unblock goal: {goal.title}",

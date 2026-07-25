@@ -6,6 +6,7 @@ never exec a real ``pyright``/``tsc`` binary.
 import json
 import subprocess
 
+import tools.coding.lsp as lsp_mod
 from tools.coding.lsp import MAX_DIAGNOSTICS_CHARS, diagnose_file
 
 
@@ -108,6 +109,35 @@ def test_unknown_extension_returns_empty_without_calling_runner():
         raise AssertionError("runner must not be called for an unsupported extension")
 
     assert diagnose_file("README.md", "/root", runner=runner) == ""
+
+
+# --- env scrub (secrets never reach the external checker) ----------------------
+
+def test_default_runner_scrubs_secret_env(monkeypatch):
+    """The real ``default_runner`` must NOT hand the checker subprocess the full
+    parent environment: an external pyright/tsc has no need for our secrets, and
+    a malicious checker plugin/config would otherwise exfiltrate them."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-should-never-leak")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-never-leak")
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    captured = {}
+
+    def fake_run(cmd, cwd, timeout, capture_output, text, check, env):
+        captured["env"] = env
+        return _FakeProc(stdout="")
+
+    monkeypatch.setattr(lsp_mod.subprocess, "run", fake_run)
+    lsp_mod.default_runner(["pyright", "x.py"], "/root", 8.0)
+
+    env = captured["env"]
+    assert env is not None, "default_runner must pass an explicit scrubbed env"
+    assert "OPENAI_API_KEY" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert not any(k.endswith("_API_KEY") or "SECRET" in k or "TOKEN" in k
+                   for k in env), f"secret-shaped var leaked: {list(env)}"
+    # But it still carries what an external checker needs to run.
+    assert env.get("PATH") == "/usr/bin:/bin"
 
 
 # --- output cap ----------------------------------------------------------------

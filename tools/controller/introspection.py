@@ -218,6 +218,39 @@ class IntrospectionMixin:
 
 		return result
 
+	def iter_mcp_tools_metadata(self) -> List[Dict[str, Any]]:
+		"""Read-only flat listing of every CONNECTED MCP server's tools, for the
+		tool_search / tool_describe surface (Tier-3 item 1).
+
+		Pure in-memory read of already-discovered metadata — it NEVER connects a
+		server (``get_all_tools()`` returns CONNECTED servers only). ``input_schema``
+		is deep-copied because ``get_all_tools()`` hands back the LIVE connection-state
+		objects (a shallow list copy over shared elements); a consumer mutating a
+		schema would corrupt the live connection. Fail-open: any error yields ``[]``
+		so tool discovery never breaks on an MCP hiccup.
+		"""
+		import copy
+		out: List[Dict[str, Any]] = []
+		try:
+			mcp = self._tools.get('mcp') if hasattr(self, '_tools') else None
+			inst = getattr(mcp, 'instance', None)
+			sm = getattr(inst, 'server_manager', None)
+			if sm is None:
+				return out
+			for server_name, tools in (sm.get_all_tools() or {}).items():
+				for t in tools or []:
+					out.append({
+						"server": server_name,
+						"name": getattr(t, "name", "") or "",
+						"server_tool_name": getattr(t, "server_tool_name", "") or "",
+						"description": getattr(t, "description", "") or "",
+						"input_schema": copy.deepcopy(getattr(t, "input_schema", {}) or {}),
+					})
+		except Exception as e:
+			import logging
+			logging.getLogger(__name__).debug(f"iter_mcp_tools_metadata skipped: {e}")
+		return out
+
 	async def get_polymarket_info(self) -> Dict[str, Any]:
 		"""Get Polymarket configuration status for the current user.
 

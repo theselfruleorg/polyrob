@@ -814,8 +814,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
             except Exception:
                 _memory_backend = ""
             try:
-                from agents.task.constants import local_mode_enabled as _lme
-                _autonomy_on = _lme()
+                from agents.task.constants import autonomy_enabled as _ae
+                _autonomy_on = _ae()
             except Exception:
                 _autonomy_on = None
             print_banner(
@@ -833,6 +833,12 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 memory_backend=_memory_backend,
                 autonomy_on=_autonomy_on,
             )
+        except Exception:
+            pass
+        # 0.9.0: one-time posture notice (autonomy on/off + data/config location).
+        try:
+            from cli.ui.first_run_notice import maybe_print_first_run_notice
+            maybe_print_first_run_notice(_renderer)
         except Exception:
             pass
         click.echo("")

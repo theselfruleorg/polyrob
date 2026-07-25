@@ -513,17 +513,25 @@ async def list_payment_requests(
     database = await _resolve_db(db)
     if database is None:
         return []
+    # The status filter must be applied in SQL BEFORE the LIMIT — filtering in
+    # Python after a `ORDER BY created_at DESC LIMIT n` would grab only the newest
+    # n rows of ANY status and could return [] while older matching (e.g. still
+    # unpaid pending) invoices exist beyond the window.
+    where = ["(user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)",
+             "json_extract(metadata, '$.kind') = ?"]
+    params: List[Any] = [user_id, user_id, INVOICE_KIND]
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    params.append(max(1, int(limit)))
     rows = await database.fetch_all(
-        """SELECT * FROM x402_payment_requests
-           WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)
-             AND json_extract(metadata, '$.kind') = ?
+        f"""SELECT * FROM x402_payment_requests
+           WHERE {' AND '.join(where)}
            ORDER BY created_at DESC LIMIT ?""",
-        (user_id, user_id, INVOICE_KIND, max(1, int(limit))),
+        tuple(params),
     )
     out = []
     for row in rows or []:
-        if status and row.get("status") != status:
-            continue
         meta = _row_metadata(row)
         out.append({
             "request_id": row.get("id"),

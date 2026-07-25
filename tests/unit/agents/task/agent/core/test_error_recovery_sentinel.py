@@ -355,3 +355,25 @@ async def test_background_check_sites_unchanged_interactive_does_not_check(monke
 
     assert tripped, "interactive billing error still trips"
     assert not checked, "interactive path must not consult credit_sentinel_active()"
+
+
+@pytest.mark.asyncio
+async def test_rewrapped_402_routes_to_billing_failover(monkeypatch):
+    """A 402 re-wrapped as LLMProviderExhaustedError (no billing text on top) should be
+    seen as billing by _handle_step_error and attempt failover, not fall through."""
+    from core.exceptions import LLMError, LLMProviderExhaustedError
+    agent = _make_agent()  # existing fixture (test_error_recovery_sentinel.py:67)
+    monkeypatch.setenv("BILLING_FAILOVER_ENABLED", "true")
+    attempts = []
+    async def fake_fallback(kind):
+        attempts.append(kind)
+        return True  # pretend a fallback provider exists
+    agent._attempt_llm_fallback_in_handler = fake_fallback
+    agent._get_provider_from_model = lambda m: "openrouter"  # pin (fixture may not)
+
+    inner = LLMError("error code: 402 - requires more credits")
+    outer = LLMProviderExhaustedError("No fallback available after LLMPermanentError")
+    outer.__context__ = inner
+    result = await agent._handle_step_error(outer)
+    assert attempts == ["billing"]      # routed to billing failover via the chain walk
+    assert result == []                  # failover succeeded → retry

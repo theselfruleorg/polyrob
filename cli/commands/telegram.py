@@ -106,6 +106,8 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
 
     dispatcher = container.get_service("outbound_dispatcher")
     if dispatcher is not None:
+        from cli.commands._bootstrap import attach_dispatcher_event_log
+        attach_dispatcher_event_log(dispatcher)
         dispatcher.start()
 
     from surfaces.telegram.harness import build_telegram_harness

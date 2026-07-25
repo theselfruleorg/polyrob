@@ -46,3 +46,15 @@ def test_constants_import_survives_garbage_numeric_env():
     out = subprocess.run([sys.executable, "-c", code], capture_output=True,
                          text=True, timeout=120)
     assert "IMPORT_OK" in out.stdout, out.stderr[-2000:]
+
+
+def test_float_env_nonfinite_returns_default(monkeypatch):
+    """inf/nan parse as valid floats but a non-finite threshold turns a gate
+    (e.g. RUN_BUDGET_USD) into a silent never-trips while the operator
+    believes it is active (2026-07-23 validation). Non-finite => default."""
+    from core.env import float_env
+    for bad in ("inf", "-inf", "Infinity", "nan", "NaN"):
+        monkeypatch.setenv("X_FLOAT_GUARD", bad)
+        assert float_env("X_FLOAT_GUARD", 1.5) == 1.5, bad
+    monkeypatch.setenv("X_FLOAT_GUARD", "2.25")
+    assert float_env("X_FLOAT_GUARD", 1.5) == 2.25

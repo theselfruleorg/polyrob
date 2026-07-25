@@ -30,8 +30,13 @@ from core.sqlite_util import execute_retry, wal_connect
 
 logger = logging.getLogger(__name__)
 
-# status lifecycle: triage -> ready -> running -> {done | blocked} ; cancelled is terminal
+# status lifecycle: triage -> waiting -> ready -> running -> {done | blocked} ; cancelled
+# is terminal. `waiting` (T2.1) is a goal created with unresolved `depends_on` edges —
+# it is NOT dispatchable (ready()'s filter excludes it with zero query changes) and
+# flips to `ready` only when every prerequisite lands `done` (see deps_satisfied /
+# the record_success completion sweep).
 STATUS_TRIAGE = "triage"
+STATUS_WAITING = "waiting"
 STATUS_READY = "ready"
 STATUS_RUNNING = "running"
 STATUS_BLOCKED = "blocked"
@@ -168,6 +173,14 @@ class GoalBoard:
                     payload TEXT NOT NULL DEFAULT '{}',
                     created_at REAL NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS goal_edges (
+                    goal_id TEXT NOT NULL,
+                    depends_on_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    PRIMARY KEY (goal_id, depends_on_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_goal_edges_dep ON goal_edges(depends_on_id);
                 """
             )
             # Idempotent migration: add kind column if it doesn't exist
@@ -183,7 +196,8 @@ class GoalBoard:
     def create(self, *, user_id: str, title: str, body: str = "", priority: int = 5,
                parent_id: Optional[str] = None, max_retries: Optional[int] = None,
                payload: Optional[Dict[str, Any]] = None, status: str = STATUS_READY,
-               kind: str = KIND_GOAL, force: bool = False) -> Goal:
+               kind: str = KIND_GOAL, force: bool = False,
+               depends_on: Optional[List[str]] = None) -> Goal:
         from core.identity import is_anonymous
         if is_anonymous(user_id):
             raise ValueError("goal create requires a real (non-anonymous) user_id (tenant scope)")
@@ -209,11 +223,51 @@ class GoalBoard:
                                 {"attempted_title": title[:200], "similarity": round(sim, 3)})
                     raise DuplicateGoalError(r["id"], r["title"], sim)
 
+        # --- DAG (T2.1 Task 1): resolve depends_on BEFORE the row is written, so an
+        # invalid dep (unknown id / cross-tenant) never leaves an orphan goal row —
+        # validation is all-or-nothing. All requested deps already done (or none
+        # requested) is byte-identical to legacy create: no edges, no extra event,
+        # no status change. A mix of done + open deps still writes the FULL edge
+        # set (including the already-done ones) so later "waiting on"/"blocks"
+        # listings are complete; deps_satisfied treats a done dep as
+        # always-satisfied via a live join, never a snapshot.
+        dep_ids = list(dict.fromkeys(depends_on or []))
+        unresolved_ids: List[str] = []
+        terminal_bad_ids: List[str] = []
+        if dep_ids:
+            deps = self._validate_dep_ids(dep_ids, user_id=user_id)
+            unresolved_ids = [d.id for d in deps if d.status != STATUS_DONE]
+            # T2.1 Task 2 (creation-time closure): a dep that is already CANCELLED
+            # or BLOCKED-with-exhausted-retries (the breaker actually tripped —
+            # `consecutive_failures >= max_retries`, distinguishing it from an
+            # agent-declared `block_from_ready` block that may not have exhausted
+            # retries) can never reach 'done'. Without this check the new goal
+            # would sit in 'waiting' forever with a dead prerequisite (flagged at
+            # the end of Task 1). Never reject the create — the goal is preserved,
+            # just immediately 'blocked' so the owner can see + unblock it.
+            terminal_bad_ids = [
+                d.id for d in deps
+                if d.status == STATUS_CANCELLED
+                or (d.status == STATUS_BLOCKED and d.consecutive_failures >= d.max_retries)
+            ]
+
+        if terminal_bad_ids:
+            effective_status = STATUS_BLOCKED
+        elif unresolved_ids:
+            effective_status = STATUS_WAITING
+        else:
+            effective_status = status
+
+        effective_payload = dict(payload or {})
+        if terminal_bad_ids:
+            effective_payload["block_kind"] = "dep_failed"
+
         g = Goal(
-            id=self._id(), user_id=user_id, title=title, body=body, kind=kind, status=status,
+            id=self._id(), user_id=user_id, title=title, body=body, kind=kind,
+            status=effective_status,
             priority=priority, parent_id=parent_id,
             max_retries=AutonomyConfig.goal_max_retries() if max_retries is None else max_retries,
-            payload=payload or {}, created_at=self._now(),
+            payload=effective_payload, created_at=self._now(),
         )
         execute_retry(
             self.db_path,
@@ -224,6 +278,22 @@ class GoalBoard:
              0, g.max_retries, json.dumps(g.payload), g.created_at),
         )
         self._event(g.id, "created", {"title": title})
+
+        if unresolved_ids:
+            now = self._now()
+            for dep_id in dep_ids:
+                execute_retry(
+                    self.db_path,
+                    """INSERT OR IGNORE INTO goal_edges
+                            (goal_id, depends_on_id, user_id, created_at)
+                        VALUES (?, ?, ?, ?)""",
+                    (g.id, dep_id, user_id, now),
+                )
+            if terminal_bad_ids:
+                self._event(g.id, "dep_failed", {"prerequisites": terminal_bad_ids})
+            else:
+                self._event(g.id, "waiting_on_deps", {"deps": unresolved_ids})
+
         return g
 
     def claim(self, goal_id: str, worker: str, *, ttl_seconds: int) -> Optional[Goal]:
@@ -277,6 +347,7 @@ class GoalBoard:
                         {"result": (result or "")[:500], "session_id": session_id})
             return
         self._event(goal_id, "succeeded", {"session_id": session_id})
+        self._sweep_dependents_on_completion(goal_id)
 
     def record_failure(self, goal_id: str, *, error: str,
                        session_id: Optional[str] = None) -> Goal:
@@ -324,6 +395,7 @@ class GoalBoard:
             )
             if rc2 == 1:
                 self._event(goal_id, "gave_up", {"failures": fails, "error": error[:500]})
+                self._cascade_dep_failed(goal_id)
             else:
                 self._event(goal_id, "stale_completion", {"error": error[:500]})
         else:
@@ -383,14 +455,34 @@ class GoalBoard:
         )
         if not rc:
             return 0
-        # 2) Trip the breaker for those that reached max_retries.
-        execute_retry(
+        # 2) Trip the breaker for those that reached max_retries. T2.1 Task 2: this
+        #    is one of the two "breaker->blocked" sites whose dependents must
+        #    cascade to dep_failed, so it goes row-by-row (was one bulk UPDATE)
+        #    to know exactly which prerequisite ids just landed 'blocked'.
+        trip_rows = execute_retry(
             self.db_path,
-            f"""UPDATE goals SET status='blocked', claim_lock=NULL, claim_expires=NULL,
-                   completed_at=?, last_failure_error='reclaimed: worker crashed (stale claim)'
-                 WHERE {stale} AND consecutive_failures >= max_retries""",
-            (now, now),
-        )
+            f"SELECT id FROM goals WHERE {stale} AND consecutive_failures >= max_retries",
+            (now,), fetch="all",
+        ) or []
+        for r in trip_rows:
+            gid = r["id"]
+            # This per-row CAS deliberately does NOT repeat the
+            # `consecutive_failures >= max_retries` recheck from the `trip_rows`
+            # SELECT above — equivalent, not a gap: nothing decrements the
+            # counter while status stays 'running' (only step 1's increment
+            # touches it), so a row that qualified there still qualifies here;
+            # `{stale}` (status='running' AND claim_expires<now) is the only
+            # guard that can meaningfully change between the two queries (an
+            # owner cancel/pause moving it off 'running').
+            rc_trip = execute_retry(
+                self.db_path,
+                f"""UPDATE goals SET status='blocked', claim_lock=NULL, claim_expires=NULL,
+                       completed_at=?, last_failure_error='reclaimed: worker crashed (stale claim)'
+                     WHERE id=? AND {stale}""",
+                (now, gid, now),
+            )
+            if rc_trip == 1:
+                self._cascade_dep_failed(gid)
         # 3) Re-queue the rest (still 'running' with an expired claim).
         execute_retry(
             self.db_path,
@@ -434,45 +526,297 @@ class GoalBoard:
     def unblock(self, goal_id: str, *, user_id: str, rationale: str = "") -> bool:
         """§5.3: requeue a ``blocked`` goal with a rationale (symmetric to
         ``fulfill_ask``). Tenant-scoped; resets the breaker so the retry budget
-        is fresh. Returns False for a non-blocked row or a wrong tenant."""
+        is fresh. Returns False for a non-blocked row or a wrong tenant.
+
+        T2.1: this is an explicit OWNER OVERRIDE — it re-enters ``ready``
+        unconditionally, including a ``blocked`` row whose ``payload.block_kind``
+        is ``dep_failed`` (a dependent whose prerequisite was cancelled or gave
+        up) and regardless of whether its ``depends_on`` edges are actually
+        satisfied. It does not re-check ``deps_satisfied`` — the owner's decision
+        wins, same as every other owner-intervention CAS in this module.
+
+        T2.1 final-review Fix 1: an owner ``unblock`` also clears
+        ``payload.block_kind`` — "owner reset = fresh classification episode".
+        Without this, ``stamp_block_kind``'s ``only_if_absent`` guard means the
+        NEXT time this goal blocks it keeps the OLD kind (e.g. a stale
+        ``needs_input`` surviving the unblock would refuse a genuine
+        ``provider_outage`` stamp on the next trip, blocking self-heal; the
+        inverse — a stale ``provider_outage`` surviving onto a hopeless goal —
+        would let it silently burn requeues it should never have gotten).
+        ``payload.provider_requeues``/``provider_retry_exhausted`` are
+        PRESERVED across the reset — the requeue-cap ledger must survive a
+        block episode, only the discriminator itself is cleared.
+        """
+        g = self.get(goal_id)
+        if g is None:
+            return False
+        payload = dict(g.payload or {})
+        payload.pop("block_kind", None)
         rc = execute_retry(
             self.db_path,
             """UPDATE goals SET status='ready', consecutive_failures=0,
-                  claim_lock=NULL, claim_expires=NULL, completed_at=NULL
+                  claim_lock=NULL, claim_expires=NULL, completed_at=NULL, payload=?
                 WHERE id=? AND kind='goal' AND status='blocked' AND user_id=?""",
-            (goal_id, user_id),
+            (json.dumps(payload), goal_id, user_id),
         )
         if rc == 1:
             self._event(goal_id, "unblocked", {"rationale": str(rationale)[:500]})
         return rc == 1
 
-    def age_out_blocked(self, *, max_age_days: int = 14) -> int:
-        """§5.3: age ancient ``blocked`` goals out VISIBLY (→ cancelled, logged)
-        instead of letting them rot as permanent planner context. The age is
-        measured from when the goal blocked (completed_at) else creation."""
+    def stamp_block_kind(self, goal_id: str, block_kind: str, *,
+                         only_if_absent: bool = False) -> bool:
+        """T2.1 Task 3: CAS-safe ``payload.block_kind`` stamp on a currently-
+        ``blocked`` goal row — the payload discriminator ``age_out_blocked``
+        reads to decide whether/how a blocked goal can self-heal.
+
+        Mirrors ``decide_ask``'s read-merge-write idiom, guarded by the SAME
+        CAS every mutation in this module uses: the write's
+        ``WHERE status='blocked'`` means a row the owner already moved off
+        ``blocked`` (an ``unblock``/``decide_ask`` racing this call) simply
+        no-ops rather than resurrecting or overwriting it.
+
+        ``only_if_absent=True`` (the ``needs_input`` producer) refuses to
+        stamp over an EXISTING ``block_kind`` — ``dep_failed``/
+        ``provider_outage`` are more specific classifications from producers
+        that ran first and take precedence; a generic escalation must never
+        clobber them. Returns False for a non-blocked row, an already-present
+        kind under ``only_if_absent``, or a no-op re-stamp of the same kind
+        (no duplicate event either way).
+        """
+        g = self.get(goal_id)
+        if g is None or g.status != STATUS_BLOCKED:
+            return False
+        payload = dict(g.payload or {})
+        existing = payload.get("block_kind")
+        if existing == block_kind:
+            return False
+        if only_if_absent and existing:
+            return False
+        payload["block_kind"] = block_kind
+        # Idempotence predicate (2026-07-23 validation): this UPDATE changes no
+        # status, so WHERE status='blocked' alone let two concurrent sweeps both
+        # get rc=1 and double-emit the event (the maintenance sweeps run before
+        # the TickLock). Gating on the STORED kind makes the loser rc=0 — and
+        # rejects its stale-payload write wholesale.
+        rc = execute_retry(
+            self.db_path,
+            """UPDATE goals SET payload=? WHERE id=? AND status='blocked'
+                 AND json_extract(payload,'$.block_kind') IS NOT ?""",
+            (json.dumps(payload), goal_id, block_kind),
+        )
+        if rc == 1:
+            self._event(goal_id, "block_kind_set", {"block_kind": block_kind})
+        return rc == 1
+
+    # T2.1 Task-3 review (finding #2): a bare CAS/breaker guard does NOT bound a
+    # non-sentinel provider failure — every requeue resets consecutive_failures,
+    # so an ordinary (never-healing) provider death would otherwise retry every
+    # ``GOAL_BLOCKED_PROVIDER_RETRY_MIN`` window forever. Hard cap, no new env
+    # (a real operator knob belongs on breaker/retry tuning, not a silent
+    # infinite-retry escape hatch): past this many requeues the row stops
+    # self-healing and falls to the SAME legacy terminal max-age rail every
+    # other blocked kind uses (finding #3, below).
+    _PROVIDER_OUTAGE_MAX_REQUEUES = 16
+
+    def age_out_blocked(self, *, max_age_days: int = 14,
+                        provider_retry_min: Optional[int] = None) -> int:
+        """§5.3 + T2.1 Task 3 (kind-aware aging, review-adjudicated 2026-07-23):
+        sweep every currently-``blocked`` goal and act per ``payload.block_kind``:
+
+        - ``provider_outage`` (not yet requeue-exhausted): a transient LLM/
+          provider death heals on its own — requeued (``blocked`` → ``ready``
+          CAS + a ``provider_outage_retried`` event, ``payload.provider_requeues``
+          incremented) on a MUCH SHORTER window, ``GOAL_BLOCKED_PROVIDER_RETRY_MIN``
+          MINUTES (default 30) rather than ``max_age_days``. Past
+          :data:`_PROVIDER_OUTAGE_MAX_REQUEUES` requeues (review finding #2 — an
+          ordinary provider death must not retry forever), the row is stamped
+          ``payload.provider_retry_exhausted=true`` (once — a
+          ``provider_retry_exhausted`` event fires exactly once) and falls
+          through to the terminal rail below instead.
+        - ``needs_input`` / ``dep_failed`` / absent / unknown / requeue-exhausted
+          ``provider_outage``: NEVER auto-requeued (still needs an explicit
+          owner decision — ``unblock``/``decide_ask`` — or, for ``dep_failed``,
+          the DAG completion sweep) but IS still subject to the legacy terminal
+          rail (review finding #3 — exempting a kind from auto-requeue must not
+          ALSO exempt it from ever aging out, or the blocked population grows
+          unbounded): a row older than ``max_age_days`` (measured from when it
+          blocked, else creation) ages out VISIBLY to ``cancelled`` (logged
+          ``aged_out``) and cascades to ``dep_failed`` dependents exactly like
+          ``cancel()``/the two breaker-trip sites
+          (``record_failure``/``reclaim_stale``).
+
+        ``max_age_days<=0`` disables the WHOLE sweep (today's contract — the
+        dispatcher's own call site already gates the call behind
+        ``max_age_days>0``, so this only matters for a direct caller/test).
+        """
         if max_age_days <= 0:
             return 0
-        cutoff = self._now() - max_age_days * 86400
+        if provider_retry_min is None:
+            try:
+                from agents.task.constants import AutonomyConfig
+                provider_retry_min = AutonomyConfig.goal_blocked_provider_retry_min()
+            except Exception:
+                provider_retry_min = 30
+        now = self._now()
+        cutoff_legacy = now - max_age_days * 86400
+        cutoff_provider = now - max(0, int(provider_retry_min)) * 60
+
+        # T2.1 Task-3 review (finding #3): pre-filter in SQL rather than pulling
+        # EVERY blocked row into Python on every tick. A provider_outage row is
+        # only ever a candidate once past its (short) provider window; every
+        # other kind (incl. a requeue-exhausted provider_outage, which reads as
+        # legacy from here on) only once past the (long) legacy window — so a
+        # freshly-blocked row of ANY kind never reaches the Python loop at all.
+        # Mirrors the established ``json_extract(metadata,'$.tenant_id')``
+        # precedent (x402 invoicing) for indexing into the payload JSON blob.
         rows = execute_retry(
             self.db_path,
-            """SELECT id FROM goals
+            """SELECT * FROM goals
                 WHERE status='blocked' AND kind='goal'
-                  AND COALESCE(completed_at, created_at) < ?""",
-            (cutoff,), fetch="all",
+                  AND (
+                        (COALESCE(json_extract(payload, '$.block_kind'), '') = 'provider_outage'
+                             AND COALESCE(completed_at, created_at) < ?)
+                     OR (COALESCE(json_extract(payload, '$.block_kind'), '') != 'provider_outage'
+                             AND COALESCE(completed_at, created_at) < ?)
+                  )""",
+            (cutoff_provider, cutoff_legacy), fetch="all",
         ) or []
         n = 0
-        now = self._now()
         for r in rows:
-            gid = r["id"]
+            g = Goal.from_row(r)
+            blocked_at = g.completed_at if g.completed_at is not None else g.created_at
+            payload = dict(g.payload or {})
+            block_kind = payload.get("block_kind")
+
+            if block_kind == "provider_outage" and not payload.get("provider_retry_exhausted"):
+                if blocked_at >= cutoff_provider:
+                    continue  # still inside the short self-heal window
+                requeues = int(payload.get("provider_requeues") or 0)
+                if requeues < self._PROVIDER_OUTAGE_MAX_REQUEUES:
+                    payload["provider_requeues"] = requeues + 1
+                    rc = execute_retry(
+                        self.db_path,
+                        """UPDATE goals SET status='ready', consecutive_failures=0,
+                              claim_lock=NULL, claim_expires=NULL, completed_at=NULL,
+                              payload=?
+                            WHERE id=? AND status='blocked'""",
+                        (json.dumps(payload), g.id),
+                    )
+                    if rc == 1:
+                        n += 1
+                        self._event(g.id, "provider_outage_retried",
+                                    {"provider_retry_min": provider_retry_min,
+                                     "requeues": requeues + 1})
+                    continue
+                # Cap reached: stop self-healing, stamp ONCE, then fall through
+                # below to the same terminal rail every other kind uses. The
+                # stored-payload predicate makes "ONCE" hold under concurrent
+                # sweeps too (2026-07-23 validation: the sweeps run before the
+                # TickLock, and a payload-only UPDATE gave both writers rc=1 —
+                # duplicate provider_retry_exhausted events).
+                payload["provider_retry_exhausted"] = True
+                rc = execute_retry(
+                    self.db_path,
+                    """UPDATE goals SET payload=? WHERE id=? AND status='blocked'
+                         AND json_extract(payload,'$.provider_retry_exhausted') IS NOT 1""",
+                    (json.dumps(payload), g.id),
+                )
+                if rc == 1:
+                    self._event(g.id, "provider_retry_exhausted", {"requeues": requeues})
+
+            # needs_input / dep_failed / absent / unknown / requeue-exhausted
+            # provider_outage: never auto-requeued, but ALL still subject to
+            # the legacy terminal max-age cutoff (review finding #3).
+            if blocked_at >= cutoff_legacy:
+                continue
             rc = execute_retry(
                 self.db_path,
                 """UPDATE goals SET status='cancelled', completed_at=?
                     WHERE id=? AND status='blocked'""",
-                (now, gid),
+                (now, g.id),
             )
             if rc == 1:
                 n += 1
-                self._event(gid, "aged_out", {"max_age_days": max_age_days})
+                self._event(g.id, "aged_out", {"max_age_days": max_age_days})
+                self._cascade_dep_failed(g.id)
+        return n
+
+    def reconcile_waiting(self, *, limit: int = 50) -> int:
+        """T2.1 final-review Fix 3: janitor for stranded ``waiting`` rows.
+
+        Every other terminal-adjacent state has a sweep (``reclaim_stale`` for
+        a crashed ``running`` row, ``age_out_blocked`` for a stale ``blocked``
+        row) — ``waiting`` had none. A row can strand there in two narrow
+        windows the completion sweep can't see: (a) ``create`` writes the goal
+        row THEN the edges — a prerequisite that completes in that gap is
+        missed (the sweep only fires from the PREREQUISITE's own
+        ``record_success``, which already ran); (b) a process crash between
+        ``record_success``'s CAS-to-``done`` and its dependents sweep. A
+        stranded waiting row is also invisible to the planner's STALLED guard
+        (``_is_live_waiting_goal`` reads it as "in flight" forever).
+
+        Cross-tenant sweep (mirrors ``reclaim_stale``/``age_out_blocked`` — an
+        internal lifecycle op, not an owner-scoped query) — cheap: one SELECT
+        of ``waiting`` rows, then a FRESH ``deps_satisfied`` re-check per row
+        (never a cached snapshot). Two outcomes per row:
+
+        - every prerequisite is ``done`` -> CAS ``waiting`` -> ``ready`` +
+          ``deps_satisfied`` event (``reason: "reconciled"``, distinguishing it
+          from the normal completion-sweep event of the same kind).
+        - any prerequisite is terminally dead (cancelled, or blocked with the
+          breaker actually exhausted — mirrors ``create``'s
+          ``terminal_bad_ids`` check) and can therefore never reach ``done``
+          -> the row is stranded behind dead work, not live work, so it is
+          cascaded to ``blocked``/``dep_failed`` (the same shape
+          ``_cascade_dep_failed`` produces) rather than left waiting forever.
+
+        Returns the number of rows transitioned (either direction).
+        """
+        rows = execute_retry(
+            self.db_path,
+            "SELECT id FROM goals WHERE status='waiting' AND kind='goal' "
+            "ORDER BY created_at LIMIT ?",
+            (int(limit),), fetch="all",
+        ) or []
+        n = 0
+        for r in rows:
+            gid = r["id"]
+            if self.deps_satisfied(gid):
+                rc = execute_retry(
+                    self.db_path,
+                    "UPDATE goals SET status='ready' WHERE id=? AND kind='goal' AND status='waiting'",
+                    (gid,),
+                )
+                if rc == 1:
+                    n += 1
+                    self._event(gid, "deps_satisfied", {"reason": "reconciled"})
+                continue
+            dead = False
+            for dep_id in self.dependencies(gid):
+                dep = self.get(dep_id)
+                if dep is None:
+                    continue
+                if dep.status == STATUS_CANCELLED or (
+                        dep.status == STATUS_BLOCKED
+                        and dep.consecutive_failures >= dep.max_retries):
+                    dead = True
+                    break
+            if not dead:
+                continue  # still genuinely waiting on live work
+            g = self.get(gid)
+            if g is None or g.status != STATUS_WAITING:
+                continue
+            payload = dict(g.payload or {})
+            payload["block_kind"] = "dep_failed"
+            rc = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='blocked', payload=?, completed_at=?
+                    WHERE id=? AND kind='goal' AND status='waiting'""",
+                (json.dumps(payload), self._now(), gid),
+            )
+            if rc == 1:
+                n += 1
+                self._event(gid, "dep_failed", {"reason": "reconciled"})
         return n
 
     _MAX_ATTEMPTS_KEPT = 5
@@ -567,20 +911,273 @@ class GoalBoard:
         rc = execute_retry(self.db_path, sql, params)
         if rc == 1:
             self._event(goal_id, "cancelled", {})
+            self._cascade_dep_failed(goal_id)
         return rc == 1
 
-    def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False) -> bool:
-        """Update goal status, optionally resetting failure counters."""
+    def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False,
+                      user_id: Optional[str] = None) -> bool:
+        """Update goal status, optionally resetting failure counters.
+
+        T2.1 Task 5 hardening: ``user_id`` is an OPTIONAL tenant guard, default
+        ``None`` — every pre-existing internal caller (breaker/aging/sweep code
+        in this module, which already reasons about tenancy elsewhere) is
+        byte-identical. When a caller passes ``user_id`` (the CLI, `polyrob
+        goals ready/pause/resume/retry` — this was IDOR-shaped before: any
+        caller could flip any tenant's goal status by id), the UPDATE adds
+        ``AND user_id=?`` so a wrong/foreign tenant is a harmless no-op
+        (``rc=0``), not a cross-tenant mutation.
+        """
         sets = ["status=?", "claim_lock=NULL", "claim_expires=NULL"]
         params: List[Any] = [new_status, goal_id]
         if reset_failures:
             sets.append("consecutive_failures=0")
             sets.append("last_failure_error=NULL")
         sql = f"UPDATE goals SET {', '.join(sets)} WHERE id=?"
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
         rc = execute_retry(self.db_path, sql, tuple(params))
         if rc == 1:
             self._event(goal_id, f"status_{new_status}", {})
         return rc == 1
+
+    # --- dependency graph (DAG, T2.1 Task 1) ----------------------------------
+
+    def _validate_dep_ids(self, dep_ids: List[str], *, user_id: str) -> List[Goal]:
+        """Resolve dep ids to Goal rows, enforcing existence + same-tenant +
+        ``kind='goal'``.
+
+        Raises ValueError on the first bad id — an all-or-nothing validation
+        pass (a partially-validated dep set is worse than none). ``get()`` is
+        NOT tenant-scoped, so every dep is re-checked against ``user_id`` here.
+        The kind check matters beyond "edges are goal->goal by design":
+        ``OBJ_DONE == STATUS_DONE == "done"`` (same literal), so an objective
+        (or an ask, which never reaches a real 'done' status either) could
+        otherwise silently satisfy a dependency it was never meant to.
+        """
+        deps: List[Goal] = []
+        for dep_id in dep_ids:
+            dep = self.get(dep_id)
+            if dep is None:
+                raise ValueError(f"depends_on: unknown goal id {dep_id!r}")
+            if dep.user_id != user_id:
+                raise ValueError(f"depends_on: goal {dep_id!r} belongs to another tenant")
+            if dep.kind != KIND_GOAL:
+                raise ValueError(
+                    f"depends_on: {dep_id!r} is a {dep.kind!r}, not a goal — "
+                    "dependency edges must target kind='goal'")
+            deps.append(dep)
+        return deps
+
+    def _would_close_cycle(self, goal_id: str, dep_id: str, *, max_depth: int = 50) -> bool:
+        """True if adding the edge ``goal_id -> dep_id`` ("goal_id depends on
+        dep_id") would close a cycle — i.e. ``dep_id`` already transitively
+        depends on ``goal_id``.
+
+        Plain BFS over the existing ``goal_edges`` graph, depth-capped (the
+        board is small; the cap guards against a pathological/corrupt edge
+        set looping forever rather than raising).
+        """
+        frontier = {dep_id}
+        visited: set = set()
+        depth = 0
+        while frontier and depth < max_depth:
+            if goal_id in frontier:
+                return True
+            depth += 1
+            next_frontier: set = set()
+            for node in frontier:
+                if node in visited:
+                    continue
+                visited.add(node)
+                rows = execute_retry(
+                    self.db_path,
+                    "SELECT depends_on_id FROM goal_edges WHERE goal_id=?",
+                    (node,), fetch="all",
+                ) or []
+                next_frontier.update(r["depends_on_id"] for r in rows)
+            frontier = next_frontier
+        return goal_id in frontier
+
+    def add_dependencies(self, goal_id: str, dep_ids: List[str], *, user_id: str) -> None:
+        """Record that ``goal_id`` depends on each id in ``dep_ids`` (idempotent
+        per pair — ``INSERT OR IGNORE``).
+
+        All-or-nothing: every dep is validated to exist and belong to the SAME
+        tenant, and every proposed edge is checked against the existing graph
+        for a self-dependency or a cycle — ALL before any edge is written.
+        Already-``done`` deps are recorded too (not skipped): ``deps_satisfied``
+        is a live join against current goal status, never a cached snapshot,
+        so a done dep is simply always-satisfied going forward.
+        """
+        ids = list(dict.fromkeys(dep_ids or []))
+        if not ids:
+            return
+        for dep_id in ids:
+            if dep_id == goal_id:
+                raise ValueError(f"goal {goal_id!r} cannot depend on itself")
+        self._validate_dep_ids(ids, user_id=user_id)
+        for dep_id in ids:
+            if self._would_close_cycle(goal_id, dep_id):
+                raise ValueError(
+                    f"depends_on: goal {dep_id!r} would create a dependency cycle "
+                    f"with {goal_id!r}")
+        now = self._now()
+        inserted: List[str] = []
+        for dep_id in ids:
+            rc = execute_retry(
+                self.db_path,
+                """INSERT OR IGNORE INTO goal_edges (goal_id, depends_on_id, user_id, created_at)
+                    VALUES (?, ?, ?, ?)""",
+                (goal_id, dep_id, user_id, now),
+            )
+            if rc == 1:
+                inserted.append(dep_id)
+        # TOCTOU repair (2026-07-23 validation): the pre-insert cycle check is
+        # check-then-write, so two concurrent add_dependencies (A→B and B→A)
+        # can both pass it — and a formed cycle strands both rows forever
+        # (ready() excludes them, reconcile_waiting reads a waiting dep as
+        # live, no janitor detects cycles). Re-verify AFTER our edges are
+        # visible: the racer whose insert commits last sees the full graph, so
+        # at least one racer detects the cycle, removes ITS OWN just-inserted
+        # edges (never pre-existing ones), and raises — a cycle can never
+        # persist past the losing caller's return.
+        for dep_id in ids:
+            if self._would_close_cycle(goal_id, dep_id):
+                for d in inserted:
+                    execute_retry(
+                        self.db_path,
+                        "DELETE FROM goal_edges WHERE goal_id=? AND depends_on_id=?",
+                        (goal_id, d),
+                    )
+                raise ValueError(
+                    f"depends_on: goal {dep_id!r} would create a dependency cycle "
+                    f"with {goal_id!r} (detected post-insert)")
+        # Edge-only writes are otherwise invisible to the wake-gate fingerprint
+        # (MAX(goal_events.id)) — every mutation path must emit an event.
+        self._event(goal_id, "deps_added", {"deps": ids})
+
+    def dependencies(self, goal_id: str) -> List[str]:
+        """Raw prerequisite ids for ``goal_id`` (edge list, no status join)."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT depends_on_id FROM goal_edges WHERE goal_id=? ORDER BY created_at",
+            (goal_id,), fetch="all",
+        ) or []
+        return [r["depends_on_id"] for r in rows]
+
+    def dependents(self, goal_id: str) -> List[str]:
+        """Ids of goals that list ``goal_id`` in their ``depends_on`` (reverse
+        edges — i.e. what ``goal_id`` blocks). Public read-only wrapper over
+        :meth:`_dependents_of` for callers outside this module (e.g. `goal_show`)."""
+        return self._dependents_of(goal_id)
+
+    def deps_satisfied(self, goal_id: str) -> bool:
+        """True iff every prerequisite edge for ``goal_id`` currently points to
+        a ``done`` goal. Always a FRESH read against ``goals.status`` — never
+        cached — so callers (e.g. the completion sweep) can re-verify at write
+        time rather than trust a stale snapshot."""
+        row = execute_retry(
+            self.db_path,
+            """SELECT COUNT(*) AS n FROM goal_edges e
+                JOIN goals g ON g.id = e.depends_on_id
+                WHERE e.goal_id=? AND g.status != 'done'""",
+            (goal_id,), fetch="one",
+        )
+        if not row:
+            return True
+        try:
+            return int(row["n"]) == 0
+        except (KeyError, TypeError, IndexError):
+            return int(row[0]) == 0
+
+    def _dependents_of(self, prerequisite_id: str) -> List[str]:
+        """Ids of goals that list ``prerequisite_id`` in their ``depends_on``."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT DISTINCT goal_id FROM goal_edges WHERE depends_on_id=?",
+            (prerequisite_id,), fetch="all",
+        ) or []
+        return [r["goal_id"] for r in rows]
+
+    def _sweep_dependents_on_completion(self, completed_goal_id: str) -> None:
+        """T2.1 Task 2 completion sweep: called ONLY after ``completed_goal_id``'s
+        own CAS to 'done' has already won (never on a ``stale_completion``).
+
+        For each dependent edge, ``deps_satisfied`` is re-verified FRESH (never
+        trusting a cached snapshot — a sibling prerequisite may complete between
+        the check and the write) and the flip is itself a CAS
+        (``WHERE status='waiting'``). Two concurrent completions of sibling
+        prerequisites (e.g. via two ``GoalBoard`` instances on one db path) can
+        both observe ``deps_satisfied() == True`` and both attempt the flip —
+        exactly one wins (rc=1, emits the event); the other's rc=0 is harmless
+        (the dependent is already ``ready``).
+        """
+        for dep_id in self._dependents_of(completed_goal_id):
+            if not self.deps_satisfied(dep_id):
+                continue
+            rc = execute_retry(
+                self.db_path,
+                "UPDATE goals SET status='ready' WHERE id=? AND kind='goal' AND status='waiting'",
+                (dep_id,),
+            )
+            if rc == 1:
+                self._event(dep_id, "deps_satisfied", {"completed": completed_goal_id})
+                continue
+            # T2.1 final-review Fix 2: a dependent that was EARLIER cascaded to
+            # blocked/dep_failed (a sibling prerequisite that broke the
+            # breaker, or was cancelled) is still DAG-revivable once every
+            # prerequisite lands 'done' — e.g. the breaker-blocked sibling is
+            # owner-unblocked and later completes for real. The plan contract
+            # says dep_failed is "owner/DAG-mediated"; without this the DAG
+            # half was missing and a revivable dep_failed row needed a SECOND
+            # manual owner unblock even after its blocker resolved itself.
+            # Read-merge-write to clear block_kind, then re-verify the same
+            # CAS condition at write time (dep_failed is exclusively
+            # DAG-produced, so clearing it here can never clobber a more
+            # specific human-facing kind).
+            dep = self.get(dep_id)
+            if dep is None or dep.status != STATUS_BLOCKED:
+                continue
+            if (dep.payload or {}).get("block_kind") != "dep_failed":
+                continue
+            payload = dict(dep.payload or {})
+            payload.pop("block_kind", None)
+            rc2 = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='ready', payload=?
+                    WHERE id=? AND kind='goal' AND status='blocked'
+                      AND COALESCE(json_extract(payload, '$.block_kind'), '') = 'dep_failed'""",
+                (json.dumps(payload), dep_id),
+            )
+            if rc2 == 1:
+                self._event(dep_id, "deps_satisfied", {"completed": completed_goal_id})
+
+    def _cascade_dep_failed(self, prerequisite_id: str) -> None:
+        """T2.1 Task 2 inverse cascade: called ONLY after ``prerequisite_id``'s
+        own CAS to a terminal-bad status (cancelled, or blocked via a breaker
+        trip) has already won.
+
+        A ``waiting`` dependent can never satisfy a dead prerequisite (it will
+        never reach 'done'), so it is flipped ``waiting -> blocked`` (CAS) with
+        ``payload.block_kind='dep_failed'`` — visible and owner-unblockable
+        (see :meth:`unblock`) rather than sitting in ``waiting`` forever.
+        """
+        now = self._now()
+        for dep_id in self._dependents_of(prerequisite_id):
+            dep = self.get(dep_id)
+            if dep is None or dep.status != STATUS_WAITING:
+                continue
+            payload = dict(dep.payload or {})
+            payload["block_kind"] = "dep_failed"
+            rc = execute_retry(
+                self.db_path,
+                """UPDATE goals SET status='blocked', payload=?, completed_at=?
+                    WHERE id=? AND kind='goal' AND status='waiting'""",
+                (json.dumps(payload), now, dep_id),
+            )
+            if rc == 1:
+                self._event(dep_id, "dep_failed", {"prerequisite": prerequisite_id})
 
     # --- queries -------------------------------------------------------------
 
@@ -724,6 +1321,12 @@ class GoalBoard:
                 dep = self.get(gid)
                 dep_payload = dict(dep.payload or {}) if dep else {}
                 dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
+                # T2.1 final-review Fix 1: an ask-fulfillment unblock is also an
+                # owner reset — clear the stale block_kind (see unblock()'s
+                # docstring for the full rationale). provider_requeues /
+                # provider_retry_exhausted are untouched (only this ONE key is
+                # popped) so the requeue-cap ledger survives the episode.
+                dep_payload.pop("block_kind", None)
                 rc2 = execute_retry(
                     self.db_path,
                     """UPDATE goals SET status='ready', consecutive_failures=0,
@@ -826,12 +1429,19 @@ class GoalBoard:
                          "payload" if payload_patch else "") if k})
         return rc == 1
 
-    def children(self, parent_id: str) -> List[Goal]:
-        rows = execute_retry(
-            self.db_path,
-            "SELECT * FROM goals WHERE parent_id=? ORDER BY created_at",
-            (parent_id,), fetch="all",
-        ) or []
+    def children(self, parent_id: str, *, user_id: Optional[str] = None) -> List[Goal]:
+        """T2.1 Task 5 hardening: ``user_id`` is an OPTIONAL tenant filter,
+        default ``None`` (today's cross-tenant listing, unchanged for existing
+        callers). Passing it restricts results to that tenant's own children —
+        `children()` was not self-defending (a caller could enumerate another
+        tenant's sub-goals by a known parent id)."""
+        sql = "SELECT * FROM goals WHERE parent_id=?"
+        params: List[Any] = [parent_id]
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
+        sql += " ORDER BY created_at"
+        rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
         return [Goal.from_row(r) for r in rows]
 
     def last_planner_run_at(self) -> Optional[float]:

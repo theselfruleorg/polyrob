@@ -332,7 +332,8 @@ class SqliteMemoryProvider(MemoryProvider):
         return max(1, min(20, limit))
 
     async def search(self, query: str, *, user_id=None, session_id: str = None,
-                     limit: int = 5, sort: str = None) -> str:
+                     limit: int = 5, sort: str = None, before_id: int = None,
+                     with_ids: bool = False) -> str:
         """Tenant-scoped recall (UP-09). Two shapes inferred from args:
 
         - **discover** (`query` has terms): FTS5 MATCH over a sanitized OR-query,
@@ -342,6 +343,14 @@ class SqliteMemoryProvider(MemoryProvider):
 
         Always scoped via `AND user_id = ?`; refuses empty user_id under
         MEMORY_REQUIRE_USER_ID (same guard as prefetch). `limit` clamped to [1,20].
+
+        T2.6 (2026-07-22): `before_id` is a rowid cursor for pagination — only rows
+        with `rowid < before_id` are considered, under whatever ordering `sort`
+        already selects (see `_keyword_rows`). `with_ids=True` appends an
+        ``(id N)`` suffix to each line (the id a caller can pass back as the next
+        `before_id`); default False keeps the legacy exact ``"- {content}"``
+        format byte-identical for direct callers that don't request it.
+
         Returns newline-joined "- {content}" snippets, or "" on no results / refusal.
         """
         if self._anon_blocked(user_id):
@@ -351,49 +360,89 @@ class SqliteMemoryProvider(MemoryProvider):
             # M3: offload the (blocking) FTS query off the event loop.
             rows = await self._run_blocking(
                 self._keyword_rows,
-                query, norm_user=self._norm_user(user_id), limit=limit, sort=sort)
+                query, norm_user=self._norm_user(user_id), limit=limit, sort=sort,
+                before_id=before_id)
         except Exception as e:
             logger.warning("sqlite memory search failed: %s", e)
             return ""
-        return self._format_recall_rows(rows)
+        return self._format_recall_rows(rows, with_ids=with_ids)
 
     def _keyword_rows(self, query: str, *, norm_user: str, limit: int,
                       sort: str = None, allow_browse: bool = True,
-                      exclude_session_id: str = None) -> list:
-        """FTS5 recall -> ranked list of ``{"content", "ts"}`` dicts (no formatting).
-        ``ts`` comes from the B2 provenance sidecar (None for legacy rows). Discover
-        when `query` has >=3-char terms; otherwise browse most-recent (unless
-        allow_browse=False -> []).
+                      exclude_session_id: str = None, before_id: int = None) -> list:
+        """FTS5 recall -> ranked list of ``{"content", "ts", "rowid"}`` dicts (no
+        formatting). ``ts`` comes from the B2 provenance sidecar (None for legacy
+        rows). Discover when `query` has >=3-char terms; otherwise browse
+        most-recent (unless allow_browse=False -> []).
 
         P2-1: when `exclude_session_id` is set (the automatic prefetch passes the
         CURRENT session), rows written by that session are excluded — otherwise recall
         re-injects the session's OWN just-written findings (already in context via the
         H-MEM tail) as 'untrusted external' memory, wasting tokens and top-k slots.
 
+        T2.6: `before_id` (rowid cursor) is applied as a plain `rowid < ?` WHERE
+        filter regardless of `sort` — for sort="newest" that's exactly "strictly
+        older, same order" (honest forward pagination); for the default rank order
+        it narrows the MATCH candidates BEFORE ranking (keeps rank order) — this
+        is LOSSY, not just reordered: a match that ranks between the returned page
+        and the cursor, but below either, is permanently excluded from every
+        subsequent page (proven: a rank-ordered page1 of ids [2, 4] then
+        before_id=2 can never again surface an id like 3 or 5 that ranked between
+        them). This is exactly why the agent-facing action (T2.6 review fix) only
+        advertises the before_id hint for sort="newest" — the one lossless mode.
+        For sort="oldest" the filter runs the SAME direction as the ORDER BY
+        (ascending), so it is NOT forward-pagination in that mode either — no
+        extra cleverness is applied to make it one (see plan T2.6: "adapt
+        honestly for other sorts").
+
+        T2.6 automation-source demotion: on the default rank-ordered (no explicit
+        `sort`) MATCH branch, a row whose session has a completed 'cron'/'goal'
+        episode for the SAME tenant (`modules/memory/episodic.py::finalize_episode`)
+        sorts AFTER every interactive ('chat'/no-episode) row, rank preserved
+        within each group. This is the only reliable existing source-of-origin
+        signal — `memories` rows carry no kind/source column, and cron/goal
+        sessions use the SAME `create_session` id scheme as chat (no naming
+        convention to key off). Episodes only exist when EPISODIC_MEMORY_ENABLED
+        is on (default off outside POLYROB_LOCAL/autonomous posture); with the
+        ledger empty this EXISTS subquery is always false, i.e. a no-op — never
+        applied to sort="newest"/"oldest" (an explicit time-order request is
+        honored as asked) or to browse (no MATCH -> no `rank` to blend with).
+
         Provenance is fetched in a SECOND query by rowid (not a JOIN) — FTS5 MATCH
         does not compose reliably with JOIN/aliasing, and rank ordering must stay
         exactly as before.
         """
         terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
-        _excl_sql = " AND session_id != ?" if exclude_session_id else ""
+        _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
         _excl_arg = (exclude_session_id,) if exclude_session_id else ()
+        _before_sql = " AND m.rowid < ?" if before_id is not None else ""
+        _before_arg = (before_id,) if before_id is not None else ()
         if terms:
             match = " OR ".join(f'"{t}"' for t in terms[:12])
-            order = {"newest": "rowid DESC", "oldest": "rowid ASC"}.get(sort, "rank")
+            if sort in ("newest", "oldest"):
+                order = "m.rowid DESC" if sort == "newest" else "m.rowid ASC"
+            else:
+                order = (
+                    "(EXISTS (SELECT 1 FROM episodes e WHERE e.session_id = "
+                    "m.session_id AND e.user_id = m.user_id "
+                    "AND e.kind IN ('cron','goal'))) ASC, rank ASC"
+                )
             rows = execute_retry(
                 self.db_path,
-                f"SELECT rowid, content FROM memories WHERE memories MATCH ? AND user_id = ?"
-                f"{_excl_sql} ORDER BY {order} LIMIT ?",
-                (match, norm_user) + _excl_arg + (limit,),
+                f"SELECT m.rowid AS rowid, m.content AS content FROM memories m "
+                f"WHERE memories MATCH ? AND m.user_id = ?{_excl_sql}{_before_sql} "
+                f"ORDER BY {order} LIMIT ?",
+                (match, norm_user) + _excl_arg + _before_arg + (limit,),
                 fetch="all",
             )
         elif allow_browse:
-            order = "rowid ASC" if sort == "oldest" else "rowid DESC"
+            order = "m.rowid ASC" if sort == "oldest" else "m.rowid DESC"
             rows = execute_retry(
                 self.db_path,
-                f"SELECT rowid, content FROM memories WHERE user_id = ?{_excl_sql} "
+                f"SELECT m.rowid AS rowid, m.content AS content FROM memories m "
+                f"WHERE m.user_id = ?{_excl_sql}{_before_sql} "
                 f"ORDER BY {order} LIMIT ?",
-                (norm_user,) + _excl_arg + (limit,),
+                (norm_user,) + _excl_arg + _before_arg + (limit,),
                 fetch="all",
             )
         else:
@@ -411,8 +460,8 @@ class SqliteMemoryProvider(MemoryProvider):
                 ts_by_rowid = {p["mem_rowid"]: p["ts"] for p in (prows or [])}
             except Exception as e:  # provenance is additive — recall must not break
                 logger.debug("mem provenance lookup skipped: %s", e)
-        return [{"content": r["content"], "ts": ts_by_rowid.get(r["rowid"])}
-                for r in rows]
+        return [{"content": r["content"], "ts": ts_by_rowid.get(r["rowid"]),
+                 "rowid": r["rowid"]} for r in rows]
 
     def _keyword_contents(self, query: str, *, norm_user: str, limit: int,
                           sort: str = None, allow_browse: bool = True,
@@ -424,19 +473,28 @@ class SqliteMemoryProvider(MemoryProvider):
             allow_browse=allow_browse, exclude_session_id=exclude_session_id)]
 
     @staticmethod
-    def _recall_line(content: str, ts=None) -> str:
-        """One recall bullet; date-prefixed when the write-time stamp is known (B2)."""
+    def _recall_line(content: str, ts=None, rowid=None) -> str:
+        """One recall bullet; date-prefixed when the write-time stamp is known (B2).
+        T2.6: an ``(id N)`` suffix when `rowid` is given (opt-in, session_search
+        pagination) — omitted (legacy shape, byte-identical) when `rowid` is None."""
         if ts:
             try:
                 day = time.strftime("%Y-%m-%d", time.localtime(int(ts)))
-                return f"- [{day}] {content}"
+                line = f"- [{day}] {content}"
             except Exception:
-                pass
-        return f"- {content}"
+                line = f"- {content}"
+        else:
+            line = f"- {content}"
+        if rowid is not None:
+            line = f"{line} (id {rowid})"
+        return line
 
     @classmethod
-    def _format_recall_rows(cls, rows) -> str:
-        return "\n".join(cls._recall_line(r["content"], r.get("ts")) for r in rows)
+    def _format_recall_rows(cls, rows, *, with_ids: bool = False) -> str:
+        return "\n".join(
+            cls._recall_line(r["content"], r.get("ts"), r.get("rowid") if with_ids else None)
+            for r in rows
+        )
 
     async def prefetch(self, query: str, *, session_id: str, user_id=None) -> str:
         # Rank-ordered, top_k, "" on anon-block or no significant terms (NO browse-on-

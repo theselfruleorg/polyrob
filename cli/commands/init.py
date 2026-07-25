@@ -250,9 +250,17 @@ def init_cmd(
             # (which it always is here — Owner pairing above just defaulted
             # one), falling back to an env note only if it somehow isn't.
             click.echo("\n=== Section 6/6: Autonomy & guardrails ===")
+            # 0.9.0: two honest prompts. Interactive local tools (coding/git/KB/RAG)
+            # are the safe, useful default; the self-directed autonomy loops
+            # (goals/self-wake/self-editing) are a separate, off-by-default opt-in.
             if click.confirm(
-                "Enable local mode (autonomy safe-set ON)?", default=False):
+                "Enable interactive local tools (coding, git, knowledge base, RAG)?",
+                default=True):
                 guardrail_updates["POLYROB_LOCAL"] = "1"
+            if click.confirm(
+                "Enable autonomy (agent works on its own between your messages — "
+                "goals, self-wake, self-editing)?", default=False):
+                guardrail_updates["AUTONOMY_ENABLED"] = "true"
 
             if click.confirm(
                 "Apply recommended approval preset (git push, PRs, installs "

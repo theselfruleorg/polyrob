@@ -9,6 +9,7 @@ no-ops and production behavior is unchanged. Registering an external provider
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Optional
 
@@ -58,19 +59,35 @@ async def memory_prefetch(query: str, *, session_id: str, user_id: Optional[str]
 
 
 async def memory_search(query: str, *, session_id: str = "", user_id: Optional[str] = None,
-                        limit: int = 5, sort: Optional[str] = None) -> str:
+                        limit: int = 5, sort: Optional[str] = None,
+                        before_id: Optional[int] = None, with_ids: bool = False) -> str:
     """Route an agent-initiated recall (discover/browse) through the active provider.
 
     Unlike ``memory_prefetch`` (automatic, fixed top_k, rank-only), this exposes the
     provider's richer ``search`` (bounded limit, sort, browse-on-empty). '' for Null
     / on any error. Tenant-scoped via ``user_id`` exactly like prefetch.
+
+    T2.6: ``before_id``/``with_ids`` (rowid-cursor pagination + id display) are only
+    forwarded when the active provider's ``search`` actually declares them — a
+    provider/test-double that predates T2.6 (e.g. a bare 5-arg stub) still gets the
+    exact legacy call it always got, rather than a TypeError. Real providers
+    (SqliteMemoryProvider, LocalVectorMemoryProvider) declare both.
     """
     provider = get_memory_registry().active()
     if provider is None:
         return ""
+    kwargs = {}
+    try:
+        params = inspect.signature(provider.search).parameters
+    except (TypeError, ValueError):
+        params = {}
+    if before_id is not None and "before_id" in params:
+        kwargs["before_id"] = before_id
+    if with_ids and "with_ids" in params:
+        kwargs["with_ids"] = with_ids
     try:
         return await provider.search(query, user_id=user_id, session_id=session_id,
-                                     limit=limit, sort=sort)
+                                     limit=limit, sort=sort, **kwargs)
     except Exception as e:
         logger.warning("memory_search failed: %s", e)
         return ""

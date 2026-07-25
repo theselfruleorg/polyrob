@@ -83,6 +83,59 @@ deliberately, because a container flag can't express them:
   above at both registration time (a startup warning) and every `run_code` call (a hard
   refusal).
 
+## SSH backend
+
+`tools/code_exec/backends/ssh.py::SshBackend` (T2.7) is a third `ExecutionBackend`,
+alongside `docker` and `local_subprocess`, that runs `run_code` on a remote host over the
+system `ssh` binary (`paramiko`/`asyncssh` are not dependencies). Argv-shape tests live in
+`tests/unit/tools/code_exec/test_ssh_backend.py`.
+
+**Stated honestly: this is not a sandbox, by default.** A generic remote host reached over
+SSH is a **different trust domain** from a hardened container — there is no container
+boundary, no capability drop, no read-only rootfs, no network-deny. Agent code executed via
+this backend runs with the **SSH user's full privileges** on that remote host, exactly as if
+that user had typed the command themselves. Calling that a sandbox would be dishonest, so it
+doesn't:
+
+- `capabilities["sandbox"]` is **`False` by default** (`{"network": True, "isolation":
+  "remote-host", "sandbox": False}`). Because of this, `sandbox_guard.py`'s refusal applies
+  to `ssh` exactly like it applies to `local_subprocess` — on a server (`POLYROB_LOCAL` not
+  set), the `ssh` backend is refused with a clear error rather than silently allowed to run
+  as a non-sandboxed backend. That refusal is correct, not a bug.
+- `CODE_EXEC_SSH_SANDBOXED=true` flips `capabilities["sandbox"]` to `True`. This is an
+  **operator attestation, not a technical guarantee** — setting it asserts that the
+  configured `CODE_EXEC_SSH_HOST` is itself hardened/disposable (e.g. an ephemeral VM or a
+  container reachable only over SSH, torn down after use) such that running arbitrary agent
+  code there under the SSH user's privileges is an acceptable, contained risk. It must only
+  be set when that is actually true for the target host — setting it against a shared,
+  persistent, or otherwise sensitive host does not make that host safer, it only makes the
+  guard stop warning about it.
+- What the backend DOES enforce, independent of the sandbox attestation: the same timeout
+  clamp (`CODE_EXEC_MAX_TIMEOUT_SEC`) and output-byte cap (`CODE_EXEC_MAX_OUTPUT_BYTES`) as
+  every other backend; a remote `timeout --signal=KILL <n>` wrapper around the executed
+  command plus a host-side backstop that kills the local `ssh` client process group if it
+  hangs; the local `ssh` CLI process itself gets the same scrubbed `build_child_env` every
+  backend's host-side subprocess gets (never the real POLYROB process environment); the
+  *remote* environment forwards **nothing** by default — `ExecutionRequest.env` entries are
+  passed through the shared `SECRET_PAT` scrub AND a POSIX-identifier check before being
+  emitted as a quoted `env NAME=value ...` prefix, so a caller cannot smuggle a
+  secret-named var (or shell syntax) into the remote command; every dynamic piece of the
+  remote command is `shlex.quote`d and passed to `ssh` as a single trailing argv element
+  (never `shell=True` locally); a `-`-prefixed `CODE_EXEC_SSH_HOST`/`CODE_EXEC_SSH_USER`
+  value is refused outright rather than risking OpenSSH option-injection. None of that adds
+  up to containment of what the remote code *can touch* on the target host — it bounds
+  runtime, output, and local-side exposure only. The identity key path
+  (`CODE_EXEC_SSH_KEY`) is never logged (only host/port/exit-code are).
+- Ephemeral-only (v1): every `run()` call is its own fresh `ssh` invocation — there is no
+  persistent remote shell/session, and `resolve_backend`'s docker-only persistent-session
+  branch is deliberately not extended to `ssh`.
+
+In short: `ssh` is the right tool when the operator already trusts the remote host's blast
+radius (a throwaway VM, a per-tenant disposable box) and wants agent code to run there
+instead of locally — it is the wrong tool for running untrusted/adversarial code against a
+host whose compromise would matter, which is exactly what `docker`'s containment above is
+for.
+
 ## Residual risks, stated honestly
 
 - **A container is a namespace/cgroup boundary sharing the host kernel — it is NOT a

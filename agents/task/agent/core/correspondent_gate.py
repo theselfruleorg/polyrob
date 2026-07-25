@@ -89,6 +89,12 @@ _HIGH_IMPACT_NAMES = frozenset({
     # payment request. The canonical forged-email social-engineering target; must be
     # unreachable while correspondent-tainted (x402_fetch/x402_pay already are).
     "x402_request",
+    # The x402_invoice tool's READ verbs — enumerated by NAME (parity with x402_request /
+    # agent_status / usage_summary) so a resolver fault can't let a tainted session read
+    # the full treasury/runtime ledger (accounting) or the invoice list incl. payer
+    # contacts (x402_invoices) — the same "fish for what you'd invoice me" disclosure the
+    # gate blocks by tool-id when resolution succeeds.
+    "accounting", "x402_invoices",
     # P1-4: outbound-egress verbs whose query params are an exfil channel (parity with
     # web_fetch/browser, which are already blocked). anysite/perplexity reach the
     # outside world with attacker-influenced arguments.

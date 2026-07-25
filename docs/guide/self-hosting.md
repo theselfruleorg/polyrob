@@ -143,7 +143,8 @@ For multi-user / production deployments, review these defaults:
 
 | Variable | Recommended server value | Notes |
 |----------|-------------------------|-------|
-| `POLYROB_LOCAL` | *(unset)* | Leave unset; this keeps autonomy flags OFF by default |
+| `POLYROB_LOCAL` | *(unset)* | Leave unset; this keeps the local-profile interactive tools **and** the autonomy loops OFF by default |
+| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed autonomy loops (self-wake / goals / curator / self-editing). Leave off on a multi-tenant server; enable a specific loop by its own flag if you need it |
 | `MEMORY_REQUIRE_USER_ID` | `true` (default) | Prevents cross-tenant memory bleed |
 | `CODE_EXEC_ENABLED` | `false` (default) | Local subprocess exec is not sandboxed — keep off until a hard-sandbox backend is added |
 | `CRON_ENABLED` | `false` (default) | Enable if you want scheduled tasks |
