@@ -31,13 +31,19 @@ CEILINGS = {
     "agents/task_agent_lite.py": 2593,
     "tools/controller/action_registration.py": 2571,
     "api/task_http_api.py": 1876,
-    "cli/ui/commands/handlers.py": 1905,
+    # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
+    # master state in `/autonomy` + `doctor`. The extraction debt on this file
+    # STANDS — it is an extraction candidate, not a designated SSOT.
+    "cli/ui/commands/handlers.py": 1908,
     # Re-baselined 2026-07-23: policy.py is the designated flag-accessor SSOT
     # (core/config_policy/) — this wave added run_budget_usd/_float_env,
     # compaction_prompt_guard, dead_target_registry_enabled, goal-blocked retry,
     # and related accessors, growing the file doing its designated job (see
     # AGENTS.md core/config_policy note). Not an extraction candidate.
-    "core/config_policy/policy.py": 1341,
+    # Re-baselined again 2026-07-25 (0.9.0): the autonomy-default split added
+    # _AUTONOMY_LOCAL_FLAGS + autonomy_enabled()/_autonomy_group_default() — the
+    # same designated job.
+    "core/config_policy/policy.py": 1352,
 }
 
 # A ceiling may sit at most this many lines above the real size before the
