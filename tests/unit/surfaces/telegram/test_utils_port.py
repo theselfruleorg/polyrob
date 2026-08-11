@@ -5,7 +5,7 @@ relies on so a future edit can't silently regress them.
 """
 import pytest
 
-from surfaces.telegram import markdown as md
+from utils import markdown_utils as md
 from surfaces.telegram.rate_limit import TelegramRateLimiter
 
 

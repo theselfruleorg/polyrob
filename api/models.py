@@ -4,9 +4,6 @@ from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from datetime import datetime
 
-from core.version import get_version
-
-
 class MessageRequest(BaseModel):
     """Request model for sending messages to agents."""
     text: str = Field(..., description="The message text to process")
@@ -45,23 +42,6 @@ class ErrorResponse(BaseModel):
     details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
 
 
-class ConversationRequest(BaseModel):
-    """Request model for conversation management."""
-    user_id: str = Field(..., description="User identifier")
-    action: str = Field(..., description="Action to perform (start, continue, end)")
-    mode: Optional[str] = Field("standard", description="Conversation mode")
-    context: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Conversation context")
-
-
-class ConversationResponse(BaseModel):
-    """Response model for conversation management."""
-    success: bool = Field(True, description="Whether the request was successful")
-    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
-    status: Optional[str] = Field(None, description="Conversation status")
-    mode: Optional[str] = Field(None, description="Active conversation mode")
-    context: Optional[Dict[str, Any]] = Field(None, description="Updated conversation context")
-
-
 class RateLimitInfo(BaseModel):
     """Rate limit information model."""
     # Support both field names for compatibility
@@ -72,26 +52,6 @@ class RateLimitInfo(BaseModel):
     limit: int = Field(100, description="Total request limit")
     window: str = Field("minute", description="Rate limit window (minute, hour)")
 
-
-
-class AgentCapability(BaseModel):
-    """Agent capability information."""
-    id: str = Field(..., description="Agent identifier")
-    name: str = Field(..., description="Agent display name")
-    version: Optional[str] = Field(default_factory=get_version, description="Agent version")
-    enabled: bool = Field(True, description="Whether agent is enabled")
-    features: List[str] = Field(default_factory=list, description="List of agent features")
-    required_services: List[str] = Field(default_factory=list, description="Required services")
-    optional_services: List[str] = Field(default_factory=list, description="Optional services")
-    description: Optional[str] = Field(None, description="Agent description")
-
-
-class HealthResponse(BaseModel):
-    """Health check response model."""
-    status: str = Field(..., description="Health status (healthy, degraded, unhealthy)")
-    version: Optional[str] = Field(None, description="API version")
-    services: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Service health status")
-    timestamp: datetime = Field(default_factory=datetime.now, description="Health check timestamp")
 
 
 class SessionCreateRequest(BaseModel):

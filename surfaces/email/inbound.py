@@ -20,10 +20,10 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
-from dataclasses import dataclass
 from email.utils import parseaddr
 from typing import Any, Optional
 
+from core.surfaces.act import InboundResult  # canonical envelope (R-4) — was a local duplicate
 from core.surfaces.dispatcher import RouteDecision, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
 
@@ -39,12 +39,6 @@ _QUOTE_BOUNDARY_RES = [
     re.compile(r"^\s*-{3,}\s*Original Message\s*-{3,}\s*$", re.IGNORECASE),  # Outlook
     re.compile(r"^\s*_{5,}\s*$"),                               # Outlook divider rule
 ]
-
-
-@dataclass
-class InboundResult:
-    inbound: InboundMessage
-    decision: RouteDecision
 
 
 def parse_from_address(raw_from: str) -> str:

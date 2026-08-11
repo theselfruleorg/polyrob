@@ -212,6 +212,38 @@ def _isolate_autonomy_state_store():
 
 
 @pytest.fixture(autouse=True)
+def _isolate_provider_registry():
+    """Keep the developer's real ``~/.polyrob/providers.yaml`` OUT of unit runs.
+
+    The ProviderSpec registry (proposal 024) merges user-declared providers over
+    the built-ins; several tests pin the exact six-provider set, so a provider
+    declared on the dev machine would flake them. ``LLM_CUSTOM_PROVIDERS`` set-but-
+    empty disables user-file loading; the cache reset ensures no snapshot built
+    under a different env leaks across tests. A test may still opt in by setting
+    ``LLM_CUSTOM_PROVIDERS`` inside its own body (after a cache reset).
+    """
+    prev = os.environ.get("LLM_CUSTOM_PROVIDERS")
+    os.environ["LLM_CUSTOM_PROVIDERS"] = ""
+
+    def _reset():
+        try:
+            from modules.llm.provider_spec import reset_provider_registry_cache
+            reset_provider_registry_cache()
+        except Exception:
+            pass
+
+    _reset()
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("LLM_CUSTOM_PROVIDERS", None)
+        else:
+            os.environ["LLM_CUSTOM_PROVIDERS"] = prev
+        _reset()
+
+
+@pytest.fixture(autouse=True)
 def _reset_autonomy_marker_global():
     """The in-process autonomous-session marker is a module-global set; any test
     that runs a goal/cron helper (run_task_to_outcome marks ids like "s1")

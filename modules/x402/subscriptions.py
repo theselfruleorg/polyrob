@@ -130,26 +130,14 @@ def subscription_grace_days() -> int:
 
 # --- plumbing ------------------------------------------------------------
 
-async def _resolve_db(db=None):
-    if db is not None:
-        return db
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    return container.get_service("database_manager")
+from modules.x402._db import resolve_db as _resolve_db  # shared plumbing (one home)
 
 
 def _emit(kind: str, *, user_id: str, attrs: Optional[dict] = None) -> None:
-    """First-class subscription telemetry (fail-open), same shape as
-    ``invoicing._emit``."""
-    try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
-        if event_log_enabled():
-            get_event_log().record(
-                kind, user_id=user_id or "", session_id="",
-                source="subscriptions", attrs=attrs or {},
-            )
-    except Exception:
-        pass
+    """First-class subscription telemetry — thin label-binding over the shared
+    ``modules.x402._db.emit`` (the body was duplicated in invoicing.py)."""
+    from modules.x402._db import emit
+    emit(kind, source="subscriptions", user_id=user_id, attrs=attrs)
 
 
 def _row(row) -> Optional[Dict[str, Any]]:

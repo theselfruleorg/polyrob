@@ -24,7 +24,6 @@ from core.logging import get_component_logger
 try:
     from hyperliquid.info import Info
     from hyperliquid.exchange import Exchange
-    from hyperliquid.utils import constants as hl_constants
     HAS_SDK = True
 except ImportError:
     HAS_SDK = False
@@ -62,13 +61,6 @@ class GetOrderbookParams(BaseModel):
 class GetFundingParams(BaseModel):
     """Parameters for getting funding rate"""
     coin: str = Field(..., description="Coin symbol")
-
-
-class GetCandlesParams(BaseModel):
-    """Parameters for getting candlestick data"""
-    coin: str = Field(..., description="Coin symbol")
-    interval: str = Field("1h", description="Candle interval: 1m, 5m, 15m, 1h, 4h, 1d")
-    limit: int = Field(100, ge=1, le=500, description="Number of candles")
 
 
 class PlaceLimitOrderParams(BaseModel):

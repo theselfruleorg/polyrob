@@ -156,26 +156,6 @@ class AuditLogger:
             # Don't raise - audit logging should not break the main flow
             return 0
 
-    async def log_auth(
-        self,
-        wallet_address: str,
-        success: bool,
-        ip_address: Optional[str] = None,
-        failure_reason: Optional[str] = None
-    ) -> int:
-        """Log authentication attempt."""
-        event_type = self.EVENT_AUTH_SUCCESS if success else self.EVENT_AUTH_FAILURE
-        action = "User authenticated" if success else f"Authentication failed: {failure_reason or 'unknown'}"
-
-        return await self.log(
-            event_type=event_type,
-            action=action,
-            actor_wallet=wallet_address,
-            actor_ip=ip_address,
-            success=success,
-            metadata={"failure_reason": failure_reason} if failure_reason else None
-        )
-
     async def log_admin_wallet_auth(
         self,
         wallet_address: str,
@@ -261,24 +241,6 @@ class AuditLogger:
             old_value=balance_before,
             new_value=balance_after,
             metadata={"amount": amount, "reason": reason}
-        )
-
-    async def log_security_alert(
-        self,
-        alert_type: str,
-        description: str,
-        actor_id: Optional[str] = None,
-        actor_ip: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
-    ) -> int:
-        """Log security alert."""
-        return await self.log(
-            event_type=self.EVENT_SECURITY_ALERT,
-            action=f"SECURITY ALERT: {alert_type} - {description}",
-            actor_id=actor_id,
-            actor_ip=actor_ip,
-            metadata=metadata,
-            success=False  # Alerts are always logged as failures for visibility
         )
 
     async def get_recent_events(

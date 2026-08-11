@@ -577,39 +577,3 @@ class TelemetryManager:
             self._service.capture(event, session_id=self._session_id)
         except Exception as e:
             self.logger.error(f"Failed to capture tool execution: {e}", exc_info=True)
-
-    def capture_error(
-        self,
-        step: int,
-        error_type: str,
-        error_message: str,
-        error_stack: Optional[str] = None,
-        recoverable: bool = True,
-        context: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Capture an error event.
-
-        Args:
-            step: Current step number
-            error_type: Type of error ('tool_error', 'llm_error', 'validation_error', etc.)
-            error_message: Error message
-            error_stack: Stack trace (will be sanitized)
-            recoverable: Whether error is recoverable
-            context: Additional context
-        """
-        try:
-            from agents.task.telemetry.views import ErrorTelemetryEvent
-            
-            event = ErrorTelemetryEvent(
-                agent_id=self._agent_id or f"unknown_{self._session_id}",
-                step=step,
-                error_type=error_type,
-                error_message=error_message,
-                error_stack=error_stack,
-                recoverable=recoverable,
-                context=context or {},
-                session_id=self._session_id
-            )
-            self._service.capture(event, session_id=self._session_id)
-        except Exception as e:
-            self.logger.error(f"Failed to capture error: {e}", exc_info=True)

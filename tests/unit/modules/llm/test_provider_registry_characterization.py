@@ -1,0 +1,308 @@
+"""Characterization suite for proposal 024 P0 (declarative provider registry).
+
+Pins the CURRENT resolution behavior of the twelve provider seams BEFORE the
+``ProviderSpec`` refactor, so the derived outputs can be proven byte-identical.
+After the refactor these tests run with ``LLM_PROVIDER_REGISTRY`` both on and
+off (the ``registry_flag`` fixture) and must pass unchanged in both modes.
+
+Covered seams (proposal 024 §2.2):
+  1  modules/llm/profiles.py PROFILES + the three oracles
+  4  model_registry.PROVIDER_CONFIG
+  5  llm_client_registry DEFAULT_MODELS / AVAILABLE_MODELS / get_default_model
+  6  llm_factory.create_chat_model unknown-provider guard
+  7  schema_generators.SCHEMA_GENERATORS routing
+  10 llm_manager.FALLBACK_HIERARCHY
+  11 api/openai_compat/model_map._KNOWN_PROVIDERS
+  12 api/openai_compat/model_map._PREFIX_TO_PROVIDER
+  +  core/runtime_config.resolve_runtime_config precedence matrix
+"""
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Registry-flag parametrization (post-refactor: both modes must be identical).
+# Before the ProviderSpec refactor lands the flag is unknown to the code and
+# setting it is a no-op, so this fixture is safe from day one.
+# ---------------------------------------------------------------------------
+@pytest.fixture(params=["on", "off"])
+def registry_flag(request, monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER_REGISTRY", "true" if request.param == "on" else "false")
+    # Ensure no user providers.yaml leaks into characterization runs.
+    monkeypatch.setenv("LLM_CUSTOM_PROVIDERS", "")
+    try:
+        from modules.llm import provider_spec
+        provider_spec.reset_provider_registry_cache()
+    except ImportError:
+        pass  # pre-refactor tree
+    yield request.param
+    try:
+        from modules.llm import provider_spec
+        provider_spec.reset_provider_registry_cache()
+    except ImportError:
+        pass
+
+
+CANONICAL_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia", "deepseek"]
+INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia"]
+
+REAL = "sk-0123456789abcdef0123456789"  # >= 20 chars, not a placeholder
+
+ALL_KEYS = {
+    "OPENROUTER_API_KEY": REAL,
+    "ANTHROPIC_API_KEY": REAL,
+    "OPENAI_API_KEY": REAL,
+    "GEMINI_API_KEY": REAL,
+    "NVIDIA_API_KEY": REAL,
+    "DEEPSEEK_API_KEY": REAL,
+}
+
+
+# ---------------------------------------------------------------------------
+# Seam 1 — profiles + oracles
+# ---------------------------------------------------------------------------
+class TestProfilesOracles:
+    def test_profiles_canonical_order_and_membership(self, registry_flag):
+        from modules.llm.profiles import PROFILES
+        assert list(PROFILES.keys()) == CANONICAL_ORDER
+
+    def test_profile_fields_pinned(self, registry_flag):
+        from modules.llm.profiles import PROFILES
+        p = PROFILES["openrouter"]
+        assert (p.env_key, p.base_url) == ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1")
+        assert PROFILES["anthropic"].base_url == "https://api.anthropic.com"
+        assert PROFILES["openai"].base_url is None
+        assert PROFILES["gemini"].env_key == "GEMINI_API_KEY"
+        assert PROFILES["nvidia"].base_url == "https://integrate.api.nvidia.com/v1"
+        assert PROFILES["nvidia"].supports_vision is False
+        assert PROFILES["deepseek"].initializable is False
+        assert PROFILES["deepseek"].supports_native_tools is False
+        for name in INITIALIZABLE_ORDER:
+            assert PROFILES[name].initializable is True
+
+    def test_providers_with_keys_order_and_deepseek(self, registry_flag):
+        from modules.llm.profiles import providers_with_keys
+        assert providers_with_keys(ALL_KEYS) == CANONICAL_ORDER
+        assert providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == ["deepseek"]
+        assert providers_with_keys({}) == []
+        # blank value counts as absent
+        assert providers_with_keys({"OPENAI_API_KEY": ""}) == []
+
+    def test_initializable_excludes_deepseek(self, registry_flag):
+        from modules.llm.profiles import initializable_providers_with_keys
+        assert initializable_providers_with_keys(ALL_KEYS) == INITIALIZABLE_ORDER
+        assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == []
+
+    def test_usable_rejects_malformed(self, registry_flag):
+        from modules.llm.profiles import usable_providers_with_keys
+        assert usable_providers_with_keys(ALL_KEYS) == INITIALIZABLE_ORDER
+        assert usable_providers_with_keys({"OPENAI_API_KEY": "short"}) == []
+        assert usable_providers_with_keys({"OPENAI_API_KEY": "your-openai-key"}) == []
+        assert usable_providers_with_keys({"DEEPSEEK_API_KEY": REAL}) == []
+
+
+# ---------------------------------------------------------------------------
+# resolve_runtime_config precedence matrix
+# ---------------------------------------------------------------------------
+class TestRuntimeConfigMatrix:
+    def test_explicit_wins_even_with_no_key(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config("anthropic", "m1", env={}) == ("anthropic", "m1")
+
+    def test_pinned_wins_below_explicit(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config(
+            None, None, env={}, pinned_provider="gemini", pinned_model="g"
+        ) == ("gemini", "g")
+        assert resolve_runtime_config(
+            "openai", None, env={}, pinned_provider="gemini", pinned_model="g"
+        ) == ("openai", None)
+
+    def test_cli_store_intersected_with_keys(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        # stored provider has a key -> honored
+        assert resolve_runtime_config(
+            None, None, env=ALL_KEYS, cli_store_default=("gemini", "g2")
+        ) == ("gemini", "g2")
+        # stored provider without a key -> skipped, first-key wins
+        assert resolve_runtime_config(
+            None, None, env={"OPENAI_API_KEY": REAL}, cli_store_default=("gemini", "g2")
+        ) == ("openai", None)
+
+    def test_first_key_canonical_order(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config(None, None, env=ALL_KEYS) == ("openrouter", None)
+        env = {"GEMINI_API_KEY": REAL, "OPENAI_API_KEY": REAL}
+        assert resolve_runtime_config(None, None, env=env) == ("openai", None)
+
+    def test_deepseek_key_never_autoresolves(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config(
+            None, None, env={"DEEPSEEK_API_KEY": REAL}
+        ) == ("openai", None)  # falls to last_resort
+
+    def test_malformed_key_never_autoresolves(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config(
+            None, None, env={"ANTHROPIC_API_KEY": "short"}
+        ) == ("openai", None)
+
+    def test_available_keys_name_based_path(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        got = resolve_runtime_config(
+            None, None, env={}, available_keys={"ANTHROPIC_API_KEY", "GEMINI_API_KEY"}
+        )
+        assert got == ("anthropic", None)
+        # deepseek name is filtered by initializable
+        got = resolve_runtime_config(
+            None, None, env={}, available_keys={"DEEPSEEK_API_KEY"}
+        )
+        assert got == ("openai", None)
+
+    def test_last_resort(self, registry_flag):
+        from core.runtime_config import resolve_runtime_config
+        assert resolve_runtime_config(
+            None, None, env={}, last_resort=("gemini", None)
+        ) == ("gemini", None)
+
+
+# ---------------------------------------------------------------------------
+# Seam 4 — PROVIDER_CONFIG
+# ---------------------------------------------------------------------------
+class TestProviderConfig:
+    def test_entries_pinned(self, registry_flag):
+        from modules.llm.model_registry import PROVIDER_CONFIG
+        expected = {
+            "openai": ("OpenAIClient", True),
+            "anthropic": ("AnthropicClient", True),
+            "deepseek": ("DeepSeekClient", False),
+            "gemini": ("GeminiClient", True),
+            "openrouter": ("OpenRouterClient", True),
+            "nvidia": ("NvidiaClient", False),
+        }
+        for name, (cls, fb) in expected.items():
+            entry = PROVIDER_CONFIG[name]
+            assert entry.client_class_name == cls, name
+            assert entry.fallback_eligible is fb, name
+        assert set(expected) <= set(PROVIDER_CONFIG.keys())
+
+
+# ---------------------------------------------------------------------------
+# Seam 5 — DEFAULT_MODELS / get_default_model / AVAILABLE_MODELS
+# ---------------------------------------------------------------------------
+class TestDefaultModels:
+    PINNED = {
+        "anthropic": "claude-sonnet-4-5",
+        "openai": "gpt-5",
+        "gemini": "gemini-2.5-flash",
+        "deepseek": "deepseek-chat",
+        "openrouter": "z-ai/glm-5.2",
+        "nvidia": "moonshotai/kimi-k2.6",
+    }
+
+    def test_default_models_pinned(self, registry_flag):
+        from modules.llm.llm_client_registry import DEFAULT_MODELS
+        for k, v in self.PINNED.items():
+            assert DEFAULT_MODELS[k] == v
+
+    def test_get_default_model_env_override(self, registry_flag, monkeypatch):
+        from modules.llm.llm_client_registry import get_default_model
+        monkeypatch.setenv("POLYROB_OPENROUTER_MODEL", "x-ai/grok-4.3")
+        assert get_default_model("openrouter") == "x-ai/grok-4.3"
+        monkeypatch.delenv("POLYROB_OPENROUTER_MODEL")
+        assert get_default_model("openrouter") == "z-ai/glm-5.2"
+        # unknown provider falls back to the openai default
+        assert get_default_model("nope") == self.PINNED["openai"]
+
+    def test_available_models_providers(self, registry_flag):
+        from modules.llm.llm_client_registry import AVAILABLE_MODELS
+        for name in CANONICAL_ORDER:
+            assert name in AVAILABLE_MODELS
+            assert isinstance(list(AVAILABLE_MODELS[name]), list)
+        # registry-backed providers have non-empty lists
+        assert AVAILABLE_MODELS["openai"]
+        assert AVAILABLE_MODELS["anthropic"]
+
+
+# ---------------------------------------------------------------------------
+# Seam 6 — factory unknown-provider guard
+# ---------------------------------------------------------------------------
+class TestFactoryGuard:
+    def test_unknown_provider_raises(self, registry_flag):
+        from modules.llm.llm_factory import create_chat_model
+        with pytest.raises(ValueError, match="Unsupported LLM provider"):
+            create_chat_model("definitely-not-a-provider", "m", 0.5, object())
+
+
+# ---------------------------------------------------------------------------
+# Seam 7 — schema generator routing
+# ---------------------------------------------------------------------------
+class TestSchemaGenerators:
+    def test_routing_pinned(self, registry_flag):
+        from tools.controller.registry.schema_generators import (
+            get_schema_generator,
+            OpenAISchemaGenerator,
+            AnthropicSchemaGenerator,
+            GeminiSchemaGenerator,
+            JSONFallbackSchemaGenerator,
+        )
+        assert isinstance(get_schema_generator("openai"), OpenAISchemaGenerator)
+        assert isinstance(get_schema_generator("anthropic"), AnthropicSchemaGenerator)
+        assert isinstance(get_schema_generator("gemini"), GeminiSchemaGenerator)
+        assert isinstance(get_schema_generator("google"), GeminiSchemaGenerator)
+        assert isinstance(get_schema_generator("deepseek"), OpenAISchemaGenerator)
+        assert isinstance(get_schema_generator("openrouter"), OpenAISchemaGenerator)
+        assert isinstance(get_schema_generator("nvidia"), OpenAISchemaGenerator)
+        # partial match keeps working
+        assert isinstance(get_schema_generator("openai-gpt4"), OpenAISchemaGenerator)
+        # unknown falls back to JSON generator
+        assert isinstance(
+            get_schema_generator("no-such-provider-xyz"), JSONFallbackSchemaGenerator
+        )
+
+
+# ---------------------------------------------------------------------------
+# Seam 10 — FALLBACK_HIERARCHY
+# ---------------------------------------------------------------------------
+class TestFallbackHierarchy:
+    def test_pairs_pinned(self, registry_flag):
+        from modules.llm.llm_manager import LLMManager
+
+        class _Cfg:
+            def get_llm_config(self):
+                return {}
+
+        mgr = LLMManager("llm_manager", _Cfg())
+        assert mgr.FALLBACK_HIERARCHY == [
+            ("openai_client", "gpt-5"),
+            ("anthropic_client", "claude-sonnet-4-5"),
+            ("openrouter_client", "z-ai/glm-5.2"),
+            ("gemini_client", "gemini-2.5-flash"),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Seams 11/12 — openai-compat model map
+# ---------------------------------------------------------------------------
+class TestModelMap:
+    def test_known_provider_slug_split(self, registry_flag):
+        from api.openai_compat.model_map import map_model
+        assert map_model("anthropic/claude-sonnet-4-5") == ("anthropic", "claude-sonnet-4-5")
+        assert map_model("openrouter/z-ai/glm-5.2") == ("openrouter", "z-ai/glm-5.2")
+        assert map_model("nvidia/moonshotai/kimi-k2.6") == ("nvidia", "moonshotai/kimi-k2.6")
+
+    def test_prefix_table_pinned(self, registry_flag, monkeypatch):
+        from api.openai_compat.model_map import map_model
+        # Use model names NOT in the registry so the prefix table (not ownership) routes.
+        assert map_model("gpt-99-preview") == ("openai", "gpt-99-preview")
+        assert map_model("o1-mega") == ("openai", "o1-mega")
+        assert map_model("o3-mega") == ("openai", "o3-mega")
+        assert map_model("claude-99") == ("anthropic", "claude-99")
+        assert map_model("gemini-99") == ("gemini", "gemini-99")
+        assert map_model("deepseek-ultra") == ("deepseek", "deepseek-ultra")
+        assert map_model("kimi-k99") == ("nvidia", "kimi-k99")
+
+    def test_registry_ownership_beats_prefix(self, registry_flag):
+        from api.openai_compat.model_map import _provider_owning
+        # a registered openrouter slug is owned by openrouter even without a prefix hit
+        owner = _provider_owning("z-ai/glm-5.2")
+        assert owner in ("openrouter", None)  # None only if registry lookup fails

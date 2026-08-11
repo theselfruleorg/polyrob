@@ -340,8 +340,8 @@ Central orchestration for tool management and action routing.
 ### Controller (`controller/service.py`)
 
 `Controller` is a thin core that **composes focused mixins via MRO** rather than holding all the
-logic inline (the god-file split, UP-11). `service.py` keeps `__init__`, the MCP/hook delegation
-shims, and `_ensure_normalize_path_exists`; the behavior lives in:
+logic inline (the god-file split, UP-11). `service.py` keeps `__init__` and the MCP/hook
+delegation shims; the behavior lives in:
 
 ```python
 class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, ActionRegistrationMixin):

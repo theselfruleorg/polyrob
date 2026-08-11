@@ -52,7 +52,7 @@ actually *live* on every Handler:
 import logging
 import re
 import traceback
-from typing import Set, Pattern
+from typing import Set
 
 from core.secret_patterns import (
     REDACTED as _REDACTED,
@@ -62,6 +62,8 @@ from core.secret_patterns import (
     PROVIDER_KEY_RE as _PROVIDER_KEY_RE,
     POLYROB_KEY_RE as _POLYROB_KEY_RE,
     AWS_RE as _AWS_RE,
+    JWT_RE as _JWT_RE,
+    apply_ssot_shapes,
 )
 
 # The stock attribute names every logging.LogRecord carries (name, msg, args,
@@ -86,7 +88,7 @@ class SecretScrubbingFilter(logging.Filter):
     # own pattern-specific replacement (KV_RE's group(1) is the KEY NAME, not the
     # secret value, so it can't go through the generic group(1)-is-the-secret loop
     # below), via ``_scrub_ssot_shapes``.
-    SSOT_PATTERNS = [_PEM_RE, _BEARER_RE, _KV_RE, _PROVIDER_KEY_RE, _POLYROB_KEY_RE, _AWS_RE]
+    SSOT_PATTERNS = [_PEM_RE, _BEARER_RE, _KV_RE, _PROVIDER_KEY_RE, _POLYROB_KEY_RE, _AWS_RE, _JWT_RE]
 
     # Legacy hand-rolled patterns — kept for shapes the SSOT doesn't cover (generic
     # api_key=/token=/secret=/password= field patterns, Anthropic/Pinecone-specific
@@ -129,6 +131,10 @@ class SecretScrubbingFilter(logging.Filter):
     MARKER_WORDS = (
         "key", "token", "secret", "bearer", "akia", "-----begin",
         "sk-", "pk-", "rk-", "rob_", "password", "authorization",
+        # JWTs always start with eyJ (base64 of '{"') — without this marker a
+        # bare OAuth token would be gated out of the battery entirely (base64url
+        # `-`/`_` chars break the 32-char alnum run in _MARKERLESS_PRECHECK).
+        "eyj",
     )
 
     # Single-scan stand-in for the three marker-less LEGACY_PATTERNS: matches iff
@@ -186,16 +192,11 @@ class SecretScrubbingFilter(logging.Filter):
         return any(marker in low for marker in cls.MARKER_WORDS)
 
     def _scrub_ssot_shapes(self, text: str) -> str:
-        """Redact the shared high-confidence credential shapes (pattern-specific
-        substitution — see ``SSOT_PATTERNS`` docstring above for why KV_RE can't go
-        through the generic group(1)-is-the-secret loop)."""
-        out = _PEM_RE.sub(_REDACTED, text)
-        out = _BEARER_RE.sub(_REDACTED, out)
-        out = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{_REDACTED}", out)
-        out = _PROVIDER_KEY_RE.sub(_REDACTED, out)
-        out = _POLYROB_KEY_RE.sub(_REDACTED, out)
-        out = _AWS_RE.sub(_REDACTED, out)
-        return out
+        """Redact the shared high-confidence credential shapes via the ONE
+        ordered battery in core/secret_patterns.apply_ssot_shapes. This filter
+        used to carry its own copy that had silently dropped the JWT rung, so
+        OAuth access/refresh tokens survived into log lines."""
+        return apply_ssot_shapes(text, _REDACTED)
 
     def scrub_message(self, message: str) -> str:
         """Scrub secrets from a message string."""

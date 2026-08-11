@@ -28,7 +28,6 @@ base class) — it never crashes the agent loop. Opt-in via ``MEMORY_BACKEND=loc
 import asyncio
 import logging
 import os
-import re
 import threading
 from typing import List, Optional
 
@@ -339,8 +338,11 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             return ""
         limit = self._clamp_limit(limit, self.top_k)
         norm = self._norm_user(user_id)
-        kw_rows = self._keyword_rows(query, norm_user=norm, limit=limit, sort=sort,
-                                     before_id=before_id)
+        # M3 parity with the base class: _keyword_rows does blocking sqlite I/O
+        # (execute_retry can time.sleep-retry under WAL contention) — offload it.
+        kw_rows = await self._run_blocking(
+            self._keyword_rows, query, norm_user=norm, limit=limit, sort=sort,
+            before_id=before_id)
         kw_list = [r["content"] for r in kw_rows]
         # B2: date-prefix lines whose write-time stamp is known. Vector-only hits
         # aren't in the keyword row set — they render bare (fail-open).
@@ -357,12 +359,11 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # and never when paginating (before_id) — an unfiltered vector KNN pass has no
         # rowid-cursor concept, so mixing it in would silently re-surface rows already
         # seen on an earlier page. Cursored pagination is keyword-only, like `sort`.
-        terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        terms = self._query_terms(query)
         if before_id is not None or not self._vec_ok or not terms or sort:
             return "\n".join(_line(c) for c in kw_list)
         try:
-            vec = await asyncio.get_event_loop().run_in_executor(
-                None, self._vector_contents, query, norm, limit)
+            vec = await self._run_blocking(self._vector_contents, query, norm, limit)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: vector search skipped: %s", e)
             return "\n".join(_line(c) for c in kw_list)
@@ -378,11 +379,13 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         if self._anon_blocked(user_id):
             return ""
         norm = self._norm_user(user_id)
-        terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        terms = self._query_terms(query)
         # P2-1: exclude the CURRENT session from automatic prefetch (self-echo guard).
+        # M3 parity with the base class: offload the blocking sqlite call.
         kw_rows = (
-            self._keyword_rows(query, norm_user=norm, limit=self.top_k,
-                               allow_browse=False, exclude_session_id=session_id)
+            await self._run_blocking(
+                self._keyword_rows, query, norm_user=norm, limit=self.top_k,
+                allow_browse=False, exclude_session_id=session_id)
             if terms else []
         )
         kw_list = [r["content"] for r in kw_rows]
@@ -393,8 +396,8 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         # Vector recall fires on any non-empty query (semantic), even when keyword
         # finds no >=3-char terms — this is where semantic beats keyword.
         try:
-            vec = await asyncio.get_event_loop().run_in_executor(
-                None, self._vector_contents, query, norm, self.top_k, session_id)
+            vec = await self._run_blocking(
+                self._vector_contents, query, norm, self.top_k, session_id)
         except Exception as e:  # fail-open to keyword-only
             logger.debug("local-vector: prefetch vector skipped: %s", e)
             return kw
@@ -546,7 +549,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
         kw_rows = self.kb_keyword_contents(query, user_id=user_id, collection=collection,
                                            limit=limit)
         # Only run vector when vec is healthy AND query has real content
-        terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        terms = self._query_terms(query)
         if not self._vec_ok or not (query or "").strip():
             # FTS-only (no vec or empty query)
             if not kw_rows:

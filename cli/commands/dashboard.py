@@ -13,7 +13,7 @@ Mirrors `cli/commands/telegram.py`'s click-command shape; registered in
 NOTE: the dashboard is a viewer + chat UI; it does NOT run the autonomy loops
 (cron/goals/curator). Goals/cron created via its pages execute when a worker with
 the autonomy runtime is up (`polyrob serve` / `polyrob gateway` / the REPL under
-ROB_LOCAL) — not from the dashboard alone.
+POLYROB_LOCAL) — not from the dashboard alone.
 """
 import os
 import webbrowser

@@ -61,6 +61,22 @@ def token_streaming_enabled() -> bool:
     return os.getenv("LLM_TOKEN_STREAMING", "0").lower() in ("1", "true", "yes", "on")
 
 
+def _client_provider_label(client) -> str:
+    """Human label for the provider behind an LLM client, for error framing.
+
+    Prefers the spec name (a providers.yaml row's own name), then the client's
+    ``_PROVIDER_LABEL``, then the class name — so a z.ai row's failures say
+    "from zai-coding", never "from AnthropicCompatClient" (Q12).
+    """
+    spec_name = getattr(getattr(client, "_spec", None), "name", None)
+    if spec_name:
+        return spec_name
+    label = getattr(client, "_PROVIDER_LABEL", None)
+    if label:
+        return label
+    return type(client).__name__
+
+
 class BaseChatModel(BaseModel, ABC):
     """Abstract base class for chat models.
 
@@ -86,17 +102,6 @@ class BaseChatModel(BaseModel, ABC):
     def _llm_type(self) -> str:
         """Return the type of LLM."""
         pass
-
-    def prepare_cache_hints(self, messages: List[BaseMessage], tools: Optional[List[Any]] = None) -> dict:
-        """Provider-agnostic prompt-cache seam (P1-3).
-
-        Returns a dict of cache hints for the concrete adapter/client to apply when
-        assembling the request (e.g. which prefix blocks to mark cacheable). The base
-        implementation is a no-op (``{}``) so providers that handle caching in-client
-        (Anthropic, OpenAI) or have none are unaffected. The canonical policy lives in
-        ``modules.llm.cache_hints``; adapters that opt in consult it from here.
-        """
-        return {}
 
     async def ainvoke(self, input, config=None, *, stop=None, **kwargs) -> AIMessage:
         """Invoke the model asynchronously."""
@@ -592,7 +597,7 @@ class LLMClientAdapter(BaseChatModel):
 
             # Route through the single unified classifier (translate_llm_error).
             # Preserves all previous categories including billing→LLMPermanentError.
-            provider_name = self._client.__class__.__name__
+            provider_name = _client_provider_label(self._client)
             translated = translate_llm_error(e, f"from {provider_name}")
             if isinstance(translated, LLMPermanentError):
                 self._logger.error(f"Detected PERMANENT error (no fallback): {str(e)[:200]}")
@@ -930,57 +935,6 @@ class GeminiAdapter(LLMClientAdapter):
         return f"gemini-{self._client.model_type}-adapter"
 
 
-class DeepSeekAgentAdapter(DeepSeekAdapter):
-    """Specialized adapter for DeepSeek models to work with Agent's structured output.
-    
-    This adapter handles the issue where DeepSeek models have trouble with 
-    schema-based structured output parsing when the output model is not "strict".
-    Instead, it implements manual JSON parsing to extract the required structure.
-    """
-    
-    def __init__(self, client: "DeepSeekClient", output_schema_class: Any = None, **kwargs):
-        """Initialize with a DeepSeek client and optional output schema.
-        
-        Args:
-            client: An initialized DeepSeek client
-            output_schema_class: The output schema class (e.g., AgentOutput)
-            **kwargs: Additional parameters
-        """
-        super().__init__(client, **kwargs)
-        self._output_schema_class = output_schema_class
-        self._logger = logging.getLogger(f"{self.__class__.__name__}")
-    
-    @property
-    def _llm_type(self) -> str:
-        """Return the type of LLM."""
-        return f"deepseek-agent-adapter-{self._client.model_type}"
-
-
-class GeminiAgentAdapter(GeminiAdapter):
-    """Specialized adapter for Gemini models to work with Agent's structured output.
-    
-    This adapter handles structured output parsing for agent interactions,
-    implementing manual JSON parsing when needed to extract the required structure.
-    """
-    
-    def __init__(self, client: "GeminiClient", output_schema_class: Any = None, **kwargs):
-        """Initialize with a Gemini client and optional output schema.
-        
-        Args:
-            client: An initialized Gemini client
-            output_schema_class: The output schema class (e.g., AgentOutput)
-            **kwargs: Additional parameters
-        """
-        super().__init__(client, **kwargs)
-        self._output_schema_class = output_schema_class
-        self._logger = logging.getLogger(f"{self.__class__.__name__}")
-    
-    @property
-    def _llm_type(self) -> str:
-        """Return the type of LLM."""
-        return f"gemini-agent-adapter-{self._client.model_type}"
-
-
 class OpenAIAdapter(LLMClientAdapter):
     """Adapter for OpenAI client - provides consistent pattern across all providers."""
     
@@ -1172,8 +1126,4 @@ __all__ = [
     "DeepSeekAdapter",
     "GeminiAdapter",
     "OpenRouterAdapter",
-
-    # Specialized adapters
-    "DeepSeekAgentAdapter",
-    "GeminiAgentAdapter",
 ]

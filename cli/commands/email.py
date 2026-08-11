@@ -9,13 +9,12 @@ Credentials: the existing gmail_email / gmail_app_password config (./.polyrob/.e
 config/.env.*). Nothing is committed.
 """
 import asyncio
+import logging
 import os
-import signal
 import sys
 from typing import Optional
 
 import click
-from core.runtime_paths import data_dir_or_home
 
 
 @click.command()
@@ -27,161 +26,79 @@ def email(poll: Optional[int], verbose: bool):
 
 
 async def _run_email(poll_opt: Optional[int], verbose: bool):
-    import logging as _logging
+    from cli.commands._surface_runner import SurfaceJob, run_surface
 
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+    def _check_creds(container, task_agent):
+        # Preflight IMAP/SMTP credentials — otherwise the surface prints "online
+        # (unconfigured)" and then silently retries the poll forever with no signal.
+        gmail_email = getattr(container.config, "gmail_email", None)
+        gmail_pw = getattr(container.config, "gmail_app_password", None)
+        if not (gmail_email and gmail_pw):
+            click.echo(click.style("[polyrob] ERROR: ", fg="red")
+                       + "email not configured — set gmail_email + gmail_app_password in "
+                         "./.polyrob/.env (or config/.env.*) to run the email surface.")
+            sys.exit(1)
 
-    # Outbound bus + tier model gate ON for this command (explicit env still wins),
-    # BEFORE the container build so the bus installs during TaskAgent construction.
-    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
-    os.environ.setdefault("EMAIL_SURFACE_ENABLED", "true")
-    os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
-
-    setup_project_path()
-    setup_sqlite_compat()
-
-    # No usable provider key → clean canonical message + exit (daemon: no inline wizard).
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-
-    # Logging policy mirrors telegram.py: verbose→DEBUG; headless→INFO; interactive→quiet.
-    # Without the headless→INFO branch a systemd email daemon (stderr=journal, not a TTY)
-    # ran with logging effectively off, so 'routed N message(s)' + errors never appeared.
-    headless = not sys.stderr.isatty()
-    if verbose:
-        log_level = "DEBUG"
-    elif headless:
-        log_level = "INFO"
-    else:
-        log_level = "ERROR"
-    quiet = (not verbose) and (not headless)
-    if quiet:
-        _logging.disable(_logging.CRITICAL)
-        os.environ["GRPC_VERBOSITY"] = "ERROR"
-        os.environ["GLOG_minloglevel"] = "3"
-
-    try:
-        container = await build_cli_container(log_level=log_level)
-    except Exception as e:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
-        sys.exit(1)
-    if quiet:
-        _logging.disable(_logging.NOTSET)
-    elif not verbose:
-        for _noisy in ("httpx", "httpcore", "asyncio", "hpack"):
-            _logging.getLogger(_noisy).setLevel(_logging.WARNING)
-
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + "TaskAgent not available")
-        sys.exit(1)
-
-    # Preflight IMAP/SMTP credentials — otherwise the surface prints "online
-    # (unconfigured)" and then silently retries the poll forever with no signal.
-    gmail_email = getattr(container.config, "gmail_email", None)
-    gmail_pw = getattr(container.config, "gmail_app_password", None)
-    if not (gmail_email and gmail_pw):
-        click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                   + "email not configured — set gmail_email + gmail_app_password in "
-                     "./.polyrob/.env (or config/.env.*) to run the email surface.")
-        sys.exit(1)
-
-    from core.surfaces.bootstrap import install_surface_bus
-    install_surface_bus(container)  # db_path defaults to container.config.data_dir
-
-    # Start the outbound dispatcher (gated on SINGULAR_CHAT_ENABLED; may be None when the
-    # bus is disabled). Without this, when durable outbound is enabled correspondent
-    # replies enqueue and NEVER send. Mirrors telegram.py: sync start(), async stop().
-    dispatcher = container.get_service("outbound_dispatcher")
-    if dispatcher is not None:
-        from cli.commands._bootstrap import attach_dispatcher_event_log
-        attach_dispatcher_event_log(dispatcher)
-        dispatcher.start()
-
-    # Register the correspondent registry on the container so the dispatcher can resolve
-    # tiers + the harness can route correspondent replies to originating sessions.
-    try:
-        from core.surfaces.correspondents import CorrespondentRegistry
-        _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-        if container.get_service("correspondent_registry") is None:
-            container.register_service(
-                "correspondent_registry",
-                CorrespondentRegistry(os.path.join(_data_dir, "correspondents.db")),
-            )
-    except Exception as e:
-        click.echo(click.style("[polyrob] WARN: ", fg="yellow")
-                   + f"correspondent registry unavailable: {e}")
-
-    # Build the email tool (SMTP send + IMAP config) from the container config.
-    from tools.email_tool import EmailTool
-    email_tool = EmailTool("email", container.config, container)
-
-    from agents.task.surface_config import SurfaceConfig
-    poll_sec = poll_opt if poll_opt is not None else SurfaceConfig.email_imap_poll_sec()
-
-    from surfaces.email.harness import build_email_harness
-    _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-    harness = build_email_harness(container, task_agent, email_tool=email_tool,
-                                  data_dir=_data_dir, poll_interval=poll_sec)
-    await harness.start()
-
-    # Autonomy loops are OFF here by default (proposal 010, option A). Both systemd
-    # entrypoints used to call start_autonomy against the SAME goals.db/cron.db, so a
-    # telegram-outbound goal claimed by this email-only process (whose MessageRouter
-    # has no telegram surface) deterministically could not send. The telegram process
-    # is the single autonomy driver; EMAIL_AUTONOMY_RUNTIME=true restores the legacy
-    # dual-runtime behavior. SMTP outbound (cron deliver=email / the agent's
-    # send_email tool) is credential-driven and does NOT need this runtime.
-    autonomy_handles = None
-    try:
+    def _autonomy_precheck() -> bool:
+        # Autonomy loops are OFF here by default (proposal 010, option A). Both systemd
+        # entrypoints used to call start_autonomy against the SAME goals.db/cron.db, so a
+        # telegram-outbound goal claimed by this email-only process (whose MessageRouter
+        # has no telegram surface) deterministically could not send. The telegram process
+        # is the single autonomy driver; EMAIL_AUTONOMY_RUNTIME=true restores the legacy
+        # dual-runtime behavior. SMTP outbound (cron deliver=email / the agent's
+        # send_email tool) is credential-driven and does NOT need this runtime.
         from core.env import bool_env
-        from agents.task.constants import local_mode_enabled
         if not bool_env("EMAIL_AUTONOMY_RUNTIME", False):
-            _logging.getLogger(__name__).info(
+            logging.getLogger(__name__).info(
                 "autonomy runtime disabled in email process (EMAIL_AUTONOMY_RUNTIME=off)")
-        elif local_mode_enabled():
-            from core.autonomy_runtime import start_autonomy
-            autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
-    except Exception:
-        autonomy_handles = None
+            return False
+        return True
 
-    addr = getattr(container.config, "gmail_email", None) or "(unconfigured)"
-    click.echo(click.style("email surface online", fg="green") + f": {addr}")
-    click.echo(click.style(
-        "correspondent-only (owner-by-email is OFF). polling every "
-        f"{poll_sec}s… (Ctrl-C to stop)", dim=True))
+    async def _build(ctx):
+        container, task_agent, data_dir = ctx.container, ctx.task_agent, ctx.data_dir
 
-    loop = asyncio.get_running_loop()
-    poll_task = asyncio.ensure_future(harness.run_polling())
+        # Register the correspondent registry on the container so the dispatcher can
+        # resolve tiers + the harness can route correspondent replies to originating
+        # sessions.
+        try:
+            from core.surfaces.correspondents import CorrespondentRegistry
+            if container.get_service("correspondent_registry") is None:
+                container.register_service(
+                    "correspondent_registry",
+                    CorrespondentRegistry(os.path.join(data_dir, "correspondents.db")),
+                )
+        except Exception as e:
+            click.echo(click.style("[polyrob] WARN: ", fg="yellow")
+                       + f"correspondent registry unavailable: {e}")
 
-    def _stop(*_a):
-        poll_task.cancel()
+        # Build the email tool (SMTP send + IMAP config) from the container config.
+        from tools.email_tool import EmailTool
+        email_tool = EmailTool("email", container.config, container)
 
-    try:
-        loop.add_signal_handler(signal.SIGINT, _stop)
-        loop.add_signal_handler(signal.SIGTERM, _stop)
-    except (NotImplementedError, RuntimeError):
-        for _sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                signal.signal(_sig, lambda *_a: _stop())
-            except (ValueError, OSError, AttributeError):
-                pass  # SIGTERM may be unavailable on some platforms/threads
+        from agents.task.surface_config import SurfaceConfig
+        poll_sec = poll_opt if poll_opt is not None else SurfaceConfig.email_imap_poll_sec()
 
-    try:
-        await poll_task
-    except asyncio.CancelledError:
-        pass
-    finally:
-        click.echo("\n" + click.style("stopping email surface…", dim=True))
-        if autonomy_handles is not None:
-            try:
-                await autonomy_handles.stop()
-            except Exception:
-                pass
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
-        await harness.stop()
+        from surfaces.email.harness import build_email_harness
+        harness = build_email_harness(container, task_agent, email_tool=email_tool,
+                                      data_dir=data_dir, poll_interval=poll_sec)
+        await harness.start()
+
+        async def _announce():
+            addr = getattr(container.config, "gmail_email", None) or "(unconfigured)"
+            click.echo(click.style("email surface online", fg="green") + f": {addr}")
+            click.echo(click.style(
+                "correspondent-only (owner-by-email is OFF). polling every "
+                f"{poll_sec}s… (Ctrl-C to stop)", dim=True))
+
+        return SurfaceJob(harness=harness, run=harness.run_polling, announce=_announce)
+
+    await run_surface(
+        extra_env={"EMAIL_SURFACE_ENABLED": "true",
+                   "CORRESPONDENT_ACCESS_ENABLED": "true"},
+        verbose=verbose,
+        preflight=_check_creds,
+        silence_loggers=("httpx", "httpcore", "asyncio", "hpack"),
+        autonomy_precheck=_autonomy_precheck,
+        build_harness=_build,
+        stopping_message="stopping email surface…",
+    )

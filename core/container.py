@@ -385,44 +385,6 @@ class DependencyContainer:
             component.container = self
             self.logger.debug(f"Initialized component: {name}")
 
-    def register_llm_clients(self, config: BotConfig):
-        """Register LLM clients based on configuration."""
-        try:
-            # Import here to avoid circular dependency
-            from modules.llm import create_llm_client
-            
-            # Register OpenAI client for auto agent
-            openai_client = create_llm_client('openai', config, self)
-            if openai_client:
-                self.register_service('openai_client', openai_client)
-                self.logger.info("✓ OpenAI client registered")
-                
-            # Register Anthropic client for other agents
-            anthropic_client = create_llm_client('anthropic', config, self)
-            if anthropic_client:
-                self.register_service('anthropic_client', anthropic_client)
-                self.logger.info("✓ Anthropic client registered")
-                
-            # Register DeepSeek client if configured
-            deepseek_client = create_llm_client('deepseek', config, self)
-            if deepseek_client:
-                self.register_service('deepseek_client', deepseek_client)
-                self.logger.info(f"✓ DeepSeek client registered with model {deepseek_client.model_type}")
-            else:
-                self.logger.debug("DeepSeek client not configured (missing API key)")
-                
-            # Register Gemini client if configured
-            gemini_client = create_llm_client('gemini', config, self)
-            if gemini_client:
-                self.register_service('gemini_client', gemini_client)
-                self.logger.info(f"✓ Gemini client registered with model {gemini_client.model_type}")
-            else:
-                self.logger.debug("Gemini client not configured (missing API key)")
-                
-        except Exception as e:
-            self.logger.error(f"Error registering LLM clients: {e}")
-
-
     def get_service_status(self) -> Dict[str, Dict[str, Any]]:
         """Get status of all registered services."""
         return {

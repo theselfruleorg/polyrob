@@ -62,7 +62,7 @@ The application follows a modular architecture with clear separation of concerns
 - **Agents** (`agents/`): The Task automation agent (the single front-door agent; chat routes through `TaskAgent.chat_once`) plus personality/prompt support
 - **Tools** (`tools/`): External integrations (browser automation, document processing, social media APIs, email, blockchain, MCP, code-exec, cron/goal tools)
 - **API** (`api/`): FastAPI HTTP endpoints for programmatic access — including the A2A protocol (`api/a2a/`) and the OpenAI-compatible `/v1` surface (`api/openai_compat/`)
-- **CLI** (`cli/`): The terminal-native `rob` agent (`cli/rob.py`, `polyrob run`/`polyrob doctor`, REPL) — a first-class surface that runs the same Task agent
+- **CLI** (`cli/`): The terminal-native `rob` agent (`cli/polyrob.py`, `polyrob run`/`polyrob doctor`, REPL) — a first-class surface that runs the same Task agent
 - **Surfaces** (`surfaces/`): Chat-surface adapters (e.g. `surfaces/telegram/`) implementing one inbound/outbound contract
 - **WebView** (`webview/`): Real-time web interface with Socket.IO for session monitoring and interaction
 - **Cron / Autonomy** (`cron/`): Durable scheduled agent runs + the goal board/dispatcher (see Scheduler/cron and Autonomy loops below)
@@ -753,7 +753,7 @@ A drop-in OpenAI-style surface so existing OpenAI SDK clients can talk to POLYRO
   `api/openai_compat/model_map.py`; request/response shapes in `models.py`.
 
 ### CLI surface (`cli/`)
-The terminal-native `rob` agent runs the same Task agent as the API. Entry `cli/rob.py`;
+The terminal-native `rob` agent runs the same Task agent as the API. Entry `cli/polyrob.py`;
 commands under `cli/commands/` (`polyrob run`, `polyrob doctor`, the chat REPL with `/autonomy`,
 `/memory`, etc.). Container built by `build_cli_container`; under `POLYROB_LOCAL` the safe autonomy
 flags default ON (see "Terminal-native consolidation"). Provider/model auto-resolves from

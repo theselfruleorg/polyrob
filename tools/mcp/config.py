@@ -324,30 +324,6 @@ def create_stdio_server(command: List[str], env_vars: Optional[Dict[str, str]] =
     )
 
 
-def create_sse_server(url: str, headers: Optional[Dict[str, str]] = None, **kwargs) -> MCPServerConfig:
-    """Helper to create an SSE MCP server configuration.
-
-    Args:
-        url: Server URL
-        headers: HTTP headers
-        **kwargs: Additional configuration options
-
-    Returns:
-        MCPServerConfig for SSE server
-    """
-    return MCPServerConfig(
-        type=MCPServerType.SSE,
-        url=url,
-        headers=headers or {},
-        enabled=kwargs.get('enabled', False),
-        timeout=kwargs.get('timeout', 30),
-        retry_attempts=kwargs.get('retry_attempts', 3),
-        retry_delay=kwargs.get('retry_delay', 5),
-        auto_reconnect=kwargs.get('auto_reconnect', True),
-        max_concurrent_requests=kwargs.get('max_concurrent_requests', 10)
-    )
-
-
 def load_local_mcp_servers() -> Dict[str, Any]:
     """Load MCP server configs from ~/.polyrob/mcp.json then ./.polyrob/mcp.json (R7).
 

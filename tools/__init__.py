@@ -240,6 +240,25 @@ try:
 except Exception as _e:  # never block tool import on the optional invoicing seam
     logging.getLogger(__name__).debug(f"x402 invoice registration skipped: {_e}")
 
+# Agent DeFi read tier (proposal 023 T0+T1): registers 'defi_data' only when
+# DEFI_DATA_ENABLED=true. Read-only — no signer, no broadcast. OFF by default
+# and deliberately NOT in the POLYROB_LOCAL safe group (prod runs POLYROB_LOCAL=1
+# beside a live mainnet wallet).
+try:
+    from .defi import register_defi_data_tool
+    register_defi_data_tool()
+except Exception as _e:  # never block tool import on the optional defi seam
+    logging.getLogger(__name__).debug(f"defi_data registration skipped: {_e}")
+
+# Agent DeFi money verbs (proposal 023 T3): registers 'defi_trade' only when
+# DEFI_TRADE_ENABLED=true. This one CAN move funds — every call routes through
+# core/wallet/tx_guard.py. OFF by default; never in the default tool_ids.
+try:
+    from .defi import register_defi_trade_tool
+    register_defi_trade_tool()
+except Exception as _e:  # never block tool import on the optional defi seam
+    logging.getLogger(__name__).debug(f"defi_trade registration skipped: {_e}")
+
 # Build TOOL_COMPONENTS for backward compatibility
 TOOL_COMPONENTS: List[Tuple[str, Type[BaseTool]]] = [
     (name, desc.tool_class)
@@ -330,40 +349,6 @@ async def cleanup_tools(tools: Dict[str, Any]) -> None:
                 cleanup_logger.error(f"Error cleaning up tool {tool_name}: {str(e)}")
 
 
-async def validate_tools(requested_tools: List[str]) -> Tuple[List[str], List[str]]:
-    """Validate requested tools.
-
-    Args:
-        requested_tools: List of tool names
-
-    Returns:
-        Tuple of (valid tools, invalid tools)
-    """
-    valid = []
-    invalid = []
-
-    for tool in requested_tools:
-        tool = tool.strip().lower()
-        if tool in TOOL_DESCRIPTORS:
-            valid.append(tool)
-        else:
-            invalid.append(tool)
-
-    return valid, invalid
-
-
-async def get_tool_info(tool_name: str) -> dict:
-    """Get metadata for a specific tool.
-
-    Args:
-        tool_name: Name of the tool
-
-    Returns:
-        Dictionary containing tool metadata
-    """
-    return get_tool_metadata(tool_name)
-
-
 # =============================================================================
 # PUBLIC API
 # =============================================================================
@@ -414,8 +399,6 @@ __all__ = [
     # Functions
     'initialize_tool',
     'cleanup_tools',
-    'validate_tools',
-    'get_tool_info',
     'get_tool_dependencies',
     'get_tool_metadata',
     'get_tool_init_order',

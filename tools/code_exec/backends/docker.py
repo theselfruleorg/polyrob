@@ -47,6 +47,7 @@ import uuid
 from typing import Awaitable, Callable, List, Optional, Tuple
 
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
+from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT, build_child_env
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
@@ -102,38 +103,9 @@ async def _default_docker_runner(
     argv = ["docker"] + list(args)
     stdin_bytes = input.encode() if input is not None else None
 
-    def _run_sync():
-        import subprocess
-        try:
-            proc = subprocess.Popen(
-                argv, env=build_child_env({}),
-                stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-        except Exception as e:
-            return 1, b"", f"docker launch error: {type(e).__name__}: {e}".encode(), False
-        try:
-            out, err = proc.communicate(input=stdin_bytes, timeout=timeout)
-            return proc.returncode, out, err, False
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            try:
-                out, err = proc.communicate(timeout=5)
-            except Exception:
-                out, err = b"", b""
-            return (proc.returncode if proc.returncode is not None else 1), out, err, True
-
-    loop = asyncio.get_event_loop()
-    code, out, err, timed_out = await loop.run_in_executor(None, _run_sync)
-    out_text = (out or b"").decode("utf-8", errors="replace")
-    err_text = (err or b"").decode("utf-8", errors="replace")
+    code, out_text, err_text, timed_out = await run_group(
+        argv, stdin_bytes=stdin_bytes, timeout=timeout, label="docker"
+    )
     if timed_out:
         raise _DockerExecTimeout(
             err_text or f"docker {' '.join(args[:2])} timed out after {timeout}s"

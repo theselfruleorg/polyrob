@@ -6,7 +6,6 @@ from .models import (
     MessageRole,
     ConversationContext,
     UserProfile,
-    KnowledgeEntry,
 )
 
 # Import managers
@@ -29,5 +28,4 @@ __all__ = [
     'MessageRole',
     'ConversationContext',
     'UserProfile',
-    'KnowledgeEntry'
 ]

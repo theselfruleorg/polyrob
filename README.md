@@ -79,6 +79,7 @@ One agent core, many front doors:
 ## 🧠 Multi-provider intelligence
 
 - **Six providers, one agent** — OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter (Grok/Kimi/Qwen/GLM), NVIDIA NIM — behind a native LLM layer with **no third-party agent framework**.
+- **Bring your own endpoint** — declare any OpenAI- or Anthropic-compatible provider in `~/.polyrob/providers.yaml` with **zero code**: a local Ollama/vLLM/LM Studio, Groq/Together/Fireworks, a z.ai GLM Coding Plan, or a corporate gateway. Declared models list and route like built-ins; hostile rows (secret-exfil `env_key`s, metadata endpoints) are refused at load.
 - **Automatic failover** — a rate-limited or failing provider silently retries on a fallback.
 - **Live model switching** — `/model <provider> <model>` mid-session, or per-request override on the `/v1` surface.
 - **Cross-provider prompt caching** — cuts token cost on long sessions, with cached-token metrics surfaced per provider.
@@ -267,6 +268,8 @@ default:
 
 - **x402 pay-per-request** — anonymous USDC micropayments (Base, Avalanche, IoTeX) via the Coinbase facilitator; the agent can both charge for its API and pay for external resources.
 - **Native agent wallet** — an EOA wallet with per-transaction and rolling 24h spend caps; testnet by default.
+- **On-chain token sight** — a read-only tool for token identity, price, liquidity, a safety screen and the agent's own portfolio on Base. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
+- **Guarded on-chain transfers** — moving value goes through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. Nine fail-closed gates, `dry_run` by default, and anything above a configurable ceiling waits for an owner approval.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
 - **SIWE** wallet auth for the multi-tenant posture.
 
@@ -300,9 +303,10 @@ mid-session with `/model <provider> <model>` (or `<provider>/<model>`). Configur
 (SSOT) → **[docs/CONFIGURATION.md](docs/CONFIGURATION.md)**.
 
 Everything crypto — the agent wallet, paying for resources (x402), getting paid
-(invoicing, branded QR cards, on-chain settlement), watchtower subscriptions, ERC-8004
-reputation, credits, and the trading tools — is documented end-to-end (all OFF by
-default) in **[docs/guide/payments.md](docs/guide/payments.md)**.
+(invoicing, branded QR cards, on-chain settlement), watchtower subscriptions, on-chain
+token sight and guarded transfers, ERC-8004 reputation, credits, and the trading
+tools — is documented end-to-end (all OFF by default) in
+**[docs/guide/payments.md](docs/guide/payments.md)**.
 
 ---
 

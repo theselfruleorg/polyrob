@@ -87,7 +87,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
 from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
@@ -156,15 +155,40 @@ def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool
 	)
 
 
+# The only exception family whose MESSAGE TEXT may decide a fatal halt.
+# `_is_fatal_step_error` matches bare substrings ("billing",
+# "api key", "authentication", and via looks_like_credit_death a bare \b402\b), which
+# is safe for a provider exception and actively wrong for anything else: a
+# sqlite3.OperationalError on the shipped `billing_failures` table, a NameError
+# naming a `billing_total` variable, or an HTTP 500 on a path containing /402 all
+# halted the whole session with "check your API configuration".
+#
+# This is the SAME gate `_trip_sentinel_if_credit_death` already applies, added there
+# for exactly these observed false positives — but it was applied only to the sentinel
+# latch (a side effect) and not here, the branch that actually stops the agent.
+# `LLMError` covers LLMPermanentError/LLMAuthenticationError/LLMProviderExhaustedError/
+# LLMRateLimitError/LLMConnectionError; InsufficientCreditsError is the one
+# credit-death shape that is a BotError rather than an LLMError.
+_PROVIDER_FAULT_EXCEPTION_TYPES = (LLMError, InsufficientCreditsError)
+
+
 def _is_fatal_step_exc(error, billing_failover_enabled: bool) -> bool:
 	"""Exception-level fatal check (chain-aware). Reproduces _is_fatal_step_error's
 	top-string truth table, then ALSO catches a credit-death 402 that llm_runner
 	re-wrapped one frame deep (str(error) has no billing text) — the classifier walks
 	__cause__/__context__. Only credit-death detection gains chain-awareness; auth/quota
-	string quirks are unchanged."""
+	string quirks are unchanged.
+
+	Type-gated: only a provider-fault exception may be judged by its text (see
+	_PROVIDER_FAULT_EXCEPTION_TYPES). An application exception is never fatal here — it
+	flows to `_handle_step_error` and is retried/counted like any other step error.
+	"""
 	from core.error_classifier import FailoverReason, classify_error
-	if _is_fatal_step_error(str(error).lower(), billing_failover_enabled):
-		return True
+	if isinstance(error, _PROVIDER_FAULT_EXCEPTION_TYPES):
+		if _is_fatal_step_error(str(error).lower(), billing_failover_enabled):
+			return True
+	# classify_error is itself type-gated to the LLM/credit family, so this stays a
+	# no-op for application exceptions.
 	if classify_error(error).reason is FailoverReason.CREDIT_DEATH:
 		return not billing_failover_enabled  # billing halts only when failover is off
 	return False
@@ -381,8 +405,28 @@ class StepMixin:
 						state.page_content = RobustParseConfig.truncate_page_content(state.page_content)
 				except Exception as e:
 					self.logger.warning(f"Error getting browser state: {str(e)}")
-					# Don't fail - just continue without browser state
-					state = None
+					# Continue without browser state — but as a MINIMAL BrowserState,
+					# not None. Both sibling branches (no-browser-context below, and the
+					# outer handler) already build this shape, and downstream consumers
+					# dereference it unconditionally: AgentMessagePrompt.get_user_message
+					# reads `self.state.screenshot` regardless of include_browser_state,
+					# so None raised AttributeError out of _prepare_step — which runs
+					# outside _step_impl's try/except, and neither step() (TimeoutError
+					# only) nor run() (CancelledError only) catches it. The "don't fail"
+					# this comment promised was actually an uncaught crash of the whole
+					# run, skipping the H-MEM save and the graceful error path.
+					from agents.task.agent.views import BrowserState
+					from tools.dom.views import DOMElementNode
+					state = BrowserState(
+						url="",
+						title="No Browser",
+						tabs=[],
+						element_tree=DOMElementNode(
+							tag_name='html', xpath='/', attributes={}, children=[],
+							is_visible=True, parent=None,
+						),
+						selector_map={},
+					)
 			else:
 				# No browser context - use a minimal state
 				self.logger.debug("No browser context available - running without browser state")

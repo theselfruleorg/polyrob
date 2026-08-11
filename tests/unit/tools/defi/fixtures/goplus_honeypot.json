@@ -1,0 +1,88 @@
+{
+ "code": 1,
+ "message": "OK",
+ "result": {
+  "0x940181a94a35a4569e4529a3cdfb74e38fd98631": {
+   "anti_whale_modifiable": "0",
+   "buy_tax": "0.05",
+   "can_take_back_ownership": "0",
+   "cannot_buy": "0",
+   "cannot_sell_all": "1",
+   "creator_address": "0xe83f922C34A1962e9aE9F52B59e18239764f2818",
+   "creator_balance": "0",
+   "creator_percent": "0.000000",
+   "dex": [
+    {
+     "liquidity_type": "UniV3",
+     "name": "UniswapV3",
+     "liquidity": "136828.650798880733772476150000000000",
+     "pool_fee": "0.003",
+     "pair": "0x3d5d143381916280ff91407febeb52f2b60f33cf"
+    }
+   ],
+   "external_call": "0",
+   "hidden_owner": "0",
+   "holder_count": "748154",
+   "holders": [
+    {
+     "address": "0xebf418fe2512e7e6bd9b87a8f0f294acdc67e6b4",
+     "tag": "",
+     "is_contract": 1,
+     "balance": "981447640.130878824374671692",
+     "percent": "0.502111362913554589",
+     "is_locked": 0
+    }
+   ],
+   "honeypot_with_same_creator": "0",
+   "is_anti_whale": "0",
+   "is_blacklisted": "0",
+   "is_honeypot": "1",
+   "is_in_cex": {
+    "listed": "1",
+    "cex_list": [
+     "Coinbase"
+    ]
+   },
+   "is_in_dex": "1",
+   "is_mintable": "1",
+   "is_open_source": "0",
+   "is_proxy": "0",
+   "is_whitelisted": "0",
+   "lp_holder_count": "92",
+   "lp_holders": [
+    {
+     "address": "0x3e1355ba7c1c9a5b4c6bfaab078462a961dace20",
+     "tag": "",
+     "value": "8034.17164332971665825299",
+     "is_contract": 1,
+     "balance": "1561.123405575083139734",
+     "percent": "0.351313443909169945",
+     "NFT_list": [
+      {
+       "value": "8034.17164332971665825299",
+       "NFT_id": "5016984",
+       "amount": "1561.123405575083139734",
+       "in_effect": "1",
+       "NFT_percentage": "0.351313443909169945"
+      }
+     ],
+     "is_locked": 0
+    }
+   ],
+   "lp_total_supply": "7113.288937744041",
+   "owner_balance": "0",
+   "owner_change_balance": "0",
+   "owner_percent": "0",
+   "personal_slippage_modifiable": "0",
+   "selfdestruct": "0",
+   "sell_tax": "1",
+   "slippage_modifiable": "0",
+   "token_name": "Aerodrome",
+   "token_symbol": "AERO",
+   "total_supply": "1954641365.684147243626356368",
+   "trading_cooldown": "0",
+   "transfer_pausable": "1",
+   "transfer_tax": "0"
+  }
+ }
+}

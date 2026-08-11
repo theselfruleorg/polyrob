@@ -342,16 +342,20 @@ def _mode_capability_default(flag_name: str) -> bool:
 # regardless of the generic APPROVAL_REQUIRED_TOOLS opt-in (payment gating is first-class,
 # not opt-in). A future subscription-renewal verb joins this tuple, not a new mode.
 PAYMENT_APPROVAL_TOOLS = (
-    "x402_request",
+    # ⚠️ RUNTIME action names only — the approval hook matches EXACTLY, and container
+    # tools register as {tool_id}_{action}. A bare `x402_request` here matched nothing,
+    # so this lane never fired. Pinned by tests/unit/core/test_action_name_parity.py.
+    "x402_invoice_x402_request",
     # L9 (2026-07-15): live-trade order verbs are money-moving too — a within-cap
-    # live order should get the SAME owner-in-the-loop an invoice does, not slip
-    # through unattended. Container-tool actions register NAMESPACED
-    # (tools/controller/tool_management.py), so these namespaced names are the
-    # runtime action names the payment-approval gate matches.
+    # live order gets the SAME owner-in-the-loop an invoice does, not unattended.
     "hyperliquid_place_limit_order",
     "hyperliquid_place_market_order",
     "polymarket_place_limit_order",
     "polymarket_place_market_order",
+    # 023 T3: the on-chain money verb. Irreversible and self-custodial — there is
+    # no exchange or facilitator to dispute it with — so it is SPEND-side and
+    # never act-and-report, in any mode.
+    "defi_trade_transfer",
 )
 
 # 013 T7 review (Important finding fix): PAYMENT_APPROVAL_TOOLS is NOT one uniform
@@ -367,7 +371,7 @@ PAYMENT_APPROVAL_TOOLS = (
 # (proposal 013) is money-spend/trading is NEVER act-and-report, even under an
 # explicit PAYMENT_APPROVAL_MODE=auto.
 PAYMENT_RECEIVE_APPROVAL_TOOLS = (
-    "x402_request",
+    "x402_invoice_x402_request",  # runtime (namespaced) name — see above
 )
 
 
@@ -408,20 +412,11 @@ def _snapshot_payment_approval_mode() -> str:
 
 
 def _snapshot_payment_approval_timeout_sec() -> float:
-    raw = os.getenv("APPROVAL_TIMEOUT_SEC")
-    if raw is None or not raw.strip():
-        return 300.0
-    try:
-        return float(raw)
-    except ValueError:
-        return 300.0
+    return _float_env("APPROVAL_TIMEOUT_SEC", 300.0)
 
 
 def _snapshot_approval_grant_ttl_hours() -> float:
-    try:
-        return float(os.getenv("APPROVAL_GRANT_TTL_HOURS", "24"))
-    except ValueError:
-        return 24.0
+    return _float_env("APPROVAL_GRANT_TTL_HOURS", 24.0)
 
 
 _FROZEN_PAYMENT_APPROVAL_MODE = _snapshot_payment_approval_mode()
@@ -662,6 +657,28 @@ def _autonomy_enabled_default() -> bool:
     return full_autonomy_enabled() or autonomy_posture() in ("owner-visible", "full")
 
 
+def defi_data_enabled() -> bool:
+    """``DEFI_DATA_ENABLED`` — read-only DeFi sight (proposal 023 T0+T1).
+
+    Tier-0 SSOT so both consumers (``tools/defi`` registration,
+    ``agents/task/tool_defaults`` session tool_ids) import DOWNWARD and cannot
+    disagree. Default OFF and deliberately NOT in ``_SAFE_LOCAL_FLAGS`` — prod
+    runs ``POLYROB_LOCAL=1`` beside a live mainnet wallet.
+    """
+    from core.env import bool_env
+    return bool_env("DEFI_DATA_ENABLED", False)
+
+
+def defi_trade_enabled() -> bool:
+    """``DEFI_TRADE_ENABLED`` — on-chain money verbs (proposal 023 T3).
+
+    Default OFF and never in ``_SAFE_LOCAL_FLAGS``. Same tier-0 SSOT reasoning
+    as :func:`defi_data_enabled`, with more at stake: this one broadcasts.
+    """
+    from core.env import bool_env
+    return bool_env("DEFI_TRADE_ENABLED", False)
+
+
 def autonomy_enabled() -> bool:
     """``AUTONOMY_ENABLED`` — the single owner-legible switch for the local
     autonomy loop group (self-wake, goal board + planner, curator,
@@ -862,10 +879,7 @@ class AutonomyConfig:
 
     @staticmethod
     def self_wake_idle_backoff_sec() -> float:
-        try:
-            return float(os.getenv("SELF_WAKE_IDLE_BACKOFF_SEC", "30"))
-        except (TypeError, ValueError):
-            return 30.0
+        return _float_env("SELF_WAKE_IDLE_BACKOFF_SEC", 30.0)
 
     # QW-1 (proposal 021) — completion deliverables attach to the owner chat
     @staticmethod
@@ -1007,10 +1021,7 @@ class AutonomyConfig:
 
     @staticmethod
     def goal_dedup_threshold() -> float:
-        try:
-            return float(os.getenv("GOAL_DEDUP_THRESHOLD", "0.6"))
-        except (TypeError, ValueError):
-            return 0.6
+        return _float_env("GOAL_DEDUP_THRESHOLD", 0.6)
 
     @staticmethod
     def goal_planner_enabled() -> bool:

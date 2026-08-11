@@ -40,7 +40,6 @@ BLOCKED_API_MODULES = (
     "api.app",
     "api.middleware",
     "api.jwt_middleware",
-    "api.conversation_manager",
     "api.dependencies",  # SPLIT file — allowlisted below until the auth seam lands
     "api.auth_endpoints",
     "api.auth_constants",
@@ -86,12 +85,16 @@ CORE_ENTRY_POINTS = [
 #                              api.payment_verification (:30) + api.dependencies (:48),
 #                              but task_handler raises first → fails on api.dependencies.
 #   api.a2a.streaming        → imports api.a2a.task_handler → api.dependencies (:26).
-#   api.openai_compat.router → top-level `from api.payment_verification import ...` (:11).
+#   api.openai_compat.router → top-level `from api.dependencies import get_user_id`
+#                              (auth dedup, 2026-08: Depends(get_user_id) replaced the
+#                              hand-rolled request.state check); it also still imports
+#                              api.payment_verification, but api.dependencies raises
+#                              first. The seam-inversion task must fix BOTH.
 # A lazy-import fix flips each from "raises" to "imports clean", making its entry stale.
 VIOLATION_ALLOWLIST: dict[str, list[str]] = {
     "api.a2a.endpoints": ["api.dependencies"],
     "api.a2a.streaming": ["api.dependencies"],
-    "api.openai_compat.router": ["api.payment_verification"],
+    "api.openai_compat.router": ["api.dependencies"],
 }
 
 BLOCKER_TEMPLATE = """

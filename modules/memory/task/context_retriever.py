@@ -19,7 +19,6 @@ Expected token usage:
 import logging
 from typing import Optional, List, Dict, Any
 from .hierarchical_memory import HierarchicalMemory, PhaseMemory, Step
-from modules.llm import count_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -691,51 +690,6 @@ class ContextRetriever:
         
         return "\n".join(lines)
 
-    def get_phase_context(self, phase_name: str) -> Optional[str]:
-        """Get context for a specific phase (not current).
-
-        Useful for reviewing past phases or cross-phase analysis.
-
-        Args:
-            phase_name: Phase to get context for
-
-        Returns:
-            Formatted phase context, or None if phase doesn't exist
-        """
-        return self._format_current_phase(phase_name)
-
-    def get_all_findings(self, phase_name: Optional[str] = None) -> List[str]:
-        """Get all findings for a phase (or all phases) - position-indexed.
-
-        Args:
-            phase_name: Phase to get findings for (if None, returns all)
-
-        Returns:
-            List of finding strings
-        """
-        if phase_name:
-            phase_memory = self.memory.get_phase_by_name(phase_name)
-            return phase_memory.key_findings if phase_memory else []
-
-        # All phases - iterate over list
-        all_findings = []
-        for phase_memory in self.memory.phase_memories:
-            all_findings.extend(phase_memory.key_findings)
-
-        return all_findings
-
-    def get_context_token_estimate(self) -> int:
-        """Estimate token count for context injection.
-
-        Uses rough approximation: ~4 characters per token.
-
-        Returns:
-            Estimated token count
-        """
-        context = self.get_context_injection()
-        # Use generic model name - will fall back to character-based estimation
-        return count_tokens(context, "default")
-
     def get_context_statistics(self) -> Dict[str, Any]:
         """Get statistics about context.
 
@@ -757,63 +711,3 @@ class ContextRetriever:
             "context_length_tokens_estimate": len(context) // 4
         }
 
-    def format_for_display(self, include_steps: bool = True) -> str:
-        """Format memory for human-readable display.
-
-        Args:
-            include_steps: Include recent steps (default True)
-
-        Returns:
-            Formatted string for display/debugging
-        """
-        lines = [
-            "=" * 80,
-            "HIERARCHICAL MEMORY SNAPSHOT",
-            "=" * 80,
-            "",
-            f"Session: {self.memory.session_id}",
-            f"Task: {self.memory.task}",
-            f"Progress: {self.memory.progress}",
-            "",
-            f"Current Phase: {self.memory.current_phase}",
-            f"Total Phases: {len(self.memory.phase_memories)}",
-            f"Completed: {len(self.memory.phases_completed)}",
-            "",
-            "-" * 80,
-            "PHASES",
-            "-" * 80,
-            ""
-        ]
-
-        # Show all phases (position-indexed iteration)
-        for phase_memory in self.memory.phase_memories:
-            status_icon = "✓" if phase_memory.status == "completed" else "→"
-            lines.append(f"{status_icon} {phase_memory.phase_name.upper()}")
-            lines.append(f"  Steps: {phase_memory.started_step}-{phase_memory.ended_step or '?'}")
-            lines.append(f"  Summary: {phase_memory.summary or '(none)'}")
-            lines.append(f"  Findings: {len(phase_memory.key_findings)}")
-            # Show sub_memory_indices if present
-            if phase_memory.sub_memory_indices:
-                lines.append(f"  Sub-indices: {phase_memory.sub_memory_indices[:10]}")  # First 10
-
-            if phase_memory.key_findings:
-                for finding in phase_memory.key_findings[-3:]:  # Last 3
-                    lines.append(f"    • {finding}")
-
-            lines.append("")
-
-        if include_steps and self.memory.recent_steps:
-            lines.append("-" * 80)
-            lines.append("RECENT STEPS")
-            lines.append("-" * 80)
-            lines.append("")
-
-            for step in self.memory.recent_steps[-10:]:  # Last 10
-                lines.append(f"[{step.step}] {step.phase}: {step.action_summary}")
-                if step.finding:
-                    lines.append(f"  → {step.finding}")
-
-        lines.append("")
-        lines.append("=" * 80)
-
-        return "\n".join(lines)

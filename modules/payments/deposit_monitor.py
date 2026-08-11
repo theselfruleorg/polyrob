@@ -8,7 +8,8 @@ import asyncio
 import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
-from decimal import Decimal
+
+from modules.payments.networks import chain_configs, TOKEN_ADDRESSES, ERC20_BALANCEOF_ABI
 
 logger = logging.getLogger(__name__)
 
@@ -40,29 +41,9 @@ class DepositMonitor:
         # Check interval (seconds)
         self.check_interval = getattr(config, 'deposit_check_interval', 60)
 
-        # Supported chains and tokens
-        self.chains = {
-            'ethereum': {
-                'rpc_url': getattr(config, 'ethereum_rpc_url', None),
-                'chain_id': 1
-            },
-            'sepolia': {
-                'rpc_url': getattr(config, 'sepolia_rpc_url', None),
-                'chain_id': 11155111
-            }
-        }
-
-        # Token contract addresses (stablecoins)
-        self.token_addresses = {
-            'ethereum': {
-                'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-                'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-            },
-            'sepolia': {
-                'USDC': '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',  # Sepolia USDC
-                'USDT': '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06'   # Sepolia USDT (example)
-            }
-        }
+        # Supported chains and tokens (shared SSOT with TreasurySweeper)
+        self.chains = chain_configs(config)
+        self.token_addresses = TOKEN_ADDRESSES
 
         # Minimum deposit thresholds (USD)
         self.min_deposit_usd = 5.00
@@ -257,16 +238,7 @@ class DepositMonitor:
             Token balance as float
         """
         try:
-            # ERC20 balanceOf ABI
-            abi = [{
-                "constant": True,
-                "inputs": [{"name": "_owner", "type": "address"}],
-                "name": "balanceOf",
-                "outputs": [{"name": "balance", "type": "uint256"}],
-                "type": "function"
-            }]
-
-            contract = w3.eth.contract(address=token_address, abi=abi)
+            contract = w3.eth.contract(address=token_address, abi=ERC20_BALANCEOF_ABI)
             balance_wei = contract.functions.balanceOf(address).call()
 
             # USDC/USDT have 6 decimals

@@ -47,6 +47,11 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     "collabland": frozenset(),
     "polymarket_data": frozenset(),    # read-only market data (no wallet)
     "hyperliquid_data": frozenset(),   # read-only market data (no wallet)
+    # Read-only token sight (proposal 023 T0+T1). No signer, no broadcast, so
+    # not `money`. The one own-funds verb (portfolio) is gated by NAME in
+    # correspondent_gate — holdings are pre-drain reconnaissance — while the
+    # impersonal reads stay available while tainted.
+    "defi_data": frozenset(),
     # -- egress / comms (delegable-but-high-impact: NOT delegate_blocked) ------
     "browser": frozenset({"high_impact"}),        # SSRF / exfil
     "web_fetch": frozenset({"high_impact"}),      # outbound fetch (SSRF / exfil)
@@ -71,6 +76,10 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # -- money ---------------------------------------------------------------
     "x402_pay": frozenset({"money", "high_impact", "delegate_blocked"}),
     "x402_invoice": frozenset({"money", "high_impact", "delegate_blocked"}),
+    # On-chain money verbs (proposal 023 T3). Every call routes through
+    # core/wallet/tx_guard.py; `money` also makes it explicit-grant-only, so the
+    # agent can never self-serve it via load_tool.
+    "defi_trade": frozenset({"money", "high_impact", "delegate_blocked"}),
     # Trading venues: reads stay allowed while tainted (deliberately NOT high_impact
     # as a tool_id); the trade verbs gate by name in correspondent_gate Tier B.
     "hyperliquid": frozenset({"money", "delegate_blocked", "readable_while_tainted"}),

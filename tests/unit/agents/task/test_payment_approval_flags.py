@@ -33,7 +33,7 @@ def _clean_payment_flags(monkeypatch):
 
 
 def test_payment_approval_tools_includes_x402_request():
-    assert "x402_request" in PAYMENT_APPROVAL_TOOLS
+    assert "x402_invoice_x402_request" in PAYMENT_APPROVAL_TOOLS
 
 
 def test_payment_approval_tools_includes_namespaced_trade_verbs():

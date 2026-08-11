@@ -504,10 +504,6 @@ def send_telemetry(event: Any, agent_id: Optional[str] = None, session_id: Optio
         return False
 
 
-# GIF creation utilities have been moved to utils/gif_utils.py
-# For backwards compatibility, import them here
-from utils.gif_utils import create_gif_with_retry, create_text_only_gif as _create_text_only_gif
-
 # DEPRECATED FUNCTIONS REMOVED - Use modules.llm.llm_factory instead
 # These functions were causing conflicts with the main LLM package and only supported OpenAI
 # Legacy LLM factory functions have been completely removed

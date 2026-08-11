@@ -97,28 +97,6 @@ class DepositWalletGenerator:
 
         return Account.from_key(key_material)
 
-    def get_private_key_for_address(self, address: str) -> bytes:
-        """Get private key for a deposit address.
-
-        Note: This requires looking up the user_id from the address first.
-        For efficiency, treasury sweeper should pass user_id directly.
-
-        Args:
-            address: Ethereum address
-
-        Returns:
-            Private key bytes
-
-        Raises:
-            ValueError: If address not found or master seed not configured
-        """
-        # This is a simplified version - in production you'd need to
-        # query the database to find which user_id generated this address
-        # For now, we'll raise an error and require using get_account_for_user_id instead
-        raise NotImplementedError(
-            "Use get_private_key_for_user_id() instead - requires user_id lookup from database"
-        )
-
     def get_private_key_for_user_id(self, user_id: str) -> bytes:
         """Get private key for a user's deposit address.
 

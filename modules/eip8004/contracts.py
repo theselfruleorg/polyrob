@@ -294,64 +294,6 @@ class IdentityRegistryContract(BaseContract):
     
     def __init__(self, address: str, chain_id: int = 8453):
         super().__init__(address, IDENTITY_REGISTRY_ABI, chain_id)
-    
-    async def get_token_uri(self, agent_id: int) -> Optional[str]:
-        """Get the tokenURI for an agent.
-        
-        Args:
-            agent_id: Agent's tokenId
-            
-        Returns:
-            Token URI (points to registration file)
-        """
-        contract = self._get_contract()
-        if not contract:
-            return None
-        
-        try:
-            return contract.functions.tokenURI(agent_id).call()
-        except Exception as e:
-            logger.error(f"Failed to get tokenURI: {e}")
-            return None
-    
-    async def get_owner(self, agent_id: int) -> Optional[str]:
-        """Get the owner of an agent.
-        
-        Args:
-            agent_id: Agent's tokenId
-            
-        Returns:
-            Owner address
-        """
-        contract = self._get_contract()
-        if not contract:
-            return None
-        
-        try:
-            return contract.functions.ownerOf(agent_id).call()
-        except Exception as e:
-            logger.error(f"Failed to get owner: {e}")
-            return None
-    
-    async def get_metadata(self, agent_id: int, key: str) -> Optional[bytes]:
-        """Get on-chain metadata for an agent.
-        
-        Args:
-            agent_id: Agent's tokenId
-            key: Metadata key (e.g., "agentWallet", "agentName")
-            
-        Returns:
-            Metadata value as bytes
-        """
-        contract = self._get_contract()
-        if not contract:
-            return None
-        
-        try:
-            return contract.functions.getMetadata(agent_id, key).call()
-        except Exception as e:
-            logger.error(f"Failed to get metadata: {e}")
-            return None
 
 
 class ReputationRegistryContract(BaseContract):
@@ -359,73 +301,6 @@ class ReputationRegistryContract(BaseContract):
     
     def __init__(self, address: str, chain_id: int = 8453):
         super().__init__(address, REPUTATION_REGISTRY_ABI, chain_id)
-    
-    async def get_aggregated_feedback(
-        self,
-        agent_id: int,
-        client_address: Optional[str] = None,
-        tag1: Optional[bytes] = None,
-        tag2: Optional[bytes] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Get aggregated feedback for an agent.
-        
-        Args:
-            agent_id: Agent's tokenId
-            client_address: Filter by client
-            tag1: Filter by tag1
-            tag2: Filter by tag2
-            
-        Returns:
-            Aggregated feedback data
-        """
-        contract = self._get_contract()
-        if not contract:
-            return None
-        
-        try:
-            from web3 import Web3
-            
-            client = client_address or "0x0000000000000000000000000000000000000000"
-            t1 = tag1 or b'\x00' * 32
-            t2 = tag2 or b'\x00' * 32
-            
-            result = contract.functions.getAggregatedFeedback(
-                agent_id,
-                Web3.to_checksum_address(client),
-                t1,
-                t2
-            ).call()
-            
-            return {
-                "count": result[0],
-                "avgScore": result[1],
-                "scores": list(result[2]),
-                "tag1s": list(result[3]),
-                "tag2s": list(result[4]),
-                "revokedStatuses": list(result[5]),
-            }
-        except Exception as e:
-            logger.error(f"Failed to get aggregated feedback: {e}")
-            return None
-    
-    async def get_clients(self, agent_id: int) -> List[str]:
-        """Get list of clients who provided feedback.
-        
-        Args:
-            agent_id: Agent's tokenId
-            
-        Returns:
-            List of client addresses
-        """
-        contract = self._get_contract()
-        if not contract:
-            return []
-        
-        try:
-            return contract.functions.getClients(agent_id).call()
-        except Exception as e:
-            logger.error(f"Failed to get clients: {e}")
-            return []
 
 
 class ValidationRegistryContract(BaseContract):
@@ -462,46 +337,5 @@ class ValidationRegistryContract(BaseContract):
             }
         except Exception as e:
             logger.error(f"Failed to get validation status: {e}")
-            return None
-    
-    async def get_summary(
-        self,
-        agent_id: int,
-        validator_addresses: Optional[List[str]] = None,
-        tag: Optional[bytes] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Get validation summary for an agent.
-        
-        Args:
-            agent_id: Agent's tokenId
-            validator_addresses: Filter by validators
-            tag: Filter by tag
-            
-        Returns:
-            Summary with count and average response
-        """
-        contract = self._get_contract()
-        if not contract:
-            return None
-        
-        try:
-            from web3 import Web3
-            
-            validators = validator_addresses or []
-            validators_checksum = [Web3.to_checksum_address(v) for v in validators]
-            t = tag or b'\x00' * 32
-            
-            result = contract.functions.getSummary(
-                agent_id,
-                validators_checksum,
-                t
-            ).call()
-            
-            return {
-                "count": result[0],
-                "avgResponse": result[1],
-            }
-        except Exception as e:
-            logger.error(f"Failed to get validation summary: {e}")
             return None
 

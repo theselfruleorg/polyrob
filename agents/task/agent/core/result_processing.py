@@ -18,11 +18,18 @@ from modules.llm.messages import AIMessage, ToolMessage
 logger = logging.getLogger(__name__)
 
 
-def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None):
+def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
+                           validation_errors=None):
 	"""Map each tool_call id -> (content, had_error) by identity.
 
 	Prefers ActionResult.tool_call_id (set by multi_act). Falls back to
 	positional pairing only when ids are absent (legacy / non-native path).
+
+	``validation_errors`` (tool_call_id -> message, from
+	``Controller.get_last_validation_errors()``) names the calls that
+	``Registry.tool_calls_to_actions`` DROPPED before execution. They occupy a slot in
+	``tool_calls_to_pass`` but produced NO entry in ``result``, so the positional
+	fallback must skip them — see the walk below.
 
 	UP-06: when ``source_for`` is provided (a callable ``tool_call_id ->
 	(action_name, tool)``), the string ``extracted_content`` of an untrusted
@@ -100,10 +107,28 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None):
 			"[pair] duplicate tool_call_id detected (%s); falling back to positional pairing",
 			ids,
 		)
+	# Positional fallback. `results` holds only the EXECUTED calls, so walking it with
+	# the index into `tool_calls_to_pass` is only correct when the two lists share an
+	# index space — which they do NOT whenever a call was dropped by pre-execution
+	# validation (Registry.tool_calls_to_actions). A drop removes an entry from the
+	# middle/front of `results`, not the tail, so every later call shifted by one and
+	# received its NEIGHBOUR's output: with calls [A(dropped), B, C], B's tool message
+	# was built from C's result and C — which really ran — was reported to the model as
+	# "was NOT executed this step". Silent content misattribution, no error surfaced.
+	#
+	# Count executed calls separately from the enumerate index: the key must stay the
+	# ORIGINAL index (that is what the consumer looks up with), while `results` is
+	# indexed by executed-position. multi_act returns an ordered prefix of the actions
+	# it was handed, so within the executed subset position is meaningful.
+	_dropped = validation_errors or {}
+	executed_pos = 0
 	for i, tc in enumerate(tool_calls_to_pass):
-		if i < len(results):
-			tc_id = tc.get("id")
-			paired[(tc_id, i)] = _entry(results[i], tc_id)
+		tc_id = tc.get("id")
+		if tc_id in _dropped:
+			continue  # never executed -> consumed no slot in `results`
+		if executed_pos < len(results):
+			paired[(tc_id, i)] = _entry(results[executed_pos], tc_id)
+		executed_pos += 1
 	return paired
 
 
@@ -150,7 +175,12 @@ class ResultProcessingMixin:
 					return (name, tool)
 
 				source_for = _source_for
-			paired = _pair_results_to_calls(result, tool_calls_to_pass, source_for=source_for)
+			# validation_errors is resolved above; pass it so the positional fallback
+			# can skip the calls that were dropped before execution (they consumed no
+			# slot in `result`).
+			paired = _pair_results_to_calls(result, tool_calls_to_pass,
+			                                source_for=source_for,
+			                                validation_errors=validation_errors)
 
 			for i, tc in enumerate(tool_calls_to_pass):
 				tc_id = tc.get('id')

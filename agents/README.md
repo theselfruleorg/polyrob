@@ -59,7 +59,6 @@ agents/
     ├── sqlite_session_registry.py  # SQLite-backed cross-process variant (opt-in)
     ├── session_route.py            # Session routing classification (LOCAL/REMOTE/MISSING)
     ├── workspace_context.py        # Workspace context
-    ├── runtime_safety.py           # Safety controls
     ├── utils.py / utils_json.py / utils_webview.py / robust_parse_config.py
     │
     ├── agent/                      # Task agent implementation (mixin-based)

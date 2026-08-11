@@ -9,6 +9,7 @@ from typing import List, Optional
 
 import click
 
+from cli.commands._bootstrap import cli_container
 from cli.ui.events import normalize as _normalize_event
 from cli.ui.plain_renderer import PlainRenderer
 from cli.ui.state import SessionState
@@ -101,17 +102,7 @@ def session_list(show_all: bool, as_json: bool):
 
 
 async def _session_list(show_all: bool, as_json: bool):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -246,17 +237,7 @@ def session_cancel(session_id: str):
 
 
 async def _session_cancel(session_id: str):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -281,17 +262,7 @@ def session_show(session_id: str, as_json: bool):
 
 
 async def _session_show(session_id: str, as_json: bool):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -337,17 +308,7 @@ def session_pause(session_id: str):
 
 
 async def _session_pause(session_id: str):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -371,17 +332,7 @@ def session_resume(session_id: str):
 
 
 async def _session_resume(session_id: str):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -434,17 +385,7 @@ def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
 
 
 async def _session_export(session_id: str, output: Optional[str], format: str):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     from agents.task.path import pm
 
@@ -636,17 +577,7 @@ def session_costs(session_id: str, as_json: bool):
 
 
 async def _session_costs(session_id: str, as_json: bool):
-    import logging as _logging
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
-    setup_project_path()
-    setup_sqlite_compat()
-
-    _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level="ERROR")
-    _logging.disable(_logging.NOTSET)
+    container = await cli_container()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:

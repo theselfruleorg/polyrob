@@ -36,7 +36,10 @@ def test_leaf_delegation_blocked():
 
 def test_x402_request_in_recommended_approval_set():
     from tools.controller.approval import DEFAULT_APPROVAL_REQUIRED_TOOLS
-    assert "x402_request" in DEFAULT_APPROVAL_REQUIRED_TOOLS
+    # RUNTIME (namespaced) name: the approval hook matches action names exactly, and
+    # container-tool actions register as {tool_id}_{action}. The bare verb matched
+    # nothing, so this lane never fired — see tests/unit/core/test_action_name_parity.py.
+    assert "x402_invoice_x402_request" in DEFAULT_APPROVAL_REQUIRED_TOOLS
 
 
 def test_x402_request_action_formats_instructions(monkeypatch):

@@ -17,9 +17,8 @@ provides:
 
 ## Design principles
 
-- **One agent core.** The REPL connects to the agent through the same `Surface`
-  contract the network surfaces use (`cli_surface.py::CLISurface`), so CLI output
-  ordering matches every other surface.
+- **One agent core.** The REPL and `polyrob run` drive the *same* Task agent the
+  API and network surfaces run — the CLI is a peer surface, not a wrapper.
 - **The renderer owns pixels.** All bubble/dedup/finalize logic lives in the Rich
   renderer; the surface only forwards the unified outbound stream into it.
 - **Fail-open rendering.** A rendering error must never break the agent loop.
@@ -32,8 +31,6 @@ provides:
 cli/
 ├── polyrob.py            # Click entry point (console_scripts) — registers every
 │                         #   subcommand; bare invocation / `chat` open the REPL
-├── cli_surface.py        # CLISurface — the CLI as a Surface contract consumer;
-│                         #   forwards the outbound stream into the renderer
 ├── config_store.py       # Key-aware provider/model resolution from ~/.polyrob/.env
 │                         #   (auto-detects the provider whose API key is present)
 ├── inventory.py          # Product-facing tool catalog backing `polyrob tools`

@@ -27,6 +27,8 @@ def test_every_produced_kind_is_known():
     from core.event_kinds import KNOWN_KINDS
     unknown = {}
     for py in _tracked_py():
+        if not py.exists():  # tracked but deleted in the working tree
+            continue
         src = py.read_text(encoding="utf-8", errors="replace")
         for kind in _PRODUCER.findall(src):
             if kind not in KNOWN_KINDS:

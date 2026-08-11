@@ -34,13 +34,9 @@ from tools.polymarket.clob_adapter import (
     ClobClient,
     ApiCreds,
     OrderArgs,
-    OrderType,
     CLOB_AVAILABLE,
     trade_capability,
 )
-
-# Back-compat alias (some call sites/tests referenced the old flag name).
-CLOB_CLIENT_AVAILABLE = CLOB_AVAILABLE
 
 from tools.base_tool import BaseTool, ToolStatus
 from tools.polymarket.models import (

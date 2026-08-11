@@ -6,9 +6,10 @@ import json
 import logging
 import time
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from api.dependencies import get_user_id
 from api.openai_compat.model_map import map_model
 from api.openai_compat.models import (ChatCompletionRequest, ChatCompletionResponse,
                                        ModelsListResponse, _ModelCard)
@@ -91,10 +92,11 @@ async def _stream_chat_completion(*, chat_id: str, created: int, model: str, rep
 
 
 @router.post("/v1/chat/completions")
-async def chat_completions(body: ChatCompletionRequest, request: Request):
-    user_id = getattr(request.state, "user_id", None)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="Missing authentication")
+async def chat_completions(
+    body: ChatCompletionRequest,
+    request: Request,
+    user_id: str = Depends(get_user_id),
+):
     await verify_payment_for_request(request, cost_credits=1)  # raises 402 if unpaid
 
     text = _last_user_text(body)
@@ -170,6 +172,33 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
 @router.get("/v1/models")
 async def list_models():
-    from modules.llm.llm_client_registry import DEFAULT_MODELS
-    cards = [_ModelCard(id=f"{prov}/{model}") for prov, model in DEFAULT_MODELS.items()]
+    """Spec-registry-derived model cards (UX assessment 2026-08-07, Q6).
+
+    One card per initializable provider's effective default (honors
+    ``POLYROB_<PROVIDER>_MODEL`` / a spec's ``default_model``) plus every
+    spec-declared model — so a providers.yaml row is *discoverable*, not just
+    routable, and a non-initializable provider (deepseek direct) is never
+    advertised. Falls open to the legacy DEFAULT_MODELS literal (also the
+    ``LLM_PROVIDER_REGISTRY=off`` path).
+    """
+    from modules.llm.llm_client_registry import DEFAULT_MODELS, get_default_model
+
+    cards = []
+    try:
+        from modules.llm.provider_spec import get_specs, provider_registry_enabled
+
+        if not provider_registry_enabled():
+            raise RuntimeError("provider registry disabled")
+        seen = set()
+        for s in get_specs():
+            if not s.initializable:
+                continue
+            default = get_default_model(s.name)
+            for m in ([default] if default else []) + list(s.models):
+                slug = f"{s.name}/{m}"
+                if slug not in seen:
+                    seen.add(slug)
+                    cards.append(_ModelCard(id=slug))
+    except Exception:
+        cards = [_ModelCard(id=f"{prov}/{model}") for prov, model in DEFAULT_MODELS.items()]
     return ModelsListResponse(data=cards).model_dump()

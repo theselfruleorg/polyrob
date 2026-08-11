@@ -756,24 +756,33 @@ class SessionManager:
             self.logger.info(f"✅ Session {session_id}: Phase {current_phase} → {new_phase}")
             return new_phase
     
-    def add_to_feed(self, session_id: str, event_type: str, data: Dict[str, Any]) -> None:
+    def add_to_feed(
+        self,
+        session_id: str,
+        event_type: str,
+        data: Dict[str, Any],
+        agent_id: Optional[str] = None,
+    ) -> None:
         """
         Add an event to the session feed.
-        
+
         Args:
             session_id: The session ID
             event_type: Type of event (e.g., 'step', 'action', 'result')
             data: Event data to store
+            agent_id: Optional originating agent id, recorded on the entry.
+                Kept as a trailing keyword so legacy 3-arg callers
+                (api/tools) stay valid.
         """
         import time
         import json
-        
+
         session_id = pm().clean_session_id(session_id)
-        
+
         # Get feed directory
         feed_dir = self.get_subdirectory(session_id, "feed")
         feed_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create feed entry
         timestamp = time.time()
         feed_entry = {
@@ -781,7 +790,9 @@ class SessionManager:
             'type': event_type,  # Use 'type' to match webview expectations
             'data': data
         }
-        
+        if agent_id:
+            feed_entry['agent_id'] = agent_id
+
         # Write to feed file
         feed_file = feed_dir / f"{event_type}_{int(timestamp * 1000)}.json"
         with open(feed_file, 'w') as f:

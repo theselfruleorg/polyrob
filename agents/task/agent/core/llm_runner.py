@@ -69,7 +69,6 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt, AgentMessagePrompt
 from agents.task.agent.views import (
@@ -82,8 +81,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -287,7 +284,7 @@ class LLMRunnerMixin:
 		
 		except (LLMRateLimitError, LLMAuthenticationError, LLMConnectionError) as llm_error:
 			error_type = type(llm_error).__name__
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 			
 			self.logger.warning(
 				f"🔄 LLM provider error ({error_type}) from {current_provider}/{self.model_name}: "
@@ -317,12 +314,20 @@ class LLMRunnerMixin:
 				# Store original LLM for potential restoration
 				original_llm = self.llm
 				original_model_name = self.model_name
+				original_provider = getattr(self, 'llm_provider', current_provider)
 				
 				try:
-					# Temporarily switch to fallback
-					self.llm = fallback_llm
+					# Switch across EVERY model/provider SSOT, not just llm/model_name.
+					# Setting only those two left self.llm_provider (read by the billing
+					# path in next_action_internal) and message_manager.llm (read by
+					# compaction) pointing at the provider that just FAILED — so every
+					# post-fallback usage record was attributed to the wrong provider and
+					# compaction ran against the dead client. The switch is permanent for
+					# the rest of the session, so the staleness was too.
 					fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
-					self.model_name = fallback_model
+					self.adopt_active_llm(
+						fallback_llm, fallback_model,
+						self._get_provider_from_model(fallback_model) or 'unknown')
 					
 					self.logger.info(f"✅ Switched to fallback provider: {fallback_model}")
 					
@@ -355,9 +360,9 @@ class LLMRunnerMixin:
 					return result
 					
 				except Exception as fallback_error:
-					# Fallback also failed - restore original and raise typed error
-					self.llm = original_llm
-					self.model_name = original_model_name
+					# Fallback also failed - restore original and raise typed error.
+					# Restore the FULL SSOT, symmetrically with the switch above.
+					self.adopt_active_llm(original_llm, original_model_name, original_provider)
 					
 					self.logger.error(
 						f"❌ Fallback also failed: {type(fallback_error).__name__}: {str(fallback_error)[:200]}"
@@ -393,7 +398,7 @@ class LLMRunnerMixin:
 		except LLMError as generic_llm_error:
 			# UPGRADED (Dec 2025): Generic LLM error - also try fallback
 			error_type = type(generic_llm_error).__name__
-			current_provider = self._get_provider_from_model(self.model_name)
+			current_provider = self._current_llm_provider(self.model_name)
 
 			self.logger.warning(f"🔄 Generic LLM error ({error_type}) - attempting fallback...")
 
@@ -409,10 +414,15 @@ class LLMRunnerMixin:
 			if fallback_llm:
 				original_llm = self.llm
 				original_model = self.model_name
+				original_provider = getattr(self, 'llm_provider', current_provider)
 
 				try:
-					self.llm = fallback_llm
-					self.model_name = getattr(fallback_llm, 'model_name', 'fallback')
+					# Full-SSOT switch (see the sibling handler above for why
+					# llm/model_name alone was not enough).
+					_fb_model = getattr(fallback_llm, 'model_name', 'fallback')
+					self.adopt_active_llm(
+						fallback_llm, _fb_model,
+						self._get_provider_from_model(_fb_model) or 'unknown')
 					self.logger.info(f"✅ Switched to fallback: {self.model_name}")
 
 					result = await asyncio.wait_for(
@@ -424,8 +434,7 @@ class LLMRunnerMixin:
 					return result
 
 				except Exception as fallback_error:
-					self.llm = original_llm
-					self.model_name = original_model
+					self.adopt_active_llm(original_llm, original_model, original_provider)
 					self.logger.error(f"❌ Fallback also failed: {fallback_error}")
 					# Track the failed fallback provider
 					fallback_provider = self._get_provider_from_model(getattr(fallback_llm, 'model_name', 'unknown'))

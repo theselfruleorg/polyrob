@@ -222,12 +222,34 @@ def create_chat_model(
             return GeminiAdapter(client=llm_client, model_name=clean_model, **sanitized_params)
 
         else:
-            # Should be unreachable — the PROVIDER_CONFIG guard above catches all
-            # unknown providers before we enter this branch. Belt-and-suspenders.
+            # Proposal 024 (L0): a registry provider with no bespoke branch above
+            # (a user-declared providers.yaml row) dispatches on its TRANSPORT to
+            # the matching generic adapter. The PROVIDER_CONFIG guard above already
+            # rejected genuinely unknown providers, so reaching here with no spec
+            # is a real bug worth the loud ValueError below.
+            from modules.llm.provider_spec import Transport, get_spec
+            spec = get_spec(provider_l)
+            if spec is not None and spec.transport is Transport.CHAT_COMPLETIONS:
+                from modules.llm.adapters import OpenRouterAdapter
+                sanitized_params = common_params.copy()
+                for key in ("parallel_tool_calls", "model"):
+                    sanitized_params.pop(key, None)
+                if hasattr(llm_client, 'model_type') and llm_client.model_type != model:
+                    logger.info(f"Updating {type(llm_client).__name__} model_type: "
+                                f"{llm_client.model_type} -> {model}")
+                    llm_client.model_type = model
+                logger.info(f"Creating OpenRouterAdapter (generic chat_completions) for {model}")
+                return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
+            if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
+                from modules.llm.adapters import AnthropicAdapter
+                sanitized_params = common_params.copy()
+                sanitized_params.pop("model", None)
+                logger.info(f"Creating AnthropicAdapter (generic anthropic_messages) for {model}")
+                return AnthropicAdapter(client=llm_client, model_name=model, **sanitized_params)
             raise ValueError(
-                f"Unsupported LLM provider '{provider}'. Supported: "
-                + ", ".join(sorted(PROVIDER_CONFIG.keys()))
-                + "."
+                f"Unsupported LLM provider '{provider}'"
+                + (f" (transport '{spec.transport.value}' not implemented)" if spec else "")
+                + ". Supported: " + ", ".join(sorted(PROVIDER_CONFIG.keys())) + "."
             )
 
     except ValueError:

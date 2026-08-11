@@ -38,6 +38,11 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
     so there is ONE prompt implementation (identical order/count)."""
     from modules.llm.profiles import all_profiles
     for profile in all_profiles():  # PROFILES order → OpenRouter first
+        if not profile.env_key:
+            # keyless-by-design (auth_type:none providers.yaml row) — there is
+            # no env key to prompt for; a non-blank answer would be stored
+            # under "" and written as a garbage env line.
+            continue
         if profile.env_key in collected_keys:
             continue
         hint = f" ({profile.signup_url})" if profile.signup_url else ""

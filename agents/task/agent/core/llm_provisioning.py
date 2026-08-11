@@ -193,45 +193,6 @@ class LLMProvisioningMixin:
         knobs and all existing callers. Inert by default (None => main model)."""
         return self._provision_aux_llm("compaction")
 
-    def set_token_limits(self, main_max_tokens: int = None, eval_max_tokens: int = None) -> None:
-        """Set token limits for the main LLM.
-
-        DEPRECATED: Token limits are now automatically configured during LLM creation
-        via llm_factory which uses model_registry. This method is kept for
-        backward compatibility but should not be needed.
-
-        Args:
-            main_max_tokens: Optional max tokens override
-            eval_max_tokens: Deprecated (evaluation removed)
-        """
-        from modules.llm.model_registry import get_model_config
-
-        # Get from model registry if not provided
-        if main_max_tokens is None:
-            config = get_model_config(self.model_name)
-            main_max_tokens = config.max_completion_tokens if config else 16384
-
-        # Only set if LLM doesn't already have it configured
-        if hasattr(self.llm, 'max_tokens'):
-            current_value = getattr(self.llm, 'max_tokens', None)
-            if current_value is None or current_value == 0:
-                self.llm.max_tokens = main_max_tokens
-                self.logger.info(f"Set main LLM max_tokens to {main_max_tokens}")
-            else:
-                self.logger.debug(f"LLM already has max_tokens={current_value}, keeping existing value")
-
-    def _get_model_max_completion_tokens(self, model_name: str) -> int:
-        """Get max completion tokens from model registry.
-
-        DEPRECATED: Use model_registry.get_model_config() directly instead.
-        This method is kept for backward compatibility.
-        """
-        from modules.llm.model_registry import get_model_config
-        config = get_model_config(model_name)
-        completion_tokens = config.max_completion_tokens if config else 16384
-        self.logger.debug(f"Using max_tokens={completion_tokens} for {model_name}")
-        return completion_tokens
-
     def _reconcile_native_tools(self, provider: str) -> bool:
         """Intersect the user's native-tools preference with provider capability.
 

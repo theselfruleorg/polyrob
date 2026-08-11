@@ -285,23 +285,9 @@ class OpenAIClient(LLMClient):
     ) -> str:
         """Generate a response from the LLM."""
         try:
-            # Handle prompt formats
-            if messages is not None:
-                # Use messages directly if provided
-                formatted_messages = messages
-            elif isinstance(prompt, list) and all(isinstance(m, dict) for m in prompt):
-                # Prompt is already a list of messages
-                formatted_messages = prompt
-            elif isinstance(prompt, dict) and 'messages' in prompt:
-                # Extract messages from prompt dict
-                formatted_messages = prompt['messages']
-            elif isinstance(prompt, str):
-                # Convert string prompt to message format
-                formatted_messages = [{"role": "user", "content": prompt}]
-            else:
-                # Default to empty message
-                formatted_messages = [{"role": "user", "content": "Hello"}]
-            
+            # Handle prompt formats (shared base normalization)
+            formatted_messages, system = self._normalize_prompt(prompt, messages, system)
+
             # Add system message if provided and not already present
             if system:
                 has_system = any(msg.get('role') == 'system' for msg in formatted_messages)

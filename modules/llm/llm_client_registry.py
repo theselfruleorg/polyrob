@@ -39,23 +39,75 @@ def _get_models_for_provider(provider: str) -> List[str]:
         # Fallback to empty list if registry fails
         return []
 
-# Legacy constants - now dynamically sourced from model_registry
-# FIXED (Nov 25, 2025): Changed from lambdas to direct function calls
-# Previous lambdas caused AVAILABLE_MODELS['openai'] to return a function, not a list
-def get_available_models_for_provider(provider: str) -> List[str]:
-    """Get available models for a provider (callable version)."""
-    return _get_models_for_provider(provider)
+class _LazyAvailableModels:
+    """Dict-like provider→models view (values are real ``list``s).
 
-# FIXED: Eagerly evaluate model lists at import time for backward compatibility
-# Code that accesses AVAILABLE_MODELS['openai'] expects a list, not a callable
-AVAILABLE_MODELS = {
-    'anthropic': _get_models_for_provider('anthropic'),
-    'openai': _get_models_for_provider('openai'),
-    'deepseek': _get_models_for_provider('deepseek'),
-    'gemini': _get_models_for_provider('gemini'),
-    'openrouter': _get_models_for_provider('openrouter'),
-    'nvidia': _get_models_for_provider('nvidia'),
-}
+    Proposal 024 (L0): unions the model_registry-backed lists with models
+    DECLARED by ProviderSpec rows (``providers.yaml`` ``models:`` keys), so a
+    user-declared provider's models are listable/ownable everywhere downstream
+    (``polyrob model``, openai-compat ``_provider_owning``, config_store).
+    Built lazily on first access and cached; ``reset()`` clears the snapshot
+    (called by ``provider_spec.reset_provider_registry_cache``).
+    """
+
+    _LEGACY_PROVIDERS = ('anthropic', 'openai', 'deepseek', 'gemini', 'openrouter', 'nvidia')
+
+    def __init__(self) -> None:
+        self._snapshot = None
+
+    def _ensure(self):
+        if self._snapshot is None:
+            snap = {}
+            try:
+                from modules.llm.provider_spec import get_specs, provider_registry_enabled
+                registry_on = provider_registry_enabled()
+            except Exception:
+                registry_on = False
+            if registry_on:
+                for s in get_specs():
+                    base = _get_models_for_provider(s.name)
+                    declared = [m for m in s.models if m not in base]
+                    snap[s.name] = base + declared
+            else:
+                for name in self._LEGACY_PROVIDERS:
+                    snap[name] = _get_models_for_provider(name)
+            self._snapshot = snap
+        return self._snapshot
+
+    def reset(self) -> None:
+        self._snapshot = None
+
+    # read-only mapping interface
+    def __getitem__(self, key):
+        return self._ensure()[key]
+
+    def __contains__(self, key) -> bool:
+        return key in self._ensure()
+
+    def __iter__(self):
+        return iter(self._ensure())
+
+    def __len__(self) -> int:
+        return len(self._ensure())
+
+    def __bool__(self) -> bool:
+        return bool(self._ensure())
+
+    def get(self, key, default=None):
+        return self._ensure().get(key, default)
+
+    def keys(self):
+        return self._ensure().keys()
+
+    def values(self):
+        return self._ensure().values()
+
+    def items(self):
+        return self._ensure().items()
+
+
+# Dict-like lazy view (was an eager dict; values are still plain lists).
+AVAILABLE_MODELS = _LazyAvailableModels()
 
 # Default models - hardcoded as policy decision (Nov 2025)
 # NOTE: These are intentionally not derived from model_registry since defaults
@@ -87,9 +139,30 @@ def get_default_model(provider: str) -> str:
         Default model name for the provider
     """
     import os
-    override = os.environ.get(f"POLYROB_{provider.upper()}_MODEL")
+    # Hyphenated provider names (zai-coding) map to underscores — a POSIX env
+    # name can't contain '-' (UX assessment 2026-08-07, Q11).
+    env_name = f"POLYROB_{provider.upper().replace('-', '_')}_MODEL"
+    override = os.environ.get(env_name)
     if override and override.strip():
         return override.strip()
+    # Proposal 024: a ProviderSpec may declare its own default (providers.yaml
+    # ``default_model:`` — a new provider like ollama, or an explicit owner
+    # override of a built-in). Built-in specs carry default_model=None, so with
+    # no user file this is byte-identical to the DEFAULT_MODELS policy literal.
+    try:
+        from modules.llm.provider_spec import get_spec, provider_registry_enabled
+        if provider_registry_enabled():
+            spec = get_spec(provider)
+            if spec is not None:
+                if spec.default_model:
+                    return spec.default_model
+                # A declared-models row without default_model: its own first
+                # model beats the openai literal below (requesting 'gpt-5' from
+                # an Ollama endpoint is never right).
+                if not spec.builtin and spec.models:
+                    return spec.models[0]
+    except Exception:
+        pass
     return DEFAULT_MODELS.get(provider, DEFAULT_MODELS['openai'])
 
 # This function will be imported by llm_manager.py
@@ -113,6 +186,7 @@ def create_llm_client(name: str, config, container=None, model_type=None):
     from modules.llm.gemini_client import GeminiClient
     from modules.llm.openrouter_client import OpenRouterClient
     from modules.llm.nvidia_client import NvidiaClient
+    from modules.llm.compat_clients import AnthropicCompatClient, OpenAICompatClient
     from modules.llm.model_registry import PROVIDER_CONFIG
 
     # Map client_class_name strings from PROVIDER_CONFIG to actual classes.
@@ -125,6 +199,10 @@ def create_llm_client(name: str, config, container=None, model_type=None):
         'GeminiClient': GeminiClient,
         'OpenRouterClient': OpenRouterClient,
         'NvidiaClient': NvidiaClient,
+        # Proposal 024 generic clients — serve any ProviderSpec whose transport
+        # is OpenAI- or Anthropic-compatible (user-declared providers.yaml rows).
+        'OpenAICompatClient': OpenAICompatClient,
+        'AnthropicCompatClient': AnthropicCompatClient,
     }
 
     if name not in PROVIDER_CONFIG:

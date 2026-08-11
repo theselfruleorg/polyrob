@@ -111,47 +111,6 @@ class PerplexitySourcesAction(BaseModel):
 	topic: str
 
 
-# Email specific actions
-class EmailSendAction(BaseModel):
-	"""Model for sending an email"""
-	model_config = ConfigDict(extra='forbid')
-
-	to_email: str = Field(description="Recipient email address")
-	subject: str = Field(description="Email subject line")
-	body: str = Field(description="Plain text email body")
-	html: Optional[str] = Field(default=None, description="HTML email body (optional)")
-	cc: Optional[str] = Field(default=None, description="CC recipients (comma-separated)")
-	bcc: Optional[str] = Field(default=None, description="BCC recipients (comma-separated)")
-
-	@field_validator('to_email', 'cc', 'bcc')
-	@classmethod
-	def validate_email_format(cls, v, info):
-		"""Validate email addresses have basic format."""
-		if v is None:
-			return v
-		# Split by comma for cc/bcc
-		emails = [e.strip() for e in v.split(',') if e.strip()]
-		for email in emails:
-			if '@' not in email or '.' not in email.split('@')[-1]:
-				raise ValueError(f"Invalid email format: {email}")
-		return v
-
-	@field_validator('subject', 'body')
-	@classmethod
-	def validate_not_empty(cls, v, info):
-		"""Ensure subject and body are not empty."""
-		if not v or not v.strip():
-			raise ValueError(f"{info.field_name} cannot be empty")
-		return v
-
-
-class EmailReadAction(BaseModel):
-	"""Model for reading emails"""
-	folder: Optional[str] = "INBOX"
-	limit: Optional[int] = 10
-	unread_only: Optional[bool] = False
-
-
 # FileSystem specific actions
 class DocProcessAction(BaseModel):
 	"""Model for processing a document"""
@@ -163,11 +122,6 @@ class DocAnalyzeAction(BaseModel):
 	"""Model for analyzing a document"""
 	text: str
 	analysis_type: Optional[str] = "general"
-
-
-class DocProcessUrlAction(BaseModel):
-	"""Model for processing content from a URL"""
-	url: str
 
 
 # File operation actions

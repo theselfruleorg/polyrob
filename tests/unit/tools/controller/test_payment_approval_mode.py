@@ -79,10 +79,10 @@ def test_mode_approve_routes_x402_request_through_owner_queue(tmp_path, monkeypa
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
 
     assert reason is None  # the spy provider approved
-    assert _SpyProvider.calls == [("x402_request", {"amount_usd": 5})]
+    assert _SpyProvider.calls == [("x402_invoice_x402_request", {"amount_usd": 5})]
 
 
 def test_mode_approve_wires_the_money_specific_timeout(tmp_path, monkeypatch):
@@ -102,7 +102,7 @@ def test_mode_approve_wires_the_money_specific_timeout(tmp_path, monkeypatch):
     c = _make_controller(tmp_path)
 
     reason = asyncio.run(asyncio.wait_for(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None), timeout=2))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None), timeout=2))
 
     assert reason is not None and "timeout" in reason.lower()
 
@@ -115,9 +115,9 @@ def test_mode_approve_denies_when_owner_queue_denies(tmp_path, monkeypatch):
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
 
-    assert reason is not None and "x402_request" in reason
+    assert reason is not None and "x402_invoice_x402_request" in reason
 
 
 def test_mode_approve_leaves_non_payment_tools_ungated_by_default(tmp_path, monkeypatch):
@@ -158,7 +158,7 @@ def test_mode_auto_does_not_queue_x402_request(tmp_path, monkeypatch):
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
 
     assert reason is None
     assert _SpyProvider.calls == []  # never queued through owner_queue
@@ -179,7 +179,7 @@ def test_mode_auto_notifies_and_audits_within_cap_creation(tmp_path, monkeypatch
     result = ActionResult(extracted_content="ok", metadata={
         "request_id": "inv_abc123", "amount_usd": 5.0, "purpose": "consulting"})
     ctx = types.SimpleNamespace(user_id="u1", session_id="s1")
-    asyncio.run(c._run_post_tool_call_hooks("x402_request", {"amount_usd": 5}, result, ctx))
+    asyncio.run(c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, result, ctx))
 
     assert len(notified) == 1
     assert notified[0][0] == "u1"
@@ -203,7 +203,7 @@ def test_mode_auto_over_cap_rejection_never_notifies(tmp_path, monkeypatch):
     result = ActionResult(error="x402_request refused: amount $999.00 exceeds the "
                                 "invoice ceiling $50.00 (X402_INVOICE_MAX_USD)")
     ctx = types.SimpleNamespace(user_id="u1", session_id="s1")
-    asyncio.run(c._run_post_tool_call_hooks("x402_request", {"amount_usd": 999}, result, ctx))
+    asyncio.run(c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 999}, result, ctx))
 
     assert notified == []
 
@@ -218,9 +218,14 @@ def test_mode_auto_over_cap_rejection_never_notifies(tmp_path, monkeypatch):
 # had set it, per the finding's fix instructions), not just the full-autonomy
 # default covered in test_autonomy_mode_approvals.py.
 
-_TRADE_VERBS = (
+# The SPEND-side subset of PAYMENT_APPROVAL_TOOLS: verbs that stay on the
+# owner_queue lane in EVERY mode, including PAYMENT_APPROVAL_MODE=auto. Named
+# for trading historically; since 023 T3 it also carries the on-chain money
+# verb, which is irreversible and self-custodial with no venue to dispute it.
+_SPEND_VERBS = (
     "hyperliquid_place_limit_order", "hyperliquid_place_market_order",
     "polymarket_place_limit_order", "polymarket_place_market_order",
+    "defi_trade_transfer",
 )
 
 
@@ -230,7 +235,7 @@ def test_mode_auto_still_queues_trade_verbs_through_owner_queue(tmp_path, monkey
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
-    for verb in _TRADE_VERBS:
+    for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, None))
         assert reason is None, verb  # the spy (owner_queue) approved
@@ -281,7 +286,7 @@ def test_mode_approve_also_queues_trade_verbs_unchanged(tmp_path, monkeypatch):
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
-    for verb in _TRADE_VERBS:
+    for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, None))
         assert reason is None, verb
@@ -318,8 +323,8 @@ def test_mode_auto_notify_hook_wired_with_receive_subset_only(tmp_path, monkeypa
 
     _make_controller(tmp_path)
 
-    assert notify_calls == [{"x402_request"}]
-    assert pre_calls == [set(_TRADE_VERBS)]
+    assert notify_calls == [{"x402_invoice_x402_request"}]
+    assert pre_calls == [set(_SPEND_VERBS)]
 
 
 # --- regression: existing gates unchanged --------------------------------------------
@@ -340,7 +345,7 @@ def test_correspondent_tainted_turn_still_cannot_create_payment_request(tmp_path
     c.register_pre_tool_call_hook(gate, fail_mode="closed")
 
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
 
     assert reason is not None
     assert "untrusted correspondent" in reason or "blocked" in reason.lower()
@@ -357,7 +362,7 @@ def test_leaf_turn_denied_by_owner_queue_itself(tmp_path, monkeypatch):
     provider = OwnerQueueApprover(board=board)
     ctx = ActionExecutionContext(session_id="s1", user_id="u1", role="leaf", is_sub_agent=True)
 
-    result = asyncio.run(provider.request("x402_request", {"amount_usd": 5}, ctx))
+    result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
     assert result is False
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
@@ -392,7 +397,7 @@ def test_taint_probe_true_denies_without_creating_ask_or_notifying(tmp_path, mon
     ctx = ActionExecutionContext(
         session_id="s1", user_id="u1", role="orchestrator", is_sub_agent=False)
 
-    result = asyncio.run(provider.request("x402_request", {"amount_usd": 5}, ctx))
+    result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
     assert result is False
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
@@ -414,7 +419,7 @@ def test_taint_probe_raising_fails_closed(tmp_path):
     ctx = ActionExecutionContext(
         session_id="s1", user_id="u1", role="orchestrator", is_sub_agent=False)
 
-    result = asyncio.run(provider.request("x402_request", {"amount_usd": 5}, ctx))
+    result = asyncio.run(provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
     assert result is False
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
@@ -440,7 +445,7 @@ def test_taint_probe_false_creates_ask_as_before(tmp_path, monkeypatch):
 
     async def _run_and_approve():
         task = asyncio.ensure_future(
-            provider.request("x402_request", {"amount_usd": 5}, ctx))
+            provider.request("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
         for _ in range(50):
             await asyncio.sleep(0.01)
             asks = board.asks(user_id="u1", status=ASK_OPEN)
@@ -476,9 +481,9 @@ def test_owner_queue_wiring_denies_when_orchestrator_tainted(tmp_path, monkeypat
     ctx = ActionExecutionContext(
         session_id="s1", user_id="u1", role="orchestrator", is_sub_agent=False)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, ctx))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, ctx))
 
-    assert reason is not None and "x402_request" in reason
+    assert reason is not None and "x402_invoice_x402_request" in reason
     assert notified == []
     board = GoalBoard(str(tmp_path / "goals.db"))
     assert board.asks(user_id="u1", status=ASK_OPEN) == []
@@ -493,10 +498,10 @@ def test_owner_queue_wiring_unaffected_when_orchestrator_untainted(tmp_path, mon
 
     c = _make_controller(tmp_path, tainted=False)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
 
     assert reason is None  # the spy provider approved
-    assert _SpyProvider.calls == [("x402_request", {"amount_usd": 5})]
+    assert _SpyProvider.calls == [("x402_invoice_x402_request", {"amount_usd": 5})]
 
 
 def test_mode_auto_tainted_turn_emits_no_notification(tmp_path, monkeypatch):
@@ -516,6 +521,6 @@ def test_mode_auto_tainted_turn_emits_no_notification(tmp_path, monkeypatch):
     result = ActionResult(extracted_content="ok", metadata={
         "request_id": "inv_abc123", "amount_usd": 5.0, "purpose": "consulting"})
     ctx = types.SimpleNamespace(user_id="u1", session_id="s1")
-    asyncio.run(c._run_post_tool_call_hooks("x402_request", {"amount_usd": 5}, result, ctx))
+    asyncio.run(c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, result, ctx))
 
     assert notified == []

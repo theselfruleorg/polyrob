@@ -194,7 +194,10 @@ def _refreeze_approval_flags_for_tests() -> None:
 DEFAULT_APPROVAL_REQUIRED_TOOLS = (
     "git_push", "github_open_pr", "github_merge_pr",
     "mcp_install", "tool_manage", "self_modify",
-    "x402_request",  # outward-facing invoicing — recommend owner approval
+    # Outward-facing invoicing — recommend owner approval. RUNTIME (namespaced) name:
+    # the hook matches exactly, and container-tool actions register as
+    # {tool_id}_{action}, so the bare `x402_request` matched nothing.
+    "x402_invoice_x402_request",
     # NOTE: hf_deploy's `deploy` is deliberately NOT here. A blanket Controller
     # gate can't tell a FIRST publish (must be approved) from a redeploy of an
     # already-approved app (unattended within caps) — gating both would break the

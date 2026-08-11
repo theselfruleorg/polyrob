@@ -655,16 +655,6 @@ class FeedFormatterRegistry:
         """
         return self._formatters.get(event_name, self._generic_formatter)
 
-    def register_formatter(self, event_name: str, formatter: BaseFeedFormatter) -> None:
-        """Register a custom formatter.
-
-        Args:
-            event_name: The event name to register formatter for
-            formatter: The formatter instance
-        """
-        self._formatters[event_name] = formatter
-
-
 # Global registry instance
 _registry = FeedFormatterRegistry()
 

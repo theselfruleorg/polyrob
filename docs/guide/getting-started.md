@@ -202,6 +202,24 @@ the key you just entered; declining leaves a one-line reminder that `polyrob ini
 available anytime. This inline wizard only fires on a real interactive terminal — it
 never prompts (and never blocks) in CI, scripts, or a piped/non-interactive run.
 
+**No key at all? Use a local or custom endpoint.** POLYROB can also run against
+any OpenAI- or Anthropic-compatible endpoint you declare in
+`~/.polyrob/providers.yaml` — a local Ollama needs **no API key**:
+
+```yaml
+providers:
+  ollama:
+    base_url: http://127.0.0.1:11434/v1
+    auth_type: none        # no key needed
+    transport: chat_completions
+    default_model: qwen3-coder:30b
+    models: [qwen3-coder:30b]
+```
+
+Then `polyrob run -p ollama "hello"` (or make it the default with
+`DEFAULT_PROVIDER=ollama`). Full reference — z.ai Coding Plan, vLLM, gateways,
+transports, security rules: [configuration.md](configuration.md#custom-llm-providers-providersyaml).
+
 ### Step 3: Verify Setup
 
 ```bash

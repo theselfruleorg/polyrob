@@ -18,6 +18,7 @@ class Signer(Protocol):
     def address(self) -> str: ...
     def sign_message(self, data: bytes) -> str: ...
     def sign_typed_data(self, domain: dict, types: dict, message: dict) -> str: ...
+    def sign_transaction(self, tx: dict) -> bytes: ...
 
 
 class LocalEoaSigner:
@@ -46,6 +47,30 @@ class LocalEoaSigner:
         signed = self._account.sign_message(signable)
         sig = signed.signature.hex()
         return sig if sig.startswith("0x") else "0x" + sig
+
+    def sign_transaction(self, tx: dict) -> bytes:
+        """Sign a transaction dict, returning the raw signed bytes.
+
+        ⚠️ SIGNING PERIMETER. This and ``sign_message``/``sign_typed_data`` are
+        the only ways signing authority leaves this object, and this is the ONLY
+        one that produces something broadcastable. Two rules follow:
+
+        * ``chainId`` is MANDATORY. An unpinned chainId is EIP-155 replay
+          exposure — the same signed payload would be valid on every EVM chain
+          the address exists on (i.e. all of them).
+        * ``sign_typed_data`` must stay OFF the money path. A signed EIP-2612 /
+          Permit2 payload is not a transaction, so it never reaches tx_guard: no
+          simulation, no delta assertion, no cap, no audit row, and the drain
+          happens later in a transaction the agent never sees. Permit support is
+          deliberately out of scope; if it is ever added it must be priced as an
+          allowance grant and routed through the guard.
+        """
+        if not tx.get("chainId"):
+            raise ValueError(
+                "refusing to sign a transaction with no chainId — an unpinned "
+                "chain is EIP-155 replay exposure")
+        signed = self._account.sign_transaction(dict(tx))
+        return bytes(signed.raw_transaction)
 
     def __repr__(self) -> str:  # never leak the key
         return f"<LocalEoaSigner address={self._account.address}>"

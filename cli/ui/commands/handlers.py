@@ -974,15 +974,17 @@ def _h_session(ctx: CommandContext) -> None:
 
 
 def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
-    """Gather autonomy loop flags + cron jobs + open goals into structured data.
+    """Gather autonomy loop flags + open-goal / cron-job counts into structured data.
 
-    Pure + fail-open: each store read is independently guarded so a missing/locked
-    DB degrades to a captured exception instead of raising into the REPL. Shared by
-    ``autonomy_status_lines`` (legacy plain-line shape) and ``_h_autonomy`` (candy
-    grammar) so both read the same snapshot without duplicating the store reads.
+    Only the flag-table assembly lives here; the goal/cron COUNTS come from
+    ``cli.ui.autonomy_poll.read_autonomy_snapshot``, which guards every store read
+    with ``os.path.exists`` — a missing ``cron.db``/``goals.db`` is skipped, never
+    CREATED (opening a store would mkdir/create the DB as a side effect; the
+    path-concerns landmine). Fail-open: a poll error degrades to zero counts
+    instead of raising into the REPL.
     """
-    import os
     from agents.task.constants import AutonomyConfig, autonomy_enabled, local_mode_enabled
+    from cli.ui.autonomy_poll import read_autonomy_snapshot
 
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
@@ -992,68 +994,22 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
         ("background-review", AutonomyConfig.background_review_enabled()),
     ]
 
-    cron_jobs = None
-    cron_error: Optional[Exception] = None
     try:
-        from cron.service import CronService
-        from cron.jobs import CronJobStore
-        cron_jobs = CronService(CronJobStore(os.path.join(data_dir, "cron.db"))).list_jobs(user_id=user_id)
-    except Exception as e:  # fail-open: stores may not exist yet
-        cron_error = e
-
-    open_goals = None
-    goals_error: Optional[Exception] = None
-    try:
-        from agents.task.goals.board import GoalBoard
-        goals = GoalBoard(os.path.join(data_dir, "goals.db")).list(user_id=user_id)
-        open_goals = [g for g in goals if getattr(g, "status", "") not in ("done", "cancelled")]
-    except Exception as e:
-        goals_error = e
+        counts = read_autonomy_snapshot(user_id, data_dir) or {}
+    except Exception:  # fail-open: stores may not exist yet
+        counts = {}
 
     return {
         "local_mode": local_mode_enabled(),
         "autonomy_enabled": autonomy_enabled(),
         "flags": flags,
-        "cron_jobs": cron_jobs,
-        "cron_error": cron_error,
-        "open_goals": open_goals,
-        "goals_error": goals_error,
+        "cron_count": int(counts.get("cron", 0) or 0),
+        "goal_count": int(counts.get("goals", 0) or 0),
     }
 
 
-def autonomy_status_lines(user_id: str, data_dir: str = "data") -> list:
-    """Build the /autonomy report: enabled loops + scheduled cron jobs / open goals.
-
-    Legacy plain-line shape, kept byte-compatible for existing callers/tests (see
-    ``tests/unit/cli/ui/test_commands_autonomy.py``) — ``_h_autonomy`` renders its
-    own candy-grammar view from ``_autonomy_snapshot`` instead of reusing these
-    lines, so this function's return format is free to stay untouched.
-    """
-    snap = _autonomy_snapshot(user_id, data_dir)
-
-    lines = [f"local mode (POLYROB_LOCAL): {'on' if snap['local_mode'] else 'off'}"]
-    lines.append(f"autonomy (AUTONOMY_ENABLED): {'on' if snap['autonomy_enabled'] else 'off'}")
-    lines.append("loops: " + ", ".join(f"{n}={'on' if v else 'off'}" for n, v in snap["flags"]))
-
-    if snap["cron_error"] is not None:
-        lines.append(f"cron jobs: (unavailable: {snap['cron_error']})")
-    else:
-        jobs = snap["cron_jobs"]
-        lines.append(f"cron jobs: {len(jobs)}")
-        for j in jobs[:10]:
-            when = j.next_run_at.isoformat() if j.next_run_at else "-"
-            lines.append(f"  - {j.id} [{j.status}] {j.schedule_spec} -> {when}: {j.task[:48]}")
-
-    if snap["goals_error"] is not None:
-        lines.append(f"goals (open): (unavailable: {snap['goals_error']})")
-    else:
-        lines.append(f"goals (open): {len(snap['open_goals'])}")
-
-    return lines
-
-
 def _h_autonomy(ctx: CommandContext) -> None:
-    """Show autonomy loop state + scheduled cron jobs / open goals (read-only)."""
+    """Show autonomy loop state + cron-job / open-goal counts (read-only)."""
     from cli.ui import candy
 
     data_dir = "data"
@@ -1070,22 +1026,14 @@ def _h_autonomy(ctx: CommandContext) -> None:
     rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
     lines = [candy.kv_lines(rows), ""]
 
-    if snap["cron_error"] is not None:
-        lines.append(f"{candy.GUTTER}(unavailable: {snap['cron_error']})")
-    else:
-        jobs = snap["cron_jobs"]
-        lines.append(candy.section(f"cron jobs ({len(jobs)})"))
-        for j in jobs[:10]:
-            when = j.next_run_at.isoformat() if j.next_run_at else "-"
-            preview = (j.task or "")[:48]
-            lines.append(candy.status_line(j.status, f"{j.id} {j.schedule_spec} -> {when}: {preview}"))
+    lines.append(candy.section(f"cron jobs ({snap['cron_count']})"))
+    if snap["cron_count"]:
+        lines.append(f"{candy.GUTTER}/cron lists the schedule")
 
     lines.append("")
-    if snap["goals_error"] is not None:
-        lines.append(f"{candy.GUTTER}(unavailable: {snap['goals_error']})")
-    else:
-        open_goals = snap["open_goals"]
-        lines.append(candy.section(f"goals (open: {len(open_goals)})"))
+    lines.append(candy.section(f"goals (open: {snap['goal_count']})"))
+    if snap["goal_count"]:
+        lines.append(f"{candy.GUTTER}/goals lists them")
 
     ctx.emit("\n".join(lines), title="autonomy")
 
@@ -1263,10 +1211,10 @@ def _h_goals(ctx: CommandContext) -> None:
     try:
         from agents.task.goals.board import GoalBoard
         from core.runtime_config import get_data_root
+        from core.runtime_paths import goals_db_path
         from pathlib import Path
 
-        data_root = Path(get_data_root())
-        db_path = data_root / "goals.db"
+        db_path = Path(goals_db_path(get_data_root()))
 
         if not db_path.exists():
             ctx.emit(
@@ -1276,7 +1224,7 @@ def _h_goals(ctx: CommandContext) -> None:
             return
 
         board = GoalBoard(str(db_path))
-        # Scope to THIS user (matches /autonomy at handlers.py autonomy_status_lines);
+        # Scope to THIS user (matches /autonomy at handlers.py _autonomy_snapshot);
         # user_id=None returned every tenant's goals — wrong slice under multi-tenant
         # and inconsistent with the autonomy view. Local runs are user_id="local".
         goals = board.list(user_id=ctx.user_id or "local", limit=10)

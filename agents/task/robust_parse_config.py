@@ -112,14 +112,10 @@ class RobustParseConfig:
     # NEW: JSON validation requirements
     REQUIRE_SCHEMA_KEYS: bool = _bool_env("REQUIRE_SCHEMA_KEYS", False)  # Disabled by default for flexibility
     REQUIRED_KEYS: list = ["current_state", "action"]  # Keys that must be present when validation enabled
-    BRAIN_STATE_KEYS: list = ["memory", "evaluation_previous_goal", "next_goal", "reasoning"]  # For brain state validation in native tools mode
-    
+
     # Function calling configuration
-    FORCE_FUNCTION_CALLING_FOR_ALL: bool = _bool_env("FORCE_FUNCTION_CALLING", True)
     ENABLE_STRUCTURED_OUTPUT_FALLBACK: bool = _bool_env("ENABLE_STRUCTURED_OUTPUT_FALLBACK", True)  # NEW
-    
-    # Message cutting - Only cut when actually needed
-    CUT_MESSAGES_BEFORE_EACH_LLM_CALL: bool = _bool_env("CUT_MESSAGES_BEFORE_LLM", False)  # Disabled by default
+
     TOKEN_BUFFER_SIZE: int = int(os.getenv("TOKEN_BUFFER_SIZE", "800"))  # FIXED: Increased buffer
     
     # NEW: Format hint management
@@ -204,33 +200,6 @@ Use double quotes only. No text outside JSON. Follow field names EXACTLY as show
         )
     
     @classmethod
-    def get_model_max_tokens(cls, model_name: str) -> Optional[int]:
-        """DEPRECATED: Use modules.llm.model_registry.get_model_config() instead.
-
-        This method is deprecated as of v2.2.0.
-
-        Args:
-            model_name: Name of the model
-
-        Returns:
-            Max tokens or None for self-regulating models
-        """
-        # Delegate to centralized model registry
-        from modules.llm.model_registry import get_model_config
-        config = get_model_config(model_name)
-
-        if config:
-            # O-series reasoning models self-regulate
-            model_lower = model_name.lower() if model_name else ""
-            if any(m in model_lower for m in ["o1", "o3"]):
-                return None  # Let reasoning models self-regulate
-
-            return config.max_completion_tokens
-
-        # Conservative default for unknown models
-        return 8000
-    
-    @classmethod
     def truncate_page_content(cls, content: str) -> str:
         """MINIMAL FIX: No truncation - return full content.
         
@@ -247,17 +216,6 @@ Use double quotes only. No text outside JSON. Follow field names EXACTLY as show
         if cls.STRIP_BASE64_IMAGES:
             content = cls.strip_base64_images(content)
         
-        # NO TRUNCATION - return full content
-        return content
-    
-    @classmethod
-    def truncate_extracted_content(cls, content: str) -> str:
-        """MINIMAL FIX: No truncation - return full content.
-        
-        This is only called as fallback when file offloading fails.
-        With 500K offload threshold, this rarely happens.
-        When it does, return full content (we have 1M token context).
-        """
         # NO TRUNCATION - return full content
         return content
     

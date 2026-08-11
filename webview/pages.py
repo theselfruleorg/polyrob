@@ -533,6 +533,9 @@ async def api_config_search(request: Request, query: str = ""):
             "value": str(info.effective), "source": info.source,
             "applies": info.applies, "sensitivity": info.sensitivity,
             "enforcement": info.enforcement, "secret": info.secret,
+            # legibility for the UI: which flags the console can never write
+            # (otherwise discoverable only by PATCHing into a 403)
+            "console_writable": info.key not in config_service.CONSOLE_UNWRITABLE_FLAGS,
         })
     return JSONResponse({"user_id": user_id, "settings": items})
 
@@ -551,6 +554,7 @@ async def api_config_explain(request: Request, key: str):
         "value": str(info.effective), "source": info.source,
         "applies": info.applies, "sensitivity": info.sensitivity,
         "enforcement": info.enforcement, "secret": info.secret,
+        "console_writable": info.key not in config_service.CONSOLE_UNWRITABLE_FLAGS,
         "description": info.description,
         "chain": [{"origin": s.origin, "value": str(s.value)} for s in info.chain],
     })
@@ -574,6 +578,14 @@ async def api_config_set(request: Request, key: str):
         return JSONResponse(
             {"error": "env-flag writes require the owner console "
                       "(local/own_ops posture)"}, status_code=403)
+    # 024 §2.6: credential-equivalent flags (inference endpoint / credential
+    # store selection) are never console-writable, at ANY posture — use the
+    # local CLI (`polyrob config set …`).
+    if key in config_service.CONSOLE_UNWRITABLE_FLAGS:
+        return JSONResponse(
+            {"error": f"'{key}' selects the agent's inference/credential "
+                      "surface and is not writable from the console — set it "
+                      "from the local CLI"}, status_code=403)
     try:
         body = await request.json()
     except Exception:
@@ -581,7 +593,7 @@ async def api_config_set(request: Request, key: str):
     res = config_service.set_value(
         key, str(body.get("value", "")),
         scope=body.get("scope"), user_id=user_id, home_dir=_data_dir(),
-        confirm=bool(body.get("confirm")))
+        confirm=bool(body.get("confirm")), surface="console")
     status = 200 if res.ok else 400
     if res.ok and res.outcome == "queued":
         status = 202

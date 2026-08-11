@@ -105,7 +105,11 @@ def test_check_env_files_accepts_valid_values(tmp_path):
 
 def test_check_env_files_unknown_with_no_suggestion_is_info_level(tmp_path):
     envfile = tmp_path / ".env"
-    envfile.write_text("MY_PROVIDER_SECRET_TOKEN_XYZ=sk-abc123\n")
+    # NB: the name must have NO close catalog match — growing the catalog can
+    # otherwise turn this into a "possible typo" suggestion (that happened when
+    # 024 added LLM_PROVIDER_REGISTRY: the old MY_PROVIDER_SECRET_TOKEN_XYZ
+    # fixture started scoring above difflib's cutoff against it).
+    envfile.write_text("MY_UNRELATED_XYZZY_SETTING=sk-abc123\n")
     findings = check_env_files([envfile])
     assert len(findings) == 1
     assert "unknown (not in catalog)" in findings[0]

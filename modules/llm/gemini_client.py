@@ -567,25 +567,12 @@ class GeminiClient(LLMClient):
     ) -> str:
         """Generate a response from the LLM."""
         try:
-            # Handle prompt formats
-            if messages is not None:
-                # Use messages directly if provided
-                formatted_messages = messages
-            elif isinstance(prompt, list) and all(isinstance(m, dict) for m in prompt):
-                # Prompt is already a list of messages
-                formatted_messages = prompt
-            elif isinstance(prompt, dict) and 'messages' in prompt:
-                # Extract messages and system from prompt dict
-                formatted_messages = prompt['messages']
-                if 'system' in prompt and not system:
-                    system = prompt['system']
-            elif isinstance(prompt, str):
-                # Convert string prompt to message format
-                formatted_messages = [{"role": "user", "content": prompt}]
-            else:
-                # Default to empty message
-                formatted_messages = [{"role": "user", "content": "Hello"}]
-            
+            # Handle prompt formats (shared base normalization; system stays a
+            # separate kwarg — a dict prompt's 'system' is hoisted into it)
+            formatted_messages, system = self._normalize_prompt(
+                prompt, messages, system, hoist_dict_system=True
+            )
+
             # Gemini doesn't support metadata in the same way as other providers
             # Convert metadata to a more standard format if needed
             filtered_kwargs = kwargs.copy()

@@ -1,0 +1,27 @@
+{
+ "_note": "CONSTRUCTED from Alchemy's documented alchemy_getTokenBalances response shape (no ALCHEMY_API_KEY available to capture a live one). Shape: result.tokenBalances[].{contractAddress,tokenBalance,error}. Zero balances are returned by the API and must be dropped by the parser.",
+ "jsonrpc": "2.0",
+ "id": 1,
+ "result": {
+  "address": "0x1111111111111111111111111111111111111111",
+  "tokenBalances": [
+   {
+    "contractAddress": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+    "tokenBalance": "0x0000000000000000000000000000000000000000000000000000000000989680"
+   },
+   {
+    "contractAddress": "0x4200000000000000000000000000000000000006",
+    "tokenBalance": "0x000000000000000000000000000000000000000000000000004064fc4b4d4000"
+   },
+   {
+    "contractAddress": "0x940181a94a35a4569e4529a3cdfb74e38fd98631",
+    "tokenBalance": "0x0000000000000000000000000000000000000000000000000000000000000000"
+   },
+   {
+    "contractAddress": "0x50c5725949a6f0c72e6c4a641f24049a917db0cb",
+    "tokenBalance": null,
+    "error": "execution reverted"
+   }
+  ]
+ }
+}

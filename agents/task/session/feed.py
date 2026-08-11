@@ -194,7 +194,10 @@ class FeedMixin:
             self.logger.warning(f"Failed to register stream callback: {e}")
 
     async def add_to_feed(self, agent_id: str, entry_type: str, data: dict) -> None:
+        # SessionManager.add_to_feed is synchronous — do NOT await it. agent_id is
+        # passed as a trailing keyword because legacy callers (api/tools) use the
+        # 3-positional (session_id, event_type, data) form.
         if self.session_manager:
-            await self.session_manager.add_to_feed(
-                self.session_id, agent_id, entry_type, data
+            self.session_manager.add_to_feed(
+                self.session_id, entry_type, data, agent_id=agent_id
             )

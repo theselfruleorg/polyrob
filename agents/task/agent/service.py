@@ -110,8 +110,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -446,8 +444,8 @@ class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin,
 		return self.orchestrator.container if self.orchestrator else None
 
 	# LLM provisioning (_supports_streaming, _create_llm_from_config[_async],
-	# set_token_limits, _get_model_max_completion_tokens, _reconcile_native_tools,
-	# set_tool_calling_method) lives in core/llm_provisioning.py::LLMProvisioningMixin (P9).
+	# _reconcile_native_tools, set_tool_calling_method) lives in
+	# core/llm_provisioning.py::LLMProvisioningMixin (P9).
 	# REMOVED: _set_model_names() - deprecated; chat_model_library set in __init__;
 	# model_name is a property delegating to MessageManager.
 

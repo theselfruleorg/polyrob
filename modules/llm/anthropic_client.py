@@ -7,7 +7,7 @@ import time
 from typing import List, Dict, Any, Optional, Union, Tuple
 
 import anthropic
-from anthropic.types import ContentBlock, MessageParam, Message
+from anthropic.types import Message
 
 from modules.llm.llm_client import LLMClient
 from modules.llm.token_counter import count_messages_tokens
@@ -122,6 +122,11 @@ class AnthropicClient(LLMClient):
     # UP-07: the dead EXTENDED_THINKING_MODELS dict was removed — its budgets now live in
     # model_registry (thinking_budget_tokens) and drive a real `thinking` block below.
 
+    # Every user-facing/log message renders the provider through this label so a
+    # spec-driven subclass (AnthropicCompatClient — e.g. a z.ai row) reports ITS
+    # provider, never "Anthropic" (mirrors OpenRouterClient._PROVIDER_LABEL).
+    _PROVIDER_LABEL = "Anthropic"
+
     def __init__(self, config: BotConfig, name: str = "anthropic_client"):
         """Initialize the client."""
         super().__init__(config=config, name=name)
@@ -147,14 +152,14 @@ class AnthropicClient(LLMClient):
         self.temperature = 0.7  # Default temperature
 
         self.logger.debug(
-            f"Anthropic client initialized: model={self.model_type}, "
+            f"{self._PROVIDER_LABEL} client initialized: model={self.model_type}, "
             f"supports_vision={self.supports_vision}"
         )
 
     def _validate_llm_config(self) -> None:
         """Validate LLM config."""
         if not self.api_key:
-            raise ServiceError("Anthropic API key not provided")
+            raise ServiceError(f"{self._PROVIDER_LABEL} API key not provided")
 
     def _profile_base_url(self) -> Optional[str]:
         """Read base_url from the Anthropic ProviderProfile (None => SDK default).
@@ -172,9 +177,9 @@ class AnthropicClient(LLMClient):
             if base_url:
                 kwargs["base_url"] = base_url
             self._client = anthropic.AsyncAnthropic(**kwargs)
-            self.logger.debug("Anthropic client setup completed")
+            self.logger.debug(f"{self._PROVIDER_LABEL} client setup completed")
         except Exception as e:
-            raise ServiceError(f"Failed to set up Anthropic client: {e}")
+            raise ServiceError(f"Failed to set up {self._PROVIDER_LABEL} client: {e}")
         
     async def _initialize(self) -> None:
         """Initialize the client."""
@@ -195,8 +200,8 @@ class AnthropicClient(LLMClient):
             self._initialized = True
             
         except Exception as e:
-            self.logger.error(f"Failed to initialize Anthropic client: {e}")
-            raise ServiceError(f"Failed to initialize Anthropic client: {e}")
+            self.logger.error(f"Failed to initialize {self._PROVIDER_LABEL} client: {e}")
+            raise ServiceError(f"Failed to initialize {self._PROVIDER_LABEL} client: {e}")
 
     async def _generate_with_tools(
         self,
@@ -257,7 +262,7 @@ class AnthropicClient(LLMClient):
         except Exception as e:
             success = False
             error_message = str(e)
-            self.logger.error(f"Anthropic tool calling error: {e}")
+            self.logger.error(f"{self._PROVIDER_LABEL} tool calling error: {e}")
 
             # Capture telemetry
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
@@ -368,7 +373,7 @@ class AnthropicClient(LLMClient):
         )
 
         # Log request
-        self.logger.info(f"Anthropic API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
+        self.logger.info(f"{self._PROVIDER_LABEL} API request with tools: model={self.model_type}, tools={len(tools)}, max_tokens={max_tokens_value}")
 
         # Filter kwargs - CRITICAL: Exclude 'system' to prevent override
         supported_params = {
@@ -648,7 +653,7 @@ class AnthropicClient(LLMClient):
             )
 
             # Log request details with proper values being used
-            self.logger.info(f"Anthropic API request: model={self.model_type}, temperature={temp}, max_tokens={max_tokens_value}, est_input_tokens={estimated_input_tokens}")
+            self.logger.info(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, temperature={temp}, max_tokens={max_tokens_value}, est_input_tokens={estimated_input_tokens}")
             
             # Filter kwargs to only include supported parameters
             # CRITICAL: Exclude 'system' from kwargs to prevent override of system_param
@@ -707,21 +712,21 @@ class AnthropicClient(LLMClient):
         except anthropic.APIError as e:
             success = False
             error_message = str(e)
-            self.logger.error(f"Anthropic API error: {e}")
+            self.logger.error(f"{self._PROVIDER_LABEL} API error: {e}")
             
             # Capture telemetry for failed requests too
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
             
-            raise ServiceError(f"Anthropic API error: {e}")
+            raise ServiceError(f"{self._PROVIDER_LABEL} API error: {e}")
         except Exception as e:
             success = False
             error_message = str(e)
-            self.logger.error(f"Error generating response from Anthropic: {e}")
+            self.logger.error(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
             
             # Capture telemetry for failed requests too
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
             
-            raise ServiceError(f"Error generating response from Anthropic: {e}")
+            raise ServiceError(f"Error generating response from {self._PROVIDER_LABEL}: {e}")
 
     async def generate_response(
         self,
@@ -735,25 +740,12 @@ class AnthropicClient(LLMClient):
     ) -> str:
         """Generate a response from the LLM."""
         try:
-            # Handle prompt formats
-            if messages is not None:
-                # Use messages directly if provided
-                formatted_messages = messages
-            elif isinstance(prompt, list) and all(isinstance(m, dict) for m in prompt):
-                # Prompt is already a list of messages
-                formatted_messages = prompt
-            elif isinstance(prompt, dict) and 'messages' in prompt:
-                # Extract messages and system from prompt dict
-                formatted_messages = prompt['messages']
-                if 'system' in prompt and not system:
-                    system = prompt['system']
-            elif isinstance(prompt, str):
-                # Convert string prompt to message format
-                formatted_messages = [{"role": "user", "content": prompt}]
-            else:
-                # Default to empty message
-                formatted_messages = [{"role": "user", "content": "Hello"}]
-            
+            # Handle prompt formats (shared base normalization; system stays a
+            # separate kwarg — a dict prompt's 'system' is hoisted into it)
+            formatted_messages, system = self._normalize_prompt(
+                prompt, messages, system, hoist_dict_system=True
+            )
+
             # Anthropic doesn't support all metadata types
             # Filter to what we can use
             filtered_kwargs = kwargs.copy()
@@ -798,11 +790,11 @@ class AnthropicClient(LLMClient):
                 messages=[{"role": "user", "content": "Test connection"}]
             )
             if not response:
-                raise LLMConnectionError("No response from Anthropic API")
-            self.logger.debug("Anthropic API connection validated successfully")
+                raise LLMConnectionError(f"No response from {self._PROVIDER_LABEL} API")
+            self.logger.debug(f"{self._PROVIDER_LABEL} API connection validated successfully")
         except Exception as e:
-            self.logger.error(f"Failed to validate Anthropic connection: {e}")
-            raise ServiceError(f"Failed to validate Anthropic connection: {e}")
+            self.logger.error(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
+            raise ServiceError(f"Failed to validate {self._PROVIDER_LABEL} connection: {e}")
 
     async def _cleanup_client(self) -> None:
         """Clean up Anthropic client."""
@@ -810,55 +802,16 @@ class AnthropicClient(LLMClient):
             if hasattr(self, '_client'):
                 # Just set it to None for garbage collection
                 self._client = None
-                self.logger.debug("Anthropic client resources released")
+                self.logger.debug(f"{self._PROVIDER_LABEL} client resources released")
         except Exception as e:
-            self.logger.error(f"Error cleaning up Anthropic client: {e}")
+            self.logger.error(f"Error cleaning up {self._PROVIDER_LABEL} client: {e}")
 
     async def cleanup(self) -> None:
         """Clean up resources."""
         await self._cleanup_client()
         self._client = None
         self._initialized = False
-        self.logger.info("Anthropic client cleaned up")
-
-    def _format_messages(self, prompt: Union[str, List[Dict[str, Any]], Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Format messages for Anthropic API."""
-        try:
-            if isinstance(prompt, str):
-                return [{
-                    "role": "user",
-                    "content": prompt
-                }]
-            elif isinstance(prompt, list):
-                return [
-                    {
-                        "role": msg.get("role", "user"),
-                        "content": msg.get("content", "")
-                    }
-                    for msg in prompt
-                    if msg.get("content") and msg.get("role") != "system"  # Skip system and empty messages
-                ]
-            elif isinstance(prompt, dict):
-                messages = []
-                
-                # Handle messages list
-                if "messages" in prompt:
-                    return [
-                        {
-                            "role": msg.get("role", "user"),
-                            "content": msg.get("content", "")
-                        }
-                        for msg in prompt["messages"]
-                        if msg.get("content") and msg.get("role") != "system"  # Skip system and empty messages
-                    ]
-                    
-                return messages
-                
-            return []
-            
-        except Exception as e:
-            self.logger.error(f"Error formatting messages: {e}")
-            raise LLMError(f"Failed to format messages: {e}")
+        self.logger.info(f"{self._PROVIDER_LABEL} client cleaned up")
 
     async def _make_validation_request(self) -> Any:
         """Make minimal test request to Anthropic."""
@@ -871,7 +824,7 @@ class AnthropicClient(LLMClient):
     def _check_validation_response(self, response: Any) -> None:
         """Validate Anthropic response."""
         if not response or not response.content:
-            raise ValueError("Invalid response from Anthropic")
+            raise ValueError(f"Invalid response from {self._PROVIDER_LABEL}")
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
         """Extract usage data from last_response.

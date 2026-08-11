@@ -16,11 +16,9 @@ default them for you (explicit env wins).
 """
 import asyncio
 import os
-import signal
 import sys
 
 import click
-from core.runtime_paths import data_dir_or_home
 
 
 @click.command()
@@ -33,146 +31,66 @@ def whatsapp(port: int, verbose: bool):
 
 
 async def _run_whatsapp(port: int, verbose: bool) -> None:
-    import logging as _logging
+    from cli.commands._surface_runner import SurfaceJob, run_surface
 
-    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+    def _check_creds(container, task_agent):
+        # Preflight Meta WhatsApp credentials — otherwise the worker prints "online" but
+        # the verify handshake + every send fail later (404/401) with no local signal.
+        missing = [v for v in ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID",
+                               "WHATSAPP_VERIFY_TOKEN")
+                   if not (os.environ.get(v) or "").strip()]
+        if missing:
+            click.echo(click.style("[polyrob] ERROR: ", fg="red")
+                       + "WhatsApp not configured — set " + ", ".join(missing)
+                       + " to run the webhook worker.")
+            sys.exit(1)
 
-    # Default surface flags ON for this command — the whole point is WhatsApp.
-    # Explicit env values still win (setdefault never clobbers).
-    os.environ.setdefault("WHATSAPP_SURFACE_ENABLED", "true")
-    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
+    def _voice_signal(container):
+        # One-line voice-readiness signal so a deploy with missing faster-whisper is visible.
+        from core.surfaces.transcription import log_transcription_readiness
+        log_transcription_readiness(container)
 
-    setup_project_path()
-    setup_sqlite_compat()
+    async def _build(ctx):
+        # Assemble the WhatsApp inbound/outbound harness and register on the container.
+        from surfaces.whatsapp.harness import build_whatsapp_harness
+        harness = build_whatsapp_harness(ctx.container, ctx.task_agent,
+                                         data_dir=ctx.data_dir)
 
-    # No usable provider key → clean canonical message + exit (daemon: no inline wizard).
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
+        # Wire the webhook router to this container, then serve via uvicorn.
+        import uvicorn  # noqa: PLC0415 — intentionally lazy (keeps import-time clean)
+        from fastapi import FastAPI
+        from api.webhooks import router as webhooks_router, set_container_provider
 
-    # Logging policy mirrors telegram.py: verbose→DEBUG; headless→INFO; interactive→quiet.
-    headless = not sys.stderr.isatty()
-    if verbose:
-        log_level = "DEBUG"
-    elif headless:
-        log_level = "INFO"
-    else:
-        log_level = "ERROR"
-    quiet = (not verbose) and (not headless)
-    if quiet:
-        _logging.disable(_logging.CRITICAL)
-        os.environ["GRPC_VERBOSITY"] = "ERROR"
-        os.environ["GLOG_minloglevel"] = "3"
+        set_container_provider(lambda: ctx.container)
+        app = FastAPI(title="polyrob whatsapp webhook worker")
+        app.include_router(webhooks_router)
 
-    try:
-        container = await build_cli_container(log_level=log_level)
-    except Exception as e:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + f"failed to start: {e}")
-        sys.exit(1)
-    if quiet:
-        _logging.disable(_logging.NOTSET)
-    elif not verbose:
-        for _noisy in ("httpx", "httpcore", "asyncio", "hpack"):
-            _logging.getLogger(_noisy).setLevel(_logging.WARNING)
+        config = uvicorn.Config(app, host="0.0.0.0", port=port,
+                                log_level=ctx.log_level.lower())
+        server = uvicorn.Server(config)
 
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + "TaskAgent not available in container")
-        sys.exit(1)
+        async def _announce():
+            click.echo(click.style("whatsapp webhook worker online", fg="green")
+                       + f": listening on port {port}")
+            click.echo(click.style(
+                "configure Meta webhook URL to: http(s)://<host>/webhooks/whatsapp",
+                dim=True))
+            click.echo(click.style("Ctrl-C to stop", dim=True))
 
-    # Preflight Meta WhatsApp credentials — otherwise the worker prints "online" but
-    # the verify handshake + every send fail later (404/401) with no local signal.
-    missing = [v for v in ("WHATSAPP_ACCESS_TOKEN", "WHATSAPP_PHONE_NUMBER_ID", "WHATSAPP_VERIFY_TOKEN")
-               if not (os.environ.get(v) or "").strip()]
-    if missing:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                   + "WhatsApp not configured — set " + ", ".join(missing)
-                   + " to run the webhook worker.")
-        sys.exit(1)
+        def _graceful_exit():
+            # Propagate SIGINT/SIGTERM into uvicorn's graceful shutdown.
+            server.should_exit = True
 
-    # Install the outbound surface bus (idempotent, gated SINGULAR_CHAT_ENABLED).
-    from core.surfaces.bootstrap import install_surface_bus
-    install_surface_bus(container)  # db_path defaults to container.config.data_dir
+        return SurfaceJob(harness=harness, run=server.serve, announce=_announce,
+                          on_stop=_graceful_exit, cancel_on_stop=False,
+                          guard_harness_stop=True)
 
-    # One-line voice-readiness signal so a deploy with missing faster-whisper is visible.
-    from core.surfaces.transcription import log_transcription_readiness
-    log_transcription_readiness(container)
-
-    # Assemble the WhatsApp inbound/outbound harness and register on the container.
-    # Pin harness state DBs (dedup / window) to the container's data_dir so per-instance
-    # isolation holds under POLYROB_DATA_DIR (else they land in ./data).
-    from surfaces.whatsapp.harness import build_whatsapp_harness
-    _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-    harness = build_whatsapp_harness(container, task_agent, data_dir=_data_dir)
-
-    # Start the outbound delivery dispatcher (if installed by the bus).
-    dispatcher = container.get_service("outbound_dispatcher")
-    if dispatcher is not None:
-        from cli.commands._bootstrap import attach_dispatcher_event_log
-        attach_dispatcher_event_log(dispatcher)
-        dispatcher.start()
-
-    # Start the autonomy background loops (cron/goals/curator) under the local profile —
-    # same shared runtime the REPL and API lifespan use.
-    autonomy_handles = None
-    try:
-        from agents.task.constants import local_mode_enabled
-        if local_mode_enabled():
-            from core.autonomy_runtime import start_autonomy
-            _data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
-            autonomy_handles = start_autonomy(task_agent=task_agent, data_dir=_data_dir)
-    except Exception:
-        autonomy_handles = None
-
-    # Wire the webhook router to this container, then serve via uvicorn.
-    import uvicorn  # noqa: PLC0415 — intentionally lazy (keeps import-time clean)
-    from fastapi import FastAPI
-    from api.webhooks import router as webhooks_router, set_container_provider
-
-    set_container_provider(lambda: container)
-    app = FastAPI(title="polyrob whatsapp webhook worker")
-    app.include_router(webhooks_router)
-
-    config = uvicorn.Config(app, host="0.0.0.0", port=port, log_level=log_level.lower())
-    server = uvicorn.Server(config)
-
-    # Propagate SIGINT/SIGTERM into uvicorn's graceful shutdown.
-    loop = asyncio.get_running_loop()
-
-    def _stop(*_a):
-        server.should_exit = True
-
-    try:
-        loop.add_signal_handler(signal.SIGINT, _stop)
-        loop.add_signal_handler(signal.SIGTERM, _stop)
-    except (NotImplementedError, RuntimeError):
-        for _sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                signal.signal(_sig, lambda *_a: _stop())
-            except (ValueError, OSError, AttributeError):
-                pass  # SIGTERM may be unavailable on some platforms/threads
-
-    click.echo(click.style("whatsapp webhook worker online", fg="green")
-               + f": listening on port {port}")
-    click.echo(click.style(
-        "configure Meta webhook URL to: http(s)://<host>/webhooks/whatsapp", dim=True))
-    click.echo(click.style("Ctrl-C to stop", dim=True))
-
-    try:
-        await server.serve()
-    finally:
-        click.echo("\n" + click.style("stopping whatsapp worker…", dim=True))
-        if autonomy_handles is not None:
-            try:
-                await autonomy_handles.stop()
-            except Exception:
-                pass
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
-        try:
-            await harness.stop()
-        except Exception:
-            pass
+    await run_surface(
+        extra_env={"WHATSAPP_SURFACE_ENABLED": "true"},
+        verbose=verbose,
+        preflight=_check_creds,
+        post_bus=_voice_signal,
+        silence_loggers=("httpx", "httpcore", "asyncio", "hpack"),
+        build_harness=_build,
+        stopping_message="stopping whatsapp worker…",
+    )

@@ -26,7 +26,6 @@ try:
     from py_clob_client_v2.clob_types import (  # type: ignore
         ApiCreds,
         OrderArgs,
-        OrderType,
         BalanceAllowanceParams,
         AssetType,
     )
@@ -43,7 +42,6 @@ except Exception as _exc:  # ImportError or any transitive failure
     ClobClient = None  # type: ignore
     ApiCreds = None  # type: ignore
     OrderArgs = None  # type: ignore
-    OrderType = None  # type: ignore
     BalanceAllowanceParams = None  # type: ignore
     AssetType = None  # type: ignore
     CLOB_AVAILABLE = False

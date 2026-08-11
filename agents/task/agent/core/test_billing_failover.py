@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from agents.task.agent.core.error_recovery import ErrorRecoveryMixin
-from core.exceptions import LLMPermanentError
+from core.exceptions import LLMError, LLMPermanentError
 
 
 import pytest
@@ -45,7 +45,19 @@ class _Host(ErrorRecoveryMixin):
 
 
 def _billing_error():
-    return Exception("Error code 402: insufficient_quota / billing hard limit reached")
+    # A plain LLMError — the real shape, and deliberately NOT LLMPermanentError.
+    # tests/unit/agents/task/agent/core/test_error_recovery_sentinel.py documents
+    # (verified 2026-07-16) that a real 402 reaches _handle_step_error as a generic
+    # LLMError: the tool-calling path re-wraps the provider exception before
+    # translate_llm_error's 402 -> LLMPermanentError mapping can apply. Using
+    # LLMPermanentError here would satisfy the isinstance arm and stop exercising the
+    # billing-TEXT classification this file is about.
+    #
+    # It must be typed at all because the permanent-halt branch is now type-gated:
+    # bare-text classification of an arbitrary exception used to halt the session for
+    # unrelated application errors that merely mentioned "billing" or "402" — see
+    # tests/unit/agents/task/core/test_fatal_halt_type_gate.py.
+    return LLMError("Error code 402: insufficient_quota / billing hard limit reached")
 
 
 def _real_openrouter_402_error():

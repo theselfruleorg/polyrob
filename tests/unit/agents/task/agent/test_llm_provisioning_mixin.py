@@ -9,8 +9,7 @@ def test_agent_composes_llm_provisioning_mixin():
     from agents.task.agent.service import Agent
     assert issubclass(Agent, LLMProvisioningMixin)
     for m in ("_supports_streaming", "_create_llm_from_config_async", "_create_llm_from_config",
-              "set_token_limits", "_get_model_max_completion_tokens", "_reconcile_native_tools",
-              "set_tool_calling_method"):
+              "_reconcile_native_tools", "set_tool_calling_method"):
         assert getattr(Agent, m).__qualname__.startswith("LLMProvisioningMixin")
 
 

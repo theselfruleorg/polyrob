@@ -33,10 +33,8 @@ def _workspace_lock_path() -> Optional[str]:
 
 
 def _workspace_lock_timeout() -> float:
-    try:
-        return float(os.environ.get("CLI_WORKSPACE_LOCK_TIMEOUT", "30"))
-    except ValueError:
-        return 30.0
+    from core.env import float_env
+    return float_env("CLI_WORKSPACE_LOCK_TIMEOUT", 30.0)
 
 
 @contextlib.contextmanager

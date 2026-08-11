@@ -1,6 +1,7 @@
 """Canonical env-flag parser for the whole repo. One falsey-set, one parser."""
 import math
 import os
+from typing import Mapping, Optional
 
 _FALSEY = ("none", "off", "false", "0", "no", "")
 
@@ -58,3 +59,39 @@ def int_env(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except (TypeError, ValueError):
         return default
+
+
+def parse_opt_float(value) -> Optional[float]:
+    """Value-based optional-float parse: None/blank/unparsable/non-finite -> None.
+
+    The finite check matters for money caps: ``"inf"`` parses as a valid float
+    and turns a ceiling (e.g. WALLET_DAILY_CAP_USD) into a silent never-trips.
+    """
+    if value is None or not str(value).strip():
+        return None
+    try:
+        val = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return val if math.isfinite(val) else None
+
+
+def bool_from(env: Optional[Mapping], name: str, default: bool) -> bool:
+    """:func:`bool_env` over an injected Mapping (``None`` -> ``os.environ``).
+
+    For the wallet/pairing/access style of testable, env-injected config —
+    those modules used to carry private opt-in truth-set forks that disagreed
+    with the repo falsey-set on values like ``"enabled"``.
+    """
+    src = os.environ if env is None else env
+    raw = src.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    return parse_bool(raw, default)
+
+
+def float_from(env: Optional[Mapping], name: str, default: float) -> float:
+    """:func:`float_env` over an injected Mapping (``None`` -> ``os.environ``)."""
+    src = os.environ if env is None else env
+    val = parse_opt_float(src.get(name))
+    return default if val is None else val

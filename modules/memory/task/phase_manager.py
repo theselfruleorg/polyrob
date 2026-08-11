@@ -523,68 +523,6 @@ class PhaseManager:
         # For many findings, list count
         return f"Completed {phase_memory.phase_name}: {len(findings)} findings"
 
-    def finalize_current_phase(self, final_step: int, summary: Optional[str] = None) -> None:
-        """Manually finalize the current active phase.
-
-        Use this when ending a session or forcing a phase completion.
-
-        Args:
-            final_step: Final step number
-            summary: Optional summary override
-        """
-        current_phase = self.memory.current_phase
-
-        # Use get_phase_by_name for list-based structure
-        phase_memory = self.memory.get_phase_by_name(current_phase)
-        if phase_memory:
-            # Generate summary if not provided
-            if not summary:
-                summary = self._generate_phase_summary(phase_memory)
-
-            self.memory.complete_phase(current_phase, final_step, summary)
-            logger.info(f"Manually finalized phase '{current_phase}' at step {final_step}")
-
-    def get_current_phase_info(self) -> Optional[Dict[str, Any]]:
-        """Get information about current phase.
-
-        Returns:
-            Dictionary with phase info, or None if no current phase
-        """
-        current = self.memory.get_current_phase_memory()
-        if not current:
-            return None
-
-        return {
-            "phase_name": current.phase_name,
-            "started_step": current.started_step,
-            "findings_count": len(current.key_findings),
-            "status": current.status,
-            "summary": current.summary
-        }
-
-    def get_all_phases_info(self) -> List[Dict[str, Any]]:
-        """Get information about all phases.
-
-        Returns:
-            List of phase info dictionaries
-        """
-        phases_info = []
-
-        # Iterate over list instead of dict.items()
-        for phase_memory in self.memory.phase_memories:
-            phases_info.append({
-                "phase_name": phase_memory.phase_name,
-                "started_step": phase_memory.started_step,
-                "ended_step": phase_memory.ended_step,
-                "findings_count": len(phase_memory.key_findings),
-                "status": phase_memory.status,
-                "summary": phase_memory.summary
-            })
-
-        # Sort by started_step
-        phases_info.sort(key=lambda x: x["started_step"])
-        return phases_info
-
     def update_progress(self, current_step: int, total_steps: Optional[int] = None) -> None:
         """Update session progress string.
 

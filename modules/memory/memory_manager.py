@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Optional, Dict, Any, List, Union
 
 from core.config import BotConfig
-from core.exceptions import MemoryError, ModuleError, DependencyError
+from core.exceptions import ModuleError, DependencyError
 from modules.base_module import BaseModule
 
 # Import managers
@@ -158,49 +158,3 @@ class MemoryManager(BaseModule):
         """Get required dependencies."""
         return ['database_manager']
 
-    async def _initialize_dependencies(self) -> None:
-        """Initialize dependencies for the memory manager."""
-        try:
-            # Initialize dependencies
-            await self._initialize()
-
-            self.logger.info("All dependencies initialized successfully")
-
-        except Exception as e:
-            self.logger.error(f"Failed to initialize dependencies: {e}")
-            raise ModuleError(f"Failed to initialize dependencies: {e}")
-
-    async def _cleanup_dependencies(self) -> None:
-        """Clean up dependencies for the memory manager."""
-        try:
-            await self._cleanup()
-
-            self.logger.info("All dependencies cleaned up successfully")
-
-        except Exception as e:
-            self.logger.error(f"Failed to clean up dependencies: {e}")
-            raise ModuleError(f"Failed to clean up dependencies: {e}")
-
-    async def clear_memory(self, user_id: str) -> None:
-        """Clear all memory data for a user.
-        
-        Args:
-            user_id: User ID to clear memory for
-            
-        Raises:
-            MemoryError: If clearing memory fails
-        """
-        try:
-            # Clear cache
-            if self.cache:
-                await self.cache.clear_user_data(user_id)
-
-            
-            # Note: Skipping knowledge base context clearing as it's not critical
-            # and requires additional implementation
-
-            self.logger.info(f"Cleared all memory data for user {user_id}")
-
-        except Exception as e:
-            self.logger.error(f"Failed to clear memory for user {user_id}: {e}")
-            raise MemoryError(f"Failed to clear memory: {str(e)}") 

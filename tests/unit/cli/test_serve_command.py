@@ -59,3 +59,61 @@ def test_serve_registered_on_cli_group():
     from cli.polyrob import cli
 
     assert "serve" in cli.commands
+
+
+def _combined_output(res):
+    out = res.output
+    try:
+        out += res.stderr or ""
+    except (AttributeError, ValueError):
+        pass
+    return out
+
+
+def test_serve_gate_reachable_without_repo_root_main(monkeypatch):
+    """Installed users have no importable repo-root `main` module (it ships in no
+    wheel, and console scripts never have the CWD on sys.path). The no-key
+    refusal must still print — the key gate runs before any server import."""
+    import sys as _sys
+
+    monkeypatch.setitem(_sys.modules, "main", None)  # simulate: main.py absent
+    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+              "OPENROUTER_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+
+    from cli.commands.serve import serve
+
+    res = CliRunner().invoke(serve, [])
+    assert res.exit_code == 1
+    assert "No API key found" in _combined_output(res), (
+        f"expected the no-key refusal, got: {res.output!r} exc={res.exception!r}"
+    )
+
+
+def test_serve_boots_without_repo_root_main(monkeypatch):
+    """With a usable key and no repo-root `main` module, serve still reaches
+    uvicorn — run_server must live in an installed package, not main.py."""
+    import sys as _sys
+
+    calls = {}
+    monkeypatch.setitem(_sys.modules, "main", None)
+    monkeypatch.setattr("uvicorn.run", lambda target, *a, **k: calls.setdefault("target", target))
+    monkeypatch.setattr("core.bootstrap.load_env", lambda **k: None)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-v1-" + "a" * 32)
+
+    from cli.commands.serve import serve
+
+    res = CliRunner().invoke(serve, ["--port", "0"])
+    assert res.exit_code == 0, f"{res.output!r} exc={res.exception!r}"
+    assert calls.get("target") == "api.app:get_app"
+
+
+def test_run_server_lives_in_installed_package():
+    """The uvicorn-launch callable is importable from the installed `api`
+    package; repo-root main.py stays a thin shim over the same callable."""
+    from api.server_boot import run_server
+
+    import main as legacy_main
+
+    assert legacy_main.run_server is run_server

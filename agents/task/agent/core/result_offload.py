@@ -257,8 +257,8 @@ Example: {{"read_file": {{"file_path": "{content_file.name}"}}}}
 					
 				except Exception as e:
 					self.logger.warning(f"Failed to store large content in file: {e}", exc_info=True)
-					# Fallback to simple truncation using new config
-					result.extracted_content = RobustParseConfig.truncate_extracted_content(result.extracted_content)
+					# Fallback: keep the full extracted content in-message (the old
+					# truncate_extracted_content call was a verified no-op and was removed).
 
 					# FIXED: Still create file reference metadata for fallback case
 					# Initialize file_references if None or not a list

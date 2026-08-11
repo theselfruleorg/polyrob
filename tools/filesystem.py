@@ -26,7 +26,7 @@ from core.exceptions import ServiceError
 from tools.controller.views import (
     ReadFileAction, WriteFileAction, AppendFileAction,
     ListDirectoryAction, DeleteFileAction, CreateDirectoryAction,
-    DocProcessAction, DocAnalyzeAction, DocProcessUrlAction,
+    DocProcessAction, DocAnalyzeAction,
 )
 from tools.filesystem_pdf import PdfExtractionMixin
 from tools.filesystem_docproc import DocProcessingMixin
@@ -791,10 +791,20 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         only writable through the gated action/CLI/webview seams, never here.
         """
         from core.security.secret_guard import is_credential_file, is_protected_config_path
-        if is_credential_file(Path(normalized_path)):
-            raise ServiceError(f"Refusing to access a credential/secret file: {display_path}")
-        if is_protected_config_path(Path(normalized_path)):
-            raise ServiceError(f"Refusing to access a protected config/identity file: {display_path}")
+        # 024 review I2: screen the REAL path too — the name guard runs on the
+        # lexical path, so an in-root symlink (`notes.md -> .polyrob/auth.json`)
+        # passes confinement AND evades a lexical-only name check. realpath is
+        # cheap and read-only; a broken link resolves to itself.
+        candidates = {Path(normalized_path)}
+        try:
+            candidates.add(Path(os.path.realpath(normalized_path)))
+        except OSError:
+            pass
+        for candidate in candidates:
+            if is_credential_file(candidate):
+                raise ServiceError(f"Refusing to access a credential/secret file: {display_path}")
+            if is_protected_config_path(candidate):
+                raise ServiceError(f"Refusing to access a protected config/identity file: {display_path}")
 
     def _normalize_path(self, file_path: str) -> str:
         """Normalize a file path to be within the workspace directory."""

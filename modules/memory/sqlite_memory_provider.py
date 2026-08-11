@@ -331,6 +331,18 @@ class SqliteMemoryProvider(MemoryProvider):
             limit = default
         return max(1, min(20, limit))
 
+    @staticmethod
+    def _query_terms(query: str) -> list:
+        """Significant (>=3-char) tokens from a free-text query — the ONE tokenizer
+        for every FTS5 recall path (base provider + the vector subclass)."""
+        return re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")
+
+    @staticmethod
+    def _fts_match(terms: list) -> str:
+        """Sanitized FTS5 OR-query over the first 12 terms (quoting each term
+        disables FTS query syntax injection)."""
+        return " OR ".join(f'"{t}"' for t in terms[:12])
+
     async def search(self, query: str, *, user_id=None, session_id: str = None,
                      limit: int = 5, sort: str = None, before_id: int = None,
                      with_ids: bool = False) -> str:
@@ -412,13 +424,13 @@ class SqliteMemoryProvider(MemoryProvider):
         does not compose reliably with JOIN/aliasing, and rank ordering must stay
         exactly as before.
         """
-        terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        terms = self._query_terms(query)
         _excl_sql = " AND m.session_id != ?" if exclude_session_id else ""
         _excl_arg = (exclude_session_id,) if exclude_session_id else ()
         _before_sql = " AND m.rowid < ?" if before_id is not None else ""
         _before_arg = (before_id,) if before_id is not None else ()
         if terms:
-            match = " OR ".join(f'"{t}"' for t in terms[:12])
+            match = self._fts_match(terms)
             if sort in ("newest", "oldest"):
                 order = "m.rowid DESC" if sort == "newest" else "m.rowid ASC"
             else:
@@ -503,7 +515,7 @@ class SqliteMemoryProvider(MemoryProvider):
         # CURRENT session — the explicit search action stays all-sessions.
         if self._anon_blocked(user_id):
             return ""
-        terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+        terms = self._query_terms(query)
         if not terms:
             return ""
         try:
@@ -909,9 +921,9 @@ class SqliteMemoryProvider(MemoryProvider):
         norm = self._norm_user(user_id)
         limit = self._clamp_limit(limit, 8)
         try:
-            terms = [t for t in re.findall(r"[A-Za-z0-9_.:/-]{3,}", query or "")]
+            terms = self._query_terms(query)
             if terms:
-                match = " OR ".join(f'"{t}"' for t in terms[:12])
+                match = self._fts_match(terms)
                 rows = execute_retry(
                     self.db_path,
                     "SELECT content, source_path, chunk_idx FROM kb_chunks "

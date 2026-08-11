@@ -41,11 +41,19 @@ def test_scan_parses_transfer_logs_with_correct_amount():
     }]
 
 
-def test_scan_rpc_error_returns_empty_no_raise():
+def test_scan_rpc_error_returns_none_no_raise():
+    """An RPC failure is UNKNOWN (None), not an empty range — and still never
+    raises into the watcher tick.
+
+    Contract changed 2026-08-07 (audit #1): this previously returned [], which
+    the watcher could not distinguish from "scanned, nothing there", so it
+    advanced the checkpoint past an unread range. See
+    tests/unit/modules/x402/test_scan_checkpoint_honesty.py.
+    """
     def bad_rpc(method, params):
         raise RuntimeError("rpc down")
 
-    assert onchain_probe.scan_treasury_transfers(bad_rpc, USDC, TREASURY, 1, 10) == []
+    assert onchain_probe.scan_treasury_transfers(bad_rpc, USDC, TREASURY, 1, 10) is None
 
 
 def test_scan_no_logs_returns_empty_list():

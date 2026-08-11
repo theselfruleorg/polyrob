@@ -4,7 +4,8 @@ This guide is the single, complete reference for **every crypto- and money-relat
 capability** in POLYROB: the agent wallet, paying for resources (x402), getting paid
 (invoicing / built-in ecommerce), on-chain settlement, watchtower subscriptions,
 metering-to-invoice, the machine-payer HTTP surface, ERC-8004 reputation, platform
-billing (credits), deposit addresses, the crypto trading tools, and the unified ledger.
+billing (credits), deposit addresses, on-chain token sight and guarded transfers,
+the crypto trading tools, and the unified ledger.
 
 > ⚠️ **Unaudited — use at your own risk.** These features have had **no independent
 > security audit**. They handle real value on mainnet and are provided as-is with no
@@ -441,7 +442,146 @@ calls. The real gate is `ENABLE_AUTH` (off = no billing service registered at al
 
 ---
 
-## 10. Crypto trading tools (`tools/hyperliquid/`, `tools/polymarket/`)
+## 10. On-chain token operations (`tools/defi/`, `core/wallet/tx_guard.py`)
+
+Two tools give the agent eyes on-chain and, separately, a guarded way to move value.
+They are split deliberately: **reading is a different risk class from spending**, so
+they are different tools behind different flags, and enabling sight never implies
+enabling spend.
+
+### 10.1 `defi_data` — read-only token sight (`DEFI_DATA_ENABLED`, default OFF)
+
+Five read-only actions on Base. **No signer is constructed and nothing is broadcast**,
+so this tool cannot move value:
+
+| Action | What it does |
+|---|---|
+| `token_resolve` | Ranked *candidate* contract addresses for a ticker — a discovery aid, never a resolver |
+| `token_info` | On-chain identity + price + liquidity + safety screen for one contract address |
+| `price` | USD price for one contract address |
+| `portfolio` | The agent's own holdings, USD-valued, with explicit coverage |
+| `contract_read` | Raw `eth_call` (returns raw hex, gas- and size-capped) |
+
+Two rules run through the whole tier:
+
+**An address is the only identity.** `token_info` / `price` / `contract_read` reject a
+ticker outright. `token_resolve` is the single verb that accepts a symbol, and it
+returns *every* candidate and never picks — even when there is exactly one match today,
+because one match is not a safety property. Binding a symbol to a contract is the
+primary injection surface for an agent that reads web pages, and liquidity ranking is
+purchasable, so a deeper pool does not mean genuine. **You choose the address.**
+
+**Unknown is never zero.** An unreadable price renders `unknown` (never `$0.00`); an
+unreachable safety screen renders `UNSCREENED` and never contains the word "safe"; a
+balance that failed to read is listed separately as unknown rather than as a zero
+holding. Only high-confidence prices enter a portfolio total — low-confidence and
+unpriceable positions are listed under "unvalued — deliberately excluded" so an
+attacker-seeded pool cannot inflate the headline figure you read.
+
+Token metadata (`decimals` above all) is **pinned** from a canonical list for verified
+tokens and **frozen on first sight** otherwise; a later differing read is surfaced as
+`metadata_changed` rather than accepted. `decimals` denominates every valuation and, at
+§10.2, the delta assertions the security model rests on — a token reporting 6 at
+simulation and 18 at execution would break it.
+
+Results are untrusted-wrapped: a token's `name`/`symbol` are chosen by whoever deployed
+the contract, so DeFi reads are an injection inlet exactly like a fetched page.
+`portfolio` alone is gated while a session is correspondent-tainted (own holdings are
+pre-drain reconnaissance); the impersonal verbs stay available.
+
+Without `ALCHEMY_API_KEY` the tool cannot *enumerate* holdings and reports
+`coverage: partial`, naming the addresses it scanned and stating outright that a token
+outside that set is invisible. The indexer is an upgrade path, never a requirement.
+
+> ⚠️ `defi_data` is deliberately **not** in the `POLYROB_LOCAL` safe group, unlike the
+> other interactive read tools. Production runs `POLYROB_LOCAL=1` beside a live mainnet
+> wallet, so joining that group would switch this on for the live agent at the next
+> deploy. Enabling it is an explicit operator decision.
+
+### 10.2 `defi_trade` — transfers behind a transaction guard (`DEFI_TRADE_ENABLED`, default OFF)
+
+**This one can move real funds.** One verb today — `transfer` — and `dry_run` defaults
+to `true`, so moving funds requires saying so explicitly.
+
+Every call routes through `core/wallet/tx_guard.py`, the single choke point: **no
+value-moving transaction is broadcast without `Decision(allowed=True)`.** The bound is
+not "we only wrote safe verbs" — that stops being a security property the moment the
+agent supplies its own calldata. It is: **simulate the transaction, measure its observed
+asset and allowance deltas, assert them against a declared intent, and refuse on any
+disagreement or any probe failure.** Effects are *measured*, never inferred from the
+caller's own calldata — checking a declaration against itself is no check at all.
+
+Nine ordered gates, every one fail-closed:
+
+1. **Owner kill-switch** — a probe failure counts as halted.
+2. **Turn origin** — a forged, self-wake, delegation-result, delegated-leaf or
+   autonomous turn is refused, and an *unprovable* origin refuses.
+3. **Structural** — zero amount, zero/burn destination.
+4. **RPC trust** — refuses to arm on the shared public endpoint. Simulation, deltas and
+   caps all read from the RPC, so it cannot be the trust anchor for moving money; pin
+   `DEFI_EVM_RPC_BASE`.
+5. **Simulation trustworthiness** — a revert, an RPC error or an unreadable balance
+   refuses. Simulation runs as one `eth_simulateV1` bundle (`[reads, tx, reads]`) so
+   state carries between calls and the deltas are real; if the node does not support it,
+   the guard refuses rather than falling back.
+6. **Delta assertion** — outflow ≤ declared, and a **measured-zero outflow on a declared
+   send refuses** (zero is never a cheap transfer; it is an unmeasured one). An
+   *undeclared* allowance grant refuses outright — a hidden `approve` is the one effect a
+   USD cap cannot bound, because the drain happens in a later transaction the cap never
+   sees.
+7. **Pricing** — an unpriceable outflow or unknown decimals refuses. No cap can bound a
+   number you do not have.
+8. **Caps** — the per-tx ceiling, rolling daily cap and replay guard, held under a
+   reservation across authorize → broadcast → record so two concurrent transfers cannot
+   both clear a nearly-exhausted cap.
+9. **Approval lane** — above `DEFI_AUTONOMOUS_MAX_USD` (default `$25`) the call returns
+   `lane=owner_queue` with `allowed=False`. A queue lane is not an execute grant.
+
+Result rendering is honest by construction: a refusal says **NOT SENT**; an
+`owner_queue` lane says it did not execute; a reverted receipt says the transfer did
+**not** happen but gas was spent (and the spend is still recorded — gas went and a nonce
+was consumed); a receipt that never arrived says **BROADCAST BUT NOT CONFIRMED** and
+warns against blind retry.
+
+The signing perimeter is deliberately narrow. Transaction signing **refuses a
+transaction with no `chainId`** (an unpinned chain is EIP-155 replay exposure across
+every EVM chain the address exists on), chain identity is pinned from config and never
+read from the RPC, and a preflight verifies the node actually serves the expected chain
+before broadcasting. **Typed-data signing is kept off the money path entirely** — a
+signed EIP-2612/Permit2 payload is not a transaction, so it would never reach the guard:
+no simulation, no delta, no cap, no audit row, and the drain happens later in a
+transaction the agent never sees.
+
+`defi_trade` is classified `money` + `high_impact` + `delegate_blocked`, so it is
+explicit-grant-only (the agent cannot self-serve it via `load_tool`), never reachable by
+a delegated sub-agent, and never in the default toolset. Its `transfer` verb is in
+`PAYMENT_APPROVAL_TOOLS` on the **spend** side — irreversible and self-custodial, with
+no venue to dispute it, so never act-and-report. All of this is ANDed with — never a
+replacement for — `AGENT_WALLET_MAX_PER_TX_USD`, `WALLET_DAILY_CAP_USD`, the owner
+kill-switch and the `owner_queue` lane.
+
+**What the mechanism cannot see**, stated rather than implied: the declaration and the
+calldata can share an author (prompt injection authors both, and they will agree — the
+turn-origin refusal and the caps are the defence there, not the delta assertion); a
+permit signature never reaches the guard at all; and the RPC is the oracle for
+everything the guard knows.
+
+```bash
+# Sight only — the safe posture to start from
+DEFI_DATA_ENABLED=true
+DEFI_EVM_RPC_BASE=https://base-mainnet.your-provider.example/v2/KEY
+# ALCHEMY_API_KEY=…            # optional: complete portfolio enumeration
+
+# Adding spend — requires a pinned RPC; keep the autonomous ceiling low
+DEFI_TRADE_ENABLED=true
+DEFI_AUTONOMOUS_MAX_USD=5      # above this, every transfer waits for an owner tap
+WALLET_DAILY_CAP_USD=25
+PAYMENT_APPROVAL_MODE=approve
+```
+
+---
+
+## 11. Crypto trading tools (`tools/hyperliquid/`, `tools/polymarket/`)
 
 Beyond payments, the agent can trade — **but live trading is dry-run by default and
 double-gated.** Both are in `DELEGATE_BLOCKED_TOOLS` and the correspondent high-impact
@@ -478,7 +618,7 @@ set.
 
 ---
 
-## 11. Accounting — the unified ledger (`modules/credits/unified_ledger.py`)
+## 12. Accounting — the unified ledger (`modules/credits/unified_ledger.py`)
 
 One read-only model joins **two ledgers that are never summed**, tenant-scoped,
 each fail-open:
@@ -500,7 +640,7 @@ Money line, and Telegram `/recap`.
 
 ---
 
-## 12. Deployment recipes
+## 13. Deployment recipes
 
 **No payments (default).** Set nothing. The invoice tool is absent; `/finance` shows
 zeros; nothing crypto runs.
@@ -543,7 +683,7 @@ flags (`SUBSCRIPTIONS_ENABLED`, `USAGE_INVOICE_BRIDGE_ENABLED`,
 
 ---
 
-## 13. Flag reference
+## 14. Flag reference
 
 `docs/CONFIGURATION.md` is the authoritative SSOT (each row has a code anchor); run
 `polyrob doctor --flags` for the live runtime view. The complete money/crypto flag set,
@@ -587,6 +727,11 @@ with current defaults:
 | `CREDIT_SENTINEL_ENABLED` / `BILLING_FAILOVER_ENABLED` | ON / ON | Credit-death latch / provider failover |
 | `DEPOSIT_MONITOR_ENABLED` / `PAYMENT_MASTER_SEED` | OFF / unset | Crypto deposit monitor + address derivation |
 | `TREASURY_SWEEPER_ENABLED` / `TREASURY_ADDRESS` / `SWEEP_INTERVAL` | OFF / unset / `3600` | Sweeps deposit balances into the treasury (fund-moving; needs the flag AND the address) |
+| `DEFI_DATA_ENABLED` | OFF | Read-only on-chain token sight (`defi_data`) — never in the local safe group |
+| `DEFI_TRADE_ENABLED` | OFF | On-chain transfers (`defi_trade`) — can move real funds; needs a pinned RPC |
+| `DEFI_AUTONOMOUS_MAX_USD` | `25` | Per-tx ceiling below which a transfer may execute autonomously; above it → `owner_queue` |
+| `DEFI_EVM_RPC_BASE` | `https://mainnet.base.org` | Operator-pinned Base JSON-RPC; `tx_guard` refuses to arm on the shared public default |
+| `ALCHEMY_API_KEY` | unset | Optional holdings indexer — upgrades `portfolio` from an honest partial scan to complete |
 | `CRYPTO_TRADE_LIVE_ENABLED` | OFF | Master live-trade switch |
 | `HYPERLIQUID_TRADING_ENABLED` / `POLYMARKET_TRADING_ENABLED` | OFF / OFF | Per-venue live trade |
 | `HYPERLIQUID_TRADE_MAX_USD` / `POLYMARKET_TRADE_MAX_USD` | `5` / `5` | Per-venue trade caps |

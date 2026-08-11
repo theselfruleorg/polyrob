@@ -29,12 +29,7 @@ from typing import Optional
 # patterns — it deliberately omits the aggressive hex/base64 catch-alls (see docstring).
 from core.secret_patterns import (  # noqa: E402
     REDACTED,
-    PEM_RE as _PEM_RE,
-    BEARER_RE as _BEARER_RE,
-    KV_RE as _KV_RE,
-    PROVIDER_KEY_RE as _PROVIDER_KEY_RE,
-    POLYROB_KEY_RE as _ROB_KEY_RE,
-    AWS_RE as _AWS_RE,
+    apply_ssot_shapes,
 )
 
 
@@ -48,10 +43,7 @@ def scrub_secret_shapes(text: Optional[str]) -> str:
     """
     if not text:
         return ""
-    out = _PEM_RE.sub(REDACTED, text)
-    out = _BEARER_RE.sub(REDACTED, out)
-    out = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
-    out = _PROVIDER_KEY_RE.sub(REDACTED, out)
-    out = _ROB_KEY_RE.sub(REDACTED, out)
-    out = _AWS_RE.sub(REDACTED, out)
+    # Ordered battery lives in ONE place (core/secret_patterns.apply_ssot_shapes)
+    # so this scrubber, the logging filter, and the CLI display scrubber can't drift.
+    out = apply_ssot_shapes(text)
     return out

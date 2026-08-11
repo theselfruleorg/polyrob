@@ -192,26 +192,14 @@ async def _ensure_pending_amount_unique_index(database) -> None:
             _PENDING_AMOUNT_INDEX, e)
 
 
-async def _resolve_db(db=None):
-    if db is not None:
-        return db
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    return container.get_service("database_manager")
+from modules.x402._db import resolve_db as _resolve_db  # shared plumbing (one home)
 
 
 def _emit(kind: str, *, user_id: str, session_id: str = "", attrs: Optional[dict] = None) -> None:
-    """First-class money telemetry (fail-open). attrs passed as an explicit dict —
-    the record() reserved-kwarg collision landmine."""
-    try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
-        if event_log_enabled():
-            get_event_log().record(
-                kind, user_id=user_id, session_id=session_id,
-                source="x402_invoice", attrs=attrs or {},
-            )
-    except Exception:
-        pass
+    """First-class money telemetry — thin label-binding over the shared
+    ``modules.x402._db.emit`` (the body was duplicated in subscriptions.py)."""
+    from modules.x402._db import emit
+    emit(kind, source="x402_invoice", user_id=user_id, session_id=session_id, attrs=attrs)
 
 
 def _row_metadata(row: Dict[str, Any]) -> dict:

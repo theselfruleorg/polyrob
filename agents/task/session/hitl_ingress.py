@@ -37,7 +37,20 @@ class HITLIngressMixin:
             self._correspondent_tainted = True
 
     def _clear_correspondent_taint(self) -> None:
-        """A genuine owner turn re-opens the gate — clear the flag AND the sources."""
+        """A genuine owner turn re-opens the gate — clear the flag AND the sources.
+
+        ⚠️ Called from the DRAIN point (agents/task/agent/core/user_ingress.py::
+        _update_forged_turn_marker), not from submit_user_message. Clearing at submit
+        time cleared it when the message was merely QUEUED — including on the three
+        paths where submit accepts nothing at all: target agent not found (silent
+        return), pending-queue full, and HITL-queue full (both raise
+        MessageQueueFullError). In each case the gate re-opened on untrusted
+        correspondent data with no owner turn ever entering the session.
+
+        Draining is the point the owner's message provably enters the turn, and it is
+        where the sibling forged-turn marker is already recomputed for the same
+        "is the owner driving?" question — one place, one answer.
+        """
         with _TAINT_LOCK:
             self._correspondent_tainted = False
             self._correspondent_taint_sources = set()
@@ -60,11 +73,6 @@ class HITLIngressMixin:
 
         if metadata is None:
             metadata = {}
-
-        # WS-A: a genuine owner/continuation turn clears any correspondent taint — the
-        # owner is driving again, so the capability gate re-opens high-impact tools.
-        if kind in _TRUSTED_CONTEXT_REF_KINDS:
-            self._clear_correspondent_taint()
 
         # C1: expand @file/@folder/@diff/@url references for trusted human intake only
         # (allowlist). Forged/system kinds are never expanded — see _TRUSTED_CONTEXT_REF_KINDS.

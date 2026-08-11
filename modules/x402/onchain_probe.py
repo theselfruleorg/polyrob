@@ -67,7 +67,7 @@ def scan_treasury_transfers(
     treasury: str,
     from_block: int,
     to_block: int,
-) -> List[Dict[str, Any]]:
+) -> Optional[List[Dict[str, Any]]]:
     """USDC ``Transfer(from, to=treasury, value)`` logs in
     ``[from_block, to_block]`` (inclusive), fetched via `eth_getLogs`
     filtered server-side on the `to` topic — only transfers INTO the
@@ -76,8 +76,14 @@ def scan_treasury_transfers(
     Returns ``[{tx_hash, from, amount_usd, block}, ...]``; ``amount_usd`` is
     ``value / 10**6`` rounded to 6 decimals (USDC's own precision) so it
     compares exactly against the ``amount_usd`` REAL column on the invoice
-    table. Any RPC or malformed-log error is swallowed — this returns ``[]``
-    rather than ever raising into the watcher's tick.
+    table.
+
+    **Return contract (audit 2026-08-07 #1).** ``None`` means the range was NOT
+    scanned (RPC error/timeout) — the caller MUST NOT advance its checkpoint
+    past it. ``[]`` means the range was scanned and genuinely held no transfers.
+    Conflating the two silently burned block ranges containing real payments,
+    unrecoverably, because ``advance_scan_checkpoint`` refuses to regress. Still
+    never raises into the watcher's tick.
     """
     if from_block > to_block:
         return []
@@ -91,9 +97,16 @@ def scan_treasury_transfers(
         logs = rpc("eth_getLogs", params)
     except Exception:
         logger.warning(
-            "onchain_probe: eth_getLogs failed (blocks %s..%s)",
+            "onchain_probe: eth_getLogs FAILED (blocks %s..%s) — range NOT scanned; "
+            "the settlement checkpoint must not advance past it",
             from_block, to_block, exc_info=True)
-        return []
+        return None
+    if logs is None:
+        # Defensive: a caller-supplied rpc that yields None is not an empty range.
+        logger.warning(
+            "onchain_probe: eth_getLogs returned no result (blocks %s..%s) — treating as UNSCANNED",
+            from_block, to_block)
+        return None
     if not logs:
         return []
     out: List[Dict[str, Any]] = []

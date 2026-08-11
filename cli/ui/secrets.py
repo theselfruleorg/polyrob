@@ -33,12 +33,7 @@ REDACTED = "«redacted»"
 # its OWN REDACTED marker ("«redacted»", above) — only the regexes are shared. The
 # cli-only patterns (Google/Slack/GitHub/hex/base64 catch-alls) stay local below.
 from core.secret_patterns import (  # noqa: E402
-    PEM_RE as _PEM_RE,
-    BEARER_RE as _BEARER_RE,
-    KV_RE as _KV_RE,
-    PROVIDER_KEY_RE as _PROVIDER_KEY_RE,
-    POLYROB_KEY_RE as _ROB_KEY_RE,
-    AWS_RE as _AWS_RE,
+    apply_ssot_shapes,
 )
 
 #: Google API key (e.g. Gemini ``AIza…`` — 39 chars, under the base64 rule).
@@ -68,14 +63,11 @@ def scrub_secrets(text: Optional[str]) -> str:
     """
     if not text:
         return ""
-    out = _PEM_RE.sub(REDACTED, text)
-    # Bearer BEFORE the kv rule: ``Authorization: Bearer <jwt>`` — the kv value
-    # stops at the first space (it would redact only "Bearer", leaving the token).
-    out = _BEARER_RE.sub(REDACTED, out)
-    out = _KV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", out)
-    out = _PROVIDER_KEY_RE.sub(REDACTED, out)
-    out = _ROB_KEY_RE.sub(REDACTED, out)
-    out = _AWS_RE.sub(REDACTED, out)
+    # Shared ordered battery (PEM → Bearer → KV → provider → rob → AWS → JWT) —
+    # ONE home in core/secret_patterns.apply_ssot_shapes so the three scrubbers
+    # can't drift. Display-only extras + catch-alls layer AFTER it (JWT before
+    # hex/base64 so a three-segment token redacts as one unit).
+    out = apply_ssot_shapes(text, REDACTED)
     out = _GOOGLE_RE.sub(REDACTED, out)
     out = _SLACK_RE.sub(REDACTED, out)
     out = _GITHUB_RE.sub(REDACTED, out)

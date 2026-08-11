@@ -448,59 +448,10 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 
 		# Log registered actions
 		self.logger.info(f"✨ Controller initialized with {self.registry.get_action_count()} actions")
-		
-		# Ensure the normalize_path method exists
-		self._ensure_normalize_path_exists()
-
-
-
-
-
 
 	# REMOVED: _register_todo_actions method - functionality moved to TaskTool
-
-	def _ensure_normalize_path_exists(self):
-		"""Ensure the normalize_path method exists and is usable.
-		This method is called during initialization to make sure file operations can use path normalization.
-		"""
-		if not hasattr(self, '_normalize_path'):
-			# Define the normalize_path method if it doesn't exist
-			def _normalize_path(self, file_path: str) -> str:
-				"""Normalize a file path using PathManager.
-
-				This is a simple wrapper that delegates all path normalization
-				to the centralized PathManager.
-
-				Args:
-					file_path: Path to normalize
-
-				Returns:
-					Normalized path within the workspace directory
-				"""
-				import os
-				from agents.task.path import pm
-
-				if not file_path:
-					raise ValueError("File path cannot be empty")
-
-				# Ensure session_id is set
-				if not hasattr(self, 'session_id') or not self.session_id:
-					raise ValueError("No session_id available for path normalization")
-
-				# Delegate to PathManager's normalize_path
-				normalized_path = pm().normalize_path(file_path, session_id=self.session_id)
-
-				# Ensure the directory exists for the normalized path
-				if normalized_path and normalized_path != file_path:
-					os.makedirs(os.path.dirname(normalized_path), exist_ok=True)
-
-				self.logger.debug(f"Normalized path: {file_path} -> {normalized_path}")
-				return normalized_path
-				
-			# Bind the method to the class
-			import types
-			self._normalize_path = types.MethodType(_normalize_path, self)
-
+	# REMOVED: _ensure_normalize_path_exists - monkey-patched a _normalize_path
+	# nothing ever called on the Controller (file ops use FileSystem._normalize_path)
 
 	# ===== Tool Management Methods =====
 

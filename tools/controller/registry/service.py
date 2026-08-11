@@ -1069,12 +1069,20 @@ class Registry:
 		"""
 		provider_lower = provider.lower()
 
-		# Providers with native tool support
-		# DeepSeek V3+ supports OpenAI-compatible function calling
-		# Docs: https://api-docs.deepseek.com/guides/function_calling
-		# OpenRouter models support native tool calling via OpenAI-compatible API
-		native_providers = ["openai", "anthropic", "gemini", "google", "deepseek", "openrouter", "nvidia"]
+		# Proposal 024 (L0): the ProviderSpec registry is the SSOT for this
+		# capability — exact-name/alias match answers FIRST (the legacy substring
+		# list below used to shadow it and contradicted the spec for deepseek,
+		# whose spec declares supports_native_tools=False).
+		try:
+			from modules.llm.provider_spec import get_spec
+			spec = get_spec(provider_lower)
+			if spec is not None:
+				return bool(spec.supports_native_tools)
+		except Exception:
+			pass
 
+		# Legacy fallback for names with no spec row (substring match preserved).
+		native_providers = ["openai", "anthropic", "gemini", "google", "deepseek", "openrouter", "nvidia"]
 		return any(p in provider_lower for p in native_providers)
 
 	def tool_call_to_action(self, tool_name: str, args: Dict[str, Any]) -> ActionModel:

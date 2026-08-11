@@ -112,7 +112,3 @@ async def teardown_session(session_id: str) -> None:
             await backend.teardown()
         except Exception:
             pass
-
-
-def _all_session_ids() -> List[str]:
-    return list(_POOL.keys())

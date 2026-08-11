@@ -51,6 +51,34 @@ def _redact_llm_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 class LLMManager(BaseComponent):
     """Service for managing LLM clients and configurations."""
 
+    @staticmethod
+    def _provider_display(provider: str) -> str:
+        """Human label for a provider name (profile display_name; degrades to the
+        raw name — never ``str.title()``, which mangles OpenRouter/NVIDIA/user rows)."""
+        try:
+            from modules.llm.profiles import get_profile
+            prof = get_profile(provider)
+            if prof is not None and prof.display_name:
+                return prof.display_name
+        except Exception:
+            pass
+        return provider
+
+    @staticmethod
+    def _provider_unavailable_message(provider: str, available: list) -> str:
+        """The remedy a user sees when a requested provider has no client.
+
+        Must name remedies that work on an INSTALLED box (the old string pointed
+        at repo-relative ``config/.env.<ENV>``, which does not exist for a pip
+        install)."""
+        return (
+            f"LLM client for provider '{provider}' is not available. "
+            f"Available providers: {', '.join(available) if available else 'none'}. "
+            f"Run `polyrob doctor` to see credential state; set a key with "
+            f"`polyrob init` or `polyrob config set <PROVIDER>_API_KEY <value>`, "
+            f"or declare a custom endpoint in ~/.polyrob/providers.yaml."
+        )
+
     def __init__(self, name: str, config: BotConfig, container: Optional[DependencyContainer] = None):
         """Initialize LLM Manager service."""
         super().__init__(name=name, config=config, container=container)
@@ -62,14 +90,46 @@ class LLMManager(BaseComponent):
         self._fallback_enabled = True  # Always enable fallback
         self._initialization_attempts = {}  # Track initialization attempts
         
-        # Hardcoded fallback hierarchy (Dec 2025)
+        # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10);
+        # the legacy literal is the LLM_PROVIDER_REGISTRY=off kill-switch path.
         # NOTE: deepseek_client DISABLED - use OpenRouter's DeepSeek instead
-        self.FALLBACK_HIERARCHY = [
+        self.FALLBACK_HIERARCHY = self._build_fallback_hierarchy()
+
+    @staticmethod
+    def _build_fallback_hierarchy():
+        """(client_name, model) fallback pairs.
+
+        Derived: fallback-eligible specs ordered by their ``fallback_rank``
+        (mirrors the legacy openai→anthropic→openrouter→gemini order exactly —
+        pinned by the characterization suite), models from the DEFAULT_MODELS
+        policy table (or the spec's own default for a providers.yaml row that
+        opted into ``fallback_eligible: true``, appended after the built-ins).
+        """
+        legacy = [
             ('openai_client', 'gpt-5'),  # Ultimate fallback - GPT-5
             ('anthropic_client', 'claude-sonnet-4-5'),
-            ('openrouter_client', 'z-ai/glm-5.2'),  # OpenRouter default = Z.AI GLM flagship (was grok-4.3)
+            ('openrouter_client', 'z-ai/glm-5.2'),  # OpenRouter default = Z.AI GLM flagship
             ('gemini_client', 'gemini-2.5-flash'),
         ]
+        try:
+            from modules.llm.llm_client_registry import DEFAULT_MODELS
+            from modules.llm.provider_spec import get_specs, provider_registry_enabled
+            if not provider_registry_enabled():
+                return legacy
+            eligible = [s for s in get_specs() if s.fallback_eligible]
+            ranked = sorted(
+                (s for s in eligible if s.fallback_rank is not None),
+                key=lambda s: s.fallback_rank,
+            )
+            unranked = [s for s in eligible if s.fallback_rank is None]
+            out = []
+            for s in ranked + unranked:
+                model = s.default_model or DEFAULT_MODELS.get(s.name)
+                if model:
+                    out.append((f"{s.name}_client", model))
+            return out or legacy
+        except Exception:
+            return legacy
 
     def _configure_client_token_limits(self, client: LLMClient, model_name: str) -> None:
         """Configure client with appropriate token limits from model registry.
@@ -155,7 +215,7 @@ class LLMManager(BaseComponent):
                                 # Use existing client
                                 self.clients[service_name] = existing_client
                                 initialized_clients.append((service_name, existing_client))
-                                self.logger.info(f"Using existing {client_name.title()} LLM client from container")
+                                self.logger.info(f"Using existing {self._provider_display(client_name)} LLM client from container")
                                 continue
                         
                         # Create client instance with appropriate configuration
@@ -183,14 +243,14 @@ class LLMManager(BaseComponent):
                             self.container.register_service(service_name, client, is_optional=True)
                         
                         initialization_results.append((client_name, True, None))
-                        self.logger.info(f"✅ {client_name.title()} LLM client initialized with model {model_type}")
+                        self.logger.info(f"✅ {self._provider_display(client_name)} LLM client initialized with model {model_type}")
                         
                     except Exception as e:
                         initialization_results.append((client_name, False, str(e)))
                         self.logger.warning(f"❌ Failed to initialize {client_name} client: {e}")
                         continue
                 else:
-                    self.logger.debug(f"⚠️ {client_name.title()} LLM client not configured (missing config or API key)")
+                    self.logger.debug(f"⚠️ {self._provider_display(client_name)} LLM client not configured (missing config or API key)")
 
             # Set primary client based on config preference or first available
             await self._set_primary_client()
@@ -225,7 +285,7 @@ class LLMManager(BaseComponent):
             raise LLMError(f"LLM manager initialization failed: {e}")
 
     async def _ensure_fallback_client(self) -> None:
-        """Ensure OpenAI GPT-4.1 client is available as fallback."""
+        """Ensure an OpenAI fallback client (gpt-5) is available."""
         try:
             openai_config = self.llm_config.get('openai', {})
             
@@ -236,12 +296,12 @@ class LLMManager(BaseComponent):
             )
             
             if not api_key:
-                self.logger.warning("No OpenAI API key found - fallback client unavailable")
+                self.logger.debug("No OpenAI API key found - fallback client unavailable")
                 return
             
-            # Create fallback OpenAI client with GPT-4.1
+            # Create fallback OpenAI client
             fallback_client = OpenAIClient(self.config, name="openai_fallback_client")
-            fallback_client.model_type = 'gpt-5'  # Always use GPT-4.1 for fallback
+            fallback_client.model_type = 'gpt-5'  # Always use gpt-5 for fallback
             fallback_client.api_key = api_key
             
             # FIXED: Configure fallback client with proper token limits from registry
@@ -255,7 +315,7 @@ class LLMManager(BaseComponent):
             if self.container:
                 self.container.register_service('openai_fallback_client', fallback_client, is_optional=True)
             
-            self.logger.info("✅ OpenAI GPT-4.1 fallback client initialized")
+            self.logger.info("✅ OpenAI fallback client initialized (gpt-5)")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize fallback client: {e}")
@@ -326,7 +386,8 @@ class LLMManager(BaseComponent):
             
             # Try to initialize the client if it doesn't exist
             provider = client_name.replace('_client', '')
-            if provider in ['anthropic', 'openai', 'deepseek', 'gemini', 'openrouter', 'nvidia']:
+            from modules.llm.model_registry import PROVIDER_CONFIG
+            if provider in PROVIDER_CONFIG:
                 try:
                     client = await self._try_initialize_client(provider)
                     if client:
@@ -350,37 +411,6 @@ class LLMManager(BaseComponent):
             self.logger.warning(f"No primary client available, using: {client.name}")
             return client
         
-        return None
-
-    async def get_client_for_provider(self, provider: str) -> Optional[LLMClient]:
-        """Get a client instance for a specific provider, initializing on demand if needed.
-
-        Args:
-            provider: Provider name (e.g., 'openai', 'anthropic')
-
-        Returns:
-            LLMClient or None if unavailable
-
-        Note:
-            This method does NOT fall back to OpenAI if the requested provider isn't available.
-            Use get_client_with_fallback() if you want automatic fallback behavior.
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # Exact client if already available
-        client_name = f"{provider}_client"
-        if client_name in self.clients:
-            return self.clients[client_name]
-
-        # Try to initialize on demand
-        client = await self._try_initialize_client(provider)
-        if client:
-            return client
-
-        # FIXED: Don't fall back to OpenAI - return None if provider unavailable
-        # Callers should check for None and handle appropriately
-        self.logger.warning(f"Client for provider '{provider}' is not available")
         return None
 
     async def get_client_with_fallback(self, preferred_client: Optional[str] = None) -> Optional[LLMClient]:
@@ -533,39 +563,6 @@ class LLMManager(BaseComponent):
             self.logger.warning(f"Could not build isolated {provider} client for {model}: {e}")
             return None
 
-    async def set_primary_client(self, client_name: str) -> bool:
-        """Set the primary LLM client.
-        
-        Args:
-            client_name: Name of the client to set as primary
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        if client_name not in self.clients:
-            # Try to initialize the client
-            provider = client_name.replace('_client', '')
-            client = await self._try_initialize_client(provider)
-            if not client:
-                self.logger.error(f"Cannot set primary client - {client_name} not available")
-                return False
-        
-        self.primary_client_name = client_name
-        self.logger.info(f"Primary client set to: {client_name}")
-        return True
-
-    async def enable_fallback(self, enabled: bool = True) -> None:
-        """Enable or disable fallback mechanism.
-        
-        Args:
-            enabled: Whether to enable fallback
-        """
-        self._fallback_enabled = enabled
-        self.logger.info(f"Fallback mechanism {'enabled' if enabled else 'disabled'}")
-
     async def _cleanup(self) -> None:
         """Clean up LLM Manager resources."""
         try:
@@ -584,14 +581,6 @@ class LLMManager(BaseComponent):
         except Exception as e:
             self.logger.error(f"Error during LLM Manager cleanup: {e}")
             raise
-
-    async def get_primary_client(self) -> Optional[LLMClient]:
-        """Get the primary LLM client."""
-        if not self._initialized:
-            await self.initialize()
-        if not self.primary_client_name:
-            return None
-        return self.clients.get(self.primary_client_name)
 
     async def get_available_models(self, provider: Optional[str] = None) -> List[Tuple[str, str]]:
         """Get a flat list of available models with their providers.
@@ -707,86 +696,6 @@ class LLMManager(BaseComponent):
         
         return result
 
-    async def update_client_settings(self, client_name: str, settings: Dict[str, Any]) -> bool:
-        """Update settings for a specific LLM client."""
-        if not self._initialized:
-            await self.initialize()
-            
-        client = self.clients.get(client_name)
-        if not client:
-            self.logger.warning(f"Client '{client_name}' not found for settings update")
-            return False
-        
-        try:
-            # Use the new update_settings method if available
-            if hasattr(client, 'update_settings'):
-                client.update_settings(settings)
-                self.logger.info(f"Updated {client_name} settings using update_settings() method")
-                
-                # FIXED: Reconfigure token limits if model was changed
-                if 'model' in settings or 'model_type' in settings:
-                    new_model = settings.get('model') or settings.get('model_type')
-                    if new_model:
-                        self._configure_client_token_limits(client, new_model)
-                        self.logger.info(f"Reconfigured token limits for {client_name} with new model {new_model}")
-                
-                return True
-                
-            # Legacy fallback - update settings directly
-            for key, value in settings.items():
-                if key == 'model_type':
-                    # Special handling for model type - requires token limit reconfiguration
-                    if hasattr(client, 'model_type'):
-                        prev_model = getattr(client, 'model_type', 'unknown')
-                        setattr(client, 'model_type', value)
-                        
-                        # Reconfigure token limits for new model
-                        self._configure_client_token_limits(client, value)
-                        self.logger.info(f"Updated {client_name} model_type: {prev_model} → {value}")
-                        
-                elif hasattr(client, key):
-                    # Log the previous value for debugging
-                    prev_val = getattr(client, key)
-                    setattr(client, key, value)
-                    self.logger.info(f"Updated {client_name} setting {key}={value} (was {prev_val})")
-                else:
-                    self.logger.warning(f"Client {client_name} doesn't have attribute {key}, skipping")
-            
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to update {client_name} settings: {e}")
-            return False
-
-    async def validate_client(self, client_name: str) -> Tuple[bool, Optional[str]]:
-        """Validate that a client is working correctly."""
-        if not self._initialized:
-            await self.initialize()
-            
-        client = self.clients.get(client_name)
-        if not client:
-            return False, "Client not found"
-        
-        try:
-            if hasattr(client, 'validate'):
-                # Some clients have a dedicated validation method
-                await client.validate()
-            else:
-                # Otherwise, try a simple generation
-                await client.generate_response(
-                    prompt="Hello",
-                    max_tokens=5
-                )
-                
-            # Special checking for DeepSeek client
-            if 'deepseek' in client_name.lower():
-                self.logger.info(f"DeepSeek client {client.model_type} validated successfully")
-                
-            return True, None
-        except Exception as e:
-            error_msg = str(e)
-            self.logger.error(f"Validation failed for {client_name}: {error_msg}")
-            return False, error_msg
-
     async def get_chat_model(self,
                                provider: str,
                                model: str,
@@ -848,17 +757,19 @@ class LLMManager(BaseComponent):
             # List available providers for helpful error message
             available = [name.replace('_client', '') for name in self.clients.keys()]
 
-            raise ValueError(
-                f"LLM client for provider '{provider}' is not available. "
-                f"Available providers: {', '.join(available) if available else 'none'}. "
-                f"Check your API keys in config/.env.{os.environ.get('ENV', 'development')}"
-            )
+            raise ValueError(self._provider_unavailable_message(provider, available))
 
         # CRITICAL: Verify we got the RIGHT client type, not a fallback
         # get_client() can return a fallback client if the requested one isn't available
         # This causes confusing errors where GeminiAdapter gets an OpenAIClient
+        # 024 fix: a spec-backed generic client (OpenAICompatClient /
+        # AnthropicCompatClient) carries its provider on `_spec.name` — the
+        # class-name substring test below can NEVER match it ("ollama" is not in
+        # "openaicompatclient"), so check the spec identity first.
+        client_spec = getattr(llm_client, "_spec", None)
+        spec_matches = client_spec is not None and getattr(client_spec, "name", None) == provider
         client_type_name = type(llm_client).__name__.lower()
-        if provider not in client_type_name:
+        if not spec_matches and provider not in client_type_name:
             self.logger.error(f"Client type mismatch: requested {provider} but got {type(llm_client).__name__}")
             available = [name.replace('_client', '') for name in self.clients.keys()]
             raise ValueError(
@@ -1005,32 +916,3 @@ class LLMManager(BaseComponent):
             f"Excluded: {exclude_providers}"
         )
         return None
-
-    def get_provider_from_model(self, model_name: str) -> str:
-        """Extract provider name from model name using model registry.
-        
-        REFACTORED (Dec 2025): Uses model_registry as single source of truth.
-        Removed redundant fallback pattern matching - model_registry handles
-        unknown models with its own fallback chain.
-        
-        Args:
-            model_name: Model name (e.g., 'gpt-5', 'claude-sonnet-4-5')
-            
-        Returns:
-            Provider name (e.g., 'openai', 'anthropic', 'gemini', 'deepseek')
-        """
-        if not model_name:
-            return 'unknown'
-        
-        # Use model registry as SINGLE SOURCE OF TRUTH
-        # model_registry.get_model() already handles unknown models with fallback chain
-        model_config = get_model_config(model_name)
-        if model_config and model_config.provider:
-            # M1 FIX: route through the single source of truth (includes NVIDIA + CUSTOM)
-            # instead of a hand-rolled map that drifts — the old map omitted NVIDIA, so
-            # Kimi/NVIDIA models returned 'unknown' (which also defeated billing failover's
-            # provider-exclusion bookkeeping).
-            from modules.llm.model_registry import canonical_provider_name
-            return canonical_provider_name(model_config.provider, default='unknown')
-
-        return 'unknown'

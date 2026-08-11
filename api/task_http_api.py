@@ -11,7 +11,6 @@ import os
 import time
 import uuid
 from datetime import datetime
-import aiofiles
 
 from api.session_routing import guard_remote
 import asyncio
@@ -1521,7 +1520,6 @@ async def inject_file_content_to_message(
     """
     from pathlib import Path
     from agents.task.path import pm
-    import aiofiles
     import base64
 
     # Get full file path
@@ -1639,7 +1637,6 @@ async def upload_document(
     """
     from pathlib import Path
     from agents.task.path import pm
-    import aiofiles
 
     try:
         # 1. Clean session ID

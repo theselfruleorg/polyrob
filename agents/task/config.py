@@ -261,21 +261,6 @@ class ScenarioStepModel(BaseModel):
     )
 
 
-class ScenarioModel(BaseModel):
-    """Multi-agent scenario definition"""
-    model_config = ConfigDict(extra='forbid')
-    
-    id: str = Field(description="Scenario identifier")
-    name: str = Field(description="Scenario name")
-    description: Optional[str] = Field(default=None, description="Scenario description")
-    mode: str = Field(default="sequential", description="Execution mode: sequential|parallel|handoff")
-    steps: List[ScenarioStepModel] = Field(description="Steps to execute")
-    parallel_params: Dict[str, Any] = Field(
-        default_factory=lambda: {"max_concurrency": 2},
-        description="Parameters for parallel execution"
-    )
-
-
 class TaskSessionConfig(BaseModel):
     """
     Complete configuration for an Task session.

@@ -21,13 +21,13 @@ import click
 
 def _service():
     from core.bootstrap import setup_project_path, setup_sqlite_compat
-    from core.runtime_paths import resolve_data_home
+    from core.runtime_paths import cron_db_path
     from cron.jobs import CronJobStore
     from cron.service import CronService
 
     setup_project_path()
     setup_sqlite_compat()
-    return CronService(CronJobStore(str(resolve_data_home() / "cron.db")))
+    return CronService(CronJobStore(cron_db_path()))
 
 
 def _tenant(user: Optional[str]) -> str:

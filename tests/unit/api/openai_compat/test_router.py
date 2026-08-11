@@ -63,6 +63,42 @@ def test_models_list(client_and_agent):
     assert any("/" in i for i in ids)  # provider/model slugs listed
 
 
+def test_models_list_excludes_non_initializable(client_and_agent):
+    """Q6 (UX assessment 2026-08-07): /v1/models must not advertise a model
+    that cannot run — deepseek's direct client is disabled."""
+    client, _ = client_and_agent
+    resp = client.get("/v1/models")
+    ids = [m["id"] for m in resp.json()["data"]]
+    assert ids  # still lists the initializable providers
+    assert not any(i.startswith("deepseek/") for i in ids)
+
+
+def test_models_list_includes_user_providers(client_and_agent, tmp_path, monkeypatch):
+    """Q6: /v1/models is the only discovery surface an OpenAI SDK client has —
+    a providers.yaml row's declared models must be listed, not just routable."""
+    path = tmp_path / "providers.yaml"
+    path.write_text(
+        "providers:\n"
+        "  ollama:\n"
+        "    base_url: http://127.0.0.1:11434/v1\n"
+        "    auth_type: none\n"
+        "    transport: chat_completions\n"
+        "    default_model: qwen3-coder:30b\n"
+        "    models: [qwen3-coder:30b, llama3.3:70b]\n"
+    )
+    monkeypatch.setenv("LLM_CUSTOM_PROVIDERS", str(path))
+    monkeypatch.setenv("LLM_PROVIDER_REGISTRY", "true")
+    from modules.llm.provider_spec import reset_provider_registry_cache
+    reset_provider_registry_cache()
+    try:
+        client, _ = client_and_agent
+        ids = [m["id"] for m in client.get("/v1/models").json()["data"]]
+        assert "ollama/qwen3-coder:30b" in ids
+        assert "ollama/llama3.3:70b" in ids
+    finally:
+        reset_provider_registry_cache()
+
+
 def test_stream_true_returns_sse(client_and_agent):
     client, _ = client_and_agent
     resp = client.post("/v1/chat/completions", json={

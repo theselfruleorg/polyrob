@@ -215,6 +215,12 @@ class SafetyLifecycleMixin:
         # Reset failure counters for fresh execution
         self.state.consecutive_failures = 0
 
+        # The tool-free-response counter is per-run too. It lives on the Agent rather
+        # than AgentState, so `state.consecutive_failures = 0` above never touched it
+        # and an empty response in a previous conversational turn still counted toward
+        # this turn's escalation.
+        self._empty_action_counter = 0
+
         # Reset loop detection state
         self.state.reset_loop_detection()
 

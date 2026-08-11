@@ -16,7 +16,7 @@ This module includes `_deep_parse_json_strings()` to recursively parse these
 stringified nested structures, fixing MCP tool calling issues.
 """
 
-from typing import Dict, List, Optional, Any, Union, Tuple, Set
+from typing import Dict, List, Optional, Any, Tuple, Set
 from dataclasses import dataclass, field, asdict
 from uuid import uuid4
 import json
@@ -165,11 +165,6 @@ from modules.llm.messages import (
     ToolMessage,
 )
 
-# Import constants from centralized location
-from agents.task.constants import (
-    TOOL_LOOKAHEAD_WINDOW
-)
-
 
 @dataclass
 class StandardToolCall:
@@ -190,15 +185,6 @@ class StandardToolCall:
             "id": self.id,
             "type": self.type
         }
-    
-    def to_openai_format(self) -> Dict[str, Any]:
-        """Convert to OpenAI tool call format for AIMessage.tool_calls"""
-        return {
-            "name": self.name,
-            "args": self.args,
-            "id": self.id,
-            "type": self.type
-        }
 
 
 class ToolCallBuilder:
@@ -212,149 +198,6 @@ class ToolCallBuilder:
 
     These are separate concerns and should NOT have overlapping logic.
     """
-
-    @staticmethod
-    def create_agent_output_call(agent_output: Any, tool_id: Optional[Union[str, int]] = None) -> StandardToolCall:
-        """Create a tool call for AgentOutput.
-
-        Args:
-            agent_output: The AgentOutput object to convert
-            tool_id: Optional specific ID to use
-
-        Returns:
-            StandardToolCall object
-        """
-        if tool_id is None:
-            tool_id = str(uuid4())
-        else:
-            tool_id = str(tool_id)
-
-        # Handle model dumping if available
-        if hasattr(agent_output, 'model_dump'):
-            args = agent_output.model_dump(mode='json', exclude_unset=True)
-        elif hasattr(agent_output, 'dict'):
-            args = agent_output.dict(exclude_unset=True)
-        else:
-            args = {"data": str(agent_output)}
-
-        return StandardToolCall(
-            name="AgentOutput",
-            args=args,
-            id=tool_id,
-            type="function"
-        )
-
-    @staticmethod
-    def create_tool_call(name: str, args: Dict[str, Any], tool_id: Optional[str] = None) -> StandardToolCall:
-        """Create a generic tool call.
-
-        Args:
-            name: Tool/function name
-            args: Arguments dictionary
-            tool_id: Optional specific ID to use
-
-        Returns:
-            StandardToolCall object
-        """
-        if tool_id is None:
-            tool_id = str(uuid4())
-
-        return StandardToolCall(
-            name=name,
-            args=args,
-            id=tool_id,
-            type="function"
-        )
-
-    @staticmethod
-    def build_tool_call_from_action(action: List[Dict[str, Any]], tool_call_id: str = None) -> 'StandardToolCall':
-        """Build a StandardToolCall from an action list.
-
-        Args:
-            action: List of action dictionaries
-            tool_call_id: Optional tool call ID (will generate if not provided)
-
-        Returns:
-            StandardToolCall object
-        """
-        if not action or not isinstance(action, list) or len(action) == 0:
-            # Return a default 'wait' action if no action provided
-            return StandardToolCall(
-                name="wait",
-                args={},
-                id=tool_call_id or str(uuid4()),
-                type="function"
-            )
-
-        # Take the first action (AutoV2 typically sends one action at a time)
-        first_action = action[0]
-
-        if not isinstance(first_action, dict) or len(first_action) == 0:
-            return StandardToolCall(
-                name="wait",
-                args={},
-                id=tool_call_id or str(uuid4()),
-                type="function"
-            )
-
-        # Extract action name and args
-        action_name = list(first_action.keys())[0]
-        action_args = first_action[action_name]
-
-        # Ensure args is a dict
-        if not isinstance(action_args, dict):
-            action_args = {"value": action_args} if action_args else {}
-
-        return StandardToolCall(
-            name=action_name,
-            args=action_args,
-            id=tool_call_id or str(uuid4()),
-            type="function"
-        )
-
-    @staticmethod
-    def validate_tool_call(tool_call: Dict[str, Any]) -> bool:
-        """Validate if a tool call has the required structure.
-
-        Args:
-            tool_call: Tool call dict to validate
-
-        Returns:
-            True if valid, False otherwise
-        """
-        required_fields = {"name", "id"}
-        optional_fields = {"args", "type"}
-
-        # Check required fields
-        if not all(field in tool_call for field in required_fields):
-            missing = required_fields - set(tool_call.keys())
-            logger.warning(f"Tool call missing required fields: {missing}")
-            return False
-
-        # Validate types
-        if not isinstance(tool_call.get("name"), str):
-            logger.warning(f"Tool call 'name' must be string, got {type(tool_call.get('name'))}")
-            return False
-
-        if not isinstance(tool_call.get("id"), str):
-            logger.warning(f"Tool call 'id' must be string, got {type(tool_call.get('id'))}")
-            return False
-
-        # Validate args if present
-        if "args" in tool_call:
-            if not isinstance(tool_call["args"], dict):
-                # Check if it's a JSON string (OpenAI format)
-                if isinstance(tool_call["args"], str):
-                    try:
-                        json.loads(tool_call["args"])
-                    except json.JSONDecodeError:
-                        logger.warning(f"Tool call 'args' is not valid JSON: {tool_call['args']}")
-                        return False
-                else:
-                    logger.warning(f"Tool call 'args' must be dict or JSON string, got {type(tool_call['args'])}")
-                    return False
-
-        return True
 
     @staticmethod
     def normalize_and_correct(tool_call: Any, provider: str = None, llm_content: str = None) -> Dict[str, Any]:

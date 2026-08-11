@@ -231,13 +231,25 @@ class ErrorRecoveryMixin:
 
 		# === PERMANENT/CRITICAL ERRORS - HALT IMMEDIATELY ===
 		# These errors indicate account-level issues that won't be resolved by fallback
+		# Type-gate the SUBSTRING arms (the isinstance arms are already safe). Bare
+		# text matching on an arbitrary exception halts the whole session with
+		# "check API configuration" for causes that have nothing to do with the
+		# provider: a sqlite3.OperationalError touching the shipped
+		# `billing_failures` table, a NameError naming a `billing_total` variable,
+		# an HTTP 500 on a path containing /402. This is the SAME false-positive
+		# class `_trip_sentinel_if_credit_death` was type-gated for above — that fix
+		# reached the sentinel latch (a side effect) but not this branch, which is
+		# the one that actually stops the agent.
+		_text_may_decide = isinstance(error, self._CREDIT_DEATH_EXCEPTION_TYPES)
 		is_permanent = (
 			isinstance(error, LLMPermanentError) or
 			isinstance(error, LLMAuthenticationError) or
-			'insufficient_quota' in error_str_lower or
-			'billing' in error_str_lower or
-			'invalid_api_key' in error_str_lower or
-			'account_deactivated' in error_str_lower
+			(_text_may_decide and (
+				'insufficient_quota' in error_str_lower or
+				'billing' in error_str_lower or
+				'invalid_api_key' in error_str_lower or
+				'account_deactivated' in error_str_lower
+			))
 		)
 
 		if is_permanent:

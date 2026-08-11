@@ -20,6 +20,7 @@ dry-run mode lets the first rollout observe transitions without applying them.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -169,8 +170,25 @@ class SkillCurator:
         """One curator pass: Phase 1 automatic transitions + episodic retention prune.
         Fail-open.
 
-        (Stays ``async`` for the ticker contract even though Phase 1 is synchronous.)
+        Every step below is synchronous SQLite + filesystem work, so the whole body is
+        offloaded to a worker thread. It used to run inline on the shared event loop:
+        the ticker awaits this coroutine on the SAME loop that serves live chat, API,
+        goal and cron sessions, and `core/sqlite_util.execute_retry` does a real
+        `time.sleep` (up to 15 retries x 0.15s) on write contention. One curator tick
+        during a concurrent memory write could therefore stall every session in the
+        process for seconds. The memory provider already routes its hot-path methods
+        through `run_in_executor` for exactly this reason; the curator's own calls into
+        it (prune_episodes / prune_memories / consolidate_notes) are plain `def` and
+        were not covered.
+
+        Ordering within the pass is unchanged — it runs as one sequential block, just
+        off the loop.
         """
+        return await asyncio.to_thread(self._run_once_blocking)
+
+    def _run_once_blocking(self) -> Dict[str, Any]:
+        """The curator pass body. Synchronous by nature (SQLite + files); callers must
+        keep it off the event loop — see run_once."""
         result: Dict[str, Any] = {}
         try:
             result["transitions"] = self.apply_automatic_transitions()

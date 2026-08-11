@@ -21,14 +21,13 @@ import time
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Tuple
 
+from core.env import bool_from
 from core.sqlite_util import execute_retry, wal_connect
-
-_BOOL_TRUE = {"1", "true", "yes", "on"}
 
 
 def pairing_required(env: Optional[Mapping[str, str]] = None) -> bool:
-    src = os.environ if env is None else env
-    return (src.get("POLYROB_REQUIRE_PAIRING", "") or "").strip().lower() in _BOOL_TRUE
+    # Repo-SSOT falsey-set semantics (core.env) — was a private opt-in truth set.
+    return bool_from(env, "POLYROB_REQUIRE_PAIRING", False)
 
 
 class PairingStore:
@@ -174,7 +173,7 @@ def guard_inbound(
         from core.instance import resolve_owner_principal
         local = (
             surface_id in _LOCAL_OWNER_SURFACES
-            and (os.getenv("POLYROB_LOCAL", "") or "").strip().lower() in _BOOL_TRUE
+            and bool_from(None, "POLYROB_LOCAL", False)
         )
         decision = evaluate_access(user_id, store=store,
                                    owner_principal=resolve_owner_principal(),

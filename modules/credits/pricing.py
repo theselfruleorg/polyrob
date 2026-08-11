@@ -5,7 +5,6 @@ SINGLE SOURCE OF TRUTH for all credit pricing and cost calculation.
 
 This config is used by:
 - modules/credits/usage_tracker.py (calculates and charges)
-- modules/credits/usage_meter.py (metering)
 - modules/credits/balance_manager.py (balance operations)
 - modules/auth/identity_mapper.py (welcome bonus, DEN allowance)
 - modules/auth/tier_manager.py (tier limits)
@@ -63,12 +62,6 @@ class PricingConfig:
     # Session creation cost (infrastructure setup)
     SESSION_CREATION_COST: int = int(os.environ.get("SESSION_CREATION_COST", "1"))
 
-    # Browser action costs
-    BROWSER_PAGE_LOAD_COST: float = float(os.environ.get("BROWSER_PAGE_LOAD_COST", "0.5"))
-    BROWSER_SCREENSHOT_COST: float = float(os.environ.get("BROWSER_SCREENSHOT_COST", "0.2"))
-    BROWSER_INTERACTION_COST: float = float(os.environ.get("BROWSER_INTERACTION_COST", "0.1"))
-    BROWSER_DEFAULT_COST: float = float(os.environ.get("BROWSER_DEFAULT_COST", "0.5"))
-
     # Special action costs
     VISION_CALL_COST: int = int(os.environ.get("VISION_CALL_COST", "2"))
     TOOL_CALL_COST: float = float(os.environ.get("TOOL_CALL_COST", "0.5"))
@@ -114,23 +107,6 @@ class PricingConfig:
         user_cost_usd = credits_charged * cls.CREDIT_VALUE_USD
 
         return credits_charged, user_cost_usd
-
-    @classmethod
-    def get_browser_action_cost(cls, action_type: str) -> float:
-        """Get cost for browser action.
-
-        Args:
-            action_type: Type of browser action (page_load, screenshot, interaction, etc.)
-
-        Returns:
-            Cost in credits
-        """
-        costs = {
-            "page_load": cls.BROWSER_PAGE_LOAD_COST,
-            "screenshot": cls.BROWSER_SCREENSHOT_COST,
-            "interaction": cls.BROWSER_INTERACTION_COST,
-        }
-        return costs.get(action_type, cls.BROWSER_DEFAULT_COST)
 
 
 # Create singleton instance for easy importing

@@ -21,9 +21,7 @@ from fastapi.responses import JSONResponse
 
 from api.a2a.models import (
     JSONRPCRequest, JSONRPCResponse, JSONRPCError, A2AErrorCode,
-    SendMessageRequest, GetTaskRequest, ListTasksRequest,
-    CancelTaskRequest, TaskResubscriptionRequest,
-    SetPushNotificationConfigRequest, PushNotificationConfig,
+    SendMessageRequest, PushNotificationConfig,
     A2AMessage, A2ATask, ListTasksResponse
 )
 from api.a2a.task_handler import A2ATaskHandler

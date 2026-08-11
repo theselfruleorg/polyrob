@@ -604,17 +604,8 @@ class OpenRouterClient(LLMClient):
     ) -> str:
         """Generate a response from the LLM."""
         try:
-            # Handle prompt formats
-            if messages is not None:
-                formatted_messages = messages
-            elif isinstance(prompt, list) and all(isinstance(m, dict) for m in prompt):
-                formatted_messages = prompt
-            elif isinstance(prompt, dict) and 'messages' in prompt:
-                formatted_messages = prompt['messages']
-            elif isinstance(prompt, str):
-                formatted_messages = [{"role": "user", "content": prompt}]
-            else:
-                formatted_messages = [{"role": "user", "content": "Hello"}]
+            # Handle prompt formats (shared base normalization)
+            formatted_messages, system = self._normalize_prompt(prompt, messages, system)
 
             # Add system message
             if system:
