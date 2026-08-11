@@ -356,10 +356,10 @@ def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monk
     # WOULD put x402_request in `reported` — proving the fix is load-bearing.
     gates, provider = approval.effective_approval_state("rob", tmp_path)
     assert provider == "auto_notify"
-    assert "x402_request" in gates
+    assert "x402_invoice_x402_request" in gates
     _queued_raw, reported_raw = approval.autonomous_gating_lanes(gates)
-    assert "x402_request" in reported_raw
-    assert "x402_request" not in _queued_raw  # not _ALWAYS_GATED_VERBS/pref-pinned
+    assert "x402_invoice_x402_request" in reported_raw
+    assert "x402_invoice_x402_request" not in _queued_raw  # not _ALWAYS_GATED_VERBS/pref-pinned
 
     import tools.controller.approval_queue as approval_queue_mod
 
@@ -391,11 +391,11 @@ def test_payment_tools_excluded_from_generic_reported_lane_wiring(tmp_path, monk
         if isinstance(prov, approval.AutoNotifyApprover)
     ]
     assert len(reported_lane_calls) == 1
-    assert "x402_request" not in reported_lane_calls[0]
+    assert "x402_invoice_x402_request" not in reported_lane_calls[0]
     assert "shell_run" in reported_lane_calls[0]  # non-payment verb unaffected
 
     assert len(notify_hook_calls) == 1
-    assert "x402_request" not in notify_hook_calls[0]
+    assert "x402_invoice_x402_request" not in notify_hook_calls[0]
     assert "shell_run" in notify_hook_calls[0]
 
 
@@ -423,7 +423,7 @@ async def test_payment_tools_generic_lane_does_not_double_notify(tmp_path, monke
     ctx = types.SimpleNamespace(user_id="rob", session_id="s1")
     result = ActionResult(extracted_content="ok", metadata={
         "request_id": "inv_abc123", "amount_usd": 5.0, "purpose": "consulting"})
-    await c._run_post_tool_call_hooks("x402_request", {"amount_usd": 5}, result, ctx)
+    await c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, result, ctx)
 
     assert len(notified) == 1, notified
     assert "inv_abc123" in notified[0][1]
@@ -512,7 +512,7 @@ def test_correspondent_gate_high_impact_money_verbs_untouched():
     # hyperliquid/polymarket legacy tokens + their trade verbs + the money action
     # names are enumerated by name (name-based layer, not tool_id resolution).
     for name in ("hyperliquid", "polymarket", "x402_pay", "x402_invoice",
-                 "x402_request", "place_limit_order", "place_market_order"):
+                 "x402_invoice_x402_request", "place_limit_order", "place_market_order"):
         assert name in _HIGH_IMPACT_NAMES, name
 
 
@@ -601,6 +601,6 @@ async def test_full_autonomy_defaulted_auto_receive_verb_still_act_and_report(
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
-    reason = await c._run_pre_tool_call_hooks("x402_request", {"amount_usd": 5}, None)
+    reason = await c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None)
     assert reason is None
     assert _SpyProvider.calls == []  # never queued -- act-and-report lane

@@ -41,6 +41,66 @@ from typing import Any, Dict, Optional
 class ModelSwapMixin:
     """Adds ``swap_model`` — the shared hot-swap primitive Agent composes in."""
 
+    def adopt_active_llm(self, new_llm: Any, model: str, provider: str) -> None:
+        """Make an ALREADY-BUILT chat model the agent's active one, updating every
+        model/provider SSOT the loop reads.
+
+        Split out of ``swap_model`` so the two paths that change the running model
+        share one implementation. The other caller is the automatic provider fallback
+        in ``llm_runner.get_next_action``, which builds its own fallback client and
+        used to set only ``self.llm``/``self.model_name`` — leaving ``self.llm_provider``
+        (which the billing path reads, ``next_action_internal.py``) and
+        ``message_manager.llm`` (which compaction reads) pointing at the ORIGINAL,
+        just-failed provider. That mislabelled every post-fallback usage record and
+        aimed compaction at the dead client.
+
+        Callers must have completed any fallible build BEFORE calling this: every
+        mutation here is unconditional.
+        """
+        self.llm = new_llm
+        self.llm_provider = provider
+        self.chat_model_library = type(new_llm).__name__
+
+        # model_name / provider_name are Agent properties delegating to the
+        # MessageManager SSOT. Set model_name first (its setter re-detects the
+        # provider FROM the name), then override provider_name with the
+        # registry-canonical label. A single write updates both views (no
+        # redundant second write straight to the manager).
+        self.model_name = model
+        self.provider_name = provider
+
+        message_manager = getattr(self, "message_manager", None)
+        if message_manager is not None:
+            # Compaction/aux paths captured the ORIGINAL llm at init
+            # (compactor.py reads self.llm) — repoint so post-swap compaction
+            # runs/bills on the NEW model, not the pre-swap one.
+            message_manager.llm = new_llm
+
+            # Re-derive token budgets + the compaction manager for the new
+            # model's context window (init-time values were sized for the OLD
+            # model). Reuses the init formula; best-effort so a registry miss
+            # never aborts the swap.
+            _recal = getattr(message_manager, "recalibrate_for_model", None)
+            if callable(_recal):
+                try:
+                    _recal(model)
+                except Exception as e:
+                    self.logger.debug(f"token/compaction recalibration after swap failed: {e}")
+
+            # Refresh the pinned runtime-identity foundation line so the agent
+            # reports the NEW model on the next turn (not the pre-swap one).
+            _set_ident = getattr(message_manager, "set_runtime_identity", None)
+            if callable(_set_ident):
+                try:
+                    _set_ident(model, provider)
+                except Exception as e:
+                    self.logger.debug(f"runtime-identity refresh after swap failed: {e}")
+
+        try:
+            self._reconcile_native_tools(provider)
+        except Exception as e:
+            self.logger.debug(f"native-tools reconciliation after model swap failed: {e}")
+
     def _detect_provider_for(self, model: str) -> Optional[str]:
         """Best-effort provider auto-detect for `model` via the model registry.
 
@@ -119,49 +179,7 @@ class ModelSwapMixin:
         # Update every SSOT the running loop reads. All mutations happen ONLY
         # after the fallible build above, so a failed build leaves the agent
         # completely unchanged (see the early return).
-        self.llm = new_llm
-        self.llm_provider = resolved_provider
-        self.chat_model_library = type(new_llm).__name__
-
-        # model_name / provider_name are Agent properties delegating to the
-        # MessageManager SSOT. Set model_name first (its setter re-detects the
-        # provider FROM the name), then override provider_name with the
-        # registry-canonical label. A single write updates both views (no
-        # redundant second write straight to the manager).
-        self.model_name = model
-        self.provider_name = resolved_provider
-
-        message_manager = getattr(self, "message_manager", None)
-        if message_manager is not None:
-            # Compaction/aux paths captured the ORIGINAL llm at init
-            # (compactor.py reads self.llm) — repoint so post-swap compaction
-            # runs/bills on the NEW model, not the pre-swap one.
-            message_manager.llm = new_llm
-
-            # Re-derive token budgets + the compaction manager for the new
-            # model's context window (init-time values were sized for the OLD
-            # model). Reuses the init formula; best-effort so a registry miss
-            # never aborts the swap.
-            _recal = getattr(message_manager, "recalibrate_for_model", None)
-            if callable(_recal):
-                try:
-                    _recal(model)
-                except Exception as e:
-                    self.logger.debug(f"token/compaction recalibration after swap failed: {e}")
-
-            # Refresh the pinned runtime-identity foundation line so the agent
-            # reports the NEW model on the next turn (not the pre-swap one).
-            _set_ident = getattr(message_manager, "set_runtime_identity", None)
-            if callable(_set_ident):
-                try:
-                    _set_ident(model, resolved_provider)
-                except Exception as e:
-                    self.logger.debug(f"runtime-identity refresh after swap failed: {e}")
-
-        try:
-            self._reconcile_native_tools(resolved_provider)
-        except Exception as e:
-            self.logger.debug(f"native-tools reconciliation after model swap failed: {e}")
+        self.adopt_active_llm(new_llm, model, resolved_provider)
 
         # Cross-provider history repair: no-op by design — see module docstring.
         # The next get_messages_for_llm() call already repairs the outbound copy

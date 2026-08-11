@@ -228,6 +228,18 @@ class TaskContextManager(BaseComponent):
         # A3: metering context (usage_tracker/user_id/session_id/agent_id) for billing
         # the reflection aux LLM call; populated by construction.py, empty => no metering.
         self.reflection_meter_ctx: Optional[dict] = None
+        # ⚠️ PER-SESSION reflection context. The two attributes above are process-wide,
+        # but this manager is a container SINGLETON shared by every session in the
+        # process (core/initialization.py registers memory_manager as
+        # ServiceScope.SINGLETON, and every SessionOrchestrator gets the same
+        # container). Agent construction wrote `reflection_llm`/`reflection_meter_ctx`
+        # directly on the instance, so the LAST session to construct owned them: one
+        # tenant's phase reflection then ran on ANOTHER tenant's aux model and was
+        # billed to that tenant's user_id/session_id. Everything else on this class is
+        # already session-keyed (`_sessions`, `_memories_since_reflection`); these two
+        # were the exception. Writers use set_reflection_context(); the instance
+        # attributes stay as the fallback for a dedicated (non-shared) manager.
+        self._reflection_by_session: Dict[str, dict] = {}
 
         # Track memories since last reflection (per session)
         self._memories_since_reflection: Dict[str, int] = {}
@@ -616,55 +628,6 @@ class TaskContextManager(BaseComponent):
             except Exception as e:
                 logger.debug(f"Error resetting loop signal for {session_id}: {e}")
 
-    def record_finding(
-        self,
-        session_id: str,
-        finding: str,
-        phase_name: Optional[str] = None,
-        embedding: Optional[List[float]] = None
-    ) -> bool:
-        """Record a finding to the hierarchical memory with proper cache invalidation.
-
-        FIX (Jan 2026): This is the preferred way to add findings as it ensures
-        the context cache is properly invalidated.
-
-        Args:
-            session_id: Session identifier
-            finding: Finding text to record
-            phase_name: Optional phase name (defaults to current phase)
-            embedding: Optional vector embedding for semantic search
-
-        Returns:
-            True if finding was added, False otherwise
-        """
-        session_data = self._sessions.get(session_id)
-        if not session_data:
-            logger.warning(f"Session {session_id} not found")
-            return False
-
-        try:
-            # Get current phase if not specified
-            if phase_name is None:
-                phase_name = session_data.memory.current_phase
-
-            # Add finding to memory
-            result = session_data.memory.add_finding_to_phase(
-                phase_name=phase_name,
-                finding=finding,
-                embedding=embedding
-            )
-
-            # Invalidate cache on successful addition
-            if result:
-                session_data.invalidate_cache()
-                logger.debug(f"Added finding to phase '{phase_name}', cache invalidated (version {session_data._cache_version})")
-
-            return result
-
-        except Exception as e:
-            logger.error(f"Failed to record finding for session {session_id}: {e}")
-            return False
-
     def get_context_injection(self, session_id: str, brain_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Get formatted context for injection into agent prompt.
 
@@ -834,6 +797,9 @@ class TaskContextManager(BaseComponent):
 
             # Remove from active sessions
             del self._sessions[session_id]
+            # Drop the per-session aux model + billing context with the session, so a
+            # long-lived singleton doesn't accumulate one LLM client per session ever run.
+            self.clear_reflection_context(session_id)
 
             logger.info(f"Closed session {session_id} with cache cleanup")
             return True, drained
@@ -841,35 +807,6 @@ class TaskContextManager(BaseComponent):
         except Exception as e:
             logger.error(f"Failed to close session {session_id}: {e}")
             return False, []
-
-    def get_session_statistics(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Get statistics for a session.
-
-        Args:
-            session_id: Session identifier
-
-        Returns:
-            Statistics dictionary, or None if session not found
-        """
-        session_data = self._sessions.get(session_id)
-        if not session_data:
-            return None
-
-        try:
-            phase_stats = session_data.phase_manager.get_phase_statistics()
-            context_stats = session_data.context_retriever.get_context_statistics()
-
-            return {
-                "session_id": session_id,
-                "task": session_data.memory.task,
-                "progress": session_data.memory.progress,
-                **phase_stats,
-                **context_stats
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to get statistics for session {session_id}: {e}")
-            return None
 
     def _get_memory_path(self, session_id: str, user_id: Optional[str] = None) -> Path:
         """Get file path for hierarchical memory.
@@ -895,14 +832,6 @@ class TaskContextManager(BaseComponent):
             List of session IDs
         """
         return list(self._sessions.keys())
-
-    def get_session_count(self) -> int:
-        """Get count of active sessions.
-
-        Returns:
-            Number of active sessions
-        """
-        return len(self._sessions)
 
     def _trigger_reflection(self, session_id: str, phase_name: str) -> None:
         """Trigger reflection process per H-MEM paper Section 3.3.
@@ -936,7 +865,7 @@ class TaskContextManager(BaseComponent):
             )
 
             # Prefer LLM synthesis (H-MEM §3.3) when enabled; else concatenate.
-            new_summary = self._llm_consolidate(recent_findings)
+            new_summary = self._llm_consolidate(recent_findings, session_id=session_id)
             if new_summary is not None:
                 # P2-11: the aux-LLM summary is unbounded model output that lands
                 # verbatim as a durable phase summary AND a promoted cross-session
@@ -999,18 +928,37 @@ class TaskContextManager(BaseComponent):
         except Exception as e:
             logger.error(f"Reflection failed for {session_id}: {e}")
 
-    def _llm_consolidate(self, findings: list) -> Optional[str]:
+    def set_reflection_context(self, session_id: str, llm, meter_ctx: Optional[dict]) -> None:
+        """Register the aux model + billing context to use for THIS session's
+        reflection. Scoped per session because this manager may be a process-wide
+        singleton shared across tenants (see _reflection_by_session)."""
+        if not session_id:
+            return
+        self._reflection_by_session[session_id] = {
+            "llm": llm, "meter_ctx": meter_ctx,
+        }
+
+    def clear_reflection_context(self, session_id: str) -> None:
+        """Drop a session's reflection context (called on session removal)."""
+        self._reflection_by_session.pop(session_id, None)
+
+    def _llm_consolidate(self, findings: list, session_id: str = "") -> Optional[str]:
         """Synthesize a phase summary from findings via the aux model (H-MEM §3.3).
 
         Thin delegator to ReflectionService — the consolidation logic lives there.
         Returns None when disabled, no model, no findings, or on any error — the
         caller then falls back to the existing concatenation.
+
+        Resolves the aux model + billing context for ``session_id`` first; falls back
+        to the instance-level attributes so a dedicated (non-shared) manager, or a
+        caller that never registered, behaves exactly as before.
         """
         from .reflection_service import ReflectionService
+        scoped = self._reflection_by_session.get(session_id or "") or {}
         svc = ReflectionService(
             enabled=self.reflection_llm_enabled,
-            llm=self.reflection_llm,
-            meter_ctx=getattr(self, "reflection_meter_ctx", None),
+            llm=scoped.get("llm", self.reflection_llm),
+            meter_ctx=scoped.get("meter_ctx", getattr(self, "reflection_meter_ctx", None)),
         )
         return svc.consolidate(findings)
 

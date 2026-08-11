@@ -41,7 +41,7 @@ class _FakeDB:
         return None
 
     async def fetch_one(self, *a, **k):
-        # No user_profiles row -> _should_deduct_credits defaults to True (deduct).
+        # No user_profiles row -> _get_user_tier returns "" -> deduct (fail-safe).
         return None
 
 

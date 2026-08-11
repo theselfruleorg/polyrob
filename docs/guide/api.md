@@ -279,8 +279,16 @@ curl -X POST http://localhost:9000/v1/chat/completions \
 
 An OpenAI model string (e.g. `gpt-4o`) is mapped to a polyrob `(provider, model)` pair internally
 (a `provider/model` slug wins outright, else known prefixes like `gpt-`/`claude-`/`gemini-` route to
-that provider, else your default provider is used). Point any OpenAI SDK at
-`http://localhost:9000/v1` with your polyrob API key.
+that provider, else your default provider is used — an unrecognized string is served by the default
+provider verbatim, never a 400). The slug form addresses ANY provider explicitly, including ones you
+declared in `~/.polyrob/providers.yaml`: `"model": "ollama/qwen3-coder:30b"` or
+`"model": "zai-coding/glm-5"`. `GET /v1/models` lists each available provider's default plus every
+declared model. Point any OpenAI SDK at `http://localhost:9000/v1` with your polyrob API key.
+
+> **Two different "API keys."** The `X-API-KEY: rob_xxx…` header is your **rob API key** — an
+> inbound credential identifying the caller to POLYROB (minted at `/api/auth/api-keys`). It is NOT
+> an LLM provider key (`OPENAI_API_KEY`, …), which is the outbound credential POLYROB spends to
+> reach a model — see [configuration.md](configuration.md).
 
 **Streaming honesty:** `stream: true` is *buffered* SSE — the agent turn runs to
 completion and the full reply arrives as one content chunk (true token streaming

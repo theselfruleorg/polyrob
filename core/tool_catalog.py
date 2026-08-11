@@ -171,7 +171,10 @@ def _gated_reason(name: str, env: Dict[str, str]) -> Optional[str]:
 
 
 def _truthy(value: Optional[str]) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+    # Repo-SSOT falsey-set semantics (core.env.parse_bool) — was a private
+    # opt-in truth set that disagreed with the flag parsers gating these tools.
+    from core.env import parse_bool
+    return parse_bool(value, False) if value is not None else False
 
 
 def _audit_events(name: str) -> List[str]:

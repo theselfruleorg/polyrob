@@ -71,7 +71,6 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
@@ -103,8 +102,6 @@ from agents.task.agent.views import (
     ActionResult,
 )
 from agents.task.agent.core.run_budget import check_run_budget
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,

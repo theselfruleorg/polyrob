@@ -12,7 +12,7 @@ Sources:
 """
 
 from dataclasses import dataclass
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List
 from enum import Enum
 import logging
 import re
@@ -1959,23 +1959,6 @@ def get_thinking_config(model_name: str) -> Dict[str, object]:
     return out
 
 
-def get_limits(model_name: str) -> Tuple[int, int, int]:
-    """Get token limits for a model
-
-    Returns:
-        Tuple of (context_window, max_completion_tokens, safe_input_tokens)
-    """
-    config = get_model_config(model_name)
-    if config:
-        return (config.context_window,
-                config.max_completion_tokens,
-                config.safe_input_tokens)
-
-    # Fallback defaults
-    logger.warning(f"Model {model_name} not in registry, using defaults")
-    return (128000, 16384, 111616)  # GPT-4 defaults
-
-
 def register_custom_model(config: ModelConfig):
     """Register a custom model configuration
 
@@ -2066,7 +2049,6 @@ def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,
 # ---------------------------------------------------------------------------
 
 from dataclasses import dataclass as _dataclass
-from typing import Type as _Type
 
 
 @_dataclass(frozen=True)
@@ -2082,14 +2064,31 @@ class _ProviderEntry:
 
 
 def _build_provider_config() -> "Dict[str, _ProviderEntry]":
-    """Build PROVIDER_CONFIG dict, importing client classes at call time."""
-    # Local imports to avoid circular dependency at module level.
-    from modules.llm.anthropic_client import AnthropicClient
-    from modules.llm.openai_client import OpenAIClient
-    from modules.llm.deepseek_client import DeepSeekClient
-    from modules.llm.gemini_client import GeminiClient
-    from modules.llm.openrouter_client import OpenRouterClient
-    from modules.llm.nvidia_client import NvidiaClient
+    """Build PROVIDER_CONFIG dict.
+
+    Since proposal 024 (L0) the entries are DERIVED from the ProviderSpec
+    registry (built-ins + user-declared providers.yaml rows; a user row's
+    client class is the generic client for its declared transport). The legacy
+    literal table below is the ``LLM_PROVIDER_REGISTRY=off`` kill-switch path —
+    byte-identical for the six built-ins (pinned by the characterization suite).
+    """
+    try:
+        from modules.llm.provider_spec import (
+            generic_client_class_name,
+            get_specs,
+            provider_registry_enabled,
+        )
+        if provider_registry_enabled():
+            out: "Dict[str, _ProviderEntry]" = {}
+            for s in get_specs():
+                cls = s.client_class_name or generic_client_class_name(s.transport)
+                if cls is None:
+                    continue  # transport with no generic client yet (RESPONSES)
+                out[s.name] = _ProviderEntry(s.name, cls, fallback_eligible=s.fallback_eligible)
+            return out
+    except Exception:
+        # Fail-open to the legacy literals — provider lookup must never crash.
+        pass
 
     return {
         "openai":      _ProviderEntry("openai",      "OpenAIClient",      fallback_eligible=True),

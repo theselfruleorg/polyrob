@@ -73,10 +73,22 @@ def test_inject_without_surface_falls_back_to_source_label():
 
 @pytest.mark.asyncio
 async def test_owner_turn_clears_taint_and_sources():
+    """The clear now fires when the owner's message is DRAINED into the turn, not
+    when it is submitted. Submitting only queues it, and three submit paths accept
+    nothing at all (agent missing, either queue full) — clearing there re-opened the
+    gate with no owner turn ever entering. See
+    tests/unit/agents/task/test_taint_clears_on_delivery_only.py."""
+    from agents.task.agent.core.user_ingress import _update_forged_turn_marker
+
     orch = _Orch({})  # no agents -> submit stores in pending queue
     orch._pending_messages = []
     orch._pending_messages_lock = asyncio.Lock()
+    orch.session_id = "s1"
     orch._set_correspondent_taint("email", "john@acme.com")
+
     await orch.submit_user_message(None, "owner speaking", kind="comment")
+    assert orch._correspondent_tainted is True, "queued != entered the turn"
+
+    _update_forged_turn_marker(orch, [{"kind": "comment", "text": "owner speaking"}])
     assert orch._correspondent_tainted is False
     assert orch._correspondent_taint_sources == set()

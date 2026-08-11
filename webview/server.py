@@ -2896,12 +2896,6 @@ async def _handle_stream_chunk(session_id: str, request: Request) -> Response:
         )
 
 
-@_fastapi.post("/api/session/{session_id}/stream", response_class=JSONResponse)
-async def receive_stream_chunk_legacy(session_id: str, request: Request) -> Response:
-    """Legacy endpoint for streaming chunks (backwards compatibility)."""
-    return await _handle_stream_chunk(session_id, request)
-
-
 @_fastapi.post("/api/webview/sessions/{session_id}/stream", response_class=JSONResponse)
 async def receive_stream_chunk(session_id: str, request: Request) -> Response:
     """Receive streaming chunk from agent and broadcast to WebView clients.
@@ -3555,30 +3549,6 @@ async def leave_activity(sid):
         pass
     _activity_clients.discard(sid)
     await _stop_hub_if_activity_empty()
-
-
-@_sio.event
-async def leave(sid):
-    """Handle a client disconnecting from Socket.io."""
-    session_id = _client_session.get(sid)
-    if session_id:
-        await _sio.leave_room(sid, session_id)
-        _client_session.pop(sid, None)
-        
-        # Decrement client count for this session
-        _session_clients[session_id] = max(0, _session_clients.get(session_id, 1) - 1)
-        
-        # If no clients left, cancel the watcher task
-        if _session_clients[session_id] == 0 and session_id in _watch_tasks:
-            _watch_tasks[session_id].cancel()
-            try:
-                await _watch_tasks[session_id]
-            except asyncio.CancelledError:
-                pass
-            del _watch_tasks[session_id]
-            logger.debug("Cancelled feed watcher for session %s", session_id)
-            
-        logger.info("Client %s left session %s", sid, session_id)
 
 
 async def _feed_watcher(session_id: str) -> None:

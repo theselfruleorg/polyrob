@@ -249,7 +249,11 @@ async def test_trip_failure_is_fail_open_and_does_not_mask_original_error(monkey
     monkeypatch.setattr("core.credit_sentinel.trip_credit_sentinel", broken_trip)
 
     agent = _make_agent()
-    err = Exception("Error code: 402 - insufficient_quota")
+    # Typed (a plain LLMError, the documented real shape — see
+    # _real_openrouter_402_error above). The permanent-halt branch is type-gated so
+    # an arbitrary exception can no longer halt the session on coincidental text;
+    # this test is about sentinel fail-openness, not exception typing.
+    err = LLMError("Error code: 402 - insufficient_quota")
     result = await agent._handle_step_error(err)
 
     assert agent.state.stopped is True

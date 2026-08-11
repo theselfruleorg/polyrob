@@ -16,75 +16,9 @@ from typing import Optional
 import click
 from core.runtime_paths import data_dir_or_home
 
-
-def _resolve_tool_list(
-    tools: Optional[str], toolset: Optional[str],
-    *, user_id: Optional[str] = None, home_dir=None,
-) -> tuple[list[str], list[str]]:
-    """Resolve the final CLI tool list from --tools / --toolset.
-
-    Precedence: ``--tools`` (explicit comma list) > ``--toolset`` (named set) >
-    a ``session.toolset`` preference (owner-UX P1 T5, only consulted when
-    ``user_id`` is given) > default. The final list is always pruned through
-    ``cli_unavailable_tools`` so the agent is never advertised tools the CLI
-    container can't register.
-
-    Returns ``(tool_list, notes)`` where ``notes`` are human-readable warning
-    lines (stderr) about pruned/unavailable tools. Pure + side-effect-free (the
-    optional pref read is the only I/O) so it is directly unit-testable (the
-    caller does the echoing). ``user_id``/``home_dir`` default to None, so every
-    pre-existing positional call (no pref file involved) stays byte-identical.
-    """
-    from agents.task.tool_defaults import cli_default_tools, resolve_toolset
-    from core.bootstrap import cli_unavailable_tools
-
-    notes: list[str] = []
-
-    if tools:
-        # Explicit list wins; still prune unavailable tools.
-        tool_list = tools.split(",")
-        missing = cli_unavailable_tools(tool_list)
-        if missing:
-            notes.append(
-                f"note: tool(s) {', '.join(missing)} are not available in the CLI "
-                f"(they need the server container); continuing without them."
-            )
-            tool_list = [t for t in tool_list if t not in set(missing)]
-    elif toolset:
-        # Named toolset, pruned through cli_unavailable_tools.
-        resolved = resolve_toolset(toolset)
-        unavail = set(cli_unavailable_tools(resolved))
-        if unavail:
-            notes.append(
-                f"note: tool(s) {', '.join(sorted(unavail))} from toolset '{toolset}' are not "
-                f"available in the CLI (they need the server container); continuing without them."
-            )
-        tool_list = [t for t in resolved if t not in unavail]
-    else:
-        # owner-UX P1 T5: neither --tools nor --toolset given for THIS run — a
-        # "session.toolset" pref may override the default toolset NAME. Only
-        # takes effect when a pref is actually ON DISK (resolve_with_source's
-        # "pref" source); otherwise falls through to cli_default_tools()
-        # unchanged (byte-identical legacy, including its own env read + pruning).
-        tool_list = None
-        if user_id:
-            try:
-                from core.prefs import resolve_with_source
-                env_toolset = os.environ.get("POLYROB_AGENT_TOOLSET", "").strip() or None
-                pref_toolset, source = resolve_with_source(
-                    "session.toolset", user_id, data_dir_or_home(home_dir),
-                    env_value=env_toolset, default=None,
-                )
-                if source == "pref" and pref_toolset:
-                    resolved = resolve_toolset(pref_toolset)
-                    unavail = set(cli_unavailable_tools(resolved))
-                    tool_list = [t for t in resolved if t not in unavail]
-            except Exception:
-                tool_list = None
-        if tool_list is None:
-            tool_list = cli_default_tools()
-
-    return tool_list, notes
+# The resolver moved to cli/toolset.py (shared with the REPL); re-imported under
+# the legacy private name so existing callers/tests keep working.
+from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 
 
 @click.command()
@@ -92,7 +26,7 @@ def _resolve_tool_list(
 @click.option("--resume", "resume_id", default=None, metavar="SESSION_ID",
               help="Resume an existing session by id (continue it) instead of starting a new task.")
 @click.option("--model", "-m", default=None, help="Model name (e.g. gemini-2.5-flash, gpt-5)")
-@click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia; DeepSeek via openrouter + deepseek/deepseek-chat)")
+@click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, or any provider declared in ~/.polyrob/providers.yaml; DeepSeek via openrouter + deepseek/deepseek-chat)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
 @click.option("--toolset", default=None, help="Named toolset (minimal/default/research/coding/development/browser/full/safe). Ignored when --tools is given.")
 @click.option("--max-steps", default=50, type=int, help="Maximum steps (default: 50)")
@@ -150,6 +84,25 @@ async def _run_session(
     load_env(local_mode=True)
     if not preflight_or_onboard(interactive=True):
         sys.exit(1)
+
+    # Validate an explicit -p against the registry (incl. providers.yaml rows
+    # and aliases) — an unknown name previously surfaced as a RuntimeError
+    # traceback deep in the session instead of the Known: list its sibling
+    # `model set-default` prints (UX assessment 2026-08-07, Q10).
+    if provider:
+        try:
+            from modules.llm.provider_spec import get_specs
+            known = []
+            for s in get_specs():
+                known.append(s.name)
+                known.extend(s.aliases)
+        except Exception:
+            known = []
+        if known and provider.strip().lower() not in known:
+            names = ", ".join(n for n in known if not n.startswith("_"))
+            click.echo(click.style(
+                f"Unknown provider '{provider}'. Known: {names}", fg="red"), err=True)
+            sys.exit(1)
 
     log_level = "DEBUG" if verbose else "ERROR"
     if not verbose:

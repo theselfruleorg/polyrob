@@ -239,14 +239,12 @@ class SessionExecutionMixin:
 
     async def execute_session(self,
                             agent_sequence: List[str],
-                            max_steps_per_agent: Optional[Dict[str, int]] = None,
-                            shared_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                            max_steps_per_agent: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
         """Execute a session with the given agent sequence.
 
         Args:
             agent_sequence: List of agent IDs to execute in sequence
             max_steps_per_agent: Maximum steps per agent
-            shared_context: Shared context data
 
         Returns:
             Results from the session execution

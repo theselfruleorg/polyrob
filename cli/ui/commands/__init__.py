@@ -2,7 +2,7 @@
 
 Public surface is unchanged: ``from cli.ui.commands import ReplExit, CommandContext,
 Command, CommandRegistry, SlashCompleter, build_completer, build_default_registry,
-default_registry, reset_default_registry, autonomy_status_lines`` all still work.
+default_registry, reset_default_registry`` all still work.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from cli.ui.commands.registry import (
     build_completer,
 )
 from cli.ui.commands.handlers import (
-    autonomy_status_lines,
     build_default_registry,
     default_registry,
     reset_default_registry,
@@ -33,7 +32,6 @@ __all__ = [
     "CommandRegistry",
     "ReplExit",
     "SlashCompleter",
-    "autonomy_status_lines",
     "build_completer",
     "build_default_registry",
     "default_registry",

@@ -365,6 +365,17 @@ class SettlementWatcher:
         transfers = await asyncio.to_thread(
             onchain_probe.scan_treasury_transfers,
             call, usdc_addr, treasury, from_block, to_block)
+        if transfers is None:
+            # The range was NOT scanned (RPC error). Hold the cursor so the next
+            # tick retries it — advancing here would burn the range forever,
+            # since advance_scan_checkpoint refuses to regress. A payer's real
+            # transfer inside it would never be enumerated, so not even
+            # payment_unmatched would fire (audit 2026-08-07 #1, Critical).
+            logger.warning(
+                "x402 settlement scan: blocks %s..%s UNSCANNED (rpc failure) — "
+                "checkpoint held at %s, will retry next tick",
+                from_block, to_block, last)
+            return 0, 0
         settled, unmatched = await self._settle_or_flag(transfers, treasury_key)
         # Advance the checkpoint for the fully-processed range regardless of
         # match outcome — an unmatched/failed-settle transfer is recorded via

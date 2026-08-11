@@ -38,6 +38,31 @@ def attach_dispatcher_event_log(dispatcher) -> None:
         pass
 
 
+async def cli_container(log_level: str = "ERROR"):
+    """Standard non-interactive container bootstrap for admin subcommands.
+
+    The one home for the preamble every ``polyrob session …`` verb repeated
+    verbatim: project-path + sqlite-compat setup, log squelch around the noisy
+    build, the non-interactive key preflight (exits 1 when keys are missing —
+    same as the inline copies did), and ``build_cli_container``.  Returns the
+    built container with logging restored.
+    """
+    import logging as _logging
+
+    from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
+
+    setup_project_path()
+    setup_sqlite_compat()
+
+    _logging.disable(_logging.CRITICAL)
+    from cli.keys import preflight_or_onboard
+    if not preflight_or_onboard(interactive=False):
+        sys.exit(1)
+    container = await build_cli_container(log_level=log_level)
+    _logging.disable(_logging.NOTSET)
+    return container
+
+
 @contextlib.contextmanager
 def suppress_bootstrap_output():
     """Silence Python-level stdout/stderr plus OS fd 2 for a bootstrap window.

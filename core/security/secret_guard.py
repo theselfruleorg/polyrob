@@ -58,6 +58,12 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
     "*.env.*",
     "snapshots/*/config/*",
     "snapshots/*/dirs/*",
+    # Proposal 024 §7.1: LLM credential store + provider registry file (see the
+    # CREDENTIAL_NAME_GLOBS rationale below) — also kept out of read-ingestion.
+    "auth.json*",
+    ".auth.json.*",
+    ".polyrob/providers.yaml*",
+    ".rob/providers.yaml*",
 )
 
 # Tool-facing subset: unambiguous CREDENTIAL filenames only. Used by the
@@ -124,6 +130,20 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     "*.env.*",
     "snapshots/*/config/*",
     "snapshots/*/dirs/*",
+    # Proposal 024 §7.1 (2026-08-06): the LLM credential store and the provider
+    # registry file. `auth.json*` is a bare basename glob ON PURPOSE — it also
+    # catches other tools' stores the borrow adapters read (~/.hermes/auth.json,
+    # ~/.codex/auth.json) and .bak/.old siblings; `.auth.json.*` covers the
+    # store's own atomic-write temp files. providers.yaml holds NO secret but is
+    # credential-EQUIVALENT: a writable providers.yaml lets an agent redirect
+    # its own inference base_url to an attacker endpoint and exfiltrate every
+    # prompt, so it gets the same denial (scoped to the config homes; a
+    # project's own providers.yaml stays readable — but see the LOCATION rule
+    # in is_credential_file for relocated stores).
+    "auth.json*",
+    ".auth.json.*",
+    ".polyrob/providers.yaml*",
+    ".rob/providers.yaml*",
 )
 
 # WS-7: absolute system config directories whose contents are HARD-DENIED for any
@@ -171,7 +191,56 @@ def is_protected_config_path(path: Path) -> bool:
         if "identity" in parts_lower:
             return True
 
+    # Proposal 024 §7.1: the LLM credential store and provider registry under a
+    # polyrob config home (~/.polyrob / ~/.rob) are write-protected like system
+    # config — an agent-writable providers.yaml would redirect the agent's own
+    # inference endpoint; auth.json holds live OAuth refresh tokens.
+    if basename in ("auth.json", "providers.yaml"):
+        parts_lower = [part.lower() for part in path.parts]
+        if ".polyrob" in parts_lower or ".rob" in parts_lower:
+            return True
+
+    # Location rule (024 review I1): the CONFIGURED store/registry paths are
+    # protected wherever the operator relocated them (realpath-matched).
+    try:
+        import os
+        if os.path.realpath(s) in _configured_llm_auth_paths():
+            return True
+    except Exception:
+        pass
+
     return False
+
+
+def _configured_llm_auth_paths() -> "tuple[str, ...]":
+    """Realpaths of the CONFIGURED credential-store + provider-registry files.
+
+    024 review I1: the name globs protect the DEFAULT locations, but both files
+    are relocatable via env (``POLYROB_AUTH_STORE``/``POLYROB_HOME``/
+    ``LLM_CUSTOM_PROVIDERS``) — a relocated store escapes every name rule. This
+    location rule is derived from the same path resolution the loaders use, so
+    the guard follows the config. Fail-open to () — never let a path problem
+    break file tooling.
+    """
+    import os
+    paths = []
+    try:
+        from core.llm_auth.store import auth_store_path
+        paths.append(os.path.realpath(str(auth_store_path())))
+    except Exception:
+        pass
+    try:
+        raw = os.environ.get("LLM_CUSTOM_PROVIDERS")
+        if raw is not None and not str(raw).strip():
+            raw = None  # set-but-empty = disabled; still guard the default path
+        if raw:
+            paths.append(os.path.realpath(str(raw).strip()))
+        else:
+            from core.paths import polyrob_home
+            paths.append(os.path.realpath(str(polyrob_home() / "providers.yaml")))
+    except Exception:
+        pass
+    return tuple(paths)
 
 
 def is_credential_file(path: Path) -> bool:
@@ -182,6 +251,10 @@ def is_credential_file(path: Path) -> bool:
     safe to apply to arbitrary project files in local mode. This is the guard the
     filesystem/coding tools use to refuse a secret file that lives inside the
     workspace (the gap the confinement floor can't cover when workspace == cwd).
+
+    Plus ONE location rule (024): the configured LLM credential-store and
+    provider-registry paths are credential files WHEREVER the operator relocated
+    them, matched by realpath.
     """
     name = path.name
     for glob in CREDENTIAL_NAME_GLOBS:
@@ -190,6 +263,13 @@ def is_credential_file(path: Path) -> bool:
                 return True
         elif _matches_path_glob(path, glob):
             return True
+    try:
+        import os
+        real = os.path.realpath(str(path))
+        if real in _configured_llm_auth_paths():
+            return True
+    except Exception:
+        pass
     return False
 
 

@@ -70,7 +70,6 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt, AgentMessagePrompt
 from agents.task.agent.views import (
@@ -83,8 +82,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -1013,6 +1010,16 @@ Then emit your function calls."""
 										self.logger.debug(f"Sample tools that caused error: {sample}")
 									raise
 
+							except InsufficientCreditsError:
+								# Credit death is FAIL-FAST, never a "try the next shape"
+								# signal. Without this the inline billing block's deliberate
+								# re-raise (see `except InsufficientCreditsError: raise` in the
+								# native-tools path above) was caught by the generic handler
+								# below, turned into `parsed = None`, and fell through to the
+								# structured-output -> plain -> manual-parse chain, each of
+								# which bills again: ONE out-of-credits step made up to FOUR
+								# paid provider calls and delayed the credit sentinel by three.
+								raise
 							except Exception as tool_error:
 								if not self._structured_output_warned:
 									self.logger.warning(f"Native tool calling failed for {provider}: {tool_error}")
@@ -1069,6 +1076,8 @@ Then emit your function calls."""
 								parsed = None
 								self.logger.warning("Structured output didn't return valid parsed output")
 
+						except InsufficientCreditsError:
+							raise  # fail-fast: never bill another shape (see above)
 						except Exception as struct_error:
 							if not self._structured_output_warned:
 								self.logger.warning(f"Structured output failed: {struct_error}")
@@ -1098,6 +1107,14 @@ Then emit your function calls."""
 								raise
 							parsed = None
 				
+				except InsufficientCreditsError:
+					raise  # fail-fast: never bill another shape (see above)
+				except asyncio.TimeoutError:
+					# The inner fallbacks re-raise a timeout deliberately; without this
+					# arm that re-raise landed in the generic handler below, which
+					# answered a timeout by making ANOTHER full-timeout call. Let it
+					# propagate to get_next_action's timeout recovery instead.
+					raise
 				except Exception as structured_error:
 					if not self._structured_output_warned:
 						self.logger.warning(f"All structured output attempts failed: {structured_error}, using manual parsing")
@@ -1114,30 +1131,7 @@ Then emit your function calls."""
 						_fb_start = time.time()
 						if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
 							self.logger.debug("Using streaming mode for final fallback LLM call")
-							full_content = ""
-							fallback_usage_metadata = None  # Initialize for fallback path
-							# Fix pass 2 (money-correctness): propagate the per-call stamped
-							# provider response id through this rebuild too (see
-							# _stream_plain_fallback above for the full rationale).
-							stamped_provider_response_id = None
-
-							async def stream_with_timeout():
-								nonlocal full_content, fallback_usage_metadata, stamped_provider_response_id
-								async for chunk in self.llm.astream(current_messages):
-									if hasattr(chunk, 'content') and chunk.content:
-										full_content += chunk.content
-										await self.hitl_manager.stream_output(chunk.content)
-									# Collect usage metadata from final chunk if available
-									if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
-										fallback_usage_metadata = chunk.usage_metadata
-									chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
-									if chunk_stamped_id:
-										stamped_provider_response_id = chunk_stamped_id
-
-							await asyncio.wait_for(stream_with_timeout(), timeout=timeout_seconds)
-							response = AIMessage(content=full_content, usage_metadata=fallback_usage_metadata)
-							if stamped_provider_response_id:
-								response._polyrob_provider_response_id = stamped_provider_response_id
+							response = await self._stream_plain_fallback(current_messages, timeout_seconds)
 						else:
 							response = await asyncio.wait_for(
 								self.llm.ainvoke(current_messages),

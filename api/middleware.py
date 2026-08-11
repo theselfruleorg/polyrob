@@ -2,7 +2,6 @@
 
 import time
 import hashlib
-import hmac
 import logging
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
@@ -412,51 +411,3 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         required_permission = "write" if request.method in ["POST", "PUT", "DELETE"] else "read"
         user_permissions = user_info.get("permissions", [])
         return required_permission in user_permissions
-
-
-def create_api_key(user_id: str, secret_key: str) -> str:
-    """Create an API key for a user."""
-    # Create timestamp
-    timestamp = str(int(time.time()))
-
-    # Create signature
-    message = f"{user_id}:{timestamp}"
-    signature = hmac.new(
-        secret_key.encode(),
-        message.encode(),
-        hashlib.sha256
-    ).hexdigest()
-
-    # Combine into API key
-    return f"{user_id}:{timestamp}:{signature}"
-
-
-def validate_api_key(api_key: str, secret_key: str, max_age_seconds: int = 86400) -> Optional[str]:
-    """Validate an API key and return user_id if valid."""
-    try:
-        parts = api_key.split(":")
-        if len(parts) != 3:
-            return None
-
-        user_id, timestamp, signature = parts
-
-        # Check age
-        key_age = int(time.time()) - int(timestamp)
-        if key_age > max_age_seconds:
-            return None
-
-        # Verify signature
-        message = f"{user_id}:{timestamp}"
-        expected_signature = hmac.new(
-            secret_key.encode(),
-            message.encode(),
-            hashlib.sha256
-        ).hexdigest()
-
-        if hmac.compare_digest(signature, expected_signature):
-            return user_id
-
-    except Exception as e:
-        logger.error(f"API key validation error: {e}")
-
-    return None

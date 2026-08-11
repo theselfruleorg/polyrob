@@ -17,6 +17,12 @@ from agents.task.telemetry.views import (
 )
 from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as _FORGED_MESSAGE_KINDS
 
+# Message kinds that count as the owner genuinely driving, and so clear correspondent
+# taint. Mirrors hitl_ingress._TRUSTED_CONTEXT_REF_KINDS (the same allowlist that
+# gates @-reference expansion); kept as a literal rather than an import to avoid an
+# agents.agent.core -> agents.session edge for one frozenset.
+_TAINT_CLEARING_KINDS = frozenset({"comment", "continuation"})
+
 
 def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> None:
     """SK-F10: recompute the forged-turn marker from a drained message batch.
@@ -41,6 +47,23 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
         None,
     )
     orchestrator._forged_turn_kind = forged_kind
+
+    # WS-A: a genuine owner/continuation turn clears any correspondent taint — the
+    # owner is driving again, so the capability gate re-opens high-impact tools.
+    #
+    # This lives HERE, at the drain, and not in submit_user_message where it used to.
+    # Clearing on submit cleared it when the message was merely QUEUED, including on
+    # the three paths that accept nothing: target agent not found (silent return),
+    # pending-queue full, and HITL-queue full (both raise MessageQueueFullError). The
+    # gate then re-opened on untrusted correspondent data with no owner turn ever
+    # entering. Draining is where the message provably enters the turn, and it is the
+    # same place — and the same "is the owner driving?" question — the forged-turn
+    # marker above is recomputed from. Fail-open.
+    if any(m.get("kind") in _TAINT_CLEARING_KINDS for m in messages):
+        try:
+            orchestrator._clear_correspondent_taint()
+        except Exception:
+            pass
 
     # P1 finalization: a genuine (non-forged) batch means the owner is driving
     # again — clear the self-wake re-entry budget for this session. Previously the

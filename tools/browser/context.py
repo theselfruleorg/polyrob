@@ -166,41 +166,6 @@ class BrowserContext:
 		# Initialize these as None - they'll be set up when needed
 		self.session: BrowserSession | None = None
 
-	async def __aenter__(self):
-		"""Async context manager entry"""
-		await self._initialize_session()
-		return self
-
-	async def __aexit__(self, exc_type, exc_val, exc_tb):
-		"""Async context manager exit - enhanced for proper WebSocket cleanup"""
-		self.logger.debug(f"BrowserContext.__aexit__ called with exc_type={exc_type}")
-		
-		# First close all pages explicitly to ensure WebSocket connections close properly
-		try:
-			if self.session and self.session.context and self.session.context.pages:
-				for page in self.session.context.pages:
-					try:
-						await page.close(timeout=3000)
-					except Exception as e:
-						self.logger.debug(f"Error closing page during __aexit__: {e}")
-		except Exception as e:
-			self.logger.warning(f"Error closing pages during __aexit__: {e}")
-			
-		# Then close the whole browser context
-		try:
-			await asyncio.wait_for(self.close(), timeout=15.0)
-		except asyncio.TimeoutError:
-			self.logger.warning("Context close timed out in __aexit__, resources may not be fully cleaned up")
-		except Exception as e:
-			self.logger.warning(f"Error during __aexit__ context close: {e}")
-			
-		# Make sure any orphaned WebSocket connections are closed
-		try:
-			# Wait a moment for any connections to finish closing
-			await asyncio.sleep(0.5)
-		except Exception:
-			pass
-
 	async def close(self):
 		"""Close the browser instance and properly clean up all resources"""
 		self.logger.debug('Closing browser context')
@@ -451,7 +416,8 @@ class BrowserContext:
 		# address is aborted. page.goto only checks the initial URL; with route
 		# interception active, Playwright re-fires this handler for each redirect target.
 		# Gated by BROWSER_ALLOW_PRIVATE_URLS (same switch as the initial-URL guard).
-		if os.getenv('BROWSER_ALLOW_PRIVATE_URLS', 'false').strip().lower() not in ('1', 'true', 'yes', 'on'):
+		from tools.browser._flags import allow_private_urls
+		if not allow_private_urls():
 			await context.route("**/*", self._ssrf_route_guard)
 
 		# Load cookies if they exist

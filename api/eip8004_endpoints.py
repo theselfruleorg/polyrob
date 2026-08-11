@@ -22,12 +22,7 @@ from modules.eip8004 import (
 )
 from modules.eip8004.registration import get_eip8004_config
 from modules.eip8004.models import (
-    CreateFeedbackAuthRequest,
-    CreateFeedbackAuthResponse,
-    SubmitFeedbackRequest,
-    GetReputationRequest,
     ReputationSummary,
-    RequestValidationRequest,
     ValidationSummary,
     ProofOfPayment,
     FeedbackAuth,

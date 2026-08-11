@@ -104,7 +104,6 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
@@ -136,8 +135,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -1056,10 +1053,14 @@ class AgentConstructionMixin:
 		# only; a plain multi-tenant server session gets None => inert. Fail-open.
 		try:
 			from agents.task.agent.core.env_context import build_environment_context
+			# `self` (the Agent) has no `tool_ids` attribute — only SystemPrompt and
+			# MessageManager do — so this read was always None and the
+			# "Tools loaded this session:" line has never once rendered. The loaded
+			# set comes from the controller, as it does everywhere else in this file.
 			_env_block = build_environment_context(
 				self.orchestrator.session_id,
 				getattr(self.orchestrator, "user_id", None),
-				tool_ids=getattr(self, "tool_ids", None),
+				tool_ids=(self.controller.list_tools() if self.controller else None),
 			)
 			if _env_block:
 				self.message_manager.set_environment_message(_env_block)
@@ -1083,10 +1084,17 @@ class AgentConstructionMixin:
 		# constants.reflection_llm_enabled_default() — the SAME helper the
 		# TaskContextManager runtime guard reads, so the two can never diverge
 		# (historical bug: TCM read BotConfig.get -> always False -> never fired).
+		# ⚠️ Registered PER SESSION, not assigned to the manager instance. The
+		# TaskContextManager here is usually the container SINGLETON shared by every
+		# session in the process, so a bare `self.task_context_manager.reflection_llm =`
+		# was last-writer-wins across tenants: session A's reflection then ran on
+		# session B's aux model. Deferred to the metering block below, which registers
+		# the model and the billing context together in one call.
 		from agents.task.constants import reflection_llm_enabled_default
+		_reflection_llm = None
 		if reflection_llm_enabled_default():
 			try:
-				self.task_context_manager.reflection_llm = self._provision_aux_llm("reflection")
+				_reflection_llm = self._provision_aux_llm("reflection")
 			except Exception as e:
 				self.logger.debug(f"reflection LLM provisioning skipped: {e}")
 
@@ -1235,13 +1243,24 @@ class AgentConstructionMixin:
 			_main_loop = asyncio.get_running_loop()
 		except RuntimeError:
 			_main_loop = None
-		self.task_context_manager.reflection_meter_ctx = {
+		_reflection_meter_ctx = {
 			"usage_tracker": self.usage_tracker,
 			"user_id": getattr(self, "user_id", None),
 			"session_id": getattr(self, "session_id", ""),
 			"agent_id": getattr(self, "agent_id", "") or "",
 			"loop": _main_loop,
 		}
+		# Register the aux model AND its billing identity together, keyed by session.
+		# Falls back to the legacy instance attributes only if the manager predates
+		# set_reflection_context (a dedicated per-session manager, where the shared-
+		# singleton hazard does not exist).
+		if hasattr(self.task_context_manager, "set_reflection_context"):
+			self.task_context_manager.set_reflection_context(
+				getattr(self, "session_id", ""), _reflection_llm, _reflection_meter_ctx)
+		else:  # pragma: no cover - legacy manager
+			if _reflection_llm is not None:
+				self.task_context_manager.reflection_llm = _reflection_llm
+			self.task_context_manager.reflection_meter_ctx = _reflection_meter_ctx
 
 		# UsageMeter retired (C5) — LLMUsageTracker (self.usage_tracker, above) is
 		# always available under the same precondition usage_meter needed

@@ -6,6 +6,243 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-11
+
+Two new capability surfaces — user-declared LLM providers and on-chain token
+operations — on top of a large correctness and honesty pass across the agent
+loop, billing, security gates, and the provider/credential UX.
+
+### Added
+
+- **On-chain token sight (`defi_data`, `DEFI_DATA_ENABLED`, default off):** a
+  read-only tool giving the agent eyes on Base — `token_resolve` (ranked
+  candidate contracts for a ticker), `token_info` (on-chain identity + price +
+  liquidity + a safety screen), `price`, `portfolio` (own holdings, USD-valued)
+  and `contract_read` (raw `eth_call`). No signer is constructed and nothing is
+  broadcast, so it cannot move value. Two rules run through the whole tier:
+  **an address is the only identity** — `token_info`/`price`/`contract_read`
+  reject a ticker outright, and `token_resolve` returns every candidate and
+  never picks, because binding a symbol to a contract is the primary injection
+  surface for an agent that reads web pages; and **unknown is never zero** — an
+  unreadable price renders `unknown`, an unreachable safety screen renders
+  `UNSCREENED` (never "safe"), a balance that failed to read is listed
+  separately as unknown, and a partial portfolio scan says outright which
+  addresses it looked at and that anything outside that set is invisible. Only
+  high-confidence prices enter a portfolio total, so an attacker-seeded pool
+  cannot inflate the headline figure an owner reads. Token metadata is pinned
+  for verified tokens and frozen on first sight otherwise, with any later
+  divergence surfaced as `metadata_changed` rather than accepted. Results are
+  untrusted-wrapped (a token's `name`/`symbol` are chosen by whoever deployed
+  the contract), and `portfolio` alone is gated while a session is
+  correspondent-tainted. An `ALCHEMY_API_KEY` upgrades holdings enumeration
+  from an honest partial scan to a complete index; it is never required.
+- **On-chain transfers behind a transaction guard (`defi_trade`,
+  `DEFI_TRADE_ENABLED`, default off):** the first verb that can move real
+  funds — `transfer`, with `dry_run=true` by default. Every call routes through
+  a single choke point (`core/wallet/tx_guard.py`) that **simulates the
+  transaction, measures its observed asset and allowance deltas, and asserts
+  them against a declared intent — refusing on any disagreement or any probe
+  failure.** The bound is not "we only wrote safe verbs", which stops being a
+  security property the moment the agent supplies its own calldata. Nine
+  ordered, fail-closed gates run before anything is signed: owner kill-switch,
+  turn origin (a forged, self-wake, delegation-result, delegated-leaf or
+  autonomous turn can never reach a money verb, and an unprovable origin
+  refuses), structural checks, an RPC-trust gate that refuses to arm on the
+  shared public endpoint, simulation trustworthiness, the delta assertion (an
+  *undeclared* allowance grant refuses outright — a hidden approve is the one
+  effect a USD cap cannot bound, because the drain happens in a later
+  transaction), pricing (an unpriceable outflow refuses), the per-transaction
+  ceiling plus rolling daily caps and replay guard, and finally the approval
+  lane: above `DEFI_AUTONOMOUS_MAX_USD` (default `$25`) the call returns
+  `lane=owner_queue` and does **not** execute. Result rendering is honest by
+  construction — a refusal says NOT SENT, a reverted receipt says the transfer
+  did not happen but gas was spent, and a receipt that never arrived says
+  BROADCAST BUT NOT CONFIRMED and warns against blind retry. The signing
+  perimeter is deliberately narrow: transaction signing refuses a transaction
+  with no `chainId` (EIP-155 replay exposure), and typed-data signing is kept
+  off the money path entirely, since a signed permit is not a transaction and
+  would bypass simulation, deltas, caps and audit. `defi_trade` is classified
+  money + high-impact + delegation-blocked, so it is explicit-grant-only and
+  the agent cannot self-serve it; it is ANDed with — never a replacement for —
+  the existing wallet caps, kill-switch and `owner_queue` approval lane.
+- **Declarative LLM provider registry (proposal 024 P0,
+  `LLM_PROVIDER_REGISTRY`, default on):** one `ProviderSpec` table
+  (`modules/llm/provider_spec.py`) now describes every LLM provider — identity,
+  credential shape, transport, base URL, capabilities — and the thirteen
+  historical hand-maintained provider lists (profiles, `PROVIDER_CONFIG`,
+  schema-generator routing, native-tools list, key→provider detection, fallback
+  hierarchy, the OpenAI-compat model map, …) are derivations of it. Users can
+  declare NEW providers with zero code in `~/.polyrob/providers.yaml`
+  (`LLM_CUSTOM_PROVIDERS`): any OpenAI-compatible endpoint (Ollama, LM Studio,
+  vLLM, llama.cpp, LiteLLM, Groq, Together, Fireworks, corporate gateways) or
+  Anthropic-compatible endpoint (z.ai GLM Coding Plan, incl. bearer auth) —
+  served by two generic spec-parameterized clients. Declared models join the
+  model registry (ownership routing through the OpenAI-compat surface and
+  `check_provider_model`); the `polyrob model` picker UI joins in the L1.5
+  surface wave. Byte-identical
+  with the flag off or no user file (pinned by a dual-mode characterization
+  suite + a provider-list ratchet test); `providers.yaml` is treated as a
+  credential-equivalent file (denied to agent file tools — it redirects the
+  agent's inference endpoint), and `auth.json` stores are name-denied
+  everywhere in preparation for 024 L1.
+- **LLM credential layer (proposal 024 L1, `LLM_AUTH_STORE_ENABLED`, default
+  off):** `core/llm_auth/` — a durable credential store at
+  `~/.polyrob/auth.json` (0600 `O_EXCL` create, cross-process `flock`, atomic
+  replace), the single `resolve_credential` oracle (env key → OAuth entry →
+  consent-tagged borrowed entry → no-credential sentinel), credential
+  **health** (`ok`/`rate_limited`/`exhausted`, `last_status_at`-reconciled so
+  a lost exhaustion marker can never resurrect a spent subscription), and an
+  auth error taxonomy (`relogin_required` vs throttle). Fail-closed tenancy:
+  the store only serves on a single-owner `POLYROB_LOCAL` deployment. The
+  credential layer is agent-unreachable by construction (pinned by tests), and
+  both secret scrubbers now redact JWT-shaped OAuth tokens via one shared
+  pattern. OAuth connect flows (L2) and surface un-blinding (L1.5) are the
+  next phases.
+
+### Changed
+
+- **Provider and credential UX is honest end-to-end.** A 15-finding evaluation
+  of provider setup and usage flows closed two outright blockers and thirteen
+  smaller lies. `polyrob serve` used to import a repo-root module that is in no
+  wheel, so *every installed* `polyrob serve` died with a `ModuleNotFoundError`
+  instead of the intended no-key refusal — the server entry point now lives in
+  the package and gates before importing it. Keyless-by-design providers (a
+  local Ollama, the documented rail) were excluded from the gating oracles, so
+  a keyless box was refused even when explicitly asked for it; they are now
+  first-class. Beyond that: `polyrob doctor` and `polyrob model` derive status
+  from one vocabulary (`present` / `malformed` / `missing` / `no key needed`)
+  instead of contradicting themselves between a table and its footer; a
+  rejected `providers.yaml` row is queryable state in `doctor` rather than a
+  transient log warning; `polyrob init` no longer prompts for the API key of a
+  keyless provider; `polyrob run -p <unknown>` prints the known-provider list
+  instead of a traceback; `GET /v1/models` derives from the spec registry so
+  declared providers are discoverable by OpenAI SDK clients; error messages
+  name the *session's actual* provider (a `-p zai-coding` failure no longer
+  reports "provider openrouter failed" or "from AnthropicCompatClient"); and
+  remedies point at `polyrob doctor` / `init` / `config set` / `providers.yaml`
+  rather than a repo-relative env path that does not exist on an installed box.
+  `POLYROB_<PROVIDER>_MODEL` is now a registered catalog row, and the
+  credential-surface write refusal moved into the config oracle so any remote
+  surface inherits it.
+- **Repo-wide duplication and dead-code sweep.** A verified audit removed
+  several thousand lines of unreachable surface — a retired second billing path
+  that re-implemented the markup math, an unused A2A client, dead LLM client
+  and manager methods (including a third "which provider owns this model"
+  implementation), dead database/memory modules and ~20 zero-caller methods,
+  orphaned telemetry models, and a 346-line duplicate Markdown formatter — and
+  consolidated the survivors onto single sources of truth: one bool/float env
+  parser battery, one secret-scrub sequence, one x402 database/telemetry
+  helper, one payments network table, one persistent-backend cache, one
+  surface-command envelope behind the seven `polyrob <surface>` commands, one
+  sidecar-DB path resolver, and one FTS query builder. Behaviour-preserving
+  except where the duplication was itself the bug (see Fixed/Security).
+
+### Fixed
+
+- **Credit death is fail-fast again.** The billing block's deliberate
+  `InsufficientCreditsError` was being absorbed by the generic exception
+  boundaries guarding the native-tools → structured-output → plain-call →
+  manual-parse chain, so each absorbed raise bought *another* billable provider
+  call: one out-of-credits step could make up to four paid calls before the
+  credit sentinel saw it. A timeout at the outer boundary was likewise answered
+  by starting another full-timeout call.
+- **A stray "billing" or "402" in an application exception no longer halts the
+  session.** Both branches that stop the agent classified any exception by bare
+  substring match on its message, so a database error on the shipped
+  `billing_failures` table, or a 500 on a path containing `/402`, killed the
+  run with "PERMANENT ERROR — check API configuration" and pointed the operator
+  at their API keys for a bug in application code. Both branches are now
+  type-gated to the LLM error family, matching the sentinel that already was.
+- **Provider fallback now updates every model source of truth.** After an
+  automatic failover the session still named the *failed* provider for billing
+  (corrupting per-provider spend and provider-health data), context compaction
+  still ran against the dead client, and token budgets were never re-derived.
+  Fallback now routes through the same adoption path as the deliberate
+  hot-swap.
+- **Tool results could be cross-wired to the wrong call.** When identity
+  pairing was unavailable, the positional fallback walked calls and results
+  with the same index — but a call dropped by pre-execution validation stays in
+  the call list and contributes no result, shifting every later call by one. A
+  tool message could be built from a *different* call's output while the call
+  that actually ran was reported to the model as "not executed", with no error
+  surfaced anywhere.
+- **Per-session reflection state no longer leaks across tenants.** The memory
+  manager is a container singleton, but the reflection model and its billing
+  identity were assigned straight onto it — last-writer-wins, so one tenant's
+  reflection ran on another tenant's aux model and the usage record was written
+  against the wrong user, session and agent.
+- **The tool-free-response counter is actually consecutive.** It was never
+  reset on a productive step, so it counted empty responses over the whole life
+  of the agent: a model that emitted one tool-free step at step 3 and another
+  at step 44 drew a "2 consecutive steps" escalation and was scolded for
+  something it had not done, and `ALLOWED_REASONING_TURNS` degenerated from
+  "one planning turn per run" into "one per two empty responses ever".
+- **Two background paths no longer block the shared event loop.** The skill
+  curator's tick and the every-10-steps memory save both did synchronous SQLite
+  and filesystem work inline on the loop that also serves live chat, API, goal
+  and cron sessions — under write contention one curator tick could stall every
+  session in the process for seconds. Both now run off-thread.
+- **`GET /api/admin/users/search` works again.** It was registered after
+  `/users/{user_id}`, so FastAPI matched the path-param route first and every
+  search landed in `get_user("search")`. Route order is now pinned by a test.
+- Judge-model calls whose structured output failed to bind went **unbilled**
+  even though the provider ran and charged for them; the `<environment>` block's
+  "Tools loaded this session" line had never rendered (it read an attribute the
+  agent does not have); a browser-state exception left a `None` that downstream
+  code dereferenced unconditionally; feed mirroring of memory reads/writes had
+  raised a `TypeError` on every call since it shipped (swallowed at debug
+  level); and a lingering inline copy of the streaming fallback on the billing
+  path was converted to the shared helper.
+
+### Security
+
+- **Four policy gates that matched nothing are live again.** Container-tool
+  actions register namespaced as `{tool_id}_{action}`, but four policy sets
+  listed the *bare* verb — and an exact-match gate keyed on a name the runtime
+  never emits fires never, while every unit test passed because the tests
+  asserted the same fiction. Consequences: `PAYMENT_APPROVAL_MODE` had **never
+  gated invoice creation** under either mode; the scoped tainted-reply
+  exemption was dead for email; and the redundant name entries protecting
+  high-impact verbs (code execution, deploy/undeploy, the x402 ledger reads)
+  were absent. All four sets now carry runtime names, and an action-name parity
+  ratchet fails the build if a gate ever again names a verb the runtime cannot
+  emit.
+- **Correspondent taint is cleared on delivery, not on submit.** The clear ran
+  at the top of message submission, before the checks that decide whether the
+  message is even accepted — so three rejection paths (unknown agent id, and
+  either queue full) re-opened every high-impact tool while the session still
+  held untrusted third-party data and no owner turn had entered. Anyone able to
+  make the queue reject could open the gate without the owner doing anything.
+  The clear now happens at the drain point, where the message provably enters
+  the turn.
+- **One ordered secret-scrub battery.** The logging filter's private copy of
+  the substitution sequence had dropped the JWT rung, so OAuth access and
+  refresh tokens survived into log lines — and the fast-path gate skipped a
+  bare JWT entirely. The persisted-content scrubber, the logging filter and the
+  CLI display scrubber now all delegate to one sequence.
+- **An RPC provider error is UNKNOWN, never a confirmed zero.** The JSON-RPC
+  helper returned `result` unconditionally, so an `{"error": …}` body mapped to
+  `0`. A rate-limited endpoint therefore reported a *confirmed* `$0.00` wallet
+  balance; worse, the x402 treasury scan swallowed the failure and returned
+  "nothing there", advancing its checkpoint past an unread block range — and
+  because the checkpoint refuses to regress, a payer's real transfer in that
+  range was lost permanently, without even an unmatched-payment notice. The
+  scan now distinguishes "not scanned" from "scanned, empty" and holds its
+  checkpoint so the next tick retries. Operators can pin a real endpoint per
+  chain with `DEFI_EVM_RPC_<CHAIN>`.
+- **MCP HTTP health checks are SSRF-validated.** The connectivity probe built a
+  raw session against a user-supplied URL with no validation and redirect
+  following; it now uses the same validate-and-pin path as every other MCP HTTP
+  hop, with redirects disabled.
+- **Workspace confinement no longer accepts sibling directories.** The path
+  validator's `realpath().startswith(root)` check passed `/tmp/ws-evil` for a
+  root of `/tmp/ws`; it now delegates to the shared containment helper.
+- Two browser lifecycle methods and a context manager pair were each defined
+  twice in one class body (Python keeps the last definition, so the first pair
+  was silently dead), a duplicate money gate in the usage tracker was deleted,
+  and `supports_native_tools` now answers from the provider spec first — the
+  hardcoded substring list had been shadowing it and contradicting the spec.
+
 ## [0.9.0] — 2026-07-25
 
 Reliability, autonomy, and honesty hardening across the agent loop, plus two new

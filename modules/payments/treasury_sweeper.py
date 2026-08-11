@@ -9,6 +9,8 @@ import logging
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 
+from modules.payments.networks import chain_configs, TOKEN_ADDRESSES, ERC20_TRANSFER_ABI
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,29 +45,9 @@ class TreasurySweeper:
         # Gas price multiplier for priority
         self.gas_multiplier = 1.2
 
-        # Chain configurations
-        self.chains = {
-            'ethereum': {
-                'rpc_url': getattr(config, 'ethereum_rpc_url', None),
-                'chain_id': 1
-            },
-            'sepolia': {
-                'rpc_url': getattr(config, 'sepolia_rpc_url', None),
-                'chain_id': 11155111
-            }
-        }
-
-        # Token contract addresses (same as deposit monitor)
-        self.token_addresses = {
-            'ethereum': {
-                'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-                'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-            },
-            'sepolia': {
-                'USDC': '0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238',
-                'USDT': '0x7169D38820dfd117C3FA1f22a697dBA58d90BA06'
-            }
-        }
+        # Chain configurations + token addresses (shared SSOT with DepositMonitor)
+        self.chains = chain_configs(config)
+        self.token_addresses = TOKEN_ADDRESSES
 
         # Running flag
         self.running = False
@@ -290,28 +272,7 @@ class TreasurySweeper:
                 self.logger.error(f"Token {token_symbol} not configured on {chain_name}")
                 return None
 
-            # ERC20 ABI for transfer
-            abi = [
-                {
-                    "constant": True,
-                    "inputs": [{"name": "_owner", "type": "address"}],
-                    "name": "balanceOf",
-                    "outputs": [{"name": "balance", "type": "uint256"}],
-                    "type": "function"
-                },
-                {
-                    "constant": False,
-                    "inputs": [
-                        {"name": "_to", "type": "address"},
-                        {"name": "_value", "type": "uint256"}
-                    ],
-                    "name": "transfer",
-                    "outputs": [{"name": "", "type": "bool"}],
-                    "type": "function"
-                }
-            ]
-
-            contract = w3.eth.contract(address=token_address, abi=abi)
+            contract = w3.eth.contract(address=token_address, abi=ERC20_TRANSFER_ABI)
 
             # Get balance
             balance = contract.functions.balanceOf(from_address).call()

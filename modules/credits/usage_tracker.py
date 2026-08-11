@@ -581,23 +581,6 @@ class LLMUsageTracker:
         except Exception as e:
             self.logger.warning(f"Failed to write telemetry (non-critical): {e}")
 
-    async def _should_deduct_credits(self, user_id: str) -> bool:
-        """Check if we should deduct credits from this user.
-
-        x402 users pay per-request via cryptocurrency signature, not via credits.
-        Admin users also bypass credit deduction.
-
-        Args:
-            user_id: User to check
-
-        Returns:
-            True if credits should be deducted, False to skip
-        """
-        # Routes through the cached tier lookup (SSOT for tier); x402/admin are exempt.
-        # On lookup failure _get_user_tier returns "" -> deduct (fail-safe).
-        tier = await self._get_user_tier(user_id)
-        return tier not in ("x402", "admin")
-
     async def _deduct_from_balance(self, record: UsageRecord):
         """Deduct credits from user balance with configurable enforcement.
 

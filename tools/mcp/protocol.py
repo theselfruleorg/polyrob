@@ -5,9 +5,8 @@ import json
 import socket
 import uuid
 import time
-from typing import Dict, Any, Optional, List, Union, AsyncIterator, Awaitable, Callable
+from typing import Dict, Any, Optional, List, Union, Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
 import aiohttp
 import subprocess
 
@@ -127,13 +126,6 @@ def _validate_and_pin_connector(
         # nothing else can re-resolve it.
         use_dns_cache=False,
     )
-
-
-class MCPMessageType(str, Enum):
-    """MCP message types."""
-    REQUEST = "request"
-    RESPONSE = "response" 
-    NOTIFICATION = "notification"
 
 
 @dataclass

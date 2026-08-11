@@ -99,7 +99,11 @@ def test_bare_wallet_view_surfaces_real_error_when_seed_is_fine(monkeypatch):
     result = runner.invoke(wallet_cmd, [])
     assert result.exit_code == 0, result.output
     assert "seed missing/short" not in result.output
-    assert "could not convert" in result.output.lower()
+    # The real config error must surface, naming the offending key (the parse
+    # now raises "<KEY> is not a finite number: ..." instead of CPython's bare
+    # "could not convert" — same contract, better message).
+    assert "AGENT_WALLET_MAX_PER_TX_USD" in result.output
+    assert "not a finite number" in result.output.lower()
 
 
 def test_bare_wallet_view_friendly_on_invalid_bip44_seed(monkeypatch):

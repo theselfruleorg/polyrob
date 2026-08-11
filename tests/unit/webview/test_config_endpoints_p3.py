@@ -70,3 +70,28 @@ def test_read_only_blocks_all_writes(monkeypatch, tmp_path):
     c = _client(monkeypatch, tmp_path, read_only=True)
     r = c.patch("/api/webgate/config/goals.daily_quota", json={"value": "3"})
     assert r.status_code == 403
+
+
+def test_credential_surface_flags_never_console_writable(monkeypatch, tmp_path):
+    """024 §2.6: flags that select the inference endpoint / credential store are
+    refused on the console PATCH surface even at the owner (local) posture."""
+    c = _client(monkeypatch, tmp_path, posture="local")
+    for key in ("LLM_CUSTOM_PROVIDERS", "POLYROB_AUTH_STORE",
+                "LLM_AUTH_STORE_ENABLED", "LLM_CREDENTIAL_BORROW",
+                "LLM_PROVIDER_REGISTRY"):
+        r = c.patch(f"/api/webgate/config/{key}", json={"value": "x"})
+        assert r.status_code == 403, key
+        assert "not writable from the console" in r.json()["error"]
+
+
+def test_config_get_marks_console_unwritable(monkeypatch, tmp_path):
+    """Legibility, not just enforcement: the GET payload says WHICH flags the
+    console cannot write, so the UI never has to discover it via a 403."""
+    c = _client(monkeypatch, tmp_path, posture="local")
+    rows = c.get("/api/webgate/config",
+                 params={"query": "LLM_CUSTOM_PROVIDERS"}).json()["settings"]
+    row = next(r for r in rows if r["key"] == "LLM_CUSTOM_PROVIDERS")
+    assert row["console_writable"] is False
+    rows2 = c.get("/api/webgate/config",
+                  params={"query": "GOALS_ENABLED"}).json()["settings"]
+    assert next(r for r in rows2 if r["key"] == "GOALS_ENABLED")["console_writable"] is True

@@ -77,9 +77,6 @@ class ToolCallTracker:
         from tools.mcp.validation_tracker import MCPValidationTracker
         self._mcp_validation = MCPValidationTracker(logger=self.logger)
 
-        # ID generation counter for globally unique IDs (Issue #7 fix)
-        self._id_counter = 0
-
         self.logger.debug(f"ToolCallTracker initialized for session {session_id}")
 
     def register_tool_calls(self, tool_calls: List[Dict[str, Any]]) -> List[str]:
@@ -128,34 +125,6 @@ class ToolCallTracker:
         """
         with self._lock:
             return self._current_step_calls.copy()
-
-    def get_normalized_calls(self, call_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
-        """
-        Get normalized tool calls by IDs.
-
-        Args:
-            call_ids: Optional list of specific IDs (uses current step if not provided)
-
-        Returns:
-            List of normalized tool call dictionaries
-        """
-        with self._lock:
-            if call_ids is None:
-                call_ids = self._current_step_calls
-
-            normalized = []
-            for call_id in call_ids:
-                if call_id in self._active_calls:
-                    record = self._active_calls[call_id]
-                    if record.normalized_call:
-                        normalized.append(record.normalized_call)
-                elif call_id in self._completed_calls:
-                    record = self._completed_calls[call_id]
-                    if record.normalized_call:
-                        normalized.append(record.normalized_call)
-
-            return normalized
-
 
     def mark_completed(self, call_id: str, result: Any = None) -> bool:
         """
@@ -384,24 +353,6 @@ class ToolCallTracker:
         with self._lock:
             return call_id in self._active_calls or call_id in self._completed_calls
 
-    def get_call_record(self, call_id: str) -> Optional[ToolCallRecord]:
-        """
-        Get complete record for a tool call.
-
-        Args:
-            call_id: Tool call ID
-
-        Returns:
-            ToolCallRecord or None if not found
-        """
-        with self._lock:
-            if call_id in self._active_calls:
-                return self._active_calls[call_id]
-            elif call_id in self._completed_calls:
-                return self._completed_calls[call_id]
-            return None
-
-
     def get_statistics(self) -> Dict[str, Any]:
         """
         Get tracker statistics.
@@ -459,26 +410,6 @@ class ToolCallTracker:
                 "orphaned_calls": 0
             }
             self.logger.info(f"ToolCallTracker reset for session {self.session_id}")
-
-    # ========== Issue #7 Fix: Centralized ID Generation ==========
-
-    def generate_call_id(self, tool_name: str = "call") -> str:
-        """Generate a globally unique tool call ID.
-
-        Format: call_{session_prefix}_{counter}_{timestamp_suffix}
-
-        Args:
-            tool_name: Optional tool name for context
-
-        Returns:
-            Unique tool call ID
-        """
-        with self._lock:
-            self._id_counter += 1
-            # Use session prefix (first 8 chars) + counter + timestamp suffix
-            session_prefix = self.session_id[:8] if self.session_id else "unknown"
-            timestamp_suffix = datetime.now().strftime("%H%M%S")
-            return f"call_{session_prefix}_{self._id_counter}_{timestamp_suffix}"
 
     # ========== Issue #1 Fix: MCP Validation Failure Tracking ==========
 

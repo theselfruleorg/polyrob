@@ -62,19 +62,18 @@ safe.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
 import shlex
 import shutil
-import signal
 import time
 from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 
 from core.env import bool_env as _bool_env, float_env as _float_env, int_env as _int_env
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
-from tools.code_exec.env_policy import SECRET_PAT, build_child_env
+from tools.code_exec.backends._proc import run_group
+from tools.code_exec.env_policy import SECRET_PAT
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
@@ -118,38 +117,9 @@ async def _default_ssh_runner(
     """
     stdin_bytes = input.encode() if input is not None else None
 
-    def _run_sync():
-        import subprocess
-        try:
-            proc = subprocess.Popen(
-                args, env=build_child_env({}),
-                stdin=subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True,  # own process group -> killpg on timeout
-            )
-        except Exception as e:
-            return 1, b"", f"ssh launch error: {type(e).__name__}: {e}".encode(), False
-        try:
-            out, err = proc.communicate(input=stdin_bytes, timeout=timeout)
-            return proc.returncode, out, err, False
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-            try:
-                out, err = proc.communicate(timeout=5)
-            except Exception:
-                out, err = b"", b""
-            return (proc.returncode if proc.returncode is not None else 1), out, err, True
-
-    loop = asyncio.get_event_loop()
-    code, out, err, timed_out = await loop.run_in_executor(None, _run_sync)
-    out_text = (out or b"").decode("utf-8", errors="replace")
-    err_text = (err or b"").decode("utf-8", errors="replace")
+    code, out_text, err_text, timed_out = await run_group(
+        args, stdin_bytes=stdin_bytes, timeout=timeout, label="ssh"
+    )
     if timed_out:
         raise _SshRunnerTimeout(err_text or f"ssh (local CLI) timed out after {timeout}s")
     return code, out_text, err_text

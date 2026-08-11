@@ -105,6 +105,19 @@ for _name, _group, _default in CATALOG:
         REGISTRY.setdefault(_name, _flag)
 
 
+def pattern_flag_for(name: str) -> Optional[Flag]:
+    """Match *name* against the dynamic ``<...>`` catalog patterns (e.g.
+    ``POLYROB_<PROVIDER>_MODEL`` ← ``POLYROB_OPENROUTER_MODEL``). Placeholders
+    match ``[A-Z0-9_]+`` (mirrors ``core.prefs.catalog_lookup``); returns the
+    pattern Flag or None."""
+    import re
+    for f in PATTERNS:
+        rx = re.sub(r"<[A-Z_]+>", "[A-Z0-9_]+", re.escape(f.name))
+        if re.fullmatch(rx, name):
+            return f
+    return None
+
+
 DynamicDefault = Callable[[str], Optional[tuple]]
 
 

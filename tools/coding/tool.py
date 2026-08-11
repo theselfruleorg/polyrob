@@ -126,13 +126,22 @@ class CodingTool(BaseTool):
         # the project cwd, so confinement alone can't stop a coding action from
         # reading/rewriting a config/.env.production that lives in the project.
         from core.security.secret_guard import is_credential_file, is_protected_config_path
-        if is_credential_file(Path(target)):
-            raise CodingError(f"refusing to touch a credential/secret file: {file_path}")
-        # Protected identity files (owner-UX P1 T6): preferences.toml/contract.md
-        # under an identity/ segment are only writable via the gated
-        # action/CLI/webview seams, never by the coding tool.
-        if is_protected_config_path(Path(target)):
-            raise CodingError(f"refusing to touch a protected config/identity file: {file_path}")
+        # 024 review I2: screen the REAL path too — an in-root symlink
+        # (`notes.md -> .polyrob/auth.json`) stays within the root and evades a
+        # lexical-only name check.
+        candidates = {Path(target)}
+        try:
+            candidates.add(Path(os.path.realpath(target)))
+        except OSError:
+            pass
+        for candidate in candidates:
+            if is_credential_file(candidate):
+                raise CodingError(f"refusing to touch a credential/secret file: {file_path}")
+            # Protected identity files (owner-UX P1 T6): preferences.toml/contract.md
+            # under an identity/ segment are only writable via the gated
+            # action/CLI/webview seams, never by the coding tool.
+            if is_protected_config_path(candidate):
+                raise CodingError(f"refusing to touch a protected config/identity file: {file_path}")
         return target
 
     # --- code_exec backend resolution (P1-B F7b) ------------------------------
@@ -155,34 +164,16 @@ class CodingTool(BaseTool):
         backend under ``(sid, True)`` (writable ``/install`` mounted at setup) so
         a pytest installed by ``run_code(packages=[...])`` is importable here.
         Non-dev keeps the legacy ``resolve_backend(session_id=sid)`` call shape.
+
+        Shared logic lives in ``tools.code_exec.backend_cache`` (dedup with
+        ``CodeExecutionTool._get_backend``). ``resolve_backend`` is imported here
+        at call time so tests patching ``tools.code_exec.resolve_backend`` (the
+        package attribute) keep working.
         """
-        from tools.code_exec import resolve_backend, code_exec_docker_persistent_enabled
+        from tools.code_exec import resolve_backend
+        from tools.code_exec.backend_cache import resolve_cached_backend
 
-        sid = None
-        if code_exec_docker_persistent_enabled():
-            sid = getattr(execution_context, "session_id", None) or None
-
-        if sid:
-            key = (sid, bool(dev_mode))
-            cached = self._persistent_backends.get(key)
-            if cached is not None:
-                return cached
-            async with self._persistent_lock:
-                cached = self._persistent_backends.get(key)  # re-check: lost the race?
-                if cached is None:
-                    if dev_mode:
-                        cached = resolve_backend(session_id=sid, dev_mode=True)
-                    else:
-                        cached = resolve_backend(session_id=sid)
-                    await cached.setup()
-                    self._persistent_backends[key] = cached
-                return cached
-
-        if self._backend is None:
-            backend = resolve_backend()
-            await backend.setup()
-            self._backend = backend
-        return self._backend
+        return await resolve_cached_backend(self, execution_context, dev_mode, resolve_backend)
 
     @staticmethod
     def _ok(content):

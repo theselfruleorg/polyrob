@@ -195,3 +195,37 @@ def build_load_skill_result(session_skills, skill_id, activated=None, skill_dir=
     if skill_dir is not None:
         result.metadata['skill_resources'] = list_skill_resources(skill_dir)
     return result
+
+
+def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
+                     item_id=None, created_by="agent"):
+    """Build the fail-open ``_self_mod_ev`` closure used by the self-modifying
+    actions (memory notes / skill_manage / self_context_manage / owner_doc_manage /
+    preferences) to record a first-class ``self_modification`` event on the
+    durable event log.
+
+    ``item_id``/``created_by`` are the per-action defaults; the returned closure
+    accepts per-call overrides. Mirrors the keyword surface of
+    ``agents.task.telemetry.self_events.emit_self_modification`` exactly.
+    NOTE: the closure is an internal telemetry helper, never a registered action,
+    so the registry's first-param-annotation introspection does not apply here.
+    """
+    default_item_id = item_id
+    default_created_by = created_by
+
+    def _self_mod_ev(action, item_id=None, *, pending=None, ok=True, created_by=None):
+        try:
+            from agents.task.telemetry.self_events import emit_self_modification
+            emit_self_modification(
+                kind=kind, action=action,
+                item_id=str((item_id if item_id is not None else default_item_id) or ""),
+                user_id=user_id or "",
+                session_id=(getattr(execution_context, 'session_id', None)
+                            or getattr(controller, 'session_id', '') or ""),
+                pending=pending,
+                created_by=(created_by if created_by is not None else default_created_by),
+                source=source, ok=ok)
+        except Exception:
+            pass
+
+    return _self_mod_ev

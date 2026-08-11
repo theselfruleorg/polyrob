@@ -198,85 +198,6 @@ class ConversationContexts:
             self.logger.error(f"Error retrieving all conversation contexts: {e}", exc_info=True)
             return []
 
-    async def update_mode(self, conversation_id: str, mode: str, metadata: Optional[Dict[str, Any]] = None) -> None:
-        """Update conversation mode."""
-        try:
-            await self.connection.execute(
-                """
-                UPDATE conversation_contexts 
-                SET mode = ?, mode_metadata = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE conversation_id = ?
-                """,
-                (mode, json.dumps(metadata) if metadata else '{}', conversation_id)
-            )
-            self.logger.debug(f"Updated mode for conversation {conversation_id} to {mode}")
-        except Exception as e:
-            self.logger.error(f"Error updating mode for conversation {conversation_id}: {e}")
-            raise
-
-    async def add_keyword(self, conversation_id: str, keyword: str) -> None:
-        """Add a keyword to the conversation."""
-        try:
-            # Get current keywords
-            query = "SELECT keywords FROM conversation_contexts WHERE conversation_id = ?"
-            row = await self.connection.fetch_one(query, (conversation_id,))
-            current_keywords = json.loads(row['keywords']) if row and row['keywords'] else []
-            
-            # Add new keyword if not already present
-            keyword_lower = keyword.lower()
-            if keyword_lower not in current_keywords:
-                current_keywords.append(keyword_lower)
-
-            await self.connection.execute(
-                """
-                UPDATE conversation_contexts 
-                SET keywords = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE conversation_id = ?
-                """,
-                (json.dumps(current_keywords), conversation_id)
-            )
-            self.logger.debug(f"Added keyword '{keyword}' to conversation {conversation_id}")
-        except Exception as e:
-            self.logger.error(f"Error adding keyword to conversation {conversation_id}: {e}")
-            raise
-
-    async def remove_keyword(self, conversation_id: str, keyword: str) -> None:
-        """Remove a keyword from the conversation."""
-        try:
-            # Get current keywords
-            query = "SELECT keywords FROM conversation_contexts WHERE conversation_id = ?"
-            row = await self.connection.fetch_one(query, (conversation_id,))
-            current_keywords = json.loads(row['keywords']) if row and row['keywords'] else []
-            
-            # Remove keyword
-            keyword_lower = keyword.lower()
-            current_keywords = [k for k in current_keywords if k != keyword_lower]
-
-            await self.connection.execute(
-                """
-                UPDATE conversation_contexts 
-                SET keywords = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE conversation_id = ?
-                """,
-                (json.dumps(current_keywords), conversation_id)
-            )
-            self.logger.debug(f"Removed keyword '{keyword}' from conversation {conversation_id}")
-        except Exception as e:
-            self.logger.error(f"Error removing keyword from conversation {conversation_id}: {e}")
-            raise
-
-    async def get_keywords(self, conversation_id: str) -> List[str]:
-        """Get all keywords for a conversation."""
-        try:
-            query = "SELECT keywords FROM conversation_contexts WHERE conversation_id = ?"
-            row = await self.connection.fetch_one(query, (conversation_id,))
-            if row and row['keywords']:
-                return json.loads(row['keywords'])
-            return []
-        except Exception as e:
-            self.logger.error(f"Error getting keywords for conversation {conversation_id}: {e}")
-            return []
-
     def _row_to_context(self, row: Dict[str, Any]) -> ConversationContext:
         """Convert database row to ConversationContext."""
         try:
@@ -334,50 +255,6 @@ class ConversationContexts:
             self.logger.error(f"Error converting row to context: {e}")
             raise
 
-    async def get_by_type(self, context_type: str) -> List[ConversationContext]:
-        """Retrieve all conversation contexts of a specific type."""
-        try:
-            query = "SELECT * FROM conversation_contexts WHERE type = ?"
-            rows = await self.connection.fetch_all(query, (context_type,))
-            return [self._row_to_context(row) for row in rows]
-        except Exception as e:
-            self.logger.error(f"Error retrieving contexts by type {context_type}: {e}", exc_info=True)
-            return []
-
-    async def get_by_chat_id(self, chat_id: str) -> Optional[ConversationContext]:
-        """Retrieve a conversation context by chat_id."""
-        try:
-            query = "SELECT * FROM conversation_contexts WHERE chat_id = ?"
-            row = await self.connection.fetch_one(query, (chat_id,))
-            return self._row_to_context(row) if row else None
-        except Exception as e:
-            self.logger.error(f"Error retrieving context by chat_id {chat_id}: {e}", exc_info=True)
-            return None
-
-    async def get_by_user_id(self, user_id: str) -> List[ConversationContext]:
-        """Retrieve all conversation contexts for a specific user."""
-        try:
-            query = "SELECT * FROM conversation_contexts WHERE user_id = ?"
-            rows = await self.connection.fetch_all(query, (user_id,))
-            return [self._row_to_context(row) for row in rows]
-        except Exception as e:
-            self.logger.error(f"Error retrieving contexts for user {user_id}: {e}", exc_info=True)
-            return []
-
-    async def update_last_interaction(self, conversation_id: str, timestamp: datetime) -> None:
-        """Update the last interaction timestamp for a conversation."""
-        try:
-            query = """
-                UPDATE conversation_contexts 
-                SET last_interaction = ?, updated_at = CURRENT_TIMESTAMP 
-                WHERE conversation_id = ?
-            """
-            await self.connection.execute(query, (timestamp.isoformat(), conversation_id))
-            self.logger.debug(f"Updated last interaction for conversation: {conversation_id}")
-        except Exception as e:
-            self.logger.error(f"Error updating last interaction for conversation {conversation_id}: {e}", exc_info=True)
-            raise
-
     def _serialize_message(self, message: Message) -> Dict[str, Any]:
         """Serialize a message object to a dictionary."""
         if hasattr(message, 'to_dict'):
@@ -395,10 +272,6 @@ class ConversationContexts:
                 'timestamp': getattr(message, 'timestamp', datetime.utcnow()).isoformat(),
                 'metadata': getattr(message, 'metadata', {})
             }
-
-    async def get_by_id(self, conversation_id: str) -> Optional[ConversationContext]:
-        """Get conversation context by ID."""
-        return await self.get(conversation_id)
 
     async def save(self, context: ConversationContext) -> None:
         """Save conversation context (upsert)."""

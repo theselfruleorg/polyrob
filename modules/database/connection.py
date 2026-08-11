@@ -459,12 +459,6 @@ class DatabaseConnection:
             self.logger.error(f"Executemany error: {e} | Query: {query}")
             raise
 
-    async def get_table_names(self) -> List[str]:
-        """Get all table names from the database."""
-        query = "SELECT name FROM sqlite_master WHERE type='table';"
-        rows = await self.fetch_all(query)
-        return [row['name'] for row in rows]
-
     async def __aenter__(self):
         """Async context manager entry."""
         if not self.connection:
@@ -510,47 +504,3 @@ class DatabaseConnection:
         except Exception as e:
             self.logger.error(f"Error executing transaction: {e}")
             raise DatabaseError(f"Failed to execute transaction: {e}")
-
-def _auto_db_path() -> str:
-    """Path to auto.db, anchored to the install/repo root (not the process CWD)."""
-    from pathlib import Path
-    return str(Path(__file__).resolve().parents[2] / "data" / "auto.db")
-
-
-def get_db_connection():
-    """Get database connection."""
-    return sqlite3.connect(_auto_db_path())
-
-def init_auto_tables():
-    """Initialize auto-related tables."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Create tables from schema
-    cursor.executescript('''
-        CREATE TABLE IF NOT EXISTS auto_knowledge (
-            id TEXT PRIMARY KEY,
-            topic TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP,
-            updated_at TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS auto_interactions (
-            id TEXT PRIMARY KEY,
-            action TEXT NOT NULL,
-            result TEXT NOT NULL,
-            created_at TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS auto_cycles (
-            id TEXT PRIMARY KEY,
-            started_at TIMESTAMP,
-            ended_at TIMESTAMP,
-            status TEXT,
-            metrics JSON
-        );
-    ''')
-    
-    conn.commit()
-    conn.close()

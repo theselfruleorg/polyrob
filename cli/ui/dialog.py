@@ -264,18 +264,9 @@ def step_is_message_only(actions: List[Dict[str, Any]]) -> bool:
 
 #: Keys that mark a dict as an agent brain-state rather than an arbitrary JSON
 #: result.  Two or more present (or a ``current_state`` wrapper) ⇒ brain-state.
-_BRAIN_KEYS = frozenset(
-    {
-        "current_state",
-        "next_goal",
-        "evaluation_previous_goal",
-        "page_summary",
-        "memory",
-        "reasoning",
-        "macro_goal",
-        "subgoal",
-    }
-)
+#: One canonical set — a drifted local copy here was missing "phase", so a brain
+#: block whose only extra key was "phase" rendered as a rob bubble.
+from modules.llm.brain_scrubber import BRAIN_KEYS as _BRAIN_KEYS
 
 #: Brain-state field values that carry no information for a planning line.
 _BRAIN_PLACEHOLDERS = frozenset({"", "pending", "n/a", "none", "synthesis pending"})

@@ -53,7 +53,7 @@ def test_reflection_summary_drains_cross_session(monkeypatch):
     tcm.add_step_memory("sr", 1, {"phase": "p1", "memory": "raw fact"}, "a", finding="raw fact")
     monkeypatch.setattr(
         TaskContextManager, "_llm_consolidate",
-        lambda self, findings: "Synthesized: the raw facts add up to X.")
+        lambda self, findings, session_id="": "Synthesized: the raw facts add up to X.")
     # the phase manager keeps step-1 work in 'discovery' (premature-transition guard)
     tcm._trigger_reflection("sr", "discovery")
     drained = tcm.drain_promoted_findings("sr")

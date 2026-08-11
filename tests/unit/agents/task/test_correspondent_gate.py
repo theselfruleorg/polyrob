@@ -32,7 +32,9 @@ def test_compute_posture_verbs_are_name_high_impact():
 def test_low_impact_tools_pass():
     # P1-4: perplexity/anysite were moved to HIGH-impact (outbound egress = exfil
     # channel, parity with web_fetch/browser), so they are no longer in this list.
-    for name in ("filesystem", "task", "session_search", "send_message"):
+    # session_search likewise moved to HIGH-impact (cross-session recall is owner
+    # disclosure) — see test_cross_session_recall_actions_are_gated_while_tainted.
+    for name in ("filesystem", "task", "load_skill", "send_message"):
         assert not is_high_impact(name)
 
 
@@ -41,7 +43,8 @@ def test_egress_and_money_verbs_are_high_impact():
     # (run_code, name-parity with shell_run) + curated-memory write must be gated so a
     # correspondent-tainted session can't mint payments, exfil via query params, run
     # code, or persist injection into future prompts.
-    for name in ("x402_request", "anysite_api", "perplexity_search", "run_code",
+    for name in ("x402_invoice_x402_request", "anysite_api", "perplexity_search",
+                 "code_execution_run_code",
                  "memory", "anysite", "perplexity", "x402_invoice"):
         assert is_high_impact(name), name
 
@@ -51,20 +54,20 @@ def test_x402_read_verbs_are_high_impact_by_name():
     # x402_invoices = invoice list incl. payer contacts) must be gated by NAME — same
     # defense-in-depth as x402_request/agent_status/usage_summary — so a resolver fault
     # (get_action_details -> None) can't let a tainted session fish the financial ledger.
-    for name in ("accounting", "x402_invoices"):
+    for name in ("x402_invoice_accounting", "x402_invoice_x402_invoices"):
         assert is_high_impact(name), name
 
 
 def test_x402_read_verbs_blocked_when_tainted_even_without_resolver():
     hook = make_correspondent_gate_hook(lambda: True)
-    for name in ("accounting", "x402_invoices"):
+    for name in ("x402_invoice_accounting", "x402_invoice_x402_invoices"):
         reason = hook(name, {}, None)  # no resolver → name-only path
         assert reason and "correspondent" in reason.lower(), name
 
 
 def test_egress_money_verbs_blocked_via_tool_id_resolution():
     # Same coverage through the full is_high_impact_call path (name + owning tool_id).
-    assert is_high_impact_call("x402_request", "x402_invoice")
+    assert is_high_impact_call("x402_invoice_x402_request", "x402_invoice")
     assert is_high_impact_call("anysite_api", "anysite")
     assert is_high_impact_call("perplexity_search", "perplexity")
     assert is_high_impact_call("run_code", "code_execution")
@@ -144,21 +147,21 @@ def test_hf_deploy_verbs_are_high_impact():
     # hf_deploy publishes/deletes a PUBLIC HF Space — enumerated by NAME (parity
     # with shell_run/run_code) AND by tool_id, so a resolver fault can't let a
     # tainted session ship or tear down a Space.
-    for name in ("deploy", "undeploy", "hf_deploy"):
+    for name in ("hf_deploy_deploy", "hf_deploy_undeploy", "hf_deploy"):
         assert is_high_impact(name), name
-    assert is_high_impact_call("deploy", "hf_deploy")
-    assert is_high_impact_call("undeploy", "hf_deploy")
+    assert is_high_impact_call("hf_deploy_deploy", "hf_deploy")
+    assert is_high_impact_call("hf_deploy_undeploy", "hf_deploy")
 
 
 def test_gate_blocks_hf_deploy_when_tainted():
     hook = make_correspondent_gate_hook(lambda: True)
-    reason = hook("deploy", {}, None)
+    reason = hook("hf_deploy_deploy", {}, None)
     assert reason and "correspondent" in reason.lower()
 
 
 def test_gate_allows_hf_deploy_when_not_tainted():
     hook = make_correspondent_gate_hook(lambda: False)
-    assert hook("deploy", {}, None) is None
+    assert hook("hf_deploy_deploy", {}, None) is None
 
 
 def test_gate_fails_closed_if_taint_probe_raises():
@@ -191,7 +194,7 @@ _BLOCKED_CALLS = [
     ("goal_create", "goal"),                 # durable autonomous work
     ("goal_cancel", "goal"),
     ("objective_add", "goal"),
-    ("x402_fetch", "x402_pay"),              # the REAL auto-paying action
+    ("x402_pay_x402_fetch", "x402_pay"),     # the REAL auto-paying action
     ("twitter_post", "twitter"),             # outbound comms
     ("twitter_reply", "twitter"),
     ("go_to_url", "browser"),                # SSRF / exfil
@@ -256,8 +259,18 @@ def test_high_impact_call_allows_low_impact_tool_reads():
     for action_name, tool_id in (("read_file", "filesystem"),
                                  ("done", None),
                                  ("send_message", None),
-                                 ("session_search", None)):
+                                 ("load_skill", None)):
         assert not is_high_impact_call(action_name, tool_id), action_name
+
+
+def test_cross_session_recall_actions_are_gated_while_tainted():
+    """session_search/memory_search/recent_activity read the owner's past sessions and
+    per-run spend. They are directly-registered (tool_id=None), so the name layer is
+    the ONLY thing in front of them — and with the D1 reply exemption on, whatever
+    they return can be echoed back to the tainting party."""
+    for name in ("session_search", "memory_search", "recent_activity",
+                 "contact_history", "owner_doc_manage", "load_tool"):
+        assert is_high_impact_call(name, None), name
 
 
 def test_high_impact_call_without_tool_id_falls_back_to_name():
@@ -266,7 +279,7 @@ def test_high_impact_call_without_tool_id_falls_back_to_name():
     assert is_high_impact_call("place_limit_order", None)
     # P1-4: run_code is now name-enumerated (parity with shell_run), so a tool-id
     # resolver fault can no longer open code execution to a tainted session.
-    assert is_high_impact_call("run_code", None)
+    assert is_high_impact_call("code_execution_run_code", None)
 
 
 def test_gate_hook_uses_resolver_to_block_dead_denylist_verbs():
@@ -367,23 +380,23 @@ def test_reply_wrong_surface_denied():
                             "text": "hi"}, None)
 
 
-def test_send_email_exemption_to_tainting_address():
+def test_email_send_exemption_to_tainting_address():
     hook = _reply_hook({("email", "john@acme.com")})
-    assert hook("send_email", {"to_email": "john@acme.com", "subject": "re",
+    assert hook("email_send", {"to": "john@acme.com", "subject": "re",
                                "body": "b"}, None) is None
 
 
-def test_send_email_with_cc_never_exempt():
+def test_email_send_with_cc_never_exempt():
     """cc/bcc could exfiltrate to a third address — the exemption is 1:1 only."""
     hook = _reply_hook({("email", "john@acme.com")})
-    assert hook("send_email", {"to_email": "john@acme.com", "cc": "evil@x.com",
+    assert hook("email_send", {"to": "john@acme.com", "cc": "evil@x.com",
                                "subject": "re", "body": "b"}, None)
 
 
 def test_other_high_impact_tools_stay_denied_despite_exemption():
     hook = _reply_hook({("email", "john@acme.com")})
     assert hook("x402_pay", {}, None)
-    assert hook("run_code", {"code": "x"}, None)
+    assert hook("code_execution_run_code", {"code": "x"}, None)
     assert hook("delegate_task", {}, None)
 
 

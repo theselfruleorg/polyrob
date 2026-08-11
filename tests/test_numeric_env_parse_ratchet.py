@@ -11,10 +11,15 @@ sites migrate, never raise it.
 import pathlib
 import re
 
-_BASELINE = 65
+# 65 (2026-07-18, narrow pattern) → 93 (2026-08-09): the widened pattern newly
+# counts the `environ.get`/`env.get` shapes it used to miss. Shrink-only, as ever.
+_BASELINE = 93
 _SKIP = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
          "deployment", "docs", "scripts"}
-_PAT = re.compile(r"(?:int|float)\(os\.getenv\(")
+# Widened 2026-08-09: the original shape missed `float(os.environ.get(...))`
+# and `float(env.get(...))` (injected-Mapping style) — core/wallet/config.py's
+# AGENT_WALLET_MAX_PER_TX_USD parse was invisible to the ratchet.
+_PAT = re.compile(r"(?:int|float)\(\s*(?:os\.)?(?:getenv|environ\.get|env\.get)\(")
 
 
 def test_raw_numeric_env_parse_count_never_grows():

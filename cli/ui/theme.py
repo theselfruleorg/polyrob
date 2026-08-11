@@ -2,8 +2,9 @@
 
 Single source of truth for the visual vocabulary of the Rich renderer:
 glyphs (icons), Rich style strings, and box styles.  Honours ``NO_COLOR``
-(https://no-color.org/) and detects truecolor support so the renderer can
-degrade gracefully on poorer terminals.
+(https://no-color.org/) so the renderer can degrade gracefully on poorer
+terminals.  (Truecolor detection lives in ``cli/ui/terminal_render.py`` —
+the env-injectable ``supports_truecolor``.)
 
 No I/O beyond reading environment variables; no Rich rendering here — this
 module only provides the constants and small predicates ``blocks.py`` /
@@ -29,12 +30,6 @@ def no_color() -> bool:
     if os.environ.get("TERM", "").lower() == "dumb":
         return True
     return False
-
-
-def supports_truecolor() -> bool:
-    """Best-effort detection of 24-bit truecolor support."""
-    ct = os.environ.get("COLORTERM", "").lower()
-    return ct in ("truecolor", "24bit")
 
 
 def is_tty(stream: object | None = None) -> bool:

@@ -102,20 +102,6 @@ class SequenceGenerator:
         with self._lock:
             return self._sequence
 
-    def set_minimum(self, min_seq: int) -> None:
-        """Set minimum sequence (for recovery/replay).
-
-        If current sequence is less than min_seq, sets it to min_seq.
-        This is useful when replaying events to avoid sequence conflicts.
-
-        Args:
-            min_seq: Minimum sequence number to ensure
-        """
-        with self._lock:
-            if self._sequence < min_seq:
-                self._sequence = min_seq
-
-
 def generate_event_id() -> str:
     """Generate unique event ID.
 
@@ -138,23 +124,3 @@ def get_timestamp_ms() -> int:
     return int(time.time() * 1000)
 
 
-def enrich_event(event: dict, session_id: str) -> dict:
-    """Add sequence number, timestamp, and ID to event.
-
-    This is the primary function for enriching events with
-    ordering and identification fields.
-
-    Args:
-        event: The event dictionary to enrich
-        session_id: The session ID for sequence generation
-
-    Returns:
-        The same event dict with _seq, _ts_ms, _id added
-    """
-    seq_gen = SequenceGenerator.get(session_id)
-
-    event['_seq'] = seq_gen.next()
-    event['_ts_ms'] = get_timestamp_ms()
-    event['_id'] = generate_event_id()
-
-    return event

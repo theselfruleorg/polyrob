@@ -7,12 +7,13 @@ from typing import Dict, Mapping, Optional
 
 TESTNET_FACILITATOR_URL = "https://x402.org/facilitator"
 
-_TRUE = {"1", "true", "yes", "on"}
+from core.env import bool_from as _bool_from, parse_opt_float as _parse_opt_float, float_from as _float_from
 
 
 def _b(env: Mapping[str, str], key: str, default: bool) -> bool:
-    raw = env.get(key)
-    return default if raw is None else raw.strip().lower() in _TRUE
+    # Repo-SSOT falsey-set semantics (core.env) — the old private {1,true,yes,on}
+    # opt-in set disagreed with every other flag parser on values like "enabled".
+    return _bool_from(env, key, default)
 
 
 @dataclass(frozen=True)
@@ -37,13 +38,24 @@ class WalletConfig:
 
 
 def _opt_float(env: Mapping[str, str], key: str) -> Optional[float]:
+    # Delegates to the SSOT value parser — which also rejects inf/nan, so a
+    # WALLET_*_CAP_USD=inf can't become a ceiling that never trips.
+    return _parse_opt_float(env.get(key))
+
+
+def _req_float(env: Mapping[str, str], key: str, default: float) -> float:
+    """Loud float parse for money ceilings: unset/blank -> *default*; set but
+    non-numeric OR non-finite -> ValueError naming the key. The CLI wallet
+    view's misconfig branch (M12) RELIES on this raise to tell the owner which
+    env key is broken — a silent fallback here would turn a typo'd cap into
+    the $1000 default without anyone noticing."""
     raw = env.get(key)
     if raw is None or not str(raw).strip():
-        return None
-    try:
-        return float(raw)
-    except ValueError:
-        return None
+        return default
+    val = _parse_opt_float(raw)
+    if val is None:
+        raise ValueError(f"{key} is not a finite number: {raw!r}")
+    return val
 
 
 def _load_per_venue_caps(env: Mapping[str, str]) -> Dict[str, float]:
@@ -87,8 +99,8 @@ def effective_max_per_tx_usd(user_id: Optional[str], home_dir,
     present => byte-identical to ``load_wallet_config(env).max_per_tx_usd``
     (owner-UX G-13)."""
     from core import prefs
-    env_value = float((os.environ if env is None else env).get(
-        "AGENT_WALLET_MAX_PER_TX_USD", "1000"))
+    env_value = _req_float(os.environ if env is None else env,
+                           "AGENT_WALLET_MAX_PER_TX_USD", 1000.0)
     return prefs.resolve("budget.wallet_per_tx_usd", user_id, home_dir,
                          env_value=env_value, default=env_value)
 
@@ -135,7 +147,7 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
     network = env.get("AGENT_WALLET_NETWORK", "testnet").strip().lower()
     # Safety default: a catastrophic per-tx ceiling, NOT a budget. Was
     # $1,000,000 (a typo could drain funds); raise it explicitly if needed.
-    max_per_tx_usd = float(env.get("AGENT_WALLET_MAX_PER_TX_USD", "1000"))
+    max_per_tx_usd = _req_float(env, "AGENT_WALLET_MAX_PER_TX_USD", 1000.0)
     # Rolling 24h spend cap; unset = disabled = legacy behavior (per-tx ceiling only).
     daily_cap_usd = _opt_float(env, "WALLET_DAILY_CAP_USD")
     resolved_user = user_id if user_id is not None else _fail_open_owner_user_id()

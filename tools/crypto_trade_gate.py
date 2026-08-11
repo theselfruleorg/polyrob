@@ -15,10 +15,10 @@ and the confirmation gate.
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass
 
 from core.env import bool_env as _bool_env
+from core.env import float_env
 
 _VENUE_FLAGS = {
     "polymarket": "POLYMARKET_TRADING_ENABLED",
@@ -29,18 +29,6 @@ _VENUE_CAPS = {
     "hyperliquid": "HYPERLIQUID_TRADE_MAX_USD",
 }
 DEFAULT_LIVE_CAP_USD = 5.0
-
-
-def _float_env(name: str, default: float) -> float:
-    try:
-        value = float(os.getenv(name, str(default)))
-    except (TypeError, ValueError):
-        return default
-    # M10: a non-finite cap (nan/inf) makes `amount > cap` always False, silently
-    # voiding the per-trade cap — clamp garbage back to the safe default.
-    if not math.isfinite(value) or value <= 0:
-        return default
-    return value
 
 
 @dataclass(frozen=True)
@@ -98,7 +86,11 @@ def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecisi
     if not flag or not _bool_env(flag, False):
         return TradeGateDecision(False, f"live trading disabled for {venue} ({flag} off) — dry-run")
 
-    cap = _float_env(_VENUE_CAPS.get(venue, ""), DEFAULT_LIVE_CAP_USD)
+    # core.env.float_env already clamps unset/blank/unparsable/non-finite to the
+    # default; the M10 `<= 0` clamp stays EXPLICIT here (a zero/negative cap would
+    # silently void `amount > cap`, never arm it on garbage).
+    cap = float_env(_VENUE_CAPS.get(venue, ""), DEFAULT_LIVE_CAP_USD)
+    cap = DEFAULT_LIVE_CAP_USD if cap <= 0 else cap
     # M10: an unpriceable order (amount_usd is None) or a non-finite amount can't be
     # checked against the cap — fail CLOSED (dry-run), never arm live on an unknown value.
     if amount_usd is None or not math.isfinite(amount_usd):

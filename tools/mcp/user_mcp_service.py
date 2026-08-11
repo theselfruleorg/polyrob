@@ -561,12 +561,22 @@ class UserMCPService:
         import aiohttp
         import time
 
+        from core.exceptions import MCPConnectionError
+        from tools.mcp.protocol import _validate_and_pin_connector
+
         try:
-            async with aiohttp.ClientSession() as session:
+            # SECURITY (SSRF/DNS rebinding): validate + pin the resolved IP at
+            # connect time, exactly like the MCP transports do (protocol.py).
+            # config.url is user-supplied — never probe it with a raw session.
+            connector = _validate_and_pin_connector(
+                config.url, allow_http=False, ssl=True, validate_ssrf=True
+            )
+            async with aiohttp.ClientSession(connector=connector) as session:
                 async with session.get(
                     config.url,
                     headers=config.headers,
-                    timeout=aiohttp.ClientTimeout(total=10)
+                    timeout=aiohttp.ClientTimeout(total=10),
+                    allow_redirects=False,
                 ) as resp:
                     latency = (time.time() - start_time) * 1000
 
@@ -585,6 +595,13 @@ class UserMCPService:
                         )
                         return TestConnectionResult(success=False, error=error)
 
+        except MCPConnectionError as e:
+            # SSRF validation refused the URL — the server is not testable.
+            error = str(e)
+            await self.db.update_connection_status(
+                user_id, server_name, connected=False, error=error
+            )
+            return TestConnectionResult(success=False, error=error)
         except aiohttp.ClientError as e:
             error = f"Connection error: {str(e)}"
             await self.db.update_connection_status(

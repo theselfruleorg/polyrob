@@ -25,7 +25,6 @@ from modules.llm.messages import (
 )
 from modules.llm.adapters import BaseChatModel
 
-from tools.browser.views import BrowserState
 
 # Import centralized LLM functionality - Single source of truth
 try:

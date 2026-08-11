@@ -24,7 +24,6 @@ import click
 from modules.pfp.config import load_frozen_config, FrozenConfigError
 from modules.pfp.identity import (
     DEFAULT_SEED as _DEFAULT_SEED,
-    b36_variant as _b36_variant,
     core_config as _core_config,
     default_config,
     random_config,

@@ -11,9 +11,8 @@ from dataclasses import dataclass
 from core.config_policy import embedder_needed
 from core.config import BotConfig
 from core.exceptions import (
-    ConfigurationError, 
+    ConfigurationError,
     ServiceError,
-    ManagerError,
     AgentError,
     ComponentInitializationError
 )

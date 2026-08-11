@@ -18,24 +18,13 @@ from datetime import datetime, timedelta
 from api.auth_constants import (
     VALID_ROLES,
     VALID_TIERS,
-    validate_role,
     validate_assignable_role,
     validate_tier,
     extract_admin_info,
 )
+from api.dependencies import get_client_ip
 
 logger = logging.getLogger(__name__)
-
-
-def get_client_ip(request: Request) -> str:
-    """Get client IP from request, handling proxies."""
-    # Check X-Forwarded-For header (set by nginx/proxies)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # Take the first IP in the chain (original client)
-        return forwarded_for.split(",")[0].strip()
-    # Fall back to direct client IP
-    return request.client.host if request.client else "unknown"
 
 
 async def get_audit_logger():
@@ -305,6 +294,82 @@ async def list_users(
             lifetime_earned=u['lifetime_earned'] or 0,
             lifetime_spent=u['lifetime_spent'] or 0,
             created_at=u['created_at']
+        )
+        for u in users
+    ]
+
+
+@router.get("/users/search", dependencies=[Depends(require_admin)])
+async def search_users(
+    request: Request,
+    q: str = Query(..., min_length=1, description="Search query"),
+    field: Literal["wallet", "email", "user_id", "all"] = Query("all", description="Field to search"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
+) -> List[UserSearchResult]:
+    """Search users by wallet address, email, or user_id.
+
+    - Wallet search is case-insensitive and supports partial match
+    - Email search is case-insensitive and supports partial match
+    - User ID search is exact match prefix
+    """
+    from core.container import DependencyContainer
+    container = DependencyContainer.get_instance()
+    db = container.get_service('database_manager')
+
+    if not db:
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+    # Build search query based on field
+    search_term = q.lower().strip()
+    where_clauses = []
+    params = []
+
+    if field == "wallet" or field == "all":
+        where_clauses.append("LOWER(u.wallet_address) LIKE ?")
+        params.append(f"%{search_term}%")
+
+    if field == "email" or field == "all":
+        where_clauses.append("LOWER(u.email) LIKE ?")
+        params.append(f"%{search_term}%")
+
+    if field == "user_id" or field == "all":
+        where_clauses.append("u.user_id LIKE ?")
+        params.append(f"{search_term}%")
+
+    where_sql = f"WHERE ({' OR '.join(where_clauses)})"
+    params.extend([limit, offset])
+
+    users = await db.fetch_all(f"""
+        SELECT
+            u.user_id,
+            u.wallet_address,
+            u.email,
+            u.tier,
+            u.role,
+            u.den_token_count,
+            u.created_at,
+            COALESCE(c.balance, 0) as balance,
+            COALESCE(b.is_blocked, 0) as is_blocked
+        FROM user_profiles u
+        LEFT JOIN user_credits c ON u.user_id = c.user_id
+        LEFT JOIN blocked_users b ON u.user_id = b.user_id
+        {where_sql}
+        ORDER BY u.created_at DESC
+        LIMIT ? OFFSET ?
+    """, tuple(params))
+
+    return [
+        UserSearchResult(
+            user_id=u['user_id'],
+            wallet_address=u['wallet_address'],
+            email=u['email'],
+            tier=u['tier'],
+            role=u['role'] or 'user',
+            den_token_count=u['den_token_count'] or 0,
+            balance=u['balance'] or 0,
+            created_at=str(u['created_at']),
+            is_blocked=bool(u['is_blocked'])
         )
         for u in users
     ]
@@ -699,82 +764,6 @@ async def get_system_stats(request: Request):
             "total_revenue_usd": x402_payments['total_revenue'] if x402_payments else 0
         }
     }
-
-
-@router.get("/users/search", dependencies=[Depends(require_admin)])
-async def search_users(
-    request: Request,
-    q: str = Query(..., min_length=1, description="Search query"),
-    field: Literal["wallet", "email", "user_id", "all"] = Query("all", description="Field to search"),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0)
-) -> List[UserSearchResult]:
-    """Search users by wallet address, email, or user_id.
-
-    - Wallet search is case-insensitive and supports partial match
-    - Email search is case-insensitive and supports partial match
-    - User ID search is exact match prefix
-    """
-    from core.container import DependencyContainer
-    container = DependencyContainer.get_instance()
-    db = container.get_service('database_manager')
-
-    if not db:
-        raise HTTPException(status_code=503, detail="Database unavailable")
-
-    # Build search query based on field
-    search_term = q.lower().strip()
-    where_clauses = []
-    params = []
-
-    if field == "wallet" or field == "all":
-        where_clauses.append("LOWER(u.wallet_address) LIKE ?")
-        params.append(f"%{search_term}%")
-
-    if field == "email" or field == "all":
-        where_clauses.append("LOWER(u.email) LIKE ?")
-        params.append(f"%{search_term}%")
-
-    if field == "user_id" or field == "all":
-        where_clauses.append("u.user_id LIKE ?")
-        params.append(f"{search_term}%")
-
-    where_sql = f"WHERE ({' OR '.join(where_clauses)})"
-    params.extend([limit, offset])
-
-    users = await db.fetch_all(f"""
-        SELECT
-            u.user_id,
-            u.wallet_address,
-            u.email,
-            u.tier,
-            u.role,
-            u.den_token_count,
-            u.created_at,
-            COALESCE(c.balance, 0) as balance,
-            COALESCE(b.is_blocked, 0) as is_blocked
-        FROM user_profiles u
-        LEFT JOIN user_credits c ON u.user_id = c.user_id
-        LEFT JOIN blocked_users b ON u.user_id = b.user_id
-        {where_sql}
-        ORDER BY u.created_at DESC
-        LIMIT ? OFFSET ?
-    """, tuple(params))
-
-    return [
-        UserSearchResult(
-            user_id=u['user_id'],
-            wallet_address=u['wallet_address'],
-            email=u['email'],
-            tier=u['tier'],
-            role=u['role'] or 'user',
-            den_token_count=u['den_token_count'] or 0,
-            balance=u['balance'] or 0,
-            created_at=str(u['created_at']),
-            is_blocked=bool(u['is_blocked'])
-        )
-        for u in users
-    ]
 
 
 @router.post("/users/{user_id}/verify-token", dependencies=[Depends(require_admin)])

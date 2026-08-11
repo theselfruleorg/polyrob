@@ -17,9 +17,6 @@ import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
-_ID_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
-
-
 @dataclass
 class Job:
     """One background shell job's metadata (output/pid live in the container)."""

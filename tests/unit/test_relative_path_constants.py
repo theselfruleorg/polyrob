@@ -33,9 +33,3 @@ def test_skills_base_dir_anchored():
 
     assert get_skills_base_dir().is_absolute()
     assert get_skills_base_dir() == REPO_ROOT / "data" / "prompts" / "skills"
-
-
-def test_auto_db_path_anchored():
-    from modules.database.connection import _auto_db_path
-
-    assert Path(_auto_db_path()).is_absolute()

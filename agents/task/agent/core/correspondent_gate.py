@@ -55,6 +55,17 @@ _HIGH_IMPACT_NAMES = frozenset({
     # Gated outbound message-to-target action (registered directly, no owning
     # tool_id) — owner/allowlist-checked send to telegram/email/whatsapp.
     "message",
+    # Own-holdings read (proposal 023 T1). defi_data is otherwise a read tool
+    # whose impersonal verbs stay available while tainted, but "what and how
+    # much do I hold" is exactly the reconnaissance an attacker wants before
+    # attempting a drain. NAMESPACED runtime name — container-tool actions
+    # register as {tool_id}_{action}, so a bare "portfolio" would never match
+    # (the live x402_request bug, audit 2026-08-07 P0-2).
+    "defi_data_portfolio",
+    # 023 T3: the on-chain money verb. tx_guard refuses a tainted turn anyway,
+    # but the enumerated name is the layer that survives a tool-id resolver
+    # fault — and this is an irreversible, self-custodial send.
+    "defi_trade_transfer",
     # I-6: read-only runtime introspection (registered directly, no owning
     # tool_id) — reveals wallet balance + tenant ledger, the same money data the
     # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.
@@ -67,6 +78,28 @@ _HIGH_IMPACT_NAMES = frozenset({
     # forged correspondent could otherwise fish for "how much would you
     # invoice me").
     "usage_summary",
+    # ── Directly-registered actions (no owning tool_id, so Layer 2 can NEVER cover
+    # them — name-matched or nothing). Each discloses owner/tenant data to a session
+    # whose latest input is attacker-authored; with the D1 reply exemption on, what
+    # they return can be echoed straight back to the tainting party.
+    #
+    # owner.md: the owner's preferences, timezone, projects — the richest PII target
+    # in the process, plus a write path. Its own forged-turn guard keys on
+    # is_sub_agent/leaf/turn_kind, none of which correspondent injection sets, so this
+    # entry is the ONLY thing in front of it.
+    "owner_doc_manage",
+    # Who we have talked to and what was said, across sessions. Gated on
+    # CORRESPONDENT_ACCESS_ENABLED — the very flag that makes taint a concept — so it
+    # is live in every deployment where this gate matters at all.
+    "contact_history",
+    # Cross-session recall: past sessions' content, and the tenant run ledger with
+    # per-run spend + task text (the same money-adjacent data agent_status and
+    # usage_summary are already gated for).
+    "session_search", "memory_search", "recent_activity",
+    # Materializes a tool into the session mid-turn. USING the loaded tool stays
+    # gated, but a tainted turn must not widen the surface that the next (untainted)
+    # turn inherits — the owner clears taint without being told the toolset grew.
+    "load_tool",
     # Aspirational coding/self-evolution action names (no tool yet; harmless tokens).
     "self_modify", "mcp_install",
     # WS-5: self_env self-maintenance verbs (posture 2). Owner-only via the posture
@@ -80,21 +113,25 @@ _HIGH_IMPACT_NAMES = frozenset({
     # P1-4: code-exec verb enumerated by NAME (parity with shell_run) so a resolver
     # fault can't open arbitrary code execution to a tainted session (the code_execution
     # tool_id below only helps when resolution succeeds).
-    "run_code",
+    # ⚠️ NAMESPACED — the code_execution tool's method is `run_code`, which registers
+    # as `code_execution_run_code`; the bare name matched nothing, so this "parity"
+    # layer defended nothing and tool-id resolution was the single point of failure.
+    "code_execution_run_code",
     # hf_deploy verbs enumerated by NAME (parity with run_code/shell_run) so a
     # resolver fault can't let a tainted session publish/delete a PUBLIC HF Space
-    # (the hf_deploy tool_id below only helps when resolution succeeds).
-    "deploy", "undeploy",
+    # (the hf_deploy tool_id below only helps when resolution succeeds). Namespaced.
+    "hf_deploy_deploy", "hf_deploy_undeploy",
     # P1-4: the agent money verb — x402_invoice tool, verb x402_request — mints a
     # payment request. The canonical forged-email social-engineering target; must be
     # unreachable while correspondent-tainted (x402_fetch/x402_pay already are).
-    "x402_request",
-    # The x402_invoice tool's READ verbs — enumerated by NAME (parity with x402_request /
-    # agent_status / usage_summary) so a resolver fault can't let a tainted session read
-    # the full treasury/runtime ledger (accounting) or the invoice list incl. payer
-    # contacts (x402_invoices) — the same "fish for what you'd invoice me" disclosure the
-    # gate blocks by tool-id when resolution succeeds.
-    "accounting", "x402_invoices",
+    # Namespaced: the runtime name is `x402_invoice_x402_request`.
+    "x402_invoice_x402_request",
+    # The x402_invoice tool's READ verbs — enumerated by NAME (parity with the request
+    # verb / agent_status / usage_summary) so a resolver fault can't let a tainted
+    # session read the full treasury/runtime ledger (accounting) or the invoice list
+    # incl. payer contacts (x402_invoices) — the same "fish for what you'd invoice me"
+    # disclosure the gate blocks by tool-id when resolution succeeds. Namespaced.
+    "x402_invoice_accounting", "x402_invoice_x402_invoices",
     # P1-4: outbound-egress verbs whose query params are an exfil channel (parity with
     # web_fetch/browser, which are already blocked). anysite/perplexity reach the
     # outside world with attacker-influenced arguments.
@@ -111,8 +148,10 @@ _HIGH_IMPACT_NAMES = frozenset({
     # resolver fault can't open the money/ship-code path.
     "git_push", "github_open_pr", "github_merge_pr", "github_pr_comment",
     "github_issue_create",
-    # The auto-paying x402 action (the tool_id is x402_pay; the verb is x402_fetch).
-    "x402_fetch",
+    # The auto-paying x402 action (tool_id x402_pay, method x402_fetch) — runtime
+    # name is namespaced. (The "pay" substring in _HIGH_IMPACT_PREFIXES also catches
+    # it, but an entry should name the thing it actually gates.)
+    "x402_pay_x402_fetch",
     # Legacy tool_id tokens kept so is_high_impact(tool_id) stays truthy for callers/
     # tests that probe by tool_id. Real per-verb coverage of these tools comes from
     # HIGH_IMPACT_TOOL_IDS resolution below.
@@ -223,7 +262,13 @@ def build_tool_resolver(controller: Any) -> Callable[[str], Optional[str]]:
 # The exemption below permits message/send_email to EXACTLY the tainting
 # (surface, address): 1:1, no cc/bcc, budget- and flag-gated.
 # ---------------------------------------------------------------------------
-_REPLY_ACTIONS = frozenset({"message", "send_email"})
+# ⚠️ RUNTIME action names. `email_send` is EmailTool's decorated method (tool_id
+# `email`, already self-prefixed so it is not double-namespaced). This set read
+# `send_email` — the name of an UNDECORATED internal helper that is never registered
+# as an action — so the exemption was dead for the email tool: a tainted session
+# could never answer the very correspondent it was talking to via `email_send`, only
+# via the generic `message(surface="email", ...)` action.
+_REPLY_ACTIONS = frozenset({"message", "email_send"})
 
 
 def _param(params: Any, key: str) -> Any:
@@ -241,10 +286,13 @@ def _reply_target(action_name: str, params: Any) -> tuple:
     if name == "message":
         return (str(_param(params, "surface") or ""),
                 str(_param(params, "target") or ""))
-    if name == "send_email":
+    if name == "email_send":
+        # EmailSendAction is extra="forbid" with a single `to` field — there is no
+        # cc/bcc to widen the blast radius. Keep reading both anyway: the check is
+        # free, and it stays correct if the param model ever grows them.
         if _param(params, "cc") or _param(params, "bcc"):
             return ("", "")
-        to = _param(params, "to_email")
+        to = _param(params, "to") or _param(params, "to_email")
         if isinstance(to, (list, tuple)):
             to = to[0] if len(to) == 1 else None
         return ("email", str(to or ""))

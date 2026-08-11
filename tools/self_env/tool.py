@@ -122,6 +122,17 @@ class SelfEnvTool(BaseTool):
         if "config_policy" in target.parts:
             return None, ("refusing to patch capability-policy source "
                           f"(core/config_policy/): {rel_path}")
+        # 024 review I7 (same asymmetry as config_policy above): patching the
+        # guard itself (core/security/ — is_credential_file → return False) or
+        # the credential layer (core/llm_auth/ — AuthStore.load echoing tokens)
+        # would be a code-level bypass of every file denial in this function.
+        parts = set(target.parts)
+        if "security" in parts and "core" in parts:
+            return None, ("refusing to patch the security-guard source "
+                          f"(core/security/): {rel_path}")
+        if "llm_auth" in parts:
+            return None, ("refusing to patch the credential-layer source "
+                          f"(core/llm_auth/): {rel_path}")
         return target, None
 
     # --- subprocess seam (injectable for tests) ------------------------------

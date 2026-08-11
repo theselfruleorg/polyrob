@@ -340,10 +340,10 @@ def reject(kind, item_id, user):
 
 
 def _goal_board():
-    from pathlib import Path
     from agents.task.goals.board import GoalBoard
     from core.runtime_config import get_data_root
-    return GoalBoard(str(Path(get_data_root()) / "goals.db"))
+    from core.runtime_paths import goals_db_path
+    return GoalBoard(goals_db_path(get_data_root()))
 
 
 @owner.command("asks")

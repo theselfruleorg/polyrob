@@ -89,6 +89,17 @@ def _dynamic_default_tools() -> list[str]:
             tools.append('anysite')
     except Exception:
         pass
+    try:
+        # Registering a container tool does NOT make it callable — the id must
+        # also be in the session's loaded tool_ids. Read the flag from the tier-0
+        # SSOT rather than `tools.defi` so this stays a DOWNWARD import (the
+        # agents->tools allowlist in tests/test_layering_ratchet.py may only
+        # shrink), and so the two readers can never disagree.
+        from core.config_policy import defi_data_enabled
+        if defi_data_enabled():
+            tools.append('defi_data')
+    except Exception:
+        pass
     return tools
 
 

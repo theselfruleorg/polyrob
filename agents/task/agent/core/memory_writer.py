@@ -69,7 +69,6 @@ from core.exceptions import (
 # PIL Image imported locally in save_screenshot() method where needed
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from tools.browser.views import BrowserStateHistory, BrowserState
 from agents.task.agent.message_manager.service import MessageManager
 from agents.task.agent.prompts import SystemPrompt, AgentMessagePrompt
 from agents.task.agent.views import (
@@ -82,8 +81,6 @@ from agents.task.agent.views import (
     AgentStepInfo,
     ActionResult,
 )
-from tools.browser.context import BrowserContext
-from tools.dom.views import DOMElementNode, SelectorMap
 from agents.task.telemetry.views import (
     HumanApprovalRequestedEvent,
     HumanApprovalDecisionEvent,
@@ -314,9 +311,17 @@ class MemoryWriterMixin:
 			else:
 				self.logger.warning(f"⚠️  H-MEM save returned False for step {step_number}")
 
-			# Periodically save to disk (every 10 steps)
+			# Periodically save to disk (every 10 steps).
+			# Offloaded for the same reason add_step_memory above is (HIGH-3):
+			# save_session -> HierarchicalMemory.save is a synchronous mkdir + open +
+			# json.dump of the session's whole H-MEM state. Run inline it froze the
+			# shared event loop — every concurrent session in the process — for the
+			# duration of that write, every 10 steps of every active session.
 			if step_number % 10 == 0:
-				self.task_context_manager.save_session(self.session_id, self.user_id)
+				await asyncio.to_thread(
+					self.task_context_manager.save_session,
+					self.session_id, self.user_id,
+				)
 				self.logger.info(f"💾 Persisted H-MEM to disk (step {step_number})")
 
 		except Exception as e:

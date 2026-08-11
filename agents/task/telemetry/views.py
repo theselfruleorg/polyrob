@@ -434,25 +434,6 @@ class HumanApprovalDecisionEvent(BaseTelemetryEvent):
 
 
 @dataclass
-class UserGuidanceEvent(BaseTelemetryEvent):
-	"""Event for when user provides guidance/message to agent."""
-	agent_id: str
-	kind: str  # 'message', 'todo_update', 'approval', 'correction'
-	text: str
-	injected_at: Optional[str] = None  # Where in agent flow it was injected
-	processed: bool = False
-	name: str = 'user_guidance'
-	
-	def get_session_id(self) -> Optional[str]:
-		"""Get the session ID for this event"""
-		if hasattr(self, 'session_id') and getattr(self, 'session_id'):
-			return getattr(self, 'session_id')
-		elif self.agent_id and '_' in self.agent_id:
-			return self.agent_id.split('_', 1)[1]
-		return None
-
-
-@dataclass
 class TodoStatusEvent(BaseTelemetryEvent):
 	"""Event for TODO list status updates."""
 	agent_id: str
@@ -463,28 +444,6 @@ class TodoStatusEvent(BaseTelemetryEvent):
 	enforcement_triggered: bool = False  # If Done was blocked due to incomplete TODOs
 	name: str = 'todo_status'
 	
-	def get_session_id(self) -> Optional[str]:
-		"""Get the session ID for this event"""
-		if hasattr(self, 'session_id') and getattr(self, 'session_id'):
-			return getattr(self, 'session_id')
-		elif self.agent_id and '_' in self.agent_id:
-			return self.agent_id.split('_', 1)[1]
-		return None
-
-
-@dataclass
-class AssistantMessageEvent(BaseTelemetryEvent):
-	"""Event for chat-like assistant messages in HITL flow."""
-	agent_id: str
-	step: int
-	message: str
-	page_summary: Optional[str] = None
-	next_goal: Optional[str] = None
-	key_actions: Optional[List[str]] = None
-	url: Optional[str] = None
-	title: Optional[str] = None
-	name: str = 'assistant_message'
-
 	def get_session_id(self) -> Optional[str]:
 		"""Get the session ID for this event"""
 		if hasattr(self, 'session_id') and getattr(self, 'session_id'):
@@ -596,25 +555,6 @@ class AgentQuestionEvent(BaseTelemetryEvent):
 	timed_out: bool
 	user_response: Optional[str]  # Truncated
 	name: str = 'agent_question'
-
-	def get_session_id(self) -> Optional[str]:
-		"""Get the session ID for this event"""
-		if hasattr(self, 'session_id') and getattr(self, 'session_id'):
-			return getattr(self, 'session_id')
-		elif self.agent_id and '_' in self.agent_id:
-			return self.agent_id.split('_', 1)[1]
-		return None
-
-
-@dataclass
-class PostCompletionContinuationEvent(BaseTelemetryEvent):
-	"""Event for user continuing task after agent completion."""
-	agent_id: str
-	final_step: int
-	continuation_message: str  # Truncated
-	delay_seconds: float  # Time between done and message
-	new_task_count: int  # Steps after continuation
-	name: str = 'post_completion_continuation'
 
 	def get_session_id(self) -> Optional[str]:
 		"""Get the session ID for this event"""
@@ -938,35 +878,6 @@ class ErrorTelemetryEvent(BaseTelemetryEvent):
 
 
 @dataclass
-class VisionContentInjectedEvent(BaseTelemetryEvent):
-	"""Track when vision content is injected into agent context."""
-	agent_id: str
-	step: int
-	image_count: int
-	image_sources: List[str]  # ['msg_0', 'msg_1', ...]
-	model_name: str
-	vision_supported: bool
-	injection_position: int
-	survived_recalibration: bool
-	
-	name: str = "vision_content_injected"
-
-
-@dataclass
-class VisionResponseAnalyzedEvent(BaseTelemetryEvent):
-	"""Track LLM response analysis for vision content."""
-	agent_id: str
-	step: int
-	expected_image_count: int
-	mentioned_visual_content: bool
-	response_length: int
-	model_name: str
-	vision_keywords_found: List[str]  # Which keywords were detected
-	
-	name: str = "vision_response_analyzed"
-
-
-@dataclass
 class ProviderFailureEvent(BaseTelemetryEvent):
 	"""Telemetry event for LLM provider failures.
 	
@@ -1041,51 +952,6 @@ class ProviderFallbackSuccessEvent(BaseTelemetryEvent):
 		elif self.agent_id and '_' in self.agent_id:
 			return self.agent_id.split('_', 1)[1]
 		return None
-
-
-@dataclass
-class SessionPausedEvent(BaseTelemetryEvent):
-	"""Event emitted when a session is paused by user.
-
-	Used for audit trail and UI synchronization.
-	"""
-	session_id: str
-	reason: str = "user_interrupt"  # user_interrupt, timeout, error
-	paused_by: str = "user"  # user, system, admin
-	name: str = 'session_paused'
-
-	def get_session_id(self) -> Optional[str]:
-		return self.session_id
-
-
-@dataclass
-class SessionResumedEvent(BaseTelemetryEvent):
-	"""Event emitted when a session is resumed by user.
-
-	Used for audit trail and UI synchronization.
-	"""
-	session_id: str
-	resumed_by: str = "user"  # user, system, admin
-	name: str = 'session_resumed'
-
-	def get_session_id(self) -> Optional[str]:
-		return self.session_id
-
-
-@dataclass
-class SessionStatusEvent(BaseTelemetryEvent):
-	"""Generic status event for session state changes.
-
-	Used for UI synchronization via feed events.
-	"""
-	session_id: str
-	status: str  # running, paused, completed, error
-	previous_status: Optional[str] = None
-	reason: Optional[str] = None
-	name: str = 'status'
-
-	def get_session_id(self) -> Optional[str]:
-		return self.session_id
 
 
 @dataclass

@@ -21,7 +21,7 @@ from typing import Any, Optional
 
 from core.surfaces.surface import Surface, split_message
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
-from surfaces.telegram.markdown import escape_markdown_v2
+from utils.markdown_utils import escape_markdown_v2
 
 logger = logging.getLogger(__name__)
 

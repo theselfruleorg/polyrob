@@ -200,17 +200,6 @@ class IntrospectionMixin:
 						for server_name, tools in all_tools.items():
 							if tools:
 								result[server_name] = [t.name for t in tools]
-
-				# Also include polymarket if it's in requested_servers
-				# Polymarket uses a separate gateway, not server_manager
-				if hasattr(mcp_tool, 'requested_servers') and mcp_tool.requested_servers:
-					if 'polymarket' in mcp_tool.requested_servers and 'polymarket' not in result:
-						# Add polymarket with common tool names for prompt generation
-						# The actual tools are discovered via mcp_list_tools
-						result['polymarket'] = [
-							'search_markets', 'get_market', 'get_market_prices',
-							'get_orderbook', 'get_user_positions', 'place_order'
-						]
 		except Exception as e:
 			import logging
 			logger = logging.getLogger(__name__)
@@ -250,61 +239,6 @@ class IntrospectionMixin:
 			import logging
 			logging.getLogger(__name__).debug(f"iter_mcp_tools_metadata skipped: {e}")
 		return out
-
-	async def get_polymarket_info(self) -> Dict[str, Any]:
-		"""Get Polymarket configuration status for the current user.
-
-		Returns wallet configuration status so the agent knows what
-		capabilities are available (read-only vs trading).
-
-		Returns:
-			Dict with:
-				- available: bool - whether polymarket is loaded
-				- demo_mode: bool - True if no wallet configured
-				- wallet_configured: bool - True if wallet address is set
-				- trading_enabled: bool - True if can execute trades
-				- trading_limits: dict - configured limits if available
-		"""
-		result = {
-			'available': False,
-			'demo_mode': True,
-			'wallet_configured': False,
-			'trading_enabled': False,
-			'trading_limits': None
-		}
-
-		try:
-			# Check if polymarket tool is loaded
-			if 'polymarket' not in self._tools:
-				return result
-
-			polymarket_tool = self._tools['polymarket'].instance
-			if not polymarket_tool:
-				return result
-
-			result['available'] = True
-
-			# Get credentials for current user
-			if hasattr(polymarket_tool, 'db_handler') and polymarket_tool.db_handler:
-				if hasattr(polymarket_tool, '_user_id') and polymarket_tool._user_id:
-					credentials = await polymarket_tool.db_handler.get_credentials(
-						polymarket_tool._user_id
-					)
-					if credentials:
-						result['demo_mode'] = credentials.demo_mode
-						result['wallet_configured'] = bool(credentials.wallet_address)
-						result['trading_enabled'] = (
-							not credentials.demo_mode and
-							bool(credentials.wallet_address) and
-							bool(credentials.private_key) and
-							credentials.enabled
-						)
-						if credentials.trading_limits:
-							result['trading_limits'] = credentials.trading_limits.to_dict()
-		except Exception as e:
-			self.logger.debug(f"Failed to get polymarket info: {e}")
-
-		return result
 
 	def get_action_names(self) -> List[str]:
 		"""Get list of all registered action names.

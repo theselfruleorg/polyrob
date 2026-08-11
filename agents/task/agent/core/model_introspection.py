@@ -15,6 +15,34 @@ from agents.task.utils import detect_llm_provider
 class ModelIntrospectionMixin:
     """Vision/provider/model-name introspection for Agent."""
 
+    def _current_llm_provider(self, model_name: str = "") -> str:
+        """The SESSION's provider — authoritative from the live client, model
+        inference only as fallback.
+
+        Model-name inference misattributes a user-declared provider's model to
+        a builtin (a `-p zai-coding` failure reported "provider openrouter
+        failed" — UX assessment 2026-08-07, Q12). The live client knows who it
+        is: a spec-backed generic client carries ``_spec.name``; builtin
+        clients carry their service name. A candidate is only trusted when the
+        registry knows it (so ``openai_fallback_client`` degrades to
+        inference, not a phantom "openai_fallback" provider).
+        """
+        client = getattr(getattr(self, "llm", None), "_client", None)
+        if client is not None:
+            candidate = getattr(getattr(client, "_spec", None), "name", None)
+            if not candidate:
+                service = getattr(client, "name", "") or ""
+                if isinstance(service, str) and service.endswith("_client"):
+                    candidate = service[: -len("_client")]
+            if candidate:
+                try:
+                    from modules.llm.profiles import get_profile
+                    if get_profile(candidate) is not None:
+                        return candidate
+                except Exception:
+                    pass
+        return self._get_provider_from_model(model_name)
+
     def _get_provider_from_model(self, model_name: str) -> str:
         """Extract provider name from model name.
 

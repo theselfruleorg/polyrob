@@ -27,10 +27,23 @@ paths = [
     '''tests/unit/core/test_security_logging_filter\.py''',
     '''tests/unit/surfaces/test_error_notices\.py''',
     '''tests/unit/tools/oauth/test_oauth_manager\.py''',
+    # the shared secret-scrub battery test: one sample per rung (pem/bearer/kv/
+    # provider/rob/aws/jwt) is exactly what it exists to contain
+    '''tests/unit/core/test_shared_credential_patterns\.py''',
 ]
 regexes = [
     # public on-chain token contract address (public by definition, not a secret)
     '''0xb0d79432bb6d163d3832157cff61a918d38aab81''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
+    # a Python identifier, not a credential: the shared ERC-20 ABI fragment
+    # constant. `from ... import TOKEN_ADDRESSES, ERC20_BALANCEOF_ABI` reads to
+    # generic-api-key as key,secret.
+    '''ERC20_BALANCEOF_ABI''',
+    # synthetic z.ai key used across the provider-registry/UX suites (literal
+    # 0123456789abcdef filler — never a real credential)
+    '''zk-0123456789abcdef0123456789''',
+    # synthetic JWT in the credential-layer agent-unreachability test; decodes to
+    # {"sub":"rob","exp":1} with the literal text "signature-segment"
+    '''eyJhbGciOiJIUzI1NiJ9\.eyJzdWIiOiJyb2IiLCJleHAiOjF9\.c2lnbmF0dXJlLXNlZ21lbnQ''',
 ]

@@ -6,7 +6,7 @@ This file links to A2A agent card, MCP endpoints, wallet addresses, etc.
 
 import os
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional
 
 from .models import RegistrationFile, Endpoint, Registration, EIP8004Config
 
@@ -154,9 +154,4 @@ def build_registration_file(
     
     logger.info(f"Built ERC-8004 registration file with {len(endpoints)} endpoints")
     return registration_file
-
-
-def get_registration_file_dict(base_url: Optional[str] = None) -> Dict[str, Any]:
-    """Get registration file as dictionary for JSON serialization."""
-    return build_registration_file(base_url).model_dump(exclude_none=True)
 

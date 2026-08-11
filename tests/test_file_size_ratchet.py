@@ -43,7 +43,13 @@ CEILINGS = {
     # Re-baselined again 2026-07-25 (0.9.0): the autonomy-default split added
     # _AUTONOMY_LOCAL_FLAGS + autonomy_enabled()/_autonomy_group_default() — the
     # same designated job.
-    "core/config_policy/policy.py": 1352,
+    # Re-baselined 2026-08-08 (+12): defi_data_enabled() for the DeFi read tier.
+    # It lives here rather than in tools/defi so that BOTH consumers (tool
+    # registration and agents/task/tool_defaults) import DOWNWARD from one SSOT —
+    # putting it in tools/ would have added a new agents->tools edge to the
+    # layering ratchet's shrink-only allowlist and given the flag two readers
+    # that could drift. Same designated job; not an extraction candidate.
+    "core/config_policy/policy.py": 1364,
 }
 
 # A ceiling may sit at most this many lines above the real size before the

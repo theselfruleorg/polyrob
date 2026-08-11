@@ -13,7 +13,12 @@ from pydantic import BaseModel, Field
 
 from tools.controller.types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
-from tools.controller._helpers import build_load_skill_result, build_session_search_hint, read_skill_resource_confined
+from tools.controller._helpers import (
+	build_load_skill_result,
+	build_session_search_hint,
+	read_skill_resource_confined,
+	self_mod_emitter,
+)
 from modules.llm.messages import AIMessage
 from core.security.forged_turns import FORGED_TURN_KINDS as _FORGED_TURN_KINDS
 
@@ -638,9 +643,6 @@ class ActionRegistrationMixin:
 		# turns refused; approver is Deny-by-default unless APPROVAL_PROVIDER is set.
 		self._register_mcp_install_action()
 
-		# Ensure normalize_path method exists for file operations
-		self._ensure_normalize_path_exists()
-
 		# Task 5: gated `message` action (owner/allowlist -> MessageRouter send),
 		# gated MESSAGE_TOOL_ENABLED (default false; ON under POLYROB_LOCAL).
 		self._register_message_action()
@@ -954,17 +956,9 @@ class ActionRegistrationMixin:
 				except Exception:
 					pass
 
-			def _self_mod_ev(action_name: str, item_id, ok: bool, pending: bool = None):
-				try:
-					from agents.task.telemetry.self_events import emit_self_modification
-					emit_self_modification(
-						kind="note", action=action_name, item_id=str(item_id or ""),
-						user_id=user_id or "",
-						session_id=(getattr(execution_context, 'session_id', None)
-						            or getattr(self, 'session_id', '') or ""),
-						pending=pending, created_by="agent", source="memory_tool", ok=ok)
-				except Exception:
-					pass
+			_self_mod_ev = self_mod_emitter(
+				execution_context, self, user_id,
+				kind="note", source="memory_tool", created_by="agent")
 
 			def _scan_blocked(*texts) -> bool:
 				"""True when the write must be rejected. Fail-CLOSED like skill
@@ -996,7 +990,7 @@ class ActionRegistrationMixin:
 				ok = nid is not None
 				_memory_write_ev(params.action, ok)
 				if params.action == "create":
-					_self_mod_ev("create", nid, ok, pending=(status == "pending"))
+					_self_mod_ev("create", nid, ok=ok, pending=(status == "pending"))
 				if not ok:
 					return ActionResult(
 						extracted_content="Could not save (empty, over size/entry cap, or no tenant).",
@@ -1021,7 +1015,7 @@ class ActionRegistrationMixin:
 					user_id, params.note_id, content=params.content,
 					title=params.title, tags=params.tags)
 				_memory_write_ev("update", ok)
-				_self_mod_ev("patch", params.note_id, ok)
+				_self_mod_ev("patch", params.note_id, ok=ok)
 				return ActionResult(
 					extracted_content=(f"Updated note #{params.note_id}." if ok
 					                   else "Update failed (not found, empty, or over cap)."),
@@ -1036,7 +1030,7 @@ class ActionRegistrationMixin:
 					return ActionResult(extracted_content="archive requires note_id.", include_in_memory=True)
 				ok = await prov.note_archive(user_id, params.note_id)
 				_memory_write_ev("archive", ok)
-				_self_mod_ev("archive", params.note_id, ok)
+				_self_mod_ev("archive", params.note_id, ok=ok)
 				return ActionResult(
 					extracted_content=(f"Archived note #{params.note_id}." if ok
 					                   else "Archive failed (not found)."),
@@ -1101,18 +1095,10 @@ class ActionRegistrationMixin:
 
 			# T4-06: every effected skill mutation records a first-class
 			# self_modification event (durable log → /telemetry + /activity). Fail-open.
-			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
-				try:
-					from agents.task.telemetry.self_events import emit_self_modification
-					emit_self_modification(
-						kind="skill", action=action, item_id=params.skill_id,
-						user_id=user_id or "",
-						session_id=(getattr(execution_context, 'session_id', None)
-						            or getattr(self, 'session_id', '') or ""),
-						pending=pending, created_by=created_by,
-						source="skill_manage", ok=ok)
-				except Exception:
-					pass
+			_self_mod_ev = self_mod_emitter(
+				execution_context, self, user_id,
+				kind="skill", source="skill_manage",
+				item_id=params.skill_id, created_by="")
 			# A forged (non-user-initiated) turn must never auto-activate a skill. The
 			# RELIABLE signal is the execution context: the background-review reviewer
 			# (and any delegated worker) runs as a sub-agent / leaf role — those fields
@@ -1369,18 +1355,10 @@ class ActionRegistrationMixin:
 
 			# T4-06: every effected self-context mutation records a first-class
 			# self_modification event (durable log → /telemetry + /activity). Fail-open.
-			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
-				try:
-					from agents.task.telemetry.self_events import emit_self_modification
-					emit_self_modification(
-						kind="self_context", action=action, item_id=user_id or "",
-						user_id=user_id or "",
-						session_id=(getattr(execution_context, 'session_id', None)
-						            or getattr(self, 'session_id', '') or ""),
-						pending=pending, created_by=created_by,
-						source="self_context_manage", ok=ok)
-				except Exception:
-					pass
+			_self_mod_ev = self_mod_emitter(
+				execution_context, self, user_id,
+				kind="self_context", source="self_context_manage",
+				item_id=user_id, created_by="")
 			# Resolve the instance home dir (same as construction).
 			_cfg = getattr(getattr(self, 'container', None), 'config', None)
 			data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
@@ -1532,18 +1510,10 @@ class ActionRegistrationMixin:
 				return ActionResult(error="owner-facts doc requires a user (tenant scope).",
 				                    include_in_memory=True)
 
-			def _self_mod_ev(action: str, *, pending=None, created_by: str = "", ok: bool = True):
-				try:
-					from agents.task.telemetry.self_events import emit_self_modification
-					emit_self_modification(
-						kind="owner_doc", action=action, item_id=user_id or "",
-						user_id=user_id or "",
-						session_id=(getattr(execution_context, 'session_id', None)
-						            or getattr(self, 'session_id', '') or ""),
-						pending=pending, created_by=created_by,
-						source="owner_doc_manage", ok=ok)
-				except Exception:
-					pass
+			_self_mod_ev = self_mod_emitter(
+				execution_context, self, user_id,
+				kind="owner_doc", source="owner_doc_manage",
+				item_id=user_id, created_by="")
 
 			_cfg = getattr(getattr(self, 'container', None), 'config', None)
 			data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
@@ -1796,17 +1766,9 @@ class ActionRegistrationMixin:
 			#     unconditionally (never active) regardless of the review flag.
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
-			def _self_mod_ev(action: str, item_id: str, *, pending=None, ok: bool = True,
-			                 created_by: str = "agent"):
-				try:
-					from agents.task.telemetry.self_events import emit_self_modification
-					emit_self_modification(
-						kind="pref", action=action, item_id=item_id, user_id=user_id or "",
-						session_id=(getattr(execution_context, 'session_id', None)
-						            or getattr(self, 'session_id', '') or ""),
-						pending=pending, created_by=created_by, source="preferences", ok=ok)
-				except Exception:
-					pass
+			_self_mod_ev = self_mod_emitter(
+				execution_context, self, user_id,
+				kind="pref", source="preferences", created_by="agent")
 
 			if params.operation == "set":
 				if is_forged:

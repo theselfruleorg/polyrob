@@ -591,37 +591,20 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     # as container SERVICES; they only become callable when their tool_id is in the
     # session's "tools" list (→ load_tools_from_container). Add the enabled autonomy
     # tools when the local profile is on AND the service is actually registered.
+    #
+    # Base resolution is the SHARED resolver (cli/toolset.py) `polyrob run` uses:
+    # explicit --toolset for THIS invocation wins over any "session.toolset" pref
+    # (the pref branch only fires when toolset is None), and every branch prunes
+    # through cli_unavailable_tools — the REPL's old inline copy had drifted and
+    # skipped the prune on the explicit-toolset branch.
     from agents.task.constants import local_mode_enabled
-    from agents.task.tool_defaults import cli_default_tools
-    if toolset:
-        # Explicit --toolset for THIS invocation always wins over any pref.
-        from agents.task.tool_defaults import resolve_toolset
-        repl_tools = list(resolve_toolset(toolset))
-    else:
-        # owner-UX P1 T5: a "session.toolset" pref overrides the default toolset
-        # for a NEW session when the caller passed no --toolset. Resolved only
-        # when a pref is actually ON DISK (resolve_with_source's "pref" source) —
-        # otherwise fall through to cli_default_tools() unchanged, so an env-only
-        # POLYROB_AGENT_TOOLSET (no pref file) stays byte-identical to legacy,
-        # including its cli_unavailable_tools pruning.
-        repl_tools = None
-        try:
-            from core.prefs import resolve_with_source
-            from core.bootstrap import cli_unavailable_tools
-            from agents.task.tool_defaults import resolve_toolset
-            _env_toolset = os.environ.get("POLYROB_AGENT_TOOLSET", "").strip() or None
-            _pref_toolset, _src = resolve_with_source(
-                "session.toolset", user_id, _data_home,
-                env_value=_env_toolset, default=None,
-            )
-            if _src == "pref" and _pref_toolset:
-                _resolved = resolve_toolset(_pref_toolset)
-                _unavail = set(cli_unavailable_tools(_resolved))
-                repl_tools = [t for t in _resolved if t not in _unavail]
-        except Exception:
-            repl_tools = None
-        if repl_tools is None:
-            repl_tools = list(cli_default_tools())
+    from cli.toolset import resolve_tool_list
+    repl_tools, _tool_notes = resolve_tool_list(
+        None, toolset, user_id=user_id, home_dir=_data_home,
+    )
+    repl_tools = list(repl_tools)
+    for _note in _tool_notes:
+        click.echo(click.style(_note, fg="yellow"), err=True)
     if local_mode_enabled():
         from agents.task.constants import AutonomyConfig
         from tools.cronjob_tools import cron_enabled

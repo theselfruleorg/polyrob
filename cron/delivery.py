@@ -51,9 +51,8 @@ def _allow_explicit_target() -> bool:
     ``deliver_target="attacker@evil.com"``. Operators of trusted single-user installs
     can opt in with ``CRON_DELIVERY_ALLOW_EXPLICIT_TARGET=true``.
     """
-    import os
-    return os.getenv("CRON_DELIVERY_ALLOW_EXPLICIT_TARGET", "").strip().lower() in (
-        "1", "true", "yes", "on")
+    from core.env import bool_env
+    return bool_env("CRON_DELIVERY_ALLOW_EXPLICIT_TARGET", False)
 
 
 def is_silent(final: Optional[str]) -> bool:

@@ -124,10 +124,6 @@ class CacheManager(BaseModule):
                 self.logger.error(f"Error clearing cache: {e}")
                 raise ModuleError(f"Failed to clear cache: {e}")
 
-    def get_size(self) -> int:
-        """Get current cache size."""
-        return len(self._cache)
-
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         return {

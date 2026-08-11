@@ -58,7 +58,6 @@ except ImportError:
 # Import API models and router for message handling
 try:
     from api.models import MessageRequest, MessageResponse
-    from api.conversation_manager import APIConversationManager
     from api.middleware import AuthenticationMiddleware, RateLimitMiddleware
     API_MODELS_AVAILABLE = True
 except ImportError:
@@ -72,7 +71,6 @@ app_state = {
     "logger": None,
     "active_updates": set(),  # Track active update IDs
     "update_semaphore": None,  # Limit concurrent updates
-    "conversation_manager": None  # API conversation manager
 }
 
 # Background task for periodic cleanup
@@ -155,16 +153,6 @@ async def lifespan(app: FastAPI):
         max_concurrent = int(os.environ.get("MAX_CONCURRENT_UPDATES", "50"))
         app_state["update_semaphore"] = asyncio.Semaphore(max_concurrent)
         logger.info(f"Initialized update semaphore with {max_concurrent} concurrent updates limit")
-
-        # Initialize API conversation manager
-        if API_MODELS_AVAILABLE:
-            try:
-                conversation_manager = APIConversationManager()
-                app_state["conversation_manager"] = conversation_manager
-
-                logger.info("✅ Conversation manager initialized")
-            except Exception as e:
-                logger.warning(f"Could not initialize conversation manager: {e}")
 
         # x402 is now handled via fastapi-x402 middleware (no custom handler needed)
 
@@ -874,37 +862,9 @@ def create_app() -> FastAPI:
 
     # Removed legacy alias routes. Use canonical /api/task/* endpoints via included router.
 
-    # API Key Management Endpoints (admin only)
-    @app.post("/api/admin/generate-key")
-    async def generate_api_key(admin_token: str = Header(None, alias="X-Admin-Token")):
-        """Generate a new API key (requires admin token)."""
-        import secrets
-        import hashlib
-
-        # Check admin authorization
-        expected_admin_token = os.environ.get("ADMIN_TOKEN")
-        if not expected_admin_token:
-            return JSONResponse(
-                status_code=503,
-                content={"error": "Admin authentication not configured"}
-            )
-
-        if not admin_token or admin_token != expected_admin_token:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Unauthorized admin access"}
-            )
-
-        # Generate a secure API key
-        api_key = secrets.token_urlsafe(32)
-        key_hash = hashlib.sha256(api_key.encode()).hexdigest()[:8]
-
-        return {
-            "api_key": api_key,
-            "key_id": f"key_{key_hash}",
-            "created_at": datetime.now().isoformat(),
-            "note": "Store this key securely. It won't be shown again."
-        }
+    # NOTE: the old POST /api/admin/generate-key endpoint was deleted (2026-08):
+    # it minted a token but never wrote the api_keys table, so the key could
+    # never authenticate. Self-service keys live at /api/auth/api-keys.
 
     @app.get("/api/test-auth")
     async def test_auth(x_api_key: Optional[str] = Header(None)):

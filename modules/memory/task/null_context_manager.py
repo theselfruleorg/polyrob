@@ -73,25 +73,6 @@ class NullTaskContextManager:
         """
         return None
 
-    def record_step(
-        self,
-        session_id: str = "",
-        step_number: int = 0,
-        action: str = "",
-        result: str = "",
-        **kwargs
-    ) -> None:
-        """No-op: Sub-agents don't record steps to H-MEM.
-
-        Args:
-            session_id: Ignored
-            step_number: Ignored
-            action: Ignored
-            result: Ignored
-            **kwargs: Ignored
-        """
-        pass
-
     def get_context_injection(
         self,
         session_id: str = "",
@@ -141,45 +122,6 @@ class NullTaskContextManager:
             **kwargs: Ignored
         """
         pass
-
-    def transition_phase(
-        self,
-        session_id: str = "",
-        from_phase: str = "",
-        to_phase: str = "",
-        **kwargs
-    ) -> None:
-        """No-op: Sub-agents don't transition phases.
-
-        Args:
-            session_id: Ignored
-            from_phase: Ignored
-            to_phase: Ignored
-            **kwargs: Ignored
-        """
-        pass
-
-    def get_session_stats(
-        self,
-        session_id: str = "",
-        **kwargs
-    ) -> Dict[str, Any]:
-        """Return empty stats for sub-agents.
-
-        Args:
-            session_id: Ignored
-            **kwargs: Ignored
-
-        Returns:
-            Empty stats dict
-        """
-        return {
-            "is_null_manager": True,
-            "session_id": session_id,
-            "steps": 0,
-            "findings": 0,
-            "phases": []
-        }
 
     def drain_promoted_findings(self, session_id: str) -> list:
         """No-op: Sub-agents have no H-MEM findings to drain."""

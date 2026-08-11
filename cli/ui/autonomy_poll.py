@@ -27,7 +27,9 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
         except Exception:
             review = False
 
-        cron_db = os.path.join(data_dir, "cron.db")
+        from core.runtime_paths import cron_db_path, goals_db_path
+
+        cron_db = cron_db_path(data_dir)
         if os.path.exists(cron_db):
             try:
                 from cron.jobs import CronJobStore
@@ -37,7 +39,7 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
             except Exception:
                 cron = 0
 
-        goals_db = os.path.join(data_dir, "goals.db")
+        goals_db = goals_db_path(data_dir)
         if os.path.exists(goals_db):
             try:
                 from agents.task.goals.board import GoalBoard

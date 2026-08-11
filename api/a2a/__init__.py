@@ -10,28 +10,11 @@ Key Components:
 - Task Management: JSON-RPC endpoints for task lifecycle
 - Streaming: SSE-based real-time status updates
 - Push Notifications: Webhook callbacks for async updates
-- Client: Consume external A2A agent services
 
 Authentication:
 - x402 (primary): Pay-per-request crypto payments
 - Bearer JWT: For registered users
+
+Routers are imported directly from their modules (api.a2a.agent_card,
+api.a2a.endpoints, api.a2a.streaming) — see api/app.py.
 """
-
-__all__ = [
-    'agent_card_router',
-    'a2a_router',
-    'streaming_router'
-]
-
-
-def __getattr__(name):
-    if name == "agent_card_router":
-        from api.a2a.agent_card import router
-        return router
-    if name == "a2a_router":
-        from api.a2a.endpoints import router
-        return router
-    if name == "streaming_router":
-        from api.a2a.streaming import router
-        return router
-    raise AttributeError(name)

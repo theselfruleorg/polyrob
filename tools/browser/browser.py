@@ -55,8 +55,8 @@ def _check_url_ssrf(url: str) -> Optional[str]:
 	Returns:
 		An error message string if the URL is blocked, or ``None`` if allowed.
 	"""
-	allow_private = os.getenv('BROWSER_ALLOW_PRIVATE_URLS', 'false').strip().lower() in ('1', 'true', 'yes', 'on')
-	if allow_private:
+	from tools.browser._flags import allow_private_urls
+	if allow_private_urls():
 		return None
 
 	# WS-4 (compute posture): a NARROW exception for the agent's OWN sandbox server —
@@ -172,7 +172,6 @@ class Browser(BaseTool):
 		# Browser-specific parameters
 		headless: bool = True,
 		slow_mo: int = 0,
-		proxy: Optional[Dict[str, Any]] = None,
 		browser_config: Optional[BrowserConfig] = None,
 		timeout: int = 30000,
 		server_args: Optional[List[str]] = None,
@@ -187,8 +186,7 @@ class Browser(BaseTool):
 			container: Dependency container (required by BaseTool)
 			headless: Whether to run browser in headless mode
 			slow_mo: Slow down Playwright operations by specified milliseconds
-			proxy: Proxy settings
-			browser_config: Custom browser configuration
+			browser_config: Custom browser configuration (incl. proxy via BrowserConfig.proxy)
 			timeout: Browser launch timeout in milliseconds
 			server_args: Additional arguments for browser launch
 			browser_path: Path to browser executable
@@ -406,36 +404,6 @@ class Browser(BaseTool):
 
 		# Browser-specific initialization happens lazily when first needed
 		self.logger.info("Browser tool initialized (browser instance will start on first use)")
-
-	async def _cleanup(self) -> None:
-		"""Cleanup browser resources.
-
-		Called automatically by BaseTool.cleanup().
-		"""
-		try:
-			if self._browser:
-				await self._browser.close()
-				self._browser = None
-				self.logger.debug("Browser closed")
-
-			if self._playwright:
-				await self._playwright.stop()
-				self._playwright = None
-				self.logger.debug("Playwright stopped")
-
-			# Handle Xvfb cleanup
-			if self._started_xvfb and self._xvfb_process:
-				try:
-					if self._xvfb_process.poll() is None:
-						self._xvfb_process.terminate()
-						self.logger.info(f"Terminated Xvfb process (PID: {self._xvfb_process.pid})")
-				except Exception as e:
-					self.logger.warning(f"Error cleaning up Xvfb: {e}")
-
-			self.logger.info("Browser cleanup completed")
-		except Exception as e:
-			self.logger.error(f"Error during browser cleanup: {e}")
-			raise
 
 	@BaseTool.action(
 		'Search the query in Google in the current tab, the query should be a search query like humans search in Google, concrete and not vague or super long.',

@@ -12,18 +12,10 @@ from core.env import int_env as _core_int_env
 # Token counting defaults - Use modules.llm.token_counter for actual counting
 # IMG_TOKENS kept for backward compatibility but should use token_counter._count_multimodal_tokens
 IMG_TOKENS = 800  # Default estimate for image tokens (actual counting done by modules.llm)
-DEFAULT_IMG_TOKENS = IMG_TOKENS  # Alias for compatibility
-ESTIMATED_CHARS_PER_TOKEN = 4  # Updated to match model_registry defaults
 
 # Default user ID for anonymous sessions. The canonical token lives in
 # core.identity (the tenant SSOT); aliased here so the value is defined once.
 from core.identity import ANON_USER_ID as DEFAULT_USER_ID  # noqa: E402
-
-# Token recalibration
-CALIBRATION_CHECK_INTERVAL = 5  # Recalibrate token counts every N steps
-
-# Error message display
-ERROR_PREVIEW_COUNT = 3  # Number of errors to show in previews
 
 # Loop detection configuration
 class LoopDetectionConfig:
@@ -65,8 +57,6 @@ class MemoryConfig:
 
 # History and Message Management
 MAX_HISTORY_SIZE = 30  # Maximum number of messages to keep in history
-PROTECT_RECENT_MESSAGES = 10  # Number of recent messages to protect from trimming
-PROTECT_INITIAL_MESSAGES = 3  # Number of initial messages (system prompts) to protect
 
 # Token and Context Management - REMOVED: Use modules.llm.model_registry instead
 # TOKEN_BUFFER_SIZE, MIN_CONTEXT_TOKENS, MAX_CONTEXT_PERCENTAGE moved to model_registry
@@ -102,21 +92,6 @@ def get_tool_lookahead_window(total_messages: int = 0) -> int:
         return 20  # Default for small contexts
 
 TOOL_LOOKAHEAD_WINDOW = 15  # Default, use get_tool_lookahead_window() for dynamic sizing
-PLACEHOLDER_CONTENT = "[Awaiting tool response]"  # Content for placeholder ToolMessages
-PLACEHOLDER_SOURCE = "tool_placeholder"  # Metadata source for placeholders
-
-# Memory and Performance
-# REMOVED DUPLICATE: Use MemoryConfig.CLEANUP_INTERVAL instead
-MEMORY_CHECK_INTERVAL = 10  # Check memory usage every N steps
-MEMORY_MESSAGE_THRESHOLD_MB = 50  # Trim if message history uses > 50MB
-MEMORY_HIGH_WATERMARK_MB = 1000  # Warn if total memory over 1GB
-MAX_RESULT_PREVIEW_LENGTH = 500  # Maximum length for action result previews
-LARGE_CONTENT_THRESHOLD = 50000  # Threshold for considering content "large"
-
-# Retry and Timeout Settings
-MAX_LLM_RETRIES = 3  # Maximum retries for LLM calls
-MAX_LLM_CREATION_RETRIES = 2  # Retries when creating LLM instances
-
 
 # ========== AUX-MODEL ROUTER (A5/A1 + generalized) ==========
 # Provider -> cheap auxiliary model, used for compaction (`llm_compact_history`) and the
@@ -430,22 +405,9 @@ class TimeoutConfig:
             return cls.TOOL_TIMEOUTS['default']
         return cls.TOOL_TIMEOUTS.get(tool_name.lower(), cls.TOOL_TIMEOUTS['default'])
 
-    @classmethod
-    def get_llm_timeout(cls, streaming: bool = False) -> int:
-        """Get timeout for LLM requests.
-
-        Args:
-            streaming: Whether this is a streaming request
-
-        Returns:
-            Timeout in seconds for the LLM request
-        """
-        return cls.LLM_STREAM_TIMEOUT if streaming else cls.LLM_REQUEST_TIMEOUT
-
 
 # Legacy constants for backward compatibility (deprecated - use TimeoutConfig instead)
 DEFAULT_STEP_TIMEOUT = TimeoutConfig.STEP_TIMEOUT
-DEFAULT_STALL_TIMEOUT = TimeoutConfig.STALL_TIMEOUT
 LLM_BASE_TIMEOUT = TimeoutConfig.LLM_BASE_TIMEOUT
 BROWSER_CLOSE_TIMEOUT = TimeoutConfig.BROWSER_CLOSE
 BROWSER_CONTEXT_CLOSE_TIMEOUT = TimeoutConfig.BROWSER_CONTEXT_CLOSE
@@ -454,9 +416,6 @@ PROCESS_KILL_TIMEOUT = TimeoutConfig.PROCESS_KILL
 
 # Agent Limits (defaults, can be overridden)
 DEFAULT_MAX_FAILURES = 5  # Maximum consecutive failures before stopping
-DEFAULT_MAX_ERROR_LENGTH = 400  # Maximum length for error messages
-DEFAULT_MAX_ACTIONS_PER_STEP = 10  # Maximum actions per step
-DEFAULT_MIN_INPUT_TOKENS = 1000  # Minimum safe input tokens
 
 # The safe-minimum toolset every agent always needs (SSOT — was spelled out as a
 # literal in orchestrator.py, goals/dispatcher.py and cron/runner.py; a shared
@@ -569,23 +528,11 @@ CHAT_MAX_STEPS = _int_env('CHAT_MAX_STEPS', 8)
 # applies). Set CHAT_SKIP_CREDIT_CHECK=off to apply the credit gate to chat.
 CHAT_SKIP_CREDIT_CHECK = os.getenv('CHAT_SKIP_CREDIT_CHECK', 'true').strip().lower() not in ('0', 'false', 'no', 'off', 'none', '')
 
-# Human-in-the-Loop Defaults
-DEFAULT_RECENT_MESSAGES_LIMIT = 10  # Number of recent messages to fetch for context
-
-# Screenshot and GIF Settings
-MAX_SCREENSHOTS_FOR_GIF = 20  # Maximum screenshots to include in GIF
-
-# User Interaction Limits
-DEFAULT_MAX_USER_GUIDANCE_TOKENS = 1000  # Maximum tokens for user guidance messages
-DEFAULT_MAX_USER_MESSAGES_PER_STEP = 3  # Maximum user messages to process per step
-
 # Session Management
 # NOTE (B3): the per-user session cap SSOT is BotConfig.max_sessions_per_user
 # (core/config.py, default 10), read at runtime in task_agent_lite. A duplicate
 # `MAX_SESSIONS_PER_USER = 100` used to live here but had ZERO call sites and only
 # misled readers — removed. Do not reintroduce a second cap constant here.
-SESSION_CLEANUP_DELAY = 2.0  # Delay before cleaning up completed sessions
-STALL_CHECK_INTERVAL = 30.0  # Check for stalls every 30 seconds
 
 # Model-specific Tool Calling Instructions
 # Some models (Grok, certain OpenRouter models) struggle with nested argument placement

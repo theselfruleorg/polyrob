@@ -189,6 +189,8 @@ def check_provider_model(provider: str, model: str) -> Tuple[bool, str]:
 # manager a provider it can't build → hard crash). An explicit `-p deepseek` flows
 # through `explicit_provider`, not `available_keys`, so it is unaffected. Reach
 # DeepSeek via OPENROUTER_API_KEY + model deepseek/deepseek-chat.
+# Kill-switch path (LLM_PROVIDER_REGISTRY=off) — the live list is derived from the
+# ProviderSpec registry by _key_to_provider() below.
 _KEY_TO_PROVIDER = [
     ("ANTHROPIC_API_KEY", "anthropic"),
     ("OPENAI_API_KEY", "openai"),
@@ -196,6 +198,27 @@ _KEY_TO_PROVIDER = [
     ("OPENROUTER_API_KEY", "openrouter"),
     ("NVIDIA_API_KEY", "nvidia"),
 ]
+
+
+def _key_to_provider():
+    """(env_key, provider) pairs for key-based auto-detection (024 seam 9).
+
+    Derived from the ProviderSpec registry (initializable + keyed specs — the
+    same deepseek-exclusion rule as the literal), so a providers.yaml provider
+    with an env key auto-detects like a built-in. Falls back to the legacy
+    literal with the registry off or on any error.
+    """
+    try:
+        from modules.llm.provider_spec import get_specs, provider_registry_enabled
+        if provider_registry_enabled():
+            return [
+                (s.env_key, s.name)
+                for s in get_specs()
+                if s.env_key and s.initializable
+            ]
+    except Exception:
+        pass
+    return list(_KEY_TO_PROVIDER)
 
 
 def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
@@ -214,7 +237,7 @@ def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
         # provider the manager will then reject.
         from modules.llm.profiles import looks_like_real_key
         available_keys = {
-            k for k, _ in _KEY_TO_PROVIDER if looks_like_real_key(os.environ.get(k))
+            k for k, _ in _key_to_provider() if looks_like_real_key(os.environ.get(k))
         }
     # `model_aliases` (B6): a bare `-m fav` expands to its (provider, model) pair
     # BEFORE the rest of the resolution runs, so the pin/store/registry logic below

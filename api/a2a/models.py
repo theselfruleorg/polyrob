@@ -158,19 +158,6 @@ class SendMessageRequest(BaseModel):
     configuration: Optional[Dict[str, Any]] = None  # pushNotificationConfig, etc.
 
 
-class SendMessageResponse(BaseModel):
-    """Response from sending a message."""
-    task: Optional[A2ATask] = None
-    message: Optional[A2AMessage] = None
-
-
-class GetTaskRequest(BaseModel):
-    """Request to get task status."""
-    id: str
-    historyLength: Optional[int] = None  # None = all, 0 = none, >0 = last N
-    metadata: Optional[Dict[str, Any]] = None
-
-
 class ListTasksRequest(BaseModel):
     """Request to list tasks."""
     contextId: Optional[str] = None

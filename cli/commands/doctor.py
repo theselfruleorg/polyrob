@@ -256,8 +256,14 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     # The resolver gets only USABLE keys (env-var NAMES) so the reported provider/model
     # matches what `polyrob run` will actually accept — a malformed key must not resolve
     # a provider the LLM manager then rejects with a misleading "No API key found".
-    usable_keys = {p.env_key for p in PROFILES.values() if p.name in usable_providers}
+    usable_keys = {p.env_key for p in PROFILES.values()
+                   if p.name in usable_providers and p.env_key}
     for prof in PROFILES.values():
+        if not prof.env_key and prof.auth_type == "none":
+            # keyless-by-design (a providers.yaml auth_type:none row) — nothing
+            # is "missing"; the endpoint needs no credential at all.
+            lines.append(f"  {prof.name}: no key needed (keyless local endpoint)")
+            continue
         if prof.name in usable_providers:
             status = "present"
         elif prof.name in present_providers:
@@ -268,13 +274,37 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         if not prof.initializable and prof.name in present_providers:
             note = " (not directly initializable — use OPENROUTER_API_KEY + deepseek/deepseek-chat)"
         lines.append(f"  {prof.name}: {status}{note}")
-    if not present_providers:
+    if not present_providers and not usable_providers:
         lines.append("  ! no provider API key found — run `polyrob init` or `polyrob config set`")
     elif not usable_providers:
         lines.append("  ! provider key(s) present but malformed — run `polyrob config set <KEY> <value>`")
 
-    provider, model = resolve_provider_model(None, None, available_keys=usable_keys)
-    lines.append(f"resolved provider/model: {provider} / {model or '(registry default)'}")
+    # providers.yaml load state (queryable, not just a transient load-time log
+    # line — UX assessment 2026-08-07, Q7). Shown only when a file exists.
+    try:
+        from modules.llm.provider_spec import user_providers_report
+        rep = user_providers_report()
+        if rep:
+            loaded = rep.get("loaded") or []
+            rejected = rep.get("rejected") or []
+            lines.append(
+                f"providers file: {rep.get('path')} — "
+                f"{len(loaded)} loaded, {len(rejected)} rejected"
+            )
+            for row_name, reason in rejected:
+                lines.append(f"  ! {row_name}: {reason} — row skipped")
+            if rep.get("file_error"):
+                lines.append(f"  ! file: {rep['file_error']}")
+    except Exception:
+        pass
+
+    if usable_providers:
+        provider, model = resolve_provider_model(None, None, available_keys=usable_keys)
+        lines.append(f"resolved provider/model: {provider} / {model or '(registry default)'}")
+    else:
+        # No usable credential → don't display the last-resort provider as if it
+        # would serve (the old line said "gemini" on a zero-key box).
+        lines.append("resolved provider/model: (none — no usable provider yet)")
 
     # Owner/instance pairing (complements `polyrob init`): show who this instance
     # answers to and its instance id, plus the session-registry backend posture.

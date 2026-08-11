@@ -87,41 +87,6 @@ class TierManager:
 
         return self.TIER_LIMITS[tier]
 
-    async def check_quota(self, user_id: str, quota_type: str) -> bool:
-        """Check if user has quota for resource."""
-
-        limits = await self.get_tier_limits(user_id)
-
-        if quota_type == "concurrent_sessions":
-            # Count active sessions
-            # Note: This assumes a sessions table exists
-            # If not, this check will be skipped
-            try:
-                active = await self.db.fetch_one("""
-                    SELECT COUNT(*) as count
-                    FROM sessions
-                    WHERE user_id = ? AND status IN ('running', 'paused')
-                """, (user_id,))
-
-                if active:
-                    return active['count'] < limits['max_concurrent_sessions']
-            except Exception as e:
-                self.logger.warning(f"Could not check session quota: {e}")
-                return True  # Allow if we can't check
-
-        return True
-
-    async def check_model_allowed(self, user_id: str, model: str) -> bool:
-        """Check if user's tier allows this model."""
-
-        limits = await self.get_tier_limits(user_id)
-        allowed = limits['allowed_models']
-
-        if allowed == "*":
-            return True
-
-        return model in allowed
-
     async def get_user_info(self, user_id: str) -> dict:
         """Get comprehensive user tier information."""
 

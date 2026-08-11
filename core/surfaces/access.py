@@ -31,7 +31,7 @@ from typing import Any, Mapping, Optional
 
 logger = logging.getLogger(__name__)
 
-_BOOL_TRUE = {"1", "true", "yes", "on"}
+from core.env import bool_from as _bool_from
 
 # Single-user local mode (`is_owner(local=True)`) grants OWNER to any non-empty uid.
 # That is correct ONLY for surfaces whose principal is the local operator — NEVER for a
@@ -56,7 +56,10 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
     """
     try:
         from core.instance import is_owner, resolve_owner_principal
-        local = allow_local and (env.get("POLYROB_LOCAL", "") or "").strip().lower() in _BOOL_TRUE
+        # Repo-SSOT falsey-set parse — keeps this OWNER gate in agreement with
+        # core.config_policy.local_mode_enabled (the old private opt-in truth
+        # set disagreed on values like "enabled": policy said local, this said not).
+        local = allow_local and _bool_from(env, "POLYROB_LOCAL", False)
         if is_owner(uid, owner_principal=resolve_owner_principal(env), local=local):
             return True
     except Exception as e:  # never let an owner-check fault grant or crash
@@ -133,7 +136,8 @@ def resolve_access_tier(
                 # always wins over the default; only the unset case moves).
                 group_on = _group_chat_mode_default()
             else:
-                group_on = str(raw_group).strip().lower() in _BOOL_TRUE
+                from core.env import parse_bool
+                group_on = parse_bool(raw_group, False)
             if not group_on:
                 return AccessTier.DENIED
             chat_id = str(getattr(source, "chat_id", "") or "")

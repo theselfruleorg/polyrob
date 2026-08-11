@@ -35,140 +35,143 @@ class StepExecutionMixin:
 	def _validate_and_intervene(self, model_output) -> bool:
 		"""Phase 2b: validate model output; inject corrective guidance and return False if the step should end early, else True."""
 		# Validate model output
-		if not self._validate_model_output(model_output):
-			# Inject corrective guidance
-			# Initialize thinking loop counter if needed
-			if not hasattr(self, '_empty_action_counter'):
-				self._empty_action_counter = 0
+		if not hasattr(self, '_empty_action_counter'):
+			self._empty_action_counter = 0
 
-			self._empty_action_counter += 1
-			self.logger.warning(f"Empty action response {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT}")
+		if self._validate_model_output(model_output):
+			# CONSECUTIVE means consecutive. The counter was only ever reset inside the
+			# escalation branch — never on a productive step, never by
+			# reset_for_continuation() — so it counted empty responses over the whole
+			# life of the agent while every log line and the intervention text called
+			# them "consecutive steps without function calls". A model that emitted one
+			# tool-free step at step 3 and another at step 44 drew the "2 consecutive
+			# steps" escalation, and ALLOWED_REASONING_TURNS degenerated from "one
+			# planning turn per run" into "one per two empty responses ever".
+			self._empty_action_counter = 0
+			return True
 
-			# D1-a (seed resolution): tolerate a bounded number of tool-free "planning"
-			# turns. Instead of treating the very first empty response as an error,
-			# acknowledge it as a planning turn and nudge (not scold) the model to act
-			# next. The >=3 thinking-loop escalation below remains the hard backstop, so
-			# the loop bound is unchanged. Disable with ALLOWED_REASONING_TURNS=0.
-			from agents.task.constants import ALLOWED_REASONING_TURNS
-			if self._empty_action_counter <= ALLOWED_REASONING_TURNS:
-				self.logger.info(
-					f"📝 Tool-free planning turn {self._empty_action_counter}/{ALLOWED_REASONING_TURNS} "
-					f"allowed (no action this step; must act next)"
-				)
-				self.message_manager.inject_user_guidance([{
-					'text': (
-						"📝 Planning turn noted. You may reason this turn, but you MUST call at "
-						"least one function on your NEXT step to make progress "
-						"(e.g. done(text=...) if you are finished)."
-					),
-					'kind': 'guidance',
-					'metadata': {'source': 'reasoning_turn_allowance', 'turn': self._empty_action_counter}
-				}])
-				# Not an error: a planning turn is a legitimate (bounded) outcome.
-				# Tagged for telemetry/clarity; the R1 conversational-exit treats it as
-				# a non-reply step (it lacks conversational_reply), so it resets the
-				# reply-run rather than counting toward an exit.
-				self._last_result = [ActionResult(
-					extracted_content="Planning turn (no action taken). Act on the next step.",
-					include_in_memory=False,
-					metadata={'planning_turn': True}
-				)]
-				if self.tool_call_tracker:
-					self.tool_call_tracker.complete_step()
-				return False
+		# --- model produced no usable actions -------------------------------------
+		# Inject corrective guidance.
+		self._empty_action_counter += 1
+		self.logger.warning(f"Empty action response {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT}")
 
-			# Get available action count for context
-			available_actions = len(self.controller.get_action_names()) if self.controller else 0
-
-			# Escalating intervention after N consecutive failures (OR-4: N defaults
-			# to 2 so a prose-only model is pushed to act one step sooner).
-			if self._empty_action_counter >= _EMPTY_ACTION_ESCALATE_AT:
-				_n = self._empty_action_counter
-				self.logger.error(
-					f"🚨 CRITICAL: Thinking loop detected - {_n} consecutive steps without function calls"
-				)
-
-				# Strong intervention with explicit example
-				self.message_manager.inject_user_guidance([{
-					'text': (
-						"🚨 INTERVENTION: Thinking loop detected.\n\n"
-						f"You have failed to call functions for {_n} consecutive steps.\n"
-						"This violates the core agent contract.\n\n"
-						"**STOP thinking. START acting.**\n\n"
-						"Example for current task:\n"
-						f"Task: {self.task}\n\n"
-						"If this is a file operation → call filesystem_write_file(...)\n"
-						"If this is a search → call mcp_execute_tool(...)\n"
-						"If you're stuck → call done(text='explanation')\n\n"
-						"**CALL A FUNCTION IN YOUR NEXT RESPONSE.**\n"
-						"No more explanations, no more planning."
-					),
-					'kind': 'intervention',
-					'metadata': {
-						'source': 'thinking_loop_detector',
-						'counter': _n,
-						'task': self.task[:100] if self.task else 'unknown'
-					}
-				}])
-
-				# History clearing disabled - preserves context
-				self.logger.info("Thinking loop detected - guidance injected")
-
-				# Reset counter for next attempt
-				self._empty_action_counter = 0
-
-				# Set error result
-				self._last_result = [ActionResult(
-					error="Thinking loop detected - guidance injected. YOU MUST CALL A FUNCTION.",
-					include_in_memory=True
-				)]
-			else:
-				# Normal error handling for attempts 1-2
-				self.message_manager.inject_user_guidance([
-					{
-						'text': (
-							"❌ CRITICAL ERROR: No function calls detected.\n\n"
-							"You MUST call at least one function every step.\n"
-							"There is no 'thinking mode' or 'planning phase'.\n\n"
-							"**What to do RIGHT NOW:**\n"
-							"1. Look at the available functions below\n"
-							"2. Pick one that makes progress on the task\n"
-							"3. CALL IT with proper parameters\n\n"
-							f"You have {available_actions} functions available - use them!"
-						),
-						'kind': 'error',
-						'metadata': {'source': 'empty_actions_validation', 'attempt': self._empty_action_counter}
-					}
-				])
-
-				# Set error result
-				self._last_result = [ActionResult(
-					error=f"No function calls (attempt {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT})",
-					include_in_memory=True
-				)]
-
-			# Clean up tracker (no messages added since execution never happened)
-			if self.tool_call_tracker:
-				self.tool_call_tracker.complete_step()
-				self.logger.debug("Cleared tool call tracker after validation error")
-			return False
-
-		# Check if model output has no actions - treat as failure
-		if not model_output.action or len(model_output.action) == 0:
-			self.logger.error("❌ Model failed to generate actions - this indicates an LLM error")
-			self.logger.error("Empty actions violate the agent contract. LLM must provide at least one action per step.")
-
-			# Treat as a normal failure
-			self.state.increment_failures()
+		# D1-a (seed resolution): tolerate a bounded number of tool-free "planning"
+		# turns. Instead of treating the very first empty response as an error,
+		# acknowledge it as a planning turn and nudge (not scold) the model to act
+		# next. The >=3 thinking-loop escalation below remains the hard backstop, so
+		# the loop bound is unchanged. Disable with ALLOWED_REASONING_TURNS=0.
+		from agents.task.constants import ALLOWED_REASONING_TURNS
+		if self._empty_action_counter <= ALLOWED_REASONING_TURNS:
+			self.logger.info(
+				f"📝 Tool-free planning turn {self._empty_action_counter}/{ALLOWED_REASONING_TURNS} "
+				f"allowed (no action this step; must act next)"
+			)
+			self.message_manager.inject_user_guidance([{
+				'text': (
+					"📝 Planning turn noted. You may reason this turn, but you MUST call at "
+					"least one function on your NEXT step to make progress "
+					"(e.g. done(text=...) if you are finished)."
+				),
+				'kind': 'guidance',
+				'metadata': {'source': 'reasoning_turn_allowance', 'turn': self._empty_action_counter}
+			}])
+			# Not an error: a planning turn is a legitimate (bounded) outcome.
+			# Tagged for telemetry/clarity; the R1 conversational-exit treats it as
+			# a non-reply step (it lacks conversational_reply), so it resets the
+			# reply-run rather than counting toward an exit.
 			self._last_result = [ActionResult(
-				error="LLM failed to generate actions. This may be a prompt issue, API problem, or model limitation.",
-				include_in_memory=True
+				extracted_content="Planning turn (no action taken). Act on the next step.",
+				include_in_memory=False,
+				metadata={'planning_turn': True}
 			)]
 			if self.tool_call_tracker:
 				self.tool_call_tracker.complete_step()
 			return False
 
-		return True
+		# Get available action count for context
+		available_actions = len(self.controller.get_action_names()) if self.controller else 0
+
+		# Escalating intervention after N consecutive failures (OR-4: N defaults
+		# to 2 so a prose-only model is pushed to act one step sooner).
+		if self._empty_action_counter >= _EMPTY_ACTION_ESCALATE_AT:
+			_n = self._empty_action_counter
+			self.logger.error(
+				f"🚨 CRITICAL: Thinking loop detected - {_n} consecutive steps without function calls"
+			)
+
+			# Strong intervention with explicit example
+			self.message_manager.inject_user_guidance([{
+				'text': (
+					"🚨 INTERVENTION: Thinking loop detected.\n\n"
+					f"You have failed to call functions for {_n} consecutive steps.\n"
+					"This violates the core agent contract.\n\n"
+					"**STOP thinking. START acting.**\n\n"
+					"Example for current task:\n"
+					f"Task: {self.task}\n\n"
+					"If this is a file operation → call filesystem_write_file(...)\n"
+					"If this is a search → call mcp_execute_tool(...)\n"
+					"If you're stuck → call done(text='explanation')\n\n"
+					"**CALL A FUNCTION IN YOUR NEXT RESPONSE.**\n"
+					"No more explanations, no more planning."
+				),
+				'kind': 'intervention',
+				'metadata': {
+					'source': 'thinking_loop_detector',
+					'counter': _n,
+					'task': self.task[:100] if self.task else 'unknown'
+				}
+			}])
+
+			# History clearing disabled - preserves context
+			self.logger.info("Thinking loop detected - guidance injected")
+
+			# Count this against the run's failure budget. Nothing else did: the only
+			# `state.increment_failures()` for this failure mode sat in a branch below
+			# that `_validate_model_output` had already made unreachable (it returns
+			# False for an empty action list, so the caller never reached a second
+			# emptiness check). With no increment, `_too_many_failures()` could never
+			# trip on a model that simply refuses to call tools, and such a run burned
+			# its entire max_steps budget making a paid LLM call every step.
+			self.state.increment_failures()
+
+			# Reset counter for next attempt
+			self._empty_action_counter = 0
+
+			# Set error result
+			self._last_result = [ActionResult(
+				error="Thinking loop detected - guidance injected. YOU MUST CALL A FUNCTION.",
+				include_in_memory=True
+			)]
+		else:
+			# Normal error handling for attempts 1-2
+			self.message_manager.inject_user_guidance([
+				{
+					'text': (
+						"❌ CRITICAL ERROR: No function calls detected.\n\n"
+						"You MUST call at least one function every step.\n"
+						"There is no 'thinking mode' or 'planning phase'.\n\n"
+						"**What to do RIGHT NOW:**\n"
+						"1. Look at the available functions below\n"
+						"2. Pick one that makes progress on the task\n"
+						"3. CALL IT with proper parameters\n\n"
+						f"You have {available_actions} functions available - use them!"
+					),
+					'kind': 'error',
+					'metadata': {'source': 'empty_actions_validation', 'attempt': self._empty_action_counter}
+				}
+			])
+
+			# Set error result
+			self._last_result = [ActionResult(
+				error=f"No function calls (attempt {self._empty_action_counter}/{_EMPTY_ACTION_ESCALATE_AT})",
+				include_in_memory=True
+			)]
+
+		# Clean up tracker (no messages added since execution never happened)
+		if self.tool_call_tracker:
+			self.tool_call_tracker.complete_step()
+			self.logger.debug("Cleared tool call tracker after validation error")
+		return False
 
 	def _build_execution_context(self, browser_context):
 		"""Build the ActionExecutionContext for this step's action execution."""

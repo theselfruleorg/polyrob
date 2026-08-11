@@ -1,19 +1,13 @@
 """Platform-agnostic markdown utilities for message formatting."""
 
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple
 
 __all__ = [
     'escape_markdown',
     'escape_markdown_v2',
     'format_message_with_markdown',
-    'format_user_mention',
     'safe_markdown_message',
-    'format_command_list',
-    'format_mode_description',
-    'format_help_section',
-    'escape_html',
-    'is_already_escaped',
-    'format_role_name'
+    'is_already_escaped'
 ]
 
 
@@ -183,13 +177,6 @@ def format_message_with_markdown(message: str, **kwargs) -> str:
     return str(message)
 
 
-def format_user_mention(username: Optional[str], full_name: str) -> str:
-    """Format user mention for group chats."""
-    if username:
-        return f"@{username}"
-    return escape_markdown(full_name)
-
-
 def safe_markdown_message(message: str, **kwargs) -> Tuple[str, Optional[str]]:
     """Format a message with markdown and ensure it's safe.
 
@@ -211,81 +198,3 @@ def safe_markdown_message(message: str, **kwargs) -> Tuple[str, Optional[str]]:
     except Exception:
         # Fallback to plain text if escaping fails
         return str(message), None
-
-
-def format_command_list(commands: List[Tuple[str, str]]) -> str:
-    """Format a list of commands with proper escaping."""
-    formatted = []
-    for cmd, desc in commands:
-        # Preserve emojis and special characters in description
-        desc = desc.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-        # Keep emojis intact
-        desc_escaped = ''
-        for c in desc:
-            if c.isalnum() or c.isspace() or ord(c) > 127:  # Keep unicode chars (emojis)
-                desc_escaped += c
-            elif c not in '\\_\\*\\`':  # Don't double-escape
-                desc_escaped += f'\\{c}'
-            else:
-                desc_escaped += c
-        # Use backticks to properly format commands with underscores
-        formatted.append(f"• `/{cmd}` - {desc_escaped}")
-    return '\n'.join(formatted)
-
-
-def format_mode_description(mode: str, emoji: str, desc: str) -> str:
-    """Format mode description with proper escaping."""
-    # Preserve emoji and handle special characters
-    mode = mode.replace('_', '\\_')
-    desc = desc.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-    return f"• `{mode}` - {emoji} {desc}"
-
-
-def format_help_section(title: str, content: str) -> str:
-    """Format a help section with proper escaping."""
-    title = title.replace('_', '\\_').replace('*', '\\*')
-    return f"\n{title}:\n{content}"
-
-
-def escape_html(text: str) -> str:
-    """
-    Escape special characters for HTML formatting.
-    Replaces characters that have special meaning in HTML.
-    """
-    if not text:
-        return ""
-
-    escape_map = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#39;'
-    }
-
-    result = ""
-    for char in text:
-        if char in escape_map:
-            result += escape_map[char]
-        else:
-            result += char
-
-    return result
-
-
-def format_role_name(role: str) -> str:
-    """Format a role name for display.
-
-    Args:
-        role: Role name to format
-
-    Returns:
-        str: Formatted role name
-    """
-    role_emojis = {
-        'user': '👤',
-        'admin': '🛡️'
-    }
-
-    emoji = role_emojis.get(role, '❓')
-    return f"{emoji} {role}"

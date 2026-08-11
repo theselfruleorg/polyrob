@@ -16,7 +16,6 @@ from io import BytesIO
 from typing import Dict, Any
 
 import pypdf  # type: ignore
-from pypdf.errors import PdfReadError  # type: ignore
 
 from core.exceptions import ServiceError
 from utils.time_utils import get_current_timestamp
@@ -29,7 +28,6 @@ class PdfExtractionMixin:
         """Process PDF content with enhanced extraction capabilities and validation."""
         from io import BytesIO
         import pypdf  #type: ignore
-        from pypdf.errors import PdfReadError  #type: ignore
         import re
 
         # Ensure content is in bytes

@@ -19,7 +19,7 @@ and **OpenClaw** ([openclaw/openclaw](https://github.com/openclaw/openclaw)).
 | **License** | MIT | MIT | MIT |
 | **Language** | Python | Python | TypeScript / Node (native macOS/iOS in Swift) |
 | **Primary focus** | Durable, self-hosted autonomy that scales to multi-tenant | Self-improving single-operator agent | Omni-channel personal assistant |
-| **Multi-provider LLM** | ✅ 6 providers | ✅ 300+ models (portal / OpenRouter / own endpoint) | ✅ Claude, OpenAI, Gemini, DeepSeek |
+| **Multi-provider LLM** | ✅ 6 built-in + any OpenAI/Anthropic-compatible endpoint declared in `providers.yaml` (Ollama, vLLM, z.ai, gateways) | ✅ 300+ models (portal / OpenRouter / own endpoint) | ✅ Claude, OpenAI, Gemini, DeepSeek |
 | **Provider failover** | ✅ Automatic cross-provider | ✅ Credential pooling + rotation | ✅ Across auth profiles |
 | **Native tool calling** | ✅ Per-provider | ✅ | ✅ |
 | **Persistent memory** | ✅ SQLite FTS5 + optional vector | ✅ FTS5 + reflective/curated, pluggable providers | ⚠️ Session history + workspace files (no dedicated vector RAG) |
@@ -213,7 +213,7 @@ See the migration guide directory for detailed paths from each framework:
 
 | Framework | Providers | Failover | Hot-swap |
 |-----------|-----------|----------|----------|
-| **POLYROB** | OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NIM | ✅ Automatic cross-provider (on billing/rate-limit errors) | ✅ Live (CLI `/model`, API per-request) |
+| **POLYROB** | OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NIM + user-declared endpoints (`providers.yaml`: Ollama/vLLM/LM Studio/z.ai/gateways, zero code) | ✅ Automatic cross-provider (on billing/rate-limit errors) | ✅ Live (CLI `/model`, API per-request) |
 | **Hermes** | 300+ via portal / OpenRouter / own endpoint | ✅ Credential pooling + rotation | ✅ `hermes model` switch |
 | **OpenClaw** | Claude, OpenAI, Gemini, DeepSeek | ✅ Across auth profiles | ✅ Config |
 

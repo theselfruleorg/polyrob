@@ -28,7 +28,7 @@ PUBLIC = [
     # introspection
     "list_actions", "get_action", "action", "get_action_schema", "create_action_model",
     "get_all_actions_for_provider", "supports_native_tools", "get_prompt_description",
-    "get_mcp_servers_info", "get_polymarket_info", "get_action_names", "has_action",
+    "get_mcp_servers_info", "get_action_names", "has_action",
     "get_action_details", "tool_calls_to_actions", "get_last_validation_errors",
 ]
 

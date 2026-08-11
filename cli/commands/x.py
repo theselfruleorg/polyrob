@@ -11,12 +11,8 @@ Rate-limit reality (pay-per-use tier, docs.x.com 2026-07): DM reads are
 """
 import asyncio
 import os
-import signal
-import sys
-from typing import Optional
 
 import click
-from core.runtime_paths import data_dir_or_home
 
 
 class XCredentialsError(click.ClickException):
@@ -46,112 +42,28 @@ def x(verbose: bool):
 
 
 async def _run_x(verbose: bool):
-    import logging as _logging
+    from cli.commands._surface_runner import SurfaceJob, run_surface
 
-    from core.bootstrap import (build_cli_container, setup_project_path,
-                                setup_sqlite_compat)
+    async def _build(ctx):
+        from surfaces.x.harness import build_x_harness
+        harness = build_x_harness(ctx.container, ctx.task_agent,
+                                  data_dir=ctx.data_dir)
 
-    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
-    os.environ.setdefault("X_SURFACE_ENABLED", "true")
+        async def _announce():
+            click.echo(click.style("x dm bot online", fg="green")
+                       + f" — polling dm_events every {os.getenv('X_DM_POLL_SEC', '90')}s…")
+            click.echo(click.style(
+                "note: X allows 15 DM reads + 15 DM sends per 15 min — "
+                "replies can lag under load", dim=True))
+            click.echo(click.style("listening… (Ctrl-C to stop)", dim=True))
 
-    setup_project_path()
-    setup_sqlite_compat()
+        return SurfaceJob(harness=harness, run=harness.run, announce=_announce)
 
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-
-    check_x_credentials()
-
-    headless = not sys.stderr.isatty()
-    if verbose:
-        log_level = "DEBUG"
-    elif headless:
-        log_level = "INFO"
-    else:
-        log_level = "ERROR"
-    quiet = (not verbose) and (not headless)
-    if quiet:
-        _logging.disable(_logging.CRITICAL)
-
-    try:
-        container = await build_cli_container(log_level=log_level)
-    except Exception as e:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                   + f"failed to start: {e}")
-        sys.exit(1)
-    if quiet:
-        _logging.disable(_logging.NOTSET)
-    elif not verbose:
-        for _noisy in ("httpx", "httpcore", "aiohttp", "asyncio"):
-            _logging.getLogger(_noisy).setLevel(_logging.WARNING)
-
-    task_agent = container.get_agent("task_agent")
-    if not task_agent:
-        click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                   + "TaskAgent not available in container")
-        sys.exit(1)
-
-    from core.surfaces.bootstrap import install_surface_bus
-    install_surface_bus(container)
-    dispatcher = container.get_service("outbound_dispatcher")
-    if dispatcher is not None:
-        from cli.commands._bootstrap import attach_dispatcher_event_log
-        attach_dispatcher_event_log(dispatcher)
-        dispatcher.start()
-
-    from surfaces.x.harness import build_x_harness
-    _data_dir = data_dir_or_home(
-        getattr(getattr(container, "config", None), "data_dir", None))
-    harness = build_x_harness(container, task_agent, data_dir=_data_dir)
-
-    autonomy_handles = None
-    try:
-        from agents.task.constants import local_mode_enabled
-        if local_mode_enabled():
-            from core.autonomy_runtime import start_autonomy
-            autonomy_handles = start_autonomy(task_agent=task_agent,
-                                              data_dir=_data_dir)
-    except Exception:
-        autonomy_handles = None
-
-    click.echo(click.style("x dm bot online", fg="green")
-               + f" — polling dm_events every {os.getenv('X_DM_POLL_SEC', '90')}s…")
-    click.echo(click.style(
-        "note: X allows 15 DM reads + 15 DM sends per 15 min — "
-        "replies can lag under load", dim=True))
-    click.echo(click.style("listening… (Ctrl-C to stop)", dim=True))
-
-    loop = asyncio.get_running_loop()
-    run_task = asyncio.ensure_future(harness.run())
-
-    def _stop(*_a):
-        run_task.cancel()
-
-    try:
-        loop.add_signal_handler(signal.SIGINT, _stop)
-        loop.add_signal_handler(signal.SIGTERM, _stop)
-    except (NotImplementedError, RuntimeError):
-        for _sig in (signal.SIGINT, signal.SIGTERM):
-            try:
-                signal.signal(_sig, lambda *_a: _stop())
-            except (ValueError, OSError, AttributeError):
-                pass
-
-    try:
-        await run_task
-    except asyncio.CancelledError:
-        pass
-    finally:
-        click.echo("\n" + click.style("stopping x dm bot…", dim=True))
-        if autonomy_handles is not None:
-            try:
-                await autonomy_handles.stop()
-            except Exception:
-                pass
-        if dispatcher is not None:
-            try:
-                await dispatcher.stop()
-            except Exception:
-                pass
-        await harness.stop()
+    await run_surface(
+        extra_env={"X_SURFACE_ENABLED": "true"},
+        verbose=verbose,
+        resolve_credentials=check_x_credentials,
+        silence_loggers=("httpx", "httpcore", "aiohttp", "asyncio"),
+        build_harness=_build,
+        stopping_message="stopping x dm bot…",
+    )

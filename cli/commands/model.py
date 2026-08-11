@@ -24,24 +24,43 @@ async def _model_list():
     # ~/.polyrob, and the config/.env.* backfill) — not just a bare server-mode load.
     load_env(local_mode=True)
 
-    from core.config import AgentConfig
-    from modules.llm.profiles import all_profiles  # P8: profiles are the declarative source
+    import os
+
+    from modules.llm.profiles import (  # P8: profiles are the declarative source
+        all_profiles,
+        providers_with_keys,
+        usable_providers_with_keys,
+    )
     from modules.llm.available_models import available_models, steer_notes
 
-    config = AgentConfig()
-    # One key-presence oracle (Seam 1) instead of a local key_attr dict.
-    ready_providers = set(config.available_providers())
+    # Same oracles + vocabulary as `polyrob doctor` (UX assessment 2026-08-07,
+    # Q5): the old AgentConfig.available_providers() read pydantic fields that
+    # only exist for the six built-ins (user rows were permanently "no key"),
+    # and its presence-only semantics rendered a placeholder key as "ready" on
+    # the same screen whose footer said no usable key exists.
+    env = dict(os.environ)
+    present = set(providers_with_keys(env))
+    usable = set(usable_providers_with_keys(env))
 
-    click.echo("Provider         Status     Default Model            Native")
+    click.echo(f"{'Provider':<16} {'Status':<14} {'Default Model':<24} Native")
     click.echo("-" * 68)
 
     # Drive the listing from ProviderProfile (single declarative source), not a
     # hardcoded dict — each profile carries default_model + capability flags (P8).
     for prof in all_profiles():
-        api_key = prof.name in ready_providers
-        status = click.style("ready", fg="green") if api_key else click.style("no key", fg="red")
+        if not prof.env_key and prof.auth_type == "none":
+            status_txt, color = "no key needed", "green"
+        elif prof.name in usable:
+            status_txt, color = "present", "green"
+        elif prof.name in present:
+            status_txt, color = "malformed", "yellow"
+        else:
+            status_txt, color = "missing", "red"
         native = "yes" if prof.supports_native_tools else "no"
-        click.echo(f"{prof.name:<16} {status:<19} {prof.default_model:<24} {native}")
+        # Pad BEFORE styling — ANSI bytes must not count toward the column width
+        # (piped output previously shifted by ~9 chars).
+        status = click.style(f"{status_txt:<14}", fg=color)
+        click.echo(f"{prof.name:<16} {status} {prof.default_model:<24} {native}")
 
     # AFTER the status table: the actual model NAMES for usable-key providers. The old
     # "(N models)" count told you how many models a provider has but never which ones —
@@ -51,7 +70,15 @@ async def _model_list():
     click.echo("")
     choices = available_models()
     if not choices:
-        click.echo("No usable provider key found — run `polyrob init` to add one.")
+        if usable:
+            # A usable provider exists (e.g. a keyless providers.yaml row) but
+            # the model join doesn't list user providers yet — don't deny it.
+            click.echo(
+                "No listable models yet for: " + ", ".join(sorted(usable))
+                + " — pass -m <model> explicitly (its declared models still route)."
+            )
+        else:
+            click.echo("No usable provider key found — run `polyrob init` to add one.")
     else:
         click.echo("Models you can use now:")
         # Column widths sized to THIS invocation's choices (model ids vary wildly in

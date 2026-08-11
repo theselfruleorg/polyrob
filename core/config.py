@@ -706,8 +706,14 @@ class ServerConfig(AgentConfig):
 
         Model selection is handled by llm_client_registry.DEFAULT_MODELS.
         This method only provides connection credentials.
+
+        Proposal 024 (L0): blocks for user-declared providers (providers.yaml)
+        and base-URL redirects of built-ins are merged in from the ProviderSpec
+        registry via ``modules.llm.profiles.extra_llm_config_blocks`` (the
+        existing layering-allowlisted core→profiles edge). With no user file /
+        registry off, the merge is empty and the output is byte-identical.
         """
-        return {
+        config: Dict[str, Any] = {
             "openai": {
                 "api_key": self.openai_api_key,
             },
@@ -731,6 +737,14 @@ class ServerConfig(AgentConfig):
                 "api_url": self.nvidia_api_url,
             }
         }
+        try:
+            from modules.llm.profiles import extra_llm_config_blocks
+            for name, block in extra_llm_config_blocks().items():
+                config.setdefault(name, {}).update(block)
+        except Exception:
+            # Fail-open: a registry problem must never break config building.
+            pass
+        return config
 
     # REMOVED: get_model_config() and validate_model_name() 
     # Use modules.llm.model_registry.get_model_config() instead

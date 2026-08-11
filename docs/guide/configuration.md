@@ -26,7 +26,12 @@ shell values override file values.
 
 ## LLM provider keys
 
-Set **at least one** provider key. polyrob automatically selects the available provider and falls back to alternatives on error.
+Set **at least one** provider key. When you don't pin a provider, polyrob auto-selects the
+**first provider with a usable key in canonical order** — `openrouter → anthropic → openai →
+gemini → nvidia → deepseek`, then your `providers.yaml` rows in file order — and falls back to
+alternatives on error. (So adding an `OPENROUTER_API_KEY` to a box that used Anthropic changes the
+default to OpenRouter; pin with `DEFAULT_PROVIDER=<name>` or `-p` to override. Full precedence:
+[CONFIGURATION.md](../CONFIGURATION.md).)
 
 | Variable | Provider |
 |----------|----------|
@@ -37,6 +42,57 @@ Set **at least one** provider key. polyrob automatically selects the available p
 | `OPENROUTER_API_KEY` | OpenRouter (proxies many models) |
 | `NVIDIA_API_KEY` | NVIDIA NIM |
 | `PERPLEXITY_API_KEY` | Perplexity — a web-search *tool*, not an LLM provider (optional) |
+
+---
+
+## Custom LLM providers (`providers.yaml`)
+
+Beyond the six built-in providers, you can declare **any OpenAI-compatible or
+Anthropic-compatible endpoint with zero code** — a local Ollama / LM Studio /
+vLLM / llama.cpp server, an aggregator (Groq, Together, Fireworks, LiteLLM), a
+subscription endpoint like the z.ai GLM Coding Plan, or a corporate gateway.
+Declare it in `~/.polyrob/providers.yaml` (path override: `LLM_CUSTOM_PROVIDERS`):
+
+```yaml
+providers:
+  ollama:
+    base_url: http://127.0.0.1:11434/v1
+    auth_type: none                    # no key needed
+    transport: chat_completions
+    default_model: qwen3-coder:30b
+    models: [qwen3-coder:30b, llama3.3:70b]
+  zai-coding:
+    base_url: https://api.z.ai/api/anthropic
+    env_key: ZAI_API_KEY               # must be *_API_KEY-shaped
+    transport: anthropic_messages      # Anthropic-shaped endpoint
+    bearer_auth: true
+    subscription: true
+    default_model: glm-5
+    models: [glm-5]
+    model_prefixes: [glm-]
+```
+
+Then use it like any built-in: `polyrob run -p ollama "…"`, or make it the
+default with `DEFAULT_PROVIDER=ollama`. A row can also **override a built-in**
+(e.g. give `openai:` a corporate-gateway `base_url`).
+
+Rules worth knowing:
+
+- **`transport`** selects the wire shape: `chat_completions` (OpenAI-style) or
+  `anthropic_messages`. A row can never name a client class — only a transport.
+- **Declare `models:`** — declared models become listable and route correctly
+  through the OpenAI-compat `/v1` surface. A row without `models:` still works,
+  but only when named explicitly (`-p <name> -m <model>`).
+- **Security is enforced at load**: `env_key` must be an `*_API_KEY`-shaped
+  variable (never a wallet/telegram/JWT secret name), `base_url` must be
+  http(s) and never a cloud-metadata endpoint, and a group/world-writable file
+  is refused. Every loaded row is logged with its effective endpoint, so a
+  redirect is always visible.
+- **The file is credential-equivalent** (it decides where your prompts and keys
+  go): agent file tools are denied access to it, and it is not writable from
+  the webview console. Keep it under `~/.polyrob/` with mode `600`.
+- Kill-switch: `LLM_PROVIDER_REGISTRY=off` restores the legacy built-in-only
+  provider tables and ignores the file entirely.
 
 ---
 

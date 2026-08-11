@@ -6,8 +6,7 @@ from typing import List, Optional, Dict, Any
 
 from .markdown_utils import (
     format_message_with_markdown,
-    safe_markdown_message,
-    escape_markdown
+    safe_markdown_message
 )
 
 logger = logging.getLogger(__name__)

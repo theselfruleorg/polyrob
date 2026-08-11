@@ -1,6 +1,6 @@
 """Base module class for core functionality modules."""
 
-from typing import Dict, Any, Optional, List, TYPE_CHECKING, Type
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 import asyncio
 import logging
 from core.base_component import BaseComponent
@@ -168,23 +168,3 @@ class BaseModule(BaseComponent):
             "module_type": self.__class__.__name__,
             "has_container": self.container is not None
         }
-
-def initialize_module(module_name: str, module_class: Type, container: DependencyContainer) -> bool:
-    """Initialize a module and register it with the container."""
-    try:
-        logger.debug(f"Initializing module {module_name}...")
-        
-        # Create and initialize the module
-        module = module_class(name=module_name, config=container.config, container=container)
-        asyncio.run(module.initialize())
-        
-        # Register with container
-        container.register_service(module_name, module)
-        
-        # Log success at debug level - higher level logs should come from the initialization module
-        logger.debug(f"{module_name} initialized successfully")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize module {module_name}: {e}")
-        return False 

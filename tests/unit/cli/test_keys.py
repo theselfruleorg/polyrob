@@ -59,3 +59,9 @@ def test_message_names_accepted_locations_and_init():
     assert "rob init" in msg
     for loc in ("~/.polyrob/.env", ".polyrob/.env", "config/.env.production"):
         assert loc in msg
+
+
+def test_message_names_custom_providers_file():
+    # A keyless/custom endpoint (Ollama, vLLM, a gateway) is a valid remedy and
+    # must be discoverable from the most-seen refusal string.
+    assert "providers.yaml" in no_key_message()

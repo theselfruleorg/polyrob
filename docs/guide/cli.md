@@ -49,7 +49,7 @@ the two.
 |------|-------------|
 | `--resume` | Resume an existing session by id (continue it) instead of starting a new task |
 | `--model`, `-m` | Model name (e.g. `gpt-5`, `gemini-2.5-flash`) |
-| `--provider`, `-p` | Provider: `openai`, `anthropic`, `gemini`, `openrouter`, `nvidia`. (DeepSeek isn't a direct `-p` value — use `-p openrouter -m deepseek/deepseek-chat`.) |
+| `--provider`, `-p` | Provider: `openai`, `anthropic`, `gemini`, `openrouter`, `nvidia`, or any provider you declared in `~/.polyrob/providers.yaml` (e.g. `-p ollama`). (DeepSeek isn't a direct `-p` value — use `-p openrouter -m deepseek/deepseek-chat`.) |
 | `--tools`, `-t` | Comma-separated tool list (e.g. `browser,mcp,filesystem`); takes precedence over `--toolset` |
 | `--toolset` | Named toolset: `minimal`, `default`, `research`, `coding`, `development`, `browser`, `full`, `safe` |
 | `--max-steps` | Maximum steps (default: 50) |
@@ -331,6 +331,7 @@ Inside the interactive REPL, commands are prefixed with `/`. Type `/help` to lis
 |------|---------|
 | `~/.polyrob/.env` | Global config: provider keys, default provider/model, toolset |
 | `~/.polyrob/cli.json` | Default provider/model set via `model set-default`/`/model`, plus any `model_aliases` you've defined; folded into `.env` the next time you run `polyrob init` |
+| `~/.polyrob/providers.yaml` | User-declared custom LLM providers (Ollama/vLLM/z.ai/gateways) — see [configuration.md](configuration.md#custom-llm-providers-providersyaml) |
 | `./.polyrob/.env` | Project-local overrides |
 | `./.polyrob/sessions/` | Project session workspaces and logs |
 

@@ -1,11 +1,12 @@
-"""Declarative provider profiles (roadmap P8, Reference §28).
+"""Declarative provider profiles (roadmap P8, Reference §28; proposal 024 L0).
 
 A ``ProviderProfile`` *describes* a provider — identity, auth, base URL, default
 model, capability flags — and owns no client construction, credential rotation, or
-streaming. Today POLYROB's ``modules/llm/*_client.py`` files conflate profile +
-transport + adapter; this layer extracts the declarative half so it has a single
-home. It is purely additive: nothing is rewired to consume it yet (that migration
-is the rest of P8), so behavior is unchanged.
+streaming. Since proposal 024 the profile table is a *derivation* of the
+``ProviderSpec`` registry (``modules/llm/provider_spec.py``), which also carries
+user-declared providers from ``~/.polyrob/providers.yaml``. The legacy literal
+table is kept as the ``LLM_PROVIDER_REGISTRY=off`` kill-switch path (byte-identical;
+remove with the kill-switch after one release).
 
 The default model deliberately reads from ``llm_client_registry.DEFAULT_MODELS`` so
 the default-model *policy* stays single-sourced.
@@ -13,7 +14,7 @@ the default-model *policy* stays single-sourced.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 from modules.llm.llm_client_registry import get_default_model
 
@@ -22,8 +23,8 @@ from modules.llm.llm_client_registry import get_default_model
 class ProviderProfile:
     name: str
     display_name: str
-    env_key: str                      # API-key environment variable
-    auth_type: str = "api_key"        # api_key | oauth | aws
+    env_key: str                      # API-key environment variable ("" = none)
+    auth_type: str = "api_key"        # api_key | oauth_* | borrowed | none
     base_url: Optional[str] = None    # None => provider SDK default
     supports_native_tools: bool = True
     supports_vision: bool = True
@@ -41,7 +42,11 @@ class ProviderProfile:
 # a key" (see ``providers_with_keys`` / ``core.runtime_config``). OpenRouter is FIRST
 # (2026-06-24): it is the preferred default client whenever its key is present —
 # explicit ``-p`` and operator pins (DEFAULT_PROVIDER/CHAT_PROVIDER) still win.
-PROFILES: Dict[str, ProviderProfile] = {
+#
+# Kill-switch path (LLM_PROVIDER_REGISTRY=off) ONLY — the live table is derived
+# from provider_spec.get_specs(). Keep in lockstep with BUILTIN_SPECS (pinned by
+# the characterization suite in both modes) until the kill-switch is removed.
+_LEGACY_PROFILES: Dict[str, ProviderProfile] = {
     "openrouter": ProviderProfile(
         name="openrouter", display_name="OpenRouter", env_key="OPENROUTER_API_KEY",
         base_url="https://openrouter.ai/api/v1", supports_native_tools=True,
@@ -79,6 +84,80 @@ PROFILES: Dict[str, ProviderProfile] = {
 }
 
 
+def _profiles_from_specs() -> Dict[str, ProviderProfile]:
+    """Derive the profile view from the ProviderSpec registry (proposal 024)."""
+    from modules.llm.provider_spec import get_specs
+    out: Dict[str, ProviderProfile] = {}
+    for s in get_specs():
+        out[s.name] = ProviderProfile(
+            name=s.name,
+            display_name=s.display_name,
+            env_key=s.env_key or "",
+            auth_type=s.auth_type.value,
+            base_url=s.resolved_base_url(),
+            supports_native_tools=s.supports_native_tools,
+            supports_vision=s.supports_vision,
+            signup_url=s.signup_url,
+            initializable=s.initializable,
+        )
+    return out
+
+
+class _LazyProfiles:
+    """Read-only dict-like view over the provider registry.
+
+    Built on first access (keeps module import light: no YAML/file I/O at import,
+    per tests/test_import_layering.py) and cached; ``reset()`` clears the snapshot
+    (called by ``provider_spec.reset_provider_registry_cache``).
+    """
+
+    def __init__(self) -> None:
+        self._snapshot: Optional[Dict[str, ProviderProfile]] = None
+
+    def _ensure(self) -> Dict[str, ProviderProfile]:
+        if self._snapshot is None:
+            from modules.llm.provider_spec import provider_registry_enabled
+            if provider_registry_enabled():
+                self._snapshot = _profiles_from_specs()
+            else:
+                self._snapshot = dict(_LEGACY_PROFILES)
+        return self._snapshot
+
+    def reset(self) -> None:
+        self._snapshot = None
+
+    # read-only mapping interface (order-preserving)
+    def __getitem__(self, key: str) -> ProviderProfile:
+        return self._ensure()[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._ensure()
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._ensure())
+
+    def __len__(self) -> int:
+        return len(self._ensure())
+
+    def __bool__(self) -> bool:
+        return bool(self._ensure())
+
+    def get(self, key: str, default=None):
+        return self._ensure().get(key, default)
+
+    def keys(self):
+        return self._ensure().keys()
+
+    def values(self):
+        return self._ensure().values()
+
+    def items(self):
+        return self._ensure().items()
+
+
+PROFILES = _LazyProfiles()
+
+
 def providers_with_keys(env=None) -> List[str]:
     """Return provider names whose API key is present in *env*, in PROFILES order.
 
@@ -92,7 +171,17 @@ def providers_with_keys(env=None) -> List[str]:
     """
     import os
     env = os.environ if env is None else env
-    return [p.name for p in PROFILES.values() if env.get(p.env_key)]
+    return [p.name for p in PROFILES.values() if p.env_key and env.get(p.env_key)]
+
+
+def _keyless_by_design(p: ProviderProfile) -> bool:
+    """True for a provider that needs no credential at all (``auth_type: none``,
+    e.g. a local Ollama declared in providers.yaml). Such providers count as
+    usable/initializable with no env key — the client sends a sentinel instead
+    (``provider_spec.NO_KEY_SENTINEL``). Without this, a keyless box with a
+    working local endpoint was refused by every no-key gate (B2, 2026-08-07).
+    """
+    return p.initializable and not p.env_key and p.auth_type == "none"
 
 
 def initializable_providers_with_keys(env=None) -> List[str]:
@@ -101,13 +190,18 @@ def initializable_providers_with_keys(env=None) -> List[str]:
     This is the SSOT for "does the user have a *usable* provider key" — the gating
     oracle that ``should_warn_no_key`` / the runtime resolver / the env-backfill and
     ``LLMManager._initialize``'s ``clients_to_try`` all derive from, so they can never
-    disagree. Excludes deepseek (direct client disabled — route via OpenRouter). The
+    disagree. Excludes deepseek (direct client disabled — route via OpenRouter).
+    Includes keyless-by-design (``auth_type: none``) providers unconditionally. The
     raw ``providers_with_keys`` stays the DISPLAY oracle (doctor/webview show a key is
     present even when it can't bootstrap directly).
     """
     import os
     env = os.environ if env is None else env
-    return [p.name for p in PROFILES.values() if env.get(p.env_key) and p.initializable]
+    return [
+        p.name for p in PROFILES.values()
+        if _keyless_by_design(p)
+        or (p.env_key and env.get(p.env_key) and p.initializable)
+    ]
 
 
 # Placeholder values that are "present" but not a real key (mirrors
@@ -143,14 +237,16 @@ def usable_providers_with_keys(env=None) -> List[str]:
     THE gating oracle wherever real key values are available (``should_warn_no_key``,
     the env-backfill, config-store resolution). Stricter than
     ``initializable_providers_with_keys`` (which is presence-only, for the resolver's
-    name-based path) — it also rejects placeholder / too-short values. Raw
+    name-based path) — it also rejects placeholder / too-short values. Keyless-by-
+    design (``auth_type: none``) providers are always usable. Raw
     ``providers_with_keys`` remains the DISPLAY oracle.
     """
     import os
     env = os.environ if env is None else env
     return [
         p.name for p in PROFILES.values()
-        if p.initializable and looks_like_real_key(env.get(p.env_key))
+        if _keyless_by_design(p)
+        or (p.initializable and p.env_key and looks_like_real_key(env.get(p.env_key)))
     ]
 
 
@@ -158,15 +254,31 @@ def no_key_message() -> str:
     """The single canonical no-key message (neutral module — no ``cli`` import).
 
     Re-exported from ``cli.keys`` and reused by ``LLMManager._initialize``'s raise so
-    every no-key surface says the same thing.
+    every no-key surface says the same thing. The provider list derives from the
+    spec registry (NOT a literal), so a user-declared providers.yaml row's env key
+    is named too — the message must never deny the user's own configuration.
     """
+    parts = []
+    for p in PROFILES.values():
+        if not p.env_key:
+            continue  # keyless-by-design rows have no key to set
+        label = p.env_key
+        if p.name == "openrouter":
+            label += " (recommended)"
+        if not p.initializable:
+            label += (
+                " (direct client disabled — use OPENROUTER_API_KEY with model "
+                "deepseek/deepseek-chat)"
+            )
+        parts.append(label)
     return (
         "No API key found. Run `polyrob init` to set one up, or put a provider key in "
         "any of: process env, ./.polyrob/.env, ~/.polyrob/.env, root .env, "
         "config/.env.development, or config/.env.production.\n"
-        "Supported providers: OPENROUTER_API_KEY (recommended), ANTHROPIC_API_KEY, "
-        "OPENAI_API_KEY, GEMINI_API_KEY, NVIDIA_API_KEY, DEEPSEEK_API_KEY "
-        "(direct client disabled — use OPENROUTER_API_KEY with model deepseek/deepseek-chat)."
+        "Supported providers: " + ", ".join(parts) + ".\n"
+        "Keyless/custom endpoints (a local Ollama, vLLM, a corporate gateway) need no "
+        "key at all — declare them in ~/.polyrob/providers.yaml (see the configuration "
+        "guide)."
     )
 
 
@@ -176,3 +288,62 @@ def get_profile(name: str) -> Optional[ProviderProfile]:
 
 def all_profiles() -> List[ProviderProfile]:
     return list(PROFILES.values())
+
+
+def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
+    """Per-provider LLM-config additions from the ProviderSpec registry (024 seam 2).
+
+    Consumed by ``core.config.BotConfig.get_llm_config()`` through the existing,
+    layering-allowlisted ``core → modules.llm.profiles`` edge. Returns:
+
+    - a full ``{"api_key", "base_url", "auth_type"}`` block for every user-declared
+      (non-builtin) provider, so ``create_llm_client``/``LLMManager`` can bootstrap
+      it exactly like a built-in; and
+    - a ``{"base_url": ...}`` override for a BUILT-IN provider whose effective base
+      URL was redirected via providers.yaml / its ``base_url_env`` — merged into the
+      literal block so clients that read config (OpenAIClient) see it.
+
+    Empty (byte-identical config) when the registry is off or no user file exists.
+    Fail-open: any registry error yields ``{}`` — config building must never break.
+    """
+    import os
+    env = os.environ if env is None else env
+    try:
+        from modules.llm.provider_spec import (
+            BUILTIN_SPECS,
+            get_specs,
+            provider_registry_enabled,
+        )
+        if not provider_registry_enabled():
+            return {}
+        out: Dict[str, Dict[str, object]] = {}
+        builtin_defaults = {b.name: b for b in BUILTIN_SPECS}
+        for s in get_specs():
+            if s.builtin:
+                default = builtin_defaults.get(s.name)
+                if default is None:
+                    continue
+                resolved = s.resolved_base_url(env)
+                if resolved != default.base_url:
+                    out.setdefault(s.name, {})["base_url"] = resolved
+                # An env_key override on a built-in (corporate gateway with its
+                # own key var) must also re-source the api_key — the BotConfig
+                # pydantic field keeps reading the ORIGINAL var otherwise.
+                if s.env_key and s.env_key != default.env_key and env.get(s.env_key):
+                    out.setdefault(s.name, {})["api_key"] = env.get(s.env_key)
+            else:
+                key = env.get(s.env_key) if s.env_key else None
+                if not key and s.auth_type.value == "none":
+                    # AuthType.NONE (Ollama & friends): the manager's bootstrap
+                    # gates skip providers with no api_key — the sentinel makes
+                    # a keyless local endpoint bootstrappable (024 live-path fix).
+                    from modules.llm.provider_spec import NO_KEY_SENTINEL
+                    key = NO_KEY_SENTINEL
+                out[s.name] = {
+                    "api_key": key,
+                    "base_url": s.resolved_base_url(env),
+                    "auth_type": s.auth_type.value,
+                }
+        return out
+    except Exception:
+        return {}

@@ -111,27 +111,3 @@ def install_playwright_browsers(with_deps: bool = False) -> Tuple[bool, Optional
         error_msg = f"Error installing Playwright browsers: {e}"
         logger.error(error_msg)
         return False, error_msg
-
-
-def ensure_browsers_installed() -> bool:
-    """Ensure Playwright browsers are installed, attempting installation if needed.
-    
-    Returns:
-        Boolean indicating if browsers are available
-    """
-    # First check if already installed
-    if check_playwright_browsers():
-        return True
-    
-    logger.warning("Playwright browsers not found - attempting to install")
-    
-    # Try basic installation first
-    success, error = install_playwright_browsers(with_deps=False)
-    if success:
-        return True
-    
-    # If basic install failed, try with dependencies (requires sudo on some systems)
-    logger.info("Attempting to install with system dependencies")
-    success, error = install_playwright_browsers(with_deps=True)
-    
-    return success

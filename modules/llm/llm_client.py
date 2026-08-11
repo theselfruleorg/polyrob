@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
 from core.exceptions import (
     LLMError,
-    LLMConfigError,
     LLMConnectionError,
     LLMResponseError,
     LLMRateLimitError,
@@ -333,20 +332,6 @@ class LLMClient(BaseModule):
         model_name = self.model_type or "gpt-3.5-turbo"  # Fallback
         return count_messages_tokens(messages, model_name)
 
-    def get_max_safe_input_tokens(self) -> int:
-        """Get the maximum safe input token count for this model.
-        
-        Returns:
-            Maximum safe input tokens (context window - completion tokens)
-        """
-        model_config = self._get_model_config()
-        if model_config:
-            return model_config.safe_input_tokens
-        else:
-            # Fallback calculation
-            estimated_context = 16000  # Conservative estimate
-            return estimated_context - self.max_tokens
-
     def get_context_window(self) -> int:
         """Get the context window size for this model.
         
@@ -371,39 +356,6 @@ class LLMClient(BaseModule):
         if model_config and model_config.max_completion_tokens:
             return model_config.max_completion_tokens
         return 8192  # Conservative default
-    
-    def get_model_limits(self) -> Dict[str, int]:
-        """Get all token limits for this model from registry.
-
-        REFACTORED (Nov 25, 2025): Consolidates limit retrieval to single method.
-
-        Returns:
-            Dict with context_window, max_completion_tokens, safe_input_tokens
-        """
-        model_config = self._get_model_config()
-        if model_config:
-            return {
-                'context_window': model_config.context_window,
-                'max_completion_tokens': model_config.max_completion_tokens,
-                'safe_input_tokens': model_config.safe_input_tokens
-            }
-        else:
-            # Conservative defaults
-            return {
-                'context_window': 16000,
-                'max_completion_tokens': 8192,
-                'safe_input_tokens': 7800
-            }
-
-    # ADDED (Dec 13, 2025): Underscore-prefixed aliases for subclass compatibility
-    # These delegate to the public methods - subclasses no longer need to override
-    def _get_context_window(self) -> int:
-        """Alias for get_context_window() - for subclass compatibility."""
-        return self.get_context_window()
-
-    def _get_max_completion_tokens(self) -> int:
-        """Alias for get_max_completion_tokens() - for subclass compatibility."""
-        return self.get_max_completion_tokens()
 
     def _adjust_max_tokens(
         self,
@@ -497,110 +449,50 @@ class LLMClient(BaseModule):
         """Generate text from the LLM."""
         pass
 
-    def _format_prompt(self, prompt_bundle: Union[str, Dict[str, Any], List[Dict[str, str]]]) -> Dict[str, Any]:
-        """Format prompt for specific LLM implementation."""
-        try:
-            if isinstance(prompt_bundle, str):
-                return {"messages": [{"role": "user", "content": prompt_bundle}]}
-            
-            elif isinstance(prompt_bundle, list):
-                return {"messages": prompt_bundle}
-            
-            elif isinstance(prompt_bundle, dict):
-                messages = []
-                
-                # Handle system prompt
-                if "system" in prompt_bundle:
-                    messages.append({
-                        "role": "system",
-                        "content": prompt_bundle["system"]
-                    })
-                    
-                # Handle message list
-                if "messages" in prompt_bundle:
-                    messages.extend(prompt_bundle["messages"])
-                    
-                # Handle character integration
-                if "character" in prompt_bundle and prompt_bundle["character"]:
-                    char_info = prompt_bundle["character"]
-                    if not any(msg["role"] == "system" for msg in messages):
-                        char_prompt = f"You are {char_info.get('name', 'an AI assistant')}.\n"
-                        if char_info.get('bio'):
-                            char_prompt += f"\n{char_info['bio']}\n"
-                        messages.insert(0, {
-                            "role": "system",
-                            "content": char_prompt
-                        })
-                        
-                return {"messages": messages}
-                
-            else:
-                raise ValueError(f"Unsupported prompt type: {type(prompt_bundle)}")
-            
-        except Exception as e:
-            raise LLMConfigError(f"Error formatting prompt: {str(e)}")
-
-    async def generate_agent_response(
+    def _normalize_prompt(
         self,
-        messages: Optional[List[Dict[str, Any]]] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
+        prompt: Optional[Union[str, Dict[str, Any], List[Dict[str, Any]]]],
+        messages: Optional[List[Dict[str, Any]]],
         system: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-        **kwargs
-    ) -> Union[str, Tuple[str, List[Dict[str, Any]]]]:
-        """Generate a response specifically for agent interactions with tool support."""
-        try:
-            await self.ensure_initialized()
-            
-            formatted_messages = []
-            
-            # Handle system message
-            if system:
-                formatted_messages.append({
-                    "role": "system",
-                    "content": system
-                })
-            
-            # Format and validate messages
-            if messages:
-                if isinstance(messages, list):
-                    for msg in messages:
-                        if not isinstance(msg, dict) or "role" not in msg:
-                            raise LLMConfigError(f"Invalid message format: {msg}")
-                        formatted_messages.append(msg)
-                else:
-                    formatted = self._format_prompt(messages)
-                    formatted_messages.extend(formatted["messages"])
-            
-            # Validate tools format if provided
-            if tools:
-                for tool in tools:
-                    if not isinstance(tool, dict) or "type" not in tool:
-                        raise LLMConfigError(f"Invalid tool format: {tool}")
-            
-            # Try tool-based generation if supported
-            try:
-                response = await self._generate_with_tools(
-                    messages=formatted_messages,
-                    tools=tools,
-                    metadata=metadata,
-                    **kwargs
-                )
-                return response
-            except NotImplementedError:
-                # Fall back to regular generation if tools not supported
-                self.logger.warning(f"{self.__class__.__name__} does not support tool-based generation, falling back to regular generation")
-                return await self.generate_response(
-                    messages=formatted_messages,
-                    metadata=metadata,
-                    **kwargs
-                )
-            
-        except LLMError:
-            raise
-        except Exception as e:
-            self.logger.error(f"Error generating agent response: {str(e)}")
-            raise LLMError(f"Agent response generation failed: {str(e)}")
+        *,
+        hoist_dict_system: bool = False,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """Resolve the polymorphic (prompt, messages) input into one message list.
+
+        Shared normalization previously copy-pasted in every provider client's
+        ``generate_response``. Precedence: explicit ``messages`` > list prompt
+        (all dicts) > dict prompt with ``'messages'`` > string prompt > default
+        ``"Hello"`` user message.
+
+        Returns ``(formatted_messages, system)``:
+
+        - ``formatted_messages`` is the SAME list object that was passed in
+          where possible (callers may mutate it, e.g. insert a system message
+          at index 0 — the OpenAI-family pattern).
+        - ``system`` is passed through unchanged, EXCEPT when
+          ``hoist_dict_system=True`` and ``prompt`` is a dict carrying
+          ``'system'`` while ``system`` is falsy — then the dict's value is
+          hoisted (the Anthropic/Gemini pattern, where system rides a separate
+          kwarg instead of the messages list).
+        """
+        if messages is not None:
+            # Use messages directly if provided
+            formatted_messages = messages
+        elif isinstance(prompt, list) and all(isinstance(m, dict) for m in prompt):
+            # Prompt is already a list of messages
+            formatted_messages = prompt
+        elif isinstance(prompt, dict) and 'messages' in prompt:
+            # Extract messages (and optionally system) from prompt dict
+            formatted_messages = prompt['messages']
+            if hoist_dict_system and 'system' in prompt and not system:
+                system = prompt['system']
+        elif isinstance(prompt, str):
+            # Convert string prompt to message format
+            formatted_messages = [{"role": "user", "content": prompt}]
+        else:
+            # Default to empty message
+            formatted_messages = [{"role": "user", "content": "Hello"}]
+        return formatted_messages, system
 
     async def _generate_with_tools(
         self,
@@ -743,40 +635,6 @@ class LLMClient(BaseModule):
             Appropriate LLMError subclass
         """
         return translate_llm_error(error, context)
-    
-    async def _safe_api_call(
-        self, 
-        api_func, 
-        *args, 
-        context: str = "API call",
-        **kwargs
-    ) -> Any:
-        """Safely execute an API call with error translation.
-        
-        Wraps API calls with consistent error handling and translation.
-        
-        Args:
-            api_func: Async function to call
-            *args: Positional arguments for the function
-            context: Context string for error messages
-            **kwargs: Keyword arguments for the function
-            
-        Returns:
-            Result of the API call
-            
-        Raises:
-            Appropriate LLMError subclass
-        """
-        try:
-            return await api_func(*args, **kwargs)
-        except LLMError:
-            # Re-raise LLM errors as-is
-            raise
-        except Exception as e:
-            # Translate to appropriate LLM error
-            translated = self._translate_error(e, context)
-            self.logger.error(f"{context} failed: {e}")
-            raise translated
 
     # ==========================================================================
     # CLIENT VALIDATION METHODS (Jan 4, 2026) - Consolidated from individual clients
@@ -898,57 +756,10 @@ class LLMClient(BaseModule):
             self.logger.error(f"Tool validation error: {e}")
             return False
 
-    def _validate_tools_list(self, tools: Optional[List[Any]]) -> List[Dict[str, Any]]:
-        """Validate and filter a list of tools.
-        
-        Args:
-            tools: List of tool definitions
-            
-        Returns:
-            List of valid tools
-        """
-        if not tools:
-            return []
-        
-        valid_tools = []
-        for i, tool in enumerate(tools):
-            if self._validate_tool_schema(tool):
-                valid_tools.append(tool)
-            else:
-                self.logger.warning(f"Skipping invalid tool at index {i}")
-        
-        return valid_tools
-
     # ==========================================================================
     # TELEMETRY METHODS (Nov 25, 2025) - Consolidated from individual clients
     # These methods provide consistent telemetry handling across all providers.
     # ==========================================================================
-    
-    def _safe_int_extract(self, value: Any) -> Optional[int]:
-        """Safely extract integer from various value types.
-        
-        Handles int, float, string conversions robustly.
-        
-        Args:
-            value: Value to convert to int
-            
-        Returns:
-            Integer value or None if conversion fails
-        """
-        if value is None:
-            return None
-        if isinstance(value, int):
-            return value
-        if isinstance(value, float):
-            return int(value)
-        if isinstance(value, str):
-            if value.lower() in ['none', 'null', '']:
-                return None
-            try:
-                return int(float(value))  # Handle "123.0" strings
-            except (ValueError, TypeError):
-                return None
-        return None
 
     def _extract_usage_data(self) -> Dict[str, Optional[int]]:
         """Extract usage data from last_response.

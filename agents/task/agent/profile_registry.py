@@ -9,7 +9,7 @@ data/task/profiles/ directory.
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import yaml
 
 from agents.task.config import AgentProfileModel
@@ -153,21 +153,3 @@ def get_profile(profile_id: str) -> Optional[AgentProfileModel]:
             )
         except:
             return None
-
-
-def list_profiles() -> List[str]:
-    """List all available profile IDs.
-    
-    Returns:
-        List of profile identifiers
-    """
-    profiles = load_profiles_from_disk()
-    return list(profiles.keys())
-
-
-def reload_profiles() -> None:
-    """Force reload profiles from disk."""
-    global _profiles_loaded
-    _profiles_loaded = False
-    load_profiles_from_disk()
-    logger.info("Profiles reloaded from disk")

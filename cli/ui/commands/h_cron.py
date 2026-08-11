@@ -6,11 +6,12 @@ is deliberately read-only: scheduling/cancel already exist via the agent-facing
 REPL command only *reports* the current schedule.
 
 Resolution mirrors the sibling ``/goals`` handler (``_h_goals``): the cron DB path
-is ``<get_data_root()>/cron.db`` so this reads the SAME database the autonomy
-dispatcher/lifespan ticker writes, and jobs are listed via the same
-``CronService(CronJobStore(...)).list_jobs(user_id=...)`` seam used by
-``autonomy_status_lines``. Fail-open per the existing handler contract — a missing
-store / disabled cron degrades to a friendly one-liner, never a REPL teardown.
+resolves through ``core.runtime_paths.cron_db_path(get_data_root())`` so this reads
+the SAME database the autonomy dispatcher/lifespan ticker writes, and jobs are
+listed via the same ``CronService(CronJobStore(...)).list_jobs(user_id=...)`` seam
+the ``polyrob cron`` surface uses. Fail-open per the existing handler contract — a
+missing store / disabled cron degrades to a friendly one-liner, never a REPL
+teardown.
 
 The main session wires registration (``handlers.py`` / ``registry.py``); this file
 only defines the handler.
@@ -34,10 +35,11 @@ def h_cron(ctx: CommandContext) -> None:
         from pathlib import Path
 
         from core.runtime_config import get_data_root
+        from core.runtime_paths import cron_db_path
         from cron.jobs import CronJobStore
         from cron.service import CronService
 
-        db_path = Path(get_data_root()) / "cron.db"
+        db_path = Path(cron_db_path(get_data_root()))
         if not db_path.exists():
             ctx.emit(candy.empty("cron jobs scheduled", "not enabled"), title="cron")
             return

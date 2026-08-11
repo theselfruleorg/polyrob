@@ -155,3 +155,81 @@ def test_approval_flags_reflect_env_at_freeze_time(monkeypatch):
         monkeypatch.delenv("APPROVAL_REQUIRED_TOOLS", raising=False)
         monkeypatch.delenv("APPROVAL_PROVIDER", raising=False)
         approval._refreeze_approval_flags_for_tests()
+
+
+# --- proposal 024 §7.1: LLM credential store + provider registry file ------------
+
+@pytest.mark.parametrize("path", [
+    "/Users/owner/.polyrob/auth.json",
+    ".polyrob/auth.json",
+    "/root/.hermes/auth.json",     # borrow-adapter source stores are equally
+    "/Users/owner/.codex/auth.json",  # credential-shaped (bare-name glob)
+    "auth.json",
+])
+def test_llm_auth_store_is_credential_guarded(path):
+    """024 §2.4: at AGENT_COMPUTE_POSTURE>=2 read_source/patch_source reach
+    ordinary files — the OAuth token store must be name-denied everywhere."""
+    assert is_credential_file(Path(path)) is True
+
+
+@pytest.mark.parametrize("path", [
+    "/Users/owner/.polyrob/providers.yaml",
+    ".polyrob/providers.yaml",
+    ".rob/providers.yaml",
+])
+def test_providers_yaml_is_credential_guarded(path):
+    """providers.yaml holds no secret but is credential-EQUIVALENT: writing it
+    redirects the agent's own inference base_url (prompt exfiltration)."""
+    assert is_credential_file(Path(path)) is True
+
+
+def test_project_own_providers_yaml_stays_readable():
+    """The denial is scoped to the config homes — a project file named
+    providers.yaml (no .polyrob/.rob component) is ordinary project data."""
+    assert is_credential_file(Path("/repo/config/providers.yaml")) is False
+
+
+@pytest.mark.parametrize("path", [
+    "/Users/owner/.polyrob/auth.json",
+    "/Users/owner/.polyrob/providers.yaml",
+    ".rob/providers.yaml",
+])
+def test_llm_auth_paths_are_write_protected(path):
+    assert is_protected_config_path(Path(path)) is True
+
+
+def test_non_home_providers_yaml_not_write_protected():
+    assert is_protected_config_path(Path("/repo/providers.yaml")) is False
+
+
+# --- 024 revalidation: location rule + temp/sibling coverage ---------------------
+
+@pytest.mark.parametrize("name", [
+    ".polyrob/.auth.json.x7f2.tmp",   # the store's own atomic-write temp file
+    "auth.json.bak",                   # sibling copies
+    "/anywhere/auth.json.old",
+])
+def test_auth_store_siblings_and_temps_guarded(name):
+    assert is_credential_file(Path(name)) is True
+
+
+def test_relocated_auth_store_caught_by_location_rule(monkeypatch, tmp_path):
+    """024 review I1: POLYROB_AUTH_STORE can relocate the store to ANY path/name;
+    the guard must follow the configuration, not just the default basename."""
+    target = tmp_path / "creds-store.json"
+    monkeypatch.setenv("POLYROB_AUTH_STORE", str(target))
+    assert is_credential_file(target) is True
+    assert is_protected_config_path(target) is True
+
+
+def test_relocated_providers_yaml_caught_by_location_rule(monkeypatch, tmp_path):
+    target = tmp_path / "my-providers.yaml"
+    monkeypatch.setenv("LLM_CUSTOM_PROVIDERS", str(target))
+    assert is_credential_file(target) is True
+    assert is_protected_config_path(target) is True
+
+
+def test_default_providers_path_guarded_when_env_unset(monkeypatch, tmp_path):
+    monkeypatch.delenv("LLM_CUSTOM_PROVIDERS", raising=False)
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path))
+    assert is_credential_file(tmp_path / "providers.yaml") is True

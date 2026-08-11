@@ -1,0 +1,327 @@
+{
+ "schemaVersion": "1.0.0",
+ "pairs": [
+  {
+   "chainId": "base",
+   "dexId": "aerodrome",
+   "url": "https://dexscreener.com/base/0x6cdcb1c4a4d1c3c6d054b27ac5b77e89eafb971d",
+   "pairAddress": "0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d",
+   "baseToken": {
+    "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+    "name": "Aerodrome",
+    "symbol": "AERO"
+   },
+   "quoteToken": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "name": "USD Coin",
+    "symbol": "USDC"
+   },
+   "priceNative": "0.4423",
+   "priceUsd": "0.4423",
+   "txns": {
+    "m5": {
+     "buys": 1,
+     "sells": 35
+    },
+    "h1": {
+     "buys": 39,
+     "sells": 80
+    },
+    "h6": {
+     "buys": 220,
+     "sells": 425
+    },
+    "h24": {
+     "buys": 399,
+     "sells": 1640
+    }
+   },
+   "volume": {
+    "h24": 899587.14,
+    "h6": 436518.03,
+    "h1": 68288.02,
+    "m5": 9106.15
+   },
+   "priceChange": {
+    "m5": -0.13,
+    "h1": 0.24,
+    "h6": 1.69,
+    "h24": 0.25
+   },
+   "liquidity": {
+    "usd": 26997228.45,
+    "base": 30512842,
+    "quote": 13498614
+   },
+   "fdv": 864715324,
+   "marketCap": 864715324,
+   "pairCreatedAt": 1694127045000,
+   "info": {
+    "imageUrl": "https://cdn.dexscreener.com/cms/images/f950c4e0a9ded4f6b5c811cf33570a65c6f7ea8630d937cd69065269e9dc3a03?width=800&height=800&quality=95&format=auto",
+    "header": "https://cdn.dexscreener.com/cms/images/c16c2e02ffddde41226e2f5aeea4ac76f3e0a6234c362fef88572f5169772504?width=1500&height=500&quality=95&format=auto",
+    "openGraph": "https://cdn.dexscreener.com/token-images/og/base/0x940181a94a35a4569e4529a3cdfb74e38fd98631?timestamp=1786122600000",
+    "websites": [
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Website"
+     },
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Docs"
+     }
+    ],
+    "socials": [
+     {
+      "url": "https://x.com/aerodromefi",
+      "type": "twitter"
+     },
+     {
+      "url": "https://discord.gg/aerodrome",
+      "type": "discord"
+     }
+    ]
+   }
+  },
+  {
+   "chainId": "base",
+   "dexId": "pancakeswap",
+   "url": "https://dexscreener.com/base/0x20cb8f872ae894f7c9e32e621c186e5afce82fd0",
+   "pairAddress": "0x20CB8f872ae894F7c9e32e621C186e5AFCe82Fd0",
+   "baseToken": {
+    "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+    "name": "Aerodrome",
+    "symbol": "AERO"
+   },
+   "quoteToken": {
+    "address": "0x4200000000000000000000000000000000000006",
+    "name": "Wrapped Ether",
+    "symbol": "WETH"
+   },
+   "priceNative": "0.0002314",
+   "priceUsd": "0.4418",
+   "txns": {
+    "m5": {
+     "buys": 2,
+     "sells": 35
+    },
+    "h1": {
+     "buys": 55,
+     "sells": 429
+    },
+    "h6": {
+     "buys": 489,
+     "sells": 2189
+    },
+    "h24": {
+     "buys": 1572,
+     "sells": 6140
+    }
+   },
+   "volume": {
+    "h24": 161199.51,
+    "h6": 49365.55,
+    "h1": 7347.77,
+    "m5": 334.02
+   },
+   "priceChange": {
+    "m5": -0.11,
+    "h1": -0.19,
+    "h6": 1.54,
+    "h24": 0.11
+   },
+   "liquidity": {
+    "usd": 147502.84,
+    "base": 246352,
+    "quote": 20.2508
+   },
+   "fdv": 863592584,
+   "marketCap": 863592584,
+   "pairCreatedAt": 1721028671000,
+   "info": {
+    "imageUrl": "https://cdn.dexscreener.com/cms/images/f950c4e0a9ded4f6b5c811cf33570a65c6f7ea8630d937cd69065269e9dc3a03?width=800&height=800&quality=95&format=auto",
+    "header": "https://cdn.dexscreener.com/cms/images/c16c2e02ffddde41226e2f5aeea4ac76f3e0a6234c362fef88572f5169772504?width=1500&height=500&quality=95&format=auto",
+    "openGraph": "https://cdn.dexscreener.com/token-images/og/base/0x940181a94a35a4569e4529a3cdfb74e38fd98631?timestamp=1786122600000",
+    "websites": [
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Website"
+     },
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Docs"
+     }
+    ],
+    "socials": [
+     {
+      "url": "https://x.com/aerodromefi",
+      "type": "twitter"
+     },
+     {
+      "url": "https://discord.gg/aerodrome",
+      "type": "discord"
+     }
+    ]
+   }
+  },
+  {
+   "chainId": "base",
+   "dexId": "aerodrome",
+   "url": "https://dexscreener.com/base/0xa4fdd479eda160671636e2ecf8f993cbf86258a8",
+   "pairAddress": "0xa4FDd479eda160671636e2eCF8f993Cbf86258a8",
+   "baseToken": {
+    "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+    "name": "Aerodrome",
+    "symbol": "AERO"
+   },
+   "quoteToken": {
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "name": "USD Coin",
+    "symbol": "USDC"
+   },
+   "priceNative": "0.4415",
+   "priceUsd": "0.4415",
+   "txns": {
+    "m5": {
+     "buys": 2,
+     "sells": 5
+    },
+    "h1": {
+     "buys": 84,
+     "sells": 169
+    },
+    "h6": {
+     "buys": 677,
+     "sells": 860
+    },
+    "h24": {
+     "buys": 1750,
+     "sells": 2176
+    }
+   },
+   "volume": {
+    "h24": 354168.26,
+    "h6": 141340.65,
+    "h1": 22327.45,
+    "m5": 1011.14
+   },
+   "priceChange": {
+    "m5": -0.15,
+    "h1": -0.2,
+    "h6": 1.55,
+    "h24": 0.15
+   },
+   "liquidity": {
+    "usd": 504369.12,
+    "base": 994152,
+    "quote": 65378
+   },
+   "fdv": 863116320,
+   "marketCap": 863116320,
+   "info": {
+    "imageUrl": "https://cdn.dexscreener.com/cms/images/f950c4e0a9ded4f6b5c811cf33570a65c6f7ea8630d937cd69065269e9dc3a03?width=800&height=800&quality=95&format=auto",
+    "header": "https://cdn.dexscreener.com/cms/images/c16c2e02ffddde41226e2f5aeea4ac76f3e0a6234c362fef88572f5169772504?width=1500&height=500&quality=95&format=auto",
+    "openGraph": "https://cdn.dexscreener.com/token-images/og/base/0x940181a94a35a4569e4529a3cdfb74e38fd98631?timestamp=1786122600000",
+    "websites": [
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Website"
+     },
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Docs"
+     }
+    ],
+    "socials": [
+     {
+      "url": "https://x.com/aerodromefi",
+      "type": "twitter"
+     },
+     {
+      "url": "https://discord.gg/aerodrome",
+      "type": "discord"
+     }
+    ]
+   }
+  },
+  {
+   "chainId": "base",
+   "dexId": "aerodrome",
+   "url": "https://dexscreener.com/base/0xdfe5f275020def30993f042174fc2d335678b626",
+   "pairAddress": "0xdFe5F275020def30993f042174Fc2D335678b626",
+   "baseToken": {
+    "address": "0x940181a94A35A4569E4529A3CDfB74e38FD98631",
+    "name": "Aerodrome",
+    "symbol": "AERO"
+   },
+   "quoteToken": {
+    "address": "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf",
+    "name": "Coinbase Wrapped BTC",
+    "symbol": "cbBTC"
+   },
+   "priceNative": "0.000006823",
+   "priceUsd": "0.4414",
+   "txns": {
+    "m5": {
+     "buys": 0,
+     "sells": 20
+    },
+    "h1": {
+     "buys": 72,
+     "sells": 71
+    },
+    "h6": {
+     "buys": 574,
+     "sells": 530
+    },
+    "h24": {
+     "buys": 1491,
+     "sells": 1740
+    }
+   },
+   "volume": {
+    "h24": 2408681.96,
+    "h6": 878113.31,
+    "h1": 116747.63,
+    "m5": 17008.86
+   },
+   "priceChange": {
+    "m5": -0.26,
+    "h1": -0.42,
+    "h6": 1.69,
+    "h24": -0.14
+   },
+   "liquidity": {
+    "usd": 1088121.04,
+    "base": 895775,
+    "quote": 10.7073
+   },
+   "fdv": 862874198,
+   "marketCap": 862874198,
+   "info": {
+    "imageUrl": "https://cdn.dexscreener.com/cms/images/f950c4e0a9ded4f6b5c811cf33570a65c6f7ea8630d937cd69065269e9dc3a03?width=800&height=800&quality=95&format=auto",
+    "header": "https://cdn.dexscreener.com/cms/images/c16c2e02ffddde41226e2f5aeea4ac76f3e0a6234c362fef88572f5169772504?width=1500&height=500&quality=95&format=auto",
+    "openGraph": "https://cdn.dexscreener.com/token-images/og/base/0x940181a94a35a4569e4529a3cdfb74e38fd98631?timestamp=1786122600000",
+    "websites": [
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Website"
+     },
+     {
+      "url": "https://aerodrome.finance/docs",
+      "label": "Docs"
+     }
+    ],
+    "socials": [
+     {
+      "url": "https://x.com/aerodromefi",
+      "type": "twitter"
+     },
+     {
+      "url": "https://discord.gg/aerodrome",
+      "type": "discord"
+     }
+    ]
+   }
+  }
+ ]
+}

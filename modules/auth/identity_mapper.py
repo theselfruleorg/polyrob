@@ -153,47 +153,6 @@ class IdentityMapper:
 
         return user_id
 
-    async def _update_wallet(self, user_id: str, wallet_address: str, chain: str = 'ethereum'):
-        """Update user's current wallet and track chain."""
-
-        # Get current wallet
-        current = await self.db.fetch_one("""
-            SELECT wallet_address, current_wallet_chain FROM user_profiles WHERE user_id = ?
-        """, (user_id,))
-
-        current_wallet = current['wallet_address'] if current else None
-        current_chain = current['current_wallet_chain'] if current else None
-
-        # If same wallet and chain, do nothing
-        if current_wallet and current_wallet.lower() == wallet_address.lower() and current_chain == chain:
-            return
-
-        # Archive old wallet to history
-        if current_wallet:
-            await self.db.execute("""
-                INSERT INTO wallet_history (
-                    user_id, wallet_address, chain,
-                    connected_at, disconnected_at
-                )
-                SELECT user_id, wallet_address, COALESCE(current_wallet_chain, 'ethereum'),
-                       current_wallet_connected_at, CURRENT_TIMESTAMP
-                FROM user_profiles WHERE user_id = ?
-            """, (user_id,))
-
-        # Update to new wallet with chain tracking
-        await self.db.execute("""
-            UPDATE user_profiles
-            SET wallet_address = ?,
-                current_wallet_chain = ?,
-                current_wallet_connected_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
-        """, (wallet_address, chain, user_id))
-
-        # Update tier based on new wallet
-        await self._update_tier(user_id, wallet_address)
-
-        self.logger.info(f"User {user_id} switched wallet to {wallet_address[:8]}... ({chain})")
-
     async def _update_tier(self, user_id: str, wallet_address: str):
         """
         Update user tier based on NFT ownership.

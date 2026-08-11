@@ -80,34 +80,15 @@ class CodeExecutionTool(BaseTool):
         keyed ``(sid, dev_mode)`` so a dev and a non-dev container for the same
         session never share mounts; non-dev keeps the legacy
         ``resolve_backend(session_id=sid)`` call shape byte-identically.
+
+        Shared logic lives in ``tools.code_exec.backend_cache`` (dedup with
+        ``CodingTool._get_code_exec_backend``). ``resolve_backend`` is passed as
+        this module's attribute so tests patching
+        ``tools.code_exec.tool.resolve_backend`` keep working.
         """
-        from tools.code_exec import code_exec_docker_persistent_enabled
+        from tools.code_exec.backend_cache import resolve_cached_backend
 
-        sid = None
-        if code_exec_docker_persistent_enabled():
-            sid = getattr(execution_context, "session_id", None) or None
-
-        if sid:
-            key = (sid, bool(dev_mode))
-            cached = self._persistent_backends.get(key)
-            if cached is not None:
-                return cached
-            async with self._persistent_lock:
-                cached = self._persistent_backends.get(key)  # re-check: lost the race?
-                if cached is None:
-                    if dev_mode:
-                        cached = resolve_backend(session_id=sid, dev_mode=True)
-                    else:
-                        cached = resolve_backend(session_id=sid)
-                    await cached.setup()
-                    self._persistent_backends[key] = cached
-                return cached
-
-        if self._backend is None:
-            backend = resolve_backend()
-            await backend.setup()
-            self._backend = backend
-        return self._backend
+        return await resolve_cached_backend(self, execution_context, dev_mode, resolve_backend)
 
     def _resolve_workdir(self, execution_context) -> Optional[str]:
         """Run inside the session workspace when a session is resolvable, else tempdir."""

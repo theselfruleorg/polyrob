@@ -1,6 +1,6 @@
 """Shared outbound rendering: per-flavor escaping + size-aware splitting. One home so
 every surface declares capabilities.markdown_flavor and gets correct escaping + chunking
-for free (generalizes surfaces/telegram/markdown.py). Splitting prefers a newline, then a
+for free (generalizes utils/markdown_utils.py). Splitting prefers a newline, then a
 space, then a hard cut — and for markdown_v2 never cuts in the middle of a '\\x' escape."""
 from typing import List
 

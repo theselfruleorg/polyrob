@@ -385,6 +385,23 @@ def get_schema_generator(provider: str) -> ToolSchemaGenerator:
         if key != "default" and key in provider_lower:
             return SCHEMA_GENERATORS[key]
 
+    # Proposal 024 (L0): a registry provider absent from the literal table routes
+    # by its declared TRANSPORT — this is the seam that used to silently zero
+    # native tool-calling for any new provider (the checklist landmine). A spec
+    # that declares supports_native_tools=False falls through to the JSON
+    # fallback below, which is then intentional (no warning needed... but the
+    # once-per-provider warn is cheap and still points at the spec, so keep it).
+    try:
+        from modules.llm.provider_spec import Transport, get_spec
+        spec = get_spec(provider_lower)
+        if spec is not None and spec.supports_native_tools:
+            if spec.transport is Transport.ANTHROPIC_MESSAGES:
+                return SCHEMA_GENERATORS["anthropic"]
+            if spec.transport is Transport.CHAT_COMPLETIONS:
+                return SCHEMA_GENERATORS["openai"]
+    except Exception:
+        pass  # fail-open to the JSON fallback — schema routing must never crash
+
     if provider_lower not in _warned_fallback_providers:
         _warned_fallback_providers.add(provider_lower)
         logger.warning(

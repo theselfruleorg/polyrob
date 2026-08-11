@@ -1,8 +1,9 @@
 """`polyrob serve` — launch the API/webgate server (doc 01, T3).
 
-A thin Click subcommand that delegates to ``main.run_server`` — the SAME
-uvicorn-launch callable the legacy ``python main.py`` systemd entry uses. No
-launch logic is duplicated here; this just maps CLI options onto that callable.
+A thin Click subcommand that delegates to ``api.server_boot.run_server`` — the
+SAME uvicorn-launch callable the legacy ``python main.py`` systemd entry uses
+(main.py is a shim over the same module). No launch logic is duplicated here;
+this just maps CLI options onto that callable.
 
 ``main.py`` stays the systemd entry point until doc 06 flips the unit file to the
 ``polyrob serve`` entry.
@@ -26,16 +27,30 @@ def serve(host, port, workers):
     import os
     import sys
 
-    from main import run_server
-
-    # Non-interactive preflight: a server must not spin up uvicorn only to crash in the
-    # lifespan when no usable provider key is present. Print the canonical message and
-    # exit cleanly instead. (The lifespan LLMError is the backstop for `python main.py`.)
+    # Non-interactive preflight FIRST — before any server import — so the
+    # refusal message is reachable on every install: a server must not spin up
+    # uvicorn only to crash in the lifespan when no usable provider key is
+    # present. local_mode=True loads the same env layers every other CLI gate
+    # reads (incl. ~/.polyrob/.env), so a key that works for `polyrob run`
+    # also works here.
     from core.bootstrap import load_env
     from modules.llm.profiles import usable_providers_with_keys, no_key_message
-    load_env(local_mode=False)
+    load_env(local_mode=True)
     if not usable_providers_with_keys(os.environ):
         click.echo(no_key_message(), err=True)
+        sys.exit(1)
+
+    # run_server lives in the installed `api` package (NOT repo-root main.py,
+    # which ships in no wheel — importing it here broke every installed
+    # `polyrob serve` with ModuleNotFoundError before the gate could print).
+    try:
+        from api.server_boot import run_server
+    except ImportError as exc:
+        click.echo(
+            f"server dependencies unavailable ({exc}) — install them with "
+            "`pip install 'polyrob[server]'`",
+            err=True,
+        )
         sys.exit(1)
 
     run_server(host=host, port=port, workers=workers)

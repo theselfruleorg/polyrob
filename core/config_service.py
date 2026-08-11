@@ -264,23 +264,49 @@ def search(query: str, *, user_id: Optional[str] = None, home_dir=None,
 # set_value
 # ---------------------------------------------------------------------------
 
+# 024 §2.6/§7.5: flags that select WHERE the agent's inference goes or WHERE
+# its credentials live are credential-equivalent — a compromised/spoofed owner
+# console must not be able to redirect them. Writable from the local CLI/REPL
+# only; the webview PATCH surface refuses them even at local/own_ops posture.
+CONSOLE_UNWRITABLE_FLAGS = frozenset({
+    "LLM_CUSTOM_PROVIDERS",
+    "POLYROB_AUTH_STORE",
+    "LLM_AUTH_STORE_ENABLED",
+    "LLM_CREDENTIAL_BORROW",
+    # the registry kill-switch: flipping it off from a console kills every
+    # user-declared provider — it selects the inference surface like the rest
+    "LLM_PROVIDER_REGISTRY",
+})
+
+
 def set_value(key: str, value: str, *, scope: Optional[str] = None,
               user_id: Optional[str] = None, home_dir=None,
-              confirm: bool = False) -> SetResult:
+              confirm: bool = False, surface: str = "local") -> SetResult:
     """Route one write to the owning store. Never raises.
 
     scope: ``user`` (preferences.toml — required for pref keys), ``project``
     (``./.polyrob/.env``) or ``global`` (``~/.polyrob/.env``) for flag keys.
     Omitted scope defaults to the key's natural store (pref→user,
     flag→project).
+
+    surface: ``local`` (CLI/REPL, the default) or a remote surface label
+    (``console``, ``telegram``, …). The credential-surface refusal is enforced
+    HERE — in the oracle — not only at the webview call site, so any surface
+    that grows a flag-write path inherits it (UX assessment 2026-08-07, Q9).
     """
     from core.prefs import PREF_SCHEMA
     if scope is not None and scope not in _SCOPES:
         return SetResult(False, "refused", f"unknown scope: {scope}")
+    if surface != "local" and key in CONSOLE_UNWRITABLE_FLAGS:
+        return SetResult(
+            False, "refused",
+            f"'{key}' selects the agent's inference/credential surface and is "
+            f"not writable from a remote surface — set it from the local CLI "
+            f"(`polyrob config set {key} <value>`)")
     if key in PREF_SCHEMA:
         return _set_pref(key, value, user_id, home_dir, confirm)
-    from core.flags import REGISTRY
-    if key in REGISTRY:
+    from core.flags import REGISTRY, pattern_flag_for
+    if key in REGISTRY or pattern_flag_for(key) is not None:
         return _set_flag(key, value, scope or "project")
     return SetResult(False, "refused",
                      f"unknown key: {key} — not a documented flag or preference")
@@ -310,9 +336,12 @@ def _set_pref(key: str, value, user_id, home_dir, confirm: bool) -> SetResult:
 
 
 def _set_flag(key: str, value: str, scope: str) -> SetResult:
-    from core.flags import REGISTRY, is_secret_flag
+    from core.flags import REGISTRY, is_secret_flag, pattern_flag_for
     from core.prefs import shape_of_default, value_matches_shape
-    flag = REGISTRY[key]
+    flag = REGISTRY.get(key) or pattern_flag_for(key)
+    if flag is None:
+        return SetResult(False, "refused",
+                         f"unknown key: {key} — not a documented flag or preference")
     if scope == "user":
         return SetResult(False, "refused",
                          f"'{key}' is an env flag — scope must be project or global")

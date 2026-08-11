@@ -43,6 +43,7 @@ SIDECAR_DB_NAMES = (
     "messages.db",       # agents/task/agent/messages/persistence.py (opt-in mirror)
     "wa_dedup.db",       # surfaces/whatsapp/harness.py
     "email_dedup.db",    # surfaces/email/harness.py
+    "defi_tokens.db",    # core/wallet/tokens.py (frozen first-seen token metadata)
     # T1 (2026-07-16): surface/deploy sidecars that were missing — backup/rollback
     # silently skipped them (second generation of the D11 class; the grep-based
     # contract test in tests/unit/core/test_db_manifest_sidecars.py now guards this).

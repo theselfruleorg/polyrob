@@ -69,6 +69,25 @@ def _parse_validation_verdict(text: str) -> "_Verdict":
 class OutputValidationMixin:
 	"""LLM output validation + next_action wrapper for Agent."""
 
+	async def _meter_judge_call(self, judge_llm, response, duration_seconds: float) -> None:
+		"""Bill one judge completion through the single aux deduction path (fail-open).
+
+		Extracted so BOTH exits that follow a successful invoke can meter: the normal
+		verdict path and the schema-mismatch path (`{'parsed': None, 'raw': ...}`),
+		which returns early. That early return used to skip metering, so a real,
+		provider-charged completion went unbilled whenever the judge's structured
+		output failed to bind.
+		"""
+		from agents.task.agent.core.aux_metering import meter_aux_llm
+		await meter_aux_llm(
+			usage_tracker=getattr(self, "usage_tracker", None),
+			user_id=getattr(self, "user_id", None),
+			session_id=getattr(self, "session_id", ""),
+			agent_id=getattr(self, "agent_id", "") or "",
+			llm=judge_llm, response=response, duration_seconds=duration_seconds,
+			component="judge", purpose="output_validation",
+		)
+
 	def _get_llm_parameters(self) -> dict:
 		"""Extract LLM parameters for logging purposes - delegates to MessageManager"""
 		return self.message_manager.get_llm_parameters()
@@ -189,6 +208,11 @@ class OutputValidationMixin:
 						'⚠️ Judge structured output returned no parsed verdict; '
 						'passing (fail-open).'
 					)
+					# ...but METER it first. This is a real completion: the provider ran
+					# it and charged for the tokens; only our schema binding failed. The
+					# early return used to skip the meter_aux_llm call below entirely, so
+					# every schema-mismatched judge call was silently unbilled.
+					await self._meter_judge_call(judge_llm, response, _time.time() - _t0)
 					return True
 				parsed = raw_parsed
 			else:
@@ -212,15 +236,7 @@ class OutputValidationMixin:
 
 		# A3: meter this aux LLM call through the single deduction path (fail-open).
 		# Only reached on a successful invoke — a failed/timed-out call is never metered.
-		from agents.task.agent.core.aux_metering import meter_aux_llm
-		await meter_aux_llm(
-			usage_tracker=getattr(self, "usage_tracker", None),
-			user_id=getattr(self, "user_id", None),
-			session_id=getattr(self, "session_id", ""),
-			agent_id=getattr(self, "agent_id", "") or "",
-			llm=judge_llm, response=_resp_for_meter, duration_seconds=_time.time() - _t0,
-			component="judge", purpose="output_validation",
-		)
+		await self._meter_judge_call(judge_llm, _resp_for_meter, _time.time() - _t0)
 		is_valid = parsed.is_valid
 		if not is_valid:
 			self.logger.info(f'❌ Validator decision: {parsed.reason}')
