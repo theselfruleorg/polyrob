@@ -36,7 +36,26 @@ _NULL_CONFIG = types.SimpleNamespace()
 CONTRACT_READ_GAS_CAP = 2_000_000
 CONTRACT_READ_MAX_BYTES = 8192
 
-SUPPORTED_CHAINS = ("base",)
+def _supported_chains():
+    """Every chain the registry knows.
+
+    The READ tier is deliberately wider than the money tier: reading a balance
+    or a price on a chain is safe, and refusing to look is not caution, it is a
+    blind spot. Whether value may MOVE there is a separate, stricter question
+    (`core.wallet.chains.money_capable`, enforced by defi_trade).
+    """
+    from core.wallet import chains
+    return tuple(chains.names())
+
+
+SUPPORTED_CHAINS = _supported_chains()
+
+
+def _chain_field(what: str) -> str:
+    from core.wallet import chains
+    return (f"Chain to {what} — the same address is a DIFFERENT token on a "
+            f"different chain, so name it deliberately. Readable: "
+            f"{', '.join(chains.names())}.")
 
 
 class ResolveParams(BaseModel):
@@ -46,19 +65,26 @@ class ResolveParams(BaseModel):
         "several different contracts commonly claim the same ticker."))
 
 
+class SwapQuoteParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("quote on"))
+    token_in: str = Field(..., description="CONTRACT ADDRESS of the token to sell (0x…)")
+    token_out: str = Field(..., description="CONTRACT ADDRESS of the token to buy (0x…)")
+    amount_in: float = Field(..., gt=0, description="Human amount of token_in to sell")
+
+
 class TokenRefParams(BaseModel):
-    chain: str = Field("base", description="Chain id (only 'base' is supported)")
+    chain: str = Field("base", description=_chain_field("look the token up on"))
     address: str = Field(..., description=(
         "The token's CONTRACT ADDRESS (0x…, 20 bytes). A ticker is not accepted "
         "— use token_resolve first to find candidate addresses."))
 
 
-class EmptyParams(BaseModel):
-    pass
+class PortfolioParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("report holdings on"))
 
 
 class ContractReadParams(BaseModel):
-    chain: str = Field("base", description="Chain id (only 'base' is supported)")
+    chain: str = Field("base", description=_chain_field("read from"))
     address: str = Field(..., description="Contract address to read from (0x…)")
     signature: str = Field(..., description="Function signature, e.g. 'totalSupply()'")
     args: List[Any] = Field(default_factory=list, description="Arguments (currently unencoded; prefer no-arg views)")
@@ -219,6 +245,51 @@ class DefiDataTool(BaseTool):
                          "This is NOT a clean result; the token is UNSCREENED.")
         return self._ar(content="\n".join(lines))
 
+    @BaseTool.action(
+        "Price a SWAP before committing to one: best Uniswap V3 fee tier and the "
+        "output you would receive. Read-only — quotes nothing on-chain and moves "
+        "no funds. Both sides must be CONTRACT ADDRESSES.",
+        param_model=SwapQuoteParams)
+    async def swap_quote(self, params: SwapQuoteParams, execution_context=None):
+        from tools.defi.providers import univ3
+        from core.wallet.tokens import get_token_identity
+
+        addr_in, err = self._validate(params.chain, params.token_in)
+        if err:
+            return self._ar(error=err)
+        addr_out, err = self._validate(params.chain, params.token_out)
+        if err:
+            return self._ar(error=err)
+        if addr_in.lower() == addr_out.lower():
+            return self._ar(error="token_in and token_out are the same token")
+
+        id_in = get_token_identity(params.chain, addr_in)
+        id_out = get_token_identity(params.chain, addr_out)
+        if id_in.decimals is None or id_out.decimals is None:
+            return self._ar(error=(
+                "one side does not report decimals — refusing to size a quote "
+                "against a token whose denomination is unknown"))
+
+        amount_in_raw = int(round(params.amount_in * (10 ** id_in.decimals)))
+        quote = univ3.best_quote(params.chain, addr_in, addr_out, amount_in_raw)
+        if quote is None:
+            return self._ar(content=(
+                f"no Uniswap V3 route for {id_in.symbol or addr_in} -> "
+                f"{id_out.symbol or addr_out} at any fee tier. "
+                f"No route is UNKNOWN, not a zero-value trade."))
+
+        out_human = quote.amount_out_raw / (10 ** id_out.decimals)
+        rate = out_human / params.amount_in if params.amount_in else 0
+        return self._ar(content=(
+            f"{params.amount_in} {id_in.symbol or addr_in} -> "
+            f"{out_human:.8f} {id_out.symbol or addr_out}\n"
+            f"  route:  Uniswap V3, fee tier {quote.fee_tier}\n"
+            f"  rate:   {rate:.8f} {id_out.symbol or 'out'} per "
+            f"{id_in.symbol or 'in'}\n"
+            f"  router: {quote.router}\n"
+            f"  NOTE: a quote is what the pool says right now, not a promise. "
+            f"defi_trade.swap bounds it with slippage before executing."))
+
     @BaseTool.action("Spot price for ONE token contract address (not a ticker).",
                      param_model=TokenRefParams)
     async def price(self, params: TokenRefParams, execution_context=None):
@@ -239,20 +310,25 @@ class DefiDataTool(BaseTool):
                if info.confidence == "low" else "")))
 
     @BaseTool.action(
-        "The agent wallet's own token holdings on Base, USD-valued, with explicit "
-        "coverage. Reveals own funds — treated as high-impact.",
-        param_model=EmptyParams)
-    async def portfolio(self, params: EmptyParams, execution_context=None):
+        "The agent wallet's own token holdings on ONE chain, USD-valued, with "
+        "explicit coverage. Holdings on other chains are NOT included — ask per "
+        "chain. Reveals own funds — treated as high-impact.",
+        param_model=PortfolioParams)
+    async def portfolio(self, params: PortfolioParams, execution_context=None):
         holder = self._resolve_holder()
         if not holder:
             return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true) "
                                   "— no address to report holdings for")
-        chain = "base"
+        chain = params.chain
+        if chain not in SUPPORTED_CHAINS:
+            return self._ar(error=(
+                f"chain {chain!r} is not supported (this tier covers "
+                f"{', '.join(SUPPORTED_CHAINS)})"))
         indexed = None
         if self._index_fn is not None:
-            indexed = self._index_fn(holder)
+            indexed = self._index_fn(holder, chain=chain)
         elif alchemy_index.available():
-            indexed = alchemy_index.fetch_balances(holder)
+            indexed = alchemy_index.fetch_balances(holder, chain=chain)
 
         if indexed is not None:
             raw = {a: v for a, v in indexed.items()}

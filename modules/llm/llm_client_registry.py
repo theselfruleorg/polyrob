@@ -187,6 +187,7 @@ def create_llm_client(name: str, config, container=None, model_type=None):
     from modules.llm.openrouter_client import OpenRouterClient
     from modules.llm.nvidia_client import NvidiaClient
     from modules.llm.compat_clients import AnthropicCompatClient, OpenAICompatClient
+    from modules.llm.responses_client import ResponsesCompatClient
     from modules.llm.model_registry import PROVIDER_CONFIG
 
     # Map client_class_name strings from PROVIDER_CONFIG to actual classes.
@@ -203,9 +204,27 @@ def create_llm_client(name: str, config, container=None, model_type=None):
         # is OpenAI- or Anthropic-compatible (user-declared providers.yaml rows).
         'OpenAICompatClient': OpenAICompatClient,
         'AnthropicCompatClient': AnthropicCompatClient,
+        'ResponsesCompatClient': ResponsesCompatClient,
     }
 
     if name not in PROVIDER_CONFIG:
+        # Distinguish "no such provider" from "this provider is declared but its
+        # transport has no client yet". The second is a real, reachable state
+        # (openai-codex / RESPONSES) and "Unknown LLM client type" sends the
+        # user hunting for a typo that isn't there.
+        try:
+            from modules.llm.provider_spec import generic_client_class_name, get_spec
+            spec = get_spec(name)
+        except Exception:
+            spec = None
+        if spec is not None and spec.client_class_name is None \
+                and generic_client_class_name(spec.transport) is None:
+            raise ValueError(
+                f"provider '{name}' speaks the '{spec.transport.value}' API, which "
+                "POLYROB cannot serve yet — the connect flow and credential "
+                "storage work, but there is no client for that wire format. "
+                "Use a provider on chat_completions or anthropic_messages."
+            )
         raise ValueError(f"Unknown LLM client type: {name}")
 
     entry = PROVIDER_CONFIG[name]

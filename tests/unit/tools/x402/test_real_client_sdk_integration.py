@@ -296,7 +296,7 @@ async def test_g8_sdk_hook_layer_fails_closed_on_network_mismatch(fake_transport
     fake_transport.network = "eip155:8453"  # a real, different network
 
     client = RealX402Client()
-    with pytest.raises(Exception, match="refusing to pay"):
+    with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
         await client.fetch_with_payment(
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
@@ -405,7 +405,7 @@ async def test_task4b_mainnet_mode_rejects_testnet_caip2_prefix_collision(fake_t
     # fake_transport.network already defaults to NETWORK == "eip155:84532" (testnet)
 
     client = RealX402Client()
-    with pytest.raises(Exception, match="refusing to pay"):
+    with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
         await client.fetch_with_payment(
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="mainnet", max_amount_usd=0.10,
@@ -458,7 +458,7 @@ async def test_asset_pin_sdk_hook_layer_refuses_non_usdc_asset_no_signing(fake_t
     fake_transport.asset = NOT_USDC_ASSET
 
     client = RealX402Client()
-    with pytest.raises(Exception, match="refusing to pay"):
+    with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
         await client.fetch_with_payment(
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,
@@ -491,7 +491,7 @@ async def test_asset_pin_d0_spoof_refused_before_decimals_ever_matter(fake_trans
     fake_transport.extra = {"name": "Spoofed", "version": "1", "decimals": 0}
 
     client = RealX402Client()
-    with pytest.raises(Exception, match="refusing to pay"):
+    with pytest.raises(Exception, match="refusing to pay|rejected by spend_controls"):
         await client.fetch_with_payment(
             url="http://fake/paid", method="POST", body="{}",
             signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=0.10,

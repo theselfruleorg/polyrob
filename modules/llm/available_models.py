@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from modules.llm.profiles import usable_providers_with_keys, providers_with_keys
+from modules.llm.profiles import (
+    providers_with_credentials,
+    usable_providers_with_credentials,
+)
 from modules.llm.model_registry import get_registry, PROVIDER_CANONICAL_NAMES, ModelProvider
 from modules.llm.llm_client_registry import get_default_model
 
@@ -58,8 +61,8 @@ def available_models(env=None, *, initialized_only: bool = False,
                       initialized_providers: Optional[set] = None) -> list[ModelChoice]:
     """The one join: usable-key providers (in PROFILES preference order) x their models.
 
-    *env* defaults to ``os.environ`` (see ``usable_providers_with_keys``/
-    ``providers_with_keys``); pass a mapping for testability.
+    *env* defaults to ``os.environ`` (see ``usable_providers_with_credentials``/
+    ``providers_with_credentials``); pass a mapping for testability.
 
     ``initialized_only`` + ``initialized_providers`` optionally narrow the result to
     providers a caller has already constructed a live client for (e.g. a surface that
@@ -67,7 +70,7 @@ def available_models(env=None, *, initialized_only: bool = False,
     key present). When ``initialized_only`` is False (default), every usable-keyed
     provider's models are listed regardless of ``initialized_providers``.
     """
-    providers = usable_providers_with_keys(env)          # excludes deepseek (initializable=False)
+    providers = usable_providers_with_credentials(env)   # excludes deepseek (initializable=False)
     if initialized_only and initialized_providers is not None:
         providers = [p for p in providers if p in initialized_providers]
     reg = get_registry()
@@ -98,8 +101,8 @@ def steer_notes(env=None) -> list[str]:
     the key isn't silently ignored with no explanation.
     """
     notes = []
-    present = set(providers_with_keys(env))              # DISPLAY oracle (includes deepseek)
-    usable = set(usable_providers_with_keys(env))
+    present = set(providers_with_credentials(env))       # DISPLAY oracle (includes deepseek)
+    usable = set(usable_providers_with_credentials(env))
     if "deepseek" in present and "deepseek" not in usable:
         notes.append("A DeepSeek key is set but its direct client is disabled. Reach DeepSeek via "
                      "OPENROUTER_API_KEY with model deepseek/deepseek-chat.")

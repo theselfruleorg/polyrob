@@ -48,7 +48,10 @@ while [[ $# -gt 0 ]]; do
     --venv-dir) VENV_DIR="$2"; shift 2 ;;
     --reset)    RESET_VENV=true; shift ;;
     -h|--help)
-      grep '^#' "$0" | head -20 | sed 's/^# \?//'
+      # Print the whole leading comment block (stop at the first non-# line) —
+      # `head -20` used to truncate it mid-list and never showed --reset.
+      awk '/^#/{print substr($0,3); next} {exit}' "$0"
+      echo "  --reset       Recreate the venv from scratch"
       exit 0
       ;;
     *) die "Unknown argument: $1" ;;
@@ -157,9 +160,9 @@ success "
   To activate this venv in a new shell:
     source ${VENV_DIR}/bin/activate
 
-  Then add your API key:
-    polyrob config set ANTHROPIC_API_KEY <your-key> --global
+  Then connect a provider (prompts for the key — out of your shell history):
+    polyrob auth add openrouter      # or: anthropic, openai, gemini, ...
 
   And start the agent:
-    polyrob run
+    polyrob
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

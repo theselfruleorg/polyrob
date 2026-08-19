@@ -42,6 +42,8 @@ def _warn_if_breaker_inert() -> None:
 @click.group()
 def surface():
     """Inspect and control per-surface circuit breakers."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @surface.command("list")

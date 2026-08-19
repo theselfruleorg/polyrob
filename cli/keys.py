@@ -19,8 +19,8 @@ from pathlib import Path
 
 from modules.llm.profiles import (  # noqa: F401  (no_key_message re-exported)
     no_key_message,
-    providers_with_keys,
-    usable_providers_with_keys,
+    providers_with_keys,  # noqa: F401  (re-exported DISPLAY oracle)
+    usable_providers_with_credentials,
 )
 
 _TRUTHY = {"1", "true", "yes", "on"}
@@ -29,18 +29,18 @@ _TRUTHY = {"1", "true", "yes", "on"}
 def should_warn_no_key(env=None) -> bool:
     """True when NO *usable* provider API key is present (after env-load/backfill).
 
-    Keys off ``usable_providers_with_keys`` — a deepseek-only environment still
+    Keys off ``usable_providers_with_credentials`` — a deepseek-only environment still
     warns/onboards (its key can't bootstrap a client), AND a malformed/placeholder key
     (too short — the kind BotConfig blanks) still warns instead of passing the guard
     and crashing the manager. Decision is driven purely by usable-key presence, not by
     whether ``~/.polyrob/.env`` exists.
     """
-    return not usable_providers_with_keys(env)
+    return not usable_providers_with_credentials(env)
 
 
 def first_run_no_config(env=None, home=None) -> bool:
     """True on a genuine first run: no usable provider key AND no ~/.polyrob/.env."""
-    if usable_providers_with_keys(env):
+    if usable_providers_with_credentials(env):
         return False
     if home is None:
         from core.paths import env_file_candidates

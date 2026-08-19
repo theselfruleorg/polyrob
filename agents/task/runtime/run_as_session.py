@@ -133,6 +133,27 @@ async def run_task_to_outcome(
         mark_autonomous(session_id)
     status = await task_agent.run_session(user_id, session_id)
     outcome = await build_run_outcome(task_agent, session_id, status)
+    if autonomous:
+        # Goal/cron runs are one-shot: release the session's persistent shell
+        # sandbox container now. Session end runs only a PARTIAL cleanup (the
+        # orchestrator stays resident for continuous chat), which skips the
+        # container teardown, and reap_orphans is cold-start-only by design —
+        # so autonomous shell users leaked one container per run until the next
+        # service restart (live 2026-08-16: 7 containers, 3–21h old). A later
+        # self-wake re-entry that runs shell simply gets a fresh container.
+        # Routed through the orchestrator (SessionCleanupMixin.
+        # release_shell_sandbox), which owns the one allowlisted
+        # agents→tools.shell layering edge.
+        try:
+            orch = None
+            get_orch = getattr(task_agent, "get_orchestrator", None)
+            if callable(get_orch):
+                orch = get_orch(session_id)
+            release = getattr(orch, "release_shell_sandbox", None)
+            if callable(release):
+                await release()
+        except Exception:
+            logger.debug("shell sandbox release failed (non-fatal)", exc_info=True)
     try:
         # Opt-in trajectory capture (TRAJECTORY_CAPTURE, datagen W1 T6).
         # maybe_capture is fail-open internally; this guard is belt-and-braces

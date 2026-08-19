@@ -64,11 +64,18 @@ def test_provider_config_client_class_name(provider, expected_class_name):
     )
 
 
-def test_provider_config_all_six_providers_present():
-    """PROVIDER_CONFIG covers exactly the six known providers."""
+def test_provider_config_covers_the_six_legacy_providers():
+    """PROVIDER_CONFIG covers the six legacy providers (plus any registry rows).
+
+    Was an equality assertion on exactly six. It is now a superset check: 024 T0
+    appends built-in subscription rows, and a providers.yaml file adds more
+    still, so an exact set can only be maintained by re-pinning it on every new
+    provider. What actually needs protecting is that none of the six can
+    DISAPPEAR (that would silently strip a client class from the factory).
+    """
     expected = {"openai", "anthropic", "deepseek", "gemini", "openrouter", "nvidia"}
     actual = set(PROVIDER_CONFIG.keys())
-    assert actual == expected, f"Provider set mismatch: got {actual}, expected {expected}"
+    assert expected <= actual, f"Provider set lost entries: expected {expected} ⊆ {actual}"
 
 
 # ---------------------------------------------------------------------------

@@ -91,3 +91,36 @@ def test_rpc_url_override(monkeypatch):
 def test_rpc_url_unknown_chain_is_empty(monkeypatch):
     monkeypatch.delenv("DEFI_EVM_RPC_NOPE", raising=False)
     assert onchain.rpc_url_for_chain("nope") == ""
+
+
+# --- one chain table (2026-08-17) -------------------------------------------
+# onchain kept its own rpc/USDC/native table beside the registry. Two tables
+# describing the same chains is precisely the drift the registry exists to end.
+
+def test_the_chain_table_is_derived_from_the_registry():
+    from core.wallet import chains, onchain
+    for row in chains.all_rows():
+        cfg = onchain._CHAIN.get(row.name)
+        assert cfg is not None, f"{row.name} missing from the read table"
+        rpc, usdc, native = cfg
+        assert rpc == row.public_rpc
+        assert usdc == row.usdc
+        assert native == row.native_symbol
+
+
+def test_ethereum_is_readable_now_that_it_is_a_known_chain():
+    from core.wallet import onchain
+    assert "ethereum" in onchain._CHAIN
+    assert onchain._CHAIN["ethereum"][1] == "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+
+
+def test_the_pinned_endpoint_still_wins_over_the_registry_default(monkeypatch):
+    from core.wallet import onchain
+    monkeypatch.setenv("DEFI_EVM_RPC_ROBINHOOD", "https://pinned.example/rpc")
+    assert onchain.rpc_url_for_chain("robinhood") == "https://pinned.example/rpc"
+
+
+def test_an_unknown_chain_has_no_endpoint(monkeypatch):
+    from core.wallet import onchain
+    monkeypatch.delenv("DEFI_EVM_RPC_NOSUCHCHAIN", raising=False)
+    assert onchain.rpc_url_for_chain("nosuchchain") == ""

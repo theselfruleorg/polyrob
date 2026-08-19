@@ -91,15 +91,29 @@ def test_ordinary_files_still_editable(path):
     assert is_credential_file(Path(path)) is False
 
 
-def test_env_dotted_globs_are_intentionally_broad():
+def test_env_dotted_globs_stay_broad_for_real_snapshot_copies():
     """M2's `*.env.*` glob denies ANY basename containing `.env.` (e.g. a
-    numeric-prefixed snapshot copy `00_.env.production`), which also catches
-    non-secret names like `test.env.example`. This is a deliberate over-deny:
-    the guard's job is to never let a real credential slip through a renamed
-    copy, and refusing an example file's read/write is a minor inconvenience
-    (not a security or data-loss issue) compared to a leaked MASTER_SEED."""
-    assert is_credential_file(Path("test.env.example")) is True
+    numeric-prefixed snapshot copy `00_.env.production`). That stays.
+
+    2026-08-18 — the ENV-TEMPLATE half of this over-deny is withdrawn. It was
+    accepted as "a minor inconvenience (not a security or data-loss issue)",
+    and prod then showed the cost: goal 5ead947671b2 ("Owner deploy package:
+    mainnet-ready x402 endpoint") failed three times on `Refusing to access a
+    credential/secret file: x402-paywall/deploy/.env.example` and ended
+    permanently blocked. A deploy package cannot document its own variables
+    without one, so the inconvenience was really a whole class of deliverable.
+
+    The reversal is safe because it is scoped to `is_credential_file` (the
+    tool-facing read/write guard). `is_secret_path`/`SECRET_NAME_GLOBS` — the
+    guard on knowledge ingestion into MODEL CONTEXT — is unchanged, and the
+    exemption cannot launder a secret: producing `.env.production.example` from
+    a real `.env.production` needs a read the guard still refuses.
+    """
     assert is_credential_file(Path("00_.env.production")) is True
+    assert is_credential_file(Path("test.env.example")) is False   # template: writable
+    # ...but it stays out of model context via the ingestion guard.
+    from core.security.secret_guard import is_secret_path
+    assert is_secret_path(Path("/ws/test.env.example"), root=Path("/ws")) is True
 
 
 # --- absolute protected-config paths for the self_env tool (WS-5) -----------------

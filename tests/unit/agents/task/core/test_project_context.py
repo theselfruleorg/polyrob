@@ -302,6 +302,95 @@ class TestBuildProjectContextMessage:
         assert msg is None
 
 
+class TestServerModeConfinesWalk:
+    """P1-8: in server mode the walk is capped at the tenant workspace — it must NOT
+    ascend to a deployment git root (which would leak the install's own
+    AGENTS.md/CLAUDE.md when the data root lives inside a source checkout).
+
+    Local mode still ascends to the git root (correct — the user's project root).
+    """
+
+    def test_confine_to_root_does_not_ascend_to_git_root(self, tmp_path: Path):
+        """load_project_context(confine_to_root=True) never reads a parent's file."""
+        from agents.task.agent.core.project_context import load_project_context
+
+        # git repo root with its OWN AGENTS.md (the deployment's file)
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("DEPLOYMENT_FILE_DO_NOT_LEAK", encoding="utf-8")
+
+        # tenant workspace nested inside the git tree — no context file of its own
+        ws = tmp_path / "data" / "tenant" / "workspace"
+        ws.mkdir(parents=True)
+
+        confined = load_project_context(ws, confine_to_root=True)
+        assert confined is None  # walk capped at ws → nothing found, no leak
+
+    def test_default_still_ascends_to_git_root(self, tmp_path: Path):
+        """Default (confine_to_root=False, i.e. local) still walks up to the git root."""
+        from agents.task.agent.core.project_context import load_project_context
+
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("PROJECT_ROOT_FILE", encoding="utf-8")
+
+        ws = tmp_path / "data" / "tenant" / "workspace"
+        ws.mkdir(parents=True)
+
+        result = load_project_context(ws)  # confine_to_root defaults False
+        assert result is not None
+        assert "PROJECT_ROOT_FILE" in result
+
+    def test_confine_reads_workspaces_own_file(self, tmp_path: Path):
+        """Confined walk still reads a context file that lives IN the workspace."""
+        from agents.task.agent.core.project_context import load_project_context
+
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("DEPLOYMENT_FILE", encoding="utf-8")
+
+        ws = tmp_path / "data" / "tenant" / "workspace"
+        ws.mkdir(parents=True)
+        (ws / "AGENTS.md").write_text("TENANT_OWN_RULES", encoding="utf-8")
+
+        confined = load_project_context(ws, confine_to_root=True)
+        assert confined is not None
+        assert "TENANT_OWN_RULES" in confined
+        assert "DEPLOYMENT_FILE" not in confined
+
+    def test_build_message_server_mode_does_not_leak_deployment_git_root(self, tmp_path: Path):
+        """End-to-end: server opt-in on a workspace nested in a git repo does NOT
+        load the repo-root context file (the P1-8 leak)."""
+        from agents.task.agent.core.project_context import build_project_context_message
+
+        # Deployment source checkout: git root with its own AGENTS.md
+        _make_git_root(tmp_path)
+        (tmp_path / "AGENTS.md").write_text("DEPLOYMENT_AGENTS_MD_LEAK", encoding="utf-8")
+
+        # Tenant session workspace lives under ./data inside that same git tree
+        ws = tmp_path / "data" / "auto" / "u1" / "sessions" / "s1" / "workspace"
+        ws.mkdir(parents=True)
+
+        msg = build_project_context_message(
+            local=False, autoload=False, server_mode=True,
+            cwd=str(tmp_path), workspace_dir=str(ws),
+        )
+        assert msg is None  # nothing in ws subtree → no leak of the deployment file
+
+    def test_build_message_local_mode_still_walks_to_git_root(self, tmp_path: Path):
+        """Local mode is unchanged: ascent from cwd to the git root still happens."""
+        from agents.task.agent.core.project_context import build_project_context_message
+
+        _make_git_root(tmp_path)
+        (tmp_path / "polyrob.md").write_text("LOCAL_ROOT_GUIDANCE", encoding="utf-8")
+        nested = tmp_path / "src" / "app"
+        nested.mkdir(parents=True)
+
+        msg = build_project_context_message(
+            local=True, autoload=True, server_mode=False,
+            cwd=str(nested), workspace_dir=None,
+        )
+        assert msg is not None
+        assert "LOCAL_ROOT_GUIDANCE" in msg
+
+
 class TestScanBlockFallThrough:
     """Fix 2: a flagged high-precedence file must not zero out project context when a
     clean lower-precedence file exists (resilience against scanner false-positives)."""

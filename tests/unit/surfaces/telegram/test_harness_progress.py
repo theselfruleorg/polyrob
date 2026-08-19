@@ -16,7 +16,7 @@ class FakeBot:
         self.calls = []   # ordered ops
         self._n = 0
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id, text, **kwargs):
         self._n += 1
         self.calls.append(("send", str(chat_id), text, self._n))
         return types.SimpleNamespace(message_id=self._n)

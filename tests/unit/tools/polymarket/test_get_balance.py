@@ -20,7 +20,8 @@ def test_get_balance_advertised_in_available_tools():
 
 @pytest.mark.asyncio
 async def test_get_balance_is_routable_not_unknown(monkeypatch):
-    monkeypatch.setattr(svc, "CLOB_AVAILABLE", True)
+    # Availability lives on the (lazily-loading) adapter now, not on service.py.
+    monkeypatch.setattr("tools.polymarket.clob_adapter.CLOB_AVAILABLE", True)
     tool = PolymarketTool(config=types.SimpleNamespace(), container=None)
     tool._user_id = "u1"
     tool.db = None

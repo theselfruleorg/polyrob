@@ -383,7 +383,8 @@ async def _start_repl_agent(task_agent, orchestrator, request, session_id):
 
 async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                      *, model: Optional[str] = None, provider: Optional[str] = None,
-                     toolset: Optional[str] = None):
+                     toolset: Optional[str] = None,
+                     start_notice: Optional[tuple] = None):
     """Build the container, create an interactive session, run the loop.
 
     plain: force the plain renderer (the ``--plain`` flag).  ``POLYROB_PLAIN`` and
@@ -395,11 +396,26 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     synchronous SIGINT fallback in ``run_repl`` reads it to flip the session to
     a terminal status when a Ctrl-C escapes ``asyncio.run`` before the async
     cancel in ``finally`` could run (F2 — the session-leak fix).
+
+    start_notice: optional ``(stream, transient)`` for a ``starting…`` notice the
+    caller ALREADY wrote (cli.polyrob writes it before the heavy imports so the
+    terminal is never blank).  When None, the notice is shown here — same
+    transcript either way; this function owns clearing it.
     """
     if lifecycle_ref is None:
         lifecycle_ref = {}
     import logging as _logging
     from core.bootstrap import build_cli_container, load_env, setup_project_path, setup_sqlite_compat
+
+    # Bug E: a TRANSIENT 'starting…' notice — erased once the container is built
+    # so it doesn't linger at the top of the transcript (Claude-Code clean head).
+    # Capture the REAL stdout now, before the bootstrap suppression swaps it.
+    from cli.ui.bootstrap_notice import clear_start_notice, show_start_notice
+    if start_notice is not None:
+        _start_out, _start_transient = start_notice
+    else:
+        _start_out = sys.stdout
+        _start_transient = show_start_notice(_start_out)
 
     setup_project_path()
     setup_sqlite_compat()
@@ -416,26 +432,31 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("TQDM_DISABLE", "1")
 
-    # Project session storage.
-    (Path.cwd() / ".polyrob" / "sessions").mkdir(parents=True, exist_ok=True)
-
     # Graceful onboarding: if NO usable provider key is present after env-load (+ backfill),
     # onboard INLINE (OpenRouter-first wizard) on a TTY and fall through into the REPL in the
     # same process; on a non-TTY / declined, print the canonical message and return. Drives
     # off the initializable oracle so a deepseek-only env onboards instead of crashing.
     from cli.keys import first_run_no_config, preflight_or_onboard, should_warn_no_key
-    if should_warn_no_key() and first_run_no_config():
-        click.echo("👋 Looks like your first run — let's set up a provider key "
-                   "(OpenRouter recommended).")
-    if not preflight_or_onboard(interactive=True):
-        return
+    if should_warn_no_key():
+        # Onboarding output is about to print — retire the transient notice first
+        # so the wizard starts on a clean line.
+        clear_start_notice(_start_out, _start_transient)
+        _start_transient = False
+        if first_run_no_config():
+            click.echo("👋 Looks like your first run — let's set up a provider key "
+                       "(OpenRouter recommended).")
+        if not preflight_or_onboard(interactive=True):
+            # 027 WP3: no-credential start must exit non-zero (parity with
+            # `polyrob run`) so scripts can detect the unconfigured state.
+            sys.exit(1)
+        # Back on the boot path: restore the notice for the container build.
+        _start_transient = show_start_notice(_start_out)
+    elif not preflight_or_onboard(interactive=True):
+        sys.exit(1)
 
-    # Bug E: a TRANSIENT 'starting…' notice — erased once the container is built
-    # so it doesn't linger at the top of the transcript (Claude-Code clean head).
-    # Capture the REAL stdout now, before the bootstrap suppression swaps it.
-    from cli.ui.bootstrap_notice import clear_start_notice, show_start_notice
-    _start_out = sys.stdout
-    _start_transient = show_start_notice(_start_out)
+    # Project session storage — created only AFTER the key gate (027 WP5:
+    # a declined zero-key start must leave the directory as found).
+    (Path.cwd() / ".polyrob" / "sessions").mkdir(parents=True, exist_ok=True)
 
     # Narrow bootstrap-only suppression (proposal §9): silence MCP config /
     # gRPC bootstrap prints, then hand stdout back to the renderer. Errors after
@@ -1014,11 +1035,14 @@ def _repl_sync_cleanup(lifecycle_ref: dict) -> None:
 
 
 def run_repl(plain: bool = False, *, model: Optional[str] = None,
-             provider: Optional[str] = None, toolset: Optional[str] = None):
+             provider: Optional[str] = None, toolset: Optional[str] = None,
+             start_notice: Optional[tuple] = None):
     """Synchronous entry point for the REPL.
 
     plain: force the plain renderer (the top-level ``--plain`` flag).
     model/provider/toolset: optional launch overrides (parity with ``polyrob run``).
+    start_notice: optional ``(stream, transient)`` of an already-written
+    ``starting…`` notice (see cli.polyrob._start_repl).
 
     F2: wraps ``asyncio.run`` so a SIGINT that escapes the event loop (e.g. a
     forced second Ctrl-C, or a Ctrl-C landing during teardown) still flips the
@@ -1028,7 +1052,8 @@ def run_repl(plain: bool = False, *, model: Optional[str] = None,
     lifecycle_ref: dict = {}
     try:
         asyncio.run(_repl_main(plain=plain, lifecycle_ref=lifecycle_ref,
-                               model=model, provider=provider, toolset=toolset))
+                               model=model, provider=provider, toolset=toolset,
+                               start_notice=start_notice))
     except KeyboardInterrupt:
         _repl_sync_cleanup(lifecycle_ref)
     else:

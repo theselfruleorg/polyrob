@@ -66,6 +66,12 @@ _HIGH_IMPACT_NAMES = frozenset({
     # but the enumerated name is the layer that survives a tool-id resolver
     # fault — and this is an irreversible, self-custodial send.
     "defi_trade_transfer",
+    # 023 T4 (2026-08-14 review fix): the swap/allowance verbs shipped with
+    # only tool-id resolution between a tainted session and a swap — the exact
+    # single point of failure these name entries exist to remove. Same
+    # rationale as transfer: irreversible, self-custodial value movement
+    # (an approval is a standing claim whose drain lands in a later tx).
+    "defi_trade_swap", "defi_trade_approve_token", "defi_trade_revoke_approval",
     # I-6: read-only runtime introspection (registered directly, no owning
     # tool_id) — reveals wallet balance + tenant ledger, the same money data the
     # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.

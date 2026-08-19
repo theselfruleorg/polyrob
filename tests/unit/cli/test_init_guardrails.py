@@ -50,8 +50,9 @@ def _read_env(home: Path) -> dict:
 
 
 # The full non-quick interactive wizard prompts, in order, BEFORE Section 6/6:
-# 6 provider keys, model, toolset, template, instance id, owner id.
-_PRE_SECTION5_BLANKS = ["" for _ in range(11)]
+# Section 1 (provider choice/key/another = 3 blanks), model, toolset, template,
+# instance id, owner id.
+_PRE_SECTION5_BLANKS = ["" for _ in range(8)]
 
 
 def _full_flow_input(*, local="", autonomy="", preset="", digest="", wallet="n") -> str:
@@ -178,11 +179,10 @@ def test_digest_with_owner_writes_prefs_not_env(tmp_path, monkeypatch):
 def test_digest_with_explicit_owner_flag_writes_that_owners_prefs(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
     # --owner/--instance-id pre-supplied => Owner-pairing's two prompts are
-    # skipped (`if instance_id is None`/`if owner_user_id is None` are both
-    # False), leaving 9 prompts (6 provider keys + model + toolset + template)
-    # before Section 6/6's 4 prompts (interactive, autonomy, preset, digest) +
-    # the wallet opt-in confirm (Task 7, "n").
-    piped = "\n".join(_PRE_SECTION5_BLANKS[:9] + ["", "", "", "email", "n"]) + "\n"
+    # skipped, leaving 6 prompts (Section 1's choice/key/another + model +
+    # toolset + template) before Section 6/6's 4 prompts (interactive,
+    # autonomy, preset, digest) + the wallet opt-in confirm (Task 7, "n").
+    piped = "\n".join(_PRE_SECTION5_BLANKS[:6] + ["", "", "", "email", "n"]) + "\n"
     res, proj = _invoke(
         ["--owner", "alice", "--instance-id", "alice"],
         home, monkeypatch, input_text=piped,

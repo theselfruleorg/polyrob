@@ -45,13 +45,146 @@ default to OpenRouter; pin with `DEFAULT_PROVIDER=<name>` or `-p` to override. F
 
 ---
 
+## Subscription plans (flat-rate providers)
+
+Some plans hand you an **API key** instead of metering you per token. POLYROB
+ships provider rows for these, so all you do is set the key — no
+`providers.yaml` needed. `polyrob init` names them rather than prompting for
+them (nobody without the plan can answer), so set the key directly:
+
+```bash
+polyrob config set OLLAMA_API_KEY      # prompts; stays out of shell history
+polyrob run -p ollama-cloud "…"
+```
+
+### Providers that take an API key
+
+Set the key and go — `polyrob run -p <provider> "…"`. Run `polyrob model list`
+for the live table.
+
+| Provider | Key | Endpoint |
+|----------|-----|----------|
+| `openrouter`, `anthropic`, `openai`, `gemini`, `nvidia`, `deepseek` | the six originals | — |
+| `ollama-cloud` | `OLLAMA_API_KEY` | `https://ollama.com/v1` |
+| `zai` | `GLM_API_KEY` (or `Z_AI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
+| `zai-coding` | `ZAI_API_KEY` | `https://api.z.ai/api/anthropic` |
+| `cerebras` | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` |
+| `moonshot` / `moonshot-cn` | `KIMI_API_KEY` / `KIMI_CN_API_KEY` | `api.moonshot.ai/v1` |
+| `kimi-coding` | `KIMI_CODING_API_KEY` | `https://api.kimi.com/coding` |
+| `minimax` / `minimax-cn` | `MINIMAX_API_KEY` / `MINIMAX_CN_API_KEY` | `api.minimax.io/anthropic` |
+| `xai` | `XAI_API_KEY` | `https://api.x.ai/v1` |
+| `dashscope` | `DASHSCOPE_API_KEY` | DashScope compatible-mode |
+| `alibaba-coding` | `ALIBABA_CODING_PLAN_API_KEY` | `coding-intl.dashscope.aliyuncs.com/v1` |
+| `stepfun` | `STEPFUN_API_KEY` | `api.stepfun.ai/step_plan/v1` |
+| `ai-gateway` (Vercel) | `AI_GATEWAY_API_KEY` | `ai-gateway.vercel.sh/v1` |
+| `opencode-zen` / `opencode-go` | `OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY` | `opencode.ai/zen…` |
+| `kilocode` | `KILOCODE_API_KEY` | `api.kilo.ai/api/gateway` |
+| `huggingface` | `HF_TOKEN` | `router.huggingface.co/v1` |
+| `xiaomi` | `XIAOMI_API_KEY` | `api.xiaomimimo.com/v1` |
+| `tencent-tokenhub` | `TOKENHUB_API_KEY` | `tokenhub.tencentmaas.com/v1` |
+| `copilot` | `COPILOT_GITHUB_TOKEN` | `api.githubcopilot.com` |
+
+Flat-rate among these: `ollama-cloud`, `zai-coding`, `kimi-coding`,
+`alibaba-coding`, `copilot`. Cerebras serves both plan types on one endpoint, so
+it defaults to metered — see `subscription:` below.
+
+Every provider also takes a `*_BASE_URL` override (e.g. `GLM_BASE_URL`) for a
+proxy or a regional endpoint.
+
+### Providers that need you to sign in (OAuth)
+
+Some plans issue no API key at all. `polyrob auth add <provider>` runs their
+OAuth flow:
+
+| Provider | Plan |
+|----------|------|
+| `anthropic-oauth` | Claude Pro / Max |
+| `openai-codex` | ChatGPT plan (Codex) |
+| `github-copilot` | GitHub Copilot |
+| `xai-oauth` | SuperGrok / X Premium+ |
+| `qwen-oauth` | Qwen portal |
+| `minimax-oauth` | MiniMax |
+
+```bash
+polyrob config set LLM_OAUTH_ENABLED true   # OFF by default, everywhere
+polyrob auth add anthropic-oauth            # prints the ToS note, then the flow
+polyrob auth status
+```
+
+> **⚠ Read this before connecting one.** These plans issue no OAuth `client_id`
+> to third-party applications. The only ids that work are the ones published in
+> the vendors' own CLIs (Claude Code, Codex CLI, VS Code, Grok CLI, Qwen CLI),
+> so connecting authenticates POLYROB **as that client**. Every open-source
+> agent offering "sign in with your Claude/ChatGPT plan" does the same thing,
+> but it is a genuine terms-of-service exposure and it lands on **your**
+> account, not ours. `polyrob auth add` states this and asks before doing
+> anything, and the feature is off by default. Your account, your call.
+
+Notes:
+
+- **`ollama-cloud` is not a local Ollama.** A local server stays a keyless
+  `ollama` row in `providers.yaml` (`auth_type: none`, `http://127.0.0.1:11434/v1`).
+  Two different products from the same vendor.
+- These rows are **appended after** the six built-ins and are excluded from
+  automatic failover, so adding them cannot change which provider an existing
+  install resolves to.
+- **Flat-rate means $0 per-token cost.** A row marked `subscription: true`
+  records no marginal API cost in `usage_records` — multiplying tokens by a
+  price does not describe any charge you actually incur. Cerebras defaults to
+  metered because one endpoint serves both plans; on Code Pro/Max, declare it:
+
+  ```yaml
+  providers:
+    cerebras:
+      subscription: true
+  ```
+- **Not yet live-verified.** These rows are declared from vendor
+  documentation; we have no seat on each plan to run the tool-executing
+  verification (proposal 024 §8) against. A wrong model id or endpoint surfaces
+  as a provider 4xx, not a wrong answer. Reports welcome.
+### Declaring your own OAuth provider
+
+Beyond the built-in seats above, any OAuth provider can be declared in
+`providers.yaml` — the flows are driven entirely by this data:
+
+```yaml
+providers:
+  myplan:
+    base_url: https://api.example.com/v1
+    transport: chat_completions
+    models: [some-model]
+    oauth:
+      auth_url: https://example.com/oauth/device   # device grant → the DEVICE endpoint
+      token_url: https://example.com/oauth/token
+      client_id: your-client-id
+      scopes: [inference]
+      grant: device_code            # or authorization_code
+      redirect_mode: manual         # 'manual' (paste the code) or 'loopback'
+      device_auth_style: form       # 'json' if the device leg wants JSON
+      refresh_skew_sec: 120         # refresh this long before expiry
+```
+
+Three redirect shapes are supported, and which you can use depends on where the
+agent runs:
+
+| Flow | Works headless / over SSH? | Notes |
+|------|---------------------------|-------|
+| `device_code` | ✅ | Prints a URL + short code; polls for the token. The default. |
+| `authorization_code` + `redirect_mode: manual` | ✅ | Provider shows the code on its own page; you paste it back. |
+| `authorization_code` + `redirect_mode: loopback` | ❌ | Opens a `127.0.0.1` listener — **refused unless `POLYROB_LOCAL`**, since a server must never open a redirect listener. |
+
+Both OAuth endpoints must be `https` and are refused otherwise (a token would
+cross the network in plaintext).
+
+---
+
 ## Custom LLM providers (`providers.yaml`)
 
-Beyond the six built-in providers, you can declare **any OpenAI-compatible or
+Beyond the built-in providers, you can declare **any OpenAI-compatible or
 Anthropic-compatible endpoint with zero code** — a local Ollama / LM Studio /
-vLLM / llama.cpp server, an aggregator (Groq, Together, Fireworks, LiteLLM), a
-subscription endpoint like the z.ai GLM Coding Plan, or a corporate gateway.
-Declare it in `~/.polyrob/providers.yaml` (path override: `LLM_CUSTOM_PROVIDERS`):
+vLLM / llama.cpp server, an aggregator (Groq, Together, Fireworks, LiteLLM), or
+a corporate gateway. Declare it in `~/.polyrob/providers.yaml` (path override:
+`LLM_CUSTOM_PROVIDERS`):
 
 ```yaml
 providers:
@@ -61,16 +194,18 @@ providers:
     transport: chat_completions
     default_model: qwen3-coder:30b
     models: [qwen3-coder:30b, llama3.3:70b]
-  zai-coding:
-    base_url: https://api.z.ai/api/anthropic
-    env_key: ZAI_API_KEY               # must be *_API_KEY-shaped
+  mygateway:
+    base_url: https://gateway.corp.internal/anthropic
+    env_key: MYGATEWAY_API_KEY         # must be *_API_KEY-shaped
     transport: anthropic_messages      # Anthropic-shaped endpoint
-    bearer_auth: true
-    subscription: true
+    bearer_auth: true                  # Authorization: Bearer, not x-api-key
     default_model: glm-5
     models: [glm-5]
-    model_prefixes: [glm-]
 ```
+
+> The z.ai GLM Coding Plan used to be the worked example here. It now ships as
+> the built-in `zai-coding` row — an existing hand-written row still works and
+> simply overrides the built-in.
 
 Then use it like any built-in: `polyrob run -p ollama "…"`, or make it the
 default with `DEFAULT_PROVIDER=ollama`. A row can also **override a built-in**
@@ -83,6 +218,10 @@ Rules worth knowing:
 - **Declare `models:`** — declared models become listable and route correctly
   through the OpenAI-compat `/v1` surface. A row without `models:` still works,
   but only when named explicitly (`-p <name> -m <model>`).
+- **`subscription: true`** marks a flat-rate plan, so per-token cost accounting
+  is skipped for it (see [Subscription plans](#subscription-plans-flat-rate-providers)).
+- **`prompt_in_init: false`** keeps `polyrob init` from asking for that row's
+  key — useful for a plan-specific row that only you have.
 - **Security is enforced at load**: `env_key` must be an `*_API_KEY`-shaped
   variable (never a wallet/telegram/JWT secret name), `base_url` must be
   http(s) and never a cloud-metadata endpoint, and a group/world-writable file
@@ -145,6 +284,7 @@ If you see a log warning like `sqlite-vec extension unavailable ... Falling back
 polyrob config show                            # view merged config, with secrets redacted
 polyrob config path                            # show project/global config file locations
 polyrob config set KEY VALUE                   # write to ./.polyrob/.env (add --global for ~/.polyrob/.env)
+polyrob config set KEY                         # omit VALUE → prompted, hidden for secrets (no shell history)
 polyrob init                                   # interactive first-run setup (writes ~/.polyrob/.env)
 polyrob model set-default                      # interactive model picker
 polyrob model set-default <provider> <model>   # persist a specific default — see `polyrob model list`

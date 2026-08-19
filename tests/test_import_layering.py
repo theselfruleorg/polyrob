@@ -74,6 +74,36 @@ def test_entry_point_does_not_import_heavy_deps(target):
     )
 
 
+# The CLI entry has a stricter budget than the shared HEAVY list: subcommands are
+# lazy-loaded (cli.polyrob._LAZY_SUBCOMMANDS), so importing the module must not pull
+# the tools package, any web framework, or the LLM manager. This is what keeps
+# `polyrob` painting its first byte in milliseconds instead of after a full
+# tools/SDK import pyramid (the 2026-08 "blank terminal on start" report).
+_CLI_FORBIDDEN = (
+    "tools",
+    "fastapi",
+    "py_clob_client_v2",
+    "eth_account",
+    "modules.llm.llm_manager",
+)
+
+
+def test_cli_entry_import_stays_thin():
+    code = _PROBE.format(target="cli.polyrob", heavy=_CLI_FORBIDDEN)
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    leaked = result.stdout.strip().split(",") if result.stdout.strip() else []
+    assert leaked == [], (
+        f"importing cli.polyrob eagerly loaded {leaked}. Register new subcommands in "
+        "_LAZY_SUBCOMMANDS (cli/polyrob.py), never as top-level imports."
+    )
+
+
 def test_modules_llm_does_not_reach_up_into_agents():
     """L1 (modules.llm) must not import L2 (agents.*) at module load — no layering inversion."""
     code = (

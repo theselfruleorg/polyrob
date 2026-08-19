@@ -13,7 +13,8 @@ def get_skill_manager():
 @click.group()
 def skills():
     """List and validate agent skills."""
-    pass
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @skills.command("list")

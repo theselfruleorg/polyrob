@@ -825,6 +825,17 @@ def check_env_files(paths: list[Path]) -> list[str]:
                 )
             continue
         _group, documented_default = hit
+        # 026 P1.4: enum-shaped flags surface an invalid member with the valid
+        # set (the resolvers silently degrade typos, so the file check is the
+        # place the owner actually hears about it).
+        try:
+            from core.config_policy.flag_enums import enum_error
+            e = enum_error(key, value)
+        except Exception:
+            e = None
+        if e:
+            findings.append(e)
+            continue
         shape = shape_of_default(documented_default)
         if not value_matches_shape(value, shape):
             findings.append(

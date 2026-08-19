@@ -329,6 +329,7 @@ class RunLoopMixin:
 				# cut short. See agent/core/conversational_exit.py for the policy.
 				from agents.task.agent.core.conversational_exit import (
 					is_reply_only_step, should_conversational_exit,
+					is_planning_turn_only_step,
 				)
 				consecutive_reply_steps = 0
 
@@ -430,7 +431,20 @@ class RunLoopMixin:
 
 					# UPGRADE (Dec 2025): Reset failure counter on successful step
 					# This prevents accumulated failures from previous steps from affecting new steps
-					if self._last_result and not any(r.error for r in self._last_result):
+					#
+					# 2026-08-18: a tool-free "planning turn" (step_execution.py's
+					# ALLOWED_REASONING_TURNS allowance) sets an error-free _last_result
+					# too, so it was ALSO resetting consecutive_failures — meaning a model
+					# alternating [planning turn (resets to 0), thinking-loop intervention
+					# (bumps to 1)] could cycle forever without ever reaching max_failures:
+					# the intervention's own +1 was wiped by the very next planning turn,
+					# every time. Confirmed the dominant failure mode of the 2026-08-18
+					# post-outage recovery burst (82% of goal failures, runs burning their
+					# entire step budget in this exact alternation, never recovering).
+					# A planning turn is a bounded allowance, not genuine progress — it must
+					# not count as the "successful step" that clears the failure counter.
+					if (self._last_result and not is_planning_turn_only_step(self._last_result)
+							and not any(r.error for r in self._last_result)):
 						if self.state.consecutive_failures > 0:
 							self.logger.info(f"✅ Step succeeded, resetting failure counter (was {self.state.consecutive_failures})")
 							self.state.consecutive_failures = 0

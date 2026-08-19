@@ -57,7 +57,9 @@ def surfaces():
     from core.surfaces.dispatcher import _COMMANDS
     from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS
     return {
-        "cli": set(cli.commands.keys()),
+        # list_commands is the public click API — it includes the lazy-loaded
+        # subcommand names (cli.commands only holds the eagerly-defined ones).
+        "cli": set(cli.list_commands(None)),
         "repl": build_default_registry(),
         "web": _webview_paths(),
         "tg_routable": set(_COMMANDS),

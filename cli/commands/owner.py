@@ -521,6 +521,38 @@ async def _with_bot_db(coro_factory):
         await db.close()
 
 
+def _warn_if_invoicing_off() -> None:
+    """026 P0.4: pending invoices only settle while the watcher loop is on."""
+    from cli._flag_warn import warn_if_flag_off
+
+    def _enabled() -> bool:
+        from modules.x402.invoicing import x402_invoicing_enabled
+        return x402_invoicing_enabled()
+
+    warn_if_flag_off(
+        "X402_INVOICE_ENABLED",
+        "rows are durable, but no settlement watcher runs — pending invoices "
+        "will not settle or wake sessions.",
+        enabled_fn=_enabled,
+    )
+
+
+def _warn_if_subscriptions_off() -> None:
+    """026 P0.4: subscription renewals/settlement need the watcher tick."""
+    from cli._flag_warn import warn_if_flag_off
+
+    def _enabled() -> bool:
+        from modules.x402.subscriptions import subscriptions_enabled
+        return subscriptions_enabled()
+
+    warn_if_flag_off(
+        "SUBSCRIPTIONS_ENABLED",
+        "subscription rows are durable, but renewals and settlement are not "
+        "processed.",
+        enabled_fn=_enabled,
+    )
+
+
 @owner.command("invoices")
 @click.option("--user", default=None, help="Tenant user_id (default: all invoice rows)")
 @click.option("--status", default=None, help="Filter: pending|completed|expired")
@@ -566,6 +598,7 @@ def invoices(user, status):
     if not ok:
         click.echo(click.style(str(rows), fg="yellow"))
         return
+    _warn_if_invoicing_off()
     # M16 (2026-07-15): always print the tenant scope so the owner is never confused
     # about which bucket a listing is for (sibling money views default to different
     # scopes — finance/sub resolve one tenant, `owner invoices` no-`--user` = ALL).
@@ -652,6 +685,7 @@ def sub_list(user):
     if not ok:
         click.echo(click.style(str(rows), fg="yellow"))
         return
+    _warn_if_subscriptions_off()
     # M16: always print the tenant scope on the listing.
     click.echo(click.style(f"subscriptions — scope: tenant {tenant}", dim=True))
     if not rows:
@@ -691,6 +725,7 @@ def sub_cancel(subscription_id, user):
     else:
         click.echo(click.style(
             f"no active subscription '{subscription_id}' for tenant {tenant}", fg="yellow"))
+    _warn_if_subscriptions_off()
 
 
 # --- W3: group-chat ingress allowlist (GROUP_CHAT_ENABLED) ---

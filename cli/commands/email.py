@@ -17,6 +17,27 @@ from typing import Optional
 import click
 
 
+def _creds_error(config, env) -> Optional[str]:
+    """None when the resolved email provider has what it needs; else the message.
+
+    agentmail: only AGENTMAIL_API_KEY is required (the inbox self-provisions).
+    smtp (legacy): gmail_email + gmail_app_password, unchanged.
+    """
+    from core.config_policy.policy import email_provider
+    if email_provider(env) == "agentmail":
+        if not (env.get("AGENTMAIL_API_KEY") or "").strip():
+            return ("EMAIL_PROVIDER=agentmail but AGENTMAIL_API_KEY is unset — "
+                    "set it in ./.polyrob/.env (or config/.env.*).")
+        return None
+    gmail_email = getattr(config, "gmail_email", None)
+    gmail_pw = getattr(config, "gmail_app_password", None)
+    if not (gmail_email and gmail_pw):
+        return ("email not configured — set gmail_email + gmail_app_password in "
+                "./.polyrob/.env (or config/.env.*) to run the email surface, or "
+                "set AGENTMAIL_API_KEY for a self-provisioned managed inbox.")
+    return None
+
+
 @click.command()
 @click.option("--poll", default=None, type=int, help="IMAP poll seconds (else EMAIL_IMAP_POLL_SEC)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
@@ -29,14 +50,11 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
     from cli.commands._surface_runner import SurfaceJob, run_surface
 
     def _check_creds(container, task_agent):
-        # Preflight IMAP/SMTP credentials — otherwise the surface prints "online
+        # Preflight per-provider credentials — otherwise the surface prints "online
         # (unconfigured)" and then silently retries the poll forever with no signal.
-        gmail_email = getattr(container.config, "gmail_email", None)
-        gmail_pw = getattr(container.config, "gmail_app_password", None)
-        if not (gmail_email and gmail_pw):
-            click.echo(click.style("[polyrob] ERROR: ", fg="red")
-                       + "email not configured — set gmail_email + gmail_app_password in "
-                         "./.polyrob/.env (or config/.env.*) to run the email surface.")
+        err = _creds_error(container.config, os.environ)
+        if err:
+            click.echo(click.style("[polyrob] ERROR: ", fg="red") + err)
             sys.exit(1)
 
     def _autonomy_precheck() -> bool:
@@ -84,8 +102,20 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
         await harness.start()
 
         async def _announce():
-            addr = getattr(container.config, "gmail_email", None) or "(unconfigured)"
-            click.echo(click.style("email surface online", fg="green") + f": {addr}")
+            from core.config_policy.policy import email_provider
+            from core.instance import resolve_agent_email
+            provider = email_provider()
+            if provider == "agentmail":
+                # Provision eagerly so the announce shows the real address and a
+                # bad API key fails loudly at startup, not on the first poll.
+                try:
+                    await email_tool.ensure_initialized()
+                except Exception as e:
+                    click.echo(click.style("[polyrob] WARN: ", fg="yellow")
+                               + f"agentmail provisioning failed: {e}")
+            addr = resolve_agent_email() or "(unconfigured)"
+            click.echo(click.style("email surface online", fg="green")
+                       + f": {addr} [{provider}]")
             click.echo(click.style(
                 "correspondent-only (owner-by-email is OFF). polling every "
                 f"{poll_sec}s… (Ctrl-C to stop)", dim=True))

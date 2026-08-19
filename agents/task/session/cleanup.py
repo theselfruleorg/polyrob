@@ -79,6 +79,26 @@ def _derive_closing_chat_summary(orchestrator) -> Optional[str]:
 class SessionCleanupMixin:
     """Session teardown for SessionOrchestrator."""
 
+    async def release_shell_sandbox(self) -> None:
+        """Release this session's pooled persistent shell sandbox container.
+
+        Callable outside full cleanup: autonomous (goal/cron) runs invoke it at
+        run end via ``run_task_to_outcome`` — their sessions only ever get the
+        PARTIAL cleanup (which keeps the container for continuous chat), so
+        without this the container leaked until the next cold-start
+        ``reap_orphans`` (live 2026-08-16: 7 containers, 3–21h old). Best-effort
+        and idempotent; a later re-entry that runs shell gets a fresh container.
+
+        NOTE: this mixin owns the one allowlisted agents→tools.shell edge
+        (tests/test_layering_ratchet.py) — callers must route through here,
+        not import backend_pool themselves.
+        """
+        try:
+            from tools.shell.backend_pool import teardown_session as _shell_teardown
+            await _shell_teardown(getattr(self, "session_id", None))
+        except Exception:
+            pass
+
     async def cleanup(
         self,
         preserve_workspace: bool = False,
@@ -172,12 +192,8 @@ class SessionCleanupMixin:
             # container + revoke its published loopback ports (best-effort, no-op
             # unless the shell tool was used at posture>=1). Without this the container
             # only gets swept by reap_orphans (>1h) and its loopback ports linger in
-            # the SSRF allowlist. Import-guarded + fail-open — never block teardown.
-            try:
-                from tools.shell.backend_pool import teardown_session as _shell_teardown
-                await _shell_teardown(getattr(self, "session_id", None))
-            except Exception:
-                pass
+            # the SSRF allowlist. Fail-open — never block teardown.
+            await self.release_shell_sandbox()
 
         try:
             # Release browser contexts for THIS session

@@ -4,8 +4,25 @@ import importlib.util
 
 import pytest
 
+
+def _chromium_available() -> bool:
+    """The package alone isn't enough — a fresh [all] install has playwright
+    but no downloaded browser binary, and these tests must skip, not fail."""
+    if importlib.util.find_spec("playwright") is None:
+        return False
+    try:
+        from pathlib import Path
+
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            return Path(p.chromium.executable_path).exists()
+    except Exception:
+        return False
+
+
 pytestmark = pytest.mark.skipif(
-    importlib.util.find_spec("playwright") is None, reason="playwright extra not installed"
+    not _chromium_available(),
+    reason="playwright extra or its chromium binary not installed",
 )
 
 from modules.pfp.renderer import render_still, RenderResult  # noqa: E402

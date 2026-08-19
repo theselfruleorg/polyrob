@@ -38,6 +38,32 @@ def attach_dispatcher_event_log(dispatcher) -> None:
         pass
 
 
+#: Once-guard for :func:`ensure_env_loaded` (per process).
+_env_loaded = False
+
+
+def ensure_env_loaded() -> None:
+    """Load the local env-file ladder exactly once per process (026 P1.2).
+
+    Failure mode C in proposal 026: 14 command modules (`polyrob cron`,
+    `polyrob goals`, `polyrob tools`, …) never called ``load_env``, so a value
+    written by ``polyrob config set`` was invisible to them — ``cron schedule``
+    warned "CRON_ENABLED is off" right after the owner turned it on. Every
+    command GROUP callback that reads flags/credentials calls this seam instead
+    of growing its own copy of the setup_project_path/setup_sqlite_compat/
+    load_env preamble. Memoized: a group whose subcommand also builds a
+    container (which loads env again with override=False) stays idempotent.
+    """
+    global _env_loaded
+    if _env_loaded:
+        return
+    from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
+    setup_project_path()
+    setup_sqlite_compat()
+    load_env(local_mode=True)
+    _env_loaded = True
+
+
 async def cli_container(log_level: str = "ERROR"):
     """Standard non-interactive container bootstrap for admin subcommands.
 
@@ -78,7 +104,20 @@ def suppress_bootstrap_output():
     ``create_session`` — cannot leave output pointed at ``/dev/null`` (which
     would make the error invisible to the user).
     """
-    devnull = open(os.devnull, "w")
+    # 027 rider: the window used to discard fd-2 entirely — a native-lib
+    # failure during startup (exactly where the no-playwright break landed)
+    # vanished. Tee suppressed output into <data_home>/logs/bootstrap.log
+    # instead; fail-open to /dev/null (this path only runs past the key gate,
+    # where the data home gets created anyway).
+    sink = None
+    try:
+        from core.runtime_paths import resolve_data_home
+        log_dir = resolve_data_home() / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        sink = open(log_dir / "bootstrap.log", "a")
+    except Exception:
+        sink = None
+    devnull = sink or open(os.devnull, "w")
     saved_stdout, saved_stderr = sys.stdout, sys.stderr
     try:
         saved_fd2 = os.dup(2)

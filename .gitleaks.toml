@@ -30,10 +30,23 @@ paths = [
     # the shared secret-scrub battery test: one sample per rung (pem/bearer/kv/
     # provider/rob/aws/jwt) is exactly what it exists to contain
     '''tests/unit/core/test_shared_credential_patterns\.py''',
+    # 0.11.0 wave — credential-flow tests whose fixtures are 0123456789-filler
+    # keys by construction (verified line-by-line at the 0.11.0 scrub gate)
+    '''tests/unit/cli/test_config_cmd\.py''',
+    '''tests/unit/cli/test_auth_add_key\.py''',
+    '''tests/unit/cli/test_doctor_provenance\.py''',
+    '''tests/unit/cli/test_connect_discovery\.py''',
+    '''tests/unit/cli/test_provider_surfaces_ux\.py''',
+    '''tests/unit/modules/llm/test_subscription_providers\.py''',
+    # OAuth error-body scrub test: contains gitleaks' own documentation example
+    # token (gho_16C7e42…) precisely to assert it gets REDACTED
+    '''tests/unit/core/llm_auth/test_oauth_flows\.py''',
 ]
 regexes = [
-    # public on-chain token contract address (public by definition, not a secret)
+    # public on-chain token contract addresses (public by definition, not secrets)
     '''0xb0d79432bb6d163d3832157cff61a918d38aab81''',
+    # mainnet USDC token contract (defi guard tests)
+    '''0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
     # a Python identifier, not a credential: the shared ERC-20 ABI fragment

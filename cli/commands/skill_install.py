@@ -691,7 +691,8 @@ def _default_user() -> str:
 @click.group("skill")
 def skill():
     """Install and approve agent skills (single-skill install pipeline)."""
-    pass
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @skill.command("install")

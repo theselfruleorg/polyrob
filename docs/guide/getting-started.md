@@ -146,7 +146,11 @@ pip install -e ".[dev,all]"
 ### Step 1: Install Browser Engine (Optional)
 
 ```bash
+# pip install into your own venv:
 python -m playwright install chromium
+# pipx install (isolated venv — your `python` has no playwright; run it
+# from polyrob's venv instead):
+"$(pipx environment --value PIPX_LOCAL_VENVS)/polyrob/bin/playwright" install chromium
 # On a fresh Linux server, also pull the system libraries (needs sudo):
 # python -m playwright install --with-deps chromium
 ```
@@ -330,7 +334,7 @@ message:
 
 ```bash
 $ polyrob chat
-● polyrob v0.8.1 · claude-sonnet-4.5 (anthropic)
+● polyrob v0.10.0 · claude-sonnet-4.5 (anthropic)
   session a1b2c3d4 · tools filesystem, task · /help · /session
 
 You: I need to research quantum computing companies for an investment report.
@@ -466,12 +470,12 @@ polyrob update --apply    # automated update (git/editable installs):
                           #   with automatic rollback on any failure
 ```
 
-For pip/pipx installs, update through the package manager and then migrate (idempotent —
-a no-op when already current):
+For pip/pipx installs, update through the package manager — schema migrations
+apply automatically on the next start (server boot and the CLI container both
+run the idempotent boot migrator):
 
 ```bash
 pip install -U "polyrob[all]"        # or: pipx upgrade polyrob
-python -m migrations.migrate upgrade
 ```
 
 **Safety net:** every `--apply` first takes a WAL-safe snapshot of your databases,
@@ -500,10 +504,11 @@ echo "OPENAI_API_KEY=sk-..." >> ~/.polyrob/.env
 
 #### Issue: "Browser not available"
 
-**Solution:** Install Playwright:
+**Solution:** Install Playwright (`pip install 'polyrob[browser]'` if the
+package itself is missing), then the browser engine:
 
 ```bash
-python -m playwright install chromium
+python -m playwright install chromium   # pipx: run playwright from polyrob's venv, see Step 1
 # On Linux, if system libraries are missing (needs sudo):
 # python -m playwright install --with-deps chromium
 ```

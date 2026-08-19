@@ -20,15 +20,28 @@ from tools.hyperliquid.models import (
 )
 from core.logging import get_component_logger
 
-# Try to import official SDK
-try:
-    from hyperliquid.info import Info
-    from hyperliquid.exchange import Exchange
-    HAS_SDK = True
-except ImportError:
-    HAS_SDK = False
-    Info = None
-    Exchange = None
+# Official SDK — imported LAZILY: hyperliquid.exchange drags eth_account (~100 ms)
+# into every process boot via tools/__init__. _has_sdk() performs the one real
+# import on first call and populates the module globals the call sites read.
+Info = None
+Exchange = None
+HAS_SDK = False
+_SDK_LOADED = False
+
+
+def _has_sdk() -> bool:
+    """True iff the official hyperliquid SDK is importable (loads on first call)."""
+    global Info, Exchange, HAS_SDK, _SDK_LOADED
+    if not _SDK_LOADED:
+        _SDK_LOADED = True
+        try:
+            from hyperliquid.info import Info as _Info
+            from hyperliquid.exchange import Exchange as _Exchange
+            Info, Exchange = _Info, _Exchange
+            HAS_SDK = True
+        except ImportError:
+            HAS_SDK = False
+    return HAS_SDK
 
 
 # =============================================================================
@@ -138,14 +151,14 @@ class HyperliquidTool(BaseTool):
         self._user_id: Optional[str] = None
         self._credentials_cache: Dict[str, HyperliquidCredentials] = {}
         self._http_client: Optional[httpx.AsyncClient] = None
-        self._info_clients: Dict[str, Info] = {}  # Cached Info clients per user
-        self._exchange_clients: Dict[str, Exchange] = {}  # Cached Exchange clients
+        self._info_clients: Dict[str, "Info"] = {}  # Cached Info clients per user
+        self._exchange_clients: Dict[str, "Exchange"] = {}  # Cached Exchange clients
         self._tools_cache: Optional[List[Dict[str, Any]]] = None
 
         self.logger = get_component_logger("HyperliquidTool")
         self._enabled = True
 
-        if not HAS_SDK:
+        if not _has_sdk():
             self.logger.warning("hyperliquid-python-sdk not installed - trading features disabled")
 
     @property
@@ -235,9 +248,9 @@ class HyperliquidTool(BaseTool):
         agent/API-wallet address returns an empty account for state/positions/fills."""
         return credentials.wallet_address
 
-    async def _get_info_client(self) -> Optional[Info]:
+    async def _get_info_client(self) -> Optional["Info"]:
         """Get or create Info client for read-only operations"""
-        if not HAS_SDK:
+        if not _has_sdk():
             return None
 
         credentials = await self._get_user_credentials()
@@ -251,9 +264,9 @@ class HyperliquidTool(BaseTool):
         self._info_clients[cache_key] = info
         return info
 
-    async def _get_exchange_client(self) -> Tuple[Optional[Exchange], Optional[str]]:
+    async def _get_exchange_client(self) -> Tuple[Optional["Exchange"], Optional[str]]:
         """Get or create authenticated Exchange client for trading"""
-        if not HAS_SDK:
+        if not _has_sdk():
             return None, "hyperliquid-python-sdk not installed"
 
         credentials = await self._get_user_credentials()
@@ -1405,7 +1418,7 @@ class HyperliquidTool(BaseTool):
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
-        if not HAS_SDK:
+        if not _has_sdk():
             return {"success": False, "error": "hyperliquid-python-sdk not installed"}
 
         credentials = await self._get_user_credentials()

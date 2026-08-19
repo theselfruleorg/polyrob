@@ -187,6 +187,15 @@ try:
 except Exception as _e:  # never block tool import on the optional git seam
     logging.getLogger(__name__).debug(f"git registration skipped: {_e}")
 
+# x_browser tool (2026-08-18 X rail): registers the 'x_browser' descriptor + class
+# only when X_BROWSER_ENABLED=true. OFF by default; never in the default tool_ids;
+# delegate_blocked. Browser-based X posting + self-registration.
+try:
+    from .x_browser import register_x_browser_tool
+    register_x_browser_tool()
+except Exception as _e:  # never block tool import on the optional x_browser seam
+    logging.getLogger(__name__).debug(f"x_browser registration skipped: {_e}")
+
 # GitHub tool (P0-E): registers the 'github' descriptor + class only when
 # GITHUB_TOOL_ENABLED is on. OFF by default (even locally); never in the default tool_ids.
 try:

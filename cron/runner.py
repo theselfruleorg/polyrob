@@ -33,6 +33,32 @@ def default_cron_tools() -> list:
         return list(BASE_DEFAULT_TOOLS)
 
 
+def resolve_job_provider(payload: Optional[dict]) -> tuple:
+    """(provider_to_use, skip) for a durable job's stored provider pin.
+
+    A stored pin records what the operator preferred WHEN THE JOB WAS CREATED. It
+    must not outlive the account: prod's 3-hourly digest froze
+    ``provider="zai-coding"`` on 2026-07-19, and when that seat hit its weekly cap
+    on 2026-08-17 the job stopped for 37 hours while a second credentialed
+    provider sat idle.
+
+    Returns ``(name, False)`` for the provider that can serve — the pin when it is
+    alive, else the first live credentialed provider — or ``(None, True)`` when
+    nothing can, which is the only case where skipping a paid tick is honest.
+    """
+    from core.runtime_config import resolve_live_provider
+    from core.credit_sentinel import credit_sentinel_active
+    pinned = (payload or {}).get("provider")
+    live = resolve_live_provider(pinned)
+    if live is not None:
+        return (live, False)
+    # Nothing resolved live. Skip a PAID tick only when the sentinel is genuinely
+    # tripped — an unknown credential picture is not evidence of credit death.
+    if credit_sentinel_active(pinned):
+        return (None, True)
+    return (pinned, False)
+
+
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     """Emit a cron_run event to the durable event log (fail-open). Makes cron
     lifecycle queryable in the uniform autonomy/governance stream, not just the
@@ -181,13 +207,28 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         # dead is a guaranteed paid failure — skip as a $0 tick until the latch
         # auto-releases. Digest/wake_agent=false ticks already returned above.
         try:
-            from core.credit_sentinel import credit_sentinel_active
-            if credit_sentinel_active():
-                logger.info("cron job %s: provider-credit sentinel active — $0 skip", job.id)
+            _pinned = (payload or {}).get("provider")
+            _live, _skip = resolve_job_provider(payload)
+            if _skip:
+                logger.info("cron job %s: every credentialed provider is credit-dead — $0 skip",
+                            job.id)
                 _cron_ev(job, "skipped", "credit_sentinel")
                 return True
+            if _live and _live != _pinned:
+                # A stored pin is a preference, not a death pact. Prod's digest job
+                # froze provider="zai-coding" into its payload on 2026-07-19; when
+                # that account hit its weekly cap the job stopped for 37 hours even
+                # though a second credentialed provider was configured throughout.
+                logger.info("cron job %s: pinned provider %s is unavailable — routing to %s",
+                            job.id, _pinned or "(none)", _live)
+                payload = dict(payload or {})
+                payload["provider"] = _live
+                # The model belongs to the provider that was pinned; drop it so the
+                # run fills a model that the NEW provider actually serves.
+                payload.pop("model", None)
+                _cron_ev(job, "provider_rerouted", _live)
         except Exception:
-            pass
+            logger.debug("cron job %s: provider liveness check skipped", job.id, exc_info=True)
         ok = False
         try:
             ok = await _execute(job, payload)
@@ -216,8 +257,8 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                     f"▶ cron run started: {(job.task or '')[:120]} ({job.id[:8]})")
         except Exception:
             logger.debug("cron start notice failed for %s", job.id, exc_info=True)
-        from core.runtime_config import resolve_runtime_config
-        provider = payload.get("provider") or resolve_runtime_config(None, None)[0]
+        from core.runtime_config import resolve_default_provider
+        provider = payload.get("provider") or resolve_default_provider()[0]
         # Fill the provider's default model from the registry when the job doesn't pin
         # one — an autonomous run has no interactive config, and a None model crashes
         # session setup downstream ('.lower()' on None). Mirrors the goal dispatcher.

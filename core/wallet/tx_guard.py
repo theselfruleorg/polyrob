@@ -53,7 +53,20 @@ class TxIntent:
     amount_raw: int
     max_spend_usd: float
     expected_allowance_grants: Sequence[Tuple[str, str, int]] = ()
+    #: Spenders to MEASURE without declaring a grant (e.g. the router a swap
+    #: pulls through). A measured pair is judged by its read delta — increases
+    #: refuse unless declared, decreases are fine — while an Approval EVENT on
+    #: an unmeasured pair refuses outright. Without this, an OZ-4.x-style
+    #: token that re-emits Approval(remaining) on transferFrom would read as a
+    #: hidden grant on every legitimate swap.
+    watch_spenders: Sequence[str] = ()
     idempotency_key: Optional[str] = None
+    #: True for an approve/revoke (023 T4). Such a call transfers NOTHING — its
+    #: risk is the allowance, declared above and verified against the simulated
+    #: delta. Without this the structural "amount must be > 0" TRANSFER rule
+    #: refused every approval outright (found on prod 2026-08-14; the unit tests
+    #: stub the guard, so they could not see it).
+    is_allowance_op: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +75,9 @@ class Decision:
     reason: str
     lane: str = "refuse"          # "autonomous" | "owner_queue" | "refuse"
     amount_usd: Optional[float] = None
+    #: gasUsed measured by the simulation, carried out so the rail can size
+    #: the broadcast gas limit from it (EvmRail.size_gas). None = unmeasured.
+    sim_gas_used: Optional[int] = None
 
 
 def autonomous_max_usd() -> float:
@@ -130,7 +146,11 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             return Decision(False, f"refused: could not prove the turn is genuine ({exc})")
 
     # -- 3. Structural -----------------------------------------------------
-    if intent.amount_raw <= 0:
+    if intent.amount_raw < 0:
+        return Decision(False, "refused: amount cannot be negative")
+    if intent.amount_raw == 0 and not intent.is_allowance_op:
+        # A zero-value transfer is meaningless. An allowance op legitimately
+        # moves nothing and must say so explicitly — it is never inferred.
         return Decision(False, "refused: amount must be greater than zero")
     if intent.to.lower() in (_ZERO_ADDRESS.lower(), _DEAD_ADDRESS.lower()):
         return Decision(False, "refused: destination is the zero/burn address")
@@ -143,7 +163,8 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             f"anchor for moving funds — set DEFI_EVM_RPC_{intent.chain.upper()}"))
 
     # -- 5. Simulate -------------------------------------------------------
-    spenders = sorted({s for (_t, s, _a) in intent.expected_allowance_grants})
+    spenders = sorted({s for (_t, s, _a) in intent.expected_allowance_grants}
+                      | set(intent.watch_spenders))
     tokens = [intent.token] if intent.token else []
     try:
         deltas = simulate_fn(tx=tx, holder=holder, chain=intent.chain,
@@ -159,24 +180,35 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         moved = deltas.token_deltas.get(intent.token)
         if moved is None:
             return Decision(False, "refused: simulation did not measure the token being sent")
-        if moved > 0:
-            return Decision(False, "refused: simulation shows an INFLOW for a send")
-        if moved == 0:
-            # A send that moves nothing means the MEASUREMENT failed, not that
-            # the transfer is free. This exact hole broadcast a live 0.25 USDC
-            # transfer on 2026-08-09: eth_call does not persist state, so every
-            # delta read back as 0, the outflow priced at $0.00, and it sailed
-            # through a cap that should have refused it. Zero is never a cheap
-            # transfer — it is an unmeasured one.
-            return Decision(False, (
-                "refused: the simulation measured NO outflow for a transfer that "
-                "should move funds — treating that as a measurement failure, not "
-                "as a free transaction"))
-        outflow_raw = -moved
-        if outflow_raw > intent.amount_raw:
-            return Decision(False, (
-                f"refused: simulated outflow {outflow_raw} exceeds the declared "
-                f"amount {intent.amount_raw}"))
+        if intent.is_allowance_op:
+            # An approve/revoke changes an allowance and must move NOTHING.
+            # (Before this branch the zero delta below read as a measurement
+            # failure, so with a pinned RPC every approve/revoke was dead on
+            # arrival — the second DOA hole on this path; the first was the
+            # structural amount>0 rule, fixed by is_allowance_op itself.)
+            if moved != 0:
+                return Decision(False, (
+                    f"refused: an allowance operation moved {moved} of the token — "
+                    f"an approve/revoke must not transfer funds"))
+        else:
+            if moved > 0:
+                return Decision(False, "refused: simulation shows an INFLOW for a send")
+            if moved == 0:
+                # A send that moves nothing means the MEASUREMENT failed, not that
+                # the transfer is free. This exact hole broadcast a live 0.25 USDC
+                # transfer on 2026-08-09: eth_call does not persist state, so every
+                # delta read back as 0, the outflow priced at $0.00, and it sailed
+                # through a cap that should have refused it. Zero is never a cheap
+                # transfer — it is an unmeasured one.
+                return Decision(False, (
+                    "refused: the simulation measured NO outflow for a transfer that "
+                    "should move funds — treating that as a measurement failure, not "
+                    "as a free transaction"))
+            outflow_raw = -moved
+            if outflow_raw > intent.amount_raw:
+                return Decision(False, (
+                    f"refused: simulated outflow {outflow_raw} exceeds the declared "
+                    f"amount {intent.amount_raw}"))
 
     declared = {(t.lower(), s.lower()): a for (t, s, a) in intent.expected_allowance_grants}
     for (token, spender), change in deltas.allowance_deltas.items():
@@ -192,14 +224,66 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
             return Decision(False, (
                 f"refused: allowance grant {change} exceeds the declared {permitted}"))
 
+    # -- 6b. Event-log cross-check ----------------------------------------
+    # The reads above cover ONLY the declared token and the measured spenders;
+    # a grant to an undeclared spender or a drain of an undeclared token was
+    # invisible to them (found in the 2026-08-14 T4 review). The simulated
+    # tx's own event log covers whoever it actually touched. Measured pairs
+    # are judged by their read delta (authoritative — some tokens re-emit
+    # Approval(remaining) on transferFrom, which is a decrease, not a grant);
+    # an Approval EVENT on an UNMEASURED pair refuses outright.
+    measured_pairs = {(t.lower(), s.lower()) for (t, s) in deltas.allowance_deltas}
+    for (l_token, l_spender, l_amount) in deltas.holder_approvals:
+        if l_amount <= 0:
+            continue                      # setting an allowance to 0 is a revoke
+        if (l_token.lower(), l_spender.lower()) in measured_pairs:
+            continue                      # the read delta above already judged it
+        return Decision(False, (
+            f"refused: the transaction emits an UNDECLARED Approval of {l_amount} "
+            f"on {l_token} to {l_spender} — a hidden approve is not bounded by a "
+            f"USD cap, because the drain happens in a later transaction"))
+    for (l_token, _l_to, l_amount) in deltas.holder_transfers:
+        if intent.token and l_token.lower() == intent.token.lower():
+            continue                      # the declared outflow, asserted above
+        if l_amount > 0:
+            return Decision(False, (
+                f"refused: the transaction emits a Transfer of {l_amount} from the "
+                f"wallet on UNDECLARED token {l_token} — it moves an asset the "
+                f"intent never mentioned"))
+
     if abs(deltas.native_delta) > _NATIVE_DUST_WEI:
         return Decision(False, (
             f"refused: unexpected native balance change of {deltas.native_delta} wei — "
             f"the transaction does something that was not declared"))
 
-    # -- 7. Price the outflow ---------------------------------------------
+    # -- 7. Price the risk -------------------------------------------------
     amount_usd = None
-    if intent.token:
+    if intent.is_allowance_op:
+        # The risk of an allowance op is the DECLARED GRANT, not the (zero)
+        # outflow — pricing the outflow valued every approval at $0.00 and no
+        # cap could bound it (§1.1, 2026-08-14). Every grant must carry a
+        # trustworthy price: a low-confidence (thin/seedable-pool) token reads
+        # None, and an unpriceable grant REFUSES rather than silently skipping
+        # the USD bound — the owner can still approve it by hand.
+        # A revoke declares no grant → $0 risk and needs no price at all, so
+        # cleaning up a worthless/unpriceable token always stays possible.
+        amount_usd = 0.0
+        for (g_token, _g_spender, g_amount) in intent.expected_allowance_grants:
+            try:
+                unit_price = price_fn(intent.chain, g_token) if price_fn else None
+            except Exception:
+                unit_price = None
+            if unit_price is None:
+                return Decision(False, (
+                    "refused: the allowance grant has no trustworthy price, so no "
+                    "cap can bound what it puts at risk — an unpriceable token can "
+                    "be approved by the owner, not autonomously"))
+            decimals = _decimals_for(intent.chain, g_token)
+            if decimals is None:
+                return Decision(False, (
+                    "refused: token decimals unknown — cannot value the allowance grant"))
+            amount_usd += (g_amount / (10 ** decimals)) * unit_price
+    elif intent.token:
         try:
             unit_price = price_fn(intent.chain, intent.token) if price_fn else None
         except Exception:
@@ -230,9 +314,11 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, (
             f"owner approval required: ${amount_usd:.4f} is above the autonomous "
             f"ceiling ${autonomous_max_usd():.2f}"),
-            lane="owner_queue", amount_usd=amount_usd)
+            lane="owner_queue", amount_usd=amount_usd,
+            sim_gas_used=deltas.gas_used)
 
-    return Decision(True, "authorized", lane="autonomous", amount_usd=amount_usd)
+    return Decision(True, "authorized", lane="autonomous", amount_usd=amount_usd,
+                    sim_gas_used=deltas.gas_used)
 
 
 def _decimals_for(chain: str, token: str) -> Optional[int]:

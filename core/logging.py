@@ -6,6 +6,24 @@ import logging
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
+
+
+class _LazyDirRotatingFileHandler(RotatingFileHandler):
+    """RotatingFileHandler that creates its directory on FIRST write (027 WP5).
+
+    Forced ``delay=True`` + a dir-creating ``_open`` so importing a module that
+    wires a file logger never writes to disk — only an actual log record does.
+    """
+
+    def __init__(self, filename, **kwargs):
+        kwargs["delay"] = True
+        super().__init__(filename, **kwargs)
+
+    def _open(self):
+        import os as _os
+
+        _os.makedirs(_os.path.dirname(self.baseFilename) or ".", exist_ok=True)
+        return super()._open()
 from colorama import Fore, Back, Style, init as colorama_init
 from typing import Optional
 import time
@@ -348,9 +366,13 @@ def setup_logging(
             root_logger.setLevel(root_numeric)
 
         global _ROOT_LOGGER_CONFIGURED
-        
-        # Ensure log directory exists (needed for both root and component loggers)
-        log_dir = ensure_log_directory()
+
+        # 027 WP5: resolve only — the directory is created lazily on the first
+        # actual write (_LazyDirRotatingFileHandler), so a read-only command
+        # (doctor, --help) importing a logging module leaves the CWD untouched.
+        log_dir = resolve_log_dir()
+        if 'logs' in str(log_dir.parent):
+            log_dir = log_dir.parent
 
         if not _ROOT_LOGGER_CONFIGURED:
             # Clear any pre-existing handlers to start from a clean state
@@ -370,7 +392,7 @@ def setup_logging(
             # Create file handler for bot.log that will capture ALL messages
             log_path = log_dir / "bot.log"
 
-            file_handler = RotatingFileHandler(
+            file_handler = _LazyDirRotatingFileHandler(
                 filename=str(log_path),
                 maxBytes=MAX_BYTES,
                 backupCount=BACKUP_COUNT,
@@ -434,7 +456,7 @@ def setup_logging(
             # If a specific log_file is provided for this component
             if log_file and component_name:
                 component_log_path = log_dir / f"{component_name}.{log_file}"
-                component_file_handler = RotatingFileHandler(
+                component_file_handler = _LazyDirRotatingFileHandler(
                     filename=str(component_log_path),
                     maxBytes=MAX_BYTES,
                     backupCount=BACKUP_COUNT,

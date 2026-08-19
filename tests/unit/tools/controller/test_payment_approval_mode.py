@@ -221,11 +221,13 @@ def test_mode_auto_over_cap_rejection_never_notifies(tmp_path, monkeypatch):
 # The SPEND-side subset of PAYMENT_APPROVAL_TOOLS: verbs that stay on the
 # owner_queue lane in EVERY mode, including PAYMENT_APPROVAL_MODE=auto. Named
 # for trading historically; since 023 T3 it also carries the on-chain money
-# verb, which is irreversible and self-custodial with no venue to dispute it.
+# verbs, which are irreversible and self-custodial with no venue to dispute
+# them (T4 review 2026-08-14: swap/approve/revoke had shipped on NO lane).
 _SPEND_VERBS = (
     "hyperliquid_place_limit_order", "hyperliquid_place_market_order",
     "polymarket_place_limit_order", "polymarket_place_market_order",
-    "defi_trade_transfer",
+    "defi_trade_transfer", "defi_trade_swap",
+    "defi_trade_approve_token", "defi_trade_revoke_approval",
 )
 
 

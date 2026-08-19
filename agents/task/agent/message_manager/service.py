@@ -140,9 +140,12 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 
 		# Cache model detection on init (single source of truth)
 		self._model_name = self._detect_model_name()
-		# Use consolidated provider detection from utils
-		from agents.task.utils import detect_llm_provider
-		self._provider_name = detect_llm_provider(None, self._model_name)
+		# The provider SERVING this session. Model-name detection alone credits
+		# the vendor that originated the model id, which bills a flat-rate seat
+		# at another provider's metered prices (a zai-coding session serving
+		# `glm-5` recorded 'openrouter' spend it never incurred).
+		from agents.task.utils import resolve_serving_provider
+		self._provider_name = resolve_serving_provider(llm, self._model_name)
 
 		# Calculate token limits from model (SINGLE SOURCE OF TRUTH)
 		self.max_input_tokens, self.safe_input_tokens, self.completion_reserve = \
@@ -414,9 +417,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 	def model_name(self, value: str) -> None:
 		"""Update model name and re-detect provider (for LLM fallback scenarios)."""
 		self._model_name = value
-		# Re-detect provider based on new model name
-		from agents.task.utils import detect_llm_provider
-		self._provider_name = detect_llm_provider(None, value)
+		# Re-resolve the serving provider; the live client still knows which row
+		# it was built from, so a same-client model change keeps the right seat.
+		from agents.task.utils import resolve_serving_provider
+		self._provider_name = resolve_serving_provider(self.llm, value)
 		self.logger.info(f"Model name updated to: {value} (provider: {self._provider_name})")
 
 	@property

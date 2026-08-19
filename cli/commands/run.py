@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from cli.commands._errors import remedy_line, session_exit_code
 from core.runtime_paths import data_dir_or_home
 
 # The resolver moved to cli/toolset.py (shared with the REPL); re-imported under
@@ -50,9 +51,19 @@ def run(
     """
     if bool(task) == bool(resume_id):
         raise click.UsageError("provide either a TASK or --resume SESSION_ID (exactly one).")
-    # The banner announces the resolved model — no extra echo needed.
-    asyncio.run(_run_session(task, model, provider, tools, toolset, max_steps, plain, verbose,
-                             resume_id=resume_id))
+    # Name the terminal tab (otherwise it shows the interpreter's "Python").
+    from cli.ui import terminal_title
+    from core.env import bool_env
+    from core.version import get_version
+    _titled = (not (plain or bool_env("POLYROB_PLAIN", False))) and \
+        terminal_title.set_terminal_title(f"polyrob {get_version()}")
+    try:
+        # The banner announces the resolved model — no extra echo needed.
+        asyncio.run(_run_session(task, model, provider, tools, toolset, max_steps, plain, verbose,
+                                 resume_id=resume_id))
+    finally:
+        if _titled:
+            terminal_title.clear_terminal_title()
 
 
 async def _run_session(
@@ -134,6 +145,9 @@ async def _run_session(
         # done; per-sink handler levels (console=ERROR) keep the terminal quiet.
         # Mirrors chat.py.
         _logging.disable(_logging.NOTSET)
+        # 027 WP3: run-time errors stay one line — tracebacks only under --verbose.
+        from cli.ui.log_squelch import apply_single_line_errors
+        apply_single_line_errors()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -307,13 +321,16 @@ async def _run_session(
         session_dir = None
 
     # Stash the agent's actual final-result text when SessionDone arrives.
-    # list used as a mutable cell so the closure can write to it.
+    # lists used as mutable cells so the closure can write to them.
     _final_result: list[str] = []
+    # SessionDone outcome: [] = no event arrived; else [(success, error_message)].
+    _done_outcome: list[tuple] = []
 
     def _feed_callback(_session_id: str, event_dict: dict) -> None:
         event = _normalize_event(event_dict)
         _ui_state.update(event)
         if isinstance(event, SessionDone):
+            _done_outcome[:] = [(event.success, event.error_message)]
             if event.final_result:
                 _final_result[:] = [event.final_result]
             if session_dir is not None:
@@ -395,8 +412,22 @@ async def _run_session(
         answer = _final_result[0] if _final_result else (result or "")
         _renderer.on_turn_end(answer)
         # No trailing "Done." — the turn summary line is the completion signal.
+        # 027 WP3: a failed session must exit non-zero (it used to exit 0 —
+        # rendering "Session failed: …" as the answer) and name one next step.
+        done_success, done_error = (_done_outcome[0] if _done_outcome else (None, ""))
+        code = session_exit_code(done_success, result or "")
+        if code != 0:
+            remedy = remedy_line(done_error or result or "")
+            if remedy:
+                click.echo(click.style(remedy, fg="yellow"))
+            sys.exit(code)
+    except SystemExit:
+        raise
     except Exception as e:
         click.echo(click.style("[polyrob] ERROR: ", fg="red") + str(e))
+        remedy = remedy_line(str(e))
+        if remedy:
+            click.echo(click.style(remedy, fg="yellow"))
         sys.exit(1)
     finally:
         ProductTelemetry._on_feed_entry = None

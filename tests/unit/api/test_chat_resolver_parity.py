@@ -29,7 +29,23 @@ def test_server_consumers_use_core_resolver_not_cli():
 def test_core_resolver_has_no_home_dir_read():
     # core.runtime_config must not READ ~/.rob/cli.json itself — it is injected by
     # the CLI. (Docstrings may mention cli.json; we check for actual code coupling.)
+    import ast
     import core.runtime_config as rc
     src = inspect.getsource(rc)
-    assert "import cli" not in src
-    assert "get_default_model" not in src  # the cli.json reader lives in cli/, not here
+
+    # Strip docstrings before the coupling check. The prose deliberately NAMES the
+    # collaborators it delegates to ("the caller fills it from the registry via
+    # get_default_model"), and a bare substring match reads that documentation as
+    # a dependency — which failed this test on a docs-only change (7b510b46).
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            body = getattr(node, "body", None)
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                body[0].value.value = ""
+    code = ast.unparse(tree)
+
+    assert "import cli" not in code
+    assert "get_default_model" not in code  # the cli.json reader lives in cli/, not here

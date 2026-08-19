@@ -35,8 +35,7 @@ def _patch_gateway_bootstrap(monkeypatch, data_dir="/tmp/polyrob-instanceX"):
 def test_gateway_command_registered():
     """Gateway command exists and is registered in polyrob CLI."""
     from cli.polyrob import cli
-    command_names = [cmd.name for cmd in cli.commands.values()]
-    assert "gateway" in command_names
+    assert "gateway" in cli.list_commands(None)
 
 
 def test_gateway_command_name():

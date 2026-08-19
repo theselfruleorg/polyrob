@@ -56,7 +56,12 @@ async def maybe_escalate_blocked(task_agent: Any, goal: Any) -> bool:
             return False
         container = getattr(task_agent, "container", None)
         from core.self_evolution import push_owner_message
-        sent = await push_owner_message(container, build_blocker_escalation(goal))
+        # source="goal_blocked" puts this on the CRITICAL lane: a stopped goal
+        # needing the owner must not be droppable by the daily chatter cap
+        # (prod suppressed 156 self_evolution messages in 8 days, escalations
+        # among them, leaving 44 asks unanswered for a month).
+        sent = await push_owner_message(container, build_blocker_escalation(goal),
+                                        source="goal_blocked")
         if sent:
             logger.info("goal %s blocked → owner escalation sent", getattr(goal, "id", "?"))
         return bool(sent)

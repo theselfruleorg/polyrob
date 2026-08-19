@@ -31,7 +31,20 @@ from agents.task.goals.board import (
 @click.group("goals")
 def goals():
     """Manage durable goals board."""
-    pass
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
+
+
+def _warn_if_goals_off() -> None:
+    """026 P0.4: a stored goal only runs if the dispatcher loop is on."""
+    from cli._flag_warn import warn_if_flag_off
+    from core.config_policy import AutonomyConfig
+
+    warn_if_flag_off(
+        "GOALS_ENABLED",
+        "the goal board is durable, but no dispatcher will pick goals up.",
+        enabled_fn=AutonomyConfig.goals_enabled,
+    )
 
 
 def _get_board(data_root: Optional[Path] = None) -> GoalBoard:
@@ -123,6 +136,7 @@ def goals_list(status: Optional[str], as_json: bool):
     """List goals."""
     board = _get_board()
     goals_list = board.list(user_id=None, status=status)
+    _warn_if_goals_off()
 
     if as_json:
         click.echo(json.dumps([_goal_to_dict(g) for g in goals_list], indent=2))
@@ -206,6 +220,7 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
     else:
         click.echo(click.style("[polyrob] ", fg="green") + f"Created goal {goal.id}")
         click.echo(_format_goal(goal))
+    _warn_if_goals_off()
 
 
 @goals.command("ready")

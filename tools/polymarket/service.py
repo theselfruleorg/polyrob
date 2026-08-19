@@ -29,14 +29,15 @@ import httpx
 # Authenticated CLOB trading client — sourced from the single adapter seam so a
 # missing/incompatible client is a LOUD, typed failure instead of a silent read-only
 # degrade. The legacy py-clob-client is archived/non-functional; clob_adapter imports
-# the maintained py-clob-client-v2 only.
-from tools.polymarket.clob_adapter import (
-    ClobClient,
-    ApiCreds,
-    OrderArgs,
-    CLOB_AVAILABLE,
-    trade_capability,
-)
+# the maintained py-clob-client-v2 only. The class symbols are imported at USE time
+# (the adapter loads the vendor SDK lazily); importing them here would put the
+# ~250 ms py_clob_client_v2 import back on every process boot.
+from typing import TYPE_CHECKING
+
+from tools.polymarket.clob_adapter import clob_available, trade_capability
+
+if TYPE_CHECKING:
+    from tools.polymarket.clob_adapter import ClobClient
 
 from tools.base_tool import BaseTool, ToolStatus
 from tools.polymarket.models import (
@@ -217,7 +218,7 @@ class PolymarketTool(BaseTool):
         self._http_client: Optional[httpx.AsyncClient] = None
 
         # CLOB client cache per user (for authenticated operations)
-        self._clob_clients: Dict[str, ClobClient] = {}
+        self._clob_clients: Dict[str, "ClobClient"] = {}
 
         # Tool discovery cache
         self._tools_cache: Optional[List[Dict[str, Any]]] = None
@@ -228,7 +229,7 @@ class PolymarketTool(BaseTool):
         self._enabled = True
 
         # Check if py-clob-client is available
-        if not CLOB_AVAILABLE:
+        if not clob_available():
             self.logger.warning(
                 "polymarket trading client unavailable - trade actions disabled (%s)",
                 trade_capability()["install_hint"],
@@ -364,7 +365,7 @@ class PolymarketTool(BaseTool):
     # CLOB CLIENT MANAGEMENT
     # =========================================================================
 
-    async def _get_clob_client(self) -> Optional[ClobClient]:
+    async def _get_clob_client(self) -> Optional["ClobClient"]:
         """
         Get authenticated CLOB client for current user with proxy wallet support.
 
@@ -373,7 +374,7 @@ class PolymarketTool(BaseTool):
 
         Returns None if user not authenticated or py-clob-client not available.
         """
-        if not CLOB_AVAILABLE:
+        if not clob_available():
             return None
 
         if not self._user_id:
@@ -400,6 +401,8 @@ class PolymarketTool(BaseTool):
             # The funder is the address that holds the funds (proxy wallet if set)
             if credentials.proxy_wallet_address:
                 client_args["funder"] = credentials.proxy_wallet_address
+
+            from tools.polymarket.clob_adapter import ApiCreds, ClobClient
 
             # Add L2 credentials if available
             if credentials.api_credentials:
@@ -496,14 +499,14 @@ class PolymarketTool(BaseTool):
             )
             return None
 
-    async def _get_authenticated_client(self) -> Tuple[Optional[ClobClient], Optional[str]]:
+    async def _get_authenticated_client(self) -> Tuple[Optional["ClobClient"], Optional[str]]:
         """
         Get fully authenticated (L2) CLOB client.
 
         Returns:
             Tuple of (client, error_message). If error, client is None.
         """
-        if not CLOB_AVAILABLE:
+        if not clob_available():
             return None, f"Polymarket trading client unavailable: {trade_capability()['install_hint']}"
 
         credentials = await self._get_user_credentials()
@@ -1458,7 +1461,7 @@ class PolymarketTool(BaseTool):
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
 
-        if not CLOB_AVAILABLE:
+        if not clob_available():
             cap = trade_capability()
             self.logger.warning("polymarket.clob_unavailable: %s", cap["reason"])
             return {
@@ -1558,6 +1561,7 @@ class PolymarketTool(BaseTool):
                 size_shares = params.size_usd / params.price
 
                 # Build order arguments
+                from tools.polymarket.clob_adapter import OrderArgs
                 order_args = OrderArgs(
                     token_id=params.token_id,
                     price=params.price,

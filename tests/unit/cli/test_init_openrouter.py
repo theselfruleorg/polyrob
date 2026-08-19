@@ -8,8 +8,8 @@ def test_init_prompts_openrouter_first(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setattr("core.paths.polyrob_home", lambda: tmp_path / ".polyrob")
     runner = CliRunner()
-    # Feed: openrouter key, then blank for every other prompt.
-    result = runner.invoke(init_cmd, ["--quick"], input="sk-or-test\n\n\n\n\n\n\n")
+    # Feed: accept the openrouter default, paste the key, decline another.
+    result = runner.invoke(init_cmd, ["--quick"], input="\nsk-or-test\nn\n\n")
     assert result.exit_code == 0
     out = result.output.lower()
     assert "openrouter" in out
@@ -21,7 +21,7 @@ def test_init_writes_openrouter_key(monkeypatch, tmp_path):
     home = tmp_path / ".polyrob"
     monkeypatch.setattr("core.paths.polyrob_home", lambda: home)
     runner = CliRunner()
-    result = runner.invoke(init_cmd, ["--quick"], input="sk-or-xyz\n\n\n\n\n\n\n")
+    result = runner.invoke(init_cmd, ["--quick"], input="\nsk-or-xyz\nn\n\n")
     assert result.exit_code == 0, result.output
     env_text = (home / ".env").read_text()
     assert "OPENROUTER_API_KEY=sk-or-xyz" in env_text
@@ -32,5 +32,5 @@ def test_init_bare_min_satisfied_by_openrouter(monkeypatch, tmp_path):
     home = tmp_path / ".polyrob"
     monkeypatch.setattr("core.paths.polyrob_home", lambda: home)
     runner = CliRunner()
-    result = runner.invoke(init_cmd, ["--quick"], input="sk-or-only\n\n\n\n\n\n\n")
+    result = runner.invoke(init_cmd, ["--quick"], input="\nsk-or-only\nn\n\n")
     assert "No LLM API key" not in result.output

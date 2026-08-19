@@ -64,3 +64,14 @@ def test_tools_breakpoint_noop_for_automatic_model(monkeypatch):
     tools = [{"type": "function", "function": {"name": "a"}}]
     out = cache_hints.apply_openrouter_tools_cache_control(tools, "openai/gpt-4o")
     assert "cache_control" not in out[-1]
+
+
+def test_anthropic_transport_spec_rows_report_in_client():
+    """P8b (context-usage audit 2026-08-15): a spec-served provider on the
+    ANTHROPIC_MESSAGES transport inherits AnthropicClient's in-client
+    cache_control breakpoints — the strategy table must say so instead of
+    stamping a false "none"."""
+    from modules.llm import cache_hints
+    assert cache_hints.provider_cache_strategy("zai-coding") == "in_client"
+    # Unknown providers (no spec row) still report none.
+    assert cache_hints.provider_cache_strategy("unknown-provider") == "none"

@@ -195,7 +195,8 @@ one accessor).
   alongside the existing Grok block. Anthropic/Claude gets none.
 - **Tool-schema memoization** — `Registry.get_all_actions_for_provider` caches the generated schema
   list per `(provider, action-set, exclusions)` (`tools/controller/registry/service.py`); self-busts
-  on any registration change. Stops regenerating ~3.7k of identical tool defs every step.
+  on any registration change. Stops regenerating ~7.5k tokens of identical tool defs every
+  step (measured on the default 5-tool local rig, 2026-08-15; grows with the loaded tool set).
 - **Skills as a user message** (PR13) — skills are pinned as a `SKILL`-origin foundation
   message (`MessageManager.set_skill_message` + `get_messages_for_llm`), NOT embedded in the
   system prompt (keeps it cache-stable). The system prompt is built once per session.
@@ -680,6 +681,43 @@ flag table.
 - Playwright-based web automation with anti-detection features
 - Managed browser contexts and sessions
 - DOM manipulation and interaction capabilities
+- **Login persistence** — `BrowserContextConfig.storage_state` injects a saved
+  cookies+localStorage snapshot at context creation, and
+  `BrowserContext.export_storage_state()` captures one. None = today's
+  logged-out behaviour, byte-identical. This is the primitive the X rail uses.
+
+### Agent email provider seam (`tools/email_providers/`)
+The `email` tool speaks two transports behind one surface, selected by
+`EMAIL_PROVIDER` (`auto`|`smtp`|`agentmail`; `core/config_policy/policy.py::
+email_provider`). `smtp` is the legacy stdlib IMAP/SMTP path (GMAIL_* creds),
+byte-identical. `agentmail` gives the agent its OWN address by default: with
+`AGENTMAIL_API_KEY` set, `EmailTool._initialize` idempotently provisions a
+managed inbox (api.agentmail.to) — no SMTP/IMAP setup — persisting the address to
+`<data_home>/agent_mail.json`. `core/instance.py::resolve_agent_email` is the
+sender-identity primitive (distinct from `resolve_owner_email`, an outbound
+target); receive rides a `MailFetcher` seam (`surfaces/email/fetchers.py`:
+`ImapFetcher`/`AgentMailFetcher`), keeping `surface_id="email"` so the whole
+correspondent/dispatcher/conversation layer is unchanged. Minted Message-IDs + a
+thread map keep reply-routing exact over HTTP.
+
+### X (x.com) browser rail (`tools/x_browser/`)
+Gated `X_BROWSER_ENABLED` (default OFF; never in default tool_ids; `high_impact`
++ `delegate_blocked`). The `x_browser` tool posts to X and registers the agent's
+own account through a real browser on a durable, encrypted login
+(`session_store.py`, Fernet over `FileTokenStore`, keyed `(user_id, "x")`).
+Verbs are dedicated (never raw browser clicks, so the approval gate is
+enforceable by action name): `x_post` (owner-approval-gated via
+`x_browser_x_post` in `DEFAULT_APPROVAL_REQUIRED_TOOLS`), `x_login_check`, and
+`x_signup_start` (always owner-queued via `_ALWAYS_GATED_VERBS`). Signup
+(`signup.py`) is a deterministic state machine: it fills the known form, pulls
+the verification code from the agent's own inbox (`MailPoller`), sets a
+generated password stored encrypted **before** it is typed, and writes an
+automation disclosure into the bio. Any CAPTCHA / phone check / unknown page is
+an `Obstacle` that raises `SignupPaused` and escalates to the owner
+(`escalation.py`: notice + goal-board ask; headed → wait for the owner to solve
+it in-window, headless → pause with the resume command). **No CAPTCHA solving,
+no anti-detection extension, one account per instance.** CLI: `polyrob x-account
+capture-session` (owner login ceremony) / `status` / `signup [--resume]`.
 
 ### MCP Integration (`tools/mcp/`)
 - **Model Context Protocol** support for external service integration

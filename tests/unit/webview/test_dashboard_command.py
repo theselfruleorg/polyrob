@@ -31,8 +31,16 @@ def test_dashboard_help_lists_command():
 
 
 def test_dashboard_registered_in_cli():
+    # The CLI lazy-loads subcommands (_LazyGroup) — click's eager `.commands`
+    # dict holds only the non-lazy few, so assert through the group's real
+    # resolution path (list_commands/get_command), same as `polyrob --help`.
+    import click
+
     from cli.polyrob import cli
-    assert "dashboard" in cli.commands
+    ctx = click.Context(cli)
+    assert "dashboard" in cli.list_commands(ctx)
+    assert cli.get_command(ctx, "dashboard") is not None
+    assert cli.get_command(ctx, "webgate") is not None  # alias
 
 
 def test_dashboard_binds_loopback_by_default(monkeypatch):

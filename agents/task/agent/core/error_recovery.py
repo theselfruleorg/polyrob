@@ -158,11 +158,23 @@ class ErrorRecoveryMixin:
 		if matched is None:
 			return
 		try:
-			from core.credit_sentinel import trip_credit_sentinel
+			from core.credit_sentinel import extract_reset_ts, trip_credit_sentinel
+			# Scope the latch to the account that actually died. Without this a
+			# dead secondary (a legacy cron pin, a stale fallback) pauses every
+			# provider — including a flat-rate seat, where credit death cannot
+			# happen at all.
+			from agents.task.utils import resolve_serving_provider
+			_provider = resolve_serving_provider(
+				getattr(self, "llm", None), getattr(self, "model_name", None))
 			await trip_credit_sentinel(
 				matched[:300],
+				provider=_provider,
 				container=getattr(self, "container", None),
-				user_id=getattr(self, "user_id", None))
+				user_id=getattr(self, "user_id", None),
+				# Plan-quota death states its own reset time ("…limit will
+				# reset at 2026-08-18 18:01:49"); latch until then instead of
+				# re-tripping (and re-pinging the owner) every release window.
+				release_ts=extract_reset_ts(matched))
 		except Exception:
 			self.logger.debug("credit sentinel trip failed (fail-open)", exc_info=True)
 
@@ -508,7 +520,11 @@ class ErrorRecoveryMixin:
 		"""
 		try:
 			current_provider = self._get_provider_from_model(self.model_name)
-			exclude_providers = list(self.state.llm_providers_failed) + [current_provider]
+			# dict.fromkeys: dedupe while keeping order — the current provider is
+			# usually already in llm_providers_failed, and the doubled entry
+			# rendered as "excluding: ['openrouter', 'openrouter']" in prod logs.
+			exclude_providers = list(dict.fromkeys(
+				list(self.state.llm_providers_failed) + [current_provider]))
 
 			self.logger.info(f"🔄 Attempting LLM fallback (excluding: {exclude_providers})")
 

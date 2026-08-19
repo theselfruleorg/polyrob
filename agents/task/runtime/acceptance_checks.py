@@ -54,6 +54,77 @@ async def _check_artifact_glob(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tu
     return False, f"artifact_glob: no file matching {pattern!r} under workspace"
 
 
+async def _check_artifact(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[bool, str]:
+    """{"type":"artifact","name":"report.md"|"id":"<artifact_id>","contains":[...]}
+
+    Resolves through the artifact ledger instead of the filesystem layout, which
+    is what ``file_contains`` gets wrong. Five goals failed last week with
+    ``file_contains: file not found ('data/x402-round4-decode.md')`` for evidence
+    the agent had really written: the relative path was resolved against a shared
+    workspace that had since been wiped, so a check meant to VERIFY the work
+    reported the work was never done.
+
+    The ledger separates the three states that path check conflates:
+      * no row            -> the agent never produced it
+      * row, file gone    -> produced, then deleted (missing)
+      * row, hash differs -> produced, then altered (changed)
+
+    ``contains`` still applies, on the ledger's recorded absolute path.
+    """
+    user_id = str(ctx.get("user_id") or "")
+    if not user_id:
+        return False, "artifact: no tenant in context"
+    artifact_id = str(check.get("id") or "").strip()
+    name = str(check.get("name") or check.get("arg") or "").strip()
+    if not (artifact_id or name):
+        return False, "artifact: neither 'id' nor 'name' given"
+
+    from core.artifacts import (VERIFY_CHANGED, VERIFY_MISSING, VERIFY_OK,
+                                get_artifact_ledger)
+    ledger = get_artifact_ledger()
+
+    row = None
+    if artifact_id:
+        row = ledger.get(artifact_id, user_id)
+        if row is None:
+            return False, f"artifact: no artifact {artifact_id!r} for this tenant"
+    else:
+        goal_id = str(ctx.get("goal_id") or "")
+        candidates = ledger.list_for_goal(user_id, goal_id) if goal_id else []
+        if not candidates:
+            session_id = str(ctx.get("session_id") or "")
+            candidates = (ledger.list_for_session(user_id, session_id)
+                          if session_id else [])
+        for cand in candidates:
+            if os.path.basename(cand.path) == name:
+                row = cand
+                break
+        if row is None:
+            return False, f"artifact: no artifact named {name!r} was produced by this run"
+
+    verdict = ledger.verify(row.id, user_id)
+    if verdict == VERIFY_MISSING:
+        return False, f"artifact: {name or row.id} was produced but is now missing from disk"
+    if verdict == VERIFY_CHANGED:
+        return False, f"artifact: {name or row.id} changed since it was recorded"
+    if verdict != VERIFY_OK:
+        return False, f"artifact: {name or row.id} unknown to the ledger"
+
+    needles = [str(x) for x in (check.get("contains") or []) if str(x)]
+    if not needles:
+        return True, f"artifact: {name or row.id} ok ({row.bytes} bytes)"
+    try:
+        with open(row.path, "r", encoding="utf-8", errors="replace") as f:
+            body = f.read(FILE_CONTAINS_MAX_BYTES)
+    except OSError as e:
+        return False, f"artifact: unreadable ({str(e)[:100]})"
+    mode = str(check.get("mode") or "all").lower()
+    hits = [n for n in needles if n in body]
+    ok = (len(hits) == len(needles)) if mode != "any" else bool(hits)
+    return ok, (f"artifact: {name or row.id} contains {len(hits)}/{len(needles)} "
+                f"(mode={mode})")
+
+
 async def _check_http_ok(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[bool, str]:
     url = str(check.get("url") or check.get("arg") or "").strip()
     if not url.startswith(("http://", "https://")):
@@ -121,6 +192,10 @@ _CHECK_TYPES: Dict[str, CheckFn] = {
     "artifact_glob": _check_artifact_glob,
     "http_ok": _check_http_ok,
     "file_contains": _check_file_contains,
+    # Prefer `artifact` over `file_contains` for a goal's OWN output: it resolves
+    # through the ledger, so a wipe or a relative-path mismatch cannot masquerade
+    # as "the agent never produced it".
+    "artifact": _check_artifact,
 }
 
 
@@ -132,14 +207,18 @@ def register_check_type(name: str, fn: CheckFn) -> None:
 
 async def run_acceptance_checks(checks: List[Dict[str, Any]], *,
                                 workspace_dir: Optional[str] = None,
-                                timeout_sec: float = DEFAULT_TIMEOUT_SEC) -> List[Dict[str, Any]]:
+                                timeout_sec: float = DEFAULT_TIMEOUT_SEC,
+                                user_id: Optional[str] = None,
+                                goal_id: Optional[str] = None,
+                                session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Execute the typed checks; each result is ``{type, ok, detail, ...}``.
 
     Fail-CLOSED per check (unknown type / crash / timeout → ok=False) but the
     RUNNER never raises — the caller reads the results.
     """
     results: List[Dict[str, Any]] = []
-    ctx = {"workspace_dir": workspace_dir, "timeout_sec": timeout_sec}
+    ctx = {"workspace_dir": workspace_dir, "timeout_sec": timeout_sec,
+           "user_id": user_id, "goal_id": goal_id, "session_id": session_id}
     for check in list(checks or [])[:MAX_CHECKS]:
         if not isinstance(check, dict):
             results.append({"type": "?", "ok": False, "detail": "malformed check (not a dict)"})

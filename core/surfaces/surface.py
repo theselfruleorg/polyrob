@@ -59,10 +59,15 @@ class SurfaceConfigSchema:
 
 
 def split_message(text: str, limit: int) -> List[str]:
-    """Split text into <=limit-sized chunks (shared by send() and the stream engine)."""
+    """Split text into <=limit-sized chunks (shared by send() and the stream engine).
+
+    Thin alias for the ONE splitter in core.surfaces.rendering — kept because several
+    surfaces import this name.
+    """
+    from core.surfaces.rendering import split_text
     if not text:
         return [text]
-    return [text[i:i + limit] for i in range(0, len(text), limit)]
+    return split_text(text, limit)
 
 
 class _LiveStream:

@@ -32,6 +32,10 @@ import click
 @click.option("--no-browser", is_flag=True, help="Do not open a browser window")
 def dashboard(multitenant, posture, host, port, no_browser):
     """Run the polyrob webgate (local web dashboard)."""
+    # 027 WP3: fail on a missing [server] extra BEFORE printing the URL and
+    # opening a browser tab (it used to crash with a raw traceback after both).
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("server")
     # Precedence: --multitenant (legacy alias) > --posture > env already set > default local.
     # Must be set BEFORE importing webview.server (it reads the flag at import
     # time to mount-gate routes).
@@ -57,9 +61,9 @@ def dashboard(multitenant, posture, host, port, no_browser):
     # UI still opens for view-only pages) rather than a hard exit — but surface it now
     # instead of letting chat fail deep in the request handler.
     from core.bootstrap import load_env
-    from modules.llm.profiles import usable_providers_with_keys
+    from modules.llm.profiles import usable_providers_with_credentials
     load_env(local_mode=True)
-    if not usable_providers_with_keys(os.environ):
+    if not usable_providers_with_credentials(os.environ):
         click.echo(click.style("[polyrob] WARN: ", fg="yellow")
                    + "no usable provider key — chat will fail until you set one "
                      "(`polyrob init` / `polyrob config set`). View-only pages still work.")

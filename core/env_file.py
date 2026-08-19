@@ -25,6 +25,27 @@ def upsert_env_var(path: Path, key: str, value: str, *, secure: bool = True) -> 
         path.chmod(0o600)
 
 
+def remove_env_var(path: Path, key: str, *, secure: bool = True) -> bool:
+    """Remove ``KEY=...`` from *path*, preserving other lines.
+
+    Same whitespace-normalized key matching as :func:`upsert_env_var` (a
+    hand-edited ``KEY = value`` line is found too). Returns True when a line
+    was removed, False when the key (or the file) was absent.
+    """
+    if not path.exists():
+        return False
+    lines = path.read_text().splitlines()
+    key = key.strip()
+    kept = [ln for ln in lines
+            if not ("=" in ln and ln.split("=", 1)[0].strip() == key)]
+    if len(kept) == len(lines):
+        return False
+    path.write_text("\n".join(kept) + ("\n" if kept else ""))
+    if secure:
+        path.chmod(0o600)
+    return True
+
+
 def read_env_file(path: Path) -> dict:
     """Parse ``KEY=value`` lines (comments/blank skipped); {} when absent."""
     result: dict = {}

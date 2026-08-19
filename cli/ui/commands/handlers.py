@@ -985,11 +985,21 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     """
     from agents.task.constants import AutonomyConfig, autonomy_enabled, local_mode_enabled
     from cli.ui.autonomy_poll import read_autonomy_snapshot
+    from core.config_policy.policy import autonomy_mode_display, autonomy_posture
+
+    # 026 P0.5: CRON_ENABLED via its own runtime resolver (posture default
+    # honored); fail-open to off — the ticker gate lives in the tools tier.
+    try:
+        from tools.cronjob_tools import cron_enabled
+        cron_flag = bool(cron_enabled())
+    except Exception:
+        cron_flag = False
 
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
         ("goals", AutonomyConfig.goals_enabled()),
         ("curator", AutonomyConfig.curator_enabled()),
+        ("cron", cron_flag),
         ("cron-run-loop", AutonomyConfig.cron_run_loop()),
         ("background-review", AutonomyConfig.background_review_enabled()),
     ]
@@ -999,9 +1009,17 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     except Exception:  # fail-open: stores may not exist yet
         counts = {}
 
+    try:
+        halted = bool(AutonomyConfig.autonomy_halted())
+    except Exception:
+        halted = False
+
     return {
         "local_mode": local_mode_enabled(),
         "autonomy_enabled": autonomy_enabled(),
+        "mode_display": autonomy_mode_display(),
+        "posture": autonomy_posture(),
+        "halted": halted,
         "flags": flags,
         "cron_count": int(counts.get("cron", 0) or 0),
         "goal_count": int(counts.get("goals", 0) or 0),
@@ -1011,6 +1029,19 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
 def _h_autonomy(ctx: CommandContext) -> None:
     """Show autonomy loop state + cron-job / open-goal counts (read-only)."""
     from cli.ui import candy
+
+    # 026 P0.5: `/autonomy on` used to print the status panel and silently
+    # ignore the argument — error honestly and name the real write path.
+    if ctx.args:
+        ctx.emit(
+            f"/autonomy takes no arguments yet (got: {' '.join(ctx.args)}).\n"
+            "It is read-only today — to turn autonomy on/off use:\n"
+            "  /config set AUTONOMY_ENABLED true   (restart applies)\n"
+            "For an immediate freeze/unfreeze of all loops use "
+            "`polyrob owner halt` / `polyrob owner resume` (live, no restart).",
+            title="autonomy",
+        )
+        return
 
     data_dir = "data"
     try:
@@ -1022,7 +1053,11 @@ def _h_autonomy(ctx: CommandContext) -> None:
     snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
 
     rows = [("local mode", "on" if snap["local_mode"] else "off"),
-            ("autonomy", "on" if snap["autonomy_enabled"] else "off")]
+            ("autonomy", "on" if snap["autonomy_enabled"] else "off"),
+            ("mode", snap.get("mode_display", "supervised")),
+            ("posture", snap.get("posture", "silent")),
+            ("halt", "HALTED — resume: polyrob owner resume"
+                     if snap.get("halted") else "off (live kill-switch: polyrob owner halt)")]
     rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
     lines = [candy.kv_lines(rows), ""]
 
@@ -1034,6 +1069,10 @@ def _h_autonomy(ctx: CommandContext) -> None:
     lines.append(candy.section(f"goals (open: {snap['goal_count']})"))
     if snap["goal_count"]:
         lines.append(f"{candy.GUTTER}/goals lists them")
+
+    lines.append("")
+    lines.append(f"{candy.GUTTER}enable/disable: /config set AUTONOMY_ENABLED true|false "
+                 "(restart applies)")
 
     ctx.emit("\n".join(lines), title="autonomy")
 
@@ -1646,6 +1685,9 @@ def build_default_registry() -> CommandRegistry:
                 usage="<description>")
     )
     reg.register(Command("tools", _h_tools, "List the agent's registered tools/actions"))
+    from cli.ui.commands.h_diag import h_auth, h_doctor
+    reg.register(Command("auth", h_auth, "Show provider credentials + how to connect one"))
+    reg.register(Command("doctor", h_doctor, "Run the polyrob doctor health report"))
     reg.register(Command(
         "toolset",
         _h_toolset,

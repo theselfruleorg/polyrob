@@ -267,6 +267,18 @@ class AnthropicClient(LLMClient):
             # Capture telemetry
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
 
+            # Only a request-shape problem can plausibly be cured by dropping
+            # the tools block. Anything else (429/5xx/auth/billing/connection)
+            # must propagate so the adapter classifies it and the agent tries a
+            # provider fallback: retrying WITHOUT tools doubles the hammering
+            # on a rate-limited account, and a "successful" non-tool reply
+            # carries zero tool_calls — the empty-action/thinking-loop storm
+            # of 2026-08-13..16 (856 blind fallback calls in 4 days).
+            from core.exceptions import LLMInvalidRequestError
+            from modules.llm.llm_client import translate_llm_error
+            if not isinstance(translate_llm_error(e), LLMInvalidRequestError):
+                raise
+
             # Fall back to non-tool generation
             self.logger.warning(f"Falling back to non-tool generation due to error: {e}")
             response = await self._generate(messages, system, temperature, max_tokens, **kwargs)
@@ -627,10 +639,20 @@ class AnthropicClient(LLMClient):
                     anthropic_role = 'user'
                 elif role in ['assistant', 'ai']:
                     anthropic_role = 'assistant'
+                elif role == 'tool':
+                    # Non-tool mode has no tool_use/tool_result blocks (the
+                    # assistant's tool_calls are flattened to content above), so
+                    # carry the result as labeled user text — the model still
+                    # reads it as an observation. This path used to warn
+                    # "Unknown role tool" per message (744× in the 2026-08-12..16
+                    # journals, one per history message on every fallback call).
+                    anthropic_role = 'user'
+                    if isinstance(content, str):
+                        content = f"[tool result] {content}"
                 else:
                     self.logger.warning(f"Unknown role {role}, treating as user")
                     anthropic_role = 'user'
-                    
+
                 anthropic_messages.append({
                     "role": anthropic_role,
                     "content": content
@@ -846,6 +868,24 @@ class AnthropicClient(LLMClient):
         # Anthropic uses input_tokens/output_tokens instead of prompt/completion
         input_tokens = getattr(usage, 'input_tokens', None)
         output_tokens = getattr(usage, 'output_tokens', None)
+
+        # P8a (context-usage audit 2026-08-15): an Anthropic-compat endpoint
+        # that returns output usage but NO input usage leaves the meter (and
+        # any cache-hit verification) input-blind while telemetry silently
+        # records prompt_tokens=0. Warn ONCE per client instance, naming the
+        # provider and the raw payload, so the gap is diagnosable.
+        if output_tokens and not input_tokens:
+            if not getattr(self, '_input_usage_warned', False):
+                self._input_usage_warned = True
+                try:
+                    raw = usage.model_dump() if hasattr(usage, 'model_dump') else vars(usage)
+                except Exception:
+                    raw = repr(usage)
+                self.logger.warning(
+                    f"{self._PROVIDER_LABEL}: input-side usage missing from response "
+                    f"(output_tokens={output_tokens}, raw usage={raw}) — prompt-token "
+                    f"metering and cache-hit metrics are blind on this endpoint"
+                )
 
         # Anthropic reports cache reads/writes SEPARATELY and EXCLUDES them from
         # input_tokens (total input = input_tokens + cache_read + cache_creation).

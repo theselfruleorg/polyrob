@@ -188,11 +188,16 @@ class TestDerivedSeams:
     def test_usable_oracle_sees_keyed_user_provider(self, user_providers):
         from modules.llm.profiles import usable_providers_with_keys
         env = {"ZAI_API_KEY": "zk-0123456789abcdef0123456789"}
-        assert usable_providers_with_keys(env) == ["ollama", "zai-coding"]
+        # `zai-coding` is a SHIPPED built-in since 024 T0, so this file's row is
+        # an override of it and keeps the built-in's slot in canonical order —
+        # ahead of the brand-new `ollama` row, which is appended after every
+        # built-in. Membership is what this asserts; the ordering contract is
+        # pinned in the characterization suite.
+        assert usable_providers_with_keys(env) == ["zai-coding", "ollama"]
         # keyless-by-design (auth_type: none) is usable with no env at all — a
         # fresh box with only an Ollama row must pass every no-key gate
-        # (UX assessment 2026-08-07, B2). Keyed builtins still outrank it in
-        # canonical order; among user rows, file order decides.
+        # (UX assessment 2026-08-07, B2). A keyed provider needs its key, so
+        # with an empty env only the keyless row survives.
         assert usable_providers_with_keys({}) == ["ollama"]
 
     def test_keyless_provider_is_initializable_without_env(self, user_providers):
@@ -443,8 +448,14 @@ class TestGenericClients:
         with pytest.raises(ServiceError) as ei:
             await client._initialize()
         msg = str(ei.value)
-        assert "zai-coding" in msg
-        assert "Anthropic" not in msg
+        # The message must identify the provider the user actually configured.
+        # Since 024 T0 ships a `zai-coding` built-in, that identity renders as
+        # its display_name ("z.ai GLM Coding Plan") rather than the bare row id
+        # — strictly more useful, and still never "Anthropic". What has to hold
+        # is that the user is pointed at THEIR provider and THEIR env var.
+        assert "z.ai" in msg
+        assert "ZAI_API_KEY" in msg
+        assert "Anthropic" not in msg and "ANTHROPIC_API_KEY" not in msg
         # the seam every inherited message site renders through
         assert client._PROVIDER_LABEL == client._spec.display_name
 

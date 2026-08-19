@@ -27,6 +27,10 @@ import click
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
 def whatsapp(port: int, verbose: bool):
     """Run the agent as a WhatsApp Cloud API bot (webhook server)."""
+    # 027 WP3: the webhook server needs uvicorn/fastapi from the [server] extra —
+    # fail in one line before the container build, not mid-startup.
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("server")
     asyncio.run(_run_whatsapp(port, verbose))
 
 

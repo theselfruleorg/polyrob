@@ -78,4 +78,4 @@ def test_cancel_marks_job_cancelled_tenant_scoped(tmp_path):
 
 def test_cron_registered_in_group():
     from cli.polyrob import cli
-    assert "cron" in cli.commands
+    assert "cron" in cli.list_commands(None)

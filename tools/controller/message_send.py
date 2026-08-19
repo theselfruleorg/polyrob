@@ -13,7 +13,11 @@ from core.surfaces.attachments import (
     screen_attachment_path,
     validate_media_paths,
 )
-from core.surfaces.outbound_target import resolve_target_tier
+from core.surfaces.outbound_target import (
+    is_bot_username,
+    normalize_surface_target,
+    resolve_target_tier,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +118,20 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         resolved = (owner_targets or {}).get(surface)
         if resolved:
             target = resolved
+
+    # AFTER owner-alias resolution (so 'owner' never becomes '@owner'):
+    # compute the API-shaped form of an agent-typed telegram target — t.me
+    # links and bare usernames reached the Bot API verbatim and failed
+    # "chat not found" (2026-08-15..16). Tier/allowlist/store matching below
+    # deliberately keeps the RAW target (owner-authored allowlist entries are
+    # matched byte-exact); only the actual send uses the normalized form.
+    send_target = normalize_surface_target(surface, target)
+    if is_bot_username(surface, send_target):
+        return {"success": False, "tier": None, "surface": surface, "target": target,
+                "error": (f"{send_target} is a bot account — Telegram forbids bot→bot "
+                          "messages, the send can never succeed. If you meant the "
+                          "owner, use target='owner'; if this is a channel whose "
+                          "@username ends in 'bot', use its numeric -100… chat id.")}
 
     home_dir = _pref_home_dir(container)
     policy, domains = resolve_outbound_policy(user_id or "", surface, home_dir=home_dir)
@@ -217,7 +235,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                     "— media not delivered")
 
     try:
-        ok = await router.send_message(chat_id=target, text=text, surface_id=surface, media=media)
+        ok = await router.send_message(chat_id=send_target, text=text, surface_id=surface, media=media)
     except Exception as e:  # fail-open: never crash the loop on a send fault
         logger.error("message send failed: %s", e, exc_info=True)
         return {"success": False, "tier": tier, "surface": surface, "target": target, "error": str(e)}
@@ -243,6 +261,8 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
 
     result = {"success": bool(ok), "tier": tier, "surface": surface, "target": target,
             "error": None if ok else "send returned false"}
+    if send_target != target:
+        result["sent_as"] = send_target  # e.g. 't.me/x' delivered as '@x'
     # Overnight 2026-07-19 finding: an attachment-blind result ("... OK") made
     # the agent retry the same send ~12x and declare BLOCKED — the result must
     # ACKNOWLEDGE what rode the message so success is legible.

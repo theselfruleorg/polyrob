@@ -328,6 +328,30 @@ class GoalDispatcher:
         except Exception:
             return data_dir_or_home(None)
 
+    @staticmethod
+    def dispatch_blocked_by_providers() -> bool:
+        """True only when NO credentialed provider can serve right now.
+
+        The old gate asked whether the DEFAULT provider was credit-dead, which
+        conflates "my first choice died" with "I cannot work". Prod dispatched
+        zero goals for 37 hours on that conflation while a second credentialed
+        provider was available the whole time.
+
+        Fail-open: a resolver error must never pause autonomy on its own.
+        """
+        try:
+            from core.credit_sentinel import credit_sentinel_active
+            from core.runtime_config import resolve_live_provider
+            if resolve_live_provider(None) is not None:
+                return False
+            # Nothing resolved live — pause only when the sentinel is genuinely
+            # tripped. An empty credential picture (test/dev, unreadable store) is
+            # not credit death, and pausing on it would stop a working box.
+            return bool(credit_sentinel_active(None))
+        except Exception:
+            logger.debug("provider liveness check failed — not pausing", exc_info=True)
+            return False
+
     async def dispatch_once(self) -> int:
         """Claim and run up to GOAL_MAX_CONCURRENT ready goals. Returns #dispatched.
 
@@ -384,10 +408,16 @@ class GoalDispatcher:
         # §6.3 provider-credit sentinel: while tripped (recent 402/credit-death),
         # burning more paid runs is pointless — pause dispatch until auto-release.
         try:
-            from core.credit_sentinel import credit_sentinel_active
-            if credit_sentinel_active():
+            # Ask "can ANYTHING serve?", not "is the default alive?". Asking only
+            # about the default is why prod dispatched zero goals for 37 hours from
+            # 2026-08-17 19:35Z: zai-coding was credit-dead and nothing ever checked
+            # whether the second credentialed provider could carry the work. A dead
+            # secondary must not pause a healthy one either (the 5.7h halt on
+            # 2026-08-14) — resolve_live_provider covers both directions.
+            if self.dispatch_blocked_by_providers():
                 if not getattr(self, "_sentinel_logged", False):
-                    logger.warning("goal dispatch paused: provider-credit sentinel active")
+                    logger.warning("goal dispatch paused: every credentialed provider "
+                                   "is credit-dead")
                     self._sentinel_logged = True
                 return 0
             self._sentinel_logged = False
@@ -506,6 +536,29 @@ class GoalDispatcher:
         except asyncio.CancelledError:
             pass
 
+    @staticmethod
+    def _prior_artifacts(goal: Goal) -> list:
+        """[(name, bytes), …] this goal's earlier attempts produced and that are
+        STILL on disk unchanged.
+
+        Verified through the ledger rather than listed from it, so a retry is
+        never told to "continue from" a file the workspace cleanup removed — the
+        exact lie that made round N+1 fail on round N's evidence. Fail-open: no
+        ledger, no block, and the prompt is byte-identical to before.
+        """
+        try:
+            import os as _os
+            from core.artifacts import VERIFY_OK, get_artifact_ledger
+            ledger = get_artifact_ledger()
+            out = []
+            for art in ledger.list_for_goal(goal.user_id, goal.id):
+                if ledger.verify(art.id, goal.user_id) == VERIFY_OK:
+                    out.append((_os.path.basename(art.path), art.bytes))
+            return out
+        except Exception:
+            logger.debug("prior-artifact lookup skipped for %s", goal.id, exc_info=True)
+            return []
+
     async def _run_goal(self, goal: Goal) -> None:
         """Run one claimed goal on the task-agent core, then record + self-wake."""
         session_id = None
@@ -561,9 +614,13 @@ class GoalDispatcher:
                 logger.debug("goal start notice failed for %s", goal.id, exc_info=True)
         try:
             payload = goal.payload or {}
-            from core.runtime_config import resolve_runtime_config
-            default_provider = resolve_runtime_config(None, None)[0]
-            provider = payload.get("provider") or default_provider
+            from core.runtime_config import (resolve_default_provider,
+                                              resolve_live_provider)
+            default_provider = resolve_default_provider()[0]
+            # A goal's stored provider pin is a preference, not a death pact —
+            # same rule as a durable cron pin (cron/runner.resolve_job_provider).
+            provider = (resolve_live_provider(payload.get("provider") or default_provider)
+                        or payload.get("provider") or default_provider)
             # Autonomous runs have no interactive config to pick a model, so fill the
             # provider's default model from the registry when the goal doesn't pin one.
             # (A None model crashes session setup downstream — '.lower()' on None.)
@@ -584,7 +641,9 @@ class GoalDispatcher:
                 except Exception:
                     objective = None
             request = {
-                "task": build_goal_run_task(goal, objective, workspace_root=_deliverables_root()),
+                "task": build_goal_run_task(goal, objective,
+                                            workspace_root=_deliverables_root(),
+                                            prior_artifacts=self._prior_artifacts(goal)),
                 "provider": provider,
                 "model": model,
                 "tools": self._resolve_tools(goal),
@@ -618,6 +677,17 @@ class GoalDispatcher:
                 _g = self.board.record_failure(goal.id, error="create_session returned no id")
                 await self._maybe_escalate_blocked(_g)
                 return
+            # Attribute this run's artifacts to the goal BEFORE any exit branch, so a
+            # run that failed (out of steps, blocked, refused) keeps the evidence it
+            # really produced. 46 goals died on "ran out of steps" last week and each
+            # retry then restarted blind against a workspace whose files it could no
+            # longer attribute. Fail-open: bookkeeping never fails a finished run.
+            try:
+                from core.artifacts import get_artifact_ledger
+                get_artifact_ledger().attach_goal(goal.user_id, session_id, goal.id)
+            except Exception:
+                logger.debug("artifact goal attribution skipped for %s", goal.id,
+                             exc_info=True)
             if run.refusal:
                 # Task 10: the sentinel trip moved to error_recovery.py (the
                 # universal LLM-error path) — a credit-death refusal is already
@@ -716,7 +786,11 @@ class GoalDispatcher:
                     _ws = _resolve_workspace_dir(self.task_agent.get_orchestrator(session_id))
                 except Exception:
                     _ws = None
-                check_results = await run_acceptance_checks(checks, workspace_dir=_ws)
+                # Thread tenant + goal so an `artifact` check can resolve through
+                # the ledger rather than a workspace-relative path.
+                check_results = await run_acceptance_checks(
+                    checks, workspace_dir=_ws, user_id=goal.user_id,
+                    goal_id=goal.id, session_id=session_id)
                 if run.evidence is not None:
                     try:
                         run.evidence.checks = check_results
@@ -1193,8 +1267,8 @@ class GoalDispatcher:
             prompt = build_planner_prompt(
                 self.board, user_id, deliverables_root,
                 history_n=AutonomyConfig.goal_planner_history_n())
-            from core.runtime_config import resolve_runtime_config
-            provider = resolve_runtime_config(None, None)[0]
+            from core.runtime_config import resolve_default_provider
+            provider = resolve_default_provider()[0]
             model = None
             try:
                 from modules.llm.llm_client_registry import get_default_model
@@ -1216,7 +1290,7 @@ class GoalDispatcher:
             # ambiguity hid a 13h board-dark outage from two intel reviews.
             from core.credit_sentinel import credit_sentinel_active
             if _is_llm_provider_exhausted(final or "") or \
-                    (not final and credit_sentinel_active()):
+                    (not final and credit_sentinel_active(provider)):
                 logger.error(
                     "%s: goal planner run died on provider outage, NOT an "
                     "empty pipeline (session=%s): %s",

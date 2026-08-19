@@ -22,7 +22,8 @@ def calculate_cost_from_tokens(
     output_tokens: Optional[int] = None,
     total_tokens: Optional[int] = None,
     cached_tokens: int = 0,
-    cache_creation_tokens: int = 0
+    cache_creation_tokens: int = 0,
+    provider: Optional[str] = None
 ) -> float:
     """
     Calculate API cost from token counts using model registry.
@@ -50,11 +51,25 @@ def calculate_cost_from_tokens(
             or a caller with no cache-metrics from its provider) -- that is
             a correct default, not a dropped parameter, as long as the
             caller forwards whatever it DOES have.
+        provider: Serving provider, when the caller knows it. A flat-rate seat
+            estimates $0 — the same rule `compute_llm_cost` applies on the
+            billing path. Without it this function shows fabricated spend for a
+            subscription plan (live: `polyrob run` printed $0.0224 for a
+            zai-coding run whose ledger row correctly recorded $0.00). Omitted
+            => metered, exactly as before.
 
     Returns:
         Estimated API cost in USD
     """
     from modules.llm.model_registry import calculate_cost
+
+    if provider:
+        try:
+            from modules.llm.provider_spec import is_flat_rate
+            if is_flat_rate(provider):
+                return 0.0
+        except Exception:
+            pass  # fail-open to the metered estimate; overstating beats hiding cost
 
     if not model_name or model_name == "unknown":
         logger.debug("Cannot calculate cost: invalid model name")

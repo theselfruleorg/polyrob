@@ -18,7 +18,14 @@ from tools.defi.providers.base import ScreenVerdict
 logger = logging.getLogger(__name__)
 
 API = "https://api.gopluslabs.io/api/v1/token_security"
-CHAIN_IDS = {"base": "8453", "arbitrum": "42161", "polygon": "137", "ethereum": "1"}
+def _chain_ids():
+    """GoPlus chain ids, from the registry. A chain GoPlus does not cover has
+    no id and `screen` reports UNAVAILABLE rather than an unscreened pass."""
+    from core.wallet import chains
+    return {r.name: r.goplus_id for r in chains.all_rows() if r.goplus_id}
+
+
+CHAIN_IDS = _chain_ids()
 
 name = "goplus"
 

@@ -234,12 +234,21 @@ class MCPURLValidator:
         ipaddress.ip_network('::ffff:0:0/96'),    # IPv4-mapped IPv6
     ]
 
+    # RFC 6052 well-known NAT64 prefix: an IPv6-only/NAT64 resolver synthesizes
+    # 64:ff9b::<embedded-ipv4> for a plain IPv4 literal/hostname (e.g.
+    # 64:ff9b::5db8:d822 for 93.184.216.34). Unlike ipv4_mapped/sixtofour, the
+    # stdlib `ipaddress` module has no property for this — decode it manually
+    # so the embedded IPv4 gets evaluated against the SAME block rules (this is
+    # not a bypass: a NAT64-wrapped 10.x address must still be blocked).
+    _NAT64_PREFIX = ipaddress.ip_network('64:ff9b::/96')
+
     @staticmethod
     def _is_blocked_ip(ip_obj: "ipaddress._BaseAddress") -> bool:
         """Authoritative SSRF check by IP *property*, not a hand-maintained range list.
 
-        Unmaps IPv4-mapped IPv6 (``::ffff:a.b.c.d``) first — otherwise a v4 network
-        check silently misses it — then blocks any non-global address class
+        Unmaps IPv4-mapped IPv6 (``::ffff:a.b.c.d``) and NAT64-synthesized
+        addresses (``64:ff9b::a.b.c.d``) first — otherwise a v4 network check
+        silently misses them — then blocks any non-global address class
         (private/loopback/link-local/reserved/multicast/unspecified) plus CGNAT.
         """
         if isinstance(ip_obj, ipaddress.IPv6Address):
@@ -247,6 +256,8 @@ class MCPURLValidator:
                 ip_obj = ip_obj.ipv4_mapped
             elif getattr(ip_obj, "sixtofour", None) is not None:
                 ip_obj = ip_obj.sixtofour
+            elif ip_obj in MCPURLValidator._NAT64_PREFIX:
+                ip_obj = ipaddress.IPv4Address(ip_obj.packed[-4:])
         if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local
                 or ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
             return True

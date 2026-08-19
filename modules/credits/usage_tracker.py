@@ -290,7 +290,7 @@ class LLMUsageTracker:
             )
 
             # 3. Calculate costs (SINGLE SOURCE OF TRUTH)
-            costs = await self._calculate_costs(model, tokens)
+            costs = await self._calculate_costs(model, tokens, provider)
 
             # 4. Use the caller-supplied STABLE idempotency key when given (G-26
             # reachability fix); otherwise fall back to a fresh uuid (legacy --
@@ -386,7 +386,8 @@ class LLMUsageTracker:
             cached_tokens = min(cached_tokens, input_tokens)
         return cached_tokens
 
-    async def _calculate_costs(self, model: str, tokens: TokenUsage) -> CostBreakdown:
+    async def _calculate_costs(self, model: str, tokens: TokenUsage,
+                               provider: Optional[str] = None) -> CostBreakdown:
         """
         Calculate costs with full transparency.
 
@@ -397,12 +398,17 @@ class LLMUsageTracker:
         row); every other cost estimate in the codebase (display/telemetry)
         must never fork its own formula away from this one.
 
+        024 T0: `provider` is forwarded so a FLAT-RATE plan (Ollama Cloud, a
+        GLM Coding Plan seat) records $0 marginal API cost instead of a
+        fabricated per-token figure. The markup/credit math below is unchanged
+        -- a reseller still charges MIN_CREDIT_CHARGE per call.
+
         Then adds configurable markup for user billing (PRICING_MARKUP env var).
 
         Returns complete breakdown: API cost → markup → credits → user cost
         """
         # Calculate API cost via the single billing entry point (G-24).
-        api_cost_usd = compute_llm_cost(model, tokens)
+        api_cost_usd = compute_llm_cost(model, tokens, provider)
 
         # Convert to credits with markup
         credits_raw = (api_cost_usd / self.CREDIT_VALUE_USD) * self.MARKUP

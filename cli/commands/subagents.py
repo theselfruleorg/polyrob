@@ -18,7 +18,8 @@ from agents.task.constants import TimeoutConfig
 @click.group("subagents")
 def subagents():
     """Inspect agent delegation and subagent activity."""
-    pass
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @subagents.command("info")

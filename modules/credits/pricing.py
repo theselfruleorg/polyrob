@@ -148,7 +148,49 @@ def _usage_field(usage: Union[Mapping[str, Any], Any], *names: str, default: int
     return default
 
 
-def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any]) -> float:
+#: Models already reported as unpriced — one WARN each, not one per call.
+_UNPRICED_SEEN: set = set()
+
+
+def _warn_unpriced_once(model: str, provider: str) -> None:
+    key = f"{provider}/{model}"
+    if key in _UNPRICED_SEEN:
+        return
+    _UNPRICED_SEEN.add(key)
+    import logging
+    logging.getLogger(__name__).warning(
+        "No pricing for %s on provider %s — recording $0 marginal cost. Add it "
+        "to modules/llm/model_registry.py to bill this provider accurately.",
+        model, provider,
+    )
+
+
+def _price_is_trustworthy(model: str, provider: str) -> bool:
+    """True when the registry's price for *model* actually describes *model*.
+
+    An exact/alias hit always does. A family fallback does only when it landed
+    on the SAME vendor — the registry's last resort is a cross-vendor default,
+    and billing a Chinese open-weight endpoint at GPT-5.1 rates is worse than
+    recording nothing.
+    """
+    try:
+        from modules.llm.model_registry import get_model_config, get_model_config_exact
+        if get_model_config_exact(model) is not None:
+            return True
+        resolved = get_model_config(model)
+        if resolved is None or resolved.pricing is None:
+            return False
+        # Same-vendor fallback is a fair proxy; anything else is not.
+        from modules.llm.provider_spec import get_spec
+        spec = get_spec(provider)
+        resolved_vendor = getattr(resolved.provider, "value", str(resolved.provider))
+        return bool(spec and resolved_vendor.lower() == provider.lower())
+    except Exception:
+        return False          # fail-open to "unpriced", never to a fabricated price
+
+
+def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any],
+                     provider: Optional[str] = None) -> float:
     """Compute the real API cost (USD) for a single LLM call's token usage.
 
     THE billing-correctness entry point (G-24): always forwards BOTH
@@ -166,11 +208,36 @@ def compute_llm_cost(model: str, usage: Union[Mapping[str, Any], Any]) -> float:
             uncached call -- this is a safe default, not silent data loss,
             because 0 is exactly correct when a provider genuinely has no
             cache metrics).
+        provider: Optional provider name (024 T0). When it names a FLAT-RATE
+            plan (`ProviderSpec.subscription`), the marginal cost of this call
+            is genuinely $0 -- the seat is already paid for monthly, or billed
+            on GPU-time -- so no per-token math runs. Omitted/unknown/metered
+            providers are unaffected, so every existing caller is
+            byte-identical.
 
     Returns:
-        Total API cost in USD (see `calculate_cost` for the pricing math).
+        Total API cost in USD (see `calculate_cost` for the pricing math), or
+        0.0 for a flat-rate provider.
     """
     from modules.llm.model_registry import calculate_cost
+
+    if provider:
+        # Fail-open: any registry problem falls through to metered pricing.
+        try:
+            from modules.llm.provider_spec import is_flat_rate
+            if is_flat_rate(provider):
+                return 0.0
+        except Exception:
+            pass
+
+    if provider and not _price_is_trustworthy(model, provider):
+        # The registry's family fallback would answer with SOME model's price.
+        # Same-vendor (claude-sonnet-4-6 -> claude-sonnet-4-5) is a fair proxy;
+        # cross-vendor is fabrication — MiniMax-M2.7 resolved to gpt-5.1 and
+        # billed at $2/$8 per M. Record no marginal cost and say which model
+        # needs pricing, rather than inventing a number.
+        _warn_unpriced_once(model, provider)
+        return 0.0
 
     input_tokens = _usage_field(usage, "prompt_tokens", "input_tokens")
     output_tokens = _usage_field(usage, "completion_tokens", "output_tokens")

@@ -177,7 +177,9 @@ def effective_approval_state(user_id: Optional[str], home_dir) -> tuple:
 
 
 def _refreeze_approval_flags_for_tests() -> None:
-    """TEST-ONLY: re-snapshot from the current env. Production never calls this."""
+    """Re-snapshot from the current env. Callers: tests, and — when this module
+    was imported before env-file layering — ``core.bootstrap.load_env``'s
+    once-per-process refreeze (026 P1.1), which fires before any agent exists."""
     global _FROZEN_APPROVAL_REQUIRED_TOOLS, _FROZEN_APPROVAL_PROVIDER
     _FROZEN_APPROVAL_REQUIRED_TOOLS = _snapshot_required_tools()
     _FROZEN_APPROVAL_PROVIDER = (os.getenv("APPROVAL_PROVIDER", "auto") or "auto").strip() or "auto"
@@ -198,6 +200,8 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = (
     # the hook matches exactly, and container-tool actions register as
     # {tool_id}_{action}, so the bare `x402_request` matched nothing.
     "x402_invoice_x402_request",
+    # Browser-based X posting — outward-facing, recommend owner approval.
+    "x_browser_x_post",
     # NOTE: hf_deploy's `deploy` is deliberately NOT here. A blanket Controller
     # gate can't tell a FIRST publish (must be approved) from a redeploy of an
     # already-approved app (unattended within caps) — gating both would break the
@@ -302,6 +306,9 @@ _ALWAYS_GATED_VERBS = frozenset({
     "self_env_install_dep", "self_env_patch_source",
     "self_env_restart_service", "self_env_git_pull",
     "mcp_install", "tool_manage",
+    # Registering an X account for the agent is an identity-creating act — owner
+    # must decide, even under autonomous mode.
+    "x_browser_x_signup_start",
 })
 
 

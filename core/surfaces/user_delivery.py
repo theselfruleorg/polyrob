@@ -56,7 +56,25 @@ PRIORITY_LOW = "low"
 #: become a spam channel (proposal 020 stamps the trip time to keep genuine
 #: re-trips distinct). Quiet hours still apply — that gate DEFERS rather than
 #: drops, so the notice survives either way.
-_CRITICAL_SOURCES = frozenset({"credit_sentinel", "halt", "security"})
+# Sources whose messages the daily cap may never drop. The test is not "is this
+# important?" but "is the agent BLOCKED until the owner reads it?" — a message
+# nobody sees is a decision nobody makes, and the run waits forever.
+#
+# 2026-08-18: the approval + blocked-goal lanes were missing here, and prod paid
+# for it. Over 8 days 195 of 196 owner notices were suppressed by the daily cap;
+# six of the suppressed were `source=approval` — the owner-queue lane every money
+# verb blocks on — while 156 were `self_evolution` goal-started pings. The agent
+# then filed `Unblock goal: …` asks that also went unseen, 44 of which were still
+# open a month later. Chatter is capped; a question the agent cannot proceed
+# without is not.
+_CRITICAL_SOURCES = frozenset({
+    "credit_sentinel",
+    "halt",
+    "security",
+    "approval",          # tools/controller/approval_queue.py — owner-queue decision
+    "payment_approval",  # the same lane for a money SPEND verb
+    "goal_blocked",      # agents/task/goals/escalation.py — a stopped goal's need
+})
 
 
 def _reserved_slots() -> int:

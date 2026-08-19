@@ -3,21 +3,12 @@
 import json
 import logging
 import asyncio
-from typing import Optional, Dict, Any, Union, TYPE_CHECKING
+from typing import Optional, Dict, Any, Union
 from pathlib import Path
 from core.config import BotConfig
 from core.base_component import BaseComponent
 from agents.personality.character import Character
 from .base_prompt import BasePromptManager
-from utils.message_utils import send_long_message
-from utils.markdown_utils import escape_markdown
-
-# aiogram (Telegram SDK) is heavy (~1.3s import) and used ONLY in the Telegram-only
-# display_prompts() path. Keep it out of module load so importing this prompt system
-# (every CLI invocation / server worker boot) does not pull aiogram.
-# See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0a).
-if TYPE_CHECKING:
-    from aiogram import types
 
 
 class SystemPromptManager(BaseComponent, BasePromptManager):
@@ -361,57 +352,3 @@ Key Guidelines:
     async def integrate_character(self, prompt: str, character: Character) -> str:
         """Integrate character information into the prompt."""
         return self._integrate_character_sync(prompt, character)
-
-    async def format_prompts_display(self) -> str:
-        """Format current prompts for display with proper markdown."""
-        try:
-            if not self._initialized:
-                await self.initialize()
-            
-            sections = ["*System Prompts Management*\n\n*Current Prompts:*\n"]
-            
-            # Format main agent prompt
-            sections.append("*Main Agent:*")
-            main_prompt = self._prompts.get('chat_agent')
-            if main_prompt:
-                sections.append("```\n" + main_prompt + "\n```")
-            else:
-                sections.append("_Not set_")
-            
-            # Format simulator agent prompt
-            sections.append("\n*Simulator Agent:*")
-            sim_prompt = self._prompts.get('simulator_agent')
-            if sim_prompt:
-                sections.append("```\n" + sim_prompt + "\n```")
-            else:
-                sections.append("_Not set_")
-            
-            # Combine all sections with proper escaping
-            formatted_text = "\n".join(sections)
-            return escape_markdown(formatted_text)
-        
-        except Exception as e:
-            self.logger.error(f"Error formatting prompts display: {e}")
-            return "❌ Error formatting prompts display"
-
-    async def display_prompts(self, message: "types.Message") -> None:
-        """Display current prompts using message utils for proper formatting."""
-        from aiogram import types
-        from aiogram.enums import ParseMode
-        try:
-            formatted_text = await self.format_prompts_display()
-            
-            # Use send_long_message to handle long prompts
-            await send_long_message(
-                message=message,
-                text=formatted_text,
-                parse_mode=ParseMode.MARKDOWN_V2,
-                link_preview_options=types.LinkPreviewOptions(is_disabled=True)
-            )
-        
-        except Exception as e:
-            self.logger.error(f"Error displaying prompts: {e}")
-            await message.answer(
-                "❌ Error displaying prompts",
-                link_preview_options=types.LinkPreviewOptions(is_disabled=True)
-            )

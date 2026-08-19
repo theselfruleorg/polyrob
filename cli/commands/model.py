@@ -11,12 +11,14 @@ def model():
 
 
 @model.command("list")
-def model_list():
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit providers + usable models as JSON.")
+def model_list(as_json: bool):
     """List available models and provider API key status."""
-    asyncio.run(_model_list())
+    asyncio.run(_model_list(as_json=as_json))
 
 
-async def _model_list():
+async def _model_list(as_json: bool = False):
     from core.bootstrap import load_env, setup_project_path, setup_sqlite_compat
     setup_project_path()
     setup_sqlite_compat()
@@ -29,7 +31,7 @@ async def _model_list():
     from modules.llm.profiles import (  # P8: profiles are the declarative source
         all_profiles,
         providers_with_keys,
-        usable_providers_with_keys,
+        usable_providers_with_credentials,
     )
     from modules.llm.available_models import available_models, steer_notes
 
@@ -40,7 +42,33 @@ async def _model_list():
     # the same screen whose footer said no usable key exists.
     env = dict(os.environ)
     present = set(providers_with_keys(env))
-    usable = set(usable_providers_with_keys(env))
+    usable = set(usable_providers_with_credentials(env))
+
+    if as_json:
+        import json as _json
+        providers = []
+        for prof in all_profiles():
+            if not prof.env_key and prof.auth_type == "none":
+                status_txt = "no key needed"
+            elif prof.name in usable:
+                status_txt = "present"
+            elif prof.name in present:
+                status_txt = "malformed"
+            else:
+                status_txt = "missing"
+            providers.append({
+                "name": prof.name,
+                "status": status_txt,
+                "default_model": prof.default_model,
+                "native_tools": bool(prof.supports_native_tools),
+            })
+        models = [
+            {"provider": c.provider, "model": c.model,
+             "display_name": c.display_name, "is_default": bool(c.is_default)}
+            for c in available_models()
+        ]
+        click.echo(_json.dumps({"providers": providers, "models": models}, indent=2))
+        return
 
     click.echo(f"{'Provider':<16} {'Status':<14} {'Default Model':<24} Native")
     click.echo("-" * 68)
@@ -109,10 +137,21 @@ def model_set_default(provider: str = None, model_name: str = None):
     from modules.llm.profiles import all_profiles
 
     if not provider and not model_name:
-        from cli.ui.model_selector import run_standalone
-        picked = run_standalone()
+        import os
+
+        from cli.ui import model_selector
+        picked = model_selector.run_standalone()
         if not picked:
-            click.echo("Cancelled.")
+            # 027 WP4: with zero usable keys the picker has nothing to pick —
+            # bare "Cancelled." left the user with no next step.
+            from modules.llm.profiles import usable_providers_with_credentials
+            if not usable_providers_with_credentials(dict(os.environ)):
+                click.echo(
+                    "No usable provider key found — connect one: "
+                    "`polyrob auth add <provider>` (or `polyrob init` for "
+                    "guided setup).")
+            else:
+                click.echo("Cancelled.")
             return
         provider, model_name = picked
 

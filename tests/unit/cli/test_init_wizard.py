@@ -101,12 +101,9 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
     # Section 1 (6 providers, OpenRouter-first), Section 2 model, Section 3 toolset, Section 4 template.
     piped = "\n".join([
-        "",         # openrouter key (blank)
-        "sk-ant",   # anthropic key
-        "",         # openai key (blank)
-        "",         # gemini key (blank)
-        "",         # nvidia key (blank)
-        "",         # deepseek key (blank)
+        "anthropic",  # provider choice
+        "sk-ant",     # anthropic key
+        "n",          # connect another? no
         "",         # model (blank)
         "research", # toolset
         "research", # template
@@ -180,12 +177,9 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
     """Picking a known model at the interactive Section-2 prompt infers its provider."""
     home = _make_home(tmp_path)
     piped = "\n".join([
-        "",           # openrouter key (blank)
-        "",           # anthropic key (blank)
+        "openai",     # provider choice
         "sk-oai",     # openai key
-        "",           # gemini key (blank)
-        "",           # nvidia key (blank)
-        "",           # deepseek key (blank)
+        "n",          # connect another? no
         "gpt-5.1",    # model → owned by openai
         "",           # toolset (default)
         "",           # template (default)
@@ -307,6 +301,7 @@ def test_existing_env_preserved_on_write(tmp_path, monkeypatch):
 def test_init_writes_files_regression(tmp_path, monkeypatch):
     home = _make_home(tmp_path)
     proj = tmp_path / "proj"; proj.mkdir(exist_ok=True)
+    (proj / ".git").mkdir(exist_ok=True)  # 027 WP5: gitignore only inside a git work tree
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
     from cli.commands.init import init_cmd

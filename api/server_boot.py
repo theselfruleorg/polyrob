@@ -14,17 +14,18 @@ APP_TARGET = "api.app:get_app"
 
 
 def _load_env():
-    """Load the active env file (config/.env.<ENV> or .env)."""
-    from dotenv import load_dotenv
+    """Pre-load env files via the ONE layering SSOT (core.bootstrap.load_env).
 
-    env = os.environ.get('ENV', 'development')
-    env_file = f'config/.env.{env}'
-    if os.path.exists(env_file):
-        load_dotenv(env_file)
-        print(f"Loaded environment from {env_file}")
-    elif os.path.exists('.env'):
-        load_dotenv('.env')
-        print("Loaded environment from .env")
+    This used to be a fourth, divergent loader (ENV-only, single file
+    ``config/.env.{ENV}`` XOR root ``.env``, no CONFIG_ENV, no layering). The
+    app it launches runs ``core.bootstrap.load_env`` in its lifespan anyway,
+    so a divergent pre-load could only disagree with what the app then sees;
+    it exists at all so ``UVICORN_*``/``LOG_LEVEL`` below read file values.
+    """
+    from core.bootstrap import load_env
+
+    resolved = load_env()
+    print(f"Loaded environment (env: {resolved})")
 
 
 def run_server(host=None, port=None, workers=None, *, reload=None, log_level=None):

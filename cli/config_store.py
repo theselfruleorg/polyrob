@@ -191,11 +191,14 @@ def check_provider_model(provider: str, model: str) -> Tuple[bool, str]:
 # DeepSeek via OPENROUTER_API_KEY + model deepseek/deepseek-chat.
 # Kill-switch path (LLM_PROVIDER_REGISTRY=off) — the live list is derived from the
 # ProviderSpec registry by _key_to_provider() below.
+# Order mirrors BUILTIN_SPECS (openrouter first) so the kill-switch path
+# auto-detects the same provider the registry path would (027 rider — the old
+# anthropic-first order silently changed the pick for multi-key users).
 _KEY_TO_PROVIDER = [
+    ("OPENROUTER_API_KEY", "openrouter"),
     ("ANTHROPIC_API_KEY", "anthropic"),
     ("OPENAI_API_KEY", "openai"),
     ("GEMINI_API_KEY", "gemini"),
-    ("OPENROUTER_API_KEY", "openrouter"),
     ("NVIDIA_API_KEY", "nvidia"),
 ]
 
@@ -264,7 +267,10 @@ def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
         pinned_provider=pinned_provider,
         pinned_model=pinned_model,
         cli_store_default=get_default_model(),
-        last_resort=("gemini", None),
+        # 027 WP4: a zero-credential box resolves to nothing — callers show the
+        # no-key guidance. The old ("gemini", None) invented a provider the
+        # user never configured.
+        last_resort=(None, None),
     )
     # Preserve an explicit ``--model`` even when ``--provider`` is absent: it must
     # win over a stored/registry model for the resolved provider. AND, when no

@@ -139,7 +139,27 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
     def _obj_line(o) -> str:
         crit = (o.payload or {}).get("success_criteria")
         base = f"- id={o.id} [{o.title}] {o.body}".rstrip()
-        return base + (f"\n    success criteria: {crit}" if crit else "")
+        if crit:
+            base += f"\n    success criteria: {crit}"
+        # Show the objective's SPEND, not just its description. Without this the
+        # planner cannot tell a fresh objective from one that has already spawned
+        # 32 children over a month, so it opens the next round either way — which
+        # is how "x402 Round 9" happened. Past the cap board.create refuses the
+        # child outright, so the number here is a warning, not a surprise.
+        try:
+            budget = board._objective_budget(o)
+            if budget > 0:
+                live = len(board.children_of(user_id, o.id))
+                base += f"\n    goal budget: {live}/{budget} live"
+                if live >= budget:
+                    base += (" — SPENT. Do not open another round on this objective; "
+                             "finish or cancel its open goals, or raise an ask naming "
+                             "the decision you need from the owner.")
+                elif live >= max(1, int(budget * 0.8)):
+                    base += " — nearly spent; converge rather than broaden."
+        except Exception:
+            pass
+        return base
 
     sections.append("STANDING OBJECTIVES (active):\n" + "\n".join(
         _obj_line(o) for o in objectives))

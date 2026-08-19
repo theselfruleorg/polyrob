@@ -58,7 +58,7 @@ def test_serve_registered_on_cli_group():
     """`serve` is registered on the top-level polyrob CLI group."""
     from cli.polyrob import cli
 
-    assert "serve" in cli.commands
+    assert "serve" in cli.list_commands(None)
 
 
 def _combined_output(res):
@@ -86,7 +86,7 @@ def test_serve_gate_reachable_without_repo_root_main(monkeypatch):
 
     res = CliRunner().invoke(serve, [])
     assert res.exit_code == 1
-    assert "No API key found" in _combined_output(res), (
+    assert "No usable provider credential" in _combined_output(res), (
         f"expected the no-key refusal, got: {res.output!r} exc={res.exception!r}"
     )
 

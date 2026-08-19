@@ -57,6 +57,9 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     "web_fetch": frozenset({"high_impact"}),      # outbound fetch (SSRF / exfil)
     "email": frozenset({"high_impact"}),          # send_email — outbound comms
     "twitter": frozenset({"high_impact"}),        # post/reply/quote — outbound comms
+    # Browser-based X posting + self-registration. delegate_blocked (account
+    # creation + posting is never a leaf child's job) beyond the browser row.
+    "x_browser": frozenset({"high_impact", "delegate_blocked"}),
     "anysite": frozenset({"high_impact"}),        # outbound structured-data egress
     "perplexity": frozenset({"high_impact"}),     # outbound search egress
     # -- autonomous work ------------------------------------------------------
@@ -72,6 +75,9 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     "github": frozenset({"high_impact", "delegate_blocked"}),
     "mcp": frozenset({"high_impact", "delegate_blocked"}),   # install path + dynamic exec
     "hf_deploy": frozenset({"high_impact", "delegate_blocked"}),
+    # The ship rail. Outward-facing (a public URL), so delegate_blocked: a leaf
+    # child never decides what the world sees under the owner's domain.
+    "publish": frozenset({"high_impact", "delegate_blocked"}),
     "tool_manage": frozenset({"high_impact", "delegate_blocked"}),  # aspirational
     # -- money ---------------------------------------------------------------
     "x402_pay": frozenset({"money", "high_impact", "delegate_blocked"}),
@@ -113,6 +119,7 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "browser_manager": ("browser.control", "network.read"),
     "perplexity": ("network.read",),
     "twitter": ("network.read", "network.write", "social.post"),
+    "x_browser": ("network.write", "social.post"),
     "email": ("network.write", "email.send"),
     "collabland": ("network.read",),
     "alchemy": ("network.read",),

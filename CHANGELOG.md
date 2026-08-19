@@ -6,6 +6,480 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-08-19
+
+### Added — multi-chain DeFi
+
+- **Chain registry SSOT (`tools/defi/chains.py`)** — Ethereum and Base as
+  money-capable chains, Robinhood Chain as data-only (capability decided by
+  on-chain evidence, not vibes); the tool door checks chain capability while
+  the transaction guard keeps its own RPC pin. Per-chain portfolio views, a
+  provider-id price filter, and a registry-driven chain gate on every money
+  verb. Gas is sized from the simulation's `gasUsed` (a fixed 120k limit
+  would out-of-gas a real swap).
+
+### Fixed — first-run install & CLI UX (proposal 027, clean-room verified)
+
+- **A plain `pip install polyrob` can actually run tasks.** Module-scope
+  playwright imports sat on the task-agent import chain, so a core install
+  (no `[browser]` extra) died with a bare "Task package not available" —
+  including the wheel published on PyPI. Browser modules are now import-safe;
+  the hard failure moves to launch time with the pip remedy.
+- **The wheel ships `migrations/`** (it was omitted — two causes: missing
+  `__init__.py` and missing from `packages.find`), and the CLI container now
+  runs boot migrations, so `polyrob run` can no longer hit `no such column`
+  after an upgrade. `polyrob update`'s pip/pipx steps state the auto-migrate
+  contract instead of prescribing a command that could not work.
+- **Honest exits + actionable failures**: `polyrob run` exits 1 when the
+  session fails and prints one remedy line (auth / billing / pip extra); a
+  bad key halts on the FIRST attempt (the retry classifier's bare `"rate"`
+  substring matched "geneRATE", so every provider error retried with
+  backoff); mid-run tracebacks squelch to one line unless `--verbose`;
+  `serve`/`dashboard`/`telegram`/`whatsapp` preflight their extras BEFORE
+  side effects instead of crashing with raw tracebacks.
+- **One credential path**: a single-provider connect prompt in `polyrob init`
+  and the inline wizard (was six sequential prompts accepting fake keys
+  silently), one no-key remedy grammar everywhere (`polyrob auth add` first),
+  `config set <secret>` writes global scope by default (`--project` opts
+  out), a rejected live-probe key offers removal, OAuth seats are usable
+  after connect under local mode (`LLM_AUTH_STORE_ENABLED` local default ON),
+  zero-key resolution returns nothing instead of inventing `gemini`, and new
+  `/auth` + `/doctor` REPL slashes.
+- **Directory hygiene**: read-only commands (`doctor`, `--help`) no longer
+  write `.polyrob/logs/` into the CWD (log dirs create lazily on first
+  write); the REPL creates its session dir only after the key gate; running
+  from `$HOME` no longer mixes the data home into `~/.polyrob`; `init` writes
+  `.gitignore` only inside git work trees; telemetry defaults off.
+- **Interface**: grouped `--help` (Start here / Surfaces / … instead of 40+
+  flat rows), aliases collapse onto their canonical row, `--json` on
+  `doctor` / `model list` / `auth status`, frozen-flag INERT disagreements
+  surface in plain `doctor`, `kb export` = the knowledge-vault export.
+- **Docs truth pass**: one canonical quickstart (the pipx playwright step now
+  targets polyrob's venv), `POLYROB_LOCAL` vs `AUTONOMY_ENABLED` untangled,
+  CLI memory-backend default corrected, `polyrob auth` documented, the six
+  shipped OAuth seats acknowledged, `install.sh` adopted + history-safe.
+- **Guard rails**: new `tests/install/` clean-room suite (wheel packaging,
+  extras import matrix, exit codes, no-pollution) + a bare-venv wheel gate in
+  the release process.
+
+### Added
+
+- **Artifact ledger (`core/artifacts.py`)** — one durable row per file the agent
+  produces (producer, path, sha256, size, kind, published url), written at the
+  single filesystem write choke point and attributed to a goal by the dispatcher
+  BEFORE any exit branch, so a run that failed on `max_steps` keeps the evidence
+  it produced. `verify()` returns `ok`/`changed`/`missing`/`unknown`, which lets
+  the new `artifact` acceptance check tell "never produced" from "produced then
+  deleted". Tenant scoping is structural. New sidecar `artifacts.db`.
+- **Ship rail (`core/publish.py`, `tools/publish/`, `PUBLISH_ENABLED`, default
+  OFF)** — the agent can put a built page at a real URL: `publish` /
+  `publish_list` / `unpublish`. A FIRST publish of a NEW slug is gated by a real
+  approving provider (same resolution as `hf_deploy`, including the
+  `auto_notify`→`owner_queue` remap); the same slug then iterates unattended.
+  The approval gate is enforced by the FILESYSTEM LAYOUT — an unapproved
+  publication waits under `<PUBLISH_ROOT>/.pending/`, which is not a valid slug —
+  so the web server needs no application logic. Refused for leaf/sub-agent and
+  forged (self-wake / delegation-result) turns, confined to the session
+  workspace, credential files refused. Serving side:
+  `deployment/nginx/polyrob-publish.conf` + `scripts/setup_publish_vhost.sh`
+  (owner-run) serve `/<slug>/` statically and proxy `/api/<slug>/` to the dev
+  container's loopback port. New sidecar `publications.db`.
+- **`artifact` acceptance check** — `{"type":"artifact","name"|"id",…}` resolves
+  through the ledger instead of a workspace-relative path, so a wipe or a
+  relative-path mismatch can no longer masquerade as "never produced".
+- **Retry continuity** — the goal run task now also carries what earlier attempts
+  PRODUCED (verified against the ledger), not only what failed.
+
+- **Agent mail by default (AgentMail provider)** — the agent can now have its
+  OWN email address with one env var. `EMAIL_PROVIDER` (`auto`|`smtp`|
+  `agentmail`) selects the transport behind the unchanged `email` tool/surface:
+  with `AGENTMAIL_API_KEY` set, the agent idempotently provisions a managed
+  inbox (api.agentmail.to) on first run — no SMTP/IMAP setup — and sends/
+  receives from it (address persisted to `<data_home>/agent_mail.json`, minted
+  RFC Message-IDs + a thread map keep correspondent reply-routing exact). New
+  identity primitive `core/instance.py::resolve_agent_email` (sender identity,
+  distinct from `POLYROB_OWNER_EMAIL`); `POLYROB_AGENT_EMAIL` overrides. The
+  legacy GMAIL_* smtp path is byte-identical; receive rides a new
+  `MailFetcher` seam (`surfaces/email/fetchers.py`).
+- **X (x.com) browser rail (`tools/x_browser/`, `X_BROWSER_ENABLED`, default
+  OFF)** — the agent can register its own X account and post from it through a
+  real browser on a durable, encrypted login. New `x_browser` tool with
+  dedicated, approval-gated verbs `x_post` / `x_login_check` / `x_signup_start`
+  (`high_impact` + `delegate_blocked`; `x_post` owner-approval-gated,
+  `x_signup_start` always owner-queued). Signup is a deterministic state machine
+  that pulls the verification code from the agent's own inbox, stores a generated
+  password encrypted before typing it, writes an automation disclosure to the
+  bio, and escalates every CAPTCHA / phone check / unknown page to the owner
+  (`SignupPaused` → notice + goal-board ask; headed waits for an in-window solve,
+  headless pauses with a resume command). Browser login persistence via
+  `BrowserContextConfig.storage_state`. CLI `polyrob x-account
+  capture-session` / `status` / `signup [--resume]`. No CAPTCHA solving, no
+  anti-detection changes, one account per instance.
+
+### Changed
+
+- **Owner asks and approvals ride a lane the daily cap cannot drop.**
+  `_CRITICAL_SOURCES` now covers `approval`, `payment_approval` and
+  `goal_blocked`; `push_owner_message` takes a `source`, so a blocked-goal
+  escalation stops sharing the chatter source. Prod delivered 1 of 196 owner
+  notices in 8 days, six of the suppressed being owner APPROVAL requests.
+- **An ask closes when the goal it blocks no longer needs the owner** — new
+  `ASK_OBSOLETE` status (deliberately distinct from `fulfilled`, which claims the
+  owner acted), released by `record_success`/`cancel`.
+- **A provider pin is a preference, not a death pact** —
+  `core.runtime_config.resolve_live_provider` re-routes a durable cron pin or a
+  goal pin whose provider is credit-dead, and goal dispatch pauses only when
+  NOTHING can serve rather than when the default provider is dead.
+- **An objective may be standing, but not infinite** — `OBJECTIVE_GOAL_BUDGET`
+  (default 25 live children) refuses a further child and names the alternative;
+  the planner sees each objective's spend.
+- **A published deliverable is reported by its URL** instead of "attached" or
+  "server-only: <path>".
+- **`.env.example` and friends are writable again.** The `.env*` credential glob
+  swallowed env TEMPLATES, blocking the agent from producing a deploy package.
+  Scoped to `is_credential_file` only — `is_secret_path` (ingestion into model
+  context) still refuses them.
+
+### Fixed
+
+- **The DeFi money verbs joined the approval lane and the taint gate.** Three
+  trading verbs shipped on NO approval lane and outside the correspondent-taint
+  gate's name layer — an approval-mode deployment could reach them without the
+  owner's OK. Every money verb now rides the same approval + taint + cap
+  ladder, enforced by an end-to-end real-guard suite.
+- **Usage is billed to the SERVING provider, not the model's vendor** — a
+  Kimi model served through OpenRouter was attributed (and priced) as
+  Moonshot; and a flat-rate subscription seat no longer fabricates per-token
+  spend in the aux + display paths.
+- **The daily workspace cleanup deleted the agent's home.** Under
+  `POLYROB_PROJECT_DIR` every session's workspace IS the shared project root, so
+  `cleanup_old_workspaces` called `shutil.rmtree` on it once per old session
+  ("removed 198/202 old workspaces", 2026-08-16/17) — destroying a week of
+  artifacts and breaking the goal acceptance checks, which then failed
+  "file not found" on evidence a previous round had really written. A per-session
+  workspace stays collectable; a shared project root is not scratch.
+
+- **Provider-outage resilience wave (2026-08-16 log review)** — the 08-13..16
+  z.ai/OpenRouter double outage ground ~12k journal errors and 63 dead
+  sessions/day because quota death wore a 429 costume:
+  - `translate_llm_error` classifies plan-quota exhaustion ("limit exhausted",
+    "insufficient balance" — z.ai codes 1310/1113) as `LLMPermanentError`, not
+    a retryable rate limit.
+  - The credit sentinel matches those shapes, and a provider-stated reset time
+    ("…will reset at 2026-08-18 18:01:49") now latches until that reset
+    (`extract_reset_ts` + per-entry `release_ts`) instead of re-tripping — and
+    re-pinging the owner — every `CREDIT_SENTINEL_RELEASE_HOURS` window.
+  - `AnthropicClient._generate_with_tools` no longer retries WITHOUT tools on
+    rate-limit/billing/connection errors (only on request-shape errors): the
+    blind fallback doubled the hammering and returned zero tool_calls — the
+    "empty action list" / thinking-loop CRITICAL storms.
+  - Autonomous (goal/cron) runs release their persistent shell sandbox
+    container at run end — partial cleanup kept them alive until the next
+    restart (7 leaked `polyrob-sbx-*` containers found).
+  - `SessionStatus` gains `INITIALIZING` (247× "Invalid status value" warnings).
+  - New `scripts/vps_maint_watchdog.sh` (systemd timer): the on-VPS maintenance
+    loop is supervised — relaunched when its tmux session dies, nudged when the
+    pane stalls, owner-alerted once (without flapping) when auth-blocked.
+  - Backlog wave (2026-08-17): a session whose serving model has no vision
+    support never captures/attaches screenshots (`_resolve_session_vision` —
+    the per-call strip missed images already in history, ~1.8k wasted adapter
+    replacements); the non-tool Anthropic path converts role='tool' messages
+    to labeled `[tool result]` user text (744× "Unknown role" warns); the
+    provider-fallback exclusion list is deduped; telegram outbound targets are
+    normalized at the API boundary (`t.me/x`/bare username → `@x`; raw form
+    kept for allowlist matching) and `@…bot` recipients are refused pre-send
+    with a `target='owner'` remedy; the consecutive-failure halt no longer
+    logs a stray "NoneType: None"; `vps_maint_watchdog.sh install` also
+    installs a weekly age-filtered docker-hygiene timer.
+
+- **Telegram replies arrived unformatted, on every model (2026-08-17)** — both
+  outbound paths were incapable of rendering formatting, so the LLM only set how
+  much raw markdown syntax the owner saw:
+  - The surface path escaped EVERY MarkdownV2 reserved char one character at a
+    time and still shipped `parse_mode="MarkdownV2"`, so Telegram rendered the
+    markers literally (`**bold**` arrived as asterisks, `$0.42` as `$0\.42`).
+    The per-character call also defeated the escaper's own code-fence branch.
+  - The harness path (post-run deliver + the cron `TelegramBotSink`) sent with
+    no `parse_mode` at all — raw markdown syntax.
+  - Fix: one converter, `core/surfaces/rendering.py::markdown_to_html`
+    (markdown → the HTML subset Telegram renders), reached through
+    `TelegramSurface.send_text()` — the single seam all three paths now use. It
+    retries a chunk as the original markdown if Telegram rejects the markup, so
+    a converter edge case degrades formatting instead of dropping the message.
+    `markdown_flavor` is `"html"` (it was `"markdownv2"`, which never matched
+    `render_for_flavor`'s `"markdown_v2"`, so the shared renderer had been
+    silently skipping Telegram).
+  - Dedup: this cluster held four splitters and two escapers. Deleted
+    `utils/markdown_utils.py` + `utils/message_utils.py` (their only live
+    consumer, `SystemPromptManager.display_prompts`, was itself dead and already
+    raising `TypeError` on a wrong call signature) and
+    `harness._split_for_telegram`; `core.surfaces.surface.split_message` now
+    aliases the one `rendering.split_text`.
+
+### Added
+
+- **Context-usage audit wave (P1–P8)** — a fresh REPL session
+  on glm-5 read `ctx 43%` before the first user message; root causes fixed:
+  - The input budget caps its output reserve at `COMPLETION_RESERVE_TOKENS`
+    (default 16384; `0` = legacy full `max_completion_tokens` reserve). glm-5's
+    budget goes 61,542 → 176,230; five registry rows that clamped to the
+    1,000-token floor (reserve==window) become usable.
+  - Registry data fix for those five rows (kimi-k2, kimi-k2-0905, qwen3-coder,
+    deepseek-speciale, minimax-m2) with a ratchet test: no row may declare
+    `max_completion_tokens` ≥ 95% of its window.
+  - The ctx gauge counts what is actually sent: the environment and
+    tool-catalog foundation blocks join every sum; the emitted tool-schema list
+    (`tools` param, ~7.5K tokens on the default rig) is stamped from the step
+    loop and included behind `CTX_COUNT_TOOL_SCHEMAS` (default on); the H-MEM
+    injection is counted with the real tokenizer instead of `words*1.3`
+    (measured 0.58–0.77× real).
+  - `/context` gains environment, tool-catalog, tool-schema, and last-known
+    H-MEM rows.
+  - Anthropic-compat observability: a one-time WARN when a response has output
+    usage but no input usage (z.ai recorded `prompt_tokens: 0` silently), and
+    `provider_cache_strategy` reports `in_client` for
+    `ANTHROPIC_MESSAGES`-transport rows (they inherit the `cache_control`
+    breakpoints; previously mislabeled `none`).
+  - `rob_dev` now carries a compact `polyrob.md` (~1.1K tokens) that wins the
+    project-context precedence over the ~20K-token `AGENTS.md` auto-load.
+
+- **Flag configurability P0+P1 wave (proposal 026)** — writes take effect and
+  diagnosis stops lying:
+  - `load_env` re-freezes the import-frozen policy flags
+    (`AGENT_COMPUTE_POSTURE`, `PAYMENT_APPROVAL_MODE`,
+    `APPROVAL_TIMEOUT_SEC`/`APPROVAL_GRANT_TTL_HOURS`) exactly once per
+    process after env-file layering — `polyrob config set` for these flags
+    was a permanent silent no-op on every CLI path; a mid-session env
+    mutation still cannot move them.
+  - Every bare CLI command group (`cron`, `goals`, `tools`, `approvals`,
+    `skills`, `soul`, `subagents`, `surface`, `todos`, `pfp`, `skill`,
+    `journey`, `update`, `config`) now loads the env-file ladder via one
+    memoized seam before reading flags (shrink-only ratchet test).
+  - Surface launchers (`_surface_runner`, `gateway`) setdefault their
+    convenience flags AFTER the preflight's `load_env`, so a file-set
+    `false` wins.
+  - Enum-shaped flags (`AUTONOMY_MODE`, `AUTONOMY_POSTURE`,
+    `AGENT_COMPUTE_POSTURE`, `PAYMENT_APPROVAL_MODE`, `OUTBOUND_POLICY`,
+    `MEMORY_BACKEND`, `CODE_EXEC_BACKEND`, `TOOL_SCHEMA_ERROR_POLICY`) reject
+    typos with the valid set on all three writers + `config check`
+    (`core/config_policy/flag_enums.py` SSOT).
+  - Post-write honesty notes on every writer: project-shadows-global,
+    process-env divergence, the `AUTONOMY_MODE=autonomous` clamp echo (names
+    the missing owner-binding prerequisite at write time), and the
+    server-ladder note for remote surfaces.
+  - `doctor --flags`: import-frozen flags report the FROZEN value (a
+    differing env value is marked INERT); the 8 `AUTONOMY_MODE` capability
+    flags resolve through the mode with an honest `default(mode:…)` label;
+    the clamp header appears in the flags view; a backtick-quoted numeric
+    catalog default (`` `0` ``) no longer mis-kinds as bool.
+  - `polyrob goals create/list`, `owner invoices`, `owner sub *` warn (never
+    block) when their loop flag is off, with the config-set remedy; REPL
+    `/autonomy` errors on arguments instead of ignoring them and gains
+    mode/posture/cron/halt rows.
+- **Server project-context walk confined to the tenant workspace (P1-8)** —
+  with `PROJECT_CONTEXT_SERVER_MODE` the context-file search can no longer
+  ascend from the session workspace to a surrounding deployment git root
+  (which leaked the install's own `AGENTS.md`); the secret-path guard now
+  evaluates candidates relative to the search root so a workspace under
+  `data/…` can load its own file.
+
+- **`polyrob auth add` now connects key-based providers**, not just OAuth
+  rows: a provider row with an env key and no OAuth flow gets a guided
+  connect — signup URL and terms note shown, hidden key prompt, key written
+  to `~/.polyrob/.env` (0600), the `doctor` readiness line echoed, and an
+  optional live validation against the row's real endpoint
+  (`--validate/--no-validate`; a 401/403 warns immediately with the scoped
+  `config unset` remedy instead of surfacing at the first real run). For the
+  z.ai pair it asks WHICH plan the key belongs to and routes `ZAI_API_KEY`
+  (GLM Coding Plan seat) vs `GLM_API_KEY` (pay-as-you-go) — the same key
+  string works only on its own endpoint. `polyrob init`'s deferred-provider
+  footer and `doctor`'s "not configured" roll-up now point at the verb.
+- **`polyrob config migrate`** — explicit, one-time migration of secret keys
+  from the legacy env files (root `.env`, `config/.env.production`,
+  `config/.env.development`) into `~/.polyrob/.env`. Lists candidates by NAME
+  only (values never shown), per-key confirmation (`--all` for scripts),
+  idempotent, and it never imports flags (suffix selector + flag-value
+  filter). Replaces the retired automatic backfill below.
+- **`polyrob doctor` names the source-file tier on every env-backed
+  credential line** (`~/.polyrob/.env`, `./.polyrob/.env`, root `.env`,
+  `config/.env.*`, or `process env (overrides <file>)`), and the malformed-
+  credential remedy now carries the matching scope (`--global` for the home
+  file; "remove it from `<file>`" for tiers `config unset` does not manage).
+  A shadowed key — a bad value in a higher tier masking a working one below —
+  is now visible in one read.
+- **`polyrob config path` derives from the env-layering SSOT**: names what
+  each tier is for, lists legacy tiers only when the file exists, and calls
+  out a relic `config/.env.*` file the resolved environment does not even
+  read, with the migrate remedy.
+
+- **`polyrob config unset KEY`** — the counterpart `config set` never had:
+  removes a key from the env file (project scope by default, `--global` for
+  `~/.polyrob/.env`), with the same whitespace-normalized matching `set` uses.
+  Until now a stale or malformed credential could only be cleared by
+  hand-editing the file. When the key lives in the *other* scope, the error
+  names the exact command to run instead of a bare miss. `polyrob doctor` now
+  names this verb directly on a "present but unusable — malformed" credential
+  line.
+
+- **Subscription plans that issue an API key now ship as built-in providers**
+  (proposal 024 T0): `ollama-cloud` (Ollama Cloud, `OLLAMA_API_KEY`),
+  `zai-coding` (z.ai GLM Coding Plan, `ZAI_API_KEY`) and `cerebras`
+  (`CEREBRAS_API_KEY`). Previously a subscriber had to hand-author a
+  `providers.yaml` row to use the plan they were already paying for. The rows
+  are appended after the six original providers and are excluded from automatic
+  failover, so they cannot change which provider an existing install resolves
+  to, and they stay inert until their key is set. `polyrob init` names them
+  once instead of adding three prompts nobody without the plan can answer
+  (new per-row `prompt_in_init:`). ⚠ Declared from vendor documentation and
+  **not** live-verified against each plan (proposal 024 §8) — a wrong model id
+  or endpoint surfaces as a provider 4xx, never a wrong answer.
+  `ollama-cloud` is the **hosted** product and is deliberately distinct from a
+  local Ollama, which stays a keyless `providers.yaml` row on loopback.
+- Claude Pro/Max and ChatGPT Plus connect via the OAuth flows below
+  (`polyrob auth add anthropic-oauth` / `openai-codex`) — they issue no API
+  key, so the key-based connect does not apply to them.
+- **`polyrob config set KEY` now prompts for VALUE** instead of requiring it as
+  an argument — hidden input for a secret-shaped key, and one line read from
+  stdin when it is piped. Passing a credential as argv put it in shell history
+  and in `ps` output for the life of the process; that form still works
+  unchanged. A blank value is refused rather than written (an empty credential
+  reads as "configured" at every presence-only gate). Previously the only
+  interactive key entry lived inside the full `polyrob init` wizard, which also
+  re-asks about model, persona, autonomy and wallet — unusable on a box that is
+  already set up.
+
+- **Credential-aware provider oracles (proposal 024 L1.5)** —
+  `credential_status()`, `providers_with_credentials()` and
+  `usable_providers_with_credentials()` in `modules/llm/profiles.py`, delegating
+  to the one resolution oracle. Every surface that asks "do we have a
+  provider?" — `doctor`, `model list`, the banner, `serve`/`dashboard` gates,
+  `init`, the env backfill, the runtime resolver, the webview console — now
+  routes through them, so a store-backed credential is visible instead of being
+  reported as "missing" while it serves requests. With `LLM_AUTH_STORE_ENABLED`
+  off (the default) they return exactly what the key-only oracles returned,
+  which is what made the migration a no-op for existing installs.
+  `polyrob doctor`'s block is now "provider credentials", naming the source and
+  expiry for a connected account and saying WHY a configured provider is
+  unusable (malformed / expired / rate-limited / exhausted) instead of
+  collapsing all four to "malformed".
+
+- **OAuth connect flows + `polyrob auth` (proposal 024 L2)** — device code
+  (RFC 8628, the default; the only flow that works on a headless server) and
+  loopback PKCE (refused unless `POLYROB_LOCAL` — a server must never open a
+  redirect listener). `polyrob auth add/list/status/remove/refresh`, a
+  per-provider `refresh_skew_sec`, and refresh serialized with an identity
+  guard so a concurrent caller cannot burn a second single-use refresh token.
+  Gate `LLM_OAUTH_ENABLED`, **default OFF everywhere including local** —
+  connecting a subscription seat is a deliberate act with a terms-of-service
+  dimension, so local mode never switches it on as a side effect.
+
+  **No built-in OAuth providers ship.** Claude Pro/Max and ChatGPT Plus issue no
+  OAuth `client_id` to third-party applications; the only ids that work are the
+  ones embedded in those vendors' own CLIs, and using one would make POLYROB
+  present itself as their product. Declare an `oauth:` block in
+  `~/.polyrob/providers.yaml` with a `client_id` you are entitled to use — both
+  endpoints must be `https` and are validated exactly like `base_url`.
+- A token is never printable: `Credential.redacted()` is the only display form,
+  `FlowResult` redacts in `repr`, and OAuth error bodies are scrubbed before
+  they reach a user (an error response can echo the token that failed).
+
+### Changed
+
+- **The automatic env-key backfill is retired** (`POLYROB_ENV_KEY_BACKFILL`
+  default ON → OFF; the flag and the helper are deleted next release). It
+  silently imported dead production keys on a zero-key boot and vanished them
+  again the moment one real key was set. When the old path would have fired,
+  a one-time WARN names `polyrob config migrate`; setting the flag truthy
+  keeps the legacy behavior for this one release.
+- `python main.py` / `polyrob serve` pre-load env files through the one
+  layering SSOT (`core.bootstrap.load_env`) instead of a divergent
+  single-file read that ignored `CONFIG_ENV` and the layering order.
+
+### Fixed
+
+- **Surface-spawned sessions no longer hardcode openai/gpt-5 — every inbound
+  telegram turn died on a pinned-provider box (2026-08-14 prod outage).** A
+  telegram message spawns its session via `create_session(request=<text>)`,
+  which inherited `SessionRequest`'s bare `provider="openai"`/`model="gpt-5"`
+  literals; on a box with no OpenAI key the turn then had to survive the
+  fallback hierarchy, and with OpenRouter out of credits it found nothing —
+  voice and text turns alike failed with "no fallback providers could be
+  initialized" while the operator-pinned `zai-coding` seat sat healthy.
+  `SessionRequest` now resolves missing provider/model through the shared
+  runtime-config ladder (`resolve_session_runtime` in `core/runtime_config.py`:
+  explicit > `CHAT_PROVIDER`/`DEFAULT_PROVIDER` pin with `DEFAULT_MODEL` >
+  first keyed provider > openai/gpt-5 last resort), the same precedence
+  goals/cron dispatch and `chat_once` already use; the HTTP API and A2A
+  session paths ride the same resolution when the caller omits model/provider.
+  `TaskSessionConfig`/`LLMConfigModel` resolve the same way (a `model_validator`
+  fills provider+model as a PAIR, so pinning one side can never pair a foreign
+  model with a pinned endpoint) — the literals are gone from all four sources,
+  and `agents/task/config.py::resolve_session_provider_model` is the single
+  agents-tier resolver the other sites delegate to. A model-only caller gets
+  that model's own provider from the registry rather than the operator pin.
+- **`CHAT_MODEL` was silently dropped when resolving a session.** The pin pair
+  is now read as a unit (`CHAT_MODEL` > `DEFAULT_MODEL`, mirroring
+  `operator_provider_pin`'s `CHAT_PROVIDER` > `DEFAULT_PROVIDER`); an operator
+  who pinned `CHAT_PROVIDER`+`CHAT_MODEL` previously got the registry default
+  model for that provider instead of the model they pinned.
+- **A primary client named `openai_fallback_client` resolved to the bogus
+  provider `openai_fallback`** in the fallback walk (suffix-only `_client`
+  strip), so it had no `llm_config` entry, built no isolated client, and was
+  silently skipped. One `_provider_of()` derivation now matches the two-step
+  strip the rest of the manager uses.
+- **`get_fallback_chat_model` now tries the (operator-pinned) primary client
+  before the generic hierarchy.** A pinned subscription seat (e.g.
+  `zai-coding`) is deliberately `fallback_eligible=False`, so it never
+  appeared in `FALLBACK_HIERARCHY` — a persisted session that requested a
+  keyless provider could exhaust the hierarchy and die while the deployment's
+  actual serving client was healthy. Exclusions still apply, so the provider
+  that just failed is never retried.
+- **`faster-whisper` is declared in `requirements.txt`** (was only the
+  pyproject `voice` extra): the prod venv rebuild dropped it and telegram
+  voice notes routed as empty text until it was hand-installed. The deploy's
+  dep sync now keeps transcription installed.
+- **A provider ALIAS (`-p glm`, `DEFAULT_PROVIDER=kimi`) died as "No client
+  found for provider glm" even with a valid key set.** The CLI's known-provider
+  validation accepted spec aliases, but nothing canonicalized them to the spec
+  name the LLM manager registers clients under. `resolve_runtime_config` (the
+  one resolver both surfaces share) now canonicalizes explicit, pinned, and
+  CLI-stored providers via the new `canonicalize_provider` (name-then-alias,
+  same shadowing rule as `get_spec`); unknown names still pass through as typed
+  and error honestly at the manager.
+- Opaque OAuth tokens (`gho_`, `github_pat_`, `sbp_`-style) were neither
+  JWT-shaped nor `sk-`-prefixed, so **every** rule in the shared secret-shape
+  battery missed them and they could land verbatim in a log line or a persisted
+  transcript. Added as a shape anchored on an unbroken 24+ alphanumeric run, so
+  it cannot swallow ordinary snake_case identifiers or paths.
+- `get_spec()` matched aliases in table order, so an earlier row claiming a
+  later row's NAME as an alias silently hijacked it — shipping `zai` alongside
+  `zai-coding` (which aliased `zai`) handed an OpenAI-compatible endpoint the
+  Anthropic schema generator, which would have shipped tools it cannot parse.
+  Exact name now wins over any alias, and four whole-table invariants are
+  pinned (no alias shadows a name, no env var is claimed twice, every row
+  routes to a real schema generator matching its transport, every default_model
+  is one its row declares).
+- `BotConfig.available_providers()` only scanned the six pydantic `*_api_key`
+  fields, so it reported a `providers.yaml` row, a shipped subscription row, or
+  a store credential as absent even while the agent was running on it. It now
+  unions that scan with the credential oracle.
+- **`ProviderSpec.subscription` was declared and read by nothing** — a flat-rate
+  plan was billed per token in `usage_records` exactly as if it were metered.
+  It now drives the billing entry point (`compute_llm_cost(..., provider=)`):
+  a flat-rate provider records $0 marginal API cost, because multiplying tokens
+  by a price describes no charge the operator actually incurs. Fails open to
+  metered for an unknown provider, so the error direction can only ever
+  overstate cost. Cerebras stays metered by default (one endpoint serves both
+  Code Pro/Max and pay-per-token); a Code subscriber opts in with
+  `subscription: true`.
+- A built-in provider served by the generic transport clients got no entry in
+  `BotConfig.get_llm_config()`, so `LLMManager` skipped it at bootstrap — the
+  provider looked configured and was silently unusable. `extra_llm_config_blocks`
+  now synthesizes the block for any spec without a hand-written literal one.
+- `providers.yaml` no longer warns "transport cannot be overridden" for a row
+  that merely **restates** a built-in's own transport. Only a genuine change is
+  refused — the warning was firing on files that were exactly correct.
+
 ## [0.10.0] — 2026-08-11
 
 Two new capability surfaces — user-declared LLM providers and on-chain token

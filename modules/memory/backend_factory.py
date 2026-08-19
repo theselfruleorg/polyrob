@@ -36,8 +36,8 @@ def maybe_register_memory_backend(*, data_dir: Optional[str] = None,
     # MEMORY_BACKEND always wins, and an empty value still means "off". If apsw/sqlite-vec
     # or the embedder is unavailable the provider degrades to FTS5 keyword recall
     # (fail-safe + loud-degrade warning), so the multi-tenant server stays on sqlite.
-    from core.env import bool_env
-    default_backend = "local_vector" if bool_env("POLYROB_LOCAL", False) else "sqlite"
+    from core.config_policy.policy import local_mode_enabled, memory_backend_default
+    default_backend = memory_backend_default(local_mode_enabled())
     backend = os.getenv("MEMORY_BACKEND", default_backend).strip().lower()
     if backend not in ("sqlite", "local_vector"):
         return None

@@ -12,6 +12,8 @@ from core.tool_catalog import build_tool_catalog, find_tool, permission_catalog
 @click.group("tools")
 def tools():
     """Inspect tool catalog, status, and permissions."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @tools.command("list")

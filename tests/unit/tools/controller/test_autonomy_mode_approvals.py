@@ -150,6 +150,7 @@ def test_always_gated_verbs_membership():
         "self_env_install_dep", "self_env_patch_source",
         "self_env_restart_service", "self_env_git_pull",
         "mcp_install", "tool_manage",
+        "x_browser_x_signup_start",
     })
 
 

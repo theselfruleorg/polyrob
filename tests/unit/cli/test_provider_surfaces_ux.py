@@ -13,7 +13,11 @@ import pytest
 from click.testing import CliRunner
 
 
-OLLAMA_ZAI_YAML = textwrap.dedent("""\
+# Two genuinely USER-DECLARED rows: one keyless, one keyed. Neither name may
+# collide with a shipped built-in — `zai-coding` used to sit here and became a
+# built-in in 024 T0, which silently turned these rows into built-in overrides
+# and changed what the tests were measuring.
+OLLAMA_GATEWAY_YAML = textwrap.dedent("""\
     providers:
       ollama:
         base_url: http://127.0.0.1:11434/v1
@@ -21,10 +25,10 @@ OLLAMA_ZAI_YAML = textwrap.dedent("""\
         transport: chat_completions
         default_model: qwen3-coder:30b
         models: [qwen3-coder:30b]
-      zai-coding:
-        base_url: https://api.z.ai/api/anthropic
+      mygateway:
+        base_url: https://gateway.example.internal/anthropic
         auth_type: api_key
-        env_key: ZAI_API_KEY
+        env_key: MYGATEWAY_API_KEY
         transport: anthropic_messages
         models: [glm-5]
         default_model: glm-5
@@ -34,7 +38,7 @@ OLLAMA_ZAI_YAML = textwrap.dedent("""\
 @pytest.fixture
 def user_providers(tmp_path, monkeypatch):
     path = tmp_path / "providers.yaml"
-    path.write_text(OLLAMA_ZAI_YAML)
+    path.write_text(OLLAMA_GATEWAY_YAML)
     monkeypatch.setenv("LLM_CUSTOM_PROVIDERS", str(path))
     monkeypatch.setenv("LLM_PROVIDER_REGISTRY", "true")
     from modules.llm.provider_spec import reset_provider_registry_cache
@@ -47,7 +51,8 @@ def user_providers(tmp_path, monkeypatch):
 def no_builtin_keys(monkeypatch):
     for k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
               "OPENROUTER_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY",
-              "ZAI_API_KEY"):
+              "MYGATEWAY_API_KEY", "OLLAMA_API_KEY", "ZAI_API_KEY",
+              "CEREBRAS_API_KEY"):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -62,16 +67,16 @@ def _run_model_list(monkeypatch):
 
 
 def test_model_list_keyed_user_provider_shows_present(user_providers, no_builtin_keys, monkeypatch):
-    monkeypatch.setenv("ZAI_API_KEY", "zk-0123456789abcdef0123456789")
+    monkeypatch.setenv("MYGATEWAY_API_KEY", "gk-0123456789abcdef0123456789")
     out = _run_model_list(monkeypatch)
-    row = next(l for l in out.splitlines() if l.startswith("zai-coding"))
+    row = next(l for l in out.splitlines() if l.startswith("mygateway"))
     assert "present" in row
     assert "no key" not in row
 
 
 def test_model_list_keyless_row_says_no_key_needed(user_providers, no_builtin_keys, monkeypatch):
     out = _run_model_list(monkeypatch)
-    row = next(l for l in out.splitlines() if l.startswith("ollama"))
+    row = next(l for l in out.splitlines() if l.split()[:1] == ["ollama"])
     assert "no key needed" in row
     # the footer must not deny the usable keyless provider (the model join
     # doesn't list user providers until L1.5 — say that, not "no usable key")
@@ -157,15 +162,25 @@ def test_doctor_zero_keys_resolved_line_is_honest(monkeypatch, no_builtin_keys):
 
 def test_init_key_prompts_skip_keyless_rows(user_providers, monkeypatch):
     prompts = []
+    # Connect the keyed user row, then try the keyless one (unknown -> refused),
+    # then stop. 027 WP4 dialog: choice -> key -> "connect another?".
+    answers = iter(["mygateway", "k" * 24, "ollama", "skip"])
 
     def fake_prompt(text, **kwargs):
         prompts.append(text)
-        return ""
+        return next(answers, "skip")
 
     monkeypatch.setattr("click.prompt", fake_prompt)
+    monkeypatch.setattr("click.confirm", lambda *a, **k: True)
     from cli.commands.init import _prompt_provider_keys
-    _prompt_provider_keys({})
+    collected = {}
+    _prompt_provider_keys(collected)
+    assert "MYGATEWAY_API_KEY" in collected   # keyed user row IS connectable
     joined = "\n".join(prompts)
-    assert "ZAI_API_KEY" not in joined  # sanity: prompts are display-name-led
-    assert "zai-coding" in joined       # keyed user row IS prompted
-    assert "ollama" not in joined       # keyless row is NOT
+    assert "MYGATEWAY_API_KEY" not in joined  # sanity: prompts are display-name-led
+    assert "mygateway" in joined              # keyed user row IS prompted
+    assert "ollama" not in joined             # keyless row is NOT
+    # 024 T0: shipped subscription rows are NAMED, never prompted for — every
+    # extra prompt shifts this position-sensitive wizard section.
+    assert "Ollama Cloud" not in joined
+    assert "Cerebras" not in joined

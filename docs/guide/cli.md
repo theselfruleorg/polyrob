@@ -10,8 +10,22 @@ The `polyrob` command-line interface is the primary way to interact with polyrob
 polyrob [command] [args] [flags]
 ```
 
-Running `polyrob` with no arguments opens the interactive REPL. Add `--plain` to
-force plain, line-oriented output (no ANSI / toolbar).
+Running `polyrob` with no arguments opens the interactive REPL. Root options
+(they apply to the bare-`polyrob` REPL session):
+
+| Flag | Meaning |
+|------|---------|
+| `--plain` | Force plain, line-oriented output (no ANSI / toolbar) |
+| `--project PATH` | Persistent project workspace — the agent reads/writes here across sessions (sets `POLYROB_PROJECT_DIR`) |
+| `-m, --model` / `-p, --provider` | Model/provider for this REPL session (parity with `polyrob run`) |
+| `--toolset NAME` | Named toolset for this REPL session |
+| `-V, --version` | Print the version and exit |
+
+`polyrob chat` is the same REPL as bare `polyrob` and takes the same
+`--model/--provider/--toolset` options. `polyrob --help` groups the full
+command list (Start here / Surfaces / Autonomy & work / Money / Inspect &
+admin); `sessions`, `models` and `webgate` are aliases of `session`, `model`
+and `dashboard`.
 
 ---
 
@@ -51,7 +65,7 @@ the two.
 | `--model`, `-m` | Model name (e.g. `gpt-5`, `gemini-2.5-flash`) |
 | `--provider`, `-p` | Provider: `openai`, `anthropic`, `gemini`, `openrouter`, `nvidia`, or any provider you declared in `~/.polyrob/providers.yaml` (e.g. `-p ollama`). (DeepSeek isn't a direct `-p` value — use `-p openrouter -m deepseek/deepseek-chat`.) |
 | `--tools`, `-t` | Comma-separated tool list (e.g. `browser,mcp,filesystem`); takes precedence over `--toolset` |
-| `--toolset` | Named toolset: `minimal`, `default`, `research`, `coding`, `development`, `browser`, `full`, `safe` |
+| `--toolset` | Named toolset: `minimal`, `safe`, `default`, `research`, `trading_research`, `coding`, `development`, `browser`, `social`, `full`, `earn`, `owner_interactive` |
 | `--max-steps` | Maximum steps (default: 50) |
 | `--plain` | Force plain output (no ANSI / panels) |
 | `--verbose`, `-v` | Show debug logging |
@@ -91,8 +105,30 @@ Diagnose your setup — checks for provider keys, optional dependencies (Playwri
 vector memory), and common misconfigurations.
 
 ```bash
-polyrob doctor
+polyrob doctor           # human-readable report
+polyrob doctor --json    # machine-readable ({"report": [lines]})
+polyrob doctor --flags   # every env flag with resolved value + source
 ```
+
+---
+
+### `polyrob auth`
+
+Connect and inspect LLM provider credentials — the recommended door for keys
+and subscription seats. `auth add` shows the signup URL, prompts for the key
+out of your shell history, validates the paste, and offers a live check.
+
+```bash
+polyrob auth add <provider>   # connect a key or OAuth seat (openrouter, anthropic,
+                              # anthropic-oauth, github-copilot, ... — see `polyrob model list`)
+polyrob auth status           # every provider's credential: source, health, expiry
+polyrob auth status --json    # machine-readable
+polyrob auth list             # OAuth/connected seats in ~/.polyrob/auth.json
+polyrob auth remove <provider> / auth refresh <provider>
+```
+
+OAuth seats need `LLM_OAUTH_ENABLED=true` to run a connect flow (deliberate —
+ToS dimension). In the REPL, `/auth` shows the same status view.
 
 ---
 
@@ -104,6 +140,8 @@ View or edit the current configuration (merged from `~/.polyrob/.env` and
 ```bash
 polyrob config show           # print the merged config, secrets redacted
 polyrob config set KEY VALUE  # set a config value (--global writes ~/.polyrob/.env)
+polyrob config set KEY        # omit VALUE to be prompted (hidden for secrets —
+                              # keeps credentials out of shell history)
 polyrob config path           # show config file locations
 ```
 
@@ -275,6 +313,7 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 | `polyrob knowledge` | `export` the notes/episodes/skills/identity/goals knowledge vault (Obsidian-compatible) |
 | `polyrob datagen` | Synthetic dataset generation: `run`, `export` (trajectory corpus) |
 | `polyrob pfp` | Avatar/profile picture: `show`, `generate`, `pick`, `push`, `studio` |
+| `polyrob soul` | Author the instance identity (SOUL docs — operator-only): `init` |
 
 ---
 

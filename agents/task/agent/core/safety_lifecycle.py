@@ -18,7 +18,10 @@ class SafetyLifecycleMixin:
     def _too_many_failures(self) -> bool:
         """Check if we should stop due to too many failures"""
         if self.state.consecutive_failures >= self.max_failures:
-            self.logger.error(f'❌ Stopping due to {self.max_failures} consecutive failures', exc_info=True)
+            # No exc_info: this check runs OUTSIDE any except block, so
+            # exc_info=True printed a literal "NoneType: None" after every
+            # halt line in the journal.
+            self.logger.error(f'❌ Stopping due to {self.max_failures} consecutive failures')
             return True
         return False
 

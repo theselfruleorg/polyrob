@@ -204,9 +204,12 @@ def _version() -> str:
 def _provider_model():
     try:
         from cli.config_store import resolve_provider_model
-        from modules.llm.profiles import PROFILES, providers_with_keys
-        present = set(providers_with_keys(dict(os.environ)))
-        keys = {p.env_key for p in PROFILES.values() if p.name in present}
+        from modules.llm.profiles import PROFILES, providers_with_credentials
+        # 024 L1.5: the credential oracle, not the key-only one — otherwise the
+        # console reports "no provider" for a box running on a connected
+        # account or a providers.yaml row.
+        present = set(providers_with_credentials(dict(os.environ)))
+        keys = {p.env_key for p in PROFILES.values() if p.name in present and p.env_key}
         return resolve_provider_model(None, None, available_keys=keys)
     except Exception:
         return (None, None)

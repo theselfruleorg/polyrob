@@ -10,8 +10,8 @@ from click.testing import CliRunner
 def test_sessions_command_group_exists():
     """Test that the sessions command group is registered."""
     from cli.polyrob import cli
-    assert "sessions" in cli.commands
-    assert "session" in cli.commands
+    assert "sessions" in cli.list_commands(None)
+    assert "session" in cli.list_commands(None)
 
 
 def test_sessions_list_has_json_flag():

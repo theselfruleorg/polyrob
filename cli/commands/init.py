@@ -33,22 +33,46 @@ from cli.config_store import migrate_to_dotenv
 
 
 def _prompt_provider_keys(collected_keys: dict) -> None:
-    """Prompt for each provider key in PROFILES order (OpenRouter first); populate
-    ``collected_keys`` in place. Shared by ``polyrob init`` and ``run_quick_key_setup``
-    so there is ONE prompt implementation (identical order/count)."""
-    from modules.llm.profiles import all_profiles
+    """One provider choice + one validated key prompt, looping on "connect
+    another" (027 WP4 — the old flow prompted for SIX keys in a row with zero
+    feedback on what was pasted). Shared by ``polyrob init`` and
+    ``run_quick_key_setup`` so there is ONE prompt implementation."""
+    import os as _os
+
+    from modules.llm.profiles import all_profiles, credential_status
+
+    onboardable = []
+    deferred = []
     for profile in all_profiles():  # PROFILES order → OpenRouter first
         if not profile.env_key:
             # keyless-by-design (auth_type:none providers.yaml row) — there is
-            # no env key to prompt for; a non-blank answer would be stored
-            # under "" and written as a garbage env line.
+            # no env key to prompt for.
             continue
-        if profile.env_key in collected_keys:
+        if not profile.prompt_in_init:
+            # Opt-in subscription plans (Ollama Cloud, z.ai GLM Coding Plan,
+            # Cerebras — 024 T0) are NAMED once below instead of prompted for.
+            deferred.append(profile)
+            continue
+        onboardable.append(profile)
+    by_name = {p.name: p for p in onboardable}
+    names = ", ".join(p.name for p in onboardable)
+
+    click.echo(f"Providers: {names}")
+    while True:
+        choice = click.prompt(
+            "Provider to connect ('skip' for none)", default="openrouter"
+        ).strip().lower()
+        if choice in ("skip", "none", "no", "-", ""):
+            break
+        profile = by_name.get(choice)
+        if profile is None:
+            click.echo(
+                f"  unknown provider '{choice}' — one of: {names} "
+                "(the full list: `polyrob auth add <name>`)")
             continue
         hint = f" ({profile.signup_url})" if profile.signup_url else ""
-        # O4 (2026-07-14 review): a non-initializable provider (e.g. DeepSeek)
-        # can't bootstrap the agent alone — say so AT the prompt, not after the
-        # user hits "No API key found" on their first run.
+        # O4: a non-initializable provider (e.g. DeepSeek) can't bootstrap the
+        # agent alone — say so AT the prompt.
         if not profile.initializable:
             hint += " — can't bootstrap alone; pair with another provider (e.g. OpenRouter)"
         entered = click.prompt(
@@ -56,6 +80,35 @@ def _prompt_provider_keys(collected_keys: dict) -> None:
             default="", show_default=False)
         if entered:
             collected_keys[profile.env_key] = entered
+            # auth-add-style feedback: say NOW when a paste is malformed, not
+            # at the first real run.
+            try:
+                env = dict(_os.environ)
+                env[profile.env_key] = entered
+                st = credential_status(env).get(profile.name)
+                if st is not None and not st.usable:
+                    click.echo(f"  doctor: {profile.name}: present but unusable — {st.reason}")
+                elif st is not None:
+                    click.echo(f"  doctor: {profile.name}: present")
+            except Exception:
+                pass
+        if not click.confirm("Connect another provider?", default=False):
+            break
+
+    if deferred:
+        # Name a few, count the rest. Listing all of them was ~780 characters
+        # of provider names in the middle of a first-run wizard.
+        subs = [p for p in deferred if p.subscription][:3]
+        sample = ", ".join(p.display_name for p in (subs or deferred[:3]))
+        click.echo(
+            f"\n{len(deferred)} more providers are available (subscription plans "
+            f"like {sample}, gateways, regional endpoints)."
+        )
+        click.echo(
+            "  `polyrob model list` to see them; `polyrob auth add <provider>` to "
+            "connect one (subscription key plans included — it shows the signup "
+            "URL and prompts for the key, out of your shell history)."
+        )
 
 
 def run_quick_key_setup() -> bool:
@@ -69,7 +122,7 @@ def run_quick_key_setup() -> bool:
     import os as _os
 
     import core.paths as _core_paths
-    from modules.llm.profiles import usable_providers_with_keys
+    from modules.llm.profiles import usable_providers_with_credentials
 
     click.echo("\n=== Set up an LLM provider key ===")
     click.echo("Recommended: OpenRouter — one key, access to every model, auto-failover.")
@@ -88,7 +141,7 @@ def run_quick_key_setup() -> bool:
         except OSError as exc:
             click.echo(f"Warning: could not write key file: {exc}", err=True)
 
-    ok = bool(usable_providers_with_keys(dict(_os.environ)))
+    ok = bool(usable_providers_with_credentials(dict(_os.environ)))
     if ok and collected:
         from cli.keys import _can_prompt
         if _can_prompt() and click.confirm(
@@ -178,7 +231,7 @@ def init_cmd(
     # persona: template provides it; no explicit flag for persona
     effective_persona = template.name if template else None
 
-    from modules.llm.profiles import usable_providers_with_keys
+    from modules.llm.profiles import usable_providers_with_credentials
 
     # Pre-fill collected_keys from explicit flags (back-compat for --anthropic-key/--openai-key).
     collected_keys: dict[str, str] = {}
@@ -369,8 +422,10 @@ def init_cmd(
     sessions = Path.cwd() / ".polyrob" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
 
+    # 027 WP5: only inside a git work tree — `polyrob init` in ~/Documents used
+    # to leave a spurious .gitignore behind.
     from cli.gitignore import ensure_polyrob_gitignored
-    ensure_polyrob_gitignored(Path.cwd(), require_git_repo=False)
+    ensure_polyrob_gitignored(Path.cwd(), require_git_repo=True)
 
     click.echo(f"Initialized POLYROB. Global config: {home_env}")
     click.echo(f"Project sessions: {sessions}")
@@ -393,7 +448,7 @@ def init_cmd(
                     merged_env.setdefault(k.strip(), v.strip())
         except OSError:
             pass
-    if not usable_providers_with_keys(env=merged_env):
+    if not usable_providers_with_credentials(env=merged_env):
         click.echo("⚠ No usable LLM API key set — add one with "
                    "`polyrob config set OPENROUTER_API_KEY <key> --global` "
                    "(for DeepSeek models use OPENROUTER_API_KEY + model deepseek/deepseek-chat)")

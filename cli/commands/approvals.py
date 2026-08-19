@@ -35,6 +35,8 @@ def _default_home_dir() -> str:
 @click.group("approvals")
 def approvals():
     """View/manage the approval-gated action set (list|add|remove)."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @approvals.command("list")

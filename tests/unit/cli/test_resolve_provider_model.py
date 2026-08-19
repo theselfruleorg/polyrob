@@ -34,10 +34,12 @@ def test_falls_back_to_provider_with_present_key_not_gemini(monkeypatch):
     assert provider == "anthropic"
 
 
-def test_last_resort_is_gemini_when_no_keys(monkeypatch):
+def test_last_resort_is_none_when_no_keys(monkeypatch):
+    # 027 WP4: a zero-credential box resolves to nothing (callers show the
+    # no-key guidance) — never a provider the user did not configure.
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
     provider, model = cs.resolve_provider_model(None, None, available_keys=set())
-    assert provider == "gemini"
+    assert provider is None and model is None
 
 
 def test_nvidia_key_autodetected(monkeypatch):
@@ -87,10 +89,10 @@ def test_keyed_stored_default_still_wins_over_first_key(monkeypatch):
 
 def test_deepseek_key_does_not_autoresolve(monkeypatch):
     # A DEEPSEEK_API_KEY alone must NOT auto-resolve to provider=deepseek (disabled
-    # direct client → would hard-crash the manager). Falls to the gemini last resort.
+    # direct client → would hard-crash the manager). Falls to the none last resort.
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
     provider, _ = cs.resolve_provider_model(None, None, available_keys={"DEEPSEEK_API_KEY"})
-    assert provider == "gemini"
+    assert provider is None
 
 
 def test_default_provider_env_pins_resolution(monkeypatch):

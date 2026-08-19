@@ -35,11 +35,16 @@ logger = logging.getLogger(__name__)
 
 # Flags snapshotted at import for security (core/config_policy/policy.py WS-7 /
 # compute-posture; tools/controller/approval.py). A file write configures the
-# NEXT process; the RUNNING one never re-reads them.
+# NEXT process; the RUNNING one never re-reads them. Since 026 P1.1 the next
+# start DOES read them from the .polyrob/.env ladder (load_env re-freezes once
+# after file layering), so "takes effect on the next start" is finally true.
+# NOTE: these are the real ENV VAR names — the timeout flag is
+# APPROVAL_TIMEOUT_SEC (shared with the generic approval seam); the old
+# "PAYMENT_APPROVAL_TIMEOUT_SEC" row was a phantom that matched nothing.
 _IMPORT_FROZEN_FLAGS = frozenset({
     "AGENT_COMPUTE_POSTURE",
     "PAYMENT_APPROVAL_MODE",
-    "PAYMENT_APPROVAL_TIMEOUT_SEC",
+    "APPROVAL_TIMEOUT_SEC",
     "APPROVAL_GRANT_TTL_HOURS",
     "APPROVAL_REQUIRED_TOOLS",
     "APPROVAL_PROVIDER",
@@ -307,7 +312,7 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
         return _set_pref(key, value, user_id, home_dir, confirm)
     from core.flags import REGISTRY, pattern_flag_for
     if key in REGISTRY or pattern_flag_for(key) is not None:
-        return _set_flag(key, value, scope or "project")
+        return _set_flag(key, value, scope or "project", surface=surface)
     return SetResult(False, "refused",
                      f"unknown key: {key} — not a documented flag or preference")
 
@@ -335,7 +340,7 @@ def _set_pref(key: str, value, user_id, home_dir, confirm: bool) -> SetResult:
                      store=str(path), applies=spec.applies)
 
 
-def _set_flag(key: str, value: str, scope: str) -> SetResult:
+def _set_flag(key: str, value: str, scope: str, *, surface: str = "local") -> SetResult:
     from core.flags import REGISTRY, is_secret_flag, pattern_flag_for
     from core.prefs import shape_of_default, value_matches_shape
     flag = REGISTRY.get(key) or pattern_flag_for(key)
@@ -346,6 +351,12 @@ def _set_flag(key: str, value: str, scope: str) -> SetResult:
         return SetResult(False, "refused",
                          f"'{key}' is an env flag — scope must be project or global")
     if not is_secret_flag(key):
+        # 026 P1.4: enum-shaped flags reject invalid members with the valid set
+        # (a typo'd AUTONOMY_MODE used to write cleanly and silently degrade).
+        from core.config_policy.flag_enums import enum_error
+        enum_err = enum_error(key, value)
+        if enum_err:
+            return SetResult(False, "invalid", enum_err)
         shape = shape_of_default(flag.default_doc)
         if not value_matches_shape(value, shape):
             return SetResult(
@@ -370,9 +381,10 @@ def _set_flag(key: str, value: str, scope: str) -> SetResult:
         note = (" — this value is frozen at import: the running process never "
                 "re-reads it; it takes effect on the next start")
     display = "(set, masked)" if is_secret_flag(key) else str(value)
-    return SetResult(True, "written",
-                     f"set {key}={display} in {path} (takes effect: restart){note}",
-                     store=str(path), applies=applies)
+    message = f"set {key}={display} in {path} (takes effect: restart){note}"
+    for extra in post_write_notes(key, str(value), scope, surface=surface):
+        message += "\n" + extra
+    return SetResult(True, "written", message, store=str(path), applies=applies)
 
 
 def _env_path(scope: str) -> Path:
@@ -380,3 +392,68 @@ def _env_path(scope: str) -> Path:
     if scope == "global":
         return polyrob_home() / ".env"
     return Path.cwd() / ".polyrob" / ".env"
+
+
+def post_write_notes(key: str, value: str, scope: str, *,
+                     surface: str = "local") -> list:
+    """Honesty notes for a just-written flag (026 P0.6 / P1.5 / P1.6).
+
+    ONE builder every writer calls (`set_value`, `polyrob config set`, REPL
+    `/config set`), so the shadow/clamp/server stories cannot diverge:
+      - P0.6 scope shadowing: a global write that the project file outranks;
+        a process-env value that differs from the effective file value.
+      - P1.6 clamp echo: AUTONOMY_MODE=autonomous evaluates the would-be
+        single-owner clamp NOW and names the missing prerequisite.
+      - P1.5 server honesty: a remote surface (webview/telegram) whose serving
+        process reads the server env ladder is told the .polyrob write applies
+        to CLI runs only.
+    Never raises; returns [] on any resolution error.
+    """
+    notes: list = []
+    try:
+        from core.env_file import read_env_file
+        project_path = _env_path("project")
+        global_path = _env_path("global")
+        proj_vals = read_env_file(project_path)
+        glob_vals = read_env_file(global_path)
+        if scope == "global" and key in proj_vals \
+                and str(proj_vals[key]) != str(value):
+            notes.append(
+                f"note: shadowed by {project_path} — {key} is set there and "
+                f"project beats global; this write has no effect until you run "
+                f"`polyrob config unset {key}`")
+        effective_file = proj_vals.get(key, glob_vals.get(key))
+        env_raw = os.environ.get(key)
+        if (env_raw is not None and str(env_raw).strip() != ""
+                and effective_file is not None
+                and str(env_raw) != str(effective_file)):
+            notes.append(
+                f"note: this process started with {key}={_mask(key, env_raw)}; "
+                "a shell/systemd-exported value wins over every file at the "
+                "next start — if it is exported there, change it there too")
+    except Exception:
+        logger.debug("post_write_notes shadow check failed", exc_info=True)
+    if key == "AUTONOMY_MODE" and str(value).strip().lower() == "autonomous":
+        try:
+            from core.config_policy.policy import full_autonomy_clamp_reason
+            reason = full_autonomy_clamp_reason()
+            if reason:
+                notes.append(
+                    f"note: autonomous will CLAMP to supervised — {reason}. "
+                    "Bind an owner (set POLYROB_OWNER_USER_ID, or run `polyrob "
+                    "init`) and ensure POLYROB_LOCAL=1, then restart")
+            else:
+                notes.append("autonomy mode after restart: autonomous (effective)")
+        except Exception:
+            logger.debug("post_write_notes clamp echo failed", exc_info=True)
+    if surface != "local":
+        try:
+            from core.config_policy.policy import local_mode_enabled
+            if not local_mode_enabled():
+                notes.append(
+                    "note: this serving process reads the server env ladder "
+                    "(config/.env.* / systemd EnvironmentFile), not "
+                    ".polyrob/.env — the write applies to CLI runs only")
+        except Exception:
+            logger.debug("post_write_notes server-ladder check failed", exc_info=True)
+    return notes

@@ -908,7 +908,10 @@ class ModelRegistry:
             name="deepseek-speciale",
             provider=ModelProvider.DEEPSEEK,
             context_window=128000,  # 128K context
-            max_completion_tokens=128000,  # 128K output!
+            # Not in the models.dev oracle; aligned with the deepseek-reasoner
+            # sibling (64K out / 128K ctx). reserve==window clamped the input
+            # budget to the 1,000-token floor (2026-08-15 audit P6).
+            max_completion_tokens=64000,
             pricing=ModelPricing(
                 input_price=0.28,
                 cached_input_price=0.028,
@@ -1250,7 +1253,7 @@ class ModelRegistry:
             name="moonshotai/kimi-k2-0905",
             provider=ModelProvider.OPENROUTER,
             context_window=262144,  # 262K tokens - verified (extended)
-            max_completion_tokens=262144,  # Can match context - verified
+            max_completion_tokens=100352,  # models.dev openrouter limit.output (2026-08-15)
             pricing=ModelPricing(input_price=0.39, output_price=1.90),
             capabilities=ModelCapabilities(
                 supports_vision=False,  # TEXT-ONLY - no image support
@@ -1268,7 +1271,7 @@ class ModelRegistry:
             name="moonshotai/kimi-k2",
             provider=ModelProvider.OPENROUTER,
             context_window=131072,  # 131K tokens - verified
-            max_completion_tokens=131072,  # Can match context
+            max_completion_tokens=100352,  # models.dev openrouter limit.output (2026-08-15)
             pricing=ModelPricing(input_price=0.456, output_price=1.84),
             capabilities=ModelCapabilities(
                 supports_vision=False,  # TEXT-ONLY - no image support
@@ -1372,7 +1375,7 @@ class ModelRegistry:
             name="qwen/qwen3-coder",
             provider=ModelProvider.OPENROUTER,
             context_window=262144,  # 262K tokens - verified
-            max_completion_tokens=262144,  # Can match context
+            max_completion_tokens=65536,  # models.dev openrouter limit.output (2026-08-15)
             pricing=ModelPricing(input_price=0.22, output_price=0.95),  # Higher above 128k
             capabilities=ModelCapabilities(
                 supports_vision=False,  # TEXT-ONLY - no image support
@@ -1523,7 +1526,7 @@ class ModelRegistry:
             name="minimax/minimax-m2",
             provider=ModelProvider.OPENROUTER,
             context_window=204800,
-            max_completion_tokens=196608,
+            max_completion_tokens=131072,  # models.dev openrouter limit.output (2026-08-15)
             pricing=ModelPricing(input_price=0.255, cached_input_price=0.03, output_price=1.0),
             capabilities=ModelCapabilities(
                 supports_vision=False, supports_function_calling=True,
@@ -1983,6 +1986,19 @@ def get_all_models(provider: Optional[ModelProvider] = None,
     """
     registry = get_registry()
     return registry.list_models(provider, include_deprecated)
+
+
+def get_model_config_exact(model_name: str):
+    """Model config by exact name or declared alias — NO family fallback.
+
+    ``get_model_config`` falls back by family and ultimately to a default, which
+    is right for capability questions (context window, max_tokens: a sane
+    default beats nothing) and WRONG for billing: it silently answers "what does
+    MiniMax-M2.7 cost" with GPT-5.1's price. Billing uses this instead.
+    """
+    registry = get_registry()
+    canonical = registry._aliases.get(model_name, model_name)
+    return registry._models.get(canonical)
 
 
 def calculate_cost(model_name: str, input_tokens: int, output_tokens: int,

@@ -34,6 +34,10 @@ def resolve_telegram_token(token_opt: Optional[str]) -> str:
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
 def telegram(token: Optional[str], verbose: bool):
     """Run the agent as a Telegram bot (local long-polling)."""
+    # 027 WP3: aiogram lives in the [telegram] extra — fail here in one line,
+    # not with a raw traceback after the container build + surface-bus install.
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("telegram")
     asyncio.run(_run_telegram(token, verbose))
 
 

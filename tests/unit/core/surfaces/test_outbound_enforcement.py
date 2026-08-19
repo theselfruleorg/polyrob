@@ -275,7 +275,10 @@ def test_allowlist_policy_first_contact_allowlisted_no_open_report(monkeypatch):
 
     assert res["success"] is True
     assert res["tier"] == "allowlisted"
-    assert router.sent == [("telegram", "friend", "hello")]
+    # 2026-08-17: the API call carries the normalized '@' form — a bare
+    # username is a guaranteed "chat not found" against the real Bot API.
+    # Allowlist matching above still used the raw "friend" (tier proves it).
+    assert router.sent == [("telegram", "@friend", "hello")]
     assert convo.get("rob", "telegram", "friend") is not None, \
         "the outbound must be recorded in the conversation store"
     # KEY ASSERTIONS: no outbound_open_send event, no owner notice

@@ -10,6 +10,9 @@ clear them, plus the one-launch env override.
 
 from __future__ import annotations
 
+import re
+from typing import Optional
+
 import click
 
 
@@ -37,6 +40,92 @@ def session_limit_message(user_id: str = "local") -> str:
         "        polyrob session cancel <id>   # cancel them\n"
         "  Or raise the cap for one launch:  MAX_SESSIONS_PER_USER=60 polyrob"
     )
+
+
+# Sentinel prefixes task_agent_lite returns for a run that did NOT succeed
+# (kept lowercase; see 027 WP3 — a failed one-shot run must exit non-zero).
+_FAILURE_SENTINELS = (
+    "session failed",
+    "task package not available",
+    "no active session",
+    "session not found",
+    "session cancelled",
+)
+
+
+def session_exit_code(done_success: Optional[bool], result_text: str) -> int:
+    """Exit code for a finished one-shot run.
+
+    ``done_success`` is the SessionDone feed event's flag when one arrived
+    (authoritative); with no event we fall back to the sentinel strings
+    ``run_session`` returns on failure paths.
+    """
+    if done_success is False:
+        return 1
+    if done_success is True:
+        return 0
+    text = (result_text or "").strip().lower()
+    return 1 if text.startswith(_FAILURE_SENTINELS) else 0
+
+
+def remedy_line(error_text: str) -> Optional[str]:
+    """One actionable next step for a known failure class, or None.
+
+    Keyed on message text so it works at the CLI boundary where only the
+    rendered error string survives (the typed exception died in the agent
+    loop). Kept aligned with core/error_classifier.py classes.
+    """
+    text = error_text or ""
+    lowered = text.lower()
+
+    # Missing optional dependency → pip extra remedy (one SSOT).
+    from core.optional_extras import missing_extra_hint
+
+    hint = missing_extra_hint(text)
+    if hint:
+        return f"fix: {hint}"
+
+    if (
+        "authenticationerror" in lowered
+        or "401" in text
+        or "unauthorized" in lowered
+        or "invalid api key" in lowered
+    ):
+        match = re.search(r"from ([A-Za-z][A-Za-z0-9_-]+)", text)
+        provider = match.group(1).lower() if match else "<provider>"
+        return (
+            f"fix: the provider rejected your key — reconnect with "
+            f"`polyrob auth add {provider}` (keys live in ~/.polyrob/.env)"
+        )
+
+    if (
+        "insufficient_quota" in lowered
+        or "insufficient credit" in lowered
+        or "402" in text
+        or "exceeded your current quota" in lowered
+    ):
+        return (
+            "fix: the provider account is out of credit — top up its billing, "
+            "or connect another provider with `polyrob auth add <provider>`"
+        )
+
+    return None
+
+
+def require_extra_or_exit(extra: str, modules=None) -> None:
+    """Preflight an optional extra BEFORE any side-effecting startup.
+
+    Surface commands used to crash with a raw ModuleNotFoundError after the
+    container build (and dashboard after opening a browser tab). One line +
+    exit 1 instead.
+    """
+    from core.optional_extras import require_extra
+
+    try:
+        require_extra(extra, modules=modules)
+    except ImportError as exc:
+        click.echo(click.style("[polyrob] ERROR: ", fg="red") + str(exc), err=True)
+        raise SystemExit(1)
 
 
 def echo_create_session_error(exc: BaseException, user_id: str = "local") -> None:

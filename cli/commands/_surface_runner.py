@@ -101,13 +101,6 @@ async def run_surface(
                                 setup_sqlite_compat)
     from core.runtime_paths import data_dir_or_home
 
-    # Surface + bus gates default ON for this command (explicit env wins —
-    # setdefault never clobbers), BEFORE the container build so the bus
-    # installs during TaskAgent construction too.
-    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
-    for _key, _value in (extra_env or {}).items():
-        os.environ.setdefault(_key, _value)
-
     setup_project_path()
     setup_sqlite_compat()
 
@@ -116,6 +109,17 @@ async def run_surface(
     from cli.keys import preflight_or_onboard
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
+
+    # Surface + bus gates default ON for this command (explicit env OR FILE
+    # value wins — setdefault never clobbers), AFTER the preflight's load_env
+    # so a `polyrob config set TELEGRAM_SURFACE_ENABLED false`-style file value
+    # is in os.environ before the setdefault (026 P1.3 — the old order seeded
+    # these BEFORE load_env, whose override=False then silently ignored the
+    # file), and BEFORE the container build so the bus installs during
+    # TaskAgent construction too.
+    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
+    for _key, _value in (extra_env or {}).items():
+        os.environ.setdefault(_key, _value)
 
     # Resolve surface credentials NOW — preflight_or_onboard already loaded the
     # env layers (./.polyrob/.env etc.), so fail fast on a missing token.
@@ -187,9 +191,21 @@ async def run_surface(
     data_dir = data_dir_or_home(
         getattr(getattr(container, "config", None), "data_dir", None))
 
-    job = await build_harness(SurfaceContext(
-        container=container, task_agent=task_agent, data_dir=data_dir,
-        creds=creds, log_level=log_level))
+    # 027 WP3 backstop: a surface whose extra slipped past its command-level
+    # preflight must still fail with the pip remedy, not a raw traceback.
+    try:
+        job = await build_harness(SurfaceContext(
+            container=container, task_agent=task_agent, data_dir=data_dir,
+            creds=creds, log_level=log_level))
+    except ModuleNotFoundError as exc:
+        from core.optional_extras import missing_extra_hint
+
+        hint = missing_extra_hint(str(exc))
+        if hint:
+            click.echo(
+                click.style("[polyrob] ERROR: ", fg="red") + hint, err=True)
+            sys.exit(1)
+        raise
 
     # Start the autonomy background loops (cron/goals/curator/surface GC) under
     # the local profile — the SAME shared runtime the REPL + API lifespan use.

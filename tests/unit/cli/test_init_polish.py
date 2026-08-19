@@ -27,17 +27,24 @@ def test_deepseek_prompt_carries_bootstrap_hint(monkeypatch):
     import cli.commands.init as m
 
     prompts = []
+    answers = iter(["deepseek", ""])
 
     def _fake_prompt(text, **kwargs):
         prompts.append(text)
-        return ""
+        return next(answers, "skip")
 
     monkeypatch.setattr(click, "prompt", _fake_prompt)
+    monkeypatch.setattr(click, "confirm", lambda *a, **k: False)
     m._prompt_provider_keys({})
 
     from modules.llm.profiles import all_profiles
-    non_init = [p for p in all_profiles() if not p.initializable]
-    assert non_init, "expected at least one non-initializable profile (deepseek)"
+    # Only providers init actually PROMPTS for can carry a prompt hint. Some
+    # non-initializable rows are never prompted (openai-codex: transport
+    # RESPONSES has no client yet, and it is an OAuth seat with no key to ask
+    # for), so requiring a prompt for every one of them tests nothing real.
+    non_init = [p for p in all_profiles()
+                if not p.initializable and p.env_key and p.prompt_in_init]
+    assert non_init, "expected at least one prompted non-initializable profile (deepseek)"
     for prof in non_init:
         matching = [t for t in prompts if prof.display_name in t]
         assert matching and "can't bootstrap alone" in matching[0], (

@@ -150,6 +150,22 @@ def local_mode_enabled() -> bool:
     return _bool_env("POLYROB_LOCAL", False) or _bool_env("ROB_LOCAL", False)
 
 
+def email_provider(env=None) -> str:
+    """Which transport backs the agent's email: ``smtp`` | ``agentmail``.
+
+    An explicit ``EMAIL_PROVIDER`` always wins; any other value (incl. the
+    ``auto`` default) resolves to ``agentmail`` iff ``AGENTMAIL_API_KEY`` is set
+    — the one-env-var "agent has its own inbox by default" path — else ``smtp``
+    (legacy GMAIL_* IMAP/SMTP, byte-identical). Unknown values fall back to
+    ``smtp`` so a typo can never route mail to an unintended provider.
+    """
+    src = os.environ if env is None else env
+    raw = (src.get("EMAIL_PROVIDER") or "auto").strip().lower()
+    if raw in ("smtp", "agentmail"):
+        return raw
+    return "agentmail" if (src.get("AGENTMAIL_API_KEY") or "").strip() else "smtp"
+
+
 def message_tool_enabled() -> bool:
     """Whether the gated `message` action (owner/allowlist -> MessageRouter) is
     registered. Default OFF; ON under POLYROB_LOCAL (single-user CLI) via the
@@ -276,6 +292,31 @@ def autonomy_mode() -> str:
     return raw if raw in _AUTONOMY_MODES else "supervised"
 
 
+def full_autonomy_clamp_reason():
+    """Why an ``AUTONOMY_MODE=autonomous`` request would clamp on THIS
+    deployment (None = the single-owner guard would grant it), independent of
+    whether the mode is set — the write-path clamp echo (026 P1.6) calls this
+    at `config set` time so the owner hears about the clamp when they write."""
+    if not local_mode_enabled():
+        return "POLYROB_LOCAL is not set (multi-tenant/server deployment)"
+    try:
+        from core.instance import (
+            resolve_owner_email,
+            resolve_owner_principal,
+            resolve_owner_telegram_id,
+        )
+        owner_bound = (
+            resolve_owner_principal(default_to_instance=False) is not None
+            or bool(resolve_owner_telegram_id())
+            or bool(resolve_owner_email())
+        )
+        if not owner_bound:
+            return "no owner principal is bound (POLYROB_OWNER_USER_ID/…)"
+    except Exception as e:  # never let the guard itself crash a resolver
+        return f"owner resolution failed: {e}"
+    return None
+
+
 def full_autonomy_enabled() -> bool:
     """True only when the operator set AUTONOMY_MODE=autonomous AND this deployment is
     a single-owner instance (local mode + a bound owner principal). Anything else
@@ -284,25 +325,7 @@ def full_autonomy_enabled() -> bool:
     global _FULL_AUTONOMY_WARNED
     if autonomy_mode() != "autonomous":
         return False
-    reason = None
-    if not local_mode_enabled():
-        reason = "POLYROB_LOCAL is not set (multi-tenant/server deployment)"
-    else:
-        try:
-            from core.instance import (
-                resolve_owner_email,
-                resolve_owner_principal,
-                resolve_owner_telegram_id,
-            )
-            owner_bound = (
-                resolve_owner_principal(default_to_instance=False) is not None
-                or bool(resolve_owner_telegram_id())
-                or bool(resolve_owner_email())
-            )
-            if not owner_bound:
-                reason = "no owner principal is bound (POLYROB_OWNER_USER_ID/…)"
-        except Exception as e:  # never let the guard itself crash a resolver
-            reason = f"owner resolution failed: {e}"
+    reason = full_autonomy_clamp_reason()
     if reason:
         if not _FULL_AUTONOMY_WARNED:
             logging.getLogger(__name__).warning(
@@ -338,40 +361,12 @@ def _mode_capability_default(flag_name: str) -> bool:
     return full_autonomy_enabled() and flag_name in _MODE_CAPABILITY_FLAGS
 
 
-# Task 9 (G-2): outward-facing payment-CREATION actions — gated by PAYMENT_APPROVAL_MODE
-# regardless of the generic APPROVAL_REQUIRED_TOOLS opt-in (payment gating is first-class,
-# not opt-in). A future subscription-renewal verb joins this tuple, not a new mode.
-PAYMENT_APPROVAL_TOOLS = (
-    # ⚠️ RUNTIME action names only — the approval hook matches EXACTLY, and container
-    # tools register as {tool_id}_{action}. A bare `x402_request` here matched nothing,
-    # so this lane never fired. Pinned by tests/unit/core/test_action_name_parity.py.
-    "x402_invoice_x402_request",
-    # L9 (2026-07-15): live-trade order verbs are money-moving too — a within-cap
-    # live order gets the SAME owner-in-the-loop an invoice does, not unattended.
-    "hyperliquid_place_limit_order",
-    "hyperliquid_place_market_order",
-    "polymarket_place_limit_order",
-    "polymarket_place_market_order",
-    # 023 T3: the on-chain money verb. Irreversible and self-custodial — there is
-    # no exchange or facilitator to dispute it with — so it is SPEND-side and
-    # never act-and-report, in any mode.
-    "defi_trade_transfer",
-)
-
-# 013 T7 review (Important finding fix): PAYMENT_APPROVAL_TOOLS is NOT one uniform
-# lane. This tuple carves out the RECEIVE-side subset that is eligible for
-# act-and-report under PAYMENT_APPROVAL_MODE=auto (post-hoc owner notify only, no
-# pre-approval block) — today just the invoicing verb. Every OTHER entry in
-# PAYMENT_APPROVAL_TOOLS (the live-trade order verbs above) is treated as
-# SPEND-side and ALWAYS keeps owner_queue pre-approval regardless of mode — see
-# tools/controller/service.py's `_spend_tools = _payment_tools - set(this tuple)`
-# wiring. This is a fail-safe by construction: a future addition to
-# PAYMENT_APPROVAL_TOOLS that is NOT also added here defaults to the strict
-# (pre-approved) lane, never silently to act-and-report. The hard product line
-# (proposal 013) is money-spend/trading is NEVER act-and-report, even under an
-# explicit PAYMENT_APPROVAL_MODE=auto.
-PAYMENT_RECEIVE_APPROVAL_TOOLS = (
-    "x402_invoice_x402_request",  # runtime (namespaced) name — see above
+# The payment-approval action-name lanes (RECEIVE vs SPEND) are pure data and
+# live in payment_tools.py (god-file ratchet); re-imported here so every
+# existing importer of this module keeps working.
+from core.config_policy.payment_tools import (  # noqa: F401,E402
+    PAYMENT_APPROVAL_TOOLS,
+    PAYMENT_RECEIVE_APPROVAL_TOOLS,
 )
 
 
@@ -485,20 +480,25 @@ def approval_grant_ttl_hours() -> float:
     return _FROZEN_APPROVAL_GRANT_TTL_HOURS
 
 
-def _refreeze_payment_approval_flags_for_tests() -> None:
-    """TEST-ONLY: re-snapshot the payment-approval flags from the current env.
+def _refreeze_payment_approval_flags() -> None:
+    """Re-snapshot the payment-approval flags from the current env (026 P1.1).
 
-    Mirrors `tools.controller.approval._refreeze_approval_flags_for_tests` — production
-    never calls this. A test that mutates ``PAYMENT_APPROVAL_MODE`` /
-    ``APPROVAL_TIMEOUT_SEC`` / ``APPROVAL_GRANT_TTL_HOURS`` via ``monkeypatch`` must call
-    this AFTER setting the env (and again in teardown) for the frozen helpers above to
-    observe the change — by design, a plain env mutation does NOT flip them.
+    TWO legitimate callers, nothing else: ``core.bootstrap.load_env`` (EXACTLY
+    ONCE per process, after env-file layering, before any container/agent — so
+    an owner-controlled ``.polyrob/.env`` value reaches the freeze; the
+    once-guard lives in bootstrap) and tests (after a monkeypatch + in
+    teardown). The security property is unchanged: a mid-session env mutation
+    still cannot move money-critical gating.
     """
     global _FROZEN_PAYMENT_APPROVAL_MODE, _FROZEN_PAYMENT_APPROVAL_TIMEOUT_SEC, \
         _FROZEN_APPROVAL_GRANT_TTL_HOURS
     _FROZEN_PAYMENT_APPROVAL_MODE = _snapshot_payment_approval_mode()
     _FROZEN_PAYMENT_APPROVAL_TIMEOUT_SEC = _snapshot_payment_approval_timeout_sec()
     _FROZEN_APPROVAL_GRANT_TTL_HOURS = _snapshot_approval_grant_ttl_hours()
+
+
+#: Back-compat alias — existing tests import the ``_for_tests`` name.
+_refreeze_payment_approval_flags_for_tests = _refreeze_payment_approval_flags
 
 
 def task_personality_block_enabled() -> bool:
@@ -625,6 +625,13 @@ def dead_target_registry_enabled() -> bool:
     return _bool_env("DEAD_TARGET_REGISTRY", True)
 
 
+# MEMORY_BACKEND default SSOT: memory_policy.py (extracted; re-exported here).
+from core.config_policy.memory_policy import (  # noqa: F401,E402
+    memory_backend_default,
+    resolved_memory_backend,
+)
+
+
 def embedder_needed() -> bool:
     """Whether this deployment actually needs the sentence-transformers embedder (torch).
 
@@ -635,7 +642,7 @@ def embedder_needed() -> bool:
     """
     return (
         AutonomyConfig.kb_enabled()
-        or os.getenv("MEMORY_BACKEND", "sqlite").lower() == "local_vector"
+        or resolved_memory_backend() == "local_vector"
         or local_mode_enabled()
     )
 
@@ -777,11 +784,12 @@ def _posture_autonomy_default(flag_name: str) -> bool:
 # - Default CLOSED: unset/garbage/out-of-range -> 0. Garbage NEVER rounds up —
 #   only the literal values 0|1|2|3 are accepted (a typo'd "9" must not grant the
 #   host tier).
-# - FROZEN AT IMPORT: the value is snapshotted once at module import so a
-#   mid-process env mutation (e.g. a prompt-injected write that reached an
-#   env-mutating surface) can never raise the running posture. Operators set it
-#   in real process env (systemd EnvironmentFile / shell / dotenv loaded at
-#   process start, see main.py) — never at runtime.
+# - FROZEN AT IMPORT (re-frozen ONCE by `core.bootstrap.load_env` after
+#   env-file layering, 026 P1.1): a mid-process env mutation (e.g. a
+#   prompt-injected write that reached an env-mutating surface) can never
+#   raise the running posture. Operators set it in real process env (systemd
+#   EnvironmentFile / shell) or the owner-controlled `.polyrob/.env` ladder
+#   loaded at process start — never at runtime.
 # - The posture is the "may" side only; the existing correspondent-taint gate and
 #   delegation blocklist stay the "never" side. `compute_posture_allows` is the
 #   ONE predicate every posture-gated capability must call.
@@ -804,14 +812,20 @@ def compute_posture() -> int:
     return _COMPUTE_POSTURE_FROZEN
 
 
-def _refreeze_compute_posture_for_tests() -> int:
-    """TEST-ONLY seam: re-snapshot the frozen posture from the current env.
+def _refreeze_compute_posture() -> int:
+    """Re-snapshot the frozen posture from the current env (026 P1.1).
 
-    Production code must never call this — the freeze is the security property.
+    Callers: ``core.bootstrap.load_env`` (once per process, after env-file
+    layering, before any agent code — see the payment twin above) and tests.
+    A mid-session env mutation still cannot raise the running posture.
     """
     global _COMPUTE_POSTURE_FROZEN
     _COMPUTE_POSTURE_FROZEN = _resolve_compute_posture(os.getenv("AGENT_COMPUTE_POSTURE"))
     return _COMPUTE_POSTURE_FROZEN
+
+
+#: Back-compat alias — existing tests import the ``_for_tests`` name.
+_refreeze_compute_posture_for_tests = _refreeze_compute_posture
 
 
 def compute_posture_allows(execution_context, min_posture: int) -> bool:

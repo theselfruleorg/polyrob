@@ -70,6 +70,7 @@ def _register_every_optional_tool() -> None:
         ("tools.x402", "register_x402_invoice_tool"),
         ("tools.cronjob_tools", "register_cronjob_tool"),
         ("tools.goal_tools", "register_goal_tool"),
+        ("tools.x_browser", "register_x_browser_tool"),
     )
     for mod_name, fn_name in registrars:
         try:
@@ -251,6 +252,11 @@ _NAME_PARITY_VERBS = (
     "email_send",
     "self_env_patch_source",
     "self_env_install_dep",
+    # 023 T3/T4: the on-chain money verbs — irreversible, self-custodial.
+    "defi_trade_transfer",
+    "defi_trade_swap",
+    "defi_trade_approve_token",
+    "defi_trade_revoke_approval",
 )
 
 

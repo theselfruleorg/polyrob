@@ -18,6 +18,8 @@ for code anchors and complete prose.
 - LLM_TOKEN_STREAMING — default: OFF — 019 P5: TRUE per-token streaming.
 - STREAM_BRAIN_SCRUB — default: ON ("true") — Scrubs brain-state JSON from the streamed user-facing buffer.
 - TASK_MAX_INPUT_TOKENS — default: unset — Caps input-token budget for the task agent (shared-client clobber guard).
+- COMPLETION_RESERVE_TOKENS — default: 16384 — Ceiling on the output reserve subtracted from the input budget (`0` = legacy full `max_completion_tokens` reserve).
+- CTX_COUNT_TOOL_SCHEMAS — default: true — Include the emitted tool-schema (`tools` param) tokens in the ctx gauge (`false` = legacy messages-only numerator).
 - COMPACTION_MODEL — default: unset — Explicit aux model for context compaction.
 - COMPACTION_AUX_MODEL — default: '' — Legacy alias / aux compaction model string.
 - COMPACTION_PROVIDER — default: unset — Provider override for the compaction aux model.
@@ -37,8 +39,9 @@ for code anchors and complete prose.
 - POLYROB_<PROVIDER>_MODEL — default: unset — Per-provider default-model override (e.g. `POLYROB_OPENROUTER_MODEL=x-ai/grok-4.3`): wins over the provider's registry/…
 - LLM_PROVIDER_REGISTRY — default: ON — 024 P0 kill-switch: derive the provider lists (profiles, PROVIDER_CONFIG, schema routing, model map, fallback hierarchy…
 - LLM_CUSTOM_PROVIDERS — default: unset (~/.polyrob/providers.yaml) — Path to the user-declared provider file (YAML: `providers:` map of `ProviderSpec` rows — base_url/transport/env_key/mod…
-- LLM_AUTH_STORE_ENABLED — default: OFF — 024 L1: serve credentials from the `~/.polyrob/auth.json` store (OAuth/borrowed) in `resolve_credential`'s rungs 2-3. *…
+- LLM_AUTH_STORE_ENABLED — default: ON under POLYROB_LOCAL, else OFF — 024 L1 (default moved by 027 WP4 — a completed `auth add <oauth-seat>` connect was unreadable without this undocumented…
 - POLYROB_AUTH_STORE — default: unset (~/.polyrob/auth.json) — Path override for the credential store (test isolation / operator relocation).
+- LLM_OAUTH_ENABLED — default: OFF — 024 L2 gate: permit `polyrob auth add` to run a provider's OAuth connect flow (device-code, or loopback PKCE under `POL…
 - LLM_CREDENTIAL_BORROW — default: OFF — 024 L3 gate: permit `resolve_credential` to serve consent-tagged borrowed credentials (imported from other CLIs' stores…
 
 ## Memory
@@ -203,6 +206,12 @@ for code anchors and complete prose.
 - HF_DEPLOY_ORG — default: unset — The Hugging Face org/user namespace to publish Spaces under (`<HF_DEPLOY_ORG>/<app_name>`).
 - HF_DEPLOY_DAILY_MAX — default: 10 — Max deploy attempts per tenant per rolling 24h.
 - HF_DEPLOY_MIN_INTERVAL_SEC — default: 120 — Minimum seconds between deploy attempts of the SAME app.
+- OBJECTIVE_GOAL_BUDGET — default: 25 — Max LIVE (non-cancelled) goals one objective may have attached.
+- PUBLISH_ENABLED — default: OFF (not safe-local) — Register the `publish` tool (publish/publish_list/unpublish — the ship rail: copy workspace files to a stable public UR…
+- PUBLISH_ROOT — default: <data_home>/publish — Directory the web server serves publications from.
+- PUBLISH_BASE_URL — default: unset (relative URLs) — Public base URL that serves `PUBLISH_ROOT` (e.g. `https://pub.example.com`).
+- PUBLICATIONS_DB_PATH — default: <data_root>/publications.db — Override the publications DB location (slug → status/url/size).
+- ARTIFACTS_DB_PATH — default: <data_root>/artifacts.db — Override the artifact-ledger DB location (one row per file the agent produces: producer, path, sha256, size, kind, publ…
 - HF_TOKEN — default: unset (secret) — Hugging Face fine-grained write token used ONLY by the `hf_deploy` broker (`HfApi`) to create/update Spaces and set sec…
 - DEPLOYED_APPS_DB_PATH — default: unset (derived from data root) — Override path for the `hf_deploy` registry DB (`deployed_apps.db`); the test suite redirects this to keep unit runs off…
 - CRON_ENABLED — default: OFF — Register the `cronjob` tool + start the cron ticker.
@@ -310,6 +319,9 @@ for code anchors and complete prose.
 - EMAIL_AUTONOMY_RUNTIME — default: OFF — Whether `polyrob email` starts the shared autonomy runtime (goal dispatcher + cron ticker + curator + surface GC).
 - GMAIL_EMAIL / GMAIL_APP_PASSWORD — default: unset — Mail credentials for the `email` tool (SMTP send + IMAP read) — the email surface reuses the same tool/creds.
 - GMAIL_IMAP_SERVER / GMAIL_SMTP_SERVER / GMAIL_SMTP_PORT — default: imap.gmail.com / smtp.gmail.com / 587 — IMAP/SMTP server endpoints for the email tool; point these at any provider.
+- EMAIL_PROVIDER — default: auto — Which transport backs the agent's email: `smtp` | `agentmail`.
+- AGENTMAIL_API_KEY — default: unset — AgentMail (api.agentmail.to) API key.
+- POLYROB_AGENT_EMAIL — default: unset — Explicit override for the agent's OWN sender address (distinct from `POLYROB_OWNER_EMAIL`, an outbound target).
 - WHATSAPP_SURFACE_ENABLED — default: OFF (**ON for polyrob whatsapp**) — WhatsApp Cloud API webhook surface enable flag.
 - WHATSAPP_ACCESS_TOKEN — default: unset — Meta permanent/system-user access token used by the Cloud API sender client.
 - WHATSAPP_PHONE_NUMBER_ID — default: unset — Meta Phone Number ID of the sending number.
@@ -374,6 +386,7 @@ for code anchors and complete prose.
 - X402_PRICE_MARKUP — default: 2.0 — Safety multiplier on the derived x402 price (margin over worst-case token cost).
 - DEFI_DATA_ENABLED — default: OFF — Proposal 023 T0+T1 — the read-only `defi_data` tool: `token_resolve` (candidate contract addresses for a ticker), `toke…
 - DEFI_TRADE_ENABLED — default: OFF — Proposal 023 T3 — the `defi_trade` tool's on-chain money verbs (`transfer`). **This one can move real funds.** Every ca…
+- DEFI_MAX_SLIPPAGE_BPS — default: 100 — Default slippage bound for `defi_trade.swap`, in basis points (100 = 1%).
 - DEFI_AUTONOMOUS_MAX_USD — default: 25 — Per-transaction ceiling below which a `defi_trade` verb may execute autonomously; above it `tx_guard` returns `lane=own…
 - DEFI_EVM_RPC_BASE — default: https://mainnet.base.org — Operator-pinnable JSON-RPC endpoint for Base, used by every on-chain read (`core/wallet/onchain.py`, `defi_data`, the x…
 - AGENT_WALLET_ENABLED — default: OFF — Enable the agent's native wallet.
@@ -418,6 +431,7 @@ for code anchors and complete prose.
 
 - TWITTER_ENABLED — default: OFF ('false') (ON under AUTONOMY_MODE=autonomous) — Enable the Twitter/X write surface.
 - TWITTER_REQUIRE_APPROVAL — default: ON ('true') — Require approval for Twitter writes.
+- X_BROWSER_ENABLED — default: OFF — Register the browser-based `x_browser` tool (post to X + self-registration on a saved login).
 - ALLOWED_REASONING_TURNS — default: 1 — Tool-free planning turns allowed before escalation.
 - COMPACTION_COOLDOWN_STEPS — default: 3 — Steps between LLM-compaction firings (85–95% band).
 - COMPACTION_PROMPT_GUARD — default: **ON** — Anti-injection framing on the compaction summarizer prompt + rebuilt summary (T1.3).
@@ -449,7 +463,7 @@ for code anchors and complete prose.
 - VALIDATE_OUTPUT — default: OFF — Judge-backed validation of the agent's final answer before it's accepted (CO-F1/CO-F10, wired live in Task 16 via the l…
 - INTERRUPT_REDIRECT — default: OFF — T16: Ctrl-C mid-turn prompts for a redirect instruction that becomes the next turn instead of silently aborting.
 - POLYROB_ENV — default: development (falls back to ENVIRONMENT) — Deployment environment name; `production`/`prod` makes the MCP encryption layer require a real `MCP_ENCRYPTION_KEY` ins…
-- POLYROB_ENV_KEY_BACKFILL — default: ON ("1") — Local-mode backfill of missing secret keys (API keys etc.) from `config/.env.*` into the process env.
+- POLYROB_ENV_KEY_BACKFILL — default: OFF — DEPRECATED (deleted next release): legacy local-mode backfill of secret keys from `config/.env.*` into the process env.
 - POLYROB_HOME — default: ~/.polyrob — Override for the polyrob home directory (CLI config, keys, home-migration target).
 - POLYROB_IN_DOCKER — default: unset — Force the self-update detector to classify the install as Docker (normally auto-detected via `/.dockerenv`); updates th…
 - POLYROB_NONINTERACTIVE — default: unset — Truthy ⇒ never prompt interactively (suppresses the inline API-key wizard; same effect as `CI=true`).

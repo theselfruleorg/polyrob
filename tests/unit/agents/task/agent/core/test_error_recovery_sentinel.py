@@ -109,10 +109,21 @@ def spy_trip(monkeypatch):
     """Record every trip_credit_sentinel call. error_recovery imports the symbol
     lazily inside the function, so patching the module attribute is picked up."""
     tripped = []
+    tripped_providers = []
+    tripped_release_ts = []
 
-    async def fake_trip(reason, *, container=None, user_id=None):
+    async def fake_trip(reason, *, provider=None, container=None, user_id=None,
+                        release_ts=None):
+        # `provider` scopes the latch (2026-08-14) and `release_ts` carries the
+        # provider-stated quota reset (2026-08-16) — a double that omits either
+        # makes the real call raise TypeError, which the fail-open except
+        # swallows, and the test then reports "no trip" for the wrong reason.
         tripped.append(reason)
+        tripped_providers.append(provider)
+        tripped_release_ts.append(release_ts)
         return True
+
+    fake_trip.release_ts_log = tripped_release_ts
 
     monkeypatch.setattr("core.credit_sentinel.trip_credit_sentinel", fake_trip)
     return tripped
@@ -340,15 +351,16 @@ async def test_background_check_sites_unchanged_interactive_does_not_check(monke
     checked = []
     real_active = cs.credit_sentinel_active
 
-    def spy_active():
+    def spy_active(provider=None):
         checked.append(True)
-        return real_active()
+        return real_active(provider)
 
     monkeypatch.setattr("core.credit_sentinel.credit_sentinel_active", spy_active)
 
     tripped = []
 
-    async def fake_trip(reason, *, container=None, user_id=None):
+    async def fake_trip(reason, *, provider=None, container=None, user_id=None,
+                        release_ts=None):
         tripped.append(reason)
 
     monkeypatch.setattr("core.credit_sentinel.trip_credit_sentinel", fake_trip)
@@ -381,3 +393,26 @@ async def test_rewrapped_402_routes_to_billing_failover(monkeypatch):
     result = await agent._handle_step_error(outer)
     assert attempts == ["billing"]      # routed to billing failover via the chain walk
     assert result == []                  # failover succeeded → retry
+
+
+@pytest.mark.asyncio
+async def test_quota_death_with_stated_reset_passes_release_ts(monkeypatch):
+    """2026-08-16: a plan-quota death that states its reset time ("…limit will
+    reset at 2026-08-18 18:01:49") must latch until that reset, not re-trip
+    (and re-ping the owner) every CREDIT_SENTINEL_RELEASE_HOURS window."""
+    calls = []
+
+    async def fake_trip(reason, *, provider=None, container=None, user_id=None,
+                        release_ts=None):
+        calls.append({"reason": reason, "release_ts": release_ts})
+        return True
+
+    monkeypatch.setattr("core.credit_sentinel.trip_credit_sentinel", fake_trip)
+    agent = _make_agent()
+    await agent._handle_step_error(LLMPermanentError(
+        "z.ai GLM Coding Plan API error: Error code: 429 - [1310]"
+        "[Weekly/Monthly Limit Exhausted. Your limit will reset at "
+        "2036-08-18 18:01:49]"))
+    assert calls, "quota-exhaustion credit death must trip the sentinel"
+    assert calls[0]["release_ts"] is not None, (
+        "the provider-stated reset must reach the latch as release_ts")

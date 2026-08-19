@@ -119,7 +119,8 @@ async def test_polymarket_place_limit_order_dry_runs_by_default(monkeypatch):
 
     for k in ("CRYPTO_TRADE_LIVE_ENABLED", "POLYMARKET_TRADING_ENABLED"):
         monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr(svc, "CLOB_AVAILABLE", True)
+    # Availability lives on the (lazily-loading) adapter now, not on service.py.
+    monkeypatch.setattr("tools.polymarket.clob_adapter.CLOB_AVAILABLE", True)
 
     async def _coro(*a, **k):
         return None

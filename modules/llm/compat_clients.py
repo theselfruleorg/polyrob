@@ -52,9 +52,15 @@ def _spec_for(name: str) -> ProviderSpec:
 
 
 def _resolve_key(spec: ProviderSpec, cfg: Dict) -> Optional[str]:
+    """The credential for *spec*: config block first, then its env-var chain.
+
+    The chain matters — a provider that publishes several names (z.ai's
+    GLM_API_KEY / ZAI_API_KEY / Z_AI_API_KEY) must not fail to construct just
+    because the user set the alias rather than the primary.
+    """
     key = cfg.get("api_key")
-    if not key and spec.env_key:
-        key = os.environ.get(spec.env_key)
+    if not key:
+        _name, key = spec.resolve_env_key()
     if not key and spec.auth_type is AuthType.NONE:
         key = _NO_KEY_SENTINEL
     return key
@@ -107,7 +113,9 @@ class OpenAICompatClient(OpenRouterClient):
         return super()._supports_tools()
 
     def _profile_base_url(self) -> Optional[str]:
-        return self._spec.resolved_base_url()
+        # api_key is passed so a key-prefix rule can redirect the host
+        # (a Kimi Code key must not go to the legacy platform endpoint).
+        return self._spec.resolved_base_url(api_key=self.api_key)
 
     def _validate_llm_config(self) -> None:
         if self._spec.auth_type is AuthType.NONE:
@@ -166,7 +174,9 @@ class AnthropicCompatClient(AnthropicClient):
         return self._spec.supports_vision
 
     def _profile_base_url(self) -> Optional[str]:
-        return self._spec.resolved_base_url()
+        # api_key is passed so a key-prefix rule can redirect the host
+        # (a Kimi Code key must not go to the legacy platform endpoint).
+        return self._spec.resolved_base_url(api_key=self.api_key)
 
     def _validate_llm_config(self) -> None:
         if self._spec.auth_type is AuthType.NONE:

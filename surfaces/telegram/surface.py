@@ -10,40 +10,25 @@ finalize). With TELEGRAM_INCREMENTAL_STREAM on (#8), stream() instead opens one 
 and live-edits it in place via editMessageText as deltas arrive, flood-throttled
 (TELEGRAM_STREAM_EDIT_INTERVAL_SEC) and RetryAfter-aware (the minimal rate limiter).
 
-MarkdownV2 is enabled: Messages are escaped via escape_markdown_v2 and sent with
-parse_mode="MarkdownV2" for rich formatting. Fail-open: a bot error returns
-SendResult(success=False) / is logged and swallowed.
+Formatting: the agent writes markdown; core.surfaces.rendering converts it to the HTML
+subset Telegram renders (parse_mode="HTML"). Every send goes through send_text(), which
+retries once as plain text if Telegram rejects the markup, so a formatting problem can
+never cost the user the message. Fail-open: a bot error returns SendResult(success=False)
+/ is logged and swallowed.
 """
 import logging
 import os
 import time as _time
 from typing import Any, Optional
 
-from core.surfaces.surface import Surface, split_message
+from core.surfaces.surface import Surface
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
-from utils.markdown_utils import escape_markdown_v2
+from core.surfaces.rendering import render_for_flavor, split_text
 
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX = 4096
 _TELEGRAM_CAPTION_MAX = 1024  # Bot API cap for photo/document captions (< the 4096 message cap)
-
-
-def _markdown_v2_chunks(text: str, limit: int) -> list[str]:
-    """Escape and split text so every chunk fits Telegram's message limit."""
-    if not text:
-        return [""]
-    chunks: list[str] = []
-    current = ""
-    for char in text:
-        escaped = escape_markdown_v2(char, allow_skip=False)
-        if current and len(current) + len(escaped) > limit:
-            chunks.append(current)
-            current = escaped
-        else:
-            current += escaped
-    chunks.append(current)
-    return chunks
 
 
 def chat_id_from_session_key(session_key: str) -> str:
@@ -79,17 +64,42 @@ class TelegramSurface(Surface):
             supports_interactive_ask=True,
             is_multi_tenant=True,
             max_message_bytes=_TELEGRAM_MAX,
-            markdown_flavor="markdownv2",  # MarkdownV2 with proper escaping via escape_markdown_v2
+            markdown_flavor="html",        # agent markdown -> Telegram HTML (see core.surfaces.rendering)
             media_out=True,                # can render OutboundMessage.media as photo/document
         )
 
     def _parse_mode(self) -> str | None:
-        return "MarkdownV2" if self.capabilities.markdown_flavor == "markdownv2" else None
+        return "HTML" if self.capabilities.markdown_flavor == "html" else None
 
     def _render_chunks(self, text: str) -> list[str]:
-        if self._parse_mode() == "MarkdownV2":
-            return _markdown_v2_chunks(text or "", self.capabilities.max_message_bytes)
-        return split_message(text or "", self.capabilities.max_message_bytes)
+        return self.render_outbound(text or "")
+
+    async def send_text(self, chat_id: str, text: str) -> Optional[Any]:
+        """The ONE outbound text seam: split, convert to Telegram HTML, send.
+
+        Retries a chunk as plain text (the original markdown source) if Telegram rejects
+        the markup, so a converter edge case degrades formatting instead of dropping the
+        message. Returns the last message_id. Raises only if BOTH attempts fail.
+        """
+        limit = self.capabilities.max_message_bytes
+        rendered = render_for_flavor(text or "", self.capabilities.markdown_flavor, limit)
+        # Same splitter, same args -> same chunk count; if that ever stops holding, the
+        # plain-text retry falls back to the rendered chunk rather than dropping a message.
+        sources = split_text(text or "", limit)
+        if len(sources) != len(rendered):
+            sources = rendered
+        parse_mode = self._parse_mode()
+        last_id = None
+        for body, source in zip(rendered, sources):
+            try:
+                sent = await self._bot.send_message(chat_id, body, parse_mode=parse_mode)
+            except Exception as e:
+                if not parse_mode:
+                    raise
+                logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
+                sent = await self._bot.send_message(chat_id, source, parse_mode=None)
+            last_id = getattr(sent, "message_id", None)
+        return last_id
 
     async def send(self, msg: OutboundMessage) -> SendResult:
         # If this discrete reply finalizes an in-flight streamed bubble, commit it in
@@ -97,17 +107,13 @@ class TelegramSurface(Surface):
         if await self._finalize_live_on_send(msg):
             return SendResult(success=True)
         chat_id = chat_id_from_session_key(msg.session_key)
-        last_id = None
-        parse_mode = self._parse_mode()
         try:
-            for chunk in self._render_chunks(msg.text or ""):
-                sent = await self._bot.send_message(chat_id, chunk, parse_mode=parse_mode)
-                last_id = getattr(sent, "message_id", None)
+            last_id = await self.send_text(chat_id, msg.text or "")
             # Media is best-effort ON TOP of the text: a media send failure (missing
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
             if msg.media:
-                await self._send_media(chat_id, msg.media, parse_mode, msg.text or "")
+                await self._send_media(chat_id, msg.media, self._parse_mode(), msg.text or "")
             return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
@@ -116,9 +122,7 @@ class TelegramSurface(Surface):
     def _caption_for(self, text: str) -> Optional[str]:
         if not text:
             return None
-        if self._parse_mode() == "MarkdownV2":
-            return _markdown_v2_chunks(text, _TELEGRAM_CAPTION_MAX)[0]
-        return split_message(text, _TELEGRAM_CAPTION_MAX)[0]
+        return render_for_flavor(text, self.capabilities.markdown_flavor, _TELEGRAM_CAPTION_MAX)[0]
 
     async def _send_media(self, chat_id: str, media: list, parse_mode, fallback_text: str) -> None:
         """Send each renderable media entry (path + kind) as a photo/document, alongside

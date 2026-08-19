@@ -33,14 +33,24 @@ def _walk_click(command, prefix: str = "", display_name: str | None = None) -> L
     rows = []
     name = display_name or command.name or "polyrob"
     qualified = f"{prefix} {name}".strip() if prefix else name
+    # list_commands/get_command are the public click API — they include the
+    # lazily-registered subcommands (cli.polyrob._LAZY_SUBCOMMANDS), which the
+    # raw .commands dict does not hold until first use.
+    child_names = (
+        sorted(command.list_commands(None))
+        if hasattr(command, "list_commands")
+        else sorted(getattr(command, "commands", {}))
+    )
     rows.append(
         {
             "name": qualified,
             "help": (command.help or "").strip(),
             "aliases": [],
-            "commands": sorted(getattr(command, "commands", {}).keys()),
+            "commands": child_names,
         }
     )
-    for child_name in sorted(getattr(command, "commands", {})):
-        rows.extend(_walk_click(command.commands[child_name], qualified, child_name))
+    for child_name in child_names:
+        child = command.get_command(None, child_name)
+        if child is not None:
+            rows.extend(_walk_click(child, qualified, child_name))
     return rows

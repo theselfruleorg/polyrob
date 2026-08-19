@@ -55,6 +55,13 @@ ASK_FULFILLED = "fulfilled"
 # Task 9 (G-2): a tool_approval ask's owner-declined outcome. Disjoint from the
 # goal-status STATUS_CANCELLED string on purpose — an ask is never a goal.
 ASK_REJECTED = "rejected"
+# 2026-08-18: the ask answered itself — every goal it blocked reached a terminal
+# state, so the owner no longer has a decision to make. Distinct from FULFILLED
+# on purpose: "fulfilled" claims the owner acted, and an ask that expired because
+# the work resolved itself must never be recorded as an owner decision. Prod held
+# 44 open asks (oldest a month) with several naming goals that had since
+# succeeded — that queue is what the owner has to read.
+ASK_OBSOLETE = "obsolete"
 
 # objective lifecycle (disjoint from goal statuses so nothing dispatches them)
 OBJ_ACTIVE = "active"
@@ -201,6 +208,9 @@ class GoalBoard:
         from core.identity import is_anonymous
         if is_anonymous(user_id):
             raise ValueError("goal create requires a real (non-anonymous) user_id (tenant scope)")
+        # An objective is allowed to be standing; it is not allowed to be infinite.
+        if kind == KIND_GOAL:
+            self._check_objective_budget(user_id, parent_id)
         from agents.task.constants import AutonomyConfig
 
         # Check for near-duplicates in the last 7 days
@@ -348,6 +358,7 @@ class GoalBoard:
             return
         self._event(goal_id, "succeeded", {"session_id": session_id})
         self._sweep_dependents_on_completion(goal_id)
+        self._release_asks(goal_id, "goal_done")
 
     def record_failure(self, goal_id: str, *, error: str,
                        session_id: Optional[str] = None) -> Goal:
@@ -912,6 +923,7 @@ class GoalBoard:
         if rc == 1:
             self._event(goal_id, "cancelled", {})
             self._cascade_dep_failed(goal_id)
+            self._release_asks(goal_id, "goal_cancelled")
         return rc == 1
 
     def update_status(self, goal_id: str, new_status: str, *, reset_failures: bool = False,
@@ -1222,6 +1234,64 @@ class GoalBoard:
             out.append(d)
         return out
 
+    def children_of(self, user_id: str, objective_id: str,
+                    *, live_only: bool = True) -> List[Goal]:
+        """Goals attached to *objective_id*. ``live_only`` drops cancelled/dropped
+        rows — the budget counts live work, not history."""
+        sql = ("SELECT * FROM goals WHERE kind=? AND user_id=? AND parent_id=?")
+        params: List[Any] = [KIND_GOAL, user_id, objective_id]
+        if live_only:
+            sql += " AND status NOT IN ('cancelled','dropped')"
+        rows = execute_retry(self.db_path, sql + " ORDER BY created_at",
+                             tuple(params), fetch="all") or []
+        return [Goal.from_row(r) for r in rows]
+
+    def _objective_budget(self, objective: Goal) -> int:
+        """Live-goal cap for *objective*. 0 disables. The objective's own
+        ``payload.goal_budget`` wins over the deployment default, so a
+        deliberately long-running objective can state its number."""
+        own = (objective.payload or {}).get("goal_budget")
+        if own is not None:
+            try:
+                return max(0, int(own))
+            except (TypeError, ValueError):
+                pass
+        from core.env import int_env
+        return int_env("OBJECTIVE_GOAL_BUDGET", 25)
+
+    def _check_objective_budget(self, user_id: str, parent_id: Optional[str]) -> None:
+        """Refuse a new child once an objective has spent its budget.
+
+        An objective with no completion criterion and no cap forces the planner
+        to invent the next increment forever: prod's "Explore the x402 agent
+        economy" accumulated 32 children over a month and produced Rounds 1..9
+        while its actual purpose (revenue) produced $0. The cap turns "keep
+        going" into "come back to me" — the refusal message says so explicitly,
+        because the agent's next move should be an ask, not another round.
+
+        Fail-OPEN on any lookup error: a budget check must never be the reason a
+        legitimate goal cannot be filed.
+        """
+        if not parent_id:
+            return
+        try:
+            objective = self.get(parent_id)
+            if objective is None or objective.kind != KIND_OBJECTIVE:
+                return
+            budget = self._objective_budget(objective)
+            if budget <= 0:
+                return
+            live = len(self.children_of(user_id, parent_id))
+        except Exception:
+            logger.debug("objective budget check skipped for %s", parent_id, exc_info=True)
+            return
+        if live >= budget:
+            raise ValueError(
+                f"objective {parent_id} has spent its goal budget ({live}/{budget} live "
+                f"goals). Do NOT open another round on it. Either finish or cancel the "
+                f"open goals, or raise an ask explaining what decision you need from the "
+                f"owner to complete the objective.")
+
     def create_objective(self, *, user_id: str, title: str, body: str = "",
                          priority: int = 5, force: bool = False,
                          payload: Optional[Dict[str, Any]] = None) -> Goal:
@@ -1339,6 +1409,66 @@ class GoalBoard:
                     self._event(gid, "unblocked_by_ask", {"ask_id": ask_id})
                     unblocked += 1
         return (True, unblocked)
+
+    def _release_asks(self, goal_id: str, reason: str) -> None:
+        """Close the owner asks a now-terminal goal was blocking. Fail-open.
+
+        The tenant is read off the goal row, so every terminal transition can
+        release its asks without threading a user_id through call sites that
+        never had one. Bookkeeping — it must never fail the transition itself.
+        """
+        try:
+            goal = self.get(goal_id)
+            if goal is not None and goal.user_id:
+                self.close_asks_for_goal(goal.user_id, goal_id, reason=reason)
+        except Exception:
+            logger.debug("ask release skipped for %s", goal_id, exc_info=True)
+
+    def close_asks_for_goal(self, user_id: str, goal_id: str, *,
+                            reason: str = "goal_resolved") -> int:
+        """Release *goal_id* from every OPEN ask, closing any ask left with none.
+
+        Called when a goal reaches a terminal state (done / cancelled): the owner
+        no longer has a decision to make about it. An ask blocking SEVERAL goals
+        stays open until the last one resolves — the need is still real for the
+        others.
+
+        Only OPEN asks move, and only this tenant's, so an owner-answered ask is
+        never reopened or re-closed. Returns the number of asks closed.
+        """
+        if not (user_id and goal_id):
+            return 0
+        closed = 0
+        now = self._now()
+        for ask in self.asks(user_id=user_id, status=ASK_OPEN):
+            payload = dict(ask.payload or {})
+            blocks = list(payload.get("blocks_goal_ids") or [])
+            if goal_id not in blocks:
+                continue
+            remaining = [g for g in blocks if g != goal_id]
+            payload["blocks_goal_ids"] = remaining
+            if remaining:
+                # Still needed by another goal — record the release, stay open.
+                execute_retry(
+                    self.db_path,
+                    "UPDATE goals SET payload=? WHERE id=? AND kind=? AND user_id=?",
+                    (json.dumps(payload), ask.id, KIND_ASK, user_id),
+                )
+                continue
+            payload["decision"] = "obsolete"
+            payload["obsolete_reason"] = reason
+            rc = execute_retry(
+                self.db_path,
+                "UPDATE goals SET status=?, completed_at=?, payload=? "
+                "WHERE id=? AND kind=? AND status=? AND user_id=?",
+                (ASK_OBSOLETE, now, json.dumps(payload), ask.id, KIND_ASK,
+                 ASK_OPEN, user_id),
+            )
+            if rc == 1:
+                self._event(ask.id, "ask_obsolete",
+                            {"goal_id": goal_id, "reason": reason})
+                closed += 1
+        return closed
 
     def fulfill_ask(self, ask_id: str, *, user_id: str) -> tuple:
         """Mark an ask fulfilled and flip its BLOCKED dependent goals back to ready.

@@ -8,7 +8,11 @@ def test_doctor_report_lists_present_keys_and_flags():
     lines = doctor_report(env)
     blob = "\n".join(lines)
     assert "anthropic: present" in blob
-    assert "openai: missing" in blob
+    # 30+ providers ship now, so an UNCONFIGURED one is rolled into a single
+    # "not configured:" line instead of getting a line of its own — thirty
+    # "missing" lines buried the one or two that actually mattered.
+    assert "not configured:" in blob
+    assert "openai" in blob
     assert "POLYROB_LOCAL" in blob and "ON" in blob          # footgun surfaced
     assert "resolved provider" in blob.lower()
 
@@ -16,7 +20,12 @@ def test_doctor_report_lists_present_keys_and_flags():
 def test_doctor_report_warns_no_keys():
     lines = doctor_report({})
     blob = "\n".join(lines)
-    assert "no provider API key" in blob  # case-sensitive; brief had blob.lower() typo
+    # 024 L1.5 widened "key" to "credential" (a connected account is neither an
+    # env var nor an API key), but the phrase people actually search for has to
+    # survive that rename — say both.
+    assert "no provider credential found" in blob
+    assert "no API key" in blob
+    assert "polyrob init" in blob
 
 
 def test_doctor_command_runs():
@@ -76,3 +85,12 @@ def test_doctor_command_sees_production_only_key(tmp_path, monkeypatch):
     res = CliRunner().invoke(doctor, [])
     assert res.exit_code == 0, res.output
     assert "openrouter: present" in res.output
+
+
+def test_doctor_malformed_env_key_names_the_unset_remedy():
+    # "present but unusable — malformed" is a diagnosis with no verb: the fix
+    # (remove the bad value) must be named right on the line, now that
+    # `polyrob config unset` exists.
+    lines = doctor_report({"ANTHROPIC_API_KEY": "x"})
+    blob = "\n".join(lines)
+    assert "polyrob config unset ANTHROPIC_API_KEY" in blob

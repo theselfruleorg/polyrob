@@ -34,20 +34,22 @@ EXIT_UP_TO_DATE = 0
 EXIT_UPDATE_AVAILABLE = 10
 EXIT_ERROR = 1
 
-# Every code-update step also runs the DB migration (`migrate upgrade`) so a self-host
-# following the printed instructions can't upgrade code past a schema change and hit
-# "no such column" on an un-migrated DB. The server auto-migrates at boot (api/app.py),
-# but the CLI/manual paths must migrate explicitly; the runner is idempotent (a no-op
-# when already current).
+# Schema migrations apply automatically at the next start (027 WP2: the server
+# at boot — api/app.py — AND the CLI container). The explicit runner remains for
+# git checkouts (`python -m migrations.migrate upgrade`, idempotent); for a
+# pip/pipx install the module now ships in the wheel, but prescribing an extra
+# interpreter-sensitive command a fresh user can get wrong is worse than
+# "migrations run on next start".
 _MIGRATE = "python -m migrations.migrate upgrade"
+_AUTO_MIGRATE_NOTE = "(schema migrations apply automatically on the next start)"
 _MANUAL_STEPS = {
     EDITABLE_GIT: f"git pull --ff-only && pip install -e . && {_MIGRATE}",
     GIT: f"git pull --ff-only && pip install . && {_MIGRATE}",
-    PIP: f'pip install -U "polyrob[all]" && {_MIGRATE}',
-    PIPX: f"pipx upgrade polyrob && {_MIGRATE}",
+    PIP: f'pip install -U "polyrob[all]"  {_AUTO_MIGRATE_NOTE}',
+    PIPX: f"pipx upgrade polyrob  {_AUTO_MIGRATE_NOTE}",
     DOCKER: "docker compose pull && docker compose up -d --build",
-    UNKNOWN: "update via the package manager you installed POLYROB with, "
-             f"then run: {_MIGRATE}",
+    UNKNOWN: "update via the package manager you installed POLYROB with "
+             f"{_AUTO_MIGRATE_NOTE}",
 }
 
 
@@ -316,6 +318,8 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                do_rollback: bool, snapshot_name: str, do_list: bool, assume_yes: bool,
                force: bool, as_json: bool):
     """Check for and apply POLYROB updates."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
     if do_list:
         _do_list_snapshots(as_json)
         sys.exit(EXIT_UP_TO_DATE)

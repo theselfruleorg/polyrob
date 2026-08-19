@@ -50,8 +50,14 @@ class LLMProvisioningMixin:
                 self.logger.error("LLMManager not available in container - cannot create LLM from config")
                 return None
 
-            model = llm_config.get('model', 'gpt-5')
+            model = llm_config.get('model')
             provider = llm_config.get('provider')
+            if not model:
+                # No model in the session config: resolve from the operator's
+                # runtime config (DEFAULT_PROVIDER pin > first keyed provider),
+                # never a hardcoded gpt-5 literal (2026-08-14 prod outage).
+                from agents.task.config import resolve_session_provider_model
+                provider, model = resolve_session_provider_model(provider, None)
 
             # If no provider specified, detect from model name using model registry
             if not provider:

@@ -247,6 +247,10 @@ def _schedule_boot_migrations(task_agent) -> None:
                 applied = (summary or {}).get("applied") or []
                 if applied:
                     logger.info("boot migrations applied: %s", ", ".join(applied))
+            except ImportError as e:
+                logger.error(
+                    "migrations package missing — schema cannot migrate "
+                    "(broken install: reinstall polyrob): %s", e)
             except Exception as e:
                 logger.warning("boot migrations failed (non-fatal): %s", e)
 

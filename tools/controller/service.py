@@ -9,7 +9,6 @@ from tools.controller.registry.views import ActionModel
 from tools.controller.types import ActionResult
 from tools.controller.hooks import HookPipeline
 from tools.controller.mcp_registrar import MCPActionRegistrar
-from tools.browser.context import BrowserContext
 from tools.controller.execution_context import ActionExecutionContext
 from tools.controller.views import DoneAction, SendMessageAction
 from agents.task.utils import time_execution_async, time_execution_sync

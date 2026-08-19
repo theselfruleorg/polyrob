@@ -38,6 +38,13 @@ _CREDIT_DEATH_MARKERS = (
     "payment required",
     "billing",
     "credit balance",
+    # Plan-quota death dressed as a 429: z.ai GLM Coding Plan code 1310
+    # ("Weekly/Monthly Limit Exhausted. Your limit will reset at <ts>") and its
+    # pay-as-you-go sibling. Without these the 2026-08 storm never latched: the
+    # dispatcher ground 63 dead sessions/day against an account that could not
+    # serve until its weekly reset.
+    "limit exhausted",
+    "insufficient balance",
 )
 
 # "402" needs word boundaries, not bare-substring matching: the bare form
@@ -89,47 +96,187 @@ def looks_like_credit_death(text: Optional[str]) -> bool:
     return bool(_CREDIT_DEATH_402_RE.search(low))
 
 
-def credit_sentinel_active() -> bool:
-    """True while the latch is fresh; an expired latch auto-releases (removed)."""
+#: Cap on how far in the future a provider-stated reset may push the latch —
+#: a garbled/mis-parsed timestamp must not pause autonomy for a month.
+_MAX_RELEASE_AHEAD_SEC = 7 * 86400
+
+#: Providers rarely state a timezone in "reset at <ts>". Bias EARLY: a
+#: too-early release costs one failed probe (which re-trips the latch); a
+#: too-late one keeps autonomy dead after the account already recovered.
+#: z.ai stamps Beijing time (UTC+8), so that reading is tried first.
+_TS_CANDIDATE_OFFSETS_SEC = (8 * 3600, 0)
+
+_RESET_AT_RE = re.compile(
+    r"reset at (\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})")
+
+
+def extract_reset_ts(text: Optional[str]) -> Optional[float]:
+    """Parse a provider-stated quota-reset time ("Your limit will reset at
+    2026-08-18 18:01:49") into an epoch release timestamp, or None.
+
+    Returns the earliest plausible reading that is still meaningfully in the
+    future (see ``_TS_CANDIDATE_OFFSETS_SEC``), capped at
+    ``_MAX_RELEASE_AHEAD_SEC``. None ⇒ callers fall back to the fixed
+    ``CREDIT_SENTINEL_RELEASE_HOURS`` window.
+    """
+    if not text:
+        return None
+    m = _RESET_AT_RE.search(str(text))
+    if not m:
+        return None
+    try:
+        import calendar
+        from datetime import datetime
+        dt = datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S")
+        as_utc = float(calendar.timegm(dt.timetuple()))
+    except Exception:
+        return None
+    now = time.time()
+    for offset in _TS_CANDIDATE_OFFSETS_SEC:
+        cand = as_utc - offset
+        if cand > now + 900:
+            return min(cand, now + _MAX_RELEASE_AHEAD_SEC)
+    return None
+
+
+#: Latch key for a credit death we could not attribute to a provider. It pauses
+#: everything, which is the conservative reading of "we don't know what died".
+GLOBAL_KEY = "*"
+
+
+def _read_latch(path: str) -> dict:
+    """The latch as ``{provider: {"ts": float, "release_ts": float|None}}``.
+    Tolerates every historical shape.
+
+    A latch written before provider scoping is ``{"ts":…, "reason":…}`` with no
+    provider. Reading it as GLOBAL (not as "no entries") matters on upgrade —
+    the alternative silently un-pauses a genuinely credit-dead provider.
+    """
+    def _entry(ts: float, release_ts: Optional[float] = None) -> dict:
+        return {"ts": ts, "release_ts": release_ts}
+
+    try:
+        with open(path) as f:
+            data = json.load(f) or {}
+    except Exception:
+        # Unreadable latch: treat its mtime as a global trip time.
+        return {GLOBAL_KEY: _entry(os.path.getmtime(path))}
+    providers = data.get("providers")
+    if isinstance(providers, dict):
+        out = {}
+        for name, entry in providers.items():
+            try:
+                release = (entry or {}).get("release_ts")
+                out[str(name)] = _entry(
+                    float((entry or {}).get("ts") or 0.0),
+                    float(release) if release else None)
+            except Exception:
+                continue
+        return out
+    # Legacy unkeyed shape.
+    try:
+        return {GLOBAL_KEY: _entry(float(data.get("ts") or 0.0))}
+    except Exception:
+        return {GLOBAL_KEY: _entry(os.path.getmtime(path))}
+
+
+def _entry_expired(entry: dict, now: float, window: float) -> bool:
+    """A provider-stated ``release_ts`` replaces the fixed window entirely."""
+    release_ts = entry.get("release_ts")
+    if release_ts:
+        return now >= float(release_ts)
+    return now - float(entry.get("ts") or 0.0) >= window
+
+
+def credit_sentinel_active(provider: Optional[str] = None) -> bool:
+    """Is autonomy paused for *provider*? Expired entries auto-release.
+
+    The latch is PER PROVIDER. Credit death is a property of one account, not
+    of the deployment: a dead OpenRouter key must not pause work pinned to a
+    healthy provider — least of all a flat-rate seat, where credit death cannot
+    occur at all. (Live 2026-08-14: one legacy cron job pinned the dry
+    OpenRouter; its 402 latched the global sentinel and paused every goal,
+    including correctly-pinned ones, for 5.7 hours.)
+
+    ``provider=None`` keeps the legacy meaning — "is anything paused" — so a
+    caller that does not know which provider it is about to use stays
+    conservative.
+    """
     if not credit_sentinel_enabled():
         return False
     path = _sentinel_path()
     try:
         if not os.path.exists(path):
             return False
-        try:
-            with open(path) as f:
-                ts = float((json.load(f) or {}).get("ts") or 0.0)
-        except Exception:
-            # Unreadable latch: treat its mtime as the trip time.
-            ts = os.path.getmtime(path)
-        if time.time() - ts >= _release_hours() * 3600:
+        entries = _read_latch(path)
+        window = _release_hours() * 3600
+        now = time.time()
+        fresh = {name: e for name, e in entries.items()
+                 if not _entry_expired(e, now, window)}
+        if not fresh:
             try:
                 os.remove(path)
                 logger.info("credit sentinel auto-released after %sh", _release_hours())
             except OSError:
                 pass
             return False
-        return True
+        if len(fresh) != len(entries):
+            _write_latch(path, fresh)  # drop only the expired providers
+        if provider is None:
+            return True
+        # A global (unattributed) trip pauses every provider.
+        return GLOBAL_KEY in fresh or str(provider) in fresh
     except Exception:
         return False  # fail-open: a broken latch never blocks autonomy
 
 
-async def trip_credit_sentinel(reason: str, *, container: Any = None,
-                               user_id: str = "") -> bool:
-    """Activate the latch + send the one §3.4 safety-net notice. Idempotent
-    while active; never raises."""
+def _write_latch(path: str, entries: dict, reason: str = "") -> None:
+    """Persist ``{provider: entry}``; entries may be the ``_read_latch`` dict
+    shape or bare ``float`` timestamps. Never raises."""
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        providers = {}
+        for name, entry in entries.items():
+            if isinstance(entry, dict):
+                providers[name] = {
+                    "ts": entry.get("ts"),
+                    "release_ts": entry.get("release_ts"),
+                    "reason": str(entry.get("reason") or reason)[:500],
+                }
+            else:
+                providers[name] = {"ts": entry, "reason": str(reason)[:500]}
+        with open(path, "w") as f:
+            json.dump({"providers": providers}, f)
+    except Exception:
+        logger.warning("credit sentinel: latch write failed", exc_info=True)
+
+
+async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
+                               container: Any = None,
+                               user_id: str = "",
+                               release_ts: Optional[float] = None) -> bool:
+    """Activate the latch for *provider* + send the one §3.4 safety-net notice.
+
+    Idempotent while that provider is already latched; never raises. ``provider``
+    is the account whose credits died — pass it whenever the caller knows it, so
+    a healthy provider keeps serving. Omitted => a GLOBAL trip (pauses
+    everything), the conservative reading of an unattributable failure.
+
+    ``release_ts`` (epoch) is a provider-stated quota-reset time (see
+    ``extract_reset_ts``): when given, the latch holds until then instead of
+    the fixed ``CREDIT_SENTINEL_RELEASE_HOURS`` window — one owner notice for
+    the whole outage instead of a re-trip (and a fresh ping) every window.
+    """
     if not credit_sentinel_enabled():
         return False
-    already = credit_sentinel_active()
+    key = str(provider) if provider else GLOBAL_KEY
+    already = credit_sentinel_active(key)
     if not already:
-        try:
-            path = _sentinel_path()
-            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-            with open(path, "w") as f:
-                json.dump({"ts": time.time(), "reason": str(reason)[:500]}, f)
-        except Exception:
-            logger.warning("credit sentinel: latch write failed", exc_info=True)
+        path = _sentinel_path()
+        entries = _read_latch(path) if os.path.exists(path) else {}
+        entries[key] = {"ts": time.time(), "release_ts": release_ts,
+                        "reason": str(reason)[:500]}
+        _write_latch(path, entries, reason=reason)
         try:
             from agents.task.telemetry.event_log import get_event_log
             get_event_log().record("credit_sentinel", user_id=str(user_id or ""),
@@ -145,10 +292,15 @@ async def trip_credit_sentinel(reason: str, *, container: Any = None,
             # well inside the dedup window, so pauses #2/#3 were silently
             # absorbed (live 2026-07-18/19: 3 trips, 1 delivered notice).
             trip_stamp = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime())
+            if release_ts:
+                resume = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(release_ts))
+                resume_text = f"at the provider's stated quota reset (~{resume})"
+            else:
+                resume_text = f"in {_release_hours()}h"
             text = (f"⛔ Autonomy paused ({trip_stamp}): provider credit failure — "
                     f"{str(reason)[:300]}. "
-                    f"Goal dispatch and LLM cron ticks resume automatically in "
-                    f"{_release_hours()}h (or remove {_sentinel_path()} after topping up).")
+                    f"Goal dispatch and LLM cron ticks resume automatically "
+                    f"{resume_text} (or remove {_sentinel_path()} after topping up).")
             outcome = await _ud.deliver_user_message(container, str(user_id or ""), text,
                                                      source="credit_sentinel")
             # 020 #3: a deduped sentinel notice means the owner was NOT told

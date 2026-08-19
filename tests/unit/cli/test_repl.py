@@ -76,7 +76,7 @@ def test_run_repl_threads_launch_flags(monkeypatch):
     captured = {}
 
     async def _fake_main(plain=False, lifecycle_ref=None, *, model=None,
-                         provider=None, toolset=None):
+                         provider=None, toolset=None, start_notice=None):
         captured.update(model=model, provider=provider, toolset=toolset)
 
     monkeypatch.setattr(chat_mod, "_repl_main", _fake_main)
@@ -89,7 +89,8 @@ def test_chat_command_accepts_launch_flags(monkeypatch):
     from cli.polyrob import cli
     captured = {}
 
-    def _fake_repl(plain=False, *, model=None, provider=None, toolset=None):
+    def _fake_repl(plain=False, *, model=None, provider=None, toolset=None,
+                   start_notice=None):
         captured.update(model=model, provider=provider, toolset=toolset)
 
     monkeypatch.setattr("cli.commands.chat.run_repl", _fake_repl)
@@ -205,7 +206,7 @@ def test_rob_no_args_invokes_repl(monkeypatch):
     result = CliRunner().invoke(cli, [])
     assert called.get("ran") is True
     # subcommands still work / are listed
-    assert "run" in cli.commands and "init" in cli.commands
+    assert "run" in cli.list_commands(None) and "init" in cli.list_commands(None)
 
 
 @pytest.mark.asyncio

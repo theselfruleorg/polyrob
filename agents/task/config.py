@@ -7,7 +7,7 @@ persisted and isolated between sessions.
 """
 
 from typing import Dict, Any, List, Optional, Union
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from datetime import datetime, timezone
 # Use timezone.utc for compatibility with older Python versions
 UTC = timezone.utc
@@ -21,6 +21,47 @@ from core.version import get_version
 import os
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_session_provider_model(provider=None, model=None, env=None):
+    """The ONE agents-tier resolver for a task session's (provider, model).
+
+    Fills whatever the caller omitted from the operator's runtime config rather
+    than a hardcoded openai/gpt-5 literal (2026-08-14 prod outage: telegram
+    sessions on a zai-coding-pinned box requested keyless openai, and every
+    inbound turn died once the OpenRouter fallback ran out of credits).
+
+    Order:
+      1. model-only caller -> the model's OWN provider from the registry, so a
+         pinned endpoint is never paired with a foreign model.
+      2. otherwise the shared core ladder (``core.runtime_config``): explicit >
+         CHAT_/DEFAULT_ pin > first keyed provider > openai/gpt-5 last resort.
+      3. a still-missing model is filled from the registry (that read lives
+         here, in the agents tier — never in core; see the layering ratchet).
+    """
+    from core.runtime_config import resolve_session_runtime
+
+    if model and not provider:
+        try:
+            from agents.task.utils import detect_llm_provider
+            detected = detect_llm_provider(None, model)
+            # NOTE: the registry's final fuzzy fallback means an UNKNOWN model
+            # still detects as 'openai' rather than 'generic' — so in practice
+            # this returns early for any non-empty model. 'generic' is reached
+            # only if the registry import fails.
+            if detected and detected != 'generic':
+                return detected, model
+        except Exception:
+            pass
+
+    provider, model = resolve_session_runtime(provider, model, env=env)
+    if not model:
+        try:
+            from modules.llm.llm_client_registry import get_default_model
+            model = get_default_model(provider)
+        except Exception:
+            model = None
+    return provider, model or "gpt-5"
 
 # Task Performance Mode Configuration
 class TaskMode:
@@ -82,14 +123,46 @@ class TaskMode:
 
 
 
+def _default_llm_dict() -> Dict[str, Any]:
+    """Default raw llm dict — provider/model resolved as a PAIR from the
+    operator's runtime config, never a hardcoded openai/gpt-5 literal."""
+    provider, model = resolve_session_provider_model()
+    return {
+        "model": model,
+        "provider": provider,
+        "temperature": 0.0,
+        "use_vision": False,
+    }
+
+
 class LLMConfigModel(BaseModel):
     """LLM configuration"""
     model_config = ConfigDict(extra='forbid')
     
-    model: str = Field(default="gpt-5", description="LLM model to use")
-    provider: str = Field(default="openai", description="LLM provider")
+    model: Optional[str] = Field(default=None, description="LLM model to use")
+    provider: Optional[str] = Field(default=None, description="LLM provider")
     temperature: float = Field(default=0.0, ge=0.0, le=2.0, description="LLM temperature")
     use_vision: bool = Field(default=True, description="Enable vision capabilities")
+
+    @model_validator(mode='before')
+    @classmethod
+    def _resolve_provider_model(cls, data):
+        """Fill an omitted provider/model from the operator's runtime config.
+
+        Filled as a PAIR (never two independent field defaults) so a caller who
+        pins only one side can't end up with a foreign model on a pinned
+        endpoint. An explicit value always survives.
+        """
+        if not isinstance(data, dict):
+            return data
+        if data.get('provider') and data.get('model'):
+            return data
+        provider, model = resolve_session_provider_model(
+            data.get('provider'), data.get('model')
+        )
+        data = dict(data)
+        data['provider'], data['model'] = provider, model
+        return data
 
 
 class LimitsConfigModel(BaseModel):
@@ -210,12 +283,7 @@ class AgentProfileModel(BaseModel):
     
     # LLM configuration
     llm: Dict[str, Any] = Field(
-        default_factory=lambda: {
-            "model": "gpt-5",
-            "provider": "openai",
-            "temperature": 0.0,
-            "use_vision": False
-        },
+        default_factory=lambda: _default_llm_dict(),
         description="LLM configuration"
     )
     
@@ -302,8 +370,8 @@ class TaskSessionConfig(BaseModel):
 
         return TaskSessionConfig(
             llm=LLMConfigModel(
-                model="gpt-5",
-                provider="openai",
+                # provider/model omitted on purpose -> resolved from the
+                # operator's runtime config by the validator above.
                 temperature=0.0,
                 use_vision=True
             ),

@@ -26,6 +26,32 @@ _FILEPATH_RE = re.compile(r'"(?:filepath|file_path|filePath)"\s*:\s*"([^"]+)"')
 _MAX_UNATTRIBUTED_LINES = 5
 
 
+def deliverable_line_for(rel: str, size: str, *, url: Optional[str] = None,
+                         fallback: Optional[str] = None) -> str:
+    """One deliverable line, preferring a PUBLISHED URL over a server path.
+
+    "attached" and "server-only: <path>" were the honest answers while the agent
+    had no way to put a file at an address. Once it does (the U2 ship rail), the
+    useful answer is the URL — that is what closes build -> publish -> the owner
+    gets a link, instead of the 2026-07-19 bare-filename failure mode.
+    """
+    if url:
+        return f"- {rel} ({size}) — published: {url}"
+    return fallback if fallback is not None else f"- {rel} ({size})"
+
+
+def published_url_for(user_id: str, path: str) -> Optional[str]:
+    """The published URL recorded for *path*, if the artifact ledger has one."""
+    try:
+        import os as _os
+
+        from core.artifacts import get_artifact_ledger
+        row = get_artifact_ledger()._row_by_path(user_id, _os.path.realpath(path))
+        return (row or {}).get("url") or None
+    except Exception:
+        return None
+
+
 def _fmt_size(n: Optional[int]) -> str:
     if not isinstance(n, (int, float)) or n < 0:
         return "?"
@@ -112,7 +138,13 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
             reason = reason or "attaching disabled"
         elif reason is None and len(attachments) >= max_files:
             reason = "attachment limit reached"
-        if reason is None and real:
+        # A PUBLISHED file is reachable by anyone — say so, and stop there. It
+        # outranks both "attached" and "server-only: <path>", which exist only
+        # because the agent used to have no way to give a file an address.
+        published = published_url_for(user_id, real) if (real and user_id) else None
+        if published:
+            lines.append(deliverable_line_for(rel, size, url=published))
+        elif reason is None and real:
             attachments.extend(media_entries_from_paths([real]))
             # The absolute path rides IN the line (review Important #3): a
             # quiet-held/capped/fallback re-delivery is text-only, so the text

@@ -162,8 +162,9 @@ class DatabaseVersionManager:
         if not migrations_dir.exists():
             return []
 
-        # Get all migration files
-        migration_files = sorted(migrations_dir.glob("*.py"))
+        # Get all migration files (v*.py only — versions/ is a regular package
+        # since 027 WP2, so a bare *.py glob would pick up __init__.py).
+        migration_files = sorted(migrations_dir.glob("v*.py"))
 
         # Get applied versions
         history = await self.get_version_history()

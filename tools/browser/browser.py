@@ -14,13 +14,31 @@ from pathlib import Path
 import time
 
 # ProxySettings type for proxy configuration
-from playwright.async_api import Browser as PlaywrightBrowser
-from playwright.async_api import (
-	Playwright,
-	async_playwright,
-)
+# playwright ships in the [browser] extra — import-safe on a core install;
+# the hard failure moves to launch time (_init) with the pip remedy.
+try:
+	from playwright.async_api import Browser as PlaywrightBrowser
+	from playwright.async_api import (
+		Playwright,
+		async_playwright,
+	)
 
-from tools.browser.context import BrowserContext, BrowserContextConfig
+	PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+	PLAYWRIGHT_AVAILABLE = False
+
+	class _PlaywrightUnavailable:
+		pass
+
+	PlaywrightBrowser = Playwright = _PlaywrightUnavailable
+	async_playwright = None
+
+from tools.browser.context import (
+	PLAYWRIGHT_MISSING_HINT,
+	BrowserContext,
+	BrowserContextConfig,
+)
+from tools.browser.views import BrowserError
 from tools.base_tool import BaseTool
 from tools.controller.types import ActionResult
 from tools.browser.actions import (
@@ -1150,6 +1168,8 @@ class Browser(BaseTool):
 
 	async def _init(self):
 		"""Initialize the browser session"""
+		if not PLAYWRIGHT_AVAILABLE:
+			raise ImportError(PLAYWRIGHT_MISSING_HINT)
 		self._playwright = await async_playwright().start()
 		self._browser = await self._setup_browser(self._playwright)
 
@@ -1286,6 +1306,12 @@ class Browser(BaseTool):
 			else:
 				return await self._setup_standard_browser(playwright)
 		except Exception as e:
+			from core.optional_extras import chromium_missing_hint
+
+			hint = chromium_missing_hint(str(e))
+			if hint:
+				self.logger.error(f'Failed to initialize Playwright browser: {hint}')
+				raise BrowserError(f'{e} — {hint}') from e
 			self.logger.error(f'Failed to initialize Playwright browser: {str(e)}')
 			raise
 

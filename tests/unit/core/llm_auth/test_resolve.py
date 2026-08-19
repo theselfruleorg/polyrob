@@ -86,11 +86,22 @@ class TestPrecedence:
 
 
 class TestFailClosedTenancy:
-    def test_store_ignored_when_flag_off(self, store, monkeypatch):
+    def test_store_serves_by_default_under_local_mode(self, store, monkeypatch):
+        # 027 WP4: the store default is ON under POLYROB_LOCAL — a completed
+        # `auth add <oauth-seat>` connect must be readable without a second,
+        # undocumented flag. The tenant/owner gate below still applies.
         monkeypatch.setenv("POLYROB_LOCAL", "1")
+        monkeypatch.delenv("LLM_AUTH_STORE_ENABLED", raising=False)
         store.set_provider("p", {"access_token": "tok"})
         cred = resolve_credential("p", spec(), env={}, store=store)
-        assert cred is None  # LLM_AUTH_STORE_ENABLED default OFF
+        assert cred is not None and cred.source == "oauth"
+
+    def test_store_ignored_when_flag_explicitly_off(self, store, monkeypatch):
+        monkeypatch.setenv("POLYROB_LOCAL", "1")
+        store.set_provider("p", {"access_token": "tok"})
+        cred = resolve_credential(
+            "p", spec(), env={"LLM_AUTH_STORE_ENABLED": "false"}, store=store)
+        assert cred is None  # explicit opt-out always wins
 
     def test_store_ignored_on_server(self, store, monkeypatch):
         """No POLYROB_LOCAL → the store NEVER serves (an accidental server

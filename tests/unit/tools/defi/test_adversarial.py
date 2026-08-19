@@ -12,7 +12,7 @@ import pytest
 
 from core.security.untrusted_wrap import is_untrusted_tool, wrap_untrusted
 from core.wallet import onchain, tokens
-from tools.defi.data_tool import DefiDataTool, EmptyParams, ResolveParams, TokenRefParams
+from tools.defi.data_tool import DefiDataTool, PortfolioParams, ResolveParams, TokenRefParams
 from tools.defi.providers import dexscreener
 from tools.defi.providers.base import PriceInfo
 
@@ -154,7 +154,7 @@ async def test_portfolio_reports_unknown_balance_as_unknown():
             chain=c, address=a, symbol="USDC", name="USD Coin", decimals=6,
             verified=True, metadata_changed=False, source="canonical"),
         price_fn=lambda c, a: PriceInfo(1.0, 1_000_000.0, 3, "high"))
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "unknown" in out.lower()
     assert "not zero" in out.lower()
 
@@ -184,7 +184,7 @@ async def test_seeded_thin_pool_cannot_inflate_the_total():
         holder="0x" + "22" * 20,
         balances_fn=lambda h, c, t: {USDC: 10_000_000, FAKE: 10 * 10 ** 18},
         identity_fn=identity_fn, price_fn=price_fn)
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
 
     assert "unvalued" in out.lower()
     assert "$10.00" in out, "the genuine USDC position is valued"
@@ -195,7 +195,7 @@ async def test_seeded_thin_pool_cannot_inflate_the_total():
 async def test_partial_coverage_says_tokens_may_be_invisible(monkeypatch):
     monkeypatch.delenv("ALCHEMY_API_KEY", raising=False)
     tool = DefiDataTool(holder="0x" + "22" * 20, balances_fn=lambda h, c, t: {})
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "partial" in out.lower()
     assert "invisible" in out.lower()
 

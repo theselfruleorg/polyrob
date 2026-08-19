@@ -243,6 +243,39 @@ def _configured_llm_auth_paths() -> "tuple[str, ...]":
     return tuple(paths)
 
 
+# Suffixes that mark an env file as a TEMPLATE: it documents which variables a
+# deployment needs, with placeholder values, and holds no secret. `.env.example`
+# is the canonical name for this and shipping one is how a deploy package
+# explains itself. The `.env*` glob below swallowed all of them, which is why
+# goal 5ead947671b2 ("Owner deploy package: mainnet-ready x402 endpoint") failed
+# three times on `Refusing to access a credential/secret file:
+# x402-paywall/deploy/.env.example` — the guard blocked documentation and
+# protected nothing.
+#
+# Scoped to ENV files only (see _is_env_template): a `.example` suffix must never
+# unlock `id_ed25519.example` or `server.pem.example`, where the base name is
+# itself the credential and the suffix would be a smuggling route.
+_ENV_TEMPLATE_SUFFIXES = (".example", ".sample", ".template", ".dist")
+
+
+def _is_env_template(name: str) -> bool:
+    """True for `.env.example` / `env.sample` / `.env.production.template` etc."""
+    lowered = name.lower()
+    for suffix in _ENV_TEMPLATE_SUFFIXES:
+        if not lowered.endswith(suffix):
+            continue
+        stem = lowered[: -len(suffix)]
+        # The remainder must itself be an ENV file name, not a key/cert whose
+        # extension merely got a template suffix appended.
+        if stem == ".env" or stem == "env":
+            return True
+        if stem.startswith(".env.") or stem.startswith("env."):
+            return True
+        if stem.endswith(".env"):
+            return True
+    return False
+
+
 def is_credential_file(path: Path) -> bool:
     """Return *True* if *path*'s NAME looks like a credential/secret file.
 
@@ -257,6 +290,8 @@ def is_credential_file(path: Path) -> bool:
     them, matched by realpath.
     """
     name = path.name
+    if _is_env_template(name):
+        return False
     for glob in CREDENTIAL_NAME_GLOBS:
         if "/" not in glob:
             if _matches_name_glob(name, glob):

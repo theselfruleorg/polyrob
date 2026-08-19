@@ -34,23 +34,18 @@ def serve(host, port, workers):
     # reads (incl. ~/.polyrob/.env), so a key that works for `polyrob run`
     # also works here.
     from core.bootstrap import load_env
-    from modules.llm.profiles import usable_providers_with_keys, no_key_message
+    from modules.llm.profiles import usable_providers_with_credentials, no_key_message
     load_env(local_mode=True)
-    if not usable_providers_with_keys(os.environ):
+    if not usable_providers_with_credentials(os.environ):
         click.echo(no_key_message(), err=True)
         sys.exit(1)
 
-    # run_server lives in the installed `api` package (NOT repo-root main.py,
-    # which ships in no wheel — importing it here broke every installed
-    # `polyrob serve` with ModuleNotFoundError before the gate could print).
-    try:
-        from api.server_boot import run_server
-    except ImportError as exc:
-        click.echo(
-            f"server dependencies unavailable ({exc}) — install them with "
-            "`pip install 'polyrob[server]'`",
-            err=True,
-        )
-        sys.exit(1)
+    # 027 WP3: api.server_boot itself imports cleanly without the extra (uvicorn
+    # is imported inside run_server), so a try/except around the import was dead
+    # code and users got a raw ModuleNotFoundError. Probe the actual deps.
+    from cli.commands._errors import require_extra_or_exit
+    require_extra_or_exit("server")
+
+    from api.server_boot import run_server
 
     run_server(host=host, port=port, workers=workers)

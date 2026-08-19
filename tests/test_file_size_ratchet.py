@@ -49,7 +49,10 @@ CEILINGS = {
     # putting it in tools/ would have added a new agents->tools edge to the
     # layering ratchet's shrink-only allowlist and given the flag two readers
     # that could drift. Same designated job; not an extraction candidate.
-    "core/config_policy/policy.py": 1364,
+    # Re-baselined 2026-08-14 (+13): the T4 money verbs (swap/approve_token/
+    # revoke_approval) joined PAYMENT_APPROVAL_TOOLS — they had shipped on NO
+    # approval lane (security review fix). Same designated job.
+    "core/config_policy/policy.py": 1377,
 }
 
 # A ceiling may sit at most this many lines above the real size before the

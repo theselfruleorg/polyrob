@@ -154,11 +154,15 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
 
     'email': ToolDescriptor(
         name='email',
-        description='Email sending via Gmail',
+        description=('Email send/receive from the agent\'s own address. Needs '
+                     'GMAIL_EMAIL+GMAIL_APP_PASSWORD (smtp provider) or '
+                     'AGENTMAIL_API_KEY (managed inbox, auto-provisioned); '
+                     'credentials are provider-dependent so they are enforced '
+                     'at initialize, not here.'),
         category=ToolCategory.COMMUNICATION,
         required_services=['rate_limit_manager'],
         optional_services=[],
-        required_config=['gmail_email', 'gmail_app_password'],
+        required_config=[],
         init_priority=35,
         is_optional=True,
     ),

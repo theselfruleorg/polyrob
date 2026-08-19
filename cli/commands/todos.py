@@ -57,7 +57,8 @@ def _item_line_positions(lines: List[str]) -> List[int]:
 @click.group("todos")
 def todos():
     """Manage a standalone workspace todo.md (not the agent's live session todos)."""
-    pass
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @todos.command("list")
