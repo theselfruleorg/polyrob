@@ -14,5 +14,10 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolate_defi_data_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "data_home"))
+    # The dir must EXIST — sqlite cannot create defi_tokens.db inside a
+    # nonexistent directory ("unable to open database file"), which made every
+    # identity-reading test return an error result instead of token output.
+    data_home = tmp_path / "data_home"
+    data_home.mkdir()
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(data_home))
     yield

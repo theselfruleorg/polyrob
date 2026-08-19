@@ -14,11 +14,18 @@ matching new log line correctly times out at ~30s (not hung, not instant-fail).
 """
 from pathlib import Path
 
+import pytest
+
 _REPO = Path(__file__).resolve().parents[2]
 
 
 def _read(rel: str) -> str:
-    return (_REPO / rel).read_text()
+    # scripts/ is publish-denylisted — on a public/pip tree these files don't
+    # exist, and a shipped test must skip, not fail (the 0.10.0 CI lesson).
+    path = _REPO / rel
+    if not path.exists():
+        pytest.skip(f"{rel} not shipped in this tree (private ops tooling)")
+    return path.read_text()
 
 
 def test_deploy_prod_polls_instead_of_fixed_sleep():

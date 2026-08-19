@@ -625,21 +625,11 @@ def dead_target_registry_enabled() -> bool:
     return _bool_env("DEAD_TARGET_REGISTRY", True)
 
 
-def memory_backend_default(local: bool) -> str:
-    """SSOT for the MEMORY_BACKEND default (027 rider): local_vector under the
-    single-user local profile, sqlite on servers. backend_factory, doctor and
-    embedder_needed all derive from THIS — three independent copies used to
-    exist and could silently diverge."""
-    return "local_vector" if local else "sqlite"
-
-
-def resolved_memory_backend() -> str:
-    """The effective backend name: explicit MEMORY_BACKEND wins, else the
-    profile default. Lowercased; may be 'none'/'' for the null provider."""
-    raw = os.getenv("MEMORY_BACKEND")
-    if raw is not None and raw.strip():
-        return raw.strip().lower()
-    return memory_backend_default(local_mode_enabled())
+# MEMORY_BACKEND default SSOT: memory_policy.py (extracted; re-exported here).
+from core.config_policy.memory_policy import (  # noqa: F401,E402
+    memory_backend_default,
+    resolved_memory_backend,
+)
 
 
 def embedder_needed() -> bool:
