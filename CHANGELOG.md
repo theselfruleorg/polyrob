@@ -142,6 +142,15 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ### Fixed
 
+- **The DeFi money verbs joined the approval lane and the taint gate.** Three
+  trading verbs shipped on NO approval lane and outside the correspondent-taint
+  gate's name layer — an approval-mode deployment could reach them without the
+  owner's OK. Every money verb now rides the same approval + taint + cap
+  ladder, enforced by an end-to-end real-guard suite.
+- **Usage is billed to the SERVING provider, not the model's vendor** — a
+  Kimi model served through OpenRouter was attributed (and priced) as
+  Moonshot; and a flat-rate subscription seat no longer fabricates per-token
+  spend in the aux + display paths.
 - **The daily workspace cleanup deleted the agent's home.** Under
   `POLYROB_PROJECT_DIR` every session's workspace IS the shared project root, so
   `cleanup_old_workspaces` called `shutil.rmtree` on it once per old session
