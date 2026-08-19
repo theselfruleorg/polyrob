@@ -20,4 +20,11 @@ def _isolate_defi_data_home(tmp_path, monkeypatch):
     data_home = tmp_path / "data_home"
     data_home.mkdir()
     monkeypatch.setenv("POLYROB_DATA_DIR", str(data_home))
+    # A CLI test earlier in the full run calls load_env(local_mode=True), which
+    # leaks the developer's REAL ~/.polyrob/.env (incl. ALCHEMY_API_KEY) into
+    # os.environ — alchemy_index.available() then flips true and portfolio tests
+    # make LIVE network calls for the fixture holder. Unit tests never network.
+    for var in ("ALCHEMY_API_KEY", "ALCHEMY_RPC_URL_ETHEREUM",
+                "ALCHEMY_RPC_URL_BASE", "ALCHEMY_RPC_URL_ROBINHOOD"):
+        monkeypatch.delenv(var, raising=False)
     yield
