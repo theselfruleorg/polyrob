@@ -1146,19 +1146,24 @@ async def create_session(
                 detail="Beta access: Task automation requires DEN token ownership or admin-granted access. Join https://t.me/tmachinrobot for access."
             )
         
-        # Build session config with tools_config if provided
         from agents.task.config import TaskSessionConfig
         from agents.task.utils import detect_llm_provider
 
         session_config = TaskSessionConfig.defaults()
-        session_config.llm.model = request_body.get("model", "gpt-5")
-
-        # Auto-detect provider from model name if not specified
-        if "provider" in request_body:
-            session_config.llm.provider = request_body["provider"]
+        req_model = request_body.get("model")
+        if req_model:
+            session_config.llm.model = req_model
+            if "provider" in request_body:
+                session_config.llm.provider = request_body["provider"]
+            else:
+                session_config.llm.provider = detect_llm_provider(None, req_model)
+                logger.info(f"Auto-detected provider '{session_config.llm.provider}' for model '{req_model}'")
         else:
-            session_config.llm.provider = detect_llm_provider(None, session_config.llm.model)
-            logger.info(f"Auto-detected provider '{session_config.llm.provider}' for model '{session_config.llm.model}'")
+            # No model in body: operator runtime config (DEFAULT_PROVIDER pin >
+            # first keyed) — never a hardcoded openai/gpt-5 (2026-08-14 outage).
+            from agents.task.config import resolve_session_provider_model
+            provider, model = resolve_session_provider_model(request_body.get("provider"), None)
+            session_config.llm.provider, session_config.llm.model = provider, model
 
         session_config.llm.temperature = request_body.get("temperature", 0.0)
 
@@ -1166,7 +1171,6 @@ async def create_session(
         if "use_vision" in request_body:
             session_config.llm.use_vision = request_body["use_vision"]
         else:
-            # Check model registry for vision support
             from modules.llm.model_registry import get_model_config
             model_config = get_model_config(session_config.llm.model)
             if model_config and model_config.capabilities:
@@ -1179,8 +1183,7 @@ async def create_session(
         session_config.limits.max_steps = request_body.get("max_steps", 50)
         session_config.tools = request_body.get("tools", ["browser", "filesystem"])
 
-        # Handle MCP server selection
-        # mcp_servers is a list of tool_ids like ["mcp:anysite", "mcp:user:myserver"]
+        # MCP server selection — a list of tool_ids like ["mcp:anysite", "mcp:user:myserver"]
         mcp_servers = request_body.get("mcp_servers", [])
         if mcp_servers:
             # Add 'mcp' to tools if not present and we have MCP servers selected

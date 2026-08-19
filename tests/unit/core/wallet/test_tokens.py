@@ -149,3 +149,41 @@ def test_bad_address_refused_before_any_rpc(tmp_path):
 
     with pytest.raises(ValueError):
         T.get_token_identity("base", "0xdeadbeef", db_path=str(tmp_path / "t.db"), rpc=boom)
+
+
+# --- per-chain canonical pins (2026-08-17) ----------------------------------
+# The pins were Base-only, so Ethereum's USDC — the most-traded ERC-20 there —
+# had no pinned identity and fell back to reading the chain.
+
+def test_ethereum_usdc_and_weth_are_pinned_with_their_own_addresses():
+    from core.wallet.tokens import canonical_token
+    usdc = canonical_token("ethereum", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+    assert usdc and usdc["symbol"] == "USDC" and usdc["decimals"] == 6
+    weth = canonical_token("ethereum", "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+    assert weth and weth["symbol"] == "WETH" and weth["decimals"] == 18
+
+
+def test_base_pins_survive_the_multi_chain_rewrite():
+    from core.wallet.tokens import canonical_token
+    assert canonical_token("base", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913")
+    assert canonical_token("base", "0x4200000000000000000000000000000000000006")
+
+
+def test_a_chains_usdc_is_never_canonical_on_another_chain():
+    """Identity is (chain, address). Base's USDC address on Ethereum is a
+    different contract — pinning across chains would assert a symbol for a
+    contract nobody verified."""
+    from core.wallet.tokens import canonical_token
+    assert canonical_token("ethereum",
+                           "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913") is None
+    assert canonical_token("base",
+                           "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48") is None
+
+
+def test_unverified_chains_carry_no_pins():
+    """Arbitrum/Polygon USDC addresses exist in the registry for balance reads,
+    but were never verified on-chain here, so they must not claim the
+    'canonical/verified' status that only an operator check confers."""
+    from core.wallet.tokens import canonical_token
+    assert canonical_token("arbitrum",
+                           "0xaf88d065e77c8cC2239327C5EDb3A432268e5831") is None

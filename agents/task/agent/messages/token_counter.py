@@ -25,6 +25,40 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def completion_reserve_cap() -> int:
+	"""Ceiling on the output reserve subtracted from the input budget (P1,
+	context-usage audit 2026-08-15).
+
+	The budget formula historically subtracted the model's FULL
+	``max_completion_tokens`` — for rows like ``z-ai/glm-5`` (131072 reserve on a
+	202752 window) that surrendered 65% of the window, and rows with
+	reserve==window clamped the budget to the 1,000-token floor. The reserve is
+	an OUTPUT allowance, not a per-request guarantee, so a bounded ceiling is
+	honest: ``COMPLETION_RESERVE_TOKENS`` (default 16384; ``0`` disables the cap
+	and restores the legacy full-reserve behavior).
+	"""
+	from core.env import int_env
+	return int_env("COMPLETION_RESERVE_TOKENS", 16384)
+
+
+def _capped_reserve(max_completion_tokens: int) -> int:
+	cap = completion_reserve_cap()
+	if cap > 0:
+		return min(max_completion_tokens, cap)
+	return max_completion_tokens
+
+
+def count_tool_schemas_enabled() -> bool:
+	"""Whether the gauge includes the tool-schema (`tools` param) tokens (P4).
+
+	The schemas are real billed prompt bytes every step (7.5K on the default
+	local rig) but were invisible to every gauge sum. Default ON; set
+	``CTX_COUNT_TOOL_SCHEMAS=false`` for the legacy messages-only numerator.
+	"""
+	from core.env import bool_env
+	return bool_env("CTX_COUNT_TOOL_SCHEMAS", True)
+
+
 class TokenCounterMixin:
 	# Empty slots so the composed MessageManager keeps its own __slots__ (no __dict__).
 	__slots__ = ()
@@ -64,9 +98,11 @@ class TokenCounterMixin:
 		model_config = get_model_config(model_name)
 
 		if model_config and model_config.context_window:
-			# 95% of context window minus completion reserve
+			# 95% of context window minus the CAPPED completion reserve (P1: the
+			# full max_completion_tokens is an output ceiling, not a per-request
+			# need — subtracting it whole starved big-output models of input).
 			context_95pct = int(model_config.context_window * 0.95)
-			completion_reserve = model_config.max_completion_tokens
+			completion_reserve = _capped_reserve(model_config.max_completion_tokens)
 			max_input = max(1000, context_95pct - completion_reserve)
 
 			# Apply safety margin (default 5%)
@@ -162,7 +198,9 @@ class TokenCounterMixin:
 			getattr(self, '_skill_message_tokens', 0) +
 			getattr(self, '_self_context_tokens', 0) +
 			getattr(self, '_project_context_tokens', 0) +
-			getattr(self, '_runtime_identity_tokens', 0)
+			getattr(self, '_runtime_identity_tokens', 0) +
+			getattr(self, '_environment_tokens', 0) +
+			getattr(self, '_tool_catalog_tokens', 0)
 		)
 
 	def estimate_tokens(self, messages: List[BaseMessage]) -> int:
@@ -267,7 +305,8 @@ class TokenCounterMixin:
 
 		if context_window > 0:
 			from agents.task.robust_parse_config import RobustParseConfig
-			new_max_input = max(1000, int(context_window * 0.95) - completion_tokens)
+			new_max_input = max(
+				1000, int(context_window * 0.95) - _capped_reserve(completion_tokens))
 			if new_max_input < self.max_input_tokens:
 				old_limit = self.max_input_tokens
 				self.max_input_tokens = new_max_input
@@ -332,7 +371,39 @@ class TokenCounterMixin:
 				+ self._initial_task_tokens + getattr(self, '_skill_message_tokens', 0)
 				+ getattr(self, '_self_context_tokens', 0)
 				+ getattr(self, '_project_context_tokens', 0)
-				+ getattr(self, '_runtime_identity_tokens', 0))
+				+ getattr(self, '_runtime_identity_tokens', 0)
+				+ getattr(self, '_environment_tokens', 0)
+				+ getattr(self, '_tool_catalog_tokens', 0))
+
+	def set_tool_schema_tokens(self, tokens: int) -> None:
+		"""Record the token cost of the emitted tool-schema list (P4).
+
+		Stamped by the step loop after the provider schemas are generated (the
+		registry memoizes the estimate, so this is a cheap per-step write). The
+		value rides `get_actual_token_count` behind CTX_COUNT_TOOL_SCHEMAS —
+		schemas are sent as the `tools` request param, NOT as a message, so they
+		never enter `history.total_tokens`.
+		"""
+		self._tool_schema_tokens = max(0, int(tokens or 0))
+
+	def _count_hmem_tokens(self, context: str) -> int:
+		"""Real token count for the H-MEM injection, memoized per context string.
+
+		Replaces the words*1.3 estimate (P7), which measured only 0.58-0.77 of
+		the real counter — an undercount in the direction that makes compaction
+		fire late. Falls back to the estimate if the counter errors.
+		"""
+		key = (len(context), hash(context))
+		memo = getattr(self, '_hmem_token_memo', None)
+		if memo and memo[0] == key:
+			return memo[1]
+		try:
+			from modules.llm import count_tokens
+			tokens = count_tokens(context, self.model_name)
+		except Exception:
+			tokens = int(len(context.split()) * 1.3)
+		self._hmem_token_memo = (key, tokens)
+		return tokens
 
 	def get_actual_token_count(self) -> int:
 		"""Get the ACTUAL token count including H-MEM and ephemeral messages.
@@ -353,18 +424,22 @@ class TokenCounterMixin:
 		if hasattr(self, '_ephemeral_messages') and self._ephemeral_messages:
 			ephemeral_tokens = self.estimate_tokens(self._ephemeral_messages)
 
-		# Estimate H-MEM tokens if available
+		# Count H-MEM tokens if available (P7: real counter, memoized per string)
 		hmem_tokens = 0
 		if self.task_context_manager and self.session_id:
 			try:
 				context = self.task_context_manager.get_context_injection(self.session_id)
 				if context:
-					# Rough estimate: words * 1.3 tokens per word
-					hmem_tokens = int(len(context.split()) * 1.3)
+					hmem_tokens = self._count_hmem_tokens(context)
 			except Exception:
 				pass
 
-		total = base_count + ephemeral_tokens + hmem_tokens
+		# P4: the emitted tool-schema list is real billed prompt bytes.
+		schema_tokens = 0
+		if count_tool_schemas_enabled():
+			schema_tokens = getattr(self, '_tool_schema_tokens', 0)
+
+		total = base_count + ephemeral_tokens + hmem_tokens + schema_tokens
 
 		# Log if there's a significant difference from base count
 		if ephemeral_tokens + hmem_tokens > 1000:
@@ -470,11 +545,7 @@ class TokenCounterMixin:
 				'usage_percent': float
 			}
 		"""
-		base_count = (self.history.total_tokens + self._system_message_tokens
-					+ self._initial_task_tokens + getattr(self, '_skill_message_tokens', 0)
-					+ getattr(self, '_self_context_tokens', 0)
-					+ getattr(self, '_project_context_tokens', 0)
-					+ getattr(self, '_runtime_identity_tokens', 0))
+		base_count = self.get_token_count()
 		current = self.get_actual_token_count()
 		remaining = self.safe_input_tokens - current
 		usage_percent = (current / self.max_input_tokens * 100) if self.max_input_tokens > 0 else 0

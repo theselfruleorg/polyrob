@@ -43,6 +43,24 @@ def _operator_env_file_sandbox():
 # one test's load_env cannot poison later tests. Deliberately a NAMED list, not a
 # full environ snapshot — >function-scoped env fixtures stay intact (none touch
 # these today; keep it that way).
+def _provider_key_env_vars() -> tuple:
+    """Every provider key var the spec registry knows (ZAI_API_KEY, GLM_API_KEY,
+    CEREBRAS_API_KEY, …). Derived, not hand-listed: the hand-list missed
+    ZAI_API_KEY the day the dev box gained one in ~/.polyrob/.env (2026-08-14) —
+    a doctor CliRunner test leaked it into os.environ and a later test in the
+    same file saw a phantom usable provider. Fail-open to () — the guard then
+    degrades to the explicit names below, never breaks collection.
+    """
+    try:
+        from modules.llm.provider_spec import get_specs
+        out = []
+        for s in get_specs():
+            out.extend(s.env_key_chain())
+        return tuple(dict.fromkeys(out))
+    except Exception:
+        return ()
+
+
 _OPERATOR_ENV_VARS = (
     "DEFAULT_PROVIDER", "DEFAULT_MODEL", "CHAT_PROVIDER", "CHAT_MODEL",
     "POLYROB_OWNER_USER_ID", "POLYROB_OWNER_EMAIL", "POLYROB_OWNER_USERNAME",
@@ -59,7 +77,7 @@ _OPERATOR_ENV_VARS = (
     "PAYMENT_APPROVAL_MODE", "PAYMENT_APPROVAL_TIMEOUT_SEC",
     "APPROVAL_GRANT_TTL_HOURS", "AGENT_COMPUTE_POSTURE",
     "AUTONOMY_POSTURE", "AUTONOMY_MODE",
-)
+) + _provider_key_env_vars()
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +95,17 @@ def _restore_operator_env_vars():
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+    # 026 P1.1: load_env now re-freezes the frozen policy flags ONCE per
+    # process — a CliRunner test that triggered the first load_env with a
+    # monkeypatched env would otherwise leave the frozen globals drifted for
+    # the rest of the suite. Realign them with the just-restored env.
+    try:
+        from core.config_policy.policy import (_refreeze_compute_posture,
+                                               _refreeze_payment_approval_flags)
+        _refreeze_compute_posture()
+        _refreeze_payment_approval_flags()
+    except Exception:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -293,6 +322,39 @@ def _isolate_deployed_apps_db(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("DEPLOYED_APPS_DB_PATH", str(tmp_path / "deployed_apps.db"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_artifacts_db(tmp_path, monkeypatch):
+    """Keep the artifact ledger OUT of the developer's real data home.
+
+    Mirrors ``_isolate_deployed_apps_db``: ``default_artifacts_db()`` resolves
+    under the data root, which on a dev machine is the repo's ``.polyrob``.
+    The cached module singleton is dropped too, so a test that already built
+    one cannot leak it into the next test's tmp path.
+    """
+    monkeypatch.setenv("ARTIFACTS_DB_PATH", str(tmp_path / "artifacts.db"))
+    from core.artifacts import reset_artifact_ledger
+    reset_artifact_ledger()
+    yield
+    reset_artifact_ledger()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_publish_store(tmp_path, monkeypatch):
+    """Keep the ship rail's DB and its SERVED FILE TREE out of the real data home.
+
+    The publish root is a directory a test could otherwise populate under the
+    developer's ~/.polyrob — and on a box where the vhost is live, those files
+    would be publicly served.
+    """
+    monkeypatch.setenv("PUBLICATIONS_DB_PATH", str(tmp_path / "publications.db"))
+    monkeypatch.setenv("PUBLISH_ROOT", str(tmp_path / "publish"))
+    monkeypatch.setenv("PUBLISH_BASE_URL", "https://pub.test.invalid")
+    from core.publish import reset_publish_store
+    reset_publish_store()
+    yield
+    reset_publish_store()
 
 
 @pytest.fixture(autouse=True)

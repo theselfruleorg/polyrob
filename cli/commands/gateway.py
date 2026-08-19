@@ -45,14 +45,6 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
 
     from core.bootstrap import build_cli_container, setup_project_path, setup_sqlite_compat
 
-    # Default the shared bus + correspondent access ON. The individual surface flags
-    # (TELEGRAM_/WHATSAPP_/EMAIL_SURFACE_ENABLED) are NOT defaulted here — the operator
-    # opts into which surfaces to run (see the "No surfaces enabled" guidance below);
-    # this is the "run all ENABLED surfaces" launcher, not "force every surface on".
-    # Explicit env values still win (os.environ.setdefault never clobbers).
-    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
-    os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
-
     setup_project_path()
     setup_sqlite_compat()
 
@@ -60,6 +52,16 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     from cli.keys import preflight_or_onboard
     if not preflight_or_onboard(interactive=False):
         sys.exit(1)
+
+    # Default the shared bus + correspondent access ON. The individual surface flags
+    # (TELEGRAM_/WHATSAPP_/EMAIL_SURFACE_ENABLED) are NOT defaulted here — the operator
+    # opts into which surfaces to run (see the "No surfaces enabled" guidance below);
+    # this is the "run all ENABLED surfaces" launcher, not "force every surface on".
+    # Explicit env OR FILE values still win: the setdefault runs AFTER the
+    # preflight's load_env (026 P1.3 — the old before-load order made load_env's
+    # override=False silently ignore a file-set CORRESPONDENT_ACCESS_ENABLED=false).
+    os.environ.setdefault("SINGULAR_CHAT_ENABLED", "true")
+    os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
 
     # Logging: verbose→DEBUG; headless→INFO; interactive→quiet (mirrors telegram.py).
     headless = not sys.stderr.isatty()
@@ -183,6 +185,13 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
     # for the shutdown sweep in `finally`.
     connector_harnesses = []
 
+    def _skip_reason(exc: BaseException) -> str:
+        """Skip-line detail; a missing optional dep gains the pip-extra remedy."""
+        from core.optional_extras import missing_extra_hint
+
+        hint = missing_extra_hint(str(exc))
+        return f"{exc} ({hint})" if hint else str(exc)
+
     def _run_harness(h):
         async def _run():
             try:
@@ -217,7 +226,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
             except Exception as exc:
                 tg_harness = None
                 click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Telegram surface failed to start, skipping: {exc}")
+                           + f"Telegram surface failed to start, skipping: {_skip_reason(exc)}")
 
     # --- WhatsApp ---
     # Preflight Meta WhatsApp credentials — otherwise the gateway serves the webhook
@@ -266,7 +275,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
             wa_harness = None
             wa_server = None
             click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + f"WhatsApp surface failed to start, skipping: {exc}")
+                       + f"WhatsApp surface failed to start, skipping: {_skip_reason(exc)}")
 
     # --- Email ---
     if em_enabled:
@@ -291,7 +300,8 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
             em_harness = build_email_harness(container, task_agent, email_tool=email_tool,
                                              data_dir=_data_dir, poll_interval=poll_sec)
             await em_harness.start()
-            addr = getattr(container.config, "gmail_email", None) or "(unconfigured)"
+            from core.instance import resolve_agent_email
+            addr = resolve_agent_email() or "(unconfigured)"
             click.echo(click.style(f"  email polling {addr} every {poll_sec}s", dim=True))
 
             async def _run_em():
@@ -304,7 +314,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
         except Exception as exc:
             em_harness = None
             click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                       + f"Email surface failed to start, skipping: {exc}")
+                       + f"Email surface failed to start, skipping: {_skip_reason(exc)}")
 
     _conn_data_dir = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
 
@@ -324,7 +334,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
                 coroutines.append(_run_harness(h))
             except Exception as exc:
                 click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Discord surface failed to start, skipping: {exc}")
+                           + f"Discord surface failed to start, skipping: {_skip_reason(exc)}")
 
     # --- Slack ---
     if sl_enabled:
@@ -345,7 +355,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
                 coroutines.append(_run_harness(h))
             except Exception as exc:
                 click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Slack surface failed to start, skipping: {exc}")
+                           + f"Slack surface failed to start, skipping: {_skip_reason(exc)}")
 
     # --- Signal ---
     if sg_enabled:
@@ -364,7 +374,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
                 coroutines.append(_run_harness(h))
             except Exception as exc:
                 click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"Signal surface failed to start, skipping: {exc}")
+                           + f"Signal surface failed to start, skipping: {_skip_reason(exc)}")
 
     # --- X (Twitter) DMs ---
     if x_enabled:
@@ -383,7 +393,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
                 coroutines.append(_run_harness(h))
             except Exception as exc:
                 click.echo(click.style("[gateway] WARN: ", fg="yellow")
-                           + f"X surface failed to start, skipping: {exc}")
+                           + f"X surface failed to start, skipping: {_skip_reason(exc)}")
 
     if not coroutines:
         # All surfaces were enabled in flags but none produced a runnable coroutine

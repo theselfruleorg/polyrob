@@ -46,15 +46,21 @@ def _int_attr(obj: Any, name: str, default: int = 0) -> int:
 
 
 # Foundation slots in assembly order (see ``messages/retrieval.py``
-# ``get_messages_for_llm``): system -> runtime identity -> self_context ->
-# project_context -> initial task -> skills -> (H-MEM, not pure — omitted).
+# ``get_messages_for_llm``): system -> runtime identity -> environment ->
+# self_context -> project_context -> initial task -> skills -> tool catalog.
+# H-MEM is shown from the LAST KNOWN count (the P7 memo the gauge leaves
+# behind) — still a pure attribute read, no task_context_manager round-trip.
 _SLOT_SPECS: Tuple[Tuple[str, str], ...] = (
     ("system prompt", "_system_message_tokens"),
     ("runtime identity", "_runtime_identity_tokens"),
+    ("environment", "_environment_tokens"),
     ("self_context (SOUL/SELF)", "_self_context_tokens"),
     ("project_context", "_project_context_tokens"),
     ("initial task", "_initial_task_tokens"),
     ("skills", "_skill_message_tokens"),
+    ("tool catalog", "_tool_catalog_tokens"),
+    # P4: sent as the `tools` request param, not a message — real billed bytes.
+    ("tool schemas (tools param)", "_tool_schema_tokens"),
 )
 
 
@@ -74,6 +80,14 @@ def render_context_breakdown(message_manager: Any) -> str:
         tokens = _int_attr(message_manager, attr)
         if tokens > 0:
             slots.append((label, tokens))
+
+    # P5: last-known H-MEM count from the P7 memo — pure attribute read.
+    try:
+        memo = getattr(message_manager, "_hmem_token_memo", None)
+        if memo and int(memo[1]) > 0:
+            slots.append(("session memory (H-MEM, last known)", int(memo[1])))
+    except Exception:
+        pass
 
     history_tokens = 0
     history = getattr(message_manager, "history", None)

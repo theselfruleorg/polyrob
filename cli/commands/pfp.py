@@ -80,6 +80,8 @@ def _resolve_config(seed: str | None, config_path: str | None) -> Dict[str, Any]
 @click.group("pfp")
 def pfp():
     """Generate, view, and manage the agent's avatar (Mindprint)."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @pfp.command("show")

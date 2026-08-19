@@ -82,6 +82,13 @@ class EmailHarness:
         self.email_tool = email_tool
         self.poll_interval = poll_interval
         self.dedup = MessageDedup(os.path.join(data_dir, "email_dedup.db"))
+        # Transport seam (Task 5, 2026-08-18): the fetcher owns "get new mail" +
+        # the durable handled-mark; poll_once stays transport-blind.
+        from surfaces.email.fetchers import AgentMailFetcher, ImapFetcher
+        if getattr(email_tool, "provider", "smtp") == "agentmail":
+            self.fetcher = AgentMailFetcher(email_tool.agentmail, self.dedup)
+        else:
+            self.fetcher = ImapFetcher(email_tool)
         # A UserDirectory is REQUIRED to identify inbound senders. Only the telegram
         # harness ever constructed/registered one, so `polyrob email` had none and
         # every inbound email crashed identification and was silently dropped after
@@ -121,13 +128,12 @@ class EmailHarness:
         from surfaces.telegram.harness import act_on_inbound  # shared decision executor
         routed = 0
         try:
-            messages = await self._fetch_unread()
+            messages = await self.fetcher.fetch_unread()
         except Exception as e:
             logger.debug("email poll fetch failed: %s", e)
             return 0
-        for num, em in messages:
+        for handle, norm in messages:
             try:
-                norm = normalize_email_message(em)
                 result = await process_email(
                     self.container, norm, dedup=self.dedup,
                     user_directory=self.user_directory,
@@ -138,35 +144,8 @@ class EmailHarness:
             except Exception as e:
                 logger.debug("email message routing failed: %s", e)
             finally:
-                self._mark_seen(num)
+                self.fetcher.mark_handled(handle)
         return routed
-
-    def _mark_seen(self, num) -> None:
-        try:
-            conn = getattr(self.email_tool, "imap_connection", None)
-            if conn is not None and num is not None:
-                conn.store(num, "+FLAGS", "\\Seen")
-        except Exception as e:
-            logger.debug("email mark-seen %s failed: %s", num, e)
-
-    async def _fetch_unread(self) -> list:
-        """Fetch unread messages as (imap_num, parsed email.Message) pairs (IMAP I/O)."""
-        import email as _email
-        tool = self.email_tool
-        await tool.ensure_initialized()
-        if not getattr(tool, "imap_connection", None):
-            await tool._connect_imap()
-        conn = tool.imap_connection
-        conn.select("INBOX")
-        _, nums = conn.search(None, "UNSEEN")
-        out = []
-        for num in (nums[0].split() if nums and nums[0] else []):
-            try:
-                _, data = conn.fetch(num, "(RFC822)")
-                out.append((num, _email.message_from_bytes(data[0][1])))
-            except Exception as e:
-                logger.debug("email fetch %s failed: %s", num, e)
-        return out
 
     async def run_polling(self) -> None:
         await self.start()

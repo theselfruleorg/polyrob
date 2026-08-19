@@ -47,10 +47,10 @@ def _backfill_provider_keys(config_dir: str = "config", env=None) -> None:
     # Gate on *usable* keys so an env whose only provider key is unusable (deepseek,
     # or a malformed/too-short key that BotConfig will blank) still triggers backfill
     # of a real provider key from config/.env.* instead of being silently masked.
-    from modules.llm.profiles import usable_providers_with_keys
+    from modules.llm.profiles import usable_providers_with_credentials
 
     env = _os.environ if env is None else env
-    if usable_providers_with_keys(env):
+    if usable_providers_with_credentials(env):
         return
     for cand in ("production", "development"):
         f = _Path(config_dir) / f".env.{cand}"
@@ -59,12 +59,104 @@ def _backfill_provider_keys(config_dir: str = "config", env=None) -> None:
         for k, v in dotenv_values(str(f)).items():
             if v and _is_secret_key(k) and not env.get(k):
                 env[k] = v
-        if usable_providers_with_keys(env):
+        if usable_providers_with_credentials(env):
             break
 
 
+#: One-time guard for the deprecation WARN below (per process).
+_warned_backfill_retired = False
+
+#: Once-guard for the frozen-policy-flag refreeze (026 P1.1). Consumed by the
+#: FIRST load_env call; later calls (and any mid-session env mutation) can
+#: never move the frozen flags again — that stays the security property.
+_POLICY_REFROZEN = False
+
+
+def _refreeze_frozen_policy_flags_once() -> None:
+    """Re-freeze the import-frozen policy flags from the now-layered env (026 P1.1).
+
+    ``core.config_policy`` is imported at this module's import time (line 16),
+    which is BEFORE any entrypoint calls :func:`load_env` — so
+    AGENT_COMPUTE_POSTURE and the payment-approval flags used to freeze the
+    bare process env and a value in any ``.polyrob/.env`` was a permanent
+    no-op (`polyrob config set AGENT_COMPUTE_POSTURE …` silently did nothing).
+    Called exactly once, at the end of the FIRST ``load_env``, before any
+    container/agent exists. Also nudges the ``tools.controller.approval``
+    seam — but only when that module is ALREADY imported (core never imports
+    the tools tier); an un-imported module freezes correctly on its own later
+    import. Fail-open: a refreeze error must never break env loading.
+    """
+    global _POLICY_REFROZEN
+    if _POLICY_REFROZEN:
+        return
+    _POLICY_REFROZEN = True
+    try:
+        from core.config_policy.policy import (_refreeze_compute_posture,
+                                               _refreeze_payment_approval_flags)
+        _refreeze_compute_posture()
+        _refreeze_payment_approval_flags()
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "frozen policy-flag refreeze failed — env-file values for "
+            "AGENT_COMPUTE_POSTURE/PAYMENT_APPROVAL_* stay inert", exc_info=True)
+    try:
+        approval_mod = sys.modules.get("tools.controller.approval")
+        if approval_mod is not None:
+            approval_mod._refreeze_approval_flags_for_tests()
+    except Exception:
+        logging.getLogger(__name__).debug("approval-seam refreeze skipped", exc_info=True)
+
+
 def _backfill_enabled() -> bool:
-    return os.environ.get("POLYROB_ENV_KEY_BACKFILL", "1").strip().lower() not in _FALSEY_BACKFILL
+    """DEPRECATED opt-in (default OFF since the backfill's retirement, W1.2).
+
+    The automatic ``config/.env.*`` key backfill imported dead production keys
+    on a zero-key boot and silently vanished them the moment ONE real key was
+    set. The replacement is the explicit ``polyrob config migrate`` verb; this
+    flag keeps the legacy behavior for one release and is then deleted along
+    with ``_backfill_provider_keys``.
+    """
+    raw = os.environ.get("POLYROB_ENV_KEY_BACKFILL")
+    if raw is None:
+        return False
+    return raw.strip().lower() not in _FALSEY_BACKFILL
+
+
+def _warn_backfill_retired_once(config_dir: str = "config") -> None:
+    """One-time WARN when the retired backfill WOULD have fired.
+
+    Fires only on the default path (flag unset — an explicit opt-out stays
+    silent), only when ``config/.env.*`` actually holds a key the old path
+    would have imported, and only when no usable provider credential exists —
+    i.e. exactly the boot the old behavior used to rescue. Names the remedy.
+    """
+    global _warned_backfill_retired
+    if _warned_backfill_retired or os.environ.get("POLYROB_ENV_KEY_BACKFILL") is not None:
+        return
+    from pathlib import Path as _Path
+    from dotenv import dotenv_values
+
+    has_candidate = False
+    for cand in ("production", "development"):
+        f = _Path(config_dir) / f".env.{cand}"
+        if not f.exists():
+            continue
+        if any(v and _is_secret_key(k) and not os.environ.get(k)
+               for k, v in dotenv_values(str(f)).items()):
+            has_candidate = True
+            break
+    if not has_candidate:
+        return
+    from modules.llm.profiles import usable_providers_with_credentials
+    if usable_providers_with_credentials(os.environ):
+        return
+    _warned_backfill_retired = True
+    logging.getLogger(__name__).warning(
+        "config/.env.* holds provider keys this process no longer auto-imports "
+        "(the env-key backfill is retired — default OFF). Run `polyrob config "
+        "migrate` to copy them into ~/.polyrob/.env, or set "
+        "POLYROB_ENV_KEY_BACKFILL=1 for the legacy behavior (removed next release)."
+    )
 
 
 def load_env(env: Optional[str] = None, config_dir: str = "config",
@@ -110,12 +202,21 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
             if cand.path.exists():
                 load_dotenv(str(cand.path), override=True)
 
-    # Local-mode key backfill (Seam 3): if the CLI still has zero provider keys
-    # after layering, source ONLY secret keys from config/.env.{production,development}
-    # so `rob` "just works" with keys wherever they reasonably live — without ever
-    # importing production flags. Server (local_mode=False) is never touched.
-    if local_mode and _backfill_enabled():
-        _backfill_provider_keys(config_dir)
+    # Local-mode key backfill (Seam 3) is RETIRED — default OFF. The explicit
+    # `polyrob config migrate` verb is the replacement; POLYROB_ENV_KEY_BACKFILL=1
+    # keeps the legacy behavior for one release (then both are deleted). On the
+    # default path a one-time WARN names the migrate verb whenever the old
+    # behavior WOULD have fired. Server (local_mode=False) is never touched.
+    if local_mode:
+        if _backfill_enabled():
+            _backfill_provider_keys(config_dir)
+        else:
+            _warn_backfill_retired_once(config_dir)
+
+    # 026 P1.1: the import-frozen policy flags snapshot BEFORE any file above
+    # loaded (this module imports core.config_policy at line 16) — re-freeze
+    # them exactly once, now that the ladder is layered.
+    _refreeze_frozen_policy_flags_once()
 
     return resolved
 
@@ -258,6 +359,7 @@ _CLI_OPTIONAL_REGISTRARS = (
     ("tools.x402",             "register_x402_tool",         ("x402_pay",)),
     ("tools.x402",             "register_x402_invoice_tool", ("x402_invoice",)),
     ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
+    ("tools.publish",          "register_publish_tool",      ("publish",)),
 )
 
 # Static (always-present) descriptors the CLI serves — the lightweight, dependency-free
@@ -686,6 +788,17 @@ async def build_cli_container(
             name='database_manager', config=config, container=container)
         await database.initialize()
         container.register_service('database_manager', database)
+        # 027 WP2: migrate bot.db at boot on the CLI path too — previously only
+        # the API lifespan and the autonomy runtime migrated, so a plain
+        # `polyrob run` could hit 'no such column' on any upgraded install.
+        # run_boot_migrations is idempotent, lock-guarded and never raises.
+        try:
+            from migrations.boot import run_boot_migrations
+            await run_boot_migrations(container, local=True)
+        except ImportError:
+            logging.getLogger(__name__).error(
+                "migrations package missing — bot.db schema cannot migrate "
+                "(broken install: reinstall polyrob)")
     except Exception:
         logging.getLogger(__name__).warning(
             "CLI database_manager init failed — x402 invoicing/metering degraded",

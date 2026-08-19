@@ -243,7 +243,8 @@ class TelemetryManager:
         prompt_tokens: Optional[int] = None,
         completion_tokens: Optional[int] = None,
         parameters: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
+        provider: Optional[str] = None
     ) -> str:
         """Capture an LLM call event.
 
@@ -274,7 +275,8 @@ class TelemetryManager:
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 parameters=parameters,
-                agent_id=self._agent_id
+                agent_id=self._agent_id,
+                provider=provider
             )
         except Exception as e:
             self.logger.error(f"Failed to capture LLM telemetry: {e}", exc_info=True)
@@ -292,7 +294,8 @@ class TelemetryManager:
         completion_tokens: Optional[int] = None,
         cached_tokens: Optional[int] = None,
         parameters: Optional[Dict[str, Any]] = None,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
+        provider: Optional[str] = None
     ) -> str:
         """Capture LLM usage event (alias for capture_llm_call with additional cached_tokens support).
 
@@ -327,6 +330,7 @@ class TelemetryManager:
                 completion_tokens=completion_tokens,
                 cached_tokens=cached_tokens,
                 parameters=parameters,
+                provider=provider,
                 agent_id=agent_id or self._agent_id
             )
         except Exception as e:

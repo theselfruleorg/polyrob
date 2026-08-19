@@ -8,7 +8,7 @@ from click.testing import CliRunner
 def test_todos_command_group_exists():
     """Test that the todos command group is registered."""
     from cli.polyrob import cli
-    assert "todos" in cli.commands
+    assert "todos" in cli.list_commands(None)
 
 
 def test_todos_list_no_file():

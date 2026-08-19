@@ -65,7 +65,10 @@ def test_trip_activates_and_auto_releases(data_dir, monkeypatch):
     # age the latch past the release window → auto-release
     p = _sentinel_path()
     state = json.loads(open(p).read())
-    state["ts"] = time.time() - 100 * 3600
+    stale = time.time() - 100 * 3600
+    # Latch entries are per provider since 2026-08-14; age every one of them.
+    for entry in state["providers"].values():
+        entry["ts"] = stale
     open(p, "w").write(json.dumps(state))
     assert credit_sentinel_active() is False
     assert not os.path.exists(p), "expired latch is removed (auto-release)"
@@ -238,3 +241,136 @@ def test_deduped_sentinel_notice_warns(data_dir, monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger=cs.logger.name):
         asyncio.run(cs.trip_credit_sentinel("openrouter 402", container=object(), user_id="rob"))
     assert any("DEDUPED" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Provider scoping (2026-08-14). Live prod: Rob ran a HEALTHY flat-rate
+# zai-coding seat, but one legacy cron job still pinned the credit-dead
+# OpenRouter. Its 402 latched the GLOBAL sentinel and paused every goal —
+# including ones correctly pinned to the working provider — for 5.7 hours.
+# A dead provider must only pause work that would USE that provider.
+# ---------------------------------------------------------------------------
+
+def test_trip_is_scoped_to_the_failing_provider(data_dir):
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    asyncio.run(trip_credit_sentinel("Error code: 402 - insufficient credits",
+                                     provider="openrouter"))
+    # the dead provider is paused
+    assert credit_sentinel_active("openrouter") is True
+    # a different, healthy provider is NOT
+    assert credit_sentinel_active("zai-coding") is False
+
+
+def test_unscoped_query_still_sees_any_active_latch(data_dir):
+    """Legacy callers pass no provider and must keep their old meaning."""
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    asyncio.run(trip_credit_sentinel("402 insufficient credits", provider="openrouter"))
+    assert credit_sentinel_active() is True
+
+
+def test_unscoped_trip_pauses_everything(data_dir):
+    """An unattributable credit death keeps the conservative global behaviour."""
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    asyncio.run(trip_credit_sentinel("402 insufficient credits"))
+    assert credit_sentinel_active() is True
+    assert credit_sentinel_active("zai-coding") is True
+
+
+def test_legacy_unkeyed_latch_file_is_read_as_global(data_dir):
+    """A latch written by the pre-scoping build must not be silently ignored —
+    that would un-pause a genuinely dead provider on upgrade."""
+    from core.credit_sentinel import credit_sentinel_active
+    (data_dir / "CREDIT_SENTINEL").write_text(
+        json.dumps({"ts": time.time(), "reason": "402 legacy"}))
+    assert credit_sentinel_active() is True
+    assert credit_sentinel_active("zai-coding") is True
+
+
+def test_two_providers_latch_independently(data_dir):
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    asyncio.run(trip_credit_sentinel("402", provider="openrouter"))
+    asyncio.run(trip_credit_sentinel("402", provider="openai"))
+    assert credit_sentinel_active("openrouter") is True
+    assert credit_sentinel_active("openai") is True
+    assert credit_sentinel_active("zai-coding") is False
+
+
+def test_scoped_entry_auto_releases_on_its_own_clock(data_dir, monkeypatch):
+    from core.credit_sentinel import credit_sentinel_active
+    stale = time.time() - (7 * 3600)  # older than the 6h default window
+    (data_dir / "CREDIT_SENTINEL").write_text(
+        json.dumps({"providers": {"openrouter": {"ts": stale, "reason": "402"}}}))
+    assert credit_sentinel_active("openrouter") is False
+    assert credit_sentinel_active() is False
+
+
+# ---------------------------------------------------------------------------
+# Plan-quota exhaustion (z.ai 1310) + provider-stated reset time (2026-08-16)
+# ---------------------------------------------------------------------------
+
+def test_looks_like_credit_death_matches_plan_quota_exhaustion():
+    from core.credit_sentinel import looks_like_credit_death
+    assert looks_like_credit_death(
+        "Error code: 429 - [1310][Weekly/Monthly Limit Exhausted. "
+        "Your limit will reset at 2026-08-18 18:01:49]") is True
+    assert looks_like_credit_death("Error code: 429 - insufficient balance") is True
+    # transient rate limiting must NOT latch the sentinel
+    assert looks_like_credit_death("429 too many requests, retry after 3s") is False
+
+
+def test_extract_reset_ts(monkeypatch):
+    import calendar
+    import time as _time
+    from core import credit_sentinel as cs
+
+    as_utc = float(calendar.timegm((2026, 8, 18, 18, 1, 49, 0, 0, 0)))
+    now = as_utc - 2 * 86400
+    monkeypatch.setattr(_time, "time", lambda: now)
+    text = ("[1310][Weekly/Monthly Limit Exhausted. Your limit will reset at "
+            "2026-08-18 18:01:49][202608161600034d3278b09a014e95]")
+    # earliest plausible reading wins (providers rarely state a timezone; z.ai
+    # stamps UTC+8 — releasing early costs one probe, releasing late costs
+    # hours of dead autonomy after recovery)
+    assert cs.extract_reset_ts(text) == as_utc - 8 * 3600
+    # already past -> None (callers fall back to the fixed window)
+    monkeypatch.setattr(_time, "time", lambda: as_utc + 100)
+    assert cs.extract_reset_ts(text) is None
+    # no reset phrase -> None
+    monkeypatch.setattr(_time, "time", lambda: now)
+    assert cs.extract_reset_ts("429 too many requests") is None
+    assert cs.extract_reset_ts(None) is None
+    # a far-future parse is capped so a garbled timestamp can't pause a month
+    far = "your quota will reset at 2026-09-30 00:00:00 thanks"
+    assert cs.extract_reset_ts(far) == now + 7 * 86400
+
+
+def test_release_ts_overrides_fixed_window(data_dir, monkeypatch):
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    # a 0h window would release instantly under the legacy clock…
+    monkeypatch.setenv("CREDIT_SENTINEL_RELEASE_HOURS", "0")
+    asyncio.run(trip_credit_sentinel(
+        "[1310] Weekly/Monthly Limit Exhausted", provider="zai-coding",
+        release_ts=time.time() + 3600))
+    # …but the provider-stated reset holds the latch
+    assert credit_sentinel_active("zai-coding") is True
+    # scoping unchanged: other providers keep serving
+    assert credit_sentinel_active("openrouter") is False
+
+
+def test_release_ts_expiry_releases(data_dir):
+    from core.credit_sentinel import credit_sentinel_active, trip_credit_sentinel
+    asyncio.run(trip_credit_sentinel(
+        "[1310] Weekly/Monthly Limit Exhausted", provider="zai-coding",
+        release_ts=time.time() - 5))
+    # the stated reset already passed -> released even though ts is fresh
+    assert credit_sentinel_active("zai-coding") is False
+
+
+def test_release_ts_survives_latch_roundtrip(data_dir):
+    from core.credit_sentinel import (_read_latch, _sentinel_path,
+                                      trip_credit_sentinel)
+    release = time.time() + 7200
+    asyncio.run(trip_credit_sentinel(
+        "[1310] limit exhausted", provider="zai-coding", release_ts=release))
+    entries = _read_latch(_sentinel_path())
+    assert entries["zai-coding"]["release_ts"] == pytest.approx(release)

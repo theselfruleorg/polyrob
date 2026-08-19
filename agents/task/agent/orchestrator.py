@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import functools
-from typing import Awaitable, Callable, Dict, List, Optional, Any
+from typing import Awaitable, Callable, Dict, List, Optional, Any, TYPE_CHECKING
 from pathlib import Path
 import os
 from datetime import datetime
@@ -28,10 +28,17 @@ from core.exceptions import (
 # Import session manager
 from agents.task.agent.session import SessionManager
 from agents.task.agent.service import Agent
-from tools.browser.browser import Browser
-from tools.browser.context import BrowserContext
-from tools.browser.browser_manager import BrowserManager
 from tools.controller.service import Controller
+
+# Browser (Playwright) types are only needed for type hints at import time — the
+# `[browser]` extra (and playwright itself) must stay optional for a headless/
+# browser-less install. `from __future__ import annotations` above already
+# postpones all annotation evaluation, so these stay real names for type
+# checkers without pulling playwright in at runtime.
+if TYPE_CHECKING:
+    from tools.browser.browser import Browser
+    from tools.browser.context import BrowserContext
+    from tools.browser.browser_manager import BrowserManager
 # Import ActionResult for loop detection and intervention
 from agents.task.agent.views import ActionResult
 # ToolManager functionality is now integrated into Controller

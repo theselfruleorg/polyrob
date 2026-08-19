@@ -127,6 +127,45 @@ async def test_post_with_media_uploads_then_attaches(monkeypatch, _pm):
     assert t.client.create_tweet.call_args.kwargs["media_ids"] == ["999"]
     uploaded_path = t.api_v1.media_upload.call_args.kwargs["filename"]
     assert uploaded_path == str(ws / "a.png")
+    # Image path: no video-only kwargs added.
+    assert "chunked" not in t.api_v1.media_upload.call_args.kwargs
+    assert "media_category" not in t.api_v1.media_upload.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_post_with_video_media_uses_chunked_upload_with_category(monkeypatch, _pm):
+    """2026-07-19 HIGH item: bare media_upload(filename=...) never told X this
+    was a tweet-attachable video. tweepy already auto-chunks + waits for
+    processing on video (chunked_upload defaults wait_for_async_finalize=True)
+    — the missing piece was media_category="tweet_video"."""
+    t = _tool(monkeypatch)
+    t.api_v1.media_upload.return_value = MagicMock(media_id=888)
+    t.client.create_tweet.return_value = _resp()
+    ws = _pm.get_workspace_dir("s1", "u1")
+    (ws / "clip.mp4").write_bytes(b"fake-mp4")
+    res = await t.twitter_post(
+        TwitterPostAction(text="video!", media_paths=["clip.mp4"]), execution_context=_ctx()
+    )
+    assert res.error is None
+    t.api_v1.media_upload.assert_called_once()
+    kwargs = t.api_v1.media_upload.call_args.kwargs
+    assert kwargs["chunked"] is True
+    assert kwargs["media_category"] == "tweet_video"
+    assert t.client.create_tweet.call_args.kwargs["media_ids"] == ["888"]
+
+
+@pytest.mark.asyncio
+async def test_post_with_mov_media_also_uses_chunked_upload(monkeypatch, _pm):
+    t = _tool(monkeypatch)
+    t.api_v1.media_upload.return_value = MagicMock(media_id=777)
+    t.client.create_tweet.return_value = _resp()
+    ws = _pm.get_workspace_dir("s1", "u1")
+    (ws / "clip.MOV").write_bytes(b"fake-mov")
+    await t.twitter_post(
+        TwitterPostAction(text="video!", media_paths=["clip.MOV"]), execution_context=_ctx()
+    )
+    kwargs = t.api_v1.media_upload.call_args.kwargs
+    assert kwargs["media_category"] == "tweet_video"  # case-insensitive extension match
 
 
 @pytest.mark.asyncio

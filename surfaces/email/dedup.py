@@ -42,3 +42,17 @@ class MessageDedup:
             (str(message_id), ts),
         )
         return n == 0  # 0 rows inserted -> it was already present
+
+    def was_seen(self, message_id: str) -> bool:
+        """Read-only probe: True if already recorded. Never records (the
+        AgentMail fetcher filters with this BEFORE the route-time ``seen``
+        check — a recording probe here would make every message look like a
+        duplicate by the time it reached routing)."""
+        if not message_id:
+            return False
+        row = execute_retry(
+            self.db_path,
+            "SELECT 1 FROM seen_messages WHERE message_id = ?",
+            (str(message_id),), fetch="one",
+        )
+        return row is not None

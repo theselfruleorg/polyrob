@@ -64,10 +64,28 @@ def test_blank_value_is_not_present():
 
 # --- initializable oracle (the gating SSOT) ------------------------------------
 
-def test_only_deepseek_is_non_initializable():
-    for name, prof in PROFILES.items():
-        assert prof.initializable is (name != "deepseek"), name
+def test_non_initializable_set_is_deepseek_plus_clientless_transports():
+    """`initializable=False` means "a credential alone cannot bootstrap this".
 
+    Two causes, and both must hold: deepseek (direct client disabled — broken
+    tool calling) and any row whose transport has NO client, which is derived
+    rather than hand-set. Without the derived arm, `openai-codex` (transport
+    RESPONSES, no generic client) was reported USABLE by the gating oracles,
+    auto-selected by the resolver, and then died in create_llm_client with
+    "Unknown LLM client type".
+    """
+    from modules.llm.provider_spec import (
+        generic_client_class_name,
+        get_spec,
+        get_specs,
+    )
+    non_init = [s for s in get_specs() if not s.initializable]
+    assert get_spec("deepseek") in non_init
+    for spec in non_init:
+        if spec.name == "deepseek":
+            continue
+        assert spec.client_class_name is None, spec.name
+        assert generic_client_class_name(spec.transport) is None, spec.name
 
 def test_initializable_excludes_deepseek_only():
     assert initializable_providers_with_keys({"DEEPSEEK_API_KEY": "v"}) == []
@@ -84,11 +102,15 @@ def test_raw_oracle_still_includes_deepseek_for_display():
     assert set(providers_with_keys({"DEEPSEEK_API_KEY": "x"})) == {"deepseek"}
 
 
-def test_initializable_client_set_matches_legacy_hardcoded_list():
+def test_initializable_client_set_covers_legacy_hardcoded_list():
     # LLMManager._initialize derives clients_to_try from this — guard against drift
     # from the historical hardcoded ['anthropic','openai','gemini','openrouter','nvidia'].
+    # Superset, not equality: 024 T0's subscription rows are initializable too (a
+    # key alone bootstraps them via the generic transport clients). The invariant
+    # that matters is that no legacy client silently drops out, and that deepseek
+    # — whose direct client has broken tool calling — never sneaks back in.
     derived = [p.name for p in PROFILES.values() if p.initializable]
-    assert set(derived) == {"anthropic", "openai", "gemini", "openrouter", "nvidia"}
+    assert {"anthropic", "openai", "gemini", "openrouter", "nvidia"} <= set(derived)
     assert "deepseek" not in derived
 
 

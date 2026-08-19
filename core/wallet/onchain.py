@@ -34,12 +34,22 @@ USDC_BASE_SEPOLIA = "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 # venue → chain it settles on (mainnet). Same EOA address on every EVM chain.
 VENUE_CHAIN = {"treasury": "base", "x402": "base",
                "hyperliquid": "arbitrum", "polymarket": "polygon"}
-# chain → (rpc, USDC erc20 contract [6 decimals], native symbol)
-_CHAIN = {
-    "base": ("https://mainnet.base.org", USDC_BASE_MAINNET, "ETH"),
-    "arbitrum": ("https://arb1.arbitrum.io/rpc", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", "ETH"),
-    "polygon": ("https://polygon-rpc.com", "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", "POL"),
-}
+
+
+def _read_table():
+    """chain → (rpc, USDC erc20 contract [6 decimals], native symbol).
+
+    DERIVED from `core.wallet.chains`, which is the one chain table. This module
+    used to carry its own, so a chain could be readable here and unknown there
+    (or worse, carry a different USDC address in each) — two descriptions of the
+    same chain that nothing kept in step.
+    """
+    from core.wallet import chains
+    return {r.name: (r.public_rpc, r.usdc, r.native_symbol)
+            for r in chains.all_rows()}
+
+
+_CHAIN = _read_table()
 _ERC20_BALANCEOF = "0x70a08231000000000000000000000000"  # balanceOf(address) selector + pad
 
 # Multicall3 — the same address on every EVM chain it is deployed to. Pinned

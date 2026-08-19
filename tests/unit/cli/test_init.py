@@ -5,6 +5,7 @@ from click.testing import CliRunner
 def test_init_writes_files(tmp_path, monkeypatch):
     home = tmp_path / "home"; home.mkdir()
     proj = tmp_path / "proj"; proj.mkdir()
+    (proj / ".git").mkdir()  # 027 WP5: init gitignores only inside a git work tree
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
     monkeypatch.chdir(proj)
     from cli.commands.init import init_cmd

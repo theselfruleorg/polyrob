@@ -91,7 +91,9 @@ class ProductTelemetry:
 		# CRITICAL FIX: Separate Posthog analytics from feed writing
 		# Feed writing is ALWAYS enabled (required for webview)
 		# Posthog analytics can be disabled with ANONYMIZED_TELEMETRY=false
-		posthog_telemetry_value = os.getenv('ANONYMIZED_TELEMETRY', 'true').lower()
+		# 027 WP5: analytics are opt-in (ANONYMIZED_TELEMETRY=true) — never on by
+		# default for an installed agent. Feed writing below is unaffected.
+		posthog_telemetry_value = os.getenv('ANONYMIZED_TELEMETRY', 'false').lower()
 		self.posthog_enabled = posthog_telemetry_value == 'true'
 
 		# Feed writing is always enabled for webview functionality
@@ -667,7 +669,8 @@ class ProductTelemetry:
 		prompt_tokens: Optional[int] = None,
 		completion_tokens: Optional[int] = None,
 		total_tokens: Optional[int] = None,
-		cached_tokens: Optional[int] = None
+		cached_tokens: Optional[int] = None,
+		provider: Optional[str] = None
 	) -> Optional[float]:
 		"""
 		Calculate cost using centralized cost_utils.
@@ -696,7 +699,8 @@ class ProductTelemetry:
 				input_tokens=prompt_tokens,
 				output_tokens=completion_tokens,
 				total_tokens=total_tokens,
-				cached_tokens=cached_tokens or 0
+				cached_tokens=cached_tokens or 0,
+				provider=provider
 			)
 			if cost > 0 and cached_tokens and cached_tokens > 0:
 				self.logger.debug(f"Calculated cost for {model_name} with {cached_tokens} cached tokens: ${cost:.6f}")
@@ -713,7 +717,8 @@ class ProductTelemetry:
 						 completion_tokens: Optional[int] = None,
 						 cached_tokens: Optional[int] = None,
 						 parameters: Optional[Dict[str, Any]] = None,
-						 agent_id: Optional[str] = None) -> str:
+						 agent_id: Optional[str] = None,
+						 provider: Optional[str] = None) -> str:
 		"""
 		Capture detailed LLM usage statistics with standardized tracking across providers.
 
@@ -798,8 +803,14 @@ class ProductTelemetry:
 				self.logger.debug(f"Token normalisation failed: {e}")
 				total_tokens = token_count
 				
-			# Add model provider information using improved detection
-			provider = self._detect_provider(model_name)
+			# Add model provider information. The CALLER's serving provider wins:
+			# model-name detection credits the vendor that originated the model id,
+			# which shows a flat-rate seat as metered spend. Some callers reach this
+			# through a **kwargs wrapper that funnels unknown keys into `parameters`,
+			# so accept it from either route before falling back to detection.
+			if not provider and isinstance(parameters, dict):
+				provider = parameters.get('provider')
+			provider = provider or self._detect_provider(model_name)
 
 			# Calculate cost estimate using centralized model registry
 			cost_estimate = self._calculate_cost_from_registry(
@@ -807,7 +818,8 @@ class ProductTelemetry:
 				prompt_tokens=prompt_tokens,
 				completion_tokens=completion_tokens,
 				total_tokens=total_tokens,
-				cached_tokens=cached_tokens
+				cached_tokens=cached_tokens,
+				provider=provider
 			)
 				
 			# Ensure a unique request ID is attached for downstream de-duplication.

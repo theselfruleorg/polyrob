@@ -55,16 +55,33 @@ def _provider_owning(model: str) -> str | None:
     ``cli/config_store.py::_provider_for_model`` uses). This catches registered vendor
     slugs whose head is NOT a known-provider prefix — ``z-ai/glm-*`` (openrouter),
     ``moonshotai/kimi-*`` (nvidia), grok/qwen/etc. — which the bare-prefix table below
-    would miss and misroute to the env default. No model appears under two providers,
-    so the lookup is unambiguous. Fail-open to None."""
+    would miss and misroute to the env default. Fail-open to None.
+
+    ⚠ Ownership is NO LONGER unambiguous. Once 30+ providers ship, the same
+    open-weight id is served by several of them (``glm-5.2`` by ollama-cloud,
+    zai and openrouter; ``kimi-k2.6`` by ollama-cloud, moonshot and nvidia).
+    First-declaring-wins would route a request to a provider the caller has no
+    credential for — a confusing 401 for a model they can actually serve. So
+    among the providers declaring the model, prefer one that is actually
+    USABLE, and only fall back to declaration order when none is."""
     try:
         from modules.llm.llm_client_registry import AVAILABLE_MODELS
     except Exception:
         return None
-    for provider, models in AVAILABLE_MODELS.items():
-        if model in models:
-            return provider
-    return None
+    owners = [provider for provider, models in AVAILABLE_MODELS.items() if model in models]
+    if not owners:
+        return None
+    if len(owners) == 1:
+        return owners[0]
+    try:
+        from modules.llm.profiles import usable_providers_with_credentials
+        usable = usable_providers_with_credentials()
+        for provider in owners:                    # declaration order among usable
+            if provider in usable:
+                return provider
+    except Exception:
+        pass
+    return owners[0]
 
 
 def map_model(openai_model: str) -> tuple[str, str]:
@@ -92,7 +109,9 @@ def map_model(openai_model: str) -> tuple[str, str]:
     for prefix, provider in _prefix_to_provider():
         if low.startswith(prefix):
             return provider, s
-    # Server path: no ~/.polyrob/cli.json read (cli_store_default=None) — just the
-    # env-resolved first-keyed provider.
-    provider, _ = resolve_runtime_config(None, None)
+    # Server path: no ~/.polyrob/cli.json read (cli_store_default=None) — honor the
+    # operator provider pin (CHAT_PROVIDER/DEFAULT_PROVIDER), else the env-resolved
+    # first-keyed provider.
+    from core.runtime_config import resolve_default_provider
+    provider, _ = resolve_default_provider()
     return provider, s

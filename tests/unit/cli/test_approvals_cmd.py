@@ -161,4 +161,4 @@ def test_remove_not_gated(tmp_path):
 
 def test_approvals_group_registered_on_polyrob_cli():
     from cli.polyrob import cli
-    assert "approvals" in cli.commands
+    assert "approvals" in cli.list_commands(None)

@@ -22,6 +22,19 @@ name = "alchemy_index"
 _BASE_URL = "https://base-mainnet.g.alchemy.com/v2"
 
 
+def base_url_for(chain: str):
+    """Alchemy endpoint for *chain*, or None when it has no slug.
+
+    None is the honest answer: guessing a slug would enumerate holdings on the
+    WRONG network and report them as this chain's.
+    """
+    from core.wallet import chains
+    row = chains.get(chain)
+    if row is None or not row.alchemy_slug:
+        return None
+    return f"https://{row.alchemy_slug}.g.alchemy.com/v2"
+
+
 def available() -> bool:
     return bool(os.getenv("ALCHEMY_API_KEY", "").strip())
 
@@ -65,8 +78,9 @@ def parse_balances(payload: Optional[Dict[str, Any]]) -> Dict[str, int]:
 # Network boundary — never exercised by unit tests.
 # --------------------------------------------------------------------------
 
-def fetch_balances(holder: str, timeout: float = 10.0) -> Optional[Dict[str, int]]:
-    """Holdings for *holder* on Base, or None when unavailable/failed.
+def fetch_balances(holder: str, timeout: float = 10.0, *,
+                   chain: str = "base") -> Optional[Dict[str, int]]:
+    """Holdings for *holder* on *chain*, or None when unavailable/failed.
 
     None means "no answer" — the caller must fall back to a candidate-list scan
     and label the coverage partial, never report an empty portfolio.
@@ -74,10 +88,13 @@ def fetch_balances(holder: str, timeout: float = 10.0) -> Optional[Dict[str, int
     key = os.getenv("ALCHEMY_API_KEY", "").strip()
     if not key:
         return None
+    base_url = base_url_for(chain)
+    if not base_url:
+        return None
     try:
         import httpx
         r = httpx.post(
-            f"{_BASE_URL}/{key}",
+            f"{base_url}/{key}",
             json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
                   "params": [holder]},
             timeout=timeout)

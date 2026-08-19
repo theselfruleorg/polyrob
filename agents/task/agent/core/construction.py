@@ -41,6 +41,29 @@ def _resolve_generate_gif(config_value, gif_enabled: bool):
     return config_value if gif_enabled else False
 
 
+def _resolve_session_vision(agent, use_vision: bool, llm) -> bool:
+    """Session-level vision gate: keep ``use_vision`` only when the serving
+    model can actually see images (registry-driven, same check the runner's
+    per-call strip uses).
+
+    Module-level so it's unit-testable without constructing a full ``Agent``;
+    fail-open — a capability-probe fault must never break construction (the
+    runner's per-call strip remains the backstop).
+    """
+    if not use_vision:
+        return False
+    try:
+        model_name = agent._extract_model_name(llm)
+        if not agent._check_vision_support(model_name):
+            agent.logger.info(
+                f"📷 use_vision disabled for this session: model '{model_name}' "
+                f"has no vision support — screenshots will not be captured/attached")
+            return False
+    except Exception:
+        pass
+    return True
+
+
 def _bump_eager_skill_usage(matched_skills, user_id, logger) -> None:
     """SK-F3: record a provenance load for every eager-injected skill.
 
@@ -145,7 +168,8 @@ from agents.task.telemetry.views import (
     ProviderFallbackSuccessEvent,
 )
 # ProductTelemetry no longer directly used - accessed via TelemetryManager
-from agents.task.utils import time_execution_async, detect_llm_provider, extract_token_usage
+from agents.task.utils import (time_execution_async, detect_llm_provider,
+                               extract_token_usage, resolve_serving_provider)
 # Safely import Google API exceptions
 try:
     from google.api_core.exceptions import ResourceExhausted
@@ -531,6 +555,15 @@ class AgentConstructionMixin:
 		self.task = task
 		self.use_vision = use_vision
 		self.llm = llm
+		# 2026-08-17: session-level vision gate. An operator default of
+		# use_vision=True must not capture/attach screenshots for a model the
+		# registry says cannot see them: get_next_action strips per-call, but
+		# images already IN HISTORY leak into every other call site (output
+		# validation, compaction, H-MEM writes) — the 2026-08-12..16 journals
+		# carry ~1.8k adapter "[IMAGE]"-replacement warnings from exactly that.
+		# Gate once at the source; a mid-session swap to a vision-less fallback
+		# is still handled by the runner's strip-and-disable.
+		self.use_vision = _resolve_session_vision(self, self.use_vision, llm)
 
 		# Set chat_model_library for provider detection (needed by set_tool_calling_method)
 		# This must be set BEFORE calling set_tool_calling_method() at line 427
@@ -655,8 +688,13 @@ class AgentConstructionMixin:
 		# NOTE: Provider detection will happen after MessageManager is created
 		# For now, detect provider just to check native tools support
 		# This is a temporary detection - model_name property will delegate to MessageManager
+		# ⚠️ SERVING provider, not the model id's registry vendor (c60e3dc5 residual,
+		# 2026-08-14): this reconcile can force use_native_tools=False for the whole
+		# session, and the step-time resolve_serving_provider sites cannot recover it.
+		# A spec-served row whose model id the registry credits elsewhere (or not at
+		# all) must reconcile against the row that actually serves the request.
 		_temp_model_name = self._extract_model_name(llm)
-		provider = detect_llm_provider(None, _temp_model_name)
+		provider = resolve_serving_provider(llm, _temp_model_name)
 
 		# Preserve user intent - intersect user preference with provider capability.
 		# This also re-assigns self.use_native_tools so the agent's own flag matches

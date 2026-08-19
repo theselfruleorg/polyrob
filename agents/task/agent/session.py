@@ -41,6 +41,7 @@ class SessionStatus(Enum):
     The continuous chat design uses COMPLETED → RESUMED flow for follow-up messages.
     """
     CREATED = "created"        # Initial state after creation
+    INITIALIZING = "initializing"  # Orchestrator is (re)building the session
     RUNNING = "running"        # Currently executing
     COMPLETED = "completed"    # Finished successfully (waiting for follow-up)
     RESUMED = "resumed"        # Continuous chat resume (transitional)
@@ -70,6 +71,7 @@ def get_user_status(internal_status: str) -> str:
 	status_map = {
 		"running": "active",
 		"created": "active",
+		"initializing": "active",
 		"resumed": "active",
 		"completed": "idle",
 		"cancelled": "stopped",
@@ -938,6 +940,28 @@ class SessionManager:
             
             return all_sessions
 
+    @staticmethod
+    def _is_shared_project_workspace(workspace_dir) -> bool:
+        """True when *workspace_dir* is the shared project root, not session scratch.
+
+        Asks the PathManager first (project-root mode is its own fact), then
+        compares realpaths as a backstop so an injected manager that points at a
+        shared folder without the flag is still protected.
+        """
+        import os
+        try:
+            manager = pm()
+            if not manager.is_project_root_workspace:
+                return False
+            project_root = manager.project_root
+            if project_root is None:
+                return False
+            return (os.path.realpath(str(workspace_dir))
+                    == os.path.realpath(str(project_root)))
+        except Exception:
+            # Fail CLOSED: an unresolvable workspace is never deleted.
+            return True
+
     def cleanup_old_workspaces(self, max_age_days: int = 7) -> int:
         """Clean up workspaces for old completed sessions.
 
@@ -972,6 +996,20 @@ class SessionManager:
                 # Get workspace directory
                 user_id = session_info.get('user_id')
                 workspace_dir = pm().get_workspace_dir(session_id, user_id)
+
+                # NEVER collect a SHARED project-root workspace. Under
+                # POLYROB_PROJECT_DIR (Model C) pm().get_workspace_dir() returns
+                # the SAME project folder for every session, so the rmtree below
+                # would delete the agent's home — every artifact it ever produced
+                # — once per old session. Prod did exactly that on 2026-08-16 and
+                # 2026-08-17 ("removed 198/202 old workspaces"), destroying a week
+                # of work. A per-session workspace is scratch and stays
+                # collectable; the project root is not scratch.
+                if self._is_shared_project_workspace(workspace_dir):
+                    self.logger.debug(
+                        "Skipping workspace cleanup for %s: shared project-root "
+                        "workspace at %s is not collectable", session_id, workspace_dir)
+                    continue
 
                 if workspace_dir.exists():
                     # Check size before deleting

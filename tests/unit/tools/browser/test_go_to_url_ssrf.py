@@ -59,6 +59,47 @@ def test_env_optout_allows_private():
         assert _check_url_ssrf("http://169.254.169.254/latest/meta-data/") is None
 
 
+# --- NAT64 (RFC 6052) synthesized-address tests ---------------------------------
+#
+# On an IPv6-only/NAT64 network, getaddrinfo() for a plain IPv4 host/literal
+# returns the well-known-prefix synthesized address 64:ff9b::<embedded-ipv4>
+# instead of the IPv4 itself (e.g. 64:ff9b::5db8:d822 for 93.184.216.34). Before
+# the fix, none of the IPv4 property checks (is_private etc.) apply to that IPv6
+# address, so it fell through to "not obviously blocked" -> a public IPv4 got
+# wrongly rejected as unrecognized, AND (the real risk direction) nothing
+# decoded the embedded IPv4 to check it either. Mocking getaddrinfo keeps this
+# hermetic — no real NAT64 resolver needed to exercise the code path.
+
+def test_nat64_synthesized_public_ip_allowed():
+    """A NAT64-synthesized address wrapping a PUBLIC IPv4 is allowed."""
+    os.environ.pop("BROWSER_ALLOW_PRIVATE_URLS", None)
+    # 64:ff9b::5db8:d822 decodes to 93.184.216.34 (example.com's IP range).
+    fake = [(10, 1, 6, "", ("64:ff9b::5db8:d822", 0, 0, 0))]
+    with patch("socket.getaddrinfo", return_value=fake):
+        assert _check_url_ssrf("https://example.com") is None
+
+
+def test_nat64_synthesized_private_ip_still_blocked():
+    """A NAT64-synthesized address wrapping a PRIVATE IPv4 is still blocked —
+    NAT64 wrapping must never bypass the SSRF guard."""
+    os.environ.pop("BROWSER_ALLOW_PRIVATE_URLS", None)
+    # 64:ff9b::a00:5 decodes to 10.0.0.5 (RFC1918).
+    fake = [(10, 1, 6, "", ("64:ff9b::a00:5", 0, 0, 0))]
+    with patch("socket.getaddrinfo", return_value=fake):
+        err = _check_url_ssrf("https://internal.example")
+    assert err is not None
+
+
+def test_nat64_synthesized_metadata_ip_still_blocked():
+    """A NAT64-synthesized address wrapping the cloud metadata IP is blocked."""
+    os.environ.pop("BROWSER_ALLOW_PRIVATE_URLS", None)
+    # 64:ff9b::a9fe:a9fe decodes to 169.254.169.254 (cloud metadata).
+    fake = [(10, 1, 6, "", ("64:ff9b::a9fe:a9fe", 0, 0, 0))]
+    with patch("socket.getaddrinfo", return_value=fake):
+        err = _check_url_ssrf("https://metadata.example")
+    assert err is not None
+
+
 def test_file_scheme_not_handled_by_ssrf_helper():
     """The SSRF helper is about IP ranges; file:// stays handled by go_to_url's own reject.
 

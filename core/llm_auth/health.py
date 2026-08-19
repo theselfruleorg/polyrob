@@ -43,6 +43,24 @@ def is_usable(health: Optional[Dict[str, Any]], now: Optional[float] = None) -> 
     return effective_state(health, now) == HEALTH_OK
 
 
+# ⚠ NOT YET WIRED (024 L1.5, 2026-08-11). `stamp_from_error_verdict` still has
+# zero callers, so stored health never leaves "ok" and the READ path below —
+# now consumed by `profiles.credential_status` / `usable_providers_with_
+# credentials` / `polyrob doctor` — is correct but always reports healthy.
+#
+# It was NOT wired here because the obvious call site is agent-tier
+# (`agents/task/agent/core/error_recovery.py`, right after `classify_error`),
+# and importing this package from `agents/` is a PERMANENT non-goal pinned by
+# tests/unit/core/llm_auth/test_agent_unreachable.py. Reaching it through a
+# core-tier hop would pass that AST scan while defeating its purpose, so the
+# call site is an owner decision, not a workaround.
+#
+# A second hazard to settle first: a `rate_limited` stamp written with NO
+# `retry_after` never heals (`effective_state` only clears on a lapsed
+# retry_after), and the gating oracle excludes unhealthy providers — so a
+# transient 429 stamped from a retry loop would park a working provider
+# permanently. Whatever call site is chosen must supply `retry_after`, or
+# stamp only terminal verdicts.
 def stamp_from_error_verdict(
     provider: str,
     verdict: str,

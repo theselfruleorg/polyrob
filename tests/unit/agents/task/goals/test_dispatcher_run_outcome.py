@@ -392,7 +392,7 @@ def test_planner_outage_logs_marker_and_skips_escalation(monkeypatch, caplog):
 
     monkeypatch.setattr(disp, "_run_task_as_session", fake_run)
     monkeypatch.setattr(planner, "build_planner_prompt", lambda *a, **k: "P")
-    monkeypatch.setattr(cs, "credit_sentinel_active", lambda: True)
+    monkeypatch.setattr(cs, "credit_sentinel_active", lambda provider=None: True)
 
     escalated = []
 
@@ -418,7 +418,7 @@ def test_planner_normal_run_still_escalates(monkeypatch, caplog):
 
     monkeypatch.setattr(disp, "_run_task_as_session", fake_run)
     monkeypatch.setattr(planner, "build_planner_prompt", lambda *a, **k: "P")
-    monkeypatch.setattr(cs, "credit_sentinel_active", lambda: False)
+    monkeypatch.setattr(cs, "credit_sentinel_active", lambda provider=None: False)
 
     escalated = []
 

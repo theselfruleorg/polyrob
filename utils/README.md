@@ -26,9 +26,6 @@ utils/
 ├── user_utils.py                   # User management and validation
 ├── auth_utils.py                   # Authentication utilities
 │
-├── markdown_utils.py               # Markdown formatting and escaping
-├── message_utils.py                # Message handling and chunking
-│
 ├── time_utils.py                   # Performance timing and measurement
 ├── metrics.py                      # Application metrics collection
 ├── circuit_breaker.py              # Circuit breaker pattern
@@ -178,59 +175,29 @@ def is_authenticated(request: Request) -> bool:
     """Whether the request is authenticated"""
 ```
 
-### 4. Markdown Utilities (`markdown_utils.py`)
+### 4. Outbound message formatting — NOT here
 
-Safe markdown formatting and escaping for Telegram.
+Markdown escaping and message chunking used to live here (`markdown_utils.py` +
+`message_utils.py`). They were a second escaper and a second splitter alongside the
+surface layer's own, so they were removed.
 
-**Key Features**:
-- Safe escaping that preserves formatting intent
-- Multiple format support (Markdown, MarkdownV2, HTML)
-- Code block preservation
-- Already-escaped detection
+The single home is **`core/surfaces/rendering.py`**:
 
-**Core Functions**:
 ```python
-def format_message_with_markdown(text: str) -> Tuple[str, Optional[ParseMode]]:
-    """Format message with safe markdown"""
+def markdown_to_html(text: str) -> str:
+    """Agent markdown -> the HTML subset Telegram renders."""
 
-def escape_markdown(text: str, allow_skip: bool = True) -> str:
-    """Escape special characters for Markdown formatting"""
+def split_text(text: str, limit: int) -> List[str]:
+    """The one splitter: newline-preferring, then space, then hard cut."""
 
-def escape_markdown_v2(text: str, allow_skip: bool = True) -> str:
-    """Escape for MarkdownV2 with stricter rules"""
-
-def safe_markdown_message(message, **kwargs) -> Tuple[str, ParseMode]:
-    """Format message safely, returning (text, parse_mode)"""
+def render_for_flavor(text: str, flavor: str, limit: int) -> List[str]:
+    """Convert + split for a surface's capabilities.markdown_flavor."""
 ```
 
-### 5. Message Utilities (`message_utils.py`)
+A surface declares `markdown_flavor` in its `SurfaceCapabilities` and gets correct
+formatting and chunking for free; `Surface.render_outbound()` is the accessor.
 
-Advanced message handling including chunking and safe sending.
-
-**Key Features**:
-- Automatic chunking for long messages
-- Graceful degradation to plain text
-- Paragraph preservation
-- Rate-limited sending
-
-**Core Functions**:
-```python
-def split_long_message(text: str, max_length: int = 4096) -> List[str]:
-    """Split long text into chunks"""
-
-def format_long_message(text: str) -> str:
-    """Format and clean long message"""
-
-async def send_long_message(
-    message,
-    text: str,
-    parse_mode: Optional[str] = ParseMode.MARKDOWN_V2,
-    **kwargs
-) -> None:
-    """Send long message with automatic chunking"""
-```
-
-### 6. Time Utilities (`time_utils.py`)
+### 5. Time Utilities (`time_utils.py`)
 
 Performance measurement and timing utilities.
 
@@ -253,7 +220,7 @@ parse_date_to_timestamp(date_string: str) -> int
 timestamp_to_date(timestamp: int) -> str
 ```
 
-### 7. Metrics (`metrics.py`)
+### 6. Metrics (`metrics.py`)
 
 Application metrics collection and analysis.
 
@@ -274,7 +241,7 @@ class Metrics(BaseComponent):
         """Get all recorded metrics"""
 ```
 
-### 8. Circuit Breaker (`circuit_breaker.py`)
+### 7. Circuit Breaker (`circuit_breaker.py`)
 
 Circuit breaker pattern for resilient external calls.
 
@@ -317,7 +284,7 @@ except CircuitBreakerError:
     result = cached_data
 ```
 
-### 9. GIF Utilities (`gif_utils.py`)
+### 8. GIF Utilities (`gif_utils.py`)
 
 GIF generation for conversation history visualization.
 
@@ -359,7 +326,7 @@ def create_text_only_gif(
     """Create a text-only GIF when image processing fails"""
 ```
 
-### 10. Path Validator (`path_validator.py`)
+### 9. Path Validator (`path_validator.py`)
 
 Secure path validation to prevent directory traversal.
 
@@ -388,7 +355,7 @@ def sanitize_filename(filename: str) -> str:
     """Remove dangerous characters from filename (module-level helper)"""
 ```
 
-### 11. Bounded Collections (`bounded_collections.py`)
+### 10. Bounded Collections (`bounded_collections.py`)
 
 Size-limited collections for memory-efficient storage.
 
@@ -449,12 +416,6 @@ __all__ = [
     # Timing utilities
     'time_execution_sync',
     'time_execution_async',
-    
-    # Message formatting
-    'format_message_with_markdown',
-    'split_long_message',
-    'format_long_message',
-    'send_long_message',
     
     # GIF utilities
     'create_history_gif',

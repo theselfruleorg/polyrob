@@ -38,12 +38,19 @@ def test_unknown_defaults_to_github_canonical_channel():
     assert _source_for(_ctx(UNKNOWN)) == "github"
 
 
-def test_every_code_update_step_includes_migrate():
-    """C3 belt-and-suspenders: non-docker manual steps must run migrate upgrade so
-    following the printed instructions can't leave code ahead of the DB schema. Docker
-    is exempt — its container auto-migrates at boot (api/app.py lifespan)."""
-    from cli.commands.update import _MANUAL_STEPS, DOCKER
+def test_every_code_update_step_covers_migration():
+    """C3 belt-and-suspenders, updated for 027 WP2: git checkouts keep the
+    explicit `migrate upgrade`; pip/pipx/unknown installs auto-migrate at the
+    next start (the CLI container + server boot both run run_boot_migrations),
+    so their steps carry the auto-migrate note instead of an interpreter-
+    sensitive command a fresh user can get wrong. Docker auto-migrates too."""
+    from cli.commands.update import _MANUAL_STEPS, DOCKER, EDITABLE_GIT, GIT
     for method, step in _MANUAL_STEPS.items():
         if method == DOCKER:
             continue
-        assert "migrate upgrade" in step, f"{method} manual step skips DB migration: {step!r}"
+        if method in (EDITABLE_GIT, GIT):
+            assert "migrate upgrade" in step, (
+                f"{method} manual step skips DB migration: {step!r}")
+        else:
+            assert "migrations apply automatically" in step, (
+                f"{method} manual step must state the auto-migrate contract: {step!r}")

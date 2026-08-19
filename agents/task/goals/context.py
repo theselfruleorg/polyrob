@@ -128,11 +128,20 @@ _OUTCOME_INSTRUCTION = (
 
 
 def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
-                        workspace_root: Optional[Path] = None) -> str:
+                        workspace_root: Optional[Path] = None,
+                        prior_artifacts: Optional[list] = None) -> str:
     """``workspace_root`` is opt-in (default None = byte-identical to before T9):
     when provided, the goal's title/body/acceptance are stamped with
     ``stamp_artifact_references`` so a retried goal sees what's ACTUALLY on disk
-    rather than trusting a stale ``last failure``/title/acceptance reference."""
+    rather than trusting a stale ``last failure``/title/acceptance reference.
+
+    ``prior_artifacts`` is ``[(name, bytes), …]`` — what EARLIER attempts really
+    produced, verified against the artifact ledger. The attempts ledger already
+    tells a retry what failed; without this it is never told what succeeded, so
+    it restarts from the title. 46 goals died on "ran out of steps" last week
+    and each retry re-did the same first 20 steps, which means a goal needing 25
+    steps could never finish — it only burned its retries. Empty/omitted =>
+    byte-identical to before."""
     parts = []
     if objective is not None:
         parts.append(
@@ -182,6 +191,17 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
             ]
             if len(attempts) > 1:
                 lines.append(f"- attempts so far: {len(attempts)}")
+        parts.append("\n".join(lines))
+    # What earlier attempts actually SHIPPED. Verified against the ledger by the
+    # caller, so this never promises a file that is no longer there.
+    if prior_artifacts:
+        lines = [
+            "ALREADY PRODUCED by an earlier attempt (verified on disk — "
+            "do NOT re-create these, continue from them):",
+        ]
+        for name, size in list(prior_artifacts)[:20]:
+            lines.append(f"- {name} ({size} bytes)")
+        lines.append("Read what you need, then do the REMAINING work only.")
         parts.append("\n".join(lines))
     parts.append(_OUTCOME_INSTRUCTION)
     return "\n\n".join(parts)

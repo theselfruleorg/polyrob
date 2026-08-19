@@ -14,10 +14,11 @@ from core.container import DependencyContainer
 from core.exceptions import LLMError, LLMConfigError, ServiceError
 
 from modules.llm.llm_client import LLMClient
-from modules.llm.anthropic_client import AnthropicClient
-from modules.llm.openai_client import OpenAIClient
-from modules.llm.gemini_client import GeminiClient
-from modules.llm.openrouter_client import OpenRouterClient
+
+# NOTE: provider client classes (AnthropicClient/OpenAIClient/GeminiClient/…) are
+# deliberately NOT imported at module level — each drags its vendor SDK (openai,
+# anthropic, google.generativeai) into every container build. create_llm_client
+# (llm_client_registry) imports the one class the active provider needs.
 
 # Import from registry to avoid circular imports
 from modules.llm.llm_client_registry import (
@@ -46,6 +47,17 @@ def _redact_llm_config(config: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         else:
             redacted[provider] = data
     return redacted
+
+
+def _provider_of(client_name: str) -> str:
+    """Provider name behind a registered client name.
+
+    ``_ensure_fallback_client`` registers 'openai_fallback_client', so stripping
+    only the '_client' suffix yields the bogus provider 'openai_fallback' — no
+    llm_config entry, no isolated client, silently skipped. This is the one
+    derivation; ``get_available_models`` uses the same two-step strip.
+    """
+    return (client_name or '').replace('_client', '').replace('_fallback', '')
 
 
 class LLMManager(BaseComponent):
@@ -300,6 +312,7 @@ class LLMManager(BaseComponent):
                 return
             
             # Create fallback OpenAI client
+            from modules.llm.openai_client import OpenAIClient
             fallback_client = OpenAIClient(self.config, name="openai_fallback_client")
             fallback_client.model_type = 'gpt-5'  # Always use gpt-5 for fallback
             fallback_client.api_key = api_key
@@ -328,7 +341,23 @@ class LLMManager(BaseComponent):
             self.primary_client_name = f"{preferred_client}_client"
             self.logger.info(f"Using configured primary client: {self.primary_client_name}")
             return
-        
+
+        # Operator provider pin (CHAT_PROVIDER > DEFAULT_PROVIDER). The same pin is
+        # already honored by ``core.runtime_config.resolve_runtime_config`` for goal
+        # dispatch + chat — but WITHOUT this, a *dead-but-keyed* provider earlier in
+        # the hardcoded ``priority_order`` below (e.g. an exhausted OpenRouter) is
+        # always chosen primary and its 402 trips the provider-credit sentinel before
+        # a funded pinned provider (e.g. ``zai-coding``) is ever used. Fail-open: a
+        # pin whose client isn't registered falls through to the priority order.
+        import os
+        pinned_provider = os.environ.get('CHAT_PROVIDER') or os.environ.get('DEFAULT_PROVIDER')
+        if pinned_provider:
+            pinned_client = f"{pinned_provider}_client"
+            if pinned_client in self.clients:
+                self.primary_client_name = pinned_client
+                self.logger.info(f"Using operator-pinned primary client: {self.primary_client_name}")
+                return
+
         # Default priority order (prefer OpenAI as primary)
         priority_order = ['openai_client', 'anthropic_client', 'openrouter_client', 'gemini_client', 'deepseek_client']
         
@@ -846,9 +875,28 @@ class LLMManager(BaseComponent):
             f"original: {original_model or 'unknown'})"
         )
         
-        # Try each provider in the fallback hierarchy
-        for client_name, fallback_model in self.FALLBACK_HIERARCHY:
-            provider = client_name.replace('_client', '')
+        # Operator-pinned primary first: the deployment's actual serving client
+        # (e.g. a funded subscription seat with fallback_eligible=False, absent
+        # from FALLBACK_HIERARCHY) beats the generic hierarchy. Exclusions still
+        # apply below, so the provider that just failed is never retried here.
+        candidates = list(self.FALLBACK_HIERARCHY)
+        primary = self.primary_client_name
+        if primary:
+            primary_model = getattr(self.clients.get(primary), 'model_type', None)
+            if not primary_model:
+                try:
+                    from modules.llm.llm_client_registry import get_default_model
+                    primary_model = get_default_model(_provider_of(primary))
+                except Exception:
+                    primary_model = None
+            if primary_model:
+                candidates = [(primary, primary_model)] + [
+                    c for c in candidates if c[0] != primary
+                ]
+
+        # Try the primary, then each provider in the fallback hierarchy
+        for client_name, fallback_model in candidates:
+            provider = _provider_of(client_name)
             
             # Skip excluded providers
             if provider in exclude_providers or client_name in exclude_providers:

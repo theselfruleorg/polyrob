@@ -47,3 +47,29 @@ def should_conversational_exit(consecutive_reply_steps: int, is_sub_agent: bool,
     if is_sub_agent or is_autonomous:
         return False
     return consecutive_reply_steps >= CONVERSATIONAL_EXIT_AFTER_REPLIES
+
+
+def is_planning_turn_only_step(results: Iterable) -> bool:
+    """True if every result of this step is the ALLOWED_REASONING_TURNS
+    placeholder (tagged ``metadata.planning_turn``, from
+    ``step_execution.py``'s bounded tool-free-turn allowance) — i.e. no tool
+    ran and no thinking-loop intervention fired either.
+
+    2026-08-18: the run loop's "reset consecutive_failures on a successful
+    step" check only tested ``not any(r.error ...)`` — a planning turn's
+    result has no error, so it was ALSO treated as a successful step. A model
+    that alternates [planning turn (error-free, resets the counter to 0),
+    thinking-loop intervention (error, bumps the counter to 1)] can cycle
+    forever: the intervention's +1 gets wiped by the very next planning turn,
+    every single time, so ``consecutive_failures`` never reaches
+    ``max_failures`` and the safety net never trips. Confirmed empirically as
+    the dominant failure mode of the 2026-08-18 post-outage recovery burst
+    (82% of goal failures shared this exact signature, several runs never
+    recovering even once, straight through to step exhaustion). A planning
+    turn is a bounded allowance, not genuine progress, so it must not count
+    as the step that clears the failure counter.
+    """
+    results = list(results or [])
+    if not results:
+        return False
+    return all(bool(getattr(r, "metadata", None)) and r.metadata.get("planning_turn") for r in results)

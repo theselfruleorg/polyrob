@@ -49,11 +49,19 @@ def is_secret_flag(name: str) -> bool:
 def _infer_kind(default_doc: str) -> str:
     """Best-effort kind from the documented default's FIRST token ('bool' |
     'int' | 'str') — trailing prose like "`1440` (**720 POLYROB_LOCAL**)" must
-    not demote a numeric default to an opaque string."""
+    not demote a numeric default to an opaque string.
+
+    A backtick-quoted bare digit (`` `0` ``, `` `1` ``) is the catalog's NUMERIC
+    grammar, never a bool — AGENT_COMPUTE_POSTURE (`0`, a 0-3 ladder) used to
+    resolve as kind=bool, so `doctor --flags` printed `True` for posture 2
+    (026 P0.2). Bool defaults are documented as ON/OFF words.
+    """
     doc = default_doc.strip().strip("*")
     # e.g. "ON", "OFF", "ON (`\"1\"`)", "**ON**", "`1440` (**720 POLYROB_LOCAL**)"
-    head = doc.split(" ")[0].strip("`'\"*").lower()
-    if head in _TRUEISH_DOC or head in _FALSEISH_DOC:
+    raw_head = doc.split(" ")[0]
+    head = raw_head.strip("`'\"*").lower()
+    quoted_numeric = raw_head.startswith("`") and head.lstrip("-").isdigit()
+    if not quoted_numeric and (head in _TRUEISH_DOC or head in _FALSEISH_DOC):
         return "bool"
     if head.lstrip("-").isdigit():
         return "int"

@@ -61,7 +61,7 @@ async def test_send_resolves_chat_from_dm_key():
     assert res.success is True
     assert bot.sent[0]["chat_id"] == "555"
     assert bot.sent[0]["text"] == "hello"
-    assert bot.sent[0]["kwargs"]["parse_mode"] == "MarkdownV2"
+    assert bot.sent[0]["kwargs"]["parse_mode"] == "HTML"
     assert res.surface_message_id is not None
 
 
@@ -115,22 +115,23 @@ async def test_buffered_stream_flushes_one_send_on_finalize():
 
 
 @pytest.mark.asyncio
-async def test_send_escapes_markdown_v2():
+async def test_send_escapes_html_special_chars_without_touching_punctuation():
     bot = _FakeBot()
     s = TelegramSurface(bot)
-    await s.send(OutboundMessage(session_key="agent:main:telegram:dm:5:u", text="a.b-c!(x)"))
-    assert bot.sent[0]["kwargs"]["parse_mode"] == "MarkdownV2"
-    assert bot.sent[0]["text"] == r"a\.b\-c\!\(x\)"
+    await s.send(OutboundMessage(session_key="agent:main:telegram:dm:5:u", text="a.b-c! 1 < 2 & ok"))
+    assert bot.sent[0]["kwargs"]["parse_mode"] == "HTML"
+    # Only & < > are markup in HTML mode; ordinary punctuation stays clean (no backslashes).
+    assert bot.sent[0]["text"] == "a.b-c! 1 &lt; 2 &amp; ok"
 
 
 @pytest.mark.asyncio
-async def test_send_splits_after_markdown_v2_escape():
+async def test_send_splits_text_over_the_message_limit():
     bot = _FakeBot()
     s = TelegramSurface(bot)
-    await s.send(OutboundMessage(session_key="agent:main:telegram:dm:5:u", text="." * 4096))
+    await s.send(OutboundMessage(session_key="agent:main:telegram:dm:5:u", text="x" * 5000))
     assert len(bot.sent) == 2
     assert all(len(c["text"]) <= 4096 for c in bot.sent)
-    assert "".join(c["text"] for c in bot.sent) == r"\." * 4096
+    assert "".join(c["text"] for c in bot.sent) == "x" * 5000
 
 
 def test_capabilities_media_out():
@@ -234,3 +235,32 @@ async def test_media_send_failure_is_failopen_text_still_delivered(tmp_path, cap
     assert res.success is True
     assert bot.sent[0]["text"] == "text must survive"
     assert any("media" in r.message.lower() for r in caplog.records)
+
+
+class _HtmlRejectingBot(_FakeBot):
+    """Accepts a send only when no parse_mode is set (models a Telegram 400 on bad HTML)."""
+    async def send_message(self, chat_id, text, **kwargs):
+        if kwargs.get("parse_mode"):
+            raise RuntimeError("Bad Request: can't parse entities")
+        return await super().send_message(chat_id, text, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_send_renders_markdown_as_html_instead_of_literal_markers():
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    await s.send(OutboundMessage(session_key="agent:main:telegram:dm:555:u_abc", text="**hi** there"))
+    assert bot.sent[0]["kwargs"]["parse_mode"] == "HTML"
+    assert bot.sent[0]["text"] == "<b>hi</b> there"
+
+
+@pytest.mark.asyncio
+async def test_send_retries_as_plain_text_when_telegram_rejects_the_markup():
+    bot = _HtmlRejectingBot()
+    s = TelegramSurface(bot)
+    res = await s.send(OutboundMessage(session_key="agent:main:telegram:dm:555:u_abc", text="**hi**"))
+    assert res.success is True
+    assert len(bot.sent) == 1
+    assert bot.sent[0]["kwargs"].get("parse_mode") is None
+    # Falls back to the ORIGINAL source, never to raw HTML tags the user would see.
+    assert bot.sent[0]["text"] == "**hi**"

@@ -170,6 +170,10 @@ async def lifespan(app: FastAPI):
                 logger.info("✅ Schema migrations applied at boot: %s", mig["applied"])
             elif mig.get("error"):
                 logger.error("⚠️ Boot migration reported an error (serving anyway): %s", mig["error"])
+        except ImportError as e:
+            logger.error(
+                "⚠️ migrations package missing — schema cannot migrate "
+                "(broken install: reinstall polyrob): %s", e)
         except Exception as e:
             logger.error("⚠️ Boot migration wiring failed (serving anyway): %s", e)
 

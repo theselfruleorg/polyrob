@@ -58,11 +58,46 @@ class Credential:
             f"source={self.source!r}, health={self.health!r}, value=<redacted>)"
         )
 
+    def redacted(self, keep: int = 4) -> str:
+        """A display-safe fingerprint of the value — THE only printable form.
+
+        `polyrob auth status` and friends need to show enough for an owner to
+        tell two credentials apart ("is that the key I just pasted?") without
+        printing one. Short values redact whole: for anything under ~3x `keep`,
+        a prefix+suffix reveals most of it.
+
+        Callers must never format ``self.value`` directly. This method exists so
+        that rule has somewhere to go.
+        """
+        if not self.value:
+            return "(none)"
+        value = str(self.value)
+        if len(value) <= keep * 3:
+            return "*" * 8
+        return f"{value[:keep]}…{value[-keep:]}"
+
 
 def auth_store_enabled(env=None) -> bool:
-    if env is not None:
-        return parse_bool(env.get("LLM_AUTH_STORE_ENABLED"), False)
-    return bool_env("LLM_AUTH_STORE_ENABLED", False)
+    source = env if env is not None else _os_environ()
+    raw = source.get("LLM_AUTH_STORE_ENABLED")
+    if raw is not None and str(raw).strip() != "":
+        return parse_bool(raw, False)
+    # 027 WP4: default ON under the single-user local profile — an
+    # `auth add <oauth-seat>` connect must be readable without a second,
+    # undocumented flag. Multi-tenant servers (no POLYROB_LOCAL) stay OFF,
+    # and _store_rungs_allowed's local_mode gate still backstops them.
+    try:
+        from core.config_policy.policy import local_mode_enabled
+
+        return local_mode_enabled()
+    except Exception:
+        return False
+
+
+def _os_environ():
+    import os
+
+    return os.environ
 
 
 def credential_borrow_enabled(env=None) -> bool:
@@ -99,6 +134,24 @@ def _tenant_allowed(user_id: Optional[str]) -> bool:
         return False
 
 
+def _env_key_chain(spec: Any) -> tuple:
+    """Every env var name *spec* accepts, primary first (duck-typed).
+
+    Prefers an ``env_key_chain()`` method when the object has one, and falls
+    back to the single ``env_key`` attribute so any spec-shaped object works.
+    """
+    if spec is None:
+        return ()
+    chain = getattr(spec, "env_key_chain", None)
+    if callable(chain):
+        try:
+            return tuple(n for n in chain() if n)
+        except Exception:
+            pass
+    name = getattr(spec, "env_key", None)
+    return (name,) if name else ()
+
+
 def resolve_credential(
     provider: str,
     spec: Any = None,
@@ -125,12 +178,15 @@ def resolve_credential(
     validate = key_validator or (lambda v: bool(v))
     now = time.time() if now is None else now
 
-    env_key = getattr(spec, "env_key", None) if spec is not None else None
     auth_type = getattr(spec, "auth_type", None)
     auth_type_value = getattr(auth_type, "value", auth_type)
 
-    # 1. explicit env key
-    if env_key:
+    # 1. explicit env key. A provider may answer to SEVERAL var names (z.ai:
+    #    GLM_API_KEY / ZAI_API_KEY / Z_AI_API_KEY; Copilot: COPILOT_GITHUB_TOKEN
+    #    / GH_TOKEN / GITHUB_TOKEN) — try them in the spec's declared order.
+    #    Duck-typed like the rest of `spec`: an object exposing only `env_key`
+    #    still works, so this stays usable with a bare ProviderProfile.
+    for env_key in _env_key_chain(spec):
         value = env.get(env_key)
         if value and validate(value):
             return Credential(

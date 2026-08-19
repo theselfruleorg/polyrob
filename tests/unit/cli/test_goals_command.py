@@ -10,7 +10,7 @@ from click.testing import CliRunner
 def test_goals_command_group_exists():
     """Test that the goals command group is registered."""
     from cli.polyrob import cli
-    assert "goals" in cli.commands
+    assert "goals" in cli.list_commands(None)
 
 
 def test_goals_list_requires_data_root():

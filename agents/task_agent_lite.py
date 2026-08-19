@@ -24,6 +24,20 @@ from agents.task.session_registry import SessionRegistry
 from agents.task.tool_defaults import default_session_tools
 from core.exceptions import AgentError, SessionOwnershipError
 from core.exceptions import InsufficientCreditsError
+from core.optional_extras import missing_extra_hint
+
+
+def task_unavailable_message(reason: Optional[str]) -> str:
+    """Format the task-package failure with its real cause and, when the
+    missing module maps to a pip extra, the install remedy (proposal 027 —
+    the bare sentinel left wheel users with no way to learn the fix)."""
+    msg = "Task package not available"
+    if reason:
+        msg += f": {reason}"
+        hint = missing_extra_hint(reason)
+        if hint:
+            msg += f" ({hint})"
+    return msg
 from core.exceptions import MessageQueueFullError
 
 logger = logging.getLogger(__name__)
@@ -59,21 +73,33 @@ def _spawn_detached(coro):
     return t
 
 
+def _resolve_session_runtime(provider=None, model=None, env=None):
+    """Fill missing SessionRequest provider/model from the operator's runtime
+    config. Thin alias for the one agents-tier resolver in
+    ``agents.task.config`` (kept as the import name existing callers use)."""
+    from agents.task.config import resolve_session_provider_model
+    return resolve_session_provider_model(provider, model, env=env)
+
+
 @dataclass
 class SessionRequest:
     """Model for session configuration."""
     task: str
-    model: str = "gpt-5"
-    provider: str = "openai"
+    model: Optional[str] = None
+    provider: Optional[str] = None
     tools: List[str] = None
     max_steps: int = 50
     temperature: float = 0.0
     use_vision: bool = True
     session_config: Optional[Dict[str, Any]] = None
-    
+
     def __post_init__(self):
         if self.tools is None:
             self.tools = default_session_tools()
+        if not self.provider or not self.model:
+            self.provider, self.model = _resolve_session_runtime(
+                self.provider, self.model
+            )
 
 
 def _resolve_chat_runtime(env=None):
@@ -344,7 +370,8 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             logger.info("✓ Started periodic workspace cleanup task")
 
         except ImportError as e:
-            logger.error(f"Task package not available: {e}")
+            self._task_unavailable_reason = str(e)
+            logger.error(task_unavailable_message(self._task_unavailable_reason))
             self.task_available = False
 
         self._initialized = True
@@ -395,7 +422,9 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             await self._initialize()
 
         if not self.task_available:
-            raise AgentError("Task package not available")
+            raise AgentError(
+                task_unavailable_message(getattr(self, "_task_unavailable_reason", None))
+            )
 
         # Pre-validate credits before creating session (unless bypassed)
         if not skip_credit_check:
@@ -426,8 +455,8 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             # Dict format from API
             session_request = SessionRequest(
                 task=request.get('task', ''),
-                model=request.get('model', 'gpt-5'),
-                provider=request.get('provider', 'openai'),
+                model=request.get('model'),
+                provider=request.get('provider'),
                 tools=request.get('tools') or default_session_tools(),
                 max_steps=request.get('max_steps', 50),
                 temperature=request.get('temperature', 0.0),
@@ -747,7 +776,7 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             Result message
         """
         if not self.task_available:
-            return "Task package not available"
+            return task_unavailable_message(getattr(self, "_task_unavailable_reason", None))
 
         # Get session
         if not session_id:
@@ -1115,8 +1144,10 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
         if not llm_manager:
             raise RuntimeError("LLMManager not available in container")
 
-        provider = request.get('provider', 'openai')
-        model = request.get('model', 'gpt-5')
+        provider = request.get('provider')
+        model = request.get('model')
+        if not provider or not model:
+            provider, model = _resolve_session_runtime(provider, model)
         temperature = request.get('temperature', 0.0)
 
         # Try the requested provider first
@@ -1171,7 +1202,9 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
         if not self.task_available:
             return {
                 'found': False,
-                'message': 'Task package not available'
+                'message': task_unavailable_message(
+                    getattr(self, "_task_unavailable_reason", None)
+                )
             }
 
         if session_id:
@@ -2025,13 +2058,20 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             # Merge request and config for _get_llm_for_request
             llm_request = {**config, **request}  # request takes priority
             llm = await self._get_llm_for_request(llm_request)
+            # `config` (session_info['config']) is the flat API-compat shape
+            # ({model, provider, max_steps, temperature, use_vision, ...}), NOT
+            # the nested TaskSessionConfig shape ({llm: {...}, limits: {...}}).
+            # Passing it as session_config always fails TaskSessionConfig's strict
+            # (extra='forbid') validation — model/provider/use_vision are already
+            # applied above via `llm`/`use_vision`, so there is nothing to recover
+            # by falling back to it here.
             agent = await orchestrator.create_agent(
                 task=request.get('task') or session_info.get('task', ''),
                 llm=llm,
                 agent_name="executor",
                 use_vision=request.get('use_vision', config.get('use_vision', True)),
                 max_actions_per_step=10,
-                session_config=request.get('session_config') or config
+                session_config=request.get('session_config')
             )
 
             # RESTORE MESSAGE HISTORY (FIX #4)

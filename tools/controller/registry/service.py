@@ -9,7 +9,6 @@ import logging
 from modules.llm.adapters import BaseChatModel
 from pydantic import BaseModel, Field, create_model
 
-from tools.browser.context import BrowserContext
 from tools.controller.registry.views import (
 	ActionModel,
 	ActionRegistry,
@@ -17,6 +16,11 @@ from tools.controller.registry.views import (
 )
 
 if TYPE_CHECKING:
+	# BrowserContext (Playwright) is a type-hint-only dependency here — keep it
+	# under TYPE_CHECKING so the `[browser]` extra stays optional for a
+	# headless/browser-less install (this module is on the import path of
+	# nearly all of agents.task.agent).
+	from tools.browser.context import BrowserContext
 	from tools.controller.execution_context import ActionExecutionContext
 from tools.controller.registry.schema_generators import (
 	get_schema_generator,
@@ -87,6 +91,8 @@ class Registry:
 		# exclusions); the key changes whenever actions are added/removed, so it
 		# self-invalidates without explicit bumping.
 		self._provider_schema_cache: dict = {}
+		# P4: token estimate of each memoized schema list, same key discipline.
+		self._provider_schema_tokens: dict = {}
 
 		# Track action registration for logging only
 		self._action_registration_logged = set()  # Track logged actions
@@ -231,6 +237,7 @@ class Registry:
 			# Schema cache is keyed on the action-set; bust it so the dropped action
 			# is no longer emitted to providers.
 			self._provider_schema_cache.clear()
+			self._provider_schema_tokens.clear()
 			self.logger.debug(f"Removed action '{action_name}'")
 			return True
 
@@ -240,7 +247,7 @@ class Registry:
 		params: dict,
 		execution_context: Optional['ActionExecutionContext'] = None,
 		# Legacy parameters for backward compatibility
-		browser: Optional[BrowserContext] = None,
+		browser: Optional['BrowserContext'] = None,
 		page_extraction_llm: Optional[BaseChatModel] = None,
 		sensitive_data: Optional[Dict[str, str]] = None,
 		available_file_paths: Optional[list[str]] = None,
@@ -904,6 +911,7 @@ class Registry:
 				# bound to the previous tool instance. Bust the schema cache so the
 				# replacement is re-emitted.
 				self._provider_schema_cache.clear()
+				self._provider_schema_tokens.clear()
 
 			# Register with the registry
 			self.registry.actions[name] = action
@@ -996,7 +1004,34 @@ class Registry:
 		)
 
 		self._provider_schema_cache[cache_key] = actions
+		# P4 (context-usage audit): memoize the emitted schema list's token cost
+		# alongside the schemas so the gauge can include it without per-step JSON
+		# serialization. chars/4 estimate — same order the providers bill.
+		try:
+			import json as _json
+			self._provider_schema_tokens[cache_key] = len(
+				_json.dumps(actions, default=str)) // 4
+		except Exception:
+			self._provider_schema_tokens[cache_key] = 0
 		return actions
+
+	def get_schema_token_estimate(self, provider: str) -> int:
+		"""Token estimate for the emitted tool-schema list of *provider* (P4).
+
+		Self-serving: generates (and memoizes) the schema list if it has not
+		been requested yet. Returns 0 for an empty registry or on any error.
+		"""
+		try:
+			cache_key = (
+				provider,
+				frozenset(self.registry.actions.keys()),
+				frozenset(self.exclude_actions),
+			)
+			if cache_key not in self._provider_schema_tokens:
+				self.get_all_actions_for_provider(provider)
+			return self._provider_schema_tokens.get(cache_key, 0)
+		except Exception:
+			return 0
 
 	# Convenience API methods for accessing registry
 	def get_action(self, name: str) -> Optional[RegisteredAction]:

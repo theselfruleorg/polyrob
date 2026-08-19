@@ -30,12 +30,20 @@ openai>=1.26.0
 anthropic>=0.20.0
 google-generativeai>=0.8.0  # FIX (Dec 2, 2025): Updated for better protobuf compatibility
 
-# Embeddings (local, no API cost) + local vector store.
-sentence-transformers>=3.0.0
+# Local vector memory (MEMORY_BACKEND=local_vector) is now an OPT-IN extra (mirrors
+# the `browser` extra above): the default MEMORY_BACKEND is `sqlite` (server) /
+# `local_vector` only under POLYROB_LOCAL, and either way the provider degrades to
+# FTS5 keyword recall with a loud warning if the embedder isn't installed — so
+# sentence-transformers (pulls in torch, ~2GB) is not worth shipping unconditionally
+# to every headless server install. To use local_vector's hybrid keyword+vector recall:
+#   pip install '.[memory-vector]'
+# See pyproject.toml [project.optional-dependencies] `memory-vector`.
 # Local vector store: sqlite-vec extension loaded via apsw (apsw ships cross-platform
 # wheels with extension loading enabled; stdlib sqlite3 is often built without it).
 # Replaces the retired Pinecone/Chroma vector backends (cross-session semantic recall
 # now lives in the local sqlite-vec memory backend, MEMORY_BACKEND=local_vector).
+# apsw/sqlite-vec stay unconditional (small C-extension packages, not the ~2GB weight
+# concern) — without sentence-transformers the provider still degrades to FTS5 either way.
 apsw>=3.46
 sqlite-vec>=0.1.6
 
@@ -74,9 +82,6 @@ imageio>=2.37.0
 python-magic>=0.4.27  # MIME type detection for file upload security
 qrcode>=7.4  # QR codes for the invoice/presence card compositor (modules/pfp/cards.py)
 
-# NLP utilities (used in memory pipeline)
-nltk>=3.9.0
-
 # CLI and dev
 rich>=13.0.0
 prompt_toolkit>=3.0.43
@@ -91,6 +96,11 @@ aiosqlite>=0.19.0
 
 # Telegram bot framework (still used in logging and some components)
 aiogram>=3.17.0
+
+# Voice-note transcription for the telegram surface (pyproject `voice` extra).
+# Prod runs telegram with voice: without this a venv rebuild silently drops
+# transcription and voice notes route as empty text (2026-08-14 prod incident).
+faster-whisper>=1.0.0
 
 # Terminal colors
 colorama>=0.4.6

@@ -46,7 +46,7 @@ async def test_incremental_stream_edits_one_message_in_place(monkeypatch):
     assert bot.sent[0] == ("555", "Hel")
     # Edits accumulate and the final edit holds the complete text.
     assert bot.edits, "expected in-place edits"
-    assert bot.edits[-1][2] == r"Hello world\!"
+    assert bot.edits[-1][2] == "Hello world!"
     assert bot.edits[-1][0] == "555"
 
 
@@ -59,10 +59,9 @@ async def test_flag_off_is_buffered_single_send(monkeypatch):
     await s.stream(_om(" world", partial=True))
     await s.stream(_om("!", partial=False))
     assert bot.edits == []                       # no live edits
-    # MarkdownV2 escaping is intentional and always paired with parse_mode="MarkdownV2"
-    # (surfaces/telegram/surface.py), so Telegram renders "\!" as a literal "!" to the
-    # user — the backslash never leaks. The buffered send is escaped accordingly.
-    assert bot.sent == [("555", "Hello world\\!")]  # one buffered send on finalize
+    # HTML parse mode only escapes & < > (see core/surfaces/rendering.py), so ordinary
+    # punctuation reaches the user clean — no backslash noise.
+    assert bot.sent == [("555", "Hello world!")]  # one buffered send on finalize
 
 
 @pytest.mark.asyncio
@@ -106,7 +105,7 @@ async def test_discrete_reply_finalizes_live_bubble_no_duplicate(monkeypatch):
     res = await s.send(OutboundMessage(session_key=_KEY, text="Here is the clean answer."))
     assert res.success
     assert len(bot.sent) == 1                      # NO duplicate send
-    assert bot.edits[-1][2] == r"Here is the clean answer\."   # bubble committed with clean text
+    assert bot.edits[-1][2] == "Here is the clean answer."   # bubble committed with clean text
     assert _KEY not in s._live                      # live stream popped
 
 

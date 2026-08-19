@@ -57,6 +57,8 @@ SIDECAR_DB_NAMES = (
     "outbox.db",            # core/surfaces/bootstrap.py (durable outbound queue)
     "surface_state.db",     # core/surfaces/bootstrap.py (surface cursor/state KV)
     "deployed_apps.db",     # tools/hf_deploy/registry.py
+    "artifacts.db",         # core/artifacts.py (one row per produced file)
+    "publications.db",      # core/publish.py (the ship rail: slug -> served dir)
     "dead_targets.db",      # core/surfaces/bootstrap.py (DeadTargetStore, T1.5)
 )
 

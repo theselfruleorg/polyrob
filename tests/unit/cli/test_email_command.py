@@ -6,7 +6,7 @@ from click.testing import CliRunner
 
 def test_email_command_registered():
     from cli.polyrob import cli
-    assert "email" in cli.commands
+    assert "email" in cli.list_commands(None)
 
 
 def test_email_exits_cleanly_when_no_creds(monkeypatch):
@@ -88,3 +88,36 @@ def test_email_starts_and_stops_outbound_dispatcher(monkeypatch):
     assert res.exit_code == 0, res.output
     dispatcher.start.assert_called_once_with()
     dispatcher.stop.assert_awaited_once_with()
+
+
+# --- provider-aware preflight (Task 6, 2026-08-18 agent-mail plan) -------------
+
+def test_creds_error_agentmail_with_key_is_none():
+    from cli.commands.email import _creds_error
+    cfg = MagicMock()
+    cfg.gmail_email = None
+    cfg.gmail_app_password = None
+    assert _creds_error(cfg, {"AGENTMAIL_API_KEY": "am_test"}) is None
+
+
+def test_creds_error_explicit_agentmail_without_key_errors():
+    from cli.commands.email import _creds_error
+    cfg = MagicMock()
+    err = _creds_error(cfg, {"EMAIL_PROVIDER": "agentmail"})
+    assert err and "AGENTMAIL_API_KEY" in err
+
+
+def test_creds_error_smtp_without_creds_errors():
+    from cli.commands.email import _creds_error
+    cfg = MagicMock()
+    cfg.gmail_email = None
+    cfg.gmail_app_password = None
+    assert _creds_error(cfg, {}) is not None
+
+
+def test_creds_error_smtp_with_creds_is_none():
+    from cli.commands.email import _creds_error
+    cfg = MagicMock()
+    cfg.gmail_email = "bot@example.com"
+    cfg.gmail_app_password = "pw"
+    assert _creds_error(cfg, {}) is None

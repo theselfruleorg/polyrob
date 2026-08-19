@@ -53,11 +53,32 @@ _SEL_NAME = "0x06fdde03"
 #: purchasable. USDC reuses the constant ``core/wallet/onchain.py`` already
 #: trusts (and ``tools/x402/real_client.py`` asset-pins against) so there is no
 #: second copy to drift.
-CANONICAL_TOKENS: Dict[Tuple[str, str], Dict[str, object]] = {
-    ("base", onchain.USDC_BASE_MAINNET): {"symbol": "USDC", "name": "USD Coin", "decimals": 6},
-    ("base", "0x4200000000000000000000000000000000000006"): {
-        "symbol": "WETH", "name": "Wrapped Ether", "decimals": 18},
-}
+def _canonical_pins() -> Dict[Tuple[str, str], Dict[str, object]]:
+    """USDC/wrapped-native pins for every chain the registry has VERIFIED.
+
+    Only ``money_enabled`` rows contribute, because that flag is exactly the
+    statement "every address in this row was checked on-chain (eth_getCode plus
+    symbol/decimals) before it was pinned". A chain whose addresses are carried
+    for balance reads only (arbitrum, polygon) contributes nothing here — it
+    would claim a verification nobody performed, and ``verified=True`` is the
+    one thing this table is the source of.
+    """
+    from core.wallet import chains
+    pins: Dict[Tuple[str, str], Dict[str, object]] = {}
+    for row in chains.all_rows():
+        if not row.money_enabled:
+            continue
+        if row.usdc:
+            pins[(row.name, row.usdc)] = {
+                "symbol": "USDC", "name": "USD Coin", "decimals": 6}
+        if row.wrapped_native:
+            pins[(row.name, row.wrapped_native)] = {
+                "symbol": f"W{row.native_symbol}",
+                "name": "Wrapped Ether", "decimals": 18}
+    return pins
+
+
+CANONICAL_TOKENS: Dict[Tuple[str, str], Dict[str, object]] = _canonical_pins()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS tokens (

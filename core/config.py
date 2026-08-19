@@ -150,17 +150,33 @@ class AgentConfig(BaseSettings):
         return data
 
     def available_providers(self) -> list:
-        """Provider names whose API key is set on this config, in PROFILES order.
+        """Provider names with a credential, in PROFILES order.
 
-        The config-object companion to ``modules.llm.profiles.providers_with_keys``
-        (which reads an env mapping). One SSOT for "which providers have a key" for
-        callers that hold a config (banner, ``rob model list``).
+        The config-object companion to
+        ``modules.llm.profiles.providers_with_credentials``. One SSOT for "which
+        providers can this process reach" for callers that hold a config
+        (banner, ``polyrob model list``).
+
+        Two sources, unioned:
+
+        1. the pydantic ``{name}_api_key`` fields — these exist ONLY for the six
+           original built-ins, so on their own they render a providers.yaml row,
+           a shipped subscription row, or a store-backed credential as absent
+           even while it is serving requests (024 L1.5);
+        2. the credential oracle over the process environment, which sees all
+           three.
+
+        Fail-open: if the oracle errors, the attribute scan alone is returned —
+        this is a display helper and must never break a banner.
         """
         from modules.llm.profiles import PROFILES
-        return [
-            name for name in PROFILES
-            if getattr(self, f"{name}_api_key", None)
-        ]
+        names = {name for name in PROFILES if getattr(self, f"{name}_api_key", None)}
+        try:
+            from modules.llm.profiles import providers_with_credentials
+            names.update(providers_with_credentials())
+        except Exception:
+            pass
+        return [name for name in PROFILES if name in names]
 
 
 class ServerConfig(AgentConfig):

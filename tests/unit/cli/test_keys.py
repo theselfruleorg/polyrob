@@ -54,11 +54,14 @@ def test_message_names_all_six_providers():
         assert prov in msg, prov
 
 
-def test_message_names_accepted_locations_and_init():
+def test_message_names_the_connect_verbs_and_key_home():
+    # 027 WP4: one remedy grammar — auth add + init; the env-file ladder wall
+    # moved to the docs. The global key home stays named.
     msg = no_key_message()
+    assert "polyrob auth add" in msg
     assert "rob init" in msg
-    for loc in ("~/.polyrob/.env", ".polyrob/.env", "config/.env.production"):
-        assert loc in msg
+    assert "~/.polyrob/.env" in msg
+    assert "config/.env.production" not in msg
 
 
 def test_message_names_custom_providers_file():

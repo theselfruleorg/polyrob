@@ -188,3 +188,35 @@ def test_handler_with_live_message_manager(mm_with_history):
     _h_context(ctx)
     out = emitted["text"].lower()
     assert "system" in out and "skills" in out and "history" in out and "%" in out
+
+
+# ---------------------------------------------------------------------------
+# P5 (context-usage audit 2026-08-15): completeness rows — environment,
+# tool catalog, tool schemas, and the last-known H-MEM count. All pure reads.
+# ---------------------------------------------------------------------------
+
+
+def test_render_includes_environment_and_tool_catalog(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    mm_with_history.set_environment_message("<environment>local repl</environment>")
+    mm_with_history.set_tool_catalog_message("<tool-catalog>rows</tool-catalog>")
+    out = render_context_breakdown(mm_with_history).lower()
+    assert "environment" in out
+    assert "tool catalog" in out
+
+
+def test_render_includes_tool_schema_row(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    mm_with_history.set_tool_schema_tokens(4321)
+    out = render_context_breakdown(mm_with_history)
+    assert "tool schemas" in out.lower()
+    assert "4,321" in out
+
+
+def test_render_includes_last_known_hmem(mm_with_history):
+    from cli.ui.commands.h_context import render_context_breakdown
+    # The memo the real-count path (P7) leaves behind; a pure attribute read.
+    mm_with_history._hmem_token_memo = ((10, 123), 987)
+    out = render_context_breakdown(mm_with_history)
+    assert "session memory" in out.lower()
+    assert "987" in out

@@ -202,3 +202,66 @@ def test_api_error_payload_is_unavailable():
 def test_empty_result_for_unknown_token_is_unavailable():
     v = goplus.parse_screen({"code": 1, "message": "OK", "result": {}})
     assert v.available is False, "no data is not a clean bill of health"
+
+
+# --- multi-chain provider scoping (2026-08-17) -------------------------------
+# Each provider knows a DIFFERENT set of chains, and the honest answer for a
+# chain a provider does not index is "unavailable", never another chain's data.
+
+def test_dexscreener_chain_scope_comes_from_the_registry():
+    from core.wallet import chains
+    from tools.defi.providers import dexscreener
+    expected = {r.dexscreener_id for r in chains.all_rows() if r.dexscreener_id}
+    assert set(dexscreener.SUPPORTED_CHAINS) == expected
+    assert "ethereum" in dexscreener.SUPPORTED_CHAINS
+    assert "base" in dexscreener.SUPPORTED_CHAINS
+    # Robinhood is not indexed there — claiming it would fabricate a price.
+    assert "robinhood" not in dexscreener.SUPPORTED_CHAINS
+
+
+def test_the_price_filter_uses_the_providers_own_chain_id(monkeypatch):
+    """`/tokens/<addr>` returns pools on EVERY chain (Ethereum USDC comes back
+    with pulsechain pairs), so the filter is what stops another chain's pool
+    pricing this one's token. It must filter by the row's dexscreener_id, not by
+    our chain NAME — if the two ever differ, filtering by the name silently
+    matches nothing."""
+    from core.wallet import chains
+    from tools.defi.providers import dexscreener
+
+    row = chains.get("base")
+    monkeypatch.setitem(chains._ROWS, "base",
+                        type(row)(**{**row.__dict__, "dexscreener_id": "base-v2"}))
+    payload = {"pairs": [
+        {"chainId": "base-v2", "baseToken": {"address": "0xaa"},
+         "priceUsd": "1.0", "liquidity": {"usd": 100000.0}},
+        {"chainId": "otherchain", "baseToken": {"address": "0xaa"},
+         "priceUsd": "999.0", "liquidity": {"usd": 900000.0}},
+    ]}
+    monkeypatch.setattr(dexscreener, "_get", lambda url, timeout: payload)
+    info = dexscreener.token("base", "0xaa")
+    assert info.price_usd == 1.0, "the deeper foreign-chain pool must not price it"
+
+
+def test_goplus_chain_ids_come_from_the_registry():
+    from core.wallet import chains
+    from tools.defi.providers import goplus
+    for row in chains.all_rows():
+        if row.goplus_id:
+            assert goplus.CHAIN_IDS.get(row.name) == row.goplus_id, row.name
+    assert "robinhood" not in goplus.CHAIN_IDS
+
+
+def test_alchemy_url_is_built_from_the_chains_slug():
+    from tools.defi.providers import alchemy_index
+    assert alchemy_index.base_url_for("base").startswith(
+        "https://base-mainnet.g.alchemy.com/")
+    assert alchemy_index.base_url_for("ethereum").startswith(
+        "https://eth-mainnet.g.alchemy.com/")
+
+
+def test_alchemy_refuses_a_chain_it_has_no_slug_for():
+    """No slug means no indexer for that chain; guessing a URL would query the
+    wrong network."""
+    from tools.defi.providers import alchemy_index
+    assert alchemy_index.base_url_for("nosuchchain") is None
+    assert alchemy_index.fetch_balances("0x" + "11" * 20, chain="nosuchchain") is None

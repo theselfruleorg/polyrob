@@ -2151,6 +2151,22 @@ class ActionRegistrationMixin:
 			except Exception as e:
 				self.logger.debug(f"agent_status: config section unavailable: {e}")
 				lines.append("config: unavailable")
+			# 7) capabilities — ground-truth tool availability (intel finding
+			#    2026-07-19: without this, the agent can only see the tool_ids
+			#    loaded into ITS OWN session and conflates "not in my session's
+			#    toolset" with "maybe disabled globally," producing wrong owner
+			#    asks like "please enable X" when X is already on. Reuses the
+			#    S1 dynamic-tool-rig catalog (tools/tool_disclosure.py) — the
+			#    SAME resolver the <tool-catalog> foundation message uses, so
+			#    this reports ground truth (container-resolved loaded/loadable/
+			#    gated+remedy) regardless of whether TOOL_PROGRESSIVE_DISCLOSURE
+			#    is on for this deploy.
+			try:
+				is_leaf = getattr(execution_context, 'role', None) == 'leaf'
+				lines.append(self.render_tool_catalog(is_leaf=is_leaf))
+			except Exception as e:
+				self.logger.debug(f"agent_status: capabilities section unavailable: {e}")
+				lines.append("capabilities: unavailable")
 			return ActionResult(
 				extracted_content="\n".join(lines) or "status unavailable",
 				include_in_memory=True,

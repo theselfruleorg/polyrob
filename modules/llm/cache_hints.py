@@ -83,6 +83,17 @@ def provider_cache_strategy(provider: str, model: Optional[str] = None) -> str:
         return openrouter_cache_strategy(model)
     if p == "gemini":
         return "explicit"      # implicit is free + needs no code; explicit is opt-in
+    # P8b (context-usage audit 2026-08-15): a spec-served provider riding the
+    # ANTHROPIC_MESSAGES transport (e.g. zai-coding) INHERITS AnthropicClient's
+    # in-client cache_control breakpoints — stamping "none" was false and hid
+    # that the stable prefix is already marked cacheable on those routes.
+    try:
+        from modules.llm.provider_spec import get_spec, Transport
+        spec = get_spec(p)
+        if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
+            return "in_client"
+    except Exception:
+        pass
     return "none"
 
 

@@ -17,6 +17,8 @@ import click
 @click.option("--user", "user", default=None, help="Tenant id (defaults to this instance's owner)")
 def journey(since: str, user: Optional[str]) -> None:
     """Timeline: what I did, learned, changed — and my income."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
     from core.bootstrap import setup_project_path, setup_sqlite_compat
     from core.runtime_config import get_data_root
     from core.identity import resolve_identity

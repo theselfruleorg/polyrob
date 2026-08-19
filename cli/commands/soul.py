@@ -45,6 +45,8 @@ def _data_home() -> Path:
 @click.group("soul")
 def soul():
     """Author the instance identity (SOUL docs — operator-only)."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @soul.command("init")

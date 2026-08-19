@@ -6,7 +6,7 @@ from click.testing import CliRunner
 def test_subagents_command_group_exists():
     """Test that the subagents command group is registered."""
     from cli.polyrob import cli
-    assert "subagents" in cli.commands
+    assert "subagents" in cli.list_commands(None)
 
 
 def test_subagents_info_shows_capability():

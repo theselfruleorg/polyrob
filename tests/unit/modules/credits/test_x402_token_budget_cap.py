@@ -83,7 +83,7 @@ async def test_record_llm_usage_halts_x402_over_budget(monkeypatch):
     t._write_to_telemetry = _noop
     t._record_usage_ledger = _noop
 
-    async def _costs(model, tokens):
+    async def _costs(model, tokens, provider=None):
         return types.SimpleNamespace(
             credits_charged=5, api_cost_usd=0.1, user_cost_usd=0.2, markup_multiplier=1.0)
 
@@ -110,7 +110,7 @@ async def test_record_llm_usage_admin_not_capped(monkeypatch):
     t._write_to_telemetry = _noop
     t._record_usage_ledger = _noop
 
-    async def _costs(model, tokens):
+    async def _costs(model, tokens, provider=None):
         return types.SimpleNamespace(
             credits_charged=5, api_cost_usd=0.1, user_cost_usd=0.2, markup_multiplier=1.0)
 

@@ -41,47 +41,16 @@ except Exception:  # pragma: no cover - aiogram always present in prod
     _TelegramConflictError = None
 
 
-# Telegram's hard per-message text cap. A reply longer than this makes
-# ``bot.send_message`` raise TelegramBadRequest("message is too long") — with no
-# chunking, that exception was swallowed fail-open and the owner got NOTHING.
-TELEGRAM_MAX_MESSAGE_LEN = 4096
+async def _send_telegram_text(bot, chat_id, text: str) -> None:
+    """Deliver ``text`` to ``chat_id`` through the ONE outbound seam.
 
-
-def _split_for_telegram(text: str, limit: Optional[int] = None) -> list:
-    """Split ``text`` into chunks Telegram will accept as separate messages.
-
-    Splits on line boundaries where possible so chunks don't cut mid-sentence; a
-    single line longer than ``limit`` is hard-cut. ``limit`` defaults to
-    ``TELEGRAM_MAX_MESSAGE_LEN``, read at call time (not def time) so tests can
-    monkeypatch the module-level cap.
+    The post-run reply, the out-of-band sink and the surface's own send() all render
+    and chunk identically because they all end up in ``TelegramSurface.send_text``
+    (markdown -> Telegram HTML, split at the message cap, plain-text retry on a markup
+    rejection). This wrapper exists only because the sink holds a raw bot, not a surface.
     """
-    if limit is None:
-        limit = TELEGRAM_MAX_MESSAGE_LEN
-    if len(text) <= limit:
-        return [text]
-    chunks = []
-    current = ""
-    for line in text.split("\n"):
-        candidate = f"{current}\n{line}" if current else line
-        if len(candidate) <= limit:
-            current = candidate
-            continue
-        if current:
-            chunks.append(current)
-        while len(line) > limit:
-            chunks.append(line[:limit])
-            line = line[limit:]
-        current = line
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-async def _send_telegram_text(bot, chat_id, text: str, **kwargs) -> None:
-    """Send ``text`` to ``chat_id``, splitting across multiple messages if it
-    exceeds Telegram's per-message length cap (see ``TELEGRAM_MAX_MESSAGE_LEN``)."""
-    for chunk in _split_for_telegram(text):
-        await bot.send_message(chat_id, chunk, **kwargs)
+    from surfaces.telegram.surface import TelegramSurface
+    await TelegramSurface(bot).send_text(chat_id, text)
 
 
 def _is_conflict_error(exc: Exception) -> bool:

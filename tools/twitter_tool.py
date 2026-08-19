@@ -1645,15 +1645,34 @@ class TwitterTool(BaseTool):
             raise RuntimeError(f"media upload failed: {err}")
         return validated
 
+    # X only documents chunked upload for these; anything else stays on the
+    # plain image path unchanged.
+    _VIDEO_EXTENSIONS = frozenset({".mp4", ".mov"})
+
     async def _upload_media(self, media_paths: List[str], execution_context=None) -> List[str]:
-        """Upload local media via v1.1 and return media_id strings."""
+        """Upload local media via v1.1 and return media_id strings.
+
+        Video needs X's chunked upload flow (INIT/APPEND/FINALIZE) with
+        media_category="tweet_video", then a wait for processing_info to reach
+        state=succeeded before the media_id is attachable to a tweet — tweepy's
+        media_upload() already auto-detects video and routes to chunked_upload()
+        (which defaults wait_for_async_finalize=True, so the processing-wait is
+        already handled); the one thing bare media_upload(filename=...) never
+        supplied was media_category, without which X may not process the
+        upload as tweet-attachable video. Images are untouched — this only adds
+        kwargs for recognized video extensions.
+        """
         if not getattr(self, "api_v1", None):
             raise RuntimeError("media upload requires the v1.1 API client (OAuth1.0a creds)")
         resolved_paths = self._resolve_media_paths(media_paths, execution_context)
         ids: List[str] = []
         for path in resolved_paths:
+            kwargs: Dict[str, Any] = {"filename": path}
+            if os.path.splitext(path)[1].lower() in self._VIDEO_EXTENSIONS:
+                kwargs["chunked"] = True
+                kwargs["media_category"] = "tweet_video"
             media = await self._make_request(
-                func=self.api_v1.media_upload, endpoint_type="media", filename=path
+                func=self.api_v1.media_upload, endpoint_type="media", **kwargs
             )
             mid = getattr(media, "media_id", None) or getattr(media, "media_id_string", None)
             ids.append(str(mid))

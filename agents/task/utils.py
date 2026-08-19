@@ -142,6 +142,35 @@ def detect_llm_provider(result: Any, model_name: Optional[str] = None) -> str:
 
     return 'generic'
 
+
+def resolve_serving_provider(llm: Any, model_name: Optional[str] = None) -> str:
+    """Provider whose TOOL-SCHEMA shape a request must use.
+
+    ``detect_llm_provider`` maps a model id to the vendor that ORIGINATED it,
+    which is not necessarily the provider serving this session: the registry
+    records ``glm-5`` under OpenRouter, but a ``zai-coding`` session serves it
+    over the Anthropic-messages transport. Selecting schemas from the model id
+    sent OpenAI-shaped tools to z.ai and earned a hard 422
+    (``body.tools[0].name: Field required``), after which the agent degraded to
+    emitting tool calls as prose.
+
+    Schema shape follows the SERVING provider, so prefer the ProviderSpec the
+    live client was built from — the same resolution
+    ``modules.llm.adapters._client_provider_label`` uses for error framing.
+    Built-in clients carry no ``_spec`` and fall back to model-name detection,
+    so their behaviour is unchanged.
+    """
+    spec_name = getattr(
+        getattr(getattr(llm, '_client', None), '_spec', None), 'name', None
+    )
+    # Only a genuine string names a ProviderSpec row — a Mock/stub llm in tests
+    # auto-creates truthy attribute chains, and a non-str "name" leaking out of
+    # here poisons every consumer (billing keys, schema lookup, telemetry).
+    if isinstance(spec_name, str) and spec_name:
+        return spec_name
+    return detect_llm_provider(None, model_name)
+
+
 def extract_token_usage(result: Any, provider: str) -> Dict[str, Optional[int]]:
     """Extract token usage from LLM response using provider-specific paths.
 

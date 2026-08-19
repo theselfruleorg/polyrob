@@ -167,6 +167,21 @@ def test_within_autonomous_cap_is_allowed(monkeypatch):
     assert d.amount_usd == pytest.approx(0.25)
 
 
+def test_decision_carries_the_simulations_gas_used():
+    """The rail sizes the broadcast gas limit from the simulation's gasUsed
+    (§3a — a fixed limit out-of-gas-reverts a swap and burns the fee), so an
+    allowed Decision must carry the measurement out of the guard."""
+    d = _authorize(deltas=_clean_deltas(gas_used=137_000))
+    assert d.allowed is True
+    assert d.sim_gas_used == 137_000
+
+
+def test_decision_gas_defaults_to_none_when_unmeasured():
+    d = _authorize()
+    assert d.allowed is True
+    assert d.sim_gas_used is None
+
+
 # --------------------------------------------------------------------------
 # Structural
 # --------------------------------------------------------------------------
@@ -220,3 +235,159 @@ def test_zero_measured_outflow_is_a_measurement_failure_not_a_free_transfer():
     d = _authorize(deltas=_clean_deltas(token_deltas={USDC: 0}))
     assert d.allowed is False
     assert "measurement failure" in d.reason.lower() or "no outflow" in d.reason.lower()
+
+
+# --------------------------------------------------------------------------
+# Allowance ops (023 T4) — the REAL approve/revoke shape, end to end.
+#
+# An approve is: amount_raw=0, token delta 0, allowance delta +grant. The
+# is_allowance_op fix (fda4c9f7) repaired the structural amount>0 rule but the
+# delta-assert step still read the zero token delta as a measurement failure,
+# so with a pinned RPC EVERY approve/revoke was dead on arrival. These tests
+# run the full authorize() with the exact deltas a real approval produces.
+# --------------------------------------------------------------------------
+
+def _approve_intent(grant=1_000_000, **kw):
+    base = dict(chain="base", token=USDC, to=SPENDER, amount_raw=0,
+                max_spend_usd=2.0, is_allowance_op=True,
+                expected_allowance_grants=((USDC, SPENDER, grant),),
+                idempotency_key="ka1")
+    base.update(kw)
+    return tx_guard.TxIntent(**base)
+
+
+def _approve_deltas(grant=1_000_000, moved=0):
+    return Deltas(ok=True, native_delta=0, token_deltas={USDC: moved},
+                  allowance_deltas={(USDC, SPENDER): grant})
+
+
+def test_a_real_approve_shape_is_authorized():
+    """The single most important allowed-path test in this file: the exact
+    deltas a genuine ERC-20 approve produces must clear the guard."""
+    d = _authorize(intent=_approve_intent(), deltas=_approve_deltas(), price=1.0)
+    assert d.allowed is True, d.reason
+    assert d.lane == "autonomous"
+
+
+def test_an_approve_prices_the_grant_not_the_zero_outflow():
+    """§1.1 root fix: the risk of an approval is the DECLARED GRANT. Pricing
+    the (zero) outflow valued every approval at $0.00 and no cap could bound it."""
+    d = _authorize(intent=_approve_intent(grant=1_000_000),
+                   deltas=_approve_deltas(grant=1_000_000), price=1.0)
+    assert d.amount_usd == pytest.approx(1.0)   # 1.0 USDC at $1, not $0.00
+
+
+def test_an_unpriceable_approval_grant_is_refused():
+    """§1.1: the memecoin case. A low-confidence price is None, and an
+    unpriceable grant must REFUSE — not silently skip the USD bound."""
+    d = _authorize(intent=_approve_intent(), deltas=_approve_deltas(), price=None)
+    assert d.allowed is False
+    assert "price" in d.reason.lower()
+
+
+def test_an_approval_grant_above_the_declared_usd_refuses():
+    d = _authorize(intent=_approve_intent(grant=5_000_000, max_spend_usd=1.0),
+                   deltas=_approve_deltas(grant=5_000_000), price=1.0)
+    assert d.allowed is False
+    assert "max_spend_usd" in d.reason or "exceeds" in d.reason.lower()
+
+
+def test_an_approval_grant_hits_the_policygate_ceiling():
+    gate = PolicyGate(max_per_tx_usd=0.5, daily_cap_usd=10.0)
+    d = _authorize(intent=_approve_intent(grant=1_000_000),
+                   deltas=_approve_deltas(grant=1_000_000), price=1.0, gate=gate)
+    assert d.allowed is False
+
+
+def test_an_approval_grant_above_the_autonomous_ceiling_routes_owner_queue(monkeypatch):
+    monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "0.10")
+    d = _authorize(intent=_approve_intent(grant=1_000_000),
+                   deltas=_approve_deltas(grant=1_000_000), price=1.0)
+    assert d.allowed is False
+    assert d.lane == "owner_queue"
+
+
+def test_an_allowance_op_that_moves_tokens_is_refused():
+    """An approve/revoke must move NOTHING. A token delta on an allowance op is
+    undeclared behaviour, whichever direction it points."""
+    d = _authorize(intent=_approve_intent(), deltas=_approve_deltas(moved=-100),
+                   price=1.0)
+    assert d.allowed is False
+    d = _authorize(intent=_approve_intent(), deltas=_approve_deltas(moved=100),
+                   price=1.0)
+    assert d.allowed is False
+
+
+def test_a_real_revoke_shape_is_authorized_without_any_price():
+    """A revoke declares no grant, so its risk is $0 and it must never be
+    refused for pricing — revoking a worthless/unpriceable token is exactly
+    the cleanup the allowance-hygiene design wants to stay easy."""
+    intent = _approve_intent(expected_allowance_grants=(), max_spend_usd=0.01)
+    deltas = Deltas(ok=True, native_delta=0, token_deltas={USDC: 0},
+                    allowance_deltas={(USDC, SPENDER): -1_000_000})
+    d = _authorize(intent=intent, deltas=deltas, price=None)
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == 0.0
+
+
+# --------------------------------------------------------------------------
+# Event-log cross-check (2026-08-14 T4 review) — the reads only cover the
+# DECLARED token and measured spenders; the tx's own event log is what covers
+# a grant to an undeclared spender or a drain of an undeclared token.
+# --------------------------------------------------------------------------
+
+OTHER_SPENDER = "0x3333333333333333333333333333333333333333"
+OTHER_TOKEN = "0x4444444444444444444444444444444444444444"
+
+
+def test_an_approval_event_to_an_unmeasured_spender_refuses():
+    """The reads never measured this pair, so the read-based check is blind to
+    it — the event is the only witness, and it refuses."""
+    d = _authorize(deltas=_clean_deltas(
+        holder_approvals=((USDC.lower(), OTHER_SPENDER, 5_000_000),)))
+    assert d.allowed is False
+    assert "approval" in d.reason.lower()
+
+
+def test_an_approval_event_on_a_measured_pair_defers_to_the_read_delta():
+    """Some tokens re-emit Approval(remaining) on transferFrom — a DECREASE.
+    On a measured pair the read delta is authoritative, so the event alone
+    must not refuse."""
+    d = _authorize(deltas=_clean_deltas(
+        holder_approvals=((USDC.lower(), SPENDER.lower(), 750_000),)))
+    assert d.allowed is True, d.reason
+
+
+def test_a_transfer_event_on_an_undeclared_token_refuses():
+    """A tx that also drains a token the intent never mentioned was invisible
+    to the balance reads (only intent.token is measured)."""
+    d = _authorize(deltas=_clean_deltas(
+        holder_transfers=((OTHER_TOKEN, TO.lower(), 999),)))
+    assert d.allowed is False
+    assert "undeclared token" in d.reason.lower()
+
+
+def test_a_transfer_event_on_the_declared_token_is_fine():
+    d = _authorize(deltas=_clean_deltas(
+        holder_transfers=((USDC.lower(), TO.lower(), 250_000),)))
+    assert d.allowed is True, d.reason
+
+
+def test_watch_spenders_are_measured_without_declaring_a_grant():
+    """The swap intent watches the router pair so its read delta (a decrease)
+    is judged as a decrease — and so a genuine hidden INCREASE on that pair is
+    caught by the read-based check."""
+    seen = {}
+
+    def sim(**kw):
+        seen["spenders"] = kw.get("spenders")
+        return _clean_deltas()
+
+    d = tx_guard.authorize(
+        _intent(watch_spenders=(OTHER_SPENDER,)),
+        {"to": USDC, "data": "0xa9059cbb", "value": 0, "chainId": 8453},
+        holder=HOLDER, gate=_gate(), execution_context=None,
+        simulate_fn=sim, price_fn=lambda c, a: 1.0,
+        rpc_is_pinned_fn=lambda chain: True, halted_fn=lambda: False)
+    assert seen["spenders"] == [OTHER_SPENDER]
+    assert d.allowed is True

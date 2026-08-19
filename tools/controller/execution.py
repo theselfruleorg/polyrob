@@ -5,16 +5,19 @@ exact signatures; behaviour is identical to the pre-split inline versions.
 """
 import asyncio
 import hashlib
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, TYPE_CHECKING
 
 from tools.controller.registry.views import ActionModel
 from tools.controller.types import ActionResult
 from tools.controller.execution_context import ActionExecutionContext
-from tools.browser.context import BrowserContext
 from agents.task.utils import time_execution_async, time_execution_sync
 from modules.llm.adapters import BaseChatModel
 from modules.llm.messages import AIMessage
 from tools.controller._helpers import observe
+
+if TYPE_CHECKING:
+	# Type-hint-only — keep playwright's [browser] extra optional on this path.
+	from tools.browser.context import BrowserContext
 
 
 def _dedup_action_error(action_name: str, e: Exception, tb: str) -> str:
@@ -55,7 +58,7 @@ class ExecutionMixin:
 		actions: list[ActionModel],
 		execution_context: Optional[ActionExecutionContext] = None,
 		# Legacy parameters for backward compatibility
-		browser_context: Optional[BrowserContext] = None,
+		browser_context: Optional['BrowserContext'] = None,
 		check_break_if_paused: Optional[Callable[[], bool]] = None,
 		check_for_new_elements: bool = True,
 		_page_extraction_llm: Optional[BaseChatModel] = None,
@@ -384,7 +387,7 @@ class ExecutionMixin:
 		action: ActionModel,
 		execution_context: Optional[ActionExecutionContext] = None,
 		# Legacy parameters for backward compatibility
-		browser_context: Optional[BrowserContext] = None,
+		browser_context: Optional['BrowserContext'] = None,
 		page_extraction_llm: Optional[BaseChatModel] = None,
 		sensitive_data: Optional[Dict[str, str]] = None,
 		available_file_paths: Optional[list[str]] = None,

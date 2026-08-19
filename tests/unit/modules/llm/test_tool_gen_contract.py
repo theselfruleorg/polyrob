@@ -151,13 +151,18 @@ class TestAnthropicContractErrorPath:
         client.model_type = "claude-opus-4-5"
         client.logger = logging.getLogger("test.anthropic")
         client.last_response = None
+        client._initialized = True
         # Stub the internal Anthropic SDK client
         client._client = MagicMock()
         return client
 
     def test_error_path_returns_3tuple(self):
-        """When _generate_with_tools raises and falls back to _generate,
-        it must return a 3-tuple (content, [], usage_dict)."""
+        """When _generate_with_tools hits a request-shape error and falls back
+        to _generate, it must return a 3-tuple (content, [], usage_dict).
+
+        (Since the 2026-08-16 gating only LLMInvalidRequestError-shaped errors
+        take the fallback path — rate-limit/billing/connection errors re-raise
+        for provider fallback; see test_anthropic_tool_fallback_gating.py.)"""
         from modules.llm.anthropic_client import AnthropicClient
 
         client = self._build_client()
@@ -167,8 +172,9 @@ class TestAnthropicContractErrorPath:
 
         # Trigger the error path by making the API call raise inside _generate_with_tools
         # We patch messages.create to raise
-        client._client.messages.create = MagicMock(side_effect=Exception("API error"))
-        client._client.messages.stream = MagicMock(side_effect=Exception("API error"))
+        _err = Exception("Error code: 400 - invalid_request_error: bad tools block")
+        client._client.messages.create = MagicMock(side_effect=_err)
+        client._client.messages.stream = MagicMock(side_effect=_err)
 
         # _generate_with_tools should catch the error and call _generate, returning fallback
         result = _run(client._generate_with_tools(

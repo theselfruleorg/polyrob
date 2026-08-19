@@ -104,6 +104,22 @@ def create_chat_model(
     # This preserves the "no silent provider swap" contract while the list of known
     # providers lives in exactly one place (model_registry.PROVIDER_CONFIG).
     if provider_l not in PROVIDER_CONFIG:
+        # A declared provider whose TRANSPORT has no client is a different
+        # failure from an unknown name — name it, so the user is not left
+        # scanning a 30-entry "Supported:" list for a typo.
+        try:
+            from modules.llm.provider_spec import generic_client_class_name, get_spec
+            spec = get_spec(provider_l)
+        except Exception:
+            spec = None
+        if spec is not None and spec.client_class_name is None \
+                and generic_client_class_name(spec.transport) is None:
+            raise ValueError(
+                f"provider '{provider}' speaks the '{spec.transport.value}' API, "
+                "which POLYROB cannot serve yet — no client implements that wire "
+                "format. Connecting and storing its credential works; inference "
+                "does not."
+            )
         raise ValueError(
             f"Unsupported LLM provider '{provider}'. Supported: "
             + ", ".join(sorted(PROVIDER_CONFIG.keys()))
@@ -239,6 +255,19 @@ def create_chat_model(
                                 f"{llm_client.model_type} -> {model}")
                     llm_client.model_type = model
                 logger.info(f"Creating OpenRouterAdapter (generic chat_completions) for {model}")
+                return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
+            if spec is not None and spec.transport is Transport.RESPONSES:
+                # The Responses client implements the same
+                # generate_agent_response contract, so the OpenRouter adapter
+                # drives it unchanged — the wire translation lives in the
+                # client, not in a fourth adapter.
+                from modules.llm.adapters import OpenRouterAdapter
+                sanitized_params = common_params.copy()
+                for key in ("parallel_tool_calls", "model"):
+                    sanitized_params.pop(key, None)
+                if hasattr(llm_client, 'model_type') and llm_client.model_type != model:
+                    llm_client.model_type = model
+                logger.info(f"Creating OpenRouterAdapter (responses transport) for {model}")
                 return OpenRouterAdapter(client=llm_client, model_name=model, **sanitized_params)
             if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
                 from modules.llm.adapters import AnthropicAdapter

@@ -21,7 +21,8 @@ def test_delegate_blocked_derivation_exact():
     assert ids_with("delegate_blocked") == frozenset({
         "code_execution", "coding", "cronjob", "x402_pay", "x402_invoice",
         "hyperliquid", "polymarket", "git", "github", "process", "tool_manage",
-        "mcp", "shell", "self_env", "hf_deploy", "defi_trade",
+        "mcp", "shell", "self_env", "hf_deploy", "defi_trade", "x_browser",
+        "publish",
     })
 
 
@@ -30,7 +31,7 @@ def test_high_impact_derivation_exact():
         "code_execution", "coding", "cronjob", "goal", "x402_pay", "email",
         "twitter", "browser", "web_fetch", "git", "github", "mcp", "process",
         "tool_manage", "shell", "self_env", "x402_invoice", "anysite",
-        "perplexity", "hf_deploy", "defi_trade",
+        "perplexity", "hf_deploy", "defi_trade", "x_browser", "publish",
     })
 
 
@@ -83,7 +84,7 @@ def test_catalog_risk_tiers_derive_exactly():
     from core.tool_capabilities import high_risk_tool_ids, medium_risk_tool_ids
 
     assert high_risk_tool_ids() == frozenset(
-        {"twitter", "email", "polymarket", "hyperliquid"})
+        {"twitter", "email", "polymarket", "hyperliquid", "x_browser"})
     assert medium_risk_tool_ids() == frozenset(
         {"mcp", "anysite", "browser_manager", "perplexity"})
 

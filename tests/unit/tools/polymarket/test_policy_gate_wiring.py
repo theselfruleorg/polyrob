@@ -24,10 +24,11 @@ class _FakeClient:
 def _tool(monkeypatch, gate):
     # The trade path legitimately requires the CLOB client; declare it available so
     # these tests exercise the PolicyGate logic regardless of which client package is
-    # installed in the env (post py-clob-client-v2 migration).
-    monkeypatch.setattr("tools.polymarket.service.CLOB_AVAILABLE", True)
+    # installed in the env (post py-clob-client-v2 migration). Both symbols live on
+    # the (lazily-loading) adapter now; service.py imports them at use time.
+    monkeypatch.setattr("tools.polymarket.clob_adapter.CLOB_AVAILABLE", True)
     monkeypatch.setattr(
-        "tools.polymarket.service.OrderArgs",
+        "tools.polymarket.clob_adapter.OrderArgs",
         lambda **kw: types.SimpleNamespace(**kw),
     )
     tool = PolymarketTool(config=types.SimpleNamespace(), container=None)

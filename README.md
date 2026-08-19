@@ -95,10 +95,11 @@ POLYROB targets **Python 3.11+**.
 # 1. Install (with all optional features)
 pipx install "polyrob[all]"
 
-# 2. Install the browser engine (for web automation)
-python -m playwright install chromium
+# 2. Browser engine (optional — only needed for web automation).
+#    pipx isolates the venv, so run playwright FROM polyrob's venv:
+"$(pipx environment --value PIPX_LOCAL_VENVS)/polyrob/bin/playwright" install chromium
 
-# 3. Configure (writes ~/.polyrob/.env)
+# 3. Configure (connects a provider key, writes ~/.polyrob/.env)
 polyrob init
 
 # 4. Sanity-check your setup
@@ -108,17 +109,21 @@ polyrob doctor
 polyrob
 ```
 
+> Plain `pip install polyrob` into your own venv? Then step 2 is just
+> `python -m playwright install chromium` in that venv — and the core agent
+> runs fine without the browser at all.
+
 Run `polyrob` and you're talking to the agent. Give it a task in plain language and it plans, works,
 and reports back; ask a follow-up and it keeps going. `polyrob doctor` is a real preflight — it
 reports which provider keys resolve, the exact model it will pick, your active memory backend, and
 workspace isolation.
 
-**Turn on personal-agent mode** to unlock the self-evolving and goal-seeking loops (skills, curator,
-goal board, self-wake, episodic memory):
+**Turn on autonomy** to unlock the self-evolving and goal-seeking loops (skills, curator,
+goal board, self-wake, episodic memory). The CLI already runs in personal/local mode
+(`POLYROB_LOCAL`); the self-directed loops need the separate master switch:
 
 ```bash
-# ~/.polyrob/.env  — single-user, on your own machine
-POLYROB_LOCAL=true
+polyrob config set AUTONOMY_ENABLED true   # or answer "yes" in `polyrob init`
 ```
 
 <details>
@@ -290,7 +295,8 @@ OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...
 
 # Memory backend
-MEMORY_BACKEND=sqlite          # keyword FTS5 (default, no extra deps)
+MEMORY_BACKEND=local_vector    # CLI default (hybrid recall; degrades to keyword FTS5
+                               # without the [memory-vector] extra). Server default: sqlite
 # MEMORY_BACKEND=local_vector  # semantic vector recall (pip install "polyrob[memory-vector]")
 
 # Personal-agent mode — turns on skills/curator/goal-board/self-wake as a group
@@ -361,6 +367,8 @@ polyrob/
 ```bash
 git clone https://github.com/theselfruleorg/polyrob
 cd polyrob
+bash install.sh          # scripted: venv + editable install + `polyrob init --no-prompt`
+# — or manually:
 python -m venv venv && source venv/bin/activate
 pip install -e ".[dev,all]"
 python -m playwright install chromium

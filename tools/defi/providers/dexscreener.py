@@ -44,11 +44,22 @@ def _checksum(addr: str) -> Optional[str]:
         return None
 
 
-#: Chains this tier can identify. DexScreener also indexes non-EVM chains
-#: (Solana et al.) whose addresses are base58, not 20-byte hex. Filtering is
-#: EXPLICIT rather than an accident of address validation, so that "we only
-#: searched Base" is a statement the caller can make honestly.
-SUPPORTED_CHAINS = ("base",)
+def _supported_chains():
+    """DexScreener ids for the chains the registry says it indexes.
+
+    DexScreener also indexes non-EVM chains (Solana et al.) whose addresses are
+    base58, not 20-byte hex, so the filter is EXPLICIT rather than an accident
+    of address validation — "we searched exactly these chains" stays a statement
+    the caller can make honestly. A chain with no ``dexscreener_id`` (Robinhood)
+    is simply not searched; claiming it would fabricate a price.
+    """
+    from core.wallet import chains
+    return tuple(dict.fromkeys(r.dexscreener_id for r in chains.all_rows()
+                               if r.dexscreener_id))
+
+
+#: Chains this tier can identify (derived from the chain registry).
+SUPPORTED_CHAINS = _supported_chains()
 
 
 def parse_search(payload: Optional[Dict[str, Any]],
@@ -147,9 +158,26 @@ def search(symbol: str, timeout: float = 8.0) -> List[Candidate]:
 
 
 def token(chain: str, address: str, timeout: float = 8.0) -> PriceInfo:
+    """Price for ``(chain, address)``.
+
+    ⚠️ ``/tokens/<addr>`` returns pools on EVERY chain the address appears on
+    (Ethereum's USDC comes back with pulsechain pairs), and the same address is
+    a different token on a different chain. This filter is what stops a foreign
+    pool from pricing our token, so it uses the chain's OWN provider id from the
+    registry rather than our internal name — a chain whose ids differ would
+    otherwise filter on a string DexScreener never emits.
+    """
+    from core.wallet import chains
+    row = chains.get(chain)
+    provider_chain = row.dexscreener_id if row else chain
+    if not provider_chain:
+        # This provider does not index the chain; no price is the honest answer.
+        return PriceInfo(price_usd=None, liquidity_usd=None, pool_count=0,
+                         confidence="unknown")
     payload = _get(f"{TOKEN_URL}/{address}", timeout)
     if payload and payload.get("pairs"):
-        payload = {"pairs": [p for p in payload["pairs"] if p.get("chainId") == chain]}
+        payload = {"pairs": [p for p in payload["pairs"]
+                             if p.get("chainId") == provider_chain]}
     return parse_pair(payload, address)
 
 

@@ -92,7 +92,10 @@ from agents.task.telemetry.views import (
     ProviderFallbackSuccessEvent,
 )
 # ProductTelemetry no longer directly used - accessed via TelemetryManager
-from agents.task.utils import time_execution_async, detect_llm_provider, extract_token_usage
+from agents.task.utils import (
+	time_execution_async, detect_llm_provider, extract_token_usage,
+	resolve_serving_provider,
+)
 # Safely import Google API exceptions
 try:
     from google.api_core.exceptions import ResourceExhausted
@@ -242,7 +245,8 @@ class NextActionInternalMixin:
 						prompt_tokens=input_tokens,
 						completion_tokens=output_tokens,
 						cached_tokens=cached_tokens,
-						agent_id=self.agent_id
+						agent_id=self.agent_id,
+						provider=resolve_serving_provider(self.llm, self.model_name)
 					)
 				except Exception as e:
 					self.logger.debug(f"Failed to capture LLM telemetry: {e}")
@@ -252,11 +256,21 @@ class NextActionInternalMixin:
 	def _classify_llm_error(e: Exception) -> str:
 		"""Classify an LLM-call exception into a retry bucket (P7 finalization:
 		extracted from _get_next_action_internal's except handler). Pure — decides
-		parse / rate_limit / parameter_error / other from the message text."""
+		auth / parse / rate_limit / parameter_error / other from the message text.
+
+		027: auth is checked FIRST and is never retried here (AUTH_PERMANENT —
+		the same key fails identically on every attempt), and the rate-limit
+		match is word-precise — the old bare ``"rate" in s`` matched 'geneRATE',
+		so every 'Failed to generate response: …' provider error (including a
+		401) was retried with backoff."""
 		s = str(e).lower()
+		if ("401" in s or "unauthorized" in s or "authentication" in s
+				or "invalid api key" in s or "api key not valid" in s):
+			return "auth"
 		if "parse" in s or "json" in s or "validation" in s:
 			return "parse"
-		if "rate" in s or "limit" in s:
+		if ("rate limit" in s or "rate_limit" in s or "ratelimit" in s
+				or "429" in s or "too many requests" in s or "limit reached" in s):
 			return "rate_limit"
 		if "llm_client" in s:
 			return "parameter_error"
@@ -386,7 +400,7 @@ class NextActionInternalMixin:
 		
 		# Provider-aware format hint injection
 		# First determine if we'll be using native tools
-		provider = detect_llm_provider(None, self.model_name)
+		provider = resolve_serving_provider(self.llm, self.model_name)
 		will_use_native_tools = (
 			self.use_native_tools and  # User preference
 			self.controller and
@@ -502,9 +516,12 @@ Then emit your function calls."""
 					if not hasattr(self, '_structured_output_warned'):
 						self._structured_output_warned = False
 
-					# Determine provider from model name
-					provider = detect_llm_provider(None, self.model_name)
-					self.logger.info(f"[DEBUG_TOOLS] Detected provider: {provider}")
+					# The provider SERVING this session — not the vendor the model
+					# registry credits with the model id. A `zai-coding` session
+					# serving `glm-5` (an OpenRouter row in the registry) must emit
+					# Anthropic-shaped tools or z.ai answers 422.
+					provider = resolve_serving_provider(self.llm, self.model_name)
+					self.logger.info(f"[DEBUG_TOOLS] Serving provider: {provider}")
 
 					# Check if provider supports native tool calling
 					# Use Controller's high-level API instead of directly accessing registry
@@ -516,6 +533,15 @@ Then emit your function calls."""
 						# Get ALL actions (core + tools) for this provider
 						# Use Controller's high-level API instead of directly accessing registry
 						tools = self.controller.get_all_actions_for_provider(provider)
+						# P4 (context-usage audit): stamp the schema list's token cost
+						# onto the gauge — real billed prompt bytes every step that were
+						# invisible to get_actual_token_count. Fail-open; memoized in
+						# the registry so this is a cheap dict read per step.
+						try:
+							self.message_manager.set_tool_schema_tokens(
+								self.controller.get_tool_schema_token_estimate(provider))
+						except Exception:
+							pass
 						self.logger.info(f"[DEBUG_TOOLS] Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
 						self.logger.debug(f"Provider {provider} - Got {len(tools) if tools else 0} actions from registry")
 
@@ -730,7 +756,8 @@ Then emit your function calls."""
 													prompt_tokens=input_tokens,
 													completion_tokens=output_tokens,
 													cached_tokens=cached_tokens,
-													agent_id=self.agent_id
+													agent_id=self.agent_id,
+													provider=resolve_serving_provider(self.llm, self.model_name)
 												)
 											except Exception as e:
 												self.logger.debug(f"Failed to capture LLM telemetry: {e}")

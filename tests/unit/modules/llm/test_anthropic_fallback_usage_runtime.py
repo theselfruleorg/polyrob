@@ -34,9 +34,14 @@ def _make_client():
         async def create(self, **params):
             calls["count"] += 1
             if calls["count"] == 1:
-                # Primary tool-call attempt fails -> triggers the
-                # error-fallback branch in _generate_with_tools.
-                raise RuntimeError("simulated tool-call error")
+                # Primary tool-call attempt fails with a REQUEST-SHAPE error ->
+                # triggers the error-fallback branch in _generate_with_tools.
+                # (Must be invalid-request-shaped: since the 2026-08-16 gating,
+                # rate-limit/permanent/connection errors re-raise instead of
+                # falling back — see test_anthropic_tool_fallback_gating.py.)
+                raise RuntimeError(
+                    "Error code: 400 - invalid_request_error: "
+                    "tools.0.input_schema is malformed")
             # Fallback call (_generate, no tools) succeeds with REAL,
             # distinguishable usage.
             text_block = SimpleNamespace(type="text", text="fallback response")

@@ -342,6 +342,51 @@ def resolve_owner_email(env: Optional[Mapping[str, str]] = None) -> Optional[str
     return None
 
 
+#: Sidecar state file written by the managed-inbox provider on provisioning
+#: (tools/email_providers/agentmail.py) and read here for sender identity.
+#: Shape: {"inbox_id": str, "address": str, "provisioned_at": iso-str}.
+AGENT_MAIL_STATE_FILENAME = "agent_mail.json"
+
+
+def agent_mail_state_path(data_home: Optional[Path] = None) -> Path:
+    """Path of the provisioned agent-inbox state file under the data home."""
+    if data_home is None:
+        from core.runtime_paths import resolve_data_home
+        data_home = resolve_data_home()
+    return Path(data_home) / AGENT_MAIL_STATE_FILENAME
+
+
+def resolve_agent_email(
+    env: Optional[Mapping[str, str]] = None,
+    data_home: Optional[Path] = None,
+) -> Optional[str]:
+    """The agent's OWN email address (sender identity), or None.
+
+    Distinct from :func:`resolve_owner_email` (an outbound TARGET — who the agent
+    may write to) — this is the address the agent sends AS. Resolution order:
+
+    1. ``POLYROB_AGENT_EMAIL`` — explicit operator override;
+    2. the provisioned managed inbox (``agent_mail.json``, written by the
+       AgentMail provider on first run);
+    3. ``GMAIL_EMAIL`` — legacy fallback where the operator's SMTP login doubles
+       as the sender identity (pre-provider behaviour, unchanged);
+    4. None (no sender identity configured).
+    """
+    src = os.environ if env is None else env
+    val = (src.get("POLYROB_AGENT_EMAIL") or "").strip()
+    if val and "@" in val:
+        return val
+    try:
+        state = json.loads(agent_mail_state_path(data_home).read_text(encoding="utf-8"))
+        addr = (str(state.get("address") or "")).strip()
+        if addr and "@" in addr:
+            return addr
+    except Exception:
+        pass
+    val = (src.get("GMAIL_EMAIL") or "").strip()
+    return val if val and "@" in val else None
+
+
 def owner_surface_alias(
     raw_id: Optional[str],
     surface_id: str,
@@ -576,6 +621,8 @@ __all__ = [
     "resolve_owner_principal",
     "resolve_owner_telegram_id",
     "resolve_owner_email",
+    "resolve_agent_email",
+    "agent_mail_state_path",
     "owner_surface_alias",
     "is_owner",
     "is_owner_local_safe",

@@ -122,8 +122,47 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
     # Verification helper (used by write_file / append_file)
     # ---------------------------------------------------------------------------
 
+    # Extension -> artifact kind. `kind` decides what the ship rail may do with a
+    # file (only a `page` is servable as a static page), so it is asserted at
+    # write time rather than sniffed later by whoever happens to publish.
+    _ARTIFACT_KINDS = {
+        ".html": "page", ".htm": "page",
+        ".py": "code", ".js": "code", ".ts": "code", ".sh": "code", ".css": "code",
+        ".md": "report", ".txt": "report", ".rst": "report",
+        ".json": "data", ".csv": "data", ".yaml": "data", ".yml": "data",
+    }
+
+    def _record_artifact(self, file_path: str) -> None:
+        """Record the just-written file in the artifact ledger.
+
+        This is the ONE write-time choke point (write_file and append_file both
+        route through _verify_file_write). Recording here replaces the run-end
+        guesswork in agents/task/runtime/evidence.py::collect_artifacts, which on
+        a shared project-root workspace attributed other runs' files to this run
+        and, after the 2026-08-17 wipe, found nothing at all.
+
+        Fail-open by construction: the ledger is bookkeeping, and a bookkeeping
+        failure must never fail a write the agent already completed.
+        """
+        try:
+            user_id = getattr(self, "user_id", None)
+            if not user_id:
+                return
+            import os as _os
+            ext = _os.path.splitext(file_path)[1].lower()
+            from core.artifacts import get_artifact_ledger
+            get_artifact_ledger().record(
+                str(user_id), file_path,
+                session_id=str(getattr(self, "session_id", "") or ""),
+                kind=self._ARTIFACT_KINDS.get(ext, "file"),
+            )
+        except Exception:
+            self.logger.debug("artifact ledger record skipped for %s", file_path,
+                              exc_info=True)
+
     async def _verify_file_write(self, file_path: str, expected_content: str, original_path: str) -> dict:
         """Verify file was written correctly (OPTIMIZATION: Task 6 - Nov 14, 2025)"""
+        self._record_artifact(file_path)
         try:
             # Read back the file
             with open(file_path, 'r', encoding='utf-8') as f:

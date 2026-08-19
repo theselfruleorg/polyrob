@@ -394,3 +394,82 @@ async def test_agent_status_config_no_secret_shaped_strings(monkeypatch, tmp_pat
     text = result.extracted_content
     assert fake_key not in text
     assert "sk-ant-realsecretvalue1234567890" not in text
+
+
+# --- capabilities section (intel finding 2026-07-19: no reliable capability-
+# introspection — the agent conflated "not in my session" with "disabled
+# globally") -------------------------------------------------------------
+
+class _ServingContainer(_Container):
+    """Like _Container but can actually SERVE a couple of tools, so the
+    catalog resolves at least one real loaded/loadable status distinctly
+    from the gated-everything case the plain _Container produces."""
+    def __init__(self, data_dir, services=()):
+        super().__init__(data_dir)
+        self._services = set(services)
+
+    def has_service(self, name):
+        return name in self._services
+
+
+@pytest.mark.asyncio
+async def test_agent_status_capabilities_section_present(monkeypatch, tmp_path):
+    c = _live_controller(monkeypatch)  # list_tools() -> ["browser", "mcp"]
+    c.container = _ServingContainer(tmp_path, services=["browser_manager"])
+
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(), execution_context=None)
+    text = result.extracted_content
+    assert "<tool-catalog>" in text and "</tool-catalog>" in text
+    # "browser" is in list_tools() (loaded in THIS session) -> reports loaded,
+    # not merely loadable, even though the container also serves it.
+    assert "browser: " in text and "[loaded]" in text
+    assert result.error is None
+
+
+@pytest.mark.asyncio
+async def test_agent_status_capabilities_distinguishes_loadable_from_loaded(monkeypatch, tmp_path):
+    """The actual bug this closes: a tool absent from list_tools() but present
+    in the container must show [loadable], not silently vanish — proving the
+    agent can now tell "not loaded THIS session" apart from "not available at
+    all"."""
+    c = _live_controller(monkeypatch)  # list_tools() -> ["browser", "mcp"] (no "twitter")
+    c.container = _ServingContainer(tmp_path, services=["twitter"])
+
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(), execution_context=None)
+    text = result.extracted_content
+    assert 'twitter: ' in text
+    assert 'loadable — load_tool("twitter")' in text
+
+
+@pytest.mark.asyncio
+async def test_agent_status_capabilities_is_leaf_from_execution_context(monkeypatch, tmp_path):
+    """A leaf/sub-agent session must see delegation-blocked tools reported
+    gated:leaf-blocked, not silently absent — same ground-truth principle."""
+    import tools.controller.delegation as deleg
+    monkeypatch.setattr(deleg, "get_blocked_child_tools", lambda: {"twitter"})
+
+    c = _live_controller(monkeypatch)
+    c.container = _ServingContainer(tmp_path, services=["twitter"])
+
+    class _Ctx:
+        role = "leaf"
+
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(), execution_context=_Ctx())
+    text = result.extracted_content
+    assert "gated:leaf-blocked" in text
+
+
+@pytest.mark.asyncio
+async def test_agent_status_capabilities_fails_soft_when_container_absent(monkeypatch):
+    """No .container attribute at all (e.g. a bare test double) must not kill
+    the rest of the report — same fail-soft contract as every other section."""
+    c = _live_controller(monkeypatch)  # no c.container set
+
+    action = c.registry.registry.actions["agent_status"]
+    result = await action.function(action.param_model(), execution_context=None)
+    text = result.extracted_content
+    assert "steps: 4/25" in text  # other sections unaffected
+    assert result.error is None

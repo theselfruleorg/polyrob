@@ -7,6 +7,7 @@ this locks the route derivation (no hardcoded /mvpbot) and the decision->action 
 COMMAND dispatches, warm-but-dead rehydrates instead of diverting).
 """
 import pytest
+from contextlib import contextmanager
 
 from surfaces.telegram.harness import (
     derive_webhook_path, act_on_inbound, owner_allowed,
@@ -506,28 +507,15 @@ async def test_build_telegram_harness_injected_bot_polling_mode():
 #     TelegramBadRequest("message is too long"), caught fail-open, and the owner got
 #     NOTHING (2026-07-03 live incident: session 2cd65776). Must split + send in order. --
 
-def test_split_for_telegram_short_text_is_one_chunk():
-    from surfaces.telegram.harness import _split_for_telegram
-    assert _split_for_telegram("hello") == ["hello"]
-
-
-def test_split_for_telegram_splits_long_text_under_limit_each():
-    from surfaces.telegram.harness import _split_for_telegram, TELEGRAM_MAX_MESSAGE_LEN
-    text = "\n".join(f"line {i} " + "x" * 50 for i in range(200))
-    chunks = _split_for_telegram(text, limit=500)
-    assert len(chunks) > 1
-    assert all(len(c) <= 500 for c in chunks)
-    # no content lost/reordered
-    assert "\n".join(chunks) == text
-
-
-def test_split_for_telegram_hard_cuts_a_single_oversized_line():
-    from surfaces.telegram.harness import _split_for_telegram
-    text = "x" * 9000
-    chunks = _split_for_telegram(text, limit=4096)
-    assert len(chunks) == 3
-    assert "".join(chunks) == text
-    assert all(len(c) <= 4096 for c in chunks)
+@contextmanager
+def _telegram_cap(limit: int):
+    """Shrink the ONE Telegram message cap (surface module constant) for a test."""
+    import surfaces.telegram.surface as s
+    orig, s._TELEGRAM_MAX = s._TELEGRAM_MAX, limit
+    try:
+        yield
+    finally:
+        s._TELEGRAM_MAX = orig
 
 
 @pytest.mark.asyncio
@@ -549,14 +537,8 @@ async def test_send_telegram_text_splits_long_reply_into_multiple_sends():
     class _Bot:
         async def send_message(self, chat_id, text, **kw): sent.append((chat_id, text))
     long_reply = "\n".join(f"paragraph {i}: " + "y" * 100 for i in range(100))
-    # _send_telegram_text has no limit= param; exercise via the module-level cap
-    import surfaces.telegram.harness as h
-    orig_limit = h.TELEGRAM_MAX_MESSAGE_LEN
-    h.TELEGRAM_MAX_MESSAGE_LEN = 500
-    try:
+    with _telegram_cap(500):
         await _send_telegram_text(_Bot(), 555, long_reply)
-    finally:
-        h.TELEGRAM_MAX_MESSAGE_LEN = orig_limit
     assert len(sent) > 1
     assert all(chat == 555 for chat, _ in sent)
     assert all(len(text) <= 500 for _, text in sent)
@@ -568,18 +550,13 @@ async def test_telegram_bot_sink_splits_long_out_of_band_message():
     """Out-of-band deliveries (cron digest / goal / self-wake) go through
     TelegramBotSink — must ALSO chunk, since a long digest hits the same cap."""
     from surfaces.telegram.harness import TelegramBotSink
-    import surfaces.telegram.harness as h
     sent = []
     class _Bot:
         async def send_message(self, chat_id, text, **kw): sent.append((chat_id, text))
-    orig_limit = h.TELEGRAM_MAX_MESSAGE_LEN
-    h.TELEGRAM_MAX_MESSAGE_LEN = 500
-    try:
+    with _telegram_cap(500):
         sink = TelegramBotSink(_Bot())
         long_text = "\n".join(f"update {i}" * 20 for i in range(50))
         ok = await sink.send_message("555", long_text)
-    finally:
-        h.TELEGRAM_MAX_MESSAGE_LEN = orig_limit
     assert ok is True
     assert len(sent) > 1
     assert all(len(text) <= 500 for _, text in sent)
@@ -687,3 +664,15 @@ async def test_start_is_fail_open_when_get_me_raises():
     h = _harness(_BoomBot(), _FakeTaskAgent())
     await h.start()  # must not raise
     assert h.bot_username is None
+
+
+@pytest.mark.asyncio
+async def test_harness_delivery_renders_markdown_instead_of_raw_markers():
+    """The post-run / out-of-band delivery path must format like the surface path —
+    it used to send with NO parse_mode, so the owner saw raw '**bold**' markers."""
+    from surfaces.telegram.harness import _send_telegram_text
+    sent = []
+    class _Bot:
+        async def send_message(self, chat_id, text, **kw): sent.append((text, kw.get("parse_mode")))
+    await _send_telegram_text(_Bot(), 555, "**done** — 2 files")
+    assert sent == [("<b>done</b> — 2 files", "HTML")]

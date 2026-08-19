@@ -233,3 +233,40 @@ class TestBareAuthTokenRestored:
         assert isinstance(result, LLMAuthenticationError), (
             f"Expected LLMAuthenticationError for 'auth error', got {type(result).__name__}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Plan-quota exhaustion dressed as a 429 (2026-08-13..16 z.ai storm)
+# ---------------------------------------------------------------------------
+
+class TestPlanQuotaExhaustion:
+    """A 429 whose body says the PLAN quota is exhausted until a stated reset
+    is credit death, not a transient rate limit: retrying it ground 63 dead
+    sessions/day for days. Must classify LLMPermanentError."""
+
+    ZAI_1310 = (
+        "z.ai GLM Coding Plan API error: Error code: 429 - {'type': 'error', "
+        "'error': {'type': 'rate_limit_error', 'code': '1310', 'message': "
+        "'[1310][Weekly/Monthly Limit Exhausted. Your limit will reset at "
+        "2026-08-18 18:01:49][202608161600034d3278b09a014e95]'}}"
+    )
+
+    def test_zai_1310_weekly_limit_is_permanent(self):
+        result = translate_llm_error(Exception(self.ZAI_1310), "ctx")
+        assert isinstance(result, LLMPermanentError), (
+            f"z.ai 1310 quota death must be LLMPermanentError, got {type(result).__name__}"
+        )
+
+    def test_insufficient_balance_is_permanent(self):
+        err = Exception("Error code: 429 - [1113] insufficient balance")
+        result = translate_llm_error(err, "ctx")
+        assert isinstance(result, LLMPermanentError)
+
+    def test_transient_429_still_rate_limit(self):
+        err = Exception(
+            "Error code: 429 - {'type': 'rate_limit_error', "
+            "'message': 'concurrency limit reached, please retry later'}")
+        result = translate_llm_error(err, "ctx")
+        assert isinstance(result, LLMRateLimitError), (
+            "a transient 429 without quota-death text must stay retryable"
+        )

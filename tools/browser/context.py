@@ -15,15 +15,37 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional, TypedDict
 from datetime import datetime
 
-from playwright.async_api import TimeoutError
-from playwright.async_api import Browser as PlaywrightBrowser
-from playwright.async_api import (
-	BrowserContext as PlaywrightBrowserContext,
-)
-from playwright.async_api import (
-	ElementHandle,
-	FrameLocator,
-	Page,
+# playwright ships in the [browser] extra — a core install must still import
+# this module (it sits on the task-agent import chain). Sentinel stand-ins keep
+# annotations and isinstance() checks valid until a browser actually launches.
+try:
+	from playwright.async_api import TimeoutError
+	from playwright.async_api import Browser as PlaywrightBrowser
+	from playwright.async_api import (
+		BrowserContext as PlaywrightBrowserContext,
+	)
+	from playwright.async_api import (
+		ElementHandle,
+		FrameLocator,
+		Page,
+	)
+
+	PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+	PLAYWRIGHT_AVAILABLE = False
+
+	class TimeoutError(Exception):  # noqa: A001 — mirrors playwright's name
+		pass
+
+	class _PlaywrightUnavailable:
+		pass
+
+	PlaywrightBrowser = PlaywrightBrowserContext = _PlaywrightUnavailable
+	ElementHandle = FrameLocator = Page = _PlaywrightUnavailable
+
+PLAYWRIGHT_MISSING_HINT = (
+	"playwright is not installed — browser automation needs the [browser] extra: "
+	"pip install 'polyrob[browser]' && python -m playwright install chromium"
 )
 
 from tools.browser.views import (
@@ -133,6 +155,11 @@ class BrowserContextConfig:
 	viewport_expansion: int = 500
 	allowed_domains: list[str] | None = None
 	include_dynamic_attributes: bool = True
+
+	# Playwright storage_state dict (cookies + localStorage origins) injected at
+	# context creation — the login-persistence primitive (2026-08-18 X rail).
+	# None = today's behaviour, byte-identical.
+	storage_state: dict | None = None
 
 	_force_keep_context_alive: bool = False
 
@@ -408,6 +435,10 @@ class BrowserContext:
 			# Connect to existing Chrome instance instead of creating new one
 			context = browser.contexts[0]
 		else:
+			# Login persistence: inject a saved storage_state (cookies +
+			# localStorage) so the context starts authenticated.
+			if getattr(self.config, "storage_state", None):
+				context_options["storage_state"] = self.config.storage_state
 			# Original code for creating new context
 			context = await browser.new_context(**context_options)
 
@@ -1649,6 +1680,15 @@ class BrowserContext:
 					json.dump(cookies, f)
 			except Exception as e:
 				logger.warning(f'Failed to save cookies: {str(e)}')
+
+	async def export_storage_state(self) -> dict:
+		"""Snapshot the live context's storage_state (cookies + localStorage).
+
+		The counterpart of ``BrowserContextConfig.storage_state`` — capture after a
+		login, persist (encrypted), inject on the next context to stay signed in.
+		"""
+		session = await self.get_session()
+		return await session.context.storage_state()
 
 	async def is_file_uploader(self, element_node: DOMElementNode, max_depth: int = 3, current_depth: int = 0) -> bool:
 		"""Check if element or its children are file uploaders"""

@@ -119,6 +119,26 @@ def kb():
 
 
 # ---------------------------------------------------------------------------
+# kb export — convergence door for the knowledge vault (027 WP6: `kb` and
+# `knowledge` were two top-level nouns for one concept; the vault export is now
+# reachable from both, same flags, one implementation in knowledge.py).
+# ---------------------------------------------------------------------------
+
+@kb.command("export")
+@click.option("--out", "out_dir", default="./knowledge-vault", show_default=True,
+              help="Vault output directory (opened directly in Obsidian).")
+@click.option("--since", "since", default=None,
+              help="Only episodes newer than this (8h / 2d / ISO date).")
+@click.option("--user", "user", default="local", show_default=True,
+              help="Tenant to export.")
+@click.pass_context
+def kb_export(ctx, out_dir: str, since, user: str):
+    """Write notes/episodes/skills/identity/goals as a markdown vault."""
+    from cli.commands.knowledge import export as knowledge_export
+    ctx.invoke(knowledge_export, out_dir=out_dir, since=since, user=user)
+
+
+# ---------------------------------------------------------------------------
 # kb add
 # ---------------------------------------------------------------------------
 

@@ -4,6 +4,10 @@ Project (./.polyrob/.env) overrides global (~/.polyrob/.env). Secret values are
 redacted in `show`. No DB, no TOML — plain dotenv files (env-flags) plus a
 per-user ``preferences.toml`` (typed prefs — see ``core.prefs``).
 
+VALUE is optional: omit it and ``config set`` prompts (hidden for a
+secret-shaped KEY, and reading one line from a pipe when stdin is not a tty),
+so a credential never lands in shell history or ``ps`` output.
+
 ``config set`` routes KEY to one of three stores, first match wins:
   1. secret-shaped KEY (``core.secrets.is_secret_key``) -> env file, written
      exactly as before (no validation, redacted echo).
@@ -121,13 +125,50 @@ def _default_home_dir() -> str:
 @click.group("config")
 def config():
     """Show or edit POLYROB configuration (file-first: ~/.polyrob + ./.polyrob)."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
+
+
+def _prompt_for_value(key: str) -> str:
+    """Read VALUE interactively when it was omitted from the command line.
+
+    `polyrob config set OPENAI_API_KEY sk-...` puts a live credential in shell
+    history (and in `ps` output while it runs). Omitting VALUE now reads it
+    instead: hidden for a secret-shaped key, echoed for a plain flag.
+
+    A piped/redirected stdin is honored too (`… | polyrob config set KEY`), so
+    scripts and password managers work without ever passing the value as argv.
+    Refuses an empty value — writing a blank credential reads as "configured"
+    at every gate that only checks presence.
+    """
+    import sys
+
+    secret = _is_secret_key(key)
+    if not sys.stdin.isatty():
+        # Non-interactive: consume exactly one line. click.prompt would call
+        # getpass here, which cannot read a pipe.
+        value = (sys.stdin.readline() or "").strip()
+    else:
+        value = click.prompt(
+            f"{key}", hide_input=secret, default="", show_default=False
+        ).strip()
+    if not value:
+        raise click.ClickException(
+            f"no value given for {key} — nothing written "
+            "(a blank value would read as 'configured' everywhere)."
+        )
+    return value
 
 
 @config.command("set")
 @click.argument("key")
-@click.argument("value")
+@click.argument("value", required=False)
 @click.option("--global", "is_global", is_flag=True, default=False,
-              help="Write to ~/.polyrob/.env (default: ./.polyrob/.env)")
+              help="Write to ~/.polyrob/.env (default for flags: ./.polyrob/.env; "
+                   "secrets already default to global)")
+@click.option("--project", "project_scope", is_flag=True, default=False,
+              help="Write a secret to the per-directory ./.polyrob/.env instead "
+                   "of the global file")
 @click.option("--user", "user_id", default=None,
               help="Tenant user id — required to set a per-user preference "
                    "(dotted key, e.g. style.verbosity)")
@@ -137,15 +178,28 @@ def config():
               help="Write KEY even if it doesn't match a known preference/flag")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-def set_cmd(key, value, is_global, user_id, confirm, force, home_dir_opt):
+def set_cmd(key, value, is_global, project_scope, user_id, confirm, force, home_dir_opt):
     """Set KEY=VALUE — routes to a secret, a per-user preference, or an env flag.
 
-    See the module docstring for the full routing decision tree.
+    Omit VALUE to be prompted for it (hidden for a secret-shaped KEY), which
+    keeps credentials out of shell history. See the module docstring for the
+    full routing decision tree.
     """
-    # 1. Secret-shaped KEY -> env file, exactly as before, no validation.
+    if value is None:
+        value = _prompt_for_value(key)
+
+    # 1. Secret-shaped KEY -> env file. 027 WP4: credentials default to the
+    #    GLOBAL ~/.polyrob/.env — a project-scope key silently vanishes the
+    #    moment the user cd's away (the classic "polyrob stopped seeing my
+    #    key"). --project opts back into the per-directory file.
     if _is_secret_key(key):
-        path = _write_env_flag(key, value, is_global)
+        secret_global = not project_scope
+        path = _write_env_flag(key, value, secret_global)
         click.echo(f"Set {key} in {path}")
+        if secret_global and not is_global:
+            click.echo(click.style(
+                "credentials write to the global ~/.polyrob/.env by default; "
+                "pass --project for a per-directory key", dim=True))
         return
 
     # 2. Dotted KEY that is a known per-user preference -> preferences.toml.
@@ -173,6 +227,12 @@ def set_cmd(key, value, is_global, user_id, confirm, force, home_dir_opt):
     hit = catalog_lookup(key)
     if hit is not None:
         _group, documented_default = hit
+        # 026 P1.4: enum-shaped flags name their valid set on a typo instead of
+        # writing a value the resolver silently degrades.
+        from core.config_policy.flag_enums import enum_error
+        enum_err = enum_error(key, value)
+        if enum_err:
+            raise click.ClickException(enum_err)
         shape = shape_of_default(documented_default)
         if not value_matches_shape(value, shape):
             raise click.ClickException(
@@ -181,6 +241,10 @@ def set_cmd(key, value, is_global, user_id, confirm, force, home_dir_opt):
             )
         path = _write_env_flag(key, value, is_global)
         click.echo(f"Set {key} in {path} (takes effect: restart).")
+        # 026 P0.6/P1.6: shadow + clamp honesty from the ONE note builder.
+        from core.config_service import post_write_notes
+        for note in post_write_notes(key, value, "global" if is_global else "project"):
+            click.echo(click.style(note, fg="yellow"))
         return
 
     # 4. Otherwise: hard-reject any unrecognized key unless --force — a
@@ -199,6 +263,148 @@ def set_cmd(key, value, is_global, user_id, confirm, force, home_dir_opt):
     path = _write_env_flag(key, value, is_global)
     suffix = f"; did you mean {hint}?" if hint is not None else ""
     click.echo(f"Set {key} in {path} (--force override{suffix}).")
+
+
+@config.command("unset")
+@click.argument("key")
+@click.option("--global", "is_global", is_flag=True, default=False,
+              help="Remove from ~/.polyrob/.env (default: ./.polyrob/.env)")
+def unset_cmd(key, is_global):
+    """Remove KEY from the env file — the counterpart of `config set`.
+
+    This is how a stale or malformed credential/flag is cleared without
+    hand-editing the file (`polyrob doctor` names this verb on a
+    "present but unusable" line). Scoping mirrors `set`: project file by
+    default, ~/.polyrob/.env with --global.
+    """
+    from core.env_file import remove_env_var
+
+    path = _env_path(is_global)
+    if remove_env_var(path, key):
+        click.echo(f"Removed {key} from {path}")
+        return
+    other = _env_path(not is_global)
+    if key.strip() in _read_env_file(other):
+        remedy = (f"polyrob config unset {key} --global" if not is_global
+                  else f"polyrob config unset {key}")
+        raise click.ClickException(
+            f"{key} is not set in {path} — it is set in {other}; run `{remedy}`"
+        )
+    raise click.ClickException(f"{key} is not set in {path}")
+
+
+# --- `config migrate` — the explicit replacement for the retired backfill -----
+# (W1.1, HANDOFF-env-system-and-key-subscriptions-2026-08-14). The automatic
+# env-key backfill (core/bootstrap._backfill_provider_keys) silently imported
+# dead production keys and vanished them again the moment ONE real key was set.
+# This verb makes the same move explicit, once, with the user choosing per key.
+
+#: Credential-shaped name SUFFIXES for migration. Deliberately suffix-based, not
+#: the broad substring hints in ``core.secrets`` — those match flags like
+#: MODEL_MAX_TOKENS ("TOKEN") whose migration would violate the backfill's
+#: "secrets only, never flags" invariant. Suffix + the flag-value filter below
+#: keep the candidate list to actual credentials.
+_MIGRATE_SECRET_SUFFIXES = (
+    "_API_KEY", "_KEY", "_KEY_ID", "_TOKEN", "_SECRET", "_PASSWORD",
+    "_PASSPHRASE", "_JWT", "_SEED", "_MNEMONIC", "_CREDENTIAL",
+)
+
+
+def _looks_like_flag_value(value: str) -> bool:
+    """True for boolean/numeric values — a flag wearing a secret-shaped name
+    (REQUIRE_DEN_TOKEN=false, MODEL_MAX_TOKENS=4096) is never a credential."""
+    s = str(value).strip().strip('"').strip("'").lower()
+    if s in ("true", "false", "yes", "no", "on", "off", ""):
+        return True
+    try:
+        float(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_migratable_secret(name: str, value: str) -> bool:
+    return name.upper().endswith(_MIGRATE_SECRET_SUFFIXES) \
+        and not _looks_like_flag_value(value)
+
+
+def _migrate_sources() -> list:
+    """Legacy secret sources in load_env PRECEDENCE order (highest first): root
+    .env beats config/.env.production beats config/.env.development, so a key
+    defined in two files migrates with its EFFECTIVE value.
+
+    027 rider: also look under the CODE ROOT, not just the CWD — a pip/checkout
+    user running `polyrob config migrate` from any directory used to always see
+    "nothing to migrate" because the paths were CWD-relative.
+    """
+    candidates = [Path(".env"),
+                  Path("config") / ".env.production",
+                  Path("config") / ".env.development"]
+    try:
+        from core.runtime_paths import resolve_runtime_paths
+        code_root = resolve_runtime_paths(local=True).code_root
+        if code_root and Path.cwd().resolve() != Path(code_root).resolve():
+            candidates += [Path(code_root) / ".env",
+                           Path(code_root) / "config" / ".env.production",
+                           Path(code_root) / "config" / ".env.development"]
+    except Exception:
+        pass
+    return candidates
+
+
+def collect_migration_candidates(home_env: dict) -> list:
+    """``(key, value, source_path)`` for each secret-shaped key in a legacy env
+    file that is absent from ~/.polyrob/.env. First source wins per key."""
+    from dotenv import dotenv_values  # parse parity with core.bootstrap.load_env
+    out, seen = [], set(home_env)
+    for src in _migrate_sources():
+        if not src.exists():
+            continue
+        for key, value in dotenv_values(str(src)).items():
+            if not value or key in seen:
+                continue
+            if _is_migratable_secret(key, value):
+                out.append((key, value, src))
+                seen.add(key)
+    return out
+
+
+@config.command("migrate")
+@click.option("--all", "take_all", is_flag=True, default=False,
+              help="Copy every listed key without per-key confirmation (for scripts).")
+def migrate_cmd(take_all):
+    """Copy secret keys from the legacy env files into ~/.polyrob/.env.
+
+    Scans root .env and config/.env.{production,development} for
+    credential-shaped keys that ~/.polyrob/.env does not have yet, lists them
+    BY NAME (values are never shown), and copies the ones you confirm.
+    Idempotent: a key already present in ~/.polyrob/.env is never touched.
+    This replaces the retired automatic env-key backfill
+    (POLYROB_ENV_KEY_BACKFILL).
+    """
+    home_env_path = polyrob_home() / ".env"
+    candidates = collect_migration_candidates(_read_env_file(home_env_path))
+    if not candidates:
+        click.echo(f"nothing to migrate — no legacy secret keys found that "
+                   f"{home_env_path} does not already have")
+        return
+    click.echo(f"found {len(candidates)} key(s) in legacy env files "
+               "(values are never shown):")
+    for key, _value, src in candidates:
+        click.echo(f"  {key}  ({src})")
+    copied = 0
+    try:
+        for key, value, _src in candidates:
+            if take_all or click.confirm(f"copy {key}?", default=True):
+                _upsert_env(home_env_path, key, value, secure=True)
+                copied += 1
+    except click.exceptions.Abort:
+        raise click.ClickException(
+            "aborted — pass --all to copy every listed key without prompting")
+    if copied:
+        click.echo(f"copied {copied} key(s) to {home_env_path}")
+    else:
+        click.echo("no keys copied")
 
 
 @config.command("show")
@@ -232,13 +438,57 @@ def show_cmd(user_id, home_dir_opt):
         click.echo(f"  {key} = {value}   ({source})")
 
 
+#: What each env-file tier is FOR — shown by `config path`. The two .polyrob
+#: files are the managed ones (`config set`/`unset`/`auth add` write them);
+#: everything below is the legacy server-mode tier: a non-systemd server deploy
+#: reads config/.env.{env} (systemd prod uses /etc/polyrob/polyrob.env via the
+#: unit file instead), and the CLI only keeps them as the LOWEST layers for
+#: back-compat. CLI keys belong in ~/.polyrob/.env — `polyrob config migrate`.
+_TIER_NOTES = {
+    "project": "managed by `polyrob config set`",
+    "home": "managed by `polyrob config set --global`",
+    "legacy-home": "legacy home (read-only transition fallback)",
+    "root": "legacy server-mode tier (lowest precedence)",
+    "config-env": ("legacy server-mode tier (non-systemd server deploys only); "
+                   "CLI keys belong in ~/.polyrob/.env — `polyrob config migrate`"),
+    "config-env-local": "legacy server-mode tier (local override)",
+}
+
+
 @config.command("path")
 def path_cmd():
-    """List the config files that contribute (project first = higher precedence)."""
-    for label, path in (("project", Path.cwd() / ".polyrob" / ".env"),
-                        ("global", polyrob_home() / ".env")):
-        status = "exists" if path.exists() else "absent"
-        click.echo(f"[{label}] {path} ({status})")
+    """List the env files that configure this process (highest precedence first).
+
+    Derived from the ONE candidate/precedence SSOT
+    (``core.paths.env_file_candidates``). The two .polyrob files are always
+    shown; a legacy tier (root .env, config/.env.*) is listed only when the
+    file actually exists. A relic config/.env.* file the RESOLVED env does not
+    read is called out too — the classic "why is my key ignored" trap.
+    """
+    import os
+
+    from core.paths import env_file_candidates
+
+    resolved = os.environ.get("CONFIG_ENV") or os.environ.get("ENV") or "development"
+    display = {"home": "global"}
+    click.echo("(process env wins over every file)")
+    listed = set()
+    for cand in env_file_candidates(resolved, local_mode=True):
+        exists = cand.path.exists()
+        listed.add(str(cand.path))
+        if cand.tier not in ("project", "home") and not exists:
+            continue  # absent legacy tiers are noise
+        label = display.get(cand.tier, cand.tier)
+        note = _TIER_NOTES.get(cand.tier, "")
+        click.echo(f"[{label}] {cand.path} ({'exists' if exists else 'absent'})"
+                   + (f" — {note}" if note else ""))
+    for relic in (Path("config") / ".env.production",
+                  Path("config") / ".env.development"):
+        if str(relic) not in listed and relic.exists():
+            click.echo(
+                f"note: {relic} exists but is NOT read (resolved env: {resolved}) — "
+                "legacy server file; `polyrob config migrate` copies its keys "
+                "to ~/.polyrob/.env")
 
 
 @config.command("check")

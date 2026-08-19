@@ -55,6 +55,29 @@ AWS_RE = re.compile(r"\bAKIA[0-9A-Z]{16}\b")
 #: The signature segment may be empty (alg=none), hence ``{0,}`` at the tail.
 JWT_RE = re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*")
 
+#: OPAQUE OAuth tokens (024 L2). Plenty of subscription providers issue tokens
+#: that are neither JWT-shaped nor ``sk-``-prefixed — a bare high-entropy blob
+#: with a short vendor prefix (``gho_``, ``ghu_``, ``github_pat_``, ``oat_``,
+#: ``sbp_``, ``xoxb-``, …). Every rule above matches on SHAPE, so those passed
+#: through the whole battery untouched and could land in a log line or a
+#: persisted transcript verbatim.
+#:
+#: Shape: one or two lowercase prefix segments, a separator, then an UNBROKEN
+#: run of >=24 alphanumerics (``gho_16C7e…``, ``github_pat_11ABC…``,
+#: ``sbp_0102…``). The unbroken run is what keeps ordinary snake_case out: a
+#: path or identifier like ``test_export_defaults_into_sess0`` is long enough in
+#: total but has no 24-char alphanumeric run, and an earlier, looser version of
+#: this rule redacted exactly that out of a pytest tmpdir path.
+#:
+#: Deliberately NOT a bare high-entropy catch-all: callers that want one already
+#: layer hex/base64 catch-alls AFTER this battery, and doing it here would
+#: redact identifiers, hashes and file paths across every log in the system.
+#: Hyphen-segmented tokens (Slack's ``xoxb-1-2-abc``) are out of scope — they
+#: have no long run either, and widening for them costs more than it buys.
+OPAQUE_TOKEN_RE = re.compile(
+    r"\b[a-z][a-z0-9]{1,15}(?:_[a-z0-9]{1,15})?[_-][A-Za-z0-9]{24,}\b"
+)
+
 
 def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     """Apply the ordered high-confidence shape battery to *text*.
@@ -75,4 +98,7 @@ def apply_ssot_shapes(text: str, redacted: str = REDACTED) -> str:
     out = POLYROB_KEY_RE.sub(redacted, out)
     out = AWS_RE.sub(redacted, out)
     out = JWT_RE.sub(redacted, out)
+    # LAST: the opaque-token rule is the loosest of the battery, so every
+    # named-shape rule gets first refusal on a match.
+    out = OPAQUE_TOKEN_RE.sub(redacted, out)
     return out

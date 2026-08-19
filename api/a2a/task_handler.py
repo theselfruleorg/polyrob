@@ -286,10 +286,13 @@ class A2ATaskHandler:
 
         # Prepare session config
         from agents.task_agent_lite import SessionRequest
+        # model/provider omitted -> SessionRequest resolves them from the
+        # operator's runtime config (DEFAULT_PROVIDER pin > first keyed
+        # provider), never a hardcoded openai/gpt-5 literal.
         session_request = SessionRequest(
             task=task_text,
-            model=metadata.get("model", config.get("model", "gpt-5")),
-            provider=metadata.get("provider", config.get("provider", "openai")),
+            model=metadata.get("model", config.get("model")),
+            provider=metadata.get("provider", config.get("provider")),
             tools=metadata.get("tools", config.get("tools", ["browser", "filesystem"])),
             max_steps=metadata.get("max_steps", config.get("max_steps", 50)),
             use_vision=metadata.get("use_vision", config.get("use_vision", True))

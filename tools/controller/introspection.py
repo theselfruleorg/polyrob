@@ -76,6 +76,15 @@ class IntrospectionMixin:
 		"""
 		return self.registry.create_action_model()
 
+	def get_tool_schema_token_estimate(self, provider: str) -> int:
+		"""Token estimate of the emitted tool-schema list for *provider* (P4,
+		context-usage audit). Memoized in the Registry alongside the schema
+		cache; the step loop stamps this onto the MessageManager gauge."""
+		try:
+			return self.registry.get_schema_token_estimate(provider)
+		except Exception:
+			return 0
+
 	def get_all_actions_for_provider(self, provider: str):
 		"""Get all action schemas formatted for a specific LLM provider.
 

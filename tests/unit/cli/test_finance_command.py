@@ -129,7 +129,7 @@ def test_cli_finance_prints_the_ledger(monkeypatch, tmp_path):
 
 def test_cli_finance_registered_in_group():
     from cli.polyrob import cli
-    assert "finance" in cli.commands
+    assert "finance" in cli.list_commands(None)
 
 
 # --------------------------------------------------------------------------- #

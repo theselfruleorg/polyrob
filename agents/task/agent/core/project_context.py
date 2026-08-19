@@ -102,7 +102,10 @@ def build_project_context_message(
     root = resolve_project_context_root(local=local, cwd=cwd, workspace_dir=workspace_dir)
     if root is None:
         return None
-    ctx = load_project_context(root, cap_tokens=cap_tokens)
+    # P1-8: on the server the walk is CONFINED to the tenant workspace — it must
+    # never ascend to a surrounding git root, which on a deployment whose data
+    # root lives inside a source checkout is the install's own AGENTS.md/CLAUDE.md.
+    ctx = load_project_context(root, cap_tokens=cap_tokens, confine_to_root=not local)
     if ctx is None:
         return None
     return frame_project_context(ctx, trusted=local)
@@ -147,6 +150,7 @@ def load_project_context(
     root: str | Path,
     *,
     cap_tokens: int = 20000,
+    confine_to_root: bool = False,
 ) -> Optional[str]:
     """Load and return project context from recognised context files.
 
@@ -154,16 +158,22 @@ def load_project_context(
     each name in ``_CONTEXT_FILENAMES``, filters secret/suspicious files, and
     returns their concatenated content capped to *cap_tokens*.
 
+    ``confine_to_root=True`` (the server tier, P1-8) caps the search at *root*
+    itself — no upward walk — so a tenant workspace nested inside a deployment
+    git tree can never read the install's own context files.
+
     Returns ``None`` when nothing is found or the whole function fails.
     """
     try:
-        return _load_project_context_impl(Path(root), cap_tokens=cap_tokens)
+        return _load_project_context_impl(
+            Path(root), cap_tokens=cap_tokens, confine_to_root=confine_to_root)
     except Exception as e:
         logger.debug("load_project_context failed (non-fatal): %s", e)
         return None
 
 
-def _load_project_context_impl(root: Path, *, cap_tokens: int) -> Optional[str]:
+def _load_project_context_impl(root: Path, *, cap_tokens: int,
+                               confine_to_root: bool = False) -> Optional[str]:
     """Implementation (raises on error; caller wraps in try/except)."""
     from agents.task.agent.core.secret_guard import is_secret_path, estimate_tokens_rough
 
@@ -174,7 +184,8 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int) -> Optional[str]:
         is_suspicious = None  # type: ignore[assignment]
 
     root_resolved = root.resolve()
-    git_root = _find_git_root(root_resolved)
+    # P1-8: confined mode never ascends — the search root IS the given root.
+    git_root = None if confine_to_root else _find_git_root(root_resolved)
     # If there is no .git root, fall back to the provided root so at least the
     # immediate directory is searched.
     search_root = git_root if git_root is not None else root_resolved
@@ -204,8 +215,18 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int) -> Optional[str]:
             if not candidate.is_file():
                 continue
 
-            # Secret-path guard.
-            if is_secret_path(candidate, root=search_root):
+            # Secret-path guard — evaluated on the path RELATIVE to the search
+            # root: components ABOVE the root (which the walk cannot escape and
+            # the tenant cannot control) must not poison the check. A server
+            # workspace lives under `data/…/workspace`, and the guard's blanket
+            # `data` dir rule flagged the workspace's own AGENTS.md through the
+            # absolute path (P1-8 follow-up). Secret paths INSIDE the walk
+            # (config/.env.*, .polyrob/…) still match on the relative form.
+            try:
+                rel_candidate = candidate.relative_to(search_root)
+            except ValueError:
+                rel_candidate = candidate
+            if is_secret_path(rel_candidate, root=search_root):
                 logger.debug("project_context: skipping secret path %s", candidate)
                 continue
 

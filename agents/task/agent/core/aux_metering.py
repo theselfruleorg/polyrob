@@ -119,8 +119,14 @@ def _llm_identity(llm: Any, response: Any = None) -> tuple[str, str]:
     provider = (getattr(llm, "llm_provider", None) or getattr(llm, "provider_name", None))
     if not provider:
         try:
-            from agents.task.utils import detect_llm_provider
-            provider = detect_llm_provider(response, model) or "unknown"
+            # A chat-model ADAPTER carries neither attribute above, so this is the
+            # live path for every aux call. Ask the client which ProviderSpec built
+            # it before falling back to model-name detection: the registry credits
+            # a model id to the vendor that ORIGINATED it, so a judge running on a
+            # zai-coding seat was recorded as `openrouter`/`glm-4.6` — an
+            # impossible pair — and billed a flat-rate seat as metered.
+            from agents.task.utils import resolve_serving_provider
+            provider = resolve_serving_provider(llm, model) or "unknown"
         except Exception:
             provider = "unknown"
     return str(model), str(provider)

@@ -416,7 +416,8 @@ def _record_owner_notice(text: str) -> None:
 
 async def _push_owner_message_outcome(container, text: Optional[str],
                                       attachments: Optional[list] = None,
-                                      priority: Optional[str] = None) -> Optional[str]:
+                                      priority: Optional[str] = None,
+                                      source: Optional[str] = None) -> Optional[str]:
     """Rail outcome of a proactive owner push, or ``None`` when nothing entered
     the rail (empty text / no container / resolver crash). Shared by
     :func:`push_owner_message` (bool facade) and
@@ -437,7 +438,7 @@ async def _push_owner_message_outcome(container, text: Optional[str],
         except Exception:
             owner = ""
         return await deliver_user_message(
-            container, owner, str(text), source="self_evolution",
+            container, owner, str(text), source=source or "self_evolution",
             attachments=attachments, priority=priority)
     except Exception as e:  # never let a notification failure break a write
         logger.debug("self_evolution: owner notify failed (fail-open): %s", e)
@@ -446,7 +447,8 @@ async def _push_owner_message_outcome(container, text: Optional[str],
 
 async def push_owner_message(container, text: Optional[str],
                              attachments: Optional[list] = None,
-                             priority: Optional[str] = None) -> bool:
+                             priority: Optional[str] = None,
+                             source: Optional[str] = None) -> bool:
     """Best-effort proactive push to the owner's Telegram (fail-open).
 
     Reuses the same sink + owner-chat resolution as ``cron/delivery`` so a
@@ -464,9 +466,17 @@ async def push_owner_message(container, text: Optional[str],
     ``priority`` (2026-07-20): pass ``"low"`` for chatter that must never
     out-compete a completion, a digest, or a halt notice for the daily cap —
     see ``core.surfaces.user_delivery``. Omitted => ``normal``, unchanged.
+
+    ``source`` (2026-08-18): names the DELIVERY LANE. This used to be hardcoded
+    ``"self_evolution"``, so a blocked-goal escalation ("I stopped, I need you")
+    was indistinguishable at the cap gate from a "goal started" ping. Pass
+    ``"goal_blocked"`` for a need the agent cannot proceed without — that source
+    is in ``_CRITICAL_SOURCES`` and the daily cap may not drop it. Omitted =>
+    ``self_evolution``, unchanged.
     """
     return (await _push_owner_message_outcome(
-        container, text, attachments=attachments, priority=priority)) == "sent"
+        container, text, attachments=attachments, priority=priority,
+        source=source)) == "sent"
 
 
 async def maybe_notify_owner_pending(container, user_id: str, *, home_dir: Path | str,

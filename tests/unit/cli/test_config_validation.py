@@ -58,7 +58,7 @@ def test_secret_key_writes_raw_without_force_even_if_unrecognized(tmp_path, monk
     # is_secret_key() flags it (contains "TOKEN") — the secret branch must win
     # BEFORE the unknown-key rejection, with no --force needed.
     monkeypatch.chdir(tmp_path)
-    r = CliRunner().invoke(config, ["set", "MY_CUSTOM_API_TOKEN", "shh-secret-value"])
+    r = CliRunner().invoke(config, ["set", "MY_CUSTOM_API_TOKEN", "shh-secret-value", "--project"])
     assert r.exit_code == 0, r.output
     text = (tmp_path / ".polyrob" / ".env").read_text()
     assert "MY_CUSTOM_API_TOKEN=shh-secret-value" in text
@@ -70,7 +70,7 @@ def test_secret_key_skips_shape_check(tmp_path, monkeypatch):
     # The secret branch must be checked FIRST and never shape-validate — if it
     # fell through to the catalog branch instead, this value would be rejected.
     monkeypatch.chdir(tmp_path)
-    r = CliRunner().invoke(config, ["set", "LLM_MAX_OUTPUT_TOKENS", "not-a-number"])
+    r = CliRunner().invoke(config, ["set", "LLM_MAX_OUTPUT_TOKENS", "not-a-number", "--project"])
     assert r.exit_code == 0, r.output
     assert "LLM_MAX_OUTPUT_TOKENS=not-a-number" in (tmp_path / ".polyrob" / ".env").read_text()
 

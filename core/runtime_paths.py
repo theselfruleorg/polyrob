@@ -79,6 +79,16 @@ def resolve_runtime_paths(*, local: bool) -> RuntimePaths:
     elif local:
         # Local home is the project-scoped ``.polyrob`` dir (doc 02 rename).
         data_home = (Path.cwd() / ".polyrob").resolve()
+        # 027 WP5: running from $HOME would collapse the data home into the
+        # CONFIG home (~/.polyrob — .env/auth.json beside the sidecar DBs,
+        # a collision core/paths.py declares must not happen). Redirect to a
+        # data/ subdir; an explicit POLYROB_DATA_DIR always wins above.
+        try:
+            from core.paths import polyrob_home
+            if data_home == polyrob_home().resolve():
+                data_home = data_home / "data"
+        except Exception:
+            pass
     else:
         data_home = _server_default_data_home().resolve()
 

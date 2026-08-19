@@ -88,4 +88,10 @@ def test_router_without_bot_username_method_is_fail_soft():
         router=router, allowlist=allowlist, owner_targets={"telegram": "28436760"},
         user_id="rob", surface="telegram", target="@tmachinroBot", text="hi",
         session_id="sess-1"))
-    assert res["tier"] == "denied"
+    # 2026-08-17: still no crash without bot_username, but the outcome upgraded
+    # from a bare allowlist denial to the explicit bot-recipient refusal — a
+    # '@…bot' handle can never receive a bot's message on Telegram, and the
+    # error now tells the agent to use target='owner' instead.
+    assert res["success"] is False
+    assert "target='owner'" in res["error"]
+    assert router.sent == []

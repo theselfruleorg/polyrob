@@ -37,16 +37,19 @@ def _tenant(user: Optional[str]) -> str:
 
 def _warn_if_cron_off() -> None:
     """A stored job only runs if the ticker is on — never mislead the owner."""
-    try:
+    from cli._flag_warn import warn_if_flag_off
+
+    def _enabled() -> bool:
         from tools.cronjob_tools import cron_enabled
-        enabled = cron_enabled()
-    except Exception:
-        enabled = False
-    if not enabled:
-        click.echo(click.style(
-            "note: CRON_ENABLED is off — the job is stored but no ticker will "
-            "run it until you enable cron (CRON_ENABLED=true or "
-            "AUTONOMY_POSTURE=full).", fg="yellow"))
+        return cron_enabled()
+
+    warn_if_flag_off(
+        "CRON_ENABLED",
+        "the job is stored but no ticker will run it.",
+        enabled_fn=_enabled,
+        remedy="polyrob config set CRON_ENABLED true --global "
+               "(or AUTONOMY_POSTURE=full)",
+    )
 
 
 def _fmt(job) -> str:
@@ -61,6 +64,8 @@ def _fmt(job) -> str:
 @click.group("cron")
 def cron():
     """Schedule, inspect and cancel durable cron jobs."""
+    from cli.commands._bootstrap import ensure_env_loaded
+    ensure_env_loaded()
 
 
 @cron.command("schedule")

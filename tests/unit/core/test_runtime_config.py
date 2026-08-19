@@ -79,3 +79,38 @@ def test_server_path_never_reads_cli_store(monkeypatch):
     assert resolve_runtime_config(
         None, None, cli_store_default=None, available_keys={"ANTHROPIC_API_KEY"},
     ) == ("anthropic", None)
+
+
+# --- Provider-alias canonicalization -----------------------------------------
+# A ProviderSpec alias (`glm` -> `zai`, `kimi` -> `moonshot`) is accepted by the
+# CLI's known-provider validation but the LLM manager only registers clients
+# under SPEC names — so an un-canonicalized alias dies downstream as
+# "No client found for provider glm" even with a valid key present.
+# The resolver is the one seam both surfaces share, so it canonicalizes.
+
+
+def test_explicit_alias_canonicalized_to_spec_name():
+    assert resolve_runtime_config("glm", None, available_keys=set()) == ("zai", None)
+
+
+def test_pinned_alias_canonicalized_to_spec_name():
+    # DEFAULT_PROVIDER=kimi must reach the manager as `moonshot`.
+    assert resolve_runtime_config(
+        None, None, pinned_provider="kimi", pinned_model=None, available_keys=set(),
+    ) == ("moonshot", None)
+
+
+def test_stored_alias_canonicalized_and_intersected():
+    # A stored alias with its provider's key present is honored under the SPEC name.
+    assert resolve_runtime_config(
+        None, None, cli_store_default=("glm", "glm-5.2"),
+        available_keys={"GLM_API_KEY"},
+    ) == ("zai", "glm-5.2")
+
+
+def test_unknown_provider_passes_through_unchanged():
+    # A providers.yaml/custom name the registry doesn't know is NOT rewritten —
+    # it reaches the manager and errors honestly there.
+    assert resolve_runtime_config("myrouter", "m1", available_keys=set()) == (
+        "myrouter", "m1",
+    )

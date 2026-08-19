@@ -23,8 +23,6 @@ from core.container import DependencyContainer, ServiceScope, ServiceRegistratio
 # Core utilities
 from modules import MODULE_INIT_ORDER
 from utils.rate_limit_manager import RateLimitManager
-from utils.message_utils import send_long_message
-from utils.markdown_utils import format_message_with_markdown
 from utils.metrics import Metrics  # Add import for Metrics
 
 # Database and Memory

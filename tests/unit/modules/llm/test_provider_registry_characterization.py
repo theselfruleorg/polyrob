@@ -45,6 +45,28 @@ def registry_flag(request, monkeypatch):
 CANONICAL_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia", "deepseek"]
 INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia"]
 
+#: Subscription/flat-rate rows appended by 024 T0. They exist ONLY on the
+#: registry path — the kill-switch (``LLM_PROVIDER_REGISTRY=off``) path is the
+#: frozen legacy literal table, which cannot know about them. That divergence is
+#: deliberate and is the first behavioral difference between the two modes; the
+#: SIX legacy providers must still resolve identically in both, which is what
+#: the rest of this suite pins. Because these rows are appended AFTER the six,
+#: the canonical "first provider with a key" preference order is unchanged for
+#: every provider an existing install actually has a key for.
+SUBSCRIPTION_ROWS = [
+    # 024 T0 — subscription plans that issue a key
+    "ollama-cloud", "zai-coding", "cerebras",
+    # 2026-08-12 Hermes-parity breadth. Same contract: appended after the six,
+    # fallback-ineligible, never prompted for in init.
+    "zai", "moonshot", "moonshot-cn", "kimi-coding", "minimax", "minimax-cn",
+    "xai", "dashscope", "alibaba-coding", "stepfun", "ai-gateway",
+    "opencode-zen", "opencode-go", "kilocode", "huggingface", "xiaomi",
+    "tencent-tokenhub", "copilot",
+    # OAuth subscription seats (no env_key — a seat is not an API key)
+    "anthropic-oauth", "openai-codex", "github-copilot", "xai-oauth",
+    "qwen-oauth", "minimax-oauth",
+]
+
 REAL = "sk-0123456789abcdef0123456789"  # >= 20 chars, not a placeholder
 
 ALL_KEYS = {
@@ -63,7 +85,51 @@ ALL_KEYS = {
 class TestProfilesOracles:
     def test_profiles_canonical_order_and_membership(self, registry_flag):
         from modules.llm.profiles import PROFILES
-        assert list(PROFILES.keys()) == CANONICAL_ORDER
+        names = list(PROFILES.keys())
+        # The six legacy providers keep their exact identity AND order in both
+        # modes — that is the parity this suite exists to protect.
+        assert names[:6] == CANONICAL_ORDER
+        if registry_flag == "off":
+            assert names == CANONICAL_ORDER      # frozen legacy literal table
+        else:
+            assert names == CANONICAL_ORDER + SUBSCRIPTION_ROWS
+
+    def test_subscription_rows_never_displace_the_legacy_six(self, registry_flag):
+        """A 024 T0 row must not steal preference, fallback, or bootstrap.
+
+        The subscription rows are appended last and are fallback-ineligible, so
+        an install that has any legacy key resolves exactly as it did before.
+        """
+        from modules.llm.profiles import PROFILES, providers_with_keys
+        assert providers_with_keys(ALL_KEYS) == CANONICAL_ORDER
+        if registry_flag == "off":
+            return
+        from modules.llm.provider_spec import get_spec
+        for name in SUBSCRIPTION_ROWS:
+            spec = get_spec(name)
+            assert spec is not None and spec.builtin, name
+            assert spec.fallback_eligible is False, name
+            # No prefix routing: several of these serve the same open-weight
+            # model ids, so a prefix would silently hijack another provider.
+            assert spec.model_prefixes == (), name
+            # Served by the generic transport clients, never a bespoke class.
+            assert spec.client_class_name is None, name
+            # A built-in may use the vendor's REAL variable name, which is not
+            # always `*_API_KEY` (HF_TOKEN, COPILOT_GITHUB_TOKEN). The
+            # `*_API_KEY` shape rule is a guard on USER-declared rows — it stops
+            # a providers.yaml file naming an arbitrary process secret as its
+            # "api key". What must hold for a built-in is only that it names a
+            # credential var and never a non-LLM secret.
+            from modules.llm.provider_spec import _env_name_sensitive
+            if spec.oauth is not None:
+                # An OAuth seat carries NO env key by design — giving it one
+                # would make an unrelated variable look like a credential.
+                assert spec.env_key is None, name
+                continue
+            for var in spec.env_key_chain():
+                assert var.isupper(), name
+                assert var.endswith(("_API_KEY", "_TOKEN")), (name, var)
+                assert not _env_name_sensitive(var.replace("_TOKEN", "")), (name, var)
 
     def test_profile_fields_pinned(self, registry_flag):
         from modules.llm.profiles import PROFILES

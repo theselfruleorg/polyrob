@@ -3,7 +3,7 @@ import pytest
 
 from tools.defi.data_tool import (
     CONTRACT_READ_GAS_CAP, CONTRACT_READ_MAX_BYTES, DefiDataTool,
-    ContractReadParams, EmptyParams, ResolveParams, TokenRefParams,
+    ContractReadParams, PortfolioParams, ResolveParams, TokenRefParams,
 )
 from tools.defi.providers.base import Candidate, PriceInfo, ScreenVerdict
 
@@ -135,7 +135,7 @@ async def test_portfolio_labels_partial_coverage_without_a_key(monkeypatch):
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "partial" in out.lower()
     assert "scanned" in out.lower()
 
@@ -144,9 +144,9 @@ async def test_portfolio_labels_partial_coverage_without_a_key(monkeypatch):
 async def test_portfolio_labels_indexed_coverage_with_a_key(monkeypatch):
     monkeypatch.setenv("ALCHEMY_API_KEY", "k")
     tool = _tool(holder="0x" + "22" * 20,
-                 index_fn=lambda h: {USDC: 10_000_000},
+                 index_fn=lambda h, chain="base": {USDC: 10_000_000},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "indexed" in out.lower()
 
 
@@ -157,7 +157,7 @@ async def test_portfolio_excludes_low_confidence_from_the_total():
                  balances_fn=lambda h, c, toks: {USDC: 10_000_000, FAKE: 5_000_000_000_000_000_000},
                  price_fn=lambda c, a: (_price(p=1.0) if a == USDC
                                         else _price(p=1_000_000.0, liq=900.0, pools=1, conf="low")))
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "unvalued" in out.lower()
     assert "5,000,000,000,000" not in out.replace(" ", "")
 
@@ -167,14 +167,14 @@ async def test_portfolio_unknown_balance_is_not_zero():
     tool = _tool(holder="0x" + "22" * 20,
                  balances_fn=lambda h, c, toks: {USDC: None},
                  price_fn=lambda c, a: _price(p=1.0))
-    out = _text(await tool.portfolio(EmptyParams()))
+    out = _text(await tool.portfolio(PortfolioParams()))
     assert "unknown" in out.lower()
 
 
 @pytest.mark.asyncio
 async def test_portfolio_without_a_wallet_is_honest():
     tool = _tool(holder=None)
-    res = await tool.portfolio(EmptyParams())
+    res = await tool.portfolio(PortfolioParams())
     assert res.error and "wallet" in res.error.lower()
 
 
@@ -212,3 +212,61 @@ async def test_contract_read_rejects_bad_address():
 def test_caps_are_bounded():
     assert 0 < CONTRACT_READ_GAS_CAP <= 5_000_000
     assert 0 < CONTRACT_READ_MAX_BYTES <= 65536
+
+
+# --------------------------------------------------------------------------
+# multi-chain data tier (2026-08-17)
+# --------------------------------------------------------------------------
+
+def test_the_data_tier_covers_every_chain_the_registry_can_read():
+    """The tier said "base only" while the registry knew five chains. Reading
+    is safe on all of them — it is MOVING value that needs verification."""
+    from core.wallet import chains
+    from tools.defi.data_tool import SUPPORTED_CHAINS
+    assert set(SUPPORTED_CHAINS) == {r.name for r in chains.all_rows()}
+    assert "ethereum" in SUPPORTED_CHAINS
+    assert "robinhood" in SUPPORTED_CHAINS
+
+
+def test_the_data_tier_still_refuses_a_chain_it_does_not_know():
+    from tools.defi.data_tool import DefiDataTool
+    addr, err = DefiDataTool()._validate("nosuchchain", "0x" + "11" * 20)
+    assert addr is None
+    assert "nosuchchain" in err
+
+
+@pytest.mark.asyncio
+async def test_portfolio_reports_the_chain_it_was_asked_for(monkeypatch):
+    """portfolio hardcoded base, so an ethereum holding was invisible with no
+    hint that it had not been looked at."""
+    from tools.defi.data_tool import PortfolioParams
+    monkeypatch.delenv("ALCHEMY_API_KEY", raising=False)
+    seen = {}
+
+    def _balances(holder, chain, toks):
+        seen["chain"] = chain
+        return {}
+
+    tool = _tool(holder="0x" + "22" * 20, balances_fn=_balances,
+                 price_fn=lambda c, a: _price(p=1.0))
+    out = _text(await tool.portfolio(PortfolioParams(chain="ethereum")))
+    assert seen["chain"] == "ethereum"
+    assert "ethereum" in out
+
+
+@pytest.mark.asyncio
+async def test_portfolio_indexes_the_requested_chain(monkeypatch):
+    """The indexer must be asked for the SAME chain, or it enumerates another
+    network's holdings and labels them this one's."""
+    from tools.defi.data_tool import PortfolioParams
+    monkeypatch.setenv("ALCHEMY_API_KEY", "k")
+    seen = {}
+
+    def _index(holder, chain="base"):
+        seen["chain"] = chain
+        return {USDC: 10_000_000}
+
+    tool = _tool(holder="0x" + "22" * 20, index_fn=_index,
+                 price_fn=lambda c, a: _price(p=1.0))
+    await tool.portfolio(PortfolioParams(chain="ethereum"))
+    assert seen["chain"] == "ethereum"

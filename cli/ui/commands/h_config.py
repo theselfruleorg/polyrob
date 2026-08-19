@@ -301,6 +301,11 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
     hit = catalog_lookup(key)
     if hit is not None:
         _group, documented_default = hit
+        # 026 P1.4: enum-shaped flags name their valid set on a typo.
+        from core.config_policy.flag_enums import enum_error
+        enum_err = enum_error(key, value)
+        if enum_err:
+            return f"error: {enum_err}"
         shape = shape_of_default(documented_default)
         if not value_matches_shape(value, shape):
             return (
@@ -318,7 +323,15 @@ def _cmd_set(ctx: ConfigCtx, rest: List[str]) -> str:
                 pass  # gitignore housekeeping must never block a set
         except Exception as exc:
             return f"error: failed to write {key} to {path}: {exc}"
-        return f"Set {key}={value} in {path} (takes effect: restart)."
+        reply = f"Set {key}={value} in {path} (takes effect: restart)."
+        # 026 P0.6/P1.6: shadow + clamp honesty from the ONE note builder.
+        try:
+            from core.config_service import post_write_notes
+            for note in post_write_notes(key, value, "project"):
+                reply += "\n" + note
+        except Exception:
+            pass
+        return reply
 
     hint = _closest_match(key)
     suffix = f" (did you mean {hint}?)" if hint else ""

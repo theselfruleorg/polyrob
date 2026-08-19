@@ -39,6 +39,11 @@ class EmailTool(BaseTool):
     DEFAULT_SMTP_SERVER = 'smtp.gmail.com'
     DEFAULT_SMTP_PORT = 587
     DEFAULT_IMAP_SERVER = 'imap.gmail.com'
+
+    # Provider seam defaults as CLASS attributes so partially-constructed tools
+    # (tests build via object.__new__) resolve to the legacy smtp path.
+    provider = "smtp"
+    agentmail = None
     
     @property
     def required_services(self) -> Dict[str, str]:
@@ -55,25 +60,42 @@ class EmailTool(BaseTool):
     def __init__(self, name: str, config: BotConfig, container: Optional[Any] = None):
         """Initialize email service."""
         super().__init__(name=name, config=config, container=container)
-        
+
         # Initialize email settings
         self.smtp_server = getattr(config, 'gmail_smtp_server', self.DEFAULT_SMTP_SERVER)
         self.smtp_port = getattr(config, 'gmail_smtp_port', self.DEFAULT_SMTP_PORT)
         self.imap_server = getattr(config, 'gmail_imap_server', self.DEFAULT_IMAP_SERVER)
-        
+
         # Initialize connections
         self.smtp_connection = None
         self.imap_connection = None
 
+        # Provider seam (2026-08-18): smtp (legacy, byte-identical) | agentmail
+        # (managed HTTP inbox — the agent's OWN address, provisioned at init).
+        from core.config_policy.policy import email_provider
+        self.provider = email_provider()
+        self.agentmail = None
+        if self.provider == "agentmail":
+            import os as _os
+            from tools.email_providers.agentmail import AgentMailClient
+            self.agentmail = AgentMailClient(_os.environ.get("AGENTMAIL_API_KEY", ""))
+
     async def _initialize(self) -> None:
         """Initialize email service."""
         try:
+            if self.provider == "agentmail":
+                # Managed inbox: ensure the agent's own address exists. No SMTP
+                # creds are needed or checked on this path.
+                from core.instance import resolve_instance_id
+                await self.agentmail.provision(resolve_instance_id())
+                return
+
             # Validate credentials
             if not all([self.config.gmail_email, self.config.gmail_app_password]):
                 self._status = ToolStatus.FAILED
                 self._error_message = "Email credentials not configured"
                 raise ConfigurationError(self._error_message)
-            
+
             # Test SMTP connection
             try:
                 await self._test_smtp_connection()
@@ -111,6 +133,10 @@ class EmailTool(BaseTool):
             if self.imap_connection:
                 self.imap_connection.logout()
                 self.imap_connection = None
+
+            # Close the managed-inbox HTTP client
+            if self.agentmail is not None:
+                await self.agentmail.aclose()
 
             self.logger.info("Email service cleaned up successfully")
 
@@ -239,6 +265,14 @@ class EmailTool(BaseTool):
 
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")
+
+        if self.provider == "agentmail":
+            # Managed inbox: HTTP send from the agent's own address. The client
+            # mints + returns the RFC Message-ID (same thread-anchor contract).
+            return await self.agentmail.send(
+                to_email, subject, body, html=html, cc=cc, bcc=bcc,
+                attachments=attachments, in_reply_to=in_reply_to,
+                references=references)
 
         try:
             # Create message. With attachments the structure is
@@ -481,14 +515,17 @@ class EmailTool(BaseTool):
             APIError: If reading fails
         """
         await self.ensure_initialized()
-        
+
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")
+
+        if self.provider == "agentmail":
+            return await self._read_emails_agentmail(limit=limit)
 
         try:
             if not self.imap_connection:
                 await self._connect_imap()
-                
+
             # Select folder
             self.imap_connection.select(folder)
             
@@ -566,6 +603,33 @@ class EmailTool(BaseTool):
         except Exception as e:
             self.logger.error(f"Failed to read emails: {str(e)}")
             raise APIError(f"Failed to read emails: {str(e)}")
+
+    async def _read_emails_agentmail(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Map the managed-inbox message shape onto read_emails' legacy dicts.
+
+        ``extracted_text`` (reply content without quoted history) is preferred
+        for ``content``; the raw ``text`` is the fallback.
+        """
+        summaries = await self.agentmail.list_messages(limit=limit)
+        emails: List[Dict[str, Any]] = []
+        for summary in summaries:
+            mid = summary.get("message_id")
+            if not mid:
+                continue
+            try:
+                full = await self.agentmail.get_message(mid)
+            except Exception as e:
+                self.logger.error(f"Error processing email {mid}: {e}")
+                continue
+            emails.append({
+                'id': mid,
+                'subject': full.get('subject') or '',
+                'from': full.get('from') or '',
+                'date': full.get('timestamp') or '',
+                'content': full.get('extracted_text') or full.get('text') or '',
+                'html_content': full.get('html') or '',
+            })
+        return emails
 
     async def mark_as_read(self, message_id: str, folder: str = 'INBOX') -> bool:
         """Mark an email as read.
