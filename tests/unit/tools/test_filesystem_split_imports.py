@@ -192,7 +192,7 @@ _EXPECTED_DOCPROC_METHODS = [
     "_parse_analysis_response",
     # process_url / process_web_content / the SSL-context helpers were removed:
     # dead, undecorated, SSRF-unsafe URL fetchers superseded by the web_fetch tool
-    # (docs/plans/2026-06-29-web-fetch-tier1-IMPLEMENTATION-PLAN.md, Task 8).
+    # (web-fetch tier-1 plan 2026-06-29, Task 8).
 ]
 
 

@@ -1,4 +1,4 @@
-"""B6 — user-defined `model_aliases` (Hermes parity).
+"""B6 — user-defined `model_aliases` (reference parity).
 
 `/model <alias>` and `-m <alias>` expand a name from the CLI config's
 `model_aliases` map to a (provider, model) pair, flowing through the same

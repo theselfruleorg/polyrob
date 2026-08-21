@@ -49,7 +49,7 @@ def build_runners(
 
     ``target_ref`` is the release ref to move to (e.g. ``"v0.5.0"``). When set (the
     ``stable``/``pre`` channels), ``install()`` **checks out that tag** — the instance
-    runs a *pinned tag* (detached HEAD; see ``docs/ops/POLYROB-OSS-OPERATIONS.md §3``),
+    runs a *pinned tag* (detached HEAD — the release operating model),
     where ``git pull --ff-only`` FAILS ("not currently on a branch") and, on a branch,
     would pull unreviewed HEAD — neither is what a release update means. ``target_ref``
     is ``None`` only for the explicit ``--channel git`` branch-tracking mode, which keeps

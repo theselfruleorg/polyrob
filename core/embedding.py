@@ -10,7 +10,7 @@ LazyEmbedder defers the build to first actual use and loads from the local cache
 (local_files_only=True, falling back to a one-time online download if uncached). It is a
 transparent stand-in for a SentenceTransformer: callers keep doing
 `container.get_service("embedding_model").encode(...)`. If nothing ever needs vectors, the
-model is never built. See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md.
+model is never built (2026-06-26 runtime-architecture finalization).
 """
 
 from __future__ import annotations

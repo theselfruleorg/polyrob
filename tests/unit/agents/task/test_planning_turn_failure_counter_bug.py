@@ -10,7 +10,7 @@ model alternating [planning turn (resets to 0), thinking-loop intervention
 by the very next planning turn, every cycle. Confirmed as the dominant failure
 mode of the 2026-08-18 post-outage recovery burst (82% of goal failures shared
 this exact signature; several runs never recovered even once, straight through
-to step exhaustion) — see docs/ops/assessment-2026-08-18-intel.md addendum.
+to step exhaustion) — see the 2026-08-18 intel assessment addendum.
 """
 from types import SimpleNamespace
 

@@ -1666,7 +1666,7 @@ class ModelRegistry:
             aliases=["gpt-oss-120b", "gpt-oss"]
         ))
 
-        # Nous Hermes 4 70B (open model via OpenRouter). NOTE: OpenRouter does NOT
+        # Nous Hermes-4 70B (open model via OpenRouter). NOTE: OpenRouter does NOT
         # advertise the `tools` parameter for Hermes-4, so supports_tools=False →
         # the agent uses the JSON-from-text fallback (not native tool calls).
         self._register_model(ModelConfig(
@@ -1684,7 +1684,7 @@ class ModelRegistry:
             aliases=["hermes-4-70b", "hermes4-70b"]
         ))
 
-        # Nous Hermes 4 405B (larger variant). Same no-native-tools caveat as 70B.
+        # Nous Hermes-4 405B (larger variant). Same no-native-tools caveat as 70B.
         self._register_model(ModelConfig(
             name="nousresearch/hermes-4-405b",
             provider=ModelProvider.OPENROUTER,

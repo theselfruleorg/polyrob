@@ -1,7 +1,7 @@
 """Adversarial regression fixtures — permanent, and not to be weakened.
 
 Each test encodes a decision from
-docs/superpowers/specs/2026-08-07-defi-tier1-token-sight-design.md. If one of
+the 2026-08-07 DeFi tier-1 token-sight design. If one of
 these starts failing, the safety property it pins has been lost — fix the code,
 not the assertion.
 """

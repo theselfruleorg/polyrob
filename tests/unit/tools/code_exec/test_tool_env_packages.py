@@ -36,7 +36,7 @@ def _clean(monkeypatch):
     )
     c._refreeze_compute_posture_for_tests()
     yield
-    # LIFO landmine (see d99b8bb3 / docs/ops/inbox.md 2026-07-14): this teardown
+    # LIFO landmine (see d99b8bb3, 2026-07-14): this teardown
     # runs BEFORE monkeypatch reverts env, so delenv explicitly or the refreeze
     # re-snapshots a test's posture and leaks it module-globally.
     monkeypatch.delenv("AGENT_COMPUTE_POSTURE", raising=False)

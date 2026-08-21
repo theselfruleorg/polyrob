@@ -43,7 +43,7 @@ _MIN_KEEP_RECENT = 10        # floor for the protected tail
 _THRASH_SAVINGS_FLOOR = 0.10 # if last 2 compactions each saved < this, stop trying (B4)
 _STATIC_FALLBACK_CAP = 8000  # char ceiling for the deterministic fallback summary (A6)
 _COMPACTED_MARKER = "[COMPACTED SESSION HISTORY]"
-# T1.3 — anti-injection framing (Hermes context_compressor.py parity). See
+# T1.3 — anti-injection framing (reference compaction-guard parity). See
 # core.config_policy.compaction_prompt_guard for the gate + rationale. Guard OFF
 # must reproduce the pre-T1.3 prompt/rebuild bytes exactly, so these are only
 # ever spliced in behind the flag check, never unconditionally.

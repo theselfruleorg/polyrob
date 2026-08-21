@@ -49,7 +49,7 @@ sqlite-vec>=0.1.6
 
 # LangChain: REMOVED (2026-06). The agent loop, message types, tool-calling,
 # prompt-caching and token-counting are all native (modules/llm/). No langchain*
-# packages are required at runtime. See docs/plans/langchain-removal-review-2026-06.md
+# packages are required at runtime. See the 2026-06 langchain-removal review
 
 # Token counting utilities
 tiktoken>=0.7.0

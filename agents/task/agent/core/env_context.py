@@ -4,7 +4,7 @@ Tells the agent WHERE IT LIVES — instance, platform, data dir, absolute
 workspace path + persistence semantics, capability-axis levels, and which
 developer executables exist on the host — so "I don't know where I am /
 whether files persist / whether node exists" is answerable in-context
-(Remotion incident, docs/reviews/2026-07-15-remotion-incident-tooling-env-awareness.md).
+(2026-07-15 incident: a render task stalled on exactly those unknowns).
 
 Emission policy (014 D-3): ONLY under ``local_mode_enabled()`` OR
 ``full_autonomy_enabled()`` — a multi-tenant server tenant never sees host

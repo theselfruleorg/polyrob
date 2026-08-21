@@ -47,7 +47,7 @@ from core.exceptions import (
 def _billing_failover_enabled() -> bool:
     """Whether billing errors should attempt provider fallback (default on, I-5).
 
-    Note (docs/proposals/008-llm-provider-fallback-goal-resilience.md): on a
+    Note (proposal 008, provider-fallback goal resilience): on a
     single-funded-provider deployment there is nothing to fall back *to* — the flag
     being on is necessary but not sufficient for prod resilience until a second
     provider key is funded (owner decision, proposal 008 Lever 1).

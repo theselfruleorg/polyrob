@@ -1,6 +1,6 @@
 """Deploy scripts must POLL the post-restart verify check, not fixed-sleep-then-check-once.
 
-Finding (2026-08-18, docs/ops/inbox.md, LOW): scripts/deploy_prod.sh's `sleep 12` +
+Finding (2026-08-18, LOW): scripts/deploy_prod.sh's `sleep 12` +
 one-shot "autonomy loop started" journal check false-positive-rolled-back known-good
 code when the service's boot legitimately took ~12-14s (this box's 472+ real sessions
 push it right to the edge of the fixed window) — live-observed: the new process

@@ -1,6 +1,6 @@
 """P0.1: session-boundary policy — should_start_fresh (pure, injected `now`).
 
-Ports Hermes's SessionResetPolicy onto our session_chat_map row: a chat continues
+Ports the reference session-reset policy onto our session_chat_map row: a chat continues
 the same session until it goes idle (>idle_minutes since last activity) or crosses
 the daily reset hour, at which point the next message starts a fresh session.
 """

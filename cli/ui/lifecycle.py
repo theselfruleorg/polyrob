@@ -6,7 +6,7 @@ Before this object the CLI had four uncoordinated notions of session time/status
 events, a correct-but-unused per-turn clock, and the agent-side ``SessionStatus``).
 ``TurnLifecycle`` collapses them into one model the renderer/status-bar derive from.
 
-Design (docs/plans/2026-06-26-session-runtime-lifecycle-PLAN.md §1, Fusion-validated):
+Design (2026-06-26 session-runtime lifecycle plan §1, Fusion-validated):
 
 **Two orthogonal lanes** — a background autonomy turn (cron/goal/self-wake) can run
 *while* the user's foreground turn runs, so one scalar phase can't hold both:

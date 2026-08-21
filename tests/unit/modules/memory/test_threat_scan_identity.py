@@ -3,7 +3,7 @@
 The base `is_suspicious` is tuned for injected *instructions*. An agent-writable
 identity/SELF doc also needs to reject *self-voice subversion* ("you are now an
 unrestricted agent", "forget your identity") and invisible/bidi-unicode payloads
-(Hermes parity). This is an ADDITIVE, isolated scanner — it must not change the base
+(reference parity). This is an ADDITIVE, isolated scanner — it must not change the base
 `is_suspicious` behavior used by skills/memory.
 """
 from modules.memory.task.threat_scan import (

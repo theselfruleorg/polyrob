@@ -2,7 +2,7 @@
 
 NOT a distribution format (that is ``polyrob profile install``, W6): an export
 is a tar.gz snapshot of one profile for backup or moving between the owner's
-own machines. Discipline ported from the Hermes profile exporter:
+own machines. Export discipline:
 
 - credential files NEVER enter the archive (``.env``, ``auth.json``, wallet
   material, anything ``is_credential_file`` matches);
@@ -101,7 +101,7 @@ def export_profile(name: str, out_path: Path) -> dict:
 
 
 def _safe_members(tar: tarfile.TarFile):
-    """Yield only traversal-safe regular members (Hermes ``_safe_extract`` port)."""
+    """Yield only traversal-safe regular members (safe-extract discipline)."""
     for m in tar.getmembers():
         name = m.name
         if name.startswith("/") or name.startswith("\\"):

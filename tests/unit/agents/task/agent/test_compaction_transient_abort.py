@@ -1,4 +1,4 @@
-"""Phase 0.3 — abort LLM compaction on a TRANSIENT failure (Hermes parity).
+"""Phase 0.3 — abort LLM compaction on a TRANSIENT failure (reference parity).
 
 POLYROB previously responded to ANY summarizer failure by building a lossy static
 fallback summary (or, if empty, an emergency prune) — permanently discarding context.

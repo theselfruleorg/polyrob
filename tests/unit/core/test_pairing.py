@@ -1,6 +1,6 @@
 """Ingress pairing / access-control (polyrob Phase D3).
 
-Hermes/OpenClaw-style owner-allowlist + DM pairing, adapted to ROB's multi-tenant
+Reference-style owner-allowlist + DM pairing, adapted to ROB's multi-tenant
 model: an unknown user is denied and issued a one-time pairing code; the operator
 approves it out-of-band; owner/local are always allowed. Gated POLYROB_REQUIRE_PAIRING
 (default OFF → everyone allowed → byte-identical).

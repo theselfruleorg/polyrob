@@ -5,7 +5,7 @@ memory/LLM stack at module load. Importing any `modules.*` leaf (e.g. modules.ll
 on the CLI / server boot) must NOT eager-load them, so the heavy re-exports and the
 class-capturing metadata tables resolve on first attribute access. The light, SDK-free
 names (BaseModule + the memory dataclasses) stay eager to preserve the historical
-circular-import pre-load. See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0c).
+circular-import pre-load (P0c, 2026-06-26 runtime-architecture finalization).
 """
 
 from typing import TYPE_CHECKING

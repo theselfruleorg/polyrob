@@ -186,12 +186,44 @@ class LLMRunnerMixin:
 		self.logger.info(f"Validated {len(valid_actions)} actions: {valid_actions}")
 		return True
 
+	def _ensure_action_model_current(self) -> None:
+		"""Rebuild self.ActionModel/self.AgentOutput if the controller's registered
+		action set has changed since they were last built.
+
+		self.ActionModel/self.AgentOutput are built ONCE at construction
+		(construction.py) and bind validation of every subsequent model_output.action
+		to that fixed field set. A mid-session load_tool() call (progressive tool
+		disclosure) registers new actions into the controller's live registry but
+		never refreshed these cached types — Pydantic's default extra='ignore'
+		then silently drops any dynamically-loaded tool's action name from
+		AgentOutput validation, since the stale class has no such field. Confirmed
+		live 2026-08-18: a session that ran `load_tool` for
+		code_execution mid-session got a systematically empty model_dump() for
+		every code_execution_run_code call for the rest of the run, misreported
+		as "empty action response" and feeding the thinking-loop/failure-counter
+		escalation. Cheap to check every step; only rebuilds when the action set
+		actually changed.
+		"""
+		try:
+			current_names = frozenset(self.controller.get_action_names())
+		except Exception:
+			return
+		if current_names == getattr(self, '_action_model_names', None):
+			return
+		self.ActionModel = self.controller.create_action_model()
+		self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
+		self._action_model_names = current_names
+
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get next action from the model with enhanced retry logic and token safety.
 
 		This method uses a language model to determine the next action based on the current state.
 		"""
+		# 2026-08-18: refresh stale ActionModel/AgentOutput bindings before every
+		# LLM call — see _ensure_action_model_current's docstring.
+		self._ensure_action_model_current()
+
 		# Check cancellation before calling LLM
 		if self._cancelled:
 			self.logger.warning(f"❌ LLM call cancelled before execution")

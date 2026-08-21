@@ -244,8 +244,8 @@ def reflection_llm_enabled_default() -> bool:
 # WS-1 (2026-07-16): the autonomy/mode/posture/payment-policy cluster + AutonomyConfig
 # were relocated to the core tier (core/config_policy/policy.py) to break the
 # core<->agents.task import cycle. They are re-exported here UNCHANGED so every existing
-# `from agents.task.constants import ...` keeps working. See
-# docs/plans/2026-07-16-ws1-config-relocation.md. New code imports from core.config_policy.
+# `from agents.task.constants import ...` keeps working. New code imports from
+# core.config_policy.
 from core.config_policy import *  # noqa: F401,F403
 from core.config_policy import (  # noqa: F401  (underscored + module-scope-used names)
     _AUTONOMY_LOCAL_FLAGS,

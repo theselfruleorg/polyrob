@@ -1,6 +1,6 @@
 """agents.task_agent_lite must import and initialize without playwright installed.
 
-Fresh-install finding (2026-07-19, docs/ops/inbox.md): `pip install -r requirements.txt`
+Fresh-install finding (2026-07-19): `pip install -r requirements.txt`
 does not install playwright (it's the `[browser]` extra by design), yet importing/
 initializing the task package failed with "Task package not available: No module
 named 'playwright'" — curator + delegation sweep also failed as a result. Root cause

@@ -1,6 +1,6 @@
 """requirements.txt must not unconditionally ship sentence-transformers (-> torch, ~2GB).
 
-Fresh-install finding (2026-07-19, docs/ops/inbox.md): every requirements.txt install
+Fresh-install finding (2026-07-19): every requirements.txt install
 (contributor local dev + server prod deploys — see AGENTS.md's Environment
 Configuration section) pulled in sentence-transformers even where
 MEMORY_BACKEND=sqlite (the server default; this box's actual config), which per

@@ -1,5 +1,5 @@
 """Regression tests for the TwitterTool lifecycle defects behind the
-2026-08-21 outage (docs/ops/2026-08-21-twitter-singleton-teardown-incident.md):
+2026-08-21 outage (the 2026-08-21 singleton-teardown incident):
 
 - S5: the credential check iterated get_twitter_config()'s ALREADY-FILTERED
   dict (empty values removed before the loop looked for empties), so a deploy

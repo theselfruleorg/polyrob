@@ -6,7 +6,7 @@ endpoints ride the SAME core seams the CLI/REPL/agent use (``core.prefs``:
 ``PREF_SCHEMA`` / ``display_effective`` / ``write_preference``), so displayed
 state can never drift from enforcement.
 
-Semantics (per docs/plans/2026-07-11-owner-ux-plan-phase4-surface-parity.md T3):
+Semantics (owner-UX phase-4 surface parity, T3):
 - GET: schema-driven — every PREF_SCHEMA key with type/sensitivity/applies/
   description + effective value & source. Tenant via ``_effective_user_id``.
 - PATCH {key, value, confirm?}: SAFE keys write immediately; GUARDED keys

@@ -41,7 +41,7 @@ from core.version import get_version
 # core.bot.Bot pulls core.initialization (the entire agent/LLM/embedder stack). It is only
 # needed inside the lifespan (which builds the bot via build_server_bot), so it must NOT be
 # imported at module load — that dragged torch/SDKs/agents into every `import api.app`
-# (every uvicorn worker boot). See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0-S).
+# (every uvicorn worker boot) — P0-S, 2026-06-26 runtime-architecture finalization.
 if TYPE_CHECKING:
     from core.bot import Bot as CoreBot
 

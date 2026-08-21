@@ -145,8 +145,8 @@ for.
   reach the host, because the container and the host share one kernel. A hardware-isolated
   backend (gVisor/Firecracker/E2B/Modal-style microVM) is the actual answer for genuinely
   adversarial multi-tenant code execution. That work was **intentionally scoped out** of
-  this deliverable — see `docs/superpowers/plans/2026-07-01-polyrob-coding-first-class/
-  02-P1-multitenant-sandboxes-and-code-skills.md` (P1, not yet built) — `docker` is the
+  this deliverable — deferred to the multi-tenant sandbox work stream (P1, not yet
+  built) — `docker` is the
   sane hardened default for today's single-tenant-per-run usage, not a claim of
   microVM-grade isolation.
 - **The `docker` CLI process itself is trusted-host code and is not further sandboxed.**

@@ -11,8 +11,8 @@ This module provides:
 Lazy package (PEP 562): the provider clients and adapters import their SDKs
 (openai/anthropic/google) at module load, so importing `modules.llm` (or any leaf such
 as `modules.llm.profiles`) must NOT eager-import them. Every public name resolves on first
-attribute access via __getattr__, keeping leaf imports SDK-free for the CLI and server boot.
-See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0c).
+attribute access via __getattr__, keeping leaf imports SDK-free for the CLI and server boot
+(P0c, 2026-06-26 runtime-architecture finalization).
 """
 
 from typing import TYPE_CHECKING

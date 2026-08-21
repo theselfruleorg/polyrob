@@ -38,7 +38,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 def default_history_path() -> Path:
     """Return (and ensure the parent of) the default history file path.
 
-    Resolved LAZILY on purpose (Hermes "Seam #1" landmine): a module-level
+    Resolved LAZILY on purpose (import-time home-binding landmine): a module-level
     ``polyrob_home()`` binding freezes the home at import time, so a profile
     selected afterwards (``-P``/``POLYROB_PROFILE`` set ``POLYROB_HOME``) would
     silently keep writing history into the wrong home. The module-binding

@@ -181,7 +181,7 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     resolved = os.environ.get("CONFIG_ENV") or env or os.environ.get("ENV", "development")
     from core.paths import env_file_candidates
 
-    # Wrong-profile guard (Hermes scar): a process that reached load_env WITHOUT
+    # Wrong-profile guard (known failure mode): a process that reached load_env WITHOUT
     # profile resolution while the sticky file names a profile would write into
     # the DEFAULT home. One-shot stderr warning, never raises.
     try:
@@ -329,7 +329,7 @@ async def build_container(
 # configured and the email SURFACE (harness, built separately in
 # `cli/commands/email.py`) worked fine — every goal requesting `tools=["email"]` hit
 # "✗ Tool 'email' not found in container" and reported a false "no credential"
-# blocker (see docs/ops/rob-backlog.md 2026-07-14 ~07:1x tick).
+# blocker (observed live 2026-07-14).
 # NOTE (2026-07-19): "browser"/"browser_manager" removed from this set for the SAME
 # false-blocker reason — the actual Chromium/playwright launch was ALREADY lazy
 # (`Browser._initialize()`'s own docstring: "browser instance will start on first
@@ -628,7 +628,7 @@ def _resolve_cli_data_home():
     # two concerns the old binary switch conflated — "data outside the code tree?"
     # (POLYROB_DATA_DIR) vs "sessions share one workspace?" (POLYROB_PROJECT_DIR).
     # This is the headless multi-session case the battle test needed
-    # (docs/plans/2026-06-29-agent-working-directory-model-ANALYSIS.md).
+    # (2026-06-29 working-directory model analysis).
     data_home = resolve_data_home()
     env_project = os.environ.get("POLYROB_PROJECT_DIR")
     if env_project:

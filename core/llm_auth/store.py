@@ -1,6 +1,6 @@
 """Durable LLM credential store — ``~/.polyrob/auth.json`` (proposal 024, L1).
 
-File discipline copied from Hermes' auth store because it is correct (§3.1):
+File discipline follows the reference implementation's auth store because it is correct (§3.1):
 
 - created via ``os.open(O_CREAT|O_EXCL|O_WRONLY, 0o600)`` — never a
   world-readable window;
@@ -264,7 +264,7 @@ class AuthStore:
         """Record credential health, reconciling on ``last_status_at``.
 
         Returns True if the stamp was applied, False if a NEWER stamp already
-        exists (the Hermes race rule: a lost exhaustion marker must not
+        exists (the race rule: a lost exhaustion marker must not
         resurrect a spent credential — the freshest observation wins).
         """
         # Review M2: an unknown state string would be written verbatim and then
