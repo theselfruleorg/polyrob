@@ -330,7 +330,7 @@ def activate_profile(flag: Optional[str] = None) -> Optional[ProfileSelection]:
 
 
 def warn_profile_fallback_once() -> None:
-    """Hermes-scar guard (their ``_warn_profile_fallback_once``): the sticky
+    """Wrong-home fallback guard (known failure mode): the sticky
     file names a profile but this process resolved nothing and ``POLYROB_HOME``
     is unset — any data it writes lands in the DEFAULT home, not the profile.
     Loud one-shot stderr warning; never raises, never blocks (spawners are
@@ -358,8 +358,8 @@ def warn_profile_fallback_once() -> None:
 def foreign_profile_of_path(path) -> Optional[str]:
     """Name of the OTHER profile *path* points into, or ``None``.
 
-    Cross-profile write guard (W4, ported from the Hermes ``file_safety``
-    shape): a session running as one profile (or none) has no business touching
+    Cross-profile write guard (W4, follows the reference implementation's
+    file-safety shape): a session running as one profile (or none) has no business touching
     another profile's home. Honestly: DEFENSE-IN-DEPTH, not a security boundary
     — same user, same filesystem; the bypass is
     ``POLYROB_ALLOW_CROSS_PROFILE=1`` or simply running with ``-P <name>``.

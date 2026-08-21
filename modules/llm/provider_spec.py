@@ -293,8 +293,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     # api.z.ai/api/anthropic. ⚠ `cerebras` / `ollama-cloud` remain declared
     # from vendor documentation only (no key on any box); a wrong model
     # id/base URL surfaces as a provider 4xx, never a silent wrong answer.
-    # See docs/proposals/024-llm-subscription-auth.md §8 and the status
-    # ledger in docs/ops/HANDOFF-llm-subscriptions-2026-08-11.md.
+    # See proposal 024 §8 and the 2026-08-11 subscription-auth status ledger.
     ProviderSpec(
         name="ollama-cloud", display_name="Ollama Cloud", aliases=("ollama_cloud",),
         env_key="OLLAMA_API_KEY",
@@ -363,12 +362,11 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         ),
     ),
     # -----------------------------------------------------------------------
-    # Hermes-parity provider breadth (2026-08-12)
+    # Extended provider breadth (2026-08-12)
     # -----------------------------------------------------------------------
-    # Endpoints + env-var chains transcribed from Hermes' PROVIDER_REGISTRY
-    # (NousResearch/hermes-agent, hermes_cli/auth.py); model ids and tool-call
-    # capability verified against models.dev, the catalog Hermes itself resolves
-    # against. Every default_model below is a model that catalog marks
+    # Endpoints + env-var chains taken from each vendor's public docs; model
+    # ids and tool-call capability verified against models.dev.
+    # Every default_model below is a model that catalog marks
     # tool_call-capable — a default that cannot call tools is useless to an
     # agent and shows up as the silent tools=0 failure.
     #
@@ -494,7 +492,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         default_model="qwen3-coder-plus",
         models=("qwen3-coder-plus", "qwen3-coder-flash"),
         fallback_eligible=False, builtin=True, subscription=True, prompt_in_init=False,
-        # Hermes also accepts DASHSCOPE_API_KEY here. We don't: it is the
+        # Some agents also accept DASHSCOPE_API_KEY here. We don't: it is the
         # `dashscope` row's primary, and one variable claimed by two rows with
         # different endpoints mis-routes whichever loses the ordering.
         tos_note="Flat-rate coding plan on a separate endpoint from pay-as-you-go DashScope.",
@@ -601,7 +599,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         models=("claude-sonnet-4.6", "gpt-5.6-sol", "gemini-3.5-flash"),
         fallback_eligible=False, builtin=True, subscription=True, prompt_in_init=False,
         signup_url="https://github.com/features/copilot",
-        # Hermes also accepts GH_TOKEN / GITHUB_TOKEN here. We do NOT: those are
+        # Some agents also accept GH_TOKEN / GITHUB_TOKEN here. We do NOT: those are
         # the generic GitHub CLI variables, set on a large share of developer
         # machines for reasons unrelated to Copilot. Claiming them would make
         # every such box report a "usable" Copilot provider that 403s the moment
@@ -616,8 +614,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     # OWN CLIs (Claude Code, Codex CLI, VS Code, Grok CLI, Qwen CLI), so
     # connecting here authenticates POLYROB as that client. Every other
     # open-source agent that offers "sign in with your Claude/ChatGPT plan"
-    # does the same thing, and Hermes is where these specific values are
-    # transcribed from — but it is a real exposure and it lands on the account
+    # does the same thing — but it is a real exposure and it lands on the account
     # HOLDER, not on us. Each row carries a tos_note, and `polyrob auth add`
     # prints it before running the flow (§7.4). LLM_OAUTH_ENABLED stays OFF by
     # default so this is never entered by accident.

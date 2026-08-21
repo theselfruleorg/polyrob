@@ -1,7 +1,7 @@
 """Tests for cli.ui.lifecycle.TurnLifecycle — the CLI's single source of truth
 for active-turn + work-clock + derived status word.
 
-Design ref: docs/plans/2026-06-26-session-runtime-lifecycle-PLAN.md §1.
+Design ref: the 2026-06-26 session-runtime lifecycle plan §1.
 
 The clock is injectable so every timing assertion is deterministic (no sleeps).
 """

@@ -11,7 +11,7 @@ module is the inert skeleton for that distinction:
   instance home dir. **Operator-write-only** in this first cut: an agent never
   writes these (a SOUL doc is a frozen, authoritative self-definition — strictly
   more trusted than a match-gated skill, so agent-editability is deferred behind a
-  dedicated owner-review gate; see docs/plans/2026-06-19-polyrob-framework-instance-finalization.md).
+  dedicated owner-review gate).
 
 The instance axis is intentionally NOT yet threaded into the row-keyed SQLite
 stores (memory/skill_usage/goals). Per-instance physical isolation rides the home

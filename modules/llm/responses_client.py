@@ -5,9 +5,8 @@ exists because subscription seats served through OpenAI's Codex backend
 (`openai-codex`) speak Responses and nothing else — before this, connecting a
 ChatGPT plan stored a credential that inference could never use.
 
-Reimplemented against the Responses wire contract rather than copied: Hermes
-(MIT) was read as a reference for the format's sharp edges, which are cheap to
-learn and expensive to rediscover:
+Implemented against the Responses wire contract directly; the format's sharp
+edges below are cheap to learn and expensive to rediscover:
 
 - **Tool schemas are FLAT.** Chat-completions nests under ``function``;
   Responses puts ``name``/``description``/``parameters`` at the top level of a

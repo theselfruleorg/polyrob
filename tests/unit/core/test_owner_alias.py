@@ -6,7 +6,7 @@ shares the same tenant as autonomy (goals / memory / SELF docs). Only telegram i
 aliased: its sender ids are platform-authenticated. Email ``From:`` / WhatsApp are
 forgeable and are NEVER aliased (AGENTS.md keeps owner-by-email OFF in v1).
 
-See docs/plans/2026-07-03-owner-instance-identity-model-HANDOFF.md.
+See the 2026-07-03 owner-instance identity model.
 """
 from core.instance import (
     owner_surface_alias,

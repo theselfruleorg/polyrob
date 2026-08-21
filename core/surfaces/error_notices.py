@@ -1,6 +1,6 @@
 """Reason-specific, owner-facing phrases for the LLM-outage notice (T1.2).
 
-Hermes never relays raw model/provider text to the user; POLYROB previously had
+Raw model/provider text must never reach the user; POLYROB previously had
 exactly one generic notice (``core.surfaces.llm_outage_notice.OUTAGE_NOTICE_TEXT``).
 This module adds a short, actionable sentence for WHY the run died on top of that
 existing rail, sourced from the same structured taxonomy SSOT

@@ -1,6 +1,6 @@
 """Stateless, SSRF-safe single-page fetch core (no browser, no Chromium).
 
-Security model (see docs/plans/2026-06-29-web-fetch-tier1-IMPLEMENTATION-PLAN.md):
+Security model:
 - Auto-redirects are OFF; every hop is re-validated.
 - Each hop is validated with MCPURLValidator.validate_and_resolve(), which returns a
   pinned IP; the connection is pinned to that IP (Host/SNI preserved) so a DNS rebind

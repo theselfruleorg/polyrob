@@ -667,8 +667,7 @@ class RunLoopMixin:
 						self.logger.warning(f"Failed to save hierarchical memory: {e}")
 
 				# Session cost tracking - credits already deducted per-call by usage_tracker
-				# (usage_meter, the pre-usage_tracker fallback, was retired in C5 — see
-				# docs/superpowers/plans/2026-07-02-polyrob-console-web-app-finalization-C-payments.md)
+				# (usage_meter, the pre-usage_tracker fallback, was retired in C5, 2026-07-02)
 				if self.user_id:
 					try:
 						if self.usage_tracker:

@@ -2,7 +2,7 @@
 
 A foreground `shell_run` that blocks forever (a server, a `sleep`, a trailing `&`
 or `nohup`) would hang the turn. The tool detects those patterns and refuses,
-nudging the model to pass `background=True` instead (Hermes parity).
+nudging the model to pass `background=True` instead (reference parity).
 """
 import pytest
 

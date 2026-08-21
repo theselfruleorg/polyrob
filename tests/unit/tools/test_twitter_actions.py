@@ -432,7 +432,7 @@ async def test_get_timeline_renders_tweets(monkeypatch):
 def test_media_paths_description_warns_against_live_debug_posts():
     """2026-07-20: 13+ debug-scratch posts ("Testing Twitter media upload with
     absolute path", etc.) leaked onto the live public account while a session
-    iterated on a media_paths bug (docs/ops/inbox.md, ~10:12Z). There's no staging
+    iterated on a media_paths bug (~10:12Z). There's no staging
     account, so the fix is a schema-level steer: the LLM sees this description on
     every media_paths field before it ever calls the action."""
     for cls in (TwitterPostAction, TwitterReplyAction, TwitterThreadAction):

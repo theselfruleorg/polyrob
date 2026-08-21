@@ -1,7 +1,6 @@
 """X (x.com) browser rail — durable login + gated posting + supervised signup.
 
-Three pieces (2026-08-18 plan, spec
-docs/superpowers/specs/2026-08-18-agent-mail-and-x-account-design.md):
+Three pieces (2026-08-18 design):
 
 - ``session_store``  — Fernet-encrypted per-tenant custody of the X login
   (storage_state + generated password + handle).

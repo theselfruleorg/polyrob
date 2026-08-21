@@ -1,4 +1,4 @@
-"""Per-session dollar-budget gate for the agent run loop (T1.1, Hermes catch-up).
+"""Per-session dollar-budget gate for the agent run loop (T1.1).
 
 Pure policy, mirrors conversational_exit.py: the run loop calls
 ``check_run_budget(agent)`` at the top of each step iteration; a non-None

@@ -5,8 +5,7 @@ so it lives in the core tier and the core<->agents.task import cycle is broken.
 This module imports ONLY stdlib + core.env (+ lazy core.instance /
 core.security.forged_turns), so `import core.config_policy` never reaches agents.task. agents/task/constants.py re-exports
 every public and externally-referenced private name here, so existing importers are
-unaffected. New code should import from core.config_policy. See
-docs/plans/2026-07-16-ws1-config-relocation.md.
+unaffected. New code should import from core.config_policy.
 """
 
 import logging
@@ -591,7 +590,7 @@ def ticker_idle_backoff_max_multiplier() -> int:
 
 def compaction_prompt_guard() -> bool:
     """Whether the compaction summarizer prompt + rebuilt summary carry explicit
-    anti-injection framing (T1.3, Hermes ``context_compressor.py`` parity).
+    anti-injection framing (T1.3, parity with the reference compaction guard).
 
     A hostile mid-history payload (e.g. a tool result or user turn containing
     "ignore prior instructions and...") sits in the raw middle that gets fed
@@ -613,7 +612,7 @@ def compaction_prompt_guard() -> bool:
 
 def dead_target_registry_enabled() -> bool:
     """Whether outbound sends are gated against a persisted dead-target registry
-    (T1.5, Hermes-catchup Tier-1 item) so a provably-dead target (bot blocked,
+    (T1.5, catch-up Tier-1 item) so a provably-dead target (bot blocked,
     chat/user deleted) is skipped instead of retried forever.
 
     Task 1 ships the store (``core/surfaces/dead_targets.py::DeadTargetStore``)
@@ -638,7 +637,7 @@ def embedder_needed() -> bool:
     SSOT for both the CLI (maybe_register_cli_embedder) and the server (initialize_modules):
     only build the heavy embedder when KB is enabled, MEMORY_BACKEND=local_vector (hybrid
     vector recall), or local mode. The default MEMORY_BACKEND=sqlite uses FTS5 keyword recall
-    and needs no embeddings. See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P1-EMB).
+    and needs no embeddings (P1-EMB, 2026-06-26 runtime-architecture finalization).
     """
     return (
         AutonomyConfig.kb_enabled()

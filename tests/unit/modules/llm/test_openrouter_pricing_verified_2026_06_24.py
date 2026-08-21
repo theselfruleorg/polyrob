@@ -62,7 +62,7 @@ def test_vision_capable_models_flagged():
         assert cfg.capabilities.supports_vision is True, f"{model} should be vision"
 
 
-def test_hermes_models_have_no_native_tools():
+def test_hermes4_models_have_no_native_tools():
     # Hermes-4 on OpenRouter does NOT advertise the `tools` parameter; mark them
     # tool-less so the agent uses the JSON-from-text fallback rather than emitting
     # native tool calls the endpoint will reject.

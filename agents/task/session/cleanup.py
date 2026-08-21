@@ -542,8 +542,9 @@ class SessionCleanupMixin:
                 # for the whole process, and because the direct _cleanup()
                 # call skipped cleanup() (the only writer of _initialized),
                 # load_tools_from_container's `if not tool.is_initialized`
-                # re-init gate never fired again — dead until restart.
-                # See docs/ops/2026-08-21-twitter-singleton-teardown-incident.md.
+                # re-init gate never fired again — dead until restart
+                # (2026-08-21 singleton-teardown incident: session eviction
+                # must not tear down shared container tool singletons).
                 #
                 # Rules now: (1) a tool instance owned by the container or the
                 # shared BrowserManager is NOT this session's to destroy —

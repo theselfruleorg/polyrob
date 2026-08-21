@@ -11,7 +11,7 @@ checked against a forbidden set. If this fails, a module on that import path gai
 top-level import of a heavy dependency. Make the import lazy (inside the function /
 lifespan that needs it) or relocate the shared symbol to an import-light home.
 
-See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (the layer contract).
+See the 2026-06-26 runtime-architecture finalization (the layer contract).
 """
 
 import subprocess

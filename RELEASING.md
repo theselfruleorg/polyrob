@@ -81,9 +81,7 @@ The following must **never** appear in the public repository or a published pack
 > (`scripts/private_paths.txt`) along with `deploy_unified.sh` and `DEPLOYMENT.md`.
 > The public self-hosting story lives in `docs/guide/self-hosting.md`.
 
-> Internal planning, review, and live-test docs (formerly `docs/plans/`,
-> `docs/reviews/`, `docs/superpowers/`, `docs/archive/`, `docs/livetest/`) are no
-> longer tracked — the `docs/` gitignore block ships only the public guide and
+> Internal planning, review, and live-test docs are not tracked in this repo — the `docs/` gitignore block ships only the public guide and
 > reference docs. Only `docs/guide/`, `docs/CONFIGURATION.md`,
 > `docs/SKILL_AUTHORING_STANDARD.md`, `docs/comparison.md`, and `docs/examples.md`
 > are published.

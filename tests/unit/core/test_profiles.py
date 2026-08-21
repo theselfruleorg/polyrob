@@ -226,7 +226,7 @@ def test_prod_env_shape_is_untouched(_isolated, monkeypatch):
     assert "POLYROB_PROJECT_DIR" not in os.environ
 
 
-# ── fallback warning (Hermes scar) ─────────────────────────────────────────
+# ── fallback warning (known failure mode) ─────────────────────────────────────────
 
 
 def test_fallback_warning_fires_once_without_resolution(_isolated, monkeypatch, capsys):

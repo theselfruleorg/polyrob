@@ -14,7 +14,7 @@ Two invariants on the core tier's upward imports into ``agents.*``:
 The scan is source-level (AST), so it catches both top-level and in-function (lazy) imports —
 a lazy import still couples the tiers at the source level even if it defers the runtime pull.
 
-See docs/plans/2026-07-16-ws1-config-relocation.md.
+See the WS-1 config relocation (2026-07-16).
 """
 import ast
 from pathlib import Path
@@ -91,7 +91,7 @@ def test_core_to_agents_edges_only_shrink():
     new = sorted(e for e in _core_agents_edges() if e not in ALLOWLISTED_CORE_TO_AGENTS_EDGES)
     assert not new, (
         "New core->agents import(s) introduced. Relocate the shared symbol into the core tier "
-        "instead of importing upward (see docs/plans/2026-07-16-ws1-config-relocation.md):\n"
+        "instead of importing upward (WS-1 config relocation, 2026-07-16):\n"
         f"{new}"
     )
 
@@ -280,7 +280,7 @@ def test_upward_tier_edges_only_shrink():
     assert not new, (
         "New upward cross-tier import(s). The layering is core <- modules <- agents <- "
         "tools <- {api,cli,surfaces,webview,cron}; move the shared symbol to the lower "
-        f"tier (see docs/ops/HANDOFF-structural-remainder-2026-07-16.md R-4):\n{new}"
+        f"tier (structural remainder R-4, 2026-07-16):\n{new}"
     )
 
 

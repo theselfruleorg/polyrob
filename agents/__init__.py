@@ -3,8 +3,8 @@
 Lazy package (PEP 562): importing `agents` (or any `agents.*` submodule) must NOT eager-load
 the agent/LLM/Telegram stack. Heavy re-exports (BaseAgent, the prompt managers, CharacterManager,
 TaskAgent) and the agent-metadata tables load on first attribute access. This keeps leaf imports
-like `agents.task.constants` import-light for the CLI and server worker boot.
-See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0b).
+like `agents.task.constants` import-light for the CLI and server worker boot
+(P0b, 2026-06-26 runtime-architecture finalization).
 """
 
 import logging

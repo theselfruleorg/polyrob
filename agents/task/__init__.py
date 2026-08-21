@@ -23,8 +23,8 @@ from typing import TYPE_CHECKING
 # Lazy package (PEP 562): importing any `agents.task.*` leaf (e.g. agents.task.constants,
 # the import-light flag/config module) must NOT eager-load the agent session/orchestrator
 # stack (which pulls the LLM SDKs). The helpers below resolve on first attribute access so
-# `from agents.task import pm, get_session_manager` keeps working unchanged.
-# See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P1b).
+# `from agents.task import pm, get_session_manager` keeps working unchanged
+# (P1b, 2026-06-26 runtime-architecture finalization).
 _LAZY_ATTRS = {
     "pm": (".path", "pm"),
     "get_safe_singleton": (".path", "get_safe_singleton"),

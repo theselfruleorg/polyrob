@@ -94,7 +94,7 @@ AGENT_COMPONENTS = _get_agent_components()
 # NOTE: SentenceTransformer is imported lazily at its only use site (in initialize_modules,
 # gated on get_embedding_config()) — never at module load. A top-level import here would
 # drag torch+transformers (~2.5s) into every process that imports core.initialization
-# (every uvicorn worker boot). See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md.
+# (every uvicorn worker boot) — 2026-06-26 runtime-architecture finalization.
 
 from tools.base_tool import ToolStatus
 

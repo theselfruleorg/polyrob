@@ -2,7 +2,7 @@
 eviction (orchestrator.cleanup(full_cleanup=True)) tore down CONTAINER-OWNED
 tool singletons by calling tool._cleanup() directly.
 
-Two invariants under test (docs/ops/2026-08-21-twitter-singleton-teardown-incident.md):
+Two invariants under test (the 2026-08-21 singleton-teardown incident):
 
 1. Session teardown must NOT touch a tool instance that is owned by the
    DependencyContainer (or the shared BrowserManager) — those are process-wide

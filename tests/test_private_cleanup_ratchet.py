@@ -13,7 +13,7 @@ where the receiver is not ``self`` (or ``cls``/``super()``). The allowlist is
 EMPTY and must stay empty — teardown from outside a class goes through the
 public ``cleanup()``.
 
-See docs/ops/2026-08-21-twitter-singleton-teardown-incident.md.
+See the 2026-08-21 singleton-teardown incident.
 """
 import ast
 from pathlib import Path

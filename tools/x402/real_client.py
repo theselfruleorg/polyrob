@@ -1,6 +1,6 @@
 """RealX402Client — wraps the official x402 Python client.
 
-API surface verified and recorded in docs/superpowers/plans/notes/x402-client-api.md.
+API surface verified against the x402 SDK (2026-07).
 Lazy-imports the SDK so the module imports cleanly even when x402 is absent
 (the tool is gated OFF by default).
 

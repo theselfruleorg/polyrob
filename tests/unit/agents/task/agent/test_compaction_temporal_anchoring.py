@@ -1,4 +1,4 @@
-"""Phase 0.4 — temporal anchoring in the compaction summary prompt (Hermes B3).
+"""Phase 0.4 — temporal anchoring in the compaction summary prompt (B3).
 
 A summarized middle that records an action as still-pending ("todo: email John")
 causes a long/recurring task to RE-RUN finished work after rotation. The summary

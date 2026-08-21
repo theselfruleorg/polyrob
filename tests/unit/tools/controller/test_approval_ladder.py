@@ -3,7 +3,7 @@
 
 Extends the interactive CLI approval provider (``InteractiveCLIApprover``,
 ``tools/controller/approval_interactive.py``) from a bare yes/no prompt to the
-five-way Hermes-style ladder. Drives ``provider.request(...)`` directly via
+five-way approval ladder. Drives ``provider.request(...)`` directly via
 ``pytest.mark.asyncio``, mirroring the harness in
 ``tests/unit/tools/controller/test_interactive_approver.py``.
 

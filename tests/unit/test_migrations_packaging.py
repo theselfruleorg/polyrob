@@ -1,6 +1,6 @@
 """migrations/ must ship in the installed wheel.
 
-Fresh-install finding (2026-07-19, docs/ops/inbox.md): `polyrob doctor` printed
+Fresh-install finding (2026-07-19): `polyrob doctor` printed
 "db schema: unknown (could not resolve code schema version)" under a pip install.
 Root cause: `migrations*` was missing from `[tool.setuptools.packages.find].include`
 in pyproject.toml, so a built wheel shipped ZERO files under `migrations/` (verified

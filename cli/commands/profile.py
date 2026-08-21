@@ -264,7 +264,7 @@ def _render_service_unit(name: str) -> str:
     """Per-profile systemd unit. POLYROB_PROFILE + POLYROB_PROFILES_ROOT are
     set explicitly (the strong env tier — activate_profile() resolves them at
     process start); without them a spawned daemon would run in legacy mode and
-    write into the DEFAULT home, not the profile (Hermes scar)."""
+    write into the DEFAULT home, not the profile (known failure mode)."""
     from core.profiles import profiles_root
     import shutil as _shutil
     exe = _shutil.which("polyrob") or "/opt/polyrob/venv/bin/polyrob"

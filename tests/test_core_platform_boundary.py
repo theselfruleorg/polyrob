@@ -1,7 +1,7 @@
 """Ratchet guard: the polyrob-core import graph must not reach the platform tier.
 
 Successor to tests/test_core_server_boundary.py for the core/platform split
-(docs/superpowers/specs/2026-06-25-core-platform-extraction-design.md). Unlike the
+(the 2026-06-25 core/platform extraction design). Unlike the
 older test, core now OWNS several api.* modules (task_http_api, a2a, openai_compat,
 session_routing, models, interfaces, chat_via_task), so `api` is NOT blocked wholesale
 — only platform api.* submodules by name, plus billing modules.* prefixes.

@@ -266,7 +266,7 @@ def test_restating_a_builtin_transport_is_not_a_conflict(tmp_path, monkeypatch, 
 
 
 # ---------------------------------------------------------------------------
-# Hermes-parity breadth (2026-08-12): every shipped row must be reachable and
+# reference-parity breadth (2026-08-12): every shipped row must be reachable and
 # correctly routed. These are whole-table invariants, not per-row assertions —
 # a new row that violates one is a silent misroute, not a visible failure.
 # ---------------------------------------------------------------------------

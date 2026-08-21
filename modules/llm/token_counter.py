@@ -21,7 +21,7 @@ except ImportError:
 # NOTE: the anthropic SDK is imported lazily at its only use site (Anthropic token
 # encoder, below) so importing token_counter / count_tokens stays SDK-free. A top-level
 # `from anthropic import Anthropic` dragged the SDK into the whole modules.llm /
-# modules.memory import chain. See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md.
+# modules.memory import chain (2026-06-26 runtime-architecture finalization).
 
 from modules.llm.model_registry import get_model_config
 

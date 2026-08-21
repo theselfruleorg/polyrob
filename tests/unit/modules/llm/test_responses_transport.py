@@ -4,8 +4,8 @@ Subscription seats served through OpenAI's Codex backend speak Responses and
 nothing else, so before this a connected ChatGPT plan stored a credential that
 inference could never use.
 
-Reimplemented against the wire contract (Hermes, MIT, read as a reference for
-the format's sharp edges). Each test below pins one of those edges — they are
+Implemented against the published Responses wire contract, with attention to
+the format's sharp edges. Each test below pins one of those edges — they are
 cheap to get wrong and expensive to diagnose, because most of them fail SILENTLY
 rather than raising.
 """

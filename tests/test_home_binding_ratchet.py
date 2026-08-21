@@ -2,8 +2,8 @@
 
 Forbids MODULE-LEVEL bindings of ``polyrob_home()`` / ``resolve_data_home()``.
 
-Why (the Hermes "Seam #1" landmine, docs/design/profile-builder.md in their
-tree): a module-global like ``SKILLS_DIR = HERMES_HOME / "skills"`` binds the
+Why (the import-time home-binding landmine): a module-global like
+``SKILLS_DIR = AGENT_HOME / "skills"`` binds the
 home AT IMPORT TIME, so a profile selected afterwards (``-P`` sets
 ``POLYROB_HOME``/``POLYROB_DATA_DIR``) does not retroactively rebind it — the
 process silently reads/writes the WRONG profile. The fix is always a lazy

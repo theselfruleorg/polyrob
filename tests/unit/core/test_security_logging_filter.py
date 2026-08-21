@@ -1,4 +1,4 @@
-"""Redaction-coverage audit (T2.5, docs/plans/2026-07-22-hermes-catchup-tiered.md).
+"""Redaction-coverage audit (T2.5, the 2026-07-22 catch-up plan).
 
 Three independently-verified gaps in ``core.security_logging_filter.SecretScrubbingFilter``
 before this test file existed (there was NO test coverage for it at all):

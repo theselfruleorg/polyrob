@@ -5,7 +5,7 @@ the reference agent) — pure, zero-dependency. POLYROB wires it at the
 LLM-adapter content seam (modules/llm/adapters.py) so every provider's assistant text is
 scrubbed before it becomes an AIMessage. The legacy `agents/task/utils_json.py` regex
 strip stays for the fallback JSON-from-text path; this module covers the native seam and
-a broader tag set. See docs/plans/agent-upgrades-2026-06/UP-07-*.md.
+a broader tag set (UP-07, 2026-06 agent-upgrade wave).
 
 ``run_agent._strip_think_blocks`` is regex-based and correct for a complete
 string, but when it runs *per-delta* in ``_fire_stream_delta`` it destroys

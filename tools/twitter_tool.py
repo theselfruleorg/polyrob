@@ -57,7 +57,7 @@ _AUTOTHREAD_NOTE = (
 #: 2026-07-20: 13+ debug-scratch posts ("Testing Twitter media upload with absolute
 #: path", etc.) landed on the LIVE public account while a session iterated on a
 #: media_paths bug — several stayed live for hours before the owner caught it
-#: (docs/ops/inbox.md, 2026-07-20 ~10:12Z). There's no staging account to redirect
+#: (2026-07-20 ~10:12Z). There's no staging account to redirect
 #: to, so the fix is steering: verify a path with a read-only tool BEFORE trying it
 #: here, since every call here is a real, public, undeletable-by-default post.
 _MEDIA_VERIFY_NOTE = (
@@ -214,7 +214,7 @@ class TwitterTool(BaseTool):
         # filters out empty values before returning (core/config.py), so
         # iterating the returned dict can never see a missing credential — a
         # zero-credential deploy used to report the tool enabled (S5,
-        # docs/ops/2026-08-21-twitter-singleton-teardown-incident.md).
+        # 2026-08-21 singleton-teardown incident).
         expected_creds = (
             'api_key', 'api_secret', 'access_token',
             'access_token_secret', 'bearer_token',

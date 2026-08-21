@@ -1,6 +1,6 @@
 """T1.2: reason-specific owner-facing phrases layered on the outage-notice rail.
 
-Hermes never relays raw model/provider text to the user; this module maps the
+Raw model/provider text must never reach the user; this module maps the
 core.error_classifier.FailoverReason taxonomy (the SSOT the step loop and the
 LLM-outage notice already share) onto short, actionable sentences. Truth-table
 coverage: each outage-class reason -> its exact phrase; every other reason ->

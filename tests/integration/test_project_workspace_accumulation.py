@@ -10,7 +10,7 @@ doing the read-append. With project-root mode ON (POLYROB_PROJECT_DIR) the three
 runs CONVERGE on one folder and INDEX.md accumulates; with the legacy per-session
 mode they FRAGMENT (the control = the original bug).
 
-See docs/plans/2026-06-29-agent-working-directory-model-ANALYSIS.md (Model C).
+See the 2026-06-29 working-directory analysis (Model C).
 """
 
 import pytest

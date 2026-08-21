@@ -56,7 +56,7 @@ INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia"]
 SUBSCRIPTION_ROWS = [
     # 024 T0 — subscription plans that issue a key
     "ollama-cloud", "zai-coding", "cerebras",
-    # 2026-08-12 Hermes-parity breadth. Same contract: appended after the six,
+    # 2026-08-12 reference-parity breadth. Same contract: appended after the six,
     # fallback-ineligible, never prompted for in init.
     "zai", "moonshot", "moonshot-cn", "kimi-coding", "minimax", "minimax-cn",
     "xai", "dashscope", "alibaba-coding", "stepfun", "ai-gateway",

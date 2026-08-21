@@ -1,4 +1,4 @@
-"""T1.3 — anti-injection framing for compaction (Hermes ``context_compressor.py``
+"""T1.3 — anti-injection framing for compaction (the reference compaction guard
 parity, review Axis 4+8).
 
 Stops a hostile mid-history payload (a tool result / user turn saying "ignore

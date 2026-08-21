@@ -23,8 +23,8 @@ from modules.llm.model_registry import get_model_config, PROVIDER_CONFIG, openai
 # canonical mirror of TimeoutConfig.LLM_REQUEST_TIMEOUT. We read it from LLMClient (L1)
 # rather than agents.task.constants (L2): a capability lib must not import up into the
 # agent layer at module load, which dragged the whole agents/__init__ fan-out (+aiogram)
-# into anything importing modules.llm. Equality is guarded by tests.
-# See docs/plans/2026-06-26-runtime-architecture-finalization-FUSION.md (P0-L).
+# into anything importing modules.llm. Equality is guarded by tests
+# (P0-L, 2026-06-26 runtime-architecture finalization).
 DEFAULT_REQUEST_TIMEOUT = LLMClient.DEFAULT_REQUEST_TIMEOUT
 DEFAULT_MAX_RETRIES = LLMClient.DEFAULT_MAX_RETRIES
 

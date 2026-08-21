@@ -1,5 +1,5 @@
 """Structured LLM-error classifier — the single source of truth for how the step loop
-and the outage notice categorize a failure (P0, docs/reviews/2026-07-21-hermes-structural-comparison.md).
+and the outage notice categorize a failure (P0, 2026-07-21 structural review).
 
 Unifies the two top-string classification sites (agents/task/agent/core/step.py
 ::_is_fatal_step_error and error_recovery.py::_handle_step_error's inline substring
@@ -71,7 +71,7 @@ class FailoverReason(str, enum.Enum):
 
 @dataclass(frozen=True)
 class ClassifiedError:
-    """A structured verdict + recovery hints (models Hermes's ClassifiedError; local
+    """A structured verdict + recovery hints (modeled on the reference implementation; local
     template: tools/controller/delegation.py::DelegationDecision). ``matched_text`` is the
     chain frame that decided a credit-death/permanent verdict (for logs / the sentinel)."""
     reason: FailoverReason

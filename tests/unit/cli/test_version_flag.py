@@ -1,6 +1,6 @@
 """`polyrob --version` / `-V` should print the version and exit 0.
 
-Fresh-install finding (2026-07-19, docs/ops/inbox.md): `polyrob --version` errored
+Fresh-install finding (2026-07-19): `polyrob --version` errored
 with "No such option" — only `polyrob version` (a subcommand) or `pip show polyrob`
 revealed it. Click's standard `--version` convention was simply never wired onto
 the top-level group. Trivial fix: `@click.version_option` on `cli`.

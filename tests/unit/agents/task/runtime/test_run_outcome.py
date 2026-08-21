@@ -1,6 +1,6 @@
 """§2 RunOutcome — one canonical outcome object assembled at run end.
 
-Proposal: docs/proposals/2026-07-09-intelligence-stack-finalization.md §2.
+Proposal: the 2026-07-09 intelligence-stack proposal §2.
 The live corruption (goal 58a1385d18bf): the agent exited honestly via
 ``done("OUTCOME: BLOCKED — …")`` but every consumer re-extracted strings from
 message history and got the P2-16 placeholder "Processing actions". RunOutcome
