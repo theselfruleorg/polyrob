@@ -9,8 +9,8 @@ def _pyproject_version() -> str:
     assert m, "no version = in pyproject.toml"
     return m.group(1)
 
-def test_pyproject_is_0_11_0():
-    assert _pyproject_version() == "0.11.0"
+def test_pyproject_is_0_12_0():
+    assert _pyproject_version() == "0.12.0"
 
 def test_core_version_accessor_matches_pyproject():
     from core.version import get_version

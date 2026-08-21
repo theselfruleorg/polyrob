@@ -83,7 +83,7 @@ def resolve_identity() -> str:
         from core.instance import resolve_owner_principal
         # STRICT resolution (default_to_instance=False): None unless an owner is
         # EXPLICITLY bound. The default `default_to_instance=True` behavior falls
-        # back to the instance id (DEFAULT_INSTANCE_ID = "rob"), which is never
+        # back to the instance id (DEFAULT_INSTANCE_ID = "polyrob"), which is never
         # anonymous — that would make the "local" fallback below unreachable and
         # contradict this function's own contract (owner-if-bound else "local").
         owner = resolve_owner_principal(default_to_instance=False)

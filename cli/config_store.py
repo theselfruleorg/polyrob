@@ -283,6 +283,28 @@ def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):
             inferred = _provider_for_model(cli_model)
             if inferred:
                 provider = inferred
+    if provider is None and model is None:
+        # `available_keys` above is ENV-only, so a box whose ONLY credential is
+        # an OAuth seat / store rung (or a keyless provider row) resolves to
+        # nothing here — yet preflight passed on exactly that credential, and the
+        # caller would then crash calling get_default_model(None). Consult the
+        # store-aware oracle (the same one preflight uses) for a coherent pair.
+        # Gated on local mode: store rungs require it (_store_rungs_allowed), and
+        # this keeps the env-only resolver contract byte-identical off the CLI.
+        try:
+            from core.config_policy import local_mode_enabled
+            if local_mode_enabled():
+                from modules.llm.profiles import usable_providers_with_credentials
+                usable = usable_providers_with_credentials()
+                if usable:
+                    provider = usable[0]
+                    # NB: registry's per-provider default (str), NOT this module's
+                    # no-arg get_default_model() which returns a (provider, model) tuple.
+                    from modules.llm.llm_client_registry import (
+                        get_default_model as _registry_default)
+                    model = _registry_default(provider)
+        except Exception:
+            pass  # fail-open: a truly keyless box stays (None, None) for the guidance path
     return provider, model
 
 

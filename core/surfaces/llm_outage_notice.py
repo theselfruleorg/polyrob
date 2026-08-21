@@ -42,8 +42,8 @@ LLM_OUTAGE_COOLDOWN_SEC = 30 * 60
 #: it clearly NOT an agent reply (proposal 015 risk note: must be
 #: distinguishable from genuine agent output).
 OUTAGE_NOTICE_TEXT = (
-    "⚠️ Rob hit an infrastructure error (LLM provider unavailable or out of "
-    "credits) and couldn't process your last message. This is an automated "
+    "⚠️ The agent hit an infrastructure error (LLM provider unavailable or out "
+    "of credits) and couldn't process your last message. This is an automated "
     "notice, not a reply — your message was logged and the owner has been "
     "notified."
 )

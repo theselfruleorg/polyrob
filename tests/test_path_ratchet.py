@@ -48,9 +48,9 @@ BASELINE = {
     "api/kb/endpoints.py": 1,
     "cli/commands/owner.py": 1,       # docstring mention of the OLD behaviour
     # cli/commands/* + persona/h_self swept through data_dir_or_home() 2026-07-16;
-    # handlers.py keeps 2: the data/characters shipped-tree mirror (CharacterManager
-    # convention, read-only), not a data-home fallback.
-    "cli/ui/commands/handlers.py": 2,
+    # the data/characters mirror moved to persona_resolver.character_search_dirs
+    # (2026-08-20) — handlers.py keeps 1 remaining hit.
+    "cli/ui/commands/handlers.py": 1,
     "core/bootstrap.py": 1,           # DATA_ROOT path_manager default (location move, deferred)
     "core/config.py": 2,              # Field defaults, anchored by bootstrap
     "core/credit_sentinel.py": 1,     # T3-fixed; "data" only in the last-resort except

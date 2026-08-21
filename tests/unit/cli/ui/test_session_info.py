@@ -64,6 +64,18 @@ def test_banner_session_info_custom_instance():
     assert "instance acme" in text.splitlines()[2]
 
 
+def test_banner_folds_default_instance_equal_to_framework():
+    # Fresh install: instance id == framework name ("polyrob") — showing
+    # "polyrob · instance polyrob" is noise, so the instance part is folded.
+    text = banner_plain(
+        version="1.0.0", model="m", provider="p", tool_ids=[], session_id="s",
+        framework="polyrob", instance_id="polyrob",
+    )
+    third = text.splitlines()[2]
+    assert "polyrob" in third
+    assert "instance" not in third
+
+
 # ---------------------------------------------------------------------------
 # /session command
 # ---------------------------------------------------------------------------

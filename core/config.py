@@ -72,7 +72,7 @@ class AgentConfig(BaseSettings):
 
     # Default agent persona
     characters_dir: str = Field(default="agents/personality/characters", alias='CHARACTERS_DIR')
-    default_character: str = Field(default="rob", alias='DEFAULT_CHARACTER')
+    default_character: str = Field(default="polyrob", alias='DEFAULT_CHARACTER')
 
     # Session memory management
     session_ttl_seconds: int = Field(default=86400, alias='SESSION_TTL_SECONDS')

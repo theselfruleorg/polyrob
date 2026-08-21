@@ -205,11 +205,20 @@ def generate_cmd(force, seed, variant, stock, config_path):
     click.echo(frozen_report(meta, png, regenerated=force))
 
 
+def _default_seed() -> str:
+    """The --seed default IS the instance name (matches the option help)."""
+    try:
+        from core.instance import resolve_instance_id
+        return resolve_instance_id()
+    except Exception:
+        return _DEFAULT_SEED
+
+
 def _build_identity(stock: bool, seed, variant) -> Dict[str, Any]:
     if stock:
         return load_frozen_config(_DEFAULT_CONFIG_PATH) if _DEFAULT_CONFIG_PATH.is_file() \
-            else default_config(seed or _DEFAULT_SEED)
-    config = random_config(seed or _DEFAULT_SEED)
+            else default_config(seed or _default_seed())
+    config = random_config(seed or _default_seed())
     if variant is not None:
         config["variant"] = variant
     return config

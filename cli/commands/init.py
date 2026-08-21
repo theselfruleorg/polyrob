@@ -197,7 +197,12 @@ def _write_env(env_path: Path, updates: dict) -> None:
 @click.option("--owner", "owner_user_id", default=None,
               help="Owner user id to pair this instance to (defaults to the instance id).")
 @click.option("--instance-id", "instance_id", default=None,
-              help="Instance id for this deployment (default 'rob').")
+              help="Instance id for this deployment (default 'polyrob').")
+@click.option("--profile", "profile_name", default=None, metavar="NAME",
+              help="Write the IDENTITY keys (persona, instance id, owner, toolset, "
+                   "guardrails) into profile NAME's .env instead of the global "
+                   "~/.polyrob/.env; provider keys + default model stay global. "
+                   "Creates the profile if it does not exist.")
 @click.option("--skip-keys", is_flag=True, default=False, hidden=True,
               help="Skip the provider-key section (used by the inline key wizard bridge).")
 def init_cmd(
@@ -212,6 +217,7 @@ def init_cmd(
     toolset_name,
     owner_user_id,
     instance_id,
+    profile_name,
     skip_keys,
 ):
     """Initialize POLYROB for this project (file-first: ~/.polyrob + ./.polyrob)."""
@@ -291,15 +297,16 @@ def init_cmd(
             # ── Section (e): Owner pairing ────────────────────────────────────
             # Pair this instance to an owner id so autonomy/self-evolution surfaces
             # know who to answer to. Single-user local: the owner id and instance id
-            # are typically the same (both default "rob"). Explicit flags win.
+            # are typically the same (both default "polyrob"). Explicit flags win.
             click.echo("\n=== Section 5/6: Owner pairing ===")
+            from core.instance import DEFAULT_INSTANCE_ID
             if instance_id is None:
                 instance_id = click.prompt(
-                    "Instance id", default="rob", show_default=True) or None
+                    "Instance id", default=DEFAULT_INSTANCE_ID, show_default=True) or None
             if owner_user_id is None:
                 owner_user_id = click.prompt(
                     "Owner user id (blank = same as instance id)",
-                    default=(instance_id or "rob"), show_default=True) or None
+                    default=(instance_id or DEFAULT_INSTANCE_ID), show_default=True) or None
 
             # ── Section 6/6: Autonomy & guardrails ───────────────────────────
             # All prompts blank-to-skip. Env keys land in ``guardrail_updates``
@@ -336,12 +343,13 @@ def init_cmd(
                     from core.prefs import write_preference
                     from core.runtime_paths import resolve_runtime_paths
                     prefs_home = resolve_runtime_paths(local=True).data_home
+                    from core.instance import DEFAULT_INSTANCE_ID as _DEF_IID
                     ok, err = write_preference(
                         prefs_home, owner_user_id, "digest.channel",
-                        digest_channel, instance_id or "rob")
+                        digest_channel, instance_id or _DEF_IID)
                     if ok:
                         write_preference(prefs_home, owner_user_id, "digest.enabled",
-                                         True, instance_id or "rob")
+                                         True, instance_id or _DEF_IID)
                     else:
                         click.echo(f"Warning: digest preference not saved: {err}", err=True)
                 else:
@@ -402,20 +410,41 @@ def init_cmd(
                 f"Provider for model '{default_model}' (blank to skip)",
                 default="", show_default=False) or None
 
-    # Persist into ~/.polyrob/.env
+    # Persist into ~/.polyrob/.env — split by scope (W4, closes the §1.3
+    # global-identity leak): IDENTITY keys go to the target profile's .env when
+    # --profile is given; genuinely global things (API keys, default model)
+    # always stay in the global home .env.
     home_env = _core_paths.polyrob_home() / ".env"
+    identity_updates = {
+        "POLYROB_AGENT_TOOLSET": effective_toolset,
+        "POLYROB_PERSONA": effective_persona,
+        "POLYROB_INSTANCE_ID": instance_id,
+        "POLYROB_OWNER_USER_ID": owner_user_id,
+    }
+    identity_updates.update(guardrail_updates)
+    global_updates = {
+        "DEFAULT_MODEL": default_model,
+        "DEFAULT_PROVIDER": default_provider,
+    }
+    global_updates.update(collected_keys)
     try:
-        updates = {
-            "DEFAULT_MODEL": default_model,
-            "DEFAULT_PROVIDER": default_provider,
-            "POLYROB_AGENT_TOOLSET": effective_toolset,
-            "POLYROB_PERSONA": effective_persona,
-            "POLYROB_INSTANCE_ID": instance_id,
-            "POLYROB_OWNER_USER_ID": owner_user_id,
-        }
-        updates.update(collected_keys)
-        updates.update(guardrail_updates)
-        _write_env(home_env, updates)
+        if profile_name:
+            from core.profiles import ProfileError, profile_dir
+            try:
+                pdir = profile_dir(profile_name)
+            except ProfileError as exc:
+                raise click.ClickException(str(exc))
+            if not pdir.is_dir():
+                from cli.commands.profile import create_profile
+                create_profile(profile_name)
+            _write_env(pdir / ".env", identity_updates)
+            _write_env(home_env, global_updates)
+            click.echo(f"Identity written to profile '{profile_name}' "
+                       f"({pdir / '.env'}); keys/model to {home_env}")
+        else:
+            updates = dict(identity_updates)
+            updates.update(global_updates)
+            _write_env(home_env, updates)
     except OSError as exc:
         click.echo(f"Warning: could not write {home_env}: {exc}", err=True)
 

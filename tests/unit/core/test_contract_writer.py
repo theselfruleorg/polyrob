@@ -121,7 +121,8 @@ def test_contract_and_owner_and_self_writers_do_not_interfere(tmp_path):
     assert "SELF note C." in load_self_doc(tmp_path, "u1")
 
     # archived contract reject is namespaced, not sharing owner's/self's rejected files
-    archived = list((tmp_path / "identity" / "rob" / "user_u1" / ".archived").glob("*.md"))
+    from core.instance import DEFAULT_INSTANCE_ID
+    archived = list((tmp_path / "identity" / DEFAULT_INSTANCE_ID / "user_u1" / ".archived").glob("*.md"))
     names = {p.name for p in archived}
     assert any(n.startswith("contract-rejected.") for n in names)
     assert not any(n == "rejected.0.md" for n in names)

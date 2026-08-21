@@ -58,11 +58,11 @@ def test_separator_label_includes_model_and_provider():
     state = SessionState()
     state.model = "glm-5.2"
     state.provider = "openrouter"
-    assert cli_app.separator_label(state) == "rob · glm-5.2 · openrouter"
+    assert cli_app.separator_label(state) == "polyrob · glm-5.2 · openrouter"
 
 
 def test_separator_label_bare_when_no_model():
-    assert cli_app.separator_label(SessionState()) == "rob"
+    assert cli_app.separator_label(SessionState()) == "polyrob"
 
 
 def test_autonomy_line_renders_counts():

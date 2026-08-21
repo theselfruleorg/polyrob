@@ -149,7 +149,7 @@ def test_agent_message_renders_with_speaker_mark():
     from cli.ui.theme import ICONS
     out = _render(blocks.agent_message("the answer is 42"))
     assert "the answer is 42" in out
-    assert f"{ICONS.speaker} rob" in out
+    assert f"{ICONS.speaker} polyrob" in out
 
 
 def test_no_final_message_notice_with_goal():
@@ -158,7 +158,7 @@ def test_no_final_message_notice_with_goal():
     assert "finished without a final message" in out
     assert "last goal:" in out
     assert "Deliver the review" in out
-    assert f"{ICONS.speaker} rob" in out
+    assert f"{ICONS.speaker} polyrob" in out
 
 
 def test_no_final_message_notice_without_goal():

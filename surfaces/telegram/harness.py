@@ -62,8 +62,16 @@ def _is_conflict_error(exc: Exception) -> bool:
 
 _DEFAULT_WEBHOOK_PATH = "/telegram/webhook"
 
-_HELP = (
-    "ROB commands:\n"
+def _agent_name() -> str:
+    """The instance's own name for user-facing help — never a hardcoded bot name."""
+    try:
+        from core.instance import resolve_instance_id
+        return resolve_instance_id()
+    except Exception:
+        return "the agent"
+
+
+_HELP_BODY = (
     "/task <goal> — start a new task\n"
     "/cancel — stop the current task\n"
     "/new — start a fresh conversation\n"
@@ -84,8 +92,13 @@ _HELP = (
     "/kb <query> — search my knowledge base\n"
     "/files [n] — recent files I produced (default 10)\n"
     "/help — show this help\n"
-    "Or just send a message to talk to ROB."
+    "Or just send a message to talk to {name}."
 )
+
+
+def _help_text() -> str:
+    name = _agent_name()
+    return f"{name} commands:\n" + _HELP_BODY.format(name=name)
 
 _OWNER_ADMIN_COMMANDS = ("/pending", "/approve", "/reject", "/asks", "/fulfill",
                          "/allow", "/deny", "/allowlist",
@@ -742,13 +755,13 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
             lines.append(f"• {r['status']} {r['surface']}:{r['target']}{note}")
         return "\n".join(lines)
 
-    return _HELP
+    return _help_text()
 
 
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None) -> Optional[str]:
     cmd = (result.decision.command or "").lower()
     if cmd == "/help":
-        return _HELP
+        return _help_text()
     if cmd in _OWNER_ADMIN_COMMANDS:
         try:
             return await _handle_owner_admin(task_agent, result, cmd)
@@ -787,7 +800,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         result.inbound.text = goal
         await _start_task_session(task_agent, result, spawn, deliver)
         return None
-    return _HELP  # unknown command -> help
+    return _help_text()  # unknown command -> help
 
 
 async def act_on_inbound(

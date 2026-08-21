@@ -5,6 +5,7 @@ list_pending unifies both; promote/reject dispatch by (kind, id); the notificati
 builder turns a pending set into one owner message. All owner-gated at the caller.
 """
 from agents.task.agent.skill_manager import SkillManager
+from core.instance import DEFAULT_INSTANCE_ID
 from core.self_context_writer import SelfContextWriter, PROVENANCE_AGENT
 from core import self_evolution
 
@@ -12,7 +13,7 @@ GOOD_SKILL = "# My Skill\n\nWhen X, do Y. A useful reusable procedure with enoug
 
 
 def _seed_self_pending(home, uid="gleb"):
-    SelfContextWriter(home, instance_id="rob").propose(
+    SelfContextWriter(home, instance_id=DEFAULT_INSTANCE_ID).propose(
         "Learned: surface blockers to the owner proactively.",
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
 
@@ -25,14 +26,14 @@ def _skill_mgr(home):
 
 def test_list_pending_empty(tmp_path):
     items = self_evolution.list_pending(
-        "gleb", home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert items == []
 
 
 def test_list_pending_includes_self_context(tmp_path):
     _seed_self_pending(tmp_path)
     items = self_evolution.list_pending(
-        "gleb", home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert len(items) == 1
     assert items[0]["kind"] == "self_context"
     assert "surface blockers" in items[0]["preview"]
@@ -43,7 +44,7 @@ def test_list_pending_includes_skills(tmp_path, monkeypatch):
     mgr = _skill_mgr(tmp_path)
     mgr.create_skill("learned-thing", GOOD_SKILL, user_id="gleb", created_by="agent")
     items = self_evolution.list_pending(
-        "gleb", home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+        "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
     kinds = {i["kind"] for i in items}
     assert "skill" in kinds
     skill_item = next(i for i in items if i["kind"] == "skill")
@@ -53,7 +54,7 @@ def test_list_pending_includes_skills(tmp_path, monkeypatch):
 def test_list_pending_tenant_scoped(tmp_path):
     _seed_self_pending(tmp_path, uid="gleb")
     items = self_evolution.list_pending(
-        "mallory", home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        "mallory", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert items == []
 
 
@@ -64,7 +65,7 @@ def test_promote_self_context(tmp_path):
     _seed_self_pending(tmp_path)
     ok, _ = self_evolution.promote(
         "self_context", "gleb", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert ok
     assert "surface blockers" in load_self_doc(tmp_path, user_id="gleb")
 
@@ -73,10 +74,10 @@ def test_reject_self_context(tmp_path):
     _seed_self_pending(tmp_path)
     ok, _ = self_evolution.reject(
         "self_context", "gleb", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert ok
     remaining = self_evolution.list_pending(
-        "gleb", home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert remaining == []
 
 
@@ -86,7 +87,7 @@ def test_promote_skill(tmp_path, monkeypatch):
     mgr.create_skill("learned-thing", GOOD_SKILL, user_id="gleb", created_by="agent")
     ok, _ = self_evolution.promote(
         "skill", "learned-thing", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
     assert ok
     assert "learned-thing" in getattr(mgr, "skill_rules", {}) or \
         (mgr._user_root("gleb") / "learned-thing" / "SKILL.md").exists()
@@ -98,7 +99,7 @@ def test_reject_skill(tmp_path, monkeypatch):
     mgr.create_skill("bad-thing", GOOD_SKILL, user_id="gleb", created_by="agent")
     ok, _ = self_evolution.reject(
         "skill", "bad-thing", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
     assert ok
     assert mgr.list_pending_skills(user_id="gleb") == []
 
@@ -106,7 +107,7 @@ def test_reject_skill(tmp_path, monkeypatch):
 def test_promote_unknown_kind_errors(tmp_path):
     ok, msg = self_evolution.promote(
         "bogus", "x", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=_skill_mgr(tmp_path))
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=_skill_mgr(tmp_path))
     assert not ok
 
 
@@ -186,7 +187,7 @@ async def test_notify_owner_pending_sends_when_flag_on(tmp_path, monkeypatch):
     _seed_self_pending(tmp_path)
     sink = _FakeSink()
     ok = await self_evolution.maybe_notify_owner_pending(
-        _FakeContainer(sink), "gleb", home_dir=tmp_path, instance_id="rob",
+        _FakeContainer(sink), "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID,
         skill_manager=_skill_mgr(tmp_path))
     assert ok
     assert sink.sent and "surface blockers" in sink.sent[0][1]
@@ -199,7 +200,7 @@ async def test_notify_owner_pending_noop_when_flag_off(tmp_path, monkeypatch):
     _seed_self_pending(tmp_path)
     sink = _FakeSink()
     ok = await self_evolution.maybe_notify_owner_pending(
-        _FakeContainer(sink), "gleb", home_dir=tmp_path, instance_id="rob",
+        _FakeContainer(sink), "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID,
         skill_manager=_skill_mgr(tmp_path))
     assert ok is False
     assert sink.sent == []
@@ -209,7 +210,7 @@ async def test_notify_owner_pending_noop_when_flag_off(tmp_path, monkeypatch):
 async def test_notify_owner_pending_failopen_no_container(tmp_path, monkeypatch):
     monkeypatch.setenv("SELF_EVOLUTION_TRANSPARENCY", "true")
     ok = await self_evolution.maybe_notify_owner_pending(
-        None, "gleb", home_dir=tmp_path, instance_id="rob")
+        None, "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID)
     assert ok is False
 
 
@@ -303,7 +304,7 @@ def _patch_rail(monkeypatch, outcomes=None):
 
 async def _notify(container, tmp_path, mgr):
     return await self_evolution.maybe_notify_owner_pending(
-        container, "gleb", home_dir=tmp_path, instance_id="rob",
+        container, "gleb", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID,
         skill_manager=mgr)
 
 
@@ -363,7 +364,7 @@ async def test_notify_after_promote_notifies_reproposal(tmp_path, monkeypatch):
     assert await _notify(c, tmp_path, mgr) is True
     ok, _ = self_evolution.promote(
         "self_context", "gleb", user_id="gleb",
-        home_dir=tmp_path, instance_id="rob", skill_manager=mgr)
+        home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID, skill_manager=mgr)
     assert ok
     _seed_self_pending(tmp_path)  # same kind:id as before
     assert await _notify(c, tmp_path, mgr) is True

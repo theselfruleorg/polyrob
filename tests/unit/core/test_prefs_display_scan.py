@@ -19,7 +19,7 @@ BLOCKED = "[BLOCKED: failed identity safety scan]"
 
 
 def _write_prefs(home, uid, body):
-    d = home / "identity" / "rob" / f"user_{uid}"
+    d = home / "identity" / "polyrob" / f"user_{uid}"
     d.mkdir(parents=True, exist_ok=True)
     (d / "preferences.toml").write_text(body, encoding="utf-8")
 

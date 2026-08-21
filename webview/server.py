@@ -648,7 +648,7 @@ def _check_session_ownership(request: Request, session_id: str) -> tuple[bool, O
         # in this instance, regardless of which surface/identity path tagged
         # it — e.g. CLI-created sessions are hardcoded to user_id="local"
         # (core/identity.py), which never equals the own_ops owner-login id
-        # (webgate.local_owner_id(), default "rob"). A strict per-session
+        # (webgate.local_owner_id(), default = the instance id). A strict per-session
         # string match here false-denies the owner on their own CLI sessions.
         # So: authenticated-as-owner -> allow unconditionally; anything else
         # (authenticated as someone/something else) -> deny. This keeps H2b's
@@ -3720,8 +3720,17 @@ async def _startup_late_services():
                     logger.info("🚀 Initializing task agent...")
                     from agents.task_agent_lite import TaskAgent
 
-                    # Create and register task agent
-                    task_agent = TaskAgent(name="task_agent", config=config, container=_container)
+                    # Create and register task agent.
+                    # owns_workspace_gc=False: this is the read-only monitoring
+                    # console. It has no business rmtree-ing the agent's
+                    # workspaces, and it DID — a webview process started
+                    # 2026-08-05 kept pre-guard code in memory and wiped
+                    # /var/lib/polyrob/project every day at 06:26 UTC for two
+                    # weeks, because deploys restart polyrob.service and not
+                    # this one. The agent process owns the GC.
+                    task_agent = TaskAgent(name="task_agent", config=config,
+                                           container=_container,
+                                           owns_workspace_gc=False)
                     await task_agent.initialize()
                     _container.register_agent("task_agent", task_agent)
 

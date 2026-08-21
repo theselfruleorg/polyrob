@@ -38,8 +38,9 @@ agents/
 │   ├── character_manager.py        # Character lifecycle management
 │   ├── persona_render.py           # Persona/style rendering helpers
 │   └── characters/                 # Character definition files
-│       ├── rob.character.json      # Default POLYROB character
-│       └── trump.character.json    # Example character
+│       └── polyrob.character.json  # Neutral default framework character
+│                                   # (a specific bot's character is profile
+│                                   #  data under <data_dir>/characters/)
 │
 ├── prompt/                         # System-prompt support
 │   ├── __init__.py

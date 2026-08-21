@@ -27,6 +27,39 @@ def test_allowlist_shape():
         assert danger not in _SELF_GOAL_ALLOWED_TOOLS
 
 
+def test_spend_money_tools_excluded_from_every_self_goal_grant(monkeypatch):
+    """Injected-goal laundering ratchet: an agent-created goal must never be able
+    to acquire a money-SPEND verb. The turn-origin gate treats a genuine
+    autonomous goal turn as allowed, so this tool-grant allowlist is the ONLY
+    line stopping an injected goal from trading. Pin the whole SPEND set (derived
+    from the capability table, so a future money tool is covered too) out of
+    every grant surface, in BOTH autonomy modes.
+    """
+    from core.tool_capabilities import ids_with
+    from tools.goal_tools import allowed_self_goal_tools, _SELF_GOAL_ALLOWED_TOOLS
+    from agents.task.goals.dispatcher import (
+        CHILD_INHERITABLE_TOOLS, default_goal_tools, child_inheritable_tools)
+    from agents.task.constants import AUTONOMOUS_MODE_TOOLS
+
+    # x402_invoice is RECEIVABLES (create an invoice), deliberately allowed; the
+    # SPEND verbs are what must never be self-grantable.
+    spend = set(ids_with("money")) - {"x402_invoice"}
+    assert "defi_trade" in spend  # the tool this ratchet was written for
+
+    for mode_on in (False, True):
+        monkeypatch.setattr("core.config_policy.full_autonomy_enabled",
+                            lambda: mode_on, raising=False)
+        monkeypatch.setattr("agents.task.constants.full_autonomy_enabled",
+                            lambda: mode_on, raising=False)
+        assert not (spend & set(allowed_self_goal_tools())), mode_on
+        assert not (spend & set(default_goal_tools())), mode_on
+        assert not (spend & set(child_inheritable_tools())), mode_on
+
+    assert not (spend & set(_SELF_GOAL_ALLOWED_TOOLS))
+    assert not (spend & set(AUTONOMOUS_MODE_TOOLS))
+    assert not (spend & set(CHILD_INHERITABLE_TOOLS))
+
+
 def test_goal_create_keeps_allowlisted_drops_blocked(tmp_path):
     tool = _make_tool(tmp_path)
     res = asyncio.run(tool.goal_create(

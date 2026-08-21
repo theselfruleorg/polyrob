@@ -182,10 +182,24 @@ class FileTokenStore(MutableMapping):
         return self._data[key]
 
     def __setitem__(self, key: Key, value: bytes) -> None:
+        # Read-modify-write against the CURRENT file: a second instance over the
+        # same file (e.g. the X login store keyed provider "x" and the signup
+        # progress store keyed "x_signup" share .x_session.json) holds a snapshot
+        # taken at ITS construction, so flushing that stale dict would erase rows
+        # this instance never saw. Reloading here folds in the other instance's
+        # writes before we flush. (Cross-PROCESS workers>1 is still last-writer-
+        # wins — see the module docstring; this only closes the same-process
+        # two-instance clobber.)
+        self._data = self._load()
         self._data[key] = bytes(value)
         self._flush()
 
     def __delitem__(self, key: Key) -> None:
+        # Same read-modify-write discipline as __setitem__: reload so deleting one
+        # key can't flush away another instance's rows (the X session clobber).
+        self._data = self._load()
+        if key not in self._data:
+            raise KeyError(key)
         del self._data[key]
         self._flush()
 

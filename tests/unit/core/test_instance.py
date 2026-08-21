@@ -25,9 +25,9 @@ from core.instance import (
 
 def test_owner_principal_defaults_to_instance_id():
     # Auto-derive (2026-07-03): with nothing explicit bound, the owner principal is the
-    # instance's own tenant (defaults to "rob"), so a single-user deploy unifies the
+    # instance's own tenant (defaults to "polyrob"), so a single-user deploy unifies the
     # owner's chat/CLI with autonomy WITHOUT retyping the instance's name in env.
-    assert resolve_owner_principal(env={}) == "rob"
+    assert resolve_owner_principal(env={}) == "polyrob"
 
 
 def test_owner_principal_defaults_to_custom_instance_id():
@@ -115,8 +115,10 @@ def test_local_safe_empty_user_never_owner():
     assert not is_owner_local_safe(None, owner_principal="rob", local_enabled=True)
 
 
-def test_instance_id_defaults_to_rob():
-    assert resolve_instance_id(env={}) == "rob"
+def test_instance_id_defaults_to_polyrob():
+    # W1 neutral identity: the framework default is "polyrob"; a specific bot
+    # (e.g. "rob") is an explicit env/profile binding, never the shipped default.
+    assert resolve_instance_id(env={}) == "polyrob"
 
 
 def test_instance_id_from_bot_instance_id_env():
@@ -129,8 +131,8 @@ def test_instance_id_polyrob_env_wins_over_legacy_rob_alias():
     assert resolve_instance_id(env=env) == "canonical"
 
 
-def test_instance_id_blank_falls_back_to_rob():
-    assert resolve_instance_id(env={"BOT_INSTANCE_ID": "  "}) == "rob"
+def test_instance_id_blank_falls_back_to_default():
+    assert resolve_instance_id(env={"BOT_INSTANCE_ID": "  "}) == "polyrob"
 
 
 def test_agent_identity_and_bot_instance_are_frozen():

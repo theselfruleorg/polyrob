@@ -93,6 +93,12 @@ async def _run_session(
     from core.bootstrap import load_env
     from cli.keys import preflight_or_onboard
     load_env(local_mode=True)
+    # POLYROB_LOCAL gates the OAuth/store credential rungs. build_cli_container
+    # setdefaults it, but the key gate + provider resolution run BEFORE the
+    # container is built — so without this a connected OAuth seat is invisible to
+    # preflight and to resolve_provider_model. setdefault preserves an explicit
+    # `POLYROB_LOCAL=0 polyrob run …` opt-out.
+    os.environ.setdefault("POLYROB_LOCAL", "1")
     if not preflight_or_onboard(interactive=True):
         sys.exit(1)
 
@@ -157,6 +163,12 @@ async def _run_session(
     # Resolve model/provider defaults
     from cli.config_store import resolve_provider_model
     resolved_provider, resolved_model = resolve_provider_model(provider, model)
+    if resolved_provider is None:
+        # Preflight passed but resolution found nothing — surface the canonical
+        # guidance instead of crashing in get_default_model(None).
+        from cli.keys import no_key_message
+        click.echo(no_key_message(), err=True)
+        sys.exit(1)
     if resolved_model is None:
         # Single source of truth for provider defaults (matches `rob model list`).
         from modules.llm.llm_client_registry import get_default_model as _registry_default

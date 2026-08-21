@@ -42,6 +42,31 @@ def test_last_resort_is_none_when_no_keys(monkeypatch):
     assert provider is None and model is None
 
 
+def test_store_seat_resolves_when_env_has_no_key(monkeypatch):
+    # An OAuth-seat-only box: env has no key, but the store-aware oracle reports
+    # a usable provider (the one preflight passed on). Under local mode the
+    # resolver must return that provider — not (None, None), which crashes the
+    # caller in get_default_model(None).
+    monkeypatch.setenv("POLYROB_LOCAL", "1")
+    monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
+    import modules.llm.profiles as _profiles
+    monkeypatch.setattr(_profiles, "usable_providers_with_credentials",
+                        lambda *a, **k: ["anthropic"])
+    import modules.llm.llm_client_registry as _reg
+    monkeypatch.setattr(_reg, "get_default_model", lambda p: "claude-x")
+    provider, model = cs.resolve_provider_model(None, None, available_keys=set())
+    assert provider == "anthropic" and model == "claude-x"
+
+
+def test_store_seat_fallback_inert_without_local_mode(monkeypatch):
+    # Off the CLI (no local mode) the resolver stays env-only → (None, None).
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.delenv("ROB_LOCAL", raising=False)
+    monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
+    provider, model = cs.resolve_provider_model(None, None, available_keys=set())
+    assert provider is None and model is None
+
+
 def test_nvidia_key_autodetected(monkeypatch):
     monkeypatch.setattr(cs, "get_default_model", lambda: (None, None))
     provider, model = cs.resolve_provider_model(None, None, available_keys={"NVIDIA_API_KEY"})

@@ -29,7 +29,10 @@ CEILINGS = {
     # The extraction debt stands — these may still only SHRINK from here.
     "webview/server.py": 3824,  # F-2: api_agents/services/task/skills reads → agents/task/telemetry/
     "agents/task_agent_lite.py": 2593,
-    "tools/controller/action_registration.py": 2571,
+    # Tightened 2026-08-20: the module-level turn-origin policy helpers
+    # (_is_forged_or_autonomous_turn et al.) moved to tools/controller/turn_origin.py
+    # (re-exported for back-compat) after 098781b8 pushed the file past 2571.
+    "tools/controller/action_registration.py": 2417,
     "api/task_http_api.py": 1876,
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file

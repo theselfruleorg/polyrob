@@ -77,6 +77,18 @@ _OPERATOR_ENV_VARS = (
     "PAYMENT_APPROVAL_MODE", "PAYMENT_APPROVAL_TIMEOUT_SEC",
     "APPROVAL_GRANT_TTL_HOURS", "AGENT_COMPUTE_POSTURE",
     "AUTONOMY_POSTURE", "AUTONOMY_MODE",
+    # Identity/character pins: an operator env file (e.g. a dev box's
+    # ./.polyrob/.env pinning the migrated legacy "rob" identity after the
+    # DEFAULT_INSTANCE_ID "rob" -> "polyrob" flip) injects these through a
+    # CliRunner load_env and would make every later test resolve the WRONG
+    # instance tree (identity/rob vs identity/polyrob write/read mismatches).
+    "POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID",
+    "PERSONALITY_DEFAULT_CHARACTER", "DEFAULT_CHARACTER",
+    # POLYROB_PROFILE is the third resolve_instance_id tier: apply_profile_env
+    # raw-writes it, and monkeypatch.delenv(raising=False) on an ABSENT var
+    # registers NO undo — so a profile-activation test leaks it and every later
+    # test resolves the leaked profile name as the instance id.
+    "POLYROB_PROFILE", "POLYROB_PROFILE_SOURCE",
 ) + _provider_key_env_vars()
 
 

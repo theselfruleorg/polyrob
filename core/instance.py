@@ -5,8 +5,8 @@ module is the inert skeleton for that distinction:
 
 - ``AgentIdentity`` / ``BotInstance`` — frozen config objects resolved once at
   construction (one profile / workspace per instance).
-- ``resolve_instance_id`` — ``instance_id`` defaults to ``"rob"`` so a
-  single-instance deploy is byte-equivalent until an operator authors a second one.
+- ``resolve_instance_id`` — ``instance_id`` defaults to ``"polyrob"`` (the
+  neutral framework id) unless the environment or the active profile names one.
 - ``load_self_context`` — reads operator-authored SOUL/IDENTITY docs from the
   instance home dir. **Operator-write-only** in this first cut: an agent never
   writes these (a SOUL doc is a frozen, authoritative self-definition — strictly
@@ -32,7 +32,11 @@ from typing import Dict, FrozenSet, List, Mapping, Optional
 #: ``/session`` so the framework↔instance distinction is legible.
 FRAMEWORK_NAME = "polyrob"
 
-DEFAULT_INSTANCE_ID = "rob"
+DEFAULT_INSTANCE_ID = "polyrob"
+
+#: The pre-W1 default instance id. Kept ONLY for the one-time copy-not-move
+#: identity migration (core/home_migration.py::migrate_identity_instance_once).
+LEGACY_INSTANCE_ID = "rob"
 
 # Char caps that bound the frozen self-context so a runaway doc can't dominate
 # the prompt.
@@ -228,8 +232,8 @@ class AgentIdentity:
 class BotInstance:
     """One named bot running on the polyrob framework.
 
-    ``instance_id`` is the (future) tenant key; today it defaults to ``"rob"`` and
-    is carried but not yet used to scope row-keyed stores.
+    ``instance_id`` is the (future) tenant key; today it defaults to
+    ``"polyrob"`` and is carried but not yet used to scope row-keyed stores.
     """
 
     instance_id: str
@@ -241,7 +245,7 @@ class BotInstance:
 
 
 def resolve_instance_id(env: Optional[Mapping[str, str]] = None) -> str:
-    """Resolve the instance id from the environment, defaulting to ``"rob"``.
+    """Resolve the instance id from the environment, defaulting to ``"polyrob"``.
 
     ``POLYROB_INSTANCE_ID`` is the canonical name; ``BOT_INSTANCE_ID`` is also
     accepted (the canonical name wins if both are set). A blank value degrades to
@@ -252,6 +256,12 @@ def resolve_instance_id(env: Optional[Mapping[str, str]] = None) -> str:
         val = (src.get(key) or "").strip()
         if val:
             return val
+    # W4: the active profile IS the instance. Profile creation pins
+    # POLYROB_INSTANCE_ID in the profile's .env; this tier covers a profile
+    # assembled by hand (unsafe names refused, never rewritten).
+    prof = (src.get("POLYROB_PROFILE") or "").strip()
+    if prof and is_safe_tenant_id(prof):
+        return prof
     return DEFAULT_INSTANCE_ID
 
 
@@ -266,7 +276,7 @@ def resolve_owner_principal(
     1. ``POLYROB_OWNER_USER_ID`` / ``BOT_OWNER_USER_ID`` — explicit binding (a distinct
        human owner uid).
     2. the FIRST entry of ``SURFACE_SUPER_ADMIN_USER_IDS`` — the role ladder's top.
-    3. **the instance id** (:func:`resolve_instance_id`, defaults to ``"rob"``) — the
+    3. **the instance id** (:func:`resolve_instance_id`, defaults to ``"polyrob"``) — the
        auto-derived single-user default so the owner's chat/CLI shares autonomy's own
        tenant (goals/memory/SELF) WITHOUT retyping the instance's name in env.
 
@@ -428,7 +438,7 @@ def console_display_name(env: Optional[Mapping[str, str]] = None) -> str:
 
     Defaults to "POLYROB Console" (the framework brand). An instance MAY
     override it explicitly via ``POLYROB_CONSOLE_NAME`` — opt-in only, so an
-    existing deploy (``resolve_instance_id()`` already defaults to "rob") does
+    existing deploy (``resolve_instance_id()`` has a neutral default) does
     not silently rename its console just because an instance id is set.
     """
     src = os.environ if env is None else env

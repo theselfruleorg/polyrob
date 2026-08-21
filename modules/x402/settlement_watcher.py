@@ -505,6 +505,16 @@ class SettlementWatcher:
             "pending invoice for treasury %s — no auto-settlement, owner should "
             "reconcile", transfer.get("tx_hash"), transfer.get("amount_usd"),
             transfer.get("from"), treasury)
+        # A telemetry row the owner has to go read is not a notice. This is an
+        # unexpected on-chain payment the owner must reconcile — deliver it over
+        # the durable rail on the critical lane (money-actionable, low-frequency).
+        amt = transfer.get("amount_usd")
+        amt_str = f"${amt}" if amt is not None else "an unknown amount"
+        await self._push_owner_notice(owner, (
+            f"Unmatched on-chain payment: {amt_str} from {transfer.get('from')} "
+            f"landed in the treasury (tx {transfer.get('tx_hash')}) but matched NO "
+            f"pending invoice. Nothing was auto-settled; please reconcile."),
+            source="payment_unmatched")
 
     async def _sweep_stale_settling(self) -> int:
         """H7 stale-'settling' reaper: revert invoices stranded in 'settling'
@@ -832,7 +842,8 @@ class SettlementWatcher:
         from core.runtime_config import get_data_root
         return GoalBoard(os.path.join(get_data_root(), "goals.db"))
 
-    async def _push_owner_notice(self, user_id: str, text: str) -> None:
+    async def _push_owner_notice(self, user_id: str, text: str,
+                                 source: str = "subscriptions") -> None:
         """Best-effort owner notification over the SAME durable delivery rail
         `_notify_expired`'s owner notice uses. Never raises."""
         if not user_id or not text:
@@ -840,9 +851,9 @@ class SettlementWatcher:
         try:
             import core.surfaces.user_delivery as _ud
             container = getattr(self.task_agent, "container", None)
-            await _ud.deliver_user_message(container, user_id, text, source="subscriptions")
+            await _ud.deliver_user_message(container, user_id, text, source=source)
         except Exception:
-            logger.debug("settlement watcher: subscription owner notice failed "
+            logger.debug("settlement watcher: owner notice failed "
                         "(fail-open)", exc_info=True)
 
     async def _resolve_correspondent_session(self, sub: dict) -> Optional[str]:

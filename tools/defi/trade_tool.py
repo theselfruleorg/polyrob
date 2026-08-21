@@ -308,12 +308,14 @@ class DefiTradeTool(BaseTool):
         """
         from core.wallet import tx_guard
         authorize = self._guard_fn or tx_guard.authorize
-        from tools.controller.action_registration import _is_forged_or_autonomous_turn
+        from tools.controller.action_registration import (
+            _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
 
         decision = authorize(intent, tx, holder=signer.address, gate=gate,
                              execution_context=execution_context, tool_self=self,
                              price_fn=self._price,
-                             forged_fn=_is_forged_or_autonomous_turn)
+                             forged_fn=_is_forged_or_autonomous_turn,
+                             autonomous_ok_fn=_is_autonomous_goal_turn)
         header += (f"  simulated value: "
                    f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
                    f"  guard: {decision.reason}\n  lane:  {decision.lane}\n")

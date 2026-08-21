@@ -101,7 +101,7 @@ def test_default_step_renders_message_and_tool_calls():
     state.update(xev)
     rend.on_event(xev)
     out = buf.getvalue()
-    assert "rob:" in out
+    assert "polyrob:" in out
     assert "hello there" in out
     # The read_file tool call shows by default (as a → call line)...
     assert "read_file" in out
@@ -203,7 +203,7 @@ def test_one_shot_suppresses_done_recap_after_send_message():
     rend.on_event(ev)
     rend.on_turn_end("Responded to the user's greeting. No further action needed.")
     out = buf.getvalue()
-    assert out.count("rob:") == 1
+    assert out.count("polyrob:") == 1
     assert "Hey! Doing great" in out
     assert "No further action needed" not in out
 
@@ -524,7 +524,7 @@ def test_on_turn_end_writes_answer():
     rend, buf, state = _renderer()
     rend.on_turn_end("The answer is 42.")
     out = buf.getvalue()
-    assert "rob:" in out
+    assert "polyrob:" in out
     assert "The answer is 42." in out
 
 
@@ -623,7 +623,7 @@ def test_plain_message_step_renders_bubble_no_tool_line():
     state.update(_MSG_STEP)
     rend.on_event(_MSG_STEP)
     out = buf.getvalue()
-    assert "rob:" in out
+    assert "polyrob:" in out
     assert "Repository Review" in out          # full text
     assert "full body line two" in out          # multi-line preserved
     assert "→ send_message" not in out          # tool line is trace
@@ -689,7 +689,7 @@ def test_plain_mixed_step_default_renders_bubble_and_tool_call():
     state.update(xev)
     rend.on_event(xev)
     out = buf.getvalue()
-    assert "rob:" in out
+    assert "polyrob:" in out
     assert "working on it" in out
     assert "task_todo_add" in out            # the tool call shows by default
     assert "[step 2]" not in out             # scaffolding is still trace
@@ -720,7 +720,7 @@ def test_plain_one_shot_message_step_is_dialog_only():
     out = buf.getvalue()
     assert "[step 1]" not in out
     assert "I will summarize" not in out
-    assert "rob:" in out
+    assert "polyrob:" in out
     assert "Repository Review" in out
 
 
@@ -765,7 +765,7 @@ def test_golden_sequence_default_is_pure_dialog():
     assert "read_file" in lines[1]
     assert lines[2].lstrip().startswith("✓")
     assert "read_file" in lines[2]
-    assert lines[3] == "rob:"
+    assert lines[3] == "polyrob:"
     assert lines[4] == "  1, 2, 3"
     assert lines[5].startswith("(")           # the activity summary
     assert "2 steps" in lines[5]

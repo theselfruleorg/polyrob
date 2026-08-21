@@ -203,7 +203,7 @@ def _tool(root):
 def _owner_ctx(session_id="s1"):
     return SimpleNamespace(
         session_id=session_id, role="orchestrator", is_sub_agent=False,
-        user_id="rob", metadata={},
+        user_id="polyrob", metadata={},
     )
 
 
@@ -419,7 +419,7 @@ async def test_flag_on_but_no_session_id_skips_snapshot(tmp_path, monkeypatch):
     (tmp_path / "x.py").write_text("a = 1\n")
     t = _tool(tmp_path)
     ctx = SimpleNamespace(
-        session_id=None, role="orchestrator", is_sub_agent=False, user_id="rob", metadata={},
+        session_id=None, role="orchestrator", is_sub_agent=False, user_id="polyrob", metadata={},
     )
     res = await t.str_replace(
         StrReplaceParams(file_path="x.py", old_string="a = 1", new_string="a = 2"),

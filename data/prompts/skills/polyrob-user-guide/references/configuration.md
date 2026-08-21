@@ -338,7 +338,7 @@ for code anchors and complete prose.
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
 - CLI_PREFER_ACTION_TEXT — default: ON ('true') — CLI prefers clean action text over raw streamed buffer.
-- POLYROB_INSTANCE_ID / BOT_INSTANCE_ID — default: "rob" (DEFAULT_INSTANCE_ID) — Instance identity id; `POLYROB_INSTANCE_ID` is canonical, `BOT_INSTANCE_ID` an accepted alias.
+- POLYROB_INSTANCE_ID / BOT_INSTANCE_ID — default: "polyrob" (DEFAULT_INSTANCE_ID; in profile mode the active profile name) — Instance identity id; `POLYROB_INSTANCE_ID` is canonical, `BOT_INSTANCE_ID` an accepted alias.
 - POLYROB_OWNER_USER_ID / BOT_OWNER_USER_ID — default: unset → **instance id** — Explicit binding of this instance's OWNER principal (an **internal `user_id`** — **not** a raw Telegram id).
 - POLYROB_LOCAL_OWNER — default: unset — Fallback owner id for `webgate.local_owner_id()`, ranked BETWEEN an explicitly-bound owner and the instance-id default…
 - SURFACE_SUPER_ADMIN_USER_IDS — default: unset — Comma list of **internal `user_id`s**. **Only its FIRST entry has any effect** — it is precedence (2) for the OWNER pri…
@@ -388,6 +388,8 @@ for code anchors and complete prose.
 - DEFI_TRADE_ENABLED — default: OFF — Proposal 023 T3 — the `defi_trade` tool's on-chain money verbs (`transfer`). **This one can move real funds.** Every ca…
 - DEFI_MAX_SLIPPAGE_BPS — default: 100 — Default slippage bound for `defi_trade.swap`, in basis points (100 = 1%).
 - DEFI_AUTONOMOUS_MAX_USD — default: 25 — Per-transaction ceiling below which a `defi_trade` verb may execute autonomously; above it `tx_guard` returns `lane=own…
+- DEFI_TIERED_SPEND_LANE — default: OFF — Proposal 023 §5.3 D3 — the explicit owner decision the T4 note reserved. `defi_trade`'s four verbs sit on `PAYMENT_APPR…
+- DEFI_AUTONOMOUS_TURN_TRADING — default: OFF — Proposal 023 — narrows `tx_guard`'s turn-origin bar.
 - DEFI_EVM_RPC_BASE — default: https://mainnet.base.org — Operator-pinnable JSON-RPC endpoint for Base, used by every on-chain read (`core/wallet/onchain.py`, `defi_data`, the x…
 - AGENT_WALLET_ENABLED — default: OFF — Enable the agent's native wallet.
 - AGENT_WALLET_NETWORK — default: testnet — Wallet network (`testnet`/`mainnet`).
@@ -465,6 +467,11 @@ for code anchors and complete prose.
 - POLYROB_ENV — default: development (falls back to ENVIRONMENT) — Deployment environment name; `production`/`prod` makes the MCP encryption layer require a real `MCP_ENCRYPTION_KEY` ins…
 - POLYROB_ENV_KEY_BACKFILL — default: OFF — DEPRECATED (deleted next release): legacy local-mode backfill of secret keys from `config/.env.*` into the process env.
 - POLYROB_HOME — default: ~/.polyrob — Override for the polyrob home directory (CLI config, keys, home-migration target).
+- POLYROB_PROFILE — default: unset — Named-profile selection (tier 2; the `-P`/`--profile` flag is tier 1 and overwrites it).
+- POLYROB_PROFILES_ROOT — default: polyrob_home()/profiles — Location of the profile registry + parent of the sticky file.
+- POLYROB_ALLOW_CROSS_PROFILE — default: OFF — Opt-in bypass of the cross-profile file guard: with it OFF, the filesystem/coding tools refuse to touch ANOTHER profile…
+- POLYROB_BIN_DIR — default: ~/.local/bin — Where `polyrob profile create/alias` writes per-profile wrapper commands (`<name>` → `polyrob -P <name>`).
+- PERSONALITY_DEFAULT_CHARACTER — default: polyrob — Which `<name>.character.json` renders the default persona.
 - POLYROB_IN_DOCKER — default: unset — Force the self-update detector to classify the install as Docker (normally auto-detected via `/.dockerenv`); updates th…
 - POLYROB_NONINTERACTIVE — default: unset — Truthy ⇒ never prompt interactively (suppresses the inline API-key wizard; same effect as `CI=true`).
 - POLYROB_PERSISTENT_INPUT — default: ON — REPL uses the long-lived bottom-anchored prompt_toolkit input; set `0`/`off` for the legacy ephemeral prompt.

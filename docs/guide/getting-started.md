@@ -64,10 +64,10 @@ lightweight `web_fetch` tool, so no browser install is needed for this first tas
 
 `polyrob init` also pairs the instance to an **owner** — the identity autonomy and
 self-evolution answer to. Interactively it asks for an instance id and owner user id
-(both default `rob` for a single-user setup). To script it:
+(both default `polyrob` for a single-user setup). To script it:
 
 ```bash
-polyrob init --non-interactive --owner rob --instance-id rob --openai-key sk-...
+polyrob init --non-interactive --owner aria --instance-id aria --openai-key sk-...
 ```
 
 `--owner` alone backfills the instance id (and vice-versa). The pairing is written to

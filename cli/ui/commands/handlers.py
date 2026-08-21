@@ -421,23 +421,22 @@ def _h_toolset(ctx: CommandContext) -> None:
 def _list_persona_names(characters_dir: Optional[Path] = None) -> List[str]:
     """Return sorted persona names from ``*.character.json`` files.
 
-    Falls back gracefully: returns ``[]`` if the directory cannot be read.
-    Accepts an explicit *characters_dir* override for test isolation; otherwise
-    uses the canonical ``data/characters/`` path relative to the repo root (same
-    heuristic as ``CharacterManager``).
+    Falls back gracefully (``[]`` on any read error). An explicit
+    *characters_dir* isolates tests; otherwise UNIONS every tier of the ONE
+    character-dir precedence (``persona_resolver.character_search_dirs``) —
+    the old cwd-relative heuristic never saw a profile's character set.
     """
     if characters_dir is None:
-        # Mirror CharacterManager: prefer data/characters/ when it contains files,
-        # else fall back to the package directory.
         try:
-            from pathlib import Path as _Path
-
-            candidate = _Path("data") / "characters"
-            if not candidate.exists() or not list(candidate.glob("*.character.json")):
-                from agents.personality import character as _char_mod
-
-                candidate = _Path(_char_mod.__file__).parent / "characters"
-            characters_dir = candidate
+            from agents.personality.persona_resolver import character_search_dirs
+            names = set()
+            for d in character_search_dirs():
+                try:
+                    names.update(p.stem.removesuffix(".character")
+                                 for p in d.glob("*.character.json"))
+                except Exception:
+                    continue
+            return sorted(names)
         except Exception:
             return []
 
@@ -915,6 +914,10 @@ def _session_info_rows(ctx: CommandContext) -> list:
     provider = getattr(state, "provider", "") or "—"
 
     owner = resolve_owner_principal() or "unbound (local owner)"
+    # Auto-derived owner == the instance's own tenant: label it instead of
+    # printing the same name twice (mirrors owner_awareness_line's guard).
+    if owner == resolve_instance_id():
+        owner = f"{owner} (auto-derived — this instance's own tenant)"
 
     workspace = "—"
     try:
@@ -1738,6 +1741,11 @@ def build_default_registry() -> CommandRegistry:
         "memory", _h_memory,
         "Show the memory provider; /memory search <query> to recall cross-session",
         usage="[search <query>]",
+    ))
+    from cli.ui.commands.h_profile import h_profile
+    reg.register(Command(
+        "profile", h_profile,
+        "Show the active named profile (isolated home/identity) and its homes",
     ))
     reg.register(Command("verbose", _h_verbose, "Toggle the live trace (steps, tools, reasoning)"))
     reg.register(Command("quiet", _h_quiet, "Mute/restore the default tool transcript"))

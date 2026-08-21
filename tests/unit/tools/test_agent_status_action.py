@@ -256,7 +256,7 @@ class _Container:
         self.config = _Config(data_dir)
 
 
-def _write_prefs(home, uid, body, instance_id="rob"):
+def _write_prefs(home, uid, body, instance_id="polyrob"):
     d = home / "identity" / instance_id / f"user_{uid}"
     d.mkdir(parents=True, exist_ok=True)
     (d / "preferences.toml").write_text(body, encoding="utf-8")

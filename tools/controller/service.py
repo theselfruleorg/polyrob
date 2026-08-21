@@ -321,6 +321,13 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 		try:
 			from core.config_policy import (
 				PAYMENT_APPROVAL_TOOLS, PAYMENT_RECEIVE_APPROVAL_TOOLS, payment_approval_mode)
+			# 023 §5.3 D3: the per-CALL predicate that lets a simulation, and (only
+			# under DEFI_TIERED_SPEND_LANE) a within-ceiling live spend, skip the
+			# owner tap. Returns None for everything else, so the lane below is
+			# unchanged for every other verb and every other deployment.
+			from core.config_policy.spend_lane import (
+				DEFI_SPEND_VERBS, autonomous_ceiling_usd, defi_spend_exemption,
+				tiered_spend_lane_enabled)
 			_payment_tools = set(PAYMENT_APPROVAL_TOOLS)
 			_receive_tools = _payment_tools & set(PAYMENT_RECEIVE_APPROVAL_TOOLS)
 			_spend_tools = _payment_tools - _receive_tools
@@ -362,7 +369,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 						)
 					self.register_pre_tool_call_hook(
 						make_approval_hook(_pay_provider, _payment_tools,
-						                   timeout=payment_approval_timeout_sec()),
+						                   timeout=payment_approval_timeout_sec(),
+						                   exempt_fn=defi_spend_exemption),
 						fail_mode="closed",  # approval failure must DENY
 					)
 					self.logger.info(
@@ -404,7 +412,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 							)
 						self.register_pre_tool_call_hook(
 							make_approval_hook(_pay_provider, _spend_tools,
-							                   timeout=payment_approval_timeout_sec()),
+							                   timeout=payment_approval_timeout_sec(),
+							                   exempt_fn=defi_spend_exemption),
 							fail_mode="closed",  # approval failure must DENY
 						)
 						self.logger.info(
@@ -434,6 +443,32 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 						)
 					except Exception as e:
 						self.logger.error(f"Failed to wire payment auto-notify hook: {e}")
+
+			# 023 D3: an autonomously-executed on-chain spend is act-and-report, never
+			# silent. The SAME post-hoc rail the receive lane uses fires one owner
+			# notification + a `payment_auto_approved` audit event per EXECUTED trade.
+			# Dry runs are skipped -- they succeed loudly but move nothing, so pinging
+			# the owner for each simulation would train them to ignore the channel.
+			if _spend_tools and tiered_spend_lane_enabled():
+				try:
+					from tools.controller.approval_queue import make_payment_auto_notify_hook
+					_orch = self.orchestrator
+					_tiered_notify = _spend_tools & set(DEFI_SPEND_VERBS)
+					self.register_post_tool_call_hook(
+						make_payment_auto_notify_hook(
+							self.container, _tiered_notify,
+							taint_probe=lambda: bool(
+								getattr(_orch, "_correspondent_tainted", False)),
+							skip_fn=lambda _a, params: bool(params.get("dry_run", True)),
+						),
+						fail_mode="open",  # a notify failure must never break the caller
+					)
+					self.logger.info(
+						f"💳 Tiered spend lane ON: {sorted(_tiered_notify)} execute below "
+						f"${autonomous_ceiling_usd():.2f} -> post-execution owner notify"
+					)
+				except Exception as e:
+					self.logger.error(f"Failed to wire tiered spend-lane notify: {e}")
 
 		# Register only core 'done' action
 		self._register_default_actions()

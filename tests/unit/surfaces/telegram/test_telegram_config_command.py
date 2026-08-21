@@ -15,7 +15,7 @@ import pytest
 
 from core.surfaces.dispatcher import RouteDecision, RouteKind, _COMMANDS
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
-from surfaces.telegram.harness import _HELP, _OWNER_ADMIN_COMMANDS, act_on_inbound
+from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS, _help_text, act_on_inbound
 from surfaces.telegram.inbound import InboundResult
 
 
@@ -179,4 +179,4 @@ async def test_config_set_guarded_key_queues_proposal(env):
 async def test_help_mentions_config(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/help", "/help"))
     assert "/config" in out
-    assert "/config" in _HELP
+    assert "/config" in _help_text()

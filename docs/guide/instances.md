@@ -4,19 +4,24 @@
 
 **polyrob** is the framework — the Python package, the CLI, and the agent runtime.
 
-**rob** is the default instance — a named deployment of the framework with its own self-identity. When you install polyrob and run `polyrob`, you are running the `rob` instance.
+An **instance** is a named deployment of the framework with its own self-identity.
+A fresh install runs the neutral default instance, `polyrob` — no person's bot
+ships in the package. A specific bot (its character, identity docs, memory) is
+*data* that lives in a data home or a named profile.
 
-This model lets you run multiple named instances of polyrob on the same machine or
-server, each with its own name and self-context. Give each instance its own **data
-home** too (see [Instance isolation](#instance-isolation) below) if you want their
-memory, skills, and scheduled work fully separated.
+The recommended way to run multiple named instances on one machine is
+**[profiles](profiles.md)** — `polyrob profile create <name>` gives each bot a
+fully isolated home (config + identity + memory + scheduled work), selected with
+`polyrob -P <name>`. The rest of this page describes the lower-level instance-id
+mechanics that profiles build on.
 
 ---
 
 ## Instance identity
 
 Each instance is identified by its **instance ID** (`POLYROB_INSTANCE_ID`, default
-`rob`). Today, the instance ID determines:
+`polyrob`; in profile mode it defaults to the profile's name). Today, the
+instance ID determines:
 
 - The name the agent uses for itself (CLI banners, `/session`, `/self`)
 - The path for the agent's own evolving SELF docs (`self.md`, `owner.md`,
@@ -61,11 +66,11 @@ agent earn the SELF.
 
 ---
 
-## The default instance: `rob`
+## The default instance: `polyrob`
 
 | Property | Value |
 |----------|-------|
-| Instance ID | `rob` (an unset/blank `POLYROB_INSTANCE_ID` always degrades to this) |
+| Instance ID | `polyrob` (an unset/blank `POLYROB_INSTANCE_ID` — with no active profile — always degrades to this) |
 | CLI config home | `~/.polyrob/` — `.env`, `cli.json`, `mcp.json` (fixed; not instance-scoped) |
 | Data home (local/CLI, default) | `./.polyrob/` under the current working directory |
 | Data home (explicit, any mode) | `$POLYROB_DATA_DIR`, when set — the recommended way to pin a server deployment's data home |
@@ -81,7 +86,7 @@ the full data-home story.
 Set the `POLYROB_INSTANCE_ID` environment variable before running any polyrob command or starting the server:
 
 ```bash
-# Run as the default 'rob' instance (no env var needed)
+# Run as the default 'polyrob' instance (no env var needed)
 polyrob run "summarize this week's news"
 
 # Run as a different named instance
@@ -96,9 +101,11 @@ polyrob
 
 ## Running a second named instance
 
-`polyrob init` has no instance-aware flag, and (per [Instance isolation](#instance-isolation)
-below) the instance ID alone doesn't separate data — so give `aria` its own data
-home by running it from its own working directory:
+**Prefer a profile:** `polyrob profile create aria && polyrob -P aria` gives
+`aria` an isolated home (config, identity, memory, cron/goals) in one step —
+see [profiles.md](profiles.md). The manual recipe below still works and shows
+the underlying mechanics: the instance ID alone doesn't separate data, so give
+`aria` its own data home by running it from its own working directory:
 
 ### Example: a second instance named `aria`
 

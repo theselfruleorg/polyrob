@@ -658,7 +658,7 @@ def create_app() -> FastAPI:
 
         health_status = {
             "status": "healthy" if active_count < 40 else "degraded",
-            "service": "rob-platform",
+            "service": "polyrob",
             "metrics": {
                 "active_updates": active_count,
                 "semaphore_available": semaphore_available,

@@ -366,7 +366,18 @@ class DefiDataTool(BaseTool):
         lines += valued or ["  (no confidently-valued holdings)"]
         lines += ["", f"total (confidently valued only): {_fmt_usd(total)}"]
         if unvalued:
-            lines += ["", "unvalued — deliberately excluded from the total:"] + unvalued
+            # The old header explained the ARITHMETIC ("excluded from the total")
+            # but not what these rows ARE, and a live run duly summarised four
+            # address-poisoning airdrops as "four unvalued positions". A wallet
+            # accumulates tokens it never bought; saying so here is cheaper than
+            # hoping every caller remembers it.
+            lines += ["", "unvalued — NOT necessarily holdings you bought:",
+                      "  A token can sit at this address because someone SENT it to you. "
+                      "Unsolicited airdrops (dust) are common and are frequently bait: "
+                      "the sell path is where they drain approvals. Treat anything here "
+                      "as noise to report, never as a position to realize, and NEVER "
+                      "trade or approve one you did not deliberately buy.",
+                      ""] + unvalued
         return self._ar(content="\n".join(lines))
 
     @BaseTool.action(

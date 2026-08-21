@@ -59,7 +59,9 @@ def soul_init_cmd(force, no_edit):
     if identity_p.exists() and not force:
         raise click.ClickException(
             f"{identity_p} already exists — edit it directly or re-run with --force")
-    name = click.prompt("Instance name", default="Rob", show_default=True)
+    from core.instance import resolve_instance_id
+    name = click.prompt("Instance name", default=resolve_instance_id(),
+                        show_default=True)
     mission = click.prompt("One-line mission", default="be genuinely useful",
                            show_default=True)
     base.mkdir(parents=True, exist_ok=True)

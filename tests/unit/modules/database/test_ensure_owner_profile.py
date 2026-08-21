@@ -42,11 +42,14 @@ async def test_seeds_resolved_principals_and_unblocks_usage_records_insert(tmp_p
         ok = await ensure_owner_profile(db=db)
         assert ok is True
 
+        from core.instance import DEFAULT_INSTANCE_ID
+
         rows = await db.fetch_all("SELECT user_id FROM user_profiles")
         ids = {r["user_id"] for r in rows}
-        # Default env: owner principal defaults to the instance id ("rob"),
-        # deduped against it; plus the local-CLI fallback tenant "local".
-        assert ids == {"rob", "local"}
+        # Default env: owner principal defaults to the instance id
+        # (DEFAULT_INSTANCE_ID), deduped against it; plus the local-CLI
+        # fallback tenant "local".
+        assert ids == {DEFAULT_INSTANCE_ID, "local"}
 
         # The FK write that used to raise IntegrityError on every LLM call
         # (usage_records.user_id -> user_profiles.user_id) now succeeds.

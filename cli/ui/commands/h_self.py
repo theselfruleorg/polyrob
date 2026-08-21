@@ -89,11 +89,16 @@ def h_self(ctx: CommandContext) -> None:
         except Exception:
             self_doc = ""
 
+        # Auto-derived owner == the instance's own tenant: label it instead of
+        # printing the same name twice (mirrors owner_awareness_line's guard).
+        owner_label = owner
+        if owner_label == instance_id:
+            owner_label = f"{owner_label} (auto-derived — this instance's own tenant)"
         lines = [
             candy.kv_lines([
                 ("framework", FRAMEWORK_NAME),
                 ("instance", instance_id),
-                ("owner", owner),
+                ("owner", owner_label),
                 ("user", user_id),
             ]),
             "",

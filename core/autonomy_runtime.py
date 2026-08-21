@@ -1,7 +1,7 @@
 """Start/stop the autonomy background loops (cron, goals, curator) for ANY entry.
 
 Previously these tickers were inlined in api/app.py's lifespan, so the terminal
-(`rob`) never ran them. This module is the single shared place both the FastAPI
+(the terminal agent) never ran them. This module is the single shared place both the FastAPI
 server and the CLI REPL call. Each loop is independently gated and fail-open: one
 loop failing to build never blocks the others. Idempotent stop()."""
 from __future__ import annotations

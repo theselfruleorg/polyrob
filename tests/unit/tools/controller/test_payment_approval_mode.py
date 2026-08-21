@@ -237,11 +237,14 @@ def test_mode_auto_still_queues_trade_verbs_through_owner_queue(tmp_path, monkey
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
+    # LIVE params: the defi verbs default dry_run=True, and a simulation is
+    # exempt from the tap by design (023 D3) — a spend is what must queue.
+    live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
     for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
-        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, None))
+        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), None))
         assert reason is None, verb  # the spy (owner_queue) approved
-        assert (verb, {"amount_usd": 5}) in _SpyProvider.calls, verb
+        assert (verb, live) in _SpyProvider.calls, verb
 
 
 def test_mode_auto_trade_verb_denied_when_owner_queue_denies(tmp_path, monkeypatch):
@@ -288,11 +291,12 @@ def test_mode_approve_also_queues_trade_verbs_unchanged(tmp_path, monkeypatch):
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
+    live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
     for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
-        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, None))
+        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), None))
         assert reason is None, verb
-        assert (verb, {"amount_usd": 5}) in _SpyProvider.calls, verb
+        assert (verb, live) in _SpyProvider.calls, verb
 
 
 def test_mode_auto_notify_hook_wired_with_receive_subset_only(tmp_path, monkeypatch):
@@ -526,3 +530,83 @@ def test_mode_auto_tainted_turn_emits_no_notification(tmp_path, monkeypatch):
     asyncio.run(c._run_post_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, result, ctx))
 
     assert notified == []
+
+
+# --- 023 §5.3 D3: the tiered on-chain spend lane -----------------------------
+# The owner decision the T4 note reserved. Default OFF keeps the hard line
+# ("money-spend is never act-and-report"); ON tiers the EVM verbs by the
+# ceiling tx_guard independently enforces. The venue order verbs never tier.
+
+_DEFI_SPEND_VERBS = ("defi_trade_swap", "defi_trade_transfer",
+                     "defi_trade_approve_token")
+_VENUE_ORDER_VERBS = ("hyperliquid_place_market_order",
+                      "polymarket_place_limit_order")
+
+
+def test_defi_dry_run_never_reaches_owner_queue(tmp_path, monkeypatch):
+    """A simulation returns before sign_and_send, so a tap buys no safety."""
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
+    monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+
+    c = _make_controller(tmp_path)
+    for verb in _DEFI_SPEND_VERBS:
+        _SpyProvider.calls = []
+        reason = asyncio.run(c._run_pre_tool_call_hooks(
+            verb, {"dry_run": True, "max_spend_usd": 999}, None))
+        assert reason is None, verb
+        assert _SpyProvider.calls == [], verb
+
+
+def test_tiered_lane_off_keeps_every_live_defi_spend_queued(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
+    monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+    monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "25")
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+
+    c = _make_controller(tmp_path)
+    for verb in _DEFI_SPEND_VERBS:
+        _SpyProvider.calls = []
+        asyncio.run(c._run_pre_tool_call_hooks(
+            verb, {"dry_run": False, "max_spend_usd": 0.5}, None))
+        assert _SpyProvider.calls, f"{verb} must still queue while the flag is off"
+
+
+def test_tiered_lane_on_executes_within_ceiling_and_queues_above(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
+    monkeypatch.setenv("DEFI_TIERED_SPEND_LANE", "true")
+    monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "1")
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+
+    c = _make_controller(tmp_path)
+    for verb in _DEFI_SPEND_VERBS:
+        _SpyProvider.calls = []
+        reason = asyncio.run(c._run_pre_tool_call_hooks(
+            verb, {"dry_run": False, "max_spend_usd": 0.9}, None))
+        assert reason is None, verb
+        assert _SpyProvider.calls == [], f"{verb} within ceiling must not queue"
+
+        _SpyProvider.calls = []
+        asyncio.run(c._run_pre_tool_call_hooks(
+            verb, {"dry_run": False, "max_spend_usd": 1.5}, None))
+        assert _SpyProvider.calls, f"{verb} above ceiling must still queue"
+
+
+def test_tiered_lane_never_loosens_the_venue_order_verbs(tmp_path, monkeypatch):
+    """The lane is scoped to the tx_guard-simulated EVM path. A venue order has
+    no simulated outflow to hold the caller to, so it keeps the tap."""
+    monkeypatch.setenv("PAYMENT_APPROVAL_MODE", "auto")
+    monkeypatch.setenv("DEFI_TIERED_SPEND_LANE", "true")
+    monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "1")
+    constants._refreeze_payment_approval_flags_for_tests()
+    monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
+
+    c = _make_controller(tmp_path)
+    for verb in _VENUE_ORDER_VERBS:
+        _SpyProvider.calls = []
+        asyncio.run(c._run_pre_tool_call_hooks(
+            verb, {"dry_run": True, "max_spend_usd": 0.01, "amount_usd": 0.01}, None))
+        assert _SpyProvider.calls, f"{verb} must always queue"

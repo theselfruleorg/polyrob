@@ -181,7 +181,7 @@ def _allowlist_tenant(user) -> str:
 
     These commands must write under the SAME tenant the `message` action reads at
     runtime — a local REPL session's user_id is `core.identity.resolve_identity()`
-    (defaults to "local" when no owner is bound), NOT the instance id "rob" that
+    (defaults to "local" when no owner is bound), NOT the instance id that
     `_owner_tenant` defaults to via `resolve_owner_principal(default_to_instance=True)`.
     Do not reuse `_owner_tenant` here; other owner commands intentionally keep that
     instance-id default.
@@ -197,7 +197,7 @@ def _money_tenant(user) -> str:
     The agent's money rows (x402 invoices, subscriptions) are created under the
     runtime session's user_id = ``core.identity.resolve_identity()`` (owner-if-
     bound else "local") — the SAME resolver `polyrob finance` uses. `_owner_tenant`
-    resolves to the instance id ("rob") when unbound, which reads a DIFFERENT
+    resolves to the instance id when unbound, which reads a DIFFERENT
     bucket, so the sibling money views disagreed on an unbound install. Use THIS
     for money listings so finance and `owner sub` agree; print the scope so the
     owner always sees which tenant a listing is for.

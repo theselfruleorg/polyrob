@@ -6,6 +6,205 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-08-21
+
+### Fixed — session eviction killed the shared Twitter/X and MCP tools (13h prod outage)
+
+- **Session teardown no longer destroys process-wide tool singletons.** Idle
+  session eviction (`orchestrator.cleanup(full_cleanup=True)`) called every
+  controller tool's private `_cleanup()` — including container singletons — so
+  one session's eviction nulled `TwitterTool.client` / `MCPTool.server_manager`
+  for the whole process, and the skipped `cleanup()` bookkeeping left
+  `is_initialized` True, so the re-init gate never fired again (dead until
+  restart; 2026-08-21, ~13h41m of failed X reads/writes plus the "anysite
+  unavailable" symptom). Teardown now skips container/browser-manager-owned
+  instances and releases session-owned tools via the public `cleanup()` only;
+  a new ratchet test forbids cross-object `_cleanup()` calls repo-wide.
+- **Twitter tool lifecycle made honest.** The credential check iterated the
+  already-filtered config dict, so a deploy with missing credentials reported
+  the tool enabled; it now checks the expected key set. `_cleanup()` clears the
+  lifecycle flags itself; `_check_ready()` verifies the live client (a dead
+  client now returns a named cause instead of an untyped tweepy
+  `AttributeError` that reads like a credentials problem); `_ensure_initialized`
+  self-heals a dead client and marks success instead of rebuilding the client
+  (and burning a live `get_me` call) on every search/get_user/get_tweets; two
+  dead init paths (`_initialize_client`, `_lazy_init`, ~70 lines, zero callers)
+  removed.
+
+### Added — named profiles: isolated, shareable bot identities
+
+- **Profiles.** `polyrob profile create <name>` makes a fully isolated home
+  under `~/.polyrob/profiles/<name>/` — its own `.env`, characters, skills,
+  identity docs, memory, goals/cron state, and sessions. Select one with
+  `polyrob -P <name>` / `POLYROB_PROFILE`, pin a folder to one with
+  `polyrob profile adopt` (writes `./.polyrob/profile`), or make one sticky
+  with `polyrob profile use`. An explicit `-P` overrides an exported
+  `POLYROB_HOME`; a pin/sticky never does (one-shot mismatch warning instead),
+  so servers with an explicit `POLYROB_DATA_DIR` are untouched. With no
+  selection anywhere, behavior is byte-identical legacy mode.
+- **Manage:** `profile list/show/path/rename/delete/alias`; `create` writes a
+  `~/.local/bin/<name>` wrapper by default so `<name> run "…"` works as a
+  command. `polyrob doctor` and the REPL's `/profile` print the active profile
+  and both homes; `polyrob init --profile <name>` writes identity keys into
+  the profile's `.env` (provider keys and the default model stay global).
+- **Share:** `profile export/import` (tar.gz backup — credentials excluded,
+  secret-shaped strings force-scrubbed, traversal-guarded) and
+  `profile install <git-url|dir> [#ref]` / `update` / `info` (the
+  `polyrob.profile.yaml` distribution format). On update, distribution-owned
+  paths (characters/skills/cron/mcp.json/soul.md) are replaced; `config.yaml`
+  is preserved unless `--force-config`; `.env`, `auth.json`, wallet material
+  and the whole `data/` tree are never touched — a distribution ships a soul,
+  never someone else's memories.
+- **Daemons:** one process per profile — every surface command honours `-P`,
+  and `deployment/polyrob@.service` runs `polyrob@<profile>` units with the
+  homes set explicitly.
+- **Guards:** file tools refuse to touch another profile's home
+  (`POLYROB_ALLOW_CROSS_PROFILE=1` to bypass deliberately); a process that
+  reaches the runtime without profile resolution while a sticky profile is set
+  warns loudly that it would write into the default home.
+
+### Changed — the package now ships a NEUTRAL identity (behavior change for every install)
+
+- **A fresh install is POLYROB, not a specific person's bot.** The framework
+  used to hardcode the maintainer's own character (`rob.character.json`, with
+  its bio and lore) as the default persona for every install on earth, and
+  `DEFAULT_INSTANCE_ID` was `"rob"`. The package now ships one neutral
+  `polyrob.character.json`; `rob.character.json` and `trump.character.json`
+  left the package (a specific bot's character is *data*, dropped into
+  `<data_dir>/characters/` or a profile — not framework code). The default
+  instance id is now `"polyrob"`.
+- **Escape hatches (existing installs):** set `PERSONALITY_DEFAULT_CHARACTER`
+  and/or drop your character file in `<data_dir>/characters/`; pin your
+  instance id with `POLYROB_INSTANCE_ID`. A configured character name that no
+  longer resolves falls back to the neutral persona with a one-shot warning —
+  never a hard failure.
+- **Identity docs migrate automatically.** On the default instance id, a
+  one-time copy-not-move migration duplicates `identity/rob/` →
+  `identity/polyrob/` in the data home (marker-gated, fail-open, source kept),
+  so existing SELF/owner docs don't vanish behind the renamed directory. A
+  deploy that pins `POLYROB_INSTANCE_ID=rob` explicitly is untouched.
+
+### Fixed — the neutral identity holds everywhere (alignment sweep)
+
+- **Every user-facing surface now speaks as the configured instance, never a
+  hardcoded bot name.** The Telegram `/help` said "ROB commands" on every
+  deployment; the LLM-outage notice, the `soul init` scaffold, `/v1/models`'
+  `owned_by`, and `/health`'s service name carried the old name; the avatar
+  generator's default seed was a person's name (now `POLYROB`, and `pfp --seed`
+  defaults to the instance name, matching its own help); the dev env template
+  pointed at a character file that no longer ships. All resolve the instance id
+  or the neutral default now.
+- **`polyrob update` on a box with the per-profile unit template silently
+  no-oped.** The manual systemd steps swept the bare `polyrob@.service`
+  TEMPLATE into one `&&` chain; `systemctl stop` on a bare template is invalid,
+  so the chain aborted before `git pull`. Templates are now skipped; live
+  `polyrob@<name>` instances are still included.
+- **One character-directory precedence.** Data home > profile home > the
+  shipped use-case personas (`researcher`/`coder`/`analyst`/`writer`/`ops`) >
+  the packaged neutral set — one implementation, used by the CharacterManager,
+  the persona resolver, and `/persona` (which now unions all tiers; the old
+  cwd-relative lookup missed a profile's characters entirely).
+- **Identity-card noise on a fresh install**: the banner no longer prints
+  `polyrob · instance polyrob`, and `/session` / `/self` label an auto-derived
+  owner instead of repeating the same name three times.
+
+### Fixed — the agent's own work kept disappearing
+
+- **The daily workspace GC had two owners; the read-only console was one of
+  them.** `polyrob-webview.service` builds its own `TaskAgent`, and
+  `TaskAgent.initialize()` unconditionally spawned `_periodic_workspace_cleanup`
+  — so a monitoring console ran a destructive `rmtree` over the agent's data
+  once a day. `TaskAgent` now takes `owns_workspace_gc` (default `True`, so the
+  agent/API processes are unchanged) and the webview passes `False`.
+- **Deploys shipped code to processes nobody restarted.** `deploy_prod.sh`
+  restarted `polyrob.service` (and `polyrob-email.service`) but never the
+  webview, which runs from the same `/opt/polyrob` tree. A webview process
+  started 2026-08-05 therefore never picked up the 2026-08-18 project-root
+  guard and kept deleting the project directory every day at 06:26 UTC for two
+  weeks while `.deployed_sha` reported the fix as live. Both deploy scripts now
+  restart every sibling unit, on the success and the rollback path.
+- **`filesystem.read_file` corrupted every file it read.** A whole-file read ran
+  through `_clean_text`, which strips each line and collapses horizontal
+  whitespace — so reading a `.py` or `.yml` returned content whose indentation
+  was gone, and the agent then edited from the corrupted copy. The write path
+  was fixed for this in F9; the read path was missed. Reads and writes now
+  round-trip. (`offset`/`limit` and `char_offset` reads were never affected.)
+
+### Fixed — x402 could not price its own server
+
+- **A 402 challenge carried in the response BODY is now parsed.** The client
+  read only the `PAYMENT-REQUIRED` header, but the x402 spec puts the payment
+  requirements in the body and POLYROB's own middleware emits exactly that
+  (nothing in the codebase sets that header). `x402_quote` therefore reported
+  every body-carrying server — our own gated A2A and `/v1` routes included — as
+  "not a paid resource". Header challenges are unchanged; the body is a
+  fallback, and a present-but-broken challenge still fails closed. Not a spend
+  hole: `x402_fetch` already authorized the gate at `max_amount_usd` when the
+  quote came back `None`.
+- **`x402_quote` no longer requires a wallet.** Pricing costs $0; refusing it
+  when `AGENT_WALLET_ENABLED` was off left invoice-only deployments unable to
+  see what anything charges. A null result now says so honestly instead of
+  implying "free".
+
+### Added — x402 discovery
+
+- **`x402_probe` and `x402_sweep`** (`tools/x402/discovery.py`): probe one
+  endpoint or many, read-only, and score payability 0–5 (answered / 402 /
+  parseable challenge / price disclosed / full `asset`+`network`+`payTo`
+  routing) with the reasons a score fell short. Handles POST-only paywalls
+  (JSON-RPC, A2A) and every `accepts` shape seen in the wild. Never sends a
+  payment header, needs no wallet, bounded to 50 targets at 8 concurrent, and
+  every agent-supplied URL goes through the same SSRF validator `web_fetch`
+  uses. All challenge decoding delegates to the one client-side parser.
+
+### Added — unattended treasury trading
+
+- **Tiered on-chain spend lane (`DEFI_TIERED_SPEND_LANE`, default OFF)** — a
+  goal-dispatched run can trade within the per-tx autonomous ceiling without the
+  owner-queue tap. **A narrowed turn-origin bar** (`DEFI_AUTONOMOUS_TURN_TRADING`,
+  default OFF) lets ONLY a goal/cron-dispatched MAIN-agent turn reach the lane;
+  a leaf/sub-agent, self-wake, delegation-result, or correspondent-tainted turn
+  still refuses. **Degen posture** hunts new launches (mintable/hidden-owner are
+  normal for a fresh token; only a honeypot or a sell-tax above ~10% rejects).
+- **Trading-doctrine skill + operator cycle seeder** (`scripts/seed_trading_cycle.py`):
+  a scan→trade→publish cycle chained by `depends_on` (the trade leg never reads
+  an empty watchlist), with create-time dedup that survives a retired
+  near-duplicate and does not revive COMPLETED rows.
+- **A position exists only if the ledger records buying it** — the portfolio's
+  unvalued block is rendered as an explicit airdrop warning, not a holdings list
+  (a dust airdrop is no longer published as a trade).
+
+### Fixed — this maintenance pass (security + correctness)
+
+- **x402 discovery SSRF/DoS**: the prober cleared a URL through the SSRF
+  validator but discarded the resolved IP and re-resolved DNS on the request (a
+  rebind window to cloud metadata on a funded box), and had no response-size or
+  total-time bound. It now pins the validated IP (web_fetch's one rebind
+  defense), caps the read at 2 MiB with a total timeout, and offloads the
+  blocking DNS.
+- **Unattended trading now requires an aggregate daily cap**: the autonomous
+  spend lane leaned on `WALLET_DAILY_CAP_USD`, but that cap defaults to none — an
+  injection could loop within-ceiling swaps to drain the treasury. tx_guard now
+  refuses the autonomous (goal-dispatched) lane when no daily cap is set; an
+  owner-driven trade is unaffected.
+- **`profile install <url>` RCE**: the clone honored git's `ext::`/`fd::`
+  transports (arbitrary command at clone time) on an attacker-controlled
+  distribution string. `GIT_ALLOW_PROTOCOL` is now pinned to real transports and
+  the source/ref can no longer inject a git flag.
+- **Owner notices that never arrived**: an unmatched on-chain payment (money to
+  reconcile) only emitted telemetry, and an empty-goal-pipeline escalation rode
+  the chatter lane the daily cap can drop. Both now deliver on the critical lane.
+- **First-run CLI**: an OAuth-seat-only (or keyless-provider) box was invisible
+  to the key gate and crashed provider resolution (`NoneType.upper()`). The CLI
+  now exports `POLYROB_LOCAL` before the gate and resolves the store-aware
+  provider (or shows the canonical no-key message) instead of a traceback.
+- **Artifact ledger completeness**: files BUILT by the coding tool bypassed the
+  ledger, so a real deliverable failed an `artifact` acceptance check as "never
+  produced"; coding writes now record, and rows key by realpath.
+- **X session store**: two `FileTokenStore` instances over one `.x_session.json`
+  clobbered each other, erasing a just-saved login + generated password. Writes
+  are now read-modify-write.
+
 ## [0.11.0] — 2026-08-19
 
 ### Added — multi-chain DeFi

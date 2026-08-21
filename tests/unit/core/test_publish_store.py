@@ -31,6 +31,7 @@ def test_good_slugs_are_accepted(slug):
 @pytest.mark.parametrize("slug", [
     "", "..", "../etc", "a/b", "a b", "UPPER", "-lead", "trail-",
     "under_score", "x" * 49, ".hidden", "a..b", "sl%2fash",
+    "abc\n", "abc\n ", "\nabc",  # trailing/leading newline: `$` matched before \n
 ])
 def test_hostile_slugs_are_refused(slug):
     assert valid_slug(slug) is False

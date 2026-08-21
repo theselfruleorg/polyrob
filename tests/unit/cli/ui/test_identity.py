@@ -1,12 +1,13 @@
-"""The chat UI shows the agent's INSTANCE name (resolve_instance_id), not a
-hardcoded 'rob' and not the framework name 'polyrob'."""
+"""The chat UI shows the agent's INSTANCE name (resolve_instance_id) — the
+resolved instance id (default DEFAULT_INSTANCE_ID), never a hardcoded name."""
 
 
 def test_agent_display_name_default(monkeypatch):
     monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
     monkeypatch.delenv("BOT_INSTANCE_ID", raising=False)
+    from core.instance import DEFAULT_INSTANCE_ID
     from cli.ui.identity import agent_display_name
-    assert agent_display_name() == "rob"
+    assert agent_display_name() == DEFAULT_INSTANCE_ID
 
 
 def test_agent_display_name_honors_instance_id(monkeypatch):

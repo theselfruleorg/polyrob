@@ -198,8 +198,6 @@ class TwitterTool(BaseTool):
         self.client = None
         self.api_v1 = None  # v1.1 tweepy.API for media upload (G1)
         self._initialized = False
-        self._lazy_initialized = False
-        self._lazy_init_lock = asyncio.Lock()
         # Per-class sliding-window rate-limit state (G1).
         self._write_times: List[float] = []
         self._dm_times: List[float] = []
@@ -212,12 +210,17 @@ class TwitterTool(BaseTool):
         self.access_token_secret = twitter_config.get('access_token_secret')
         self.bearer_token = twitter_config.get('bearer_token')
 
-        # Check credentials
-        missing_creds = []
-        for name, value in twitter_config.items():
-            if not value:
-                missing_creds.append(name.upper())
-        
+        # Check credentials against the EXPECTED key set. get_twitter_config()
+        # filters out empty values before returning (core/config.py), so
+        # iterating the returned dict can never see a missing credential — a
+        # zero-credential deploy used to report the tool enabled (S5,
+        # docs/ops/2026-08-21-twitter-singleton-teardown-incident.md).
+        expected_creds = (
+            'api_key', 'api_secret', 'access_token',
+            'access_token_secret', 'bearer_token',
+        )
+        missing_creds = [n.upper() for n in expected_creds if not twitter_config.get(n)]
+
         if missing_creds:
             self.logger.warning(f"Missing Twitter credentials: {', '.join(missing_creds)}")
             self._enabled = False
@@ -288,88 +291,21 @@ class TwitterTool(BaseTool):
                 raise
 
     async def _cleanup(self) -> None:
-        """Clean up Twitter service resources."""
+        """Clean up Twitter service resources.
+
+        Also clears the lifecycle flags itself: after the 2026-08-21 outage
+        (a caller invoked _cleanup() directly, leaving _initialized True over
+        a destroyed client so the re-init gate never fired), the destroyed
+        state and the flags must stay consistent no matter which path ran.
+        """
         try:
-            if self.client:
-                self.client = None
+            self.client = None
+            self.api_v1 = None
+            self._initialized = False
             self.logger.info(f"{self.name} cleaned up successfully")
         except Exception as e:
             self.logger.error(f"Failed to cleanup {self.name}: {e}")
             raise
-
-    async def _initialize_client(self) -> None:
-        """Initialize the Twitter API client."""
-        try:
-            import tweepy # type: ignore
-            
-            # Initialize API client with credentials
-            self.client = tweepy.Client(
-                bearer_token=self.bearer_token,
-                consumer_key=self.api_key,
-                consumer_secret=self.api_secret,
-                access_token=self.access_token,
-                access_token_secret=self.access_token_secret,
-                wait_on_rate_limit=False  # Changed to False to handle rate limits ourselves
-            )
-            self._init_v1_client()
-
-            # Test connection with rate limit handling
-            try:
-                me = await self._make_request(
-                    func=self.client.get_me,
-                    endpoint_type='users'
-                )
-                
-                if me and hasattr(me, 'data'):
-                    self.logger.info("Twitter client initialized successfully")
-                else:
-                    self.logger.warning("Twitter API returned empty response during initialization")
-                    
-            except RateLimitError as e:
-                # Log warning but continue initialization
-                self.logger.warning(
-                    f"Twitter API rate limit hit during initialization. Service will be enabled "
-                    f"but some features may be temporarily unavailable: {str(e)}"
-                )
-            except Exception as e:
-                self.logger.warning(f"Twitter API test failed during initialization: {str(e)}")
-                
-            # Enable service even if test fails
-            self._enabled = True
-            
-        except Exception as e:
-            self.logger.error(f"Failed to initialize Twitter client: {e}")
-            self._enabled = False
-
-    async def _lazy_init(self) -> None:
-        """Lazily initialize the Twitter client when first needed."""
-        if self._lazy_initialized:
-            return
-            
-        async with self._lazy_init_lock:
-            if self._lazy_initialized:
-                return
-                
-            try:
-                # Test connection with rate limiting
-                me = await self._make_request(
-                    func=self.client.get_me,
-                    endpoint_type='users'
-                )
-                
-                if not me or (hasattr(me, 'data') and not me.data):
-                    raise ServiceError("Failed to get user data from Twitter API")
-                
-                self._lazy_initialized = True
-                self.logger.info("Twitter client connection test successful")
-                
-            except RateLimitError as e:
-                # Log warning but don't fail initialization
-                self.logger.warning(f"Rate limit encountered during Twitter connection test: {e}")
-                self._lazy_initialized = True
-            except Exception as e:
-                self.logger.error(f"Failed to test Twitter connection: {e}")
-                raise
 
     async def _execute_request(self, func, *args, **kwargs):
         """Execute the actual request.
@@ -1788,6 +1724,16 @@ class TwitterTool(BaseTool):
             return self._err("Twitter service not available - missing credentials")
         if not twitter_write_enabled():
             return self._err("Twitter write surface disabled (set TWITTER_ENABLED=true)")
+        if self.client is None:
+            # Live-capability check, not just static config: a dead client used
+            # to sail past this gate and surface as an untyped AttributeError
+            # deep in tweepy ('NoneType' has no attribute 'create_tweet'),
+            # which reads like a credentials problem and misdirects escalation.
+            return self._err(
+                "Twitter client is not constructed (tool was torn down or its "
+                "initialization failed) — re-initialize the twitter tool; this "
+                "is NOT a credentials problem if credentials were present at startup"
+            )
         return None
 
     # --- compose actions -------------------------------------------------
@@ -2105,9 +2051,17 @@ class TwitterTool(BaseTool):
         self.api_v1 = None
 
     async def _ensure_initialized(self) -> None:
-        """Ensure service is initialized."""
-        if not self._initialized:
-            await self._initialize()
+        """Ensure the tweepy client is live, rebuilding it if needed.
+
+        Checks the CLIENT as well as the flag (a stale flag over a dead client
+        was the 2026-08-21 outage shape), and marks success so repeat calls
+        are no-ops — the old version never set _initialized, so every call on
+        this path rebuilt the client and burned a live get_me API call.
+        """
+        if self._initialized and self.client is not None:
+            return
+        await self._initialize()
+        self._initialized = True
 
     @BaseTool.action("Search for tweets on Twitter", param_model=TwitterSearchActionModel)
     async def twitter_search(self, params: TwitterSearchActionModel):

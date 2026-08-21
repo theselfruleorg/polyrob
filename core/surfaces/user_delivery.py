@@ -74,6 +74,8 @@ _CRITICAL_SOURCES = frozenset({
     "approval",          # tools/controller/approval_queue.py — owner-queue decision
     "payment_approval",  # the same lane for a money SPEND verb
     "goal_blocked",      # agents/task/goals/escalation.py — a stopped goal's need
+    "payment_unmatched", # modules/x402/settlement_watcher.py — unexpected on-chain
+                         # money the owner must reconcile (rare, always owner-actionable)
 })
 
 

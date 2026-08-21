@@ -405,10 +405,16 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                         f"- Read last 100 lines: {{\"filePath\": \"{params.file_path}\", \"offset\": {max(1, total_lines - 99)}, \"limit\": 100}}"
                     )
 
-            # Process content with text cleaner
-            processed_content = await self._clean_text(content)
-
-            return processed_content
+            # Return content VERBATIM — the read twin of the F9 write fix below.
+            # This used to run through _clean_text, which collapses horizontal
+            # whitespace and strips every line: right for prose extracted from a
+            # PDF, catastrophic for source. Reading a .py/.yml gave back text
+            # whose indentation was gone, so the agent edited from a corrupted
+            # copy and wrote back code that would not compile. A read must return
+            # what is on disk; read and write have to round-trip.
+            # (The offset/limit and char_offset branches above always returned
+            # early and were never affected.)
+            return content
 
         except ServiceError:
             # Re-raise ServiceErrors as-is (they already have good messages)
@@ -844,6 +850,27 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 raise ServiceError(f"Refusing to access a credential/secret file: {display_path}")
             if is_protected_config_path(candidate):
                 raise ServiceError(f"Refusing to access a protected config/identity file: {display_path}")
+
+        # W4 cross-profile guard (defense-in-depth, NOT a security boundary):
+        # a session running as one profile must not touch another profile's
+        # home. Bypass deliberately with POLYROB_ALLOW_CROSS_PROFILE=1, or run
+        # in that profile with -P.
+        try:
+            from core.profiles import (cross_profile_access_allowed,
+                                       foreign_profile_of_path)
+            if not cross_profile_access_allowed():
+                for candidate in candidates:
+                    other = foreign_profile_of_path(candidate)
+                    if other:
+                        raise ServiceError(
+                            f"Refusing to touch profile '{other}' from outside it: "
+                            f"{display_path} (run with `polyrob -P {other}` to work "
+                            f"in that profile, or set POLYROB_ALLOW_CROSS_PROFILE=1 "
+                            f"to bypass deliberately)")
+        except ServiceError:
+            raise
+        except Exception:
+            pass
 
     def _normalize_path(self, file_path: str) -> str:
         """Normalize a file path to be within the workspace directory."""

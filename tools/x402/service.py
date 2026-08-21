@@ -39,6 +39,51 @@ class FetchParams(BaseModel):
     )
 
 
+def _render_probe(row: dict) -> str:
+    """One compact, honest line-block per endpoint. Never invents a price."""
+    head = f"{row['url']} [{row['method']}]"
+    if row.get("error"):
+        return f"{head} ERROR {row['error']}\nscore 0/5 — endpoint did not answer"
+
+    lines = [f"{head} HTTP {row['status']}"]
+    if row["status"] == 402:
+        price = row.get("price_usd")
+        lines.append(f"  price     : {'$%.4f USD' % price if price is not None else 'NOT DISCLOSED'}")
+        lines.append(f"  network   : {row.get('network') or '?'}")
+        lines.append(f"  asset     : {row.get('asset') or '?'}")
+        lines.append(f"  payTo     : {row.get('pay_to') or '?'}")
+        if row.get("accepts"):
+            acc = "; ".join(f"{a['network']} / {a['asset']} / {a['scheme']}"
+                            for a in row["accepts"])
+            lines.append(f"  accepts   : {acc}")
+        elif not row.get("challenge_parseable"):
+            lines.append("  accepts   : 402 with no parseable challenge body")
+    lines.append(f"score {row.get('score', 0)}/5"
+                 + (" — " + "; ".join(row["score_reasons"]) if row.get("score_reasons") else ""))
+    return "\n".join(lines)
+
+
+def _render_sweep(ledger: dict) -> str:
+    dist = ", ".join(f"{k}={v}" for k, v in sorted(ledger["outcome_distribution"].items()))
+    head = (f"swept {ledger['swept']} endpoint(s) — {dist or 'no outcomes'} — "
+            f"{ledger['payable']} payable today (score 5/5)")
+    return "\n\n".join([head] + [_render_probe(r) for r in ledger["endpoints"]])
+
+
+class ProbeParams(BaseModel):
+    url: str = Field(..., description="URL to probe read-only for an x402 paywall")
+    method: str = Field("GET", description="HTTP method — POST reveals POST-only 402s (JSON-RPC, A2A)")
+    body: Optional[str] = Field(None, description="Request body for POST (JSON string)")
+
+
+class SweepParams(BaseModel):
+    targets: list = Field(
+        ...,
+        description=("Endpoints to probe: bare URL strings, or objects "
+                     "{service, url, method?, body?}. Read-only, never pays."),
+    )
+
+
 class EmptyWalletParams(BaseModel):
     pass
 
@@ -83,19 +128,58 @@ class X402PayTool(BaseTool):
             return ActionResult(error=error)
         return ActionResult(extracted_content=content)
 
-    @BaseTool.action("Get the x402 price (USD) of a resource without paying", param_model=QuoteParams)
+    @BaseTool.action("Get the x402 price (USD) of a resource without paying (never pays)",
+                     param_model=QuoteParams)
     async def x402_quote(self, params: QuoteParams, execution_context=None):
-        wallet = self._get_wallet()
-        if wallet is None:
-            return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
+        # NO WALLET REQUIRED. A quote is a plain GET that costs $0, but this used
+        # to refuse outright when the wallet was disabled — so an invoice-only
+        # deployment could not see what anything charges. The paying verbs below
+        # still demand a wallet; pricing does not.
         try:
             price = await self._get_client().quote(params.url)
             if price is None:
-                return self._ar(content=f"{params.url} is not a paid resource (no x402 challenge)")
+                return self._ar(content=(
+                    f"{params.url}: no x402 price found on a plain GET. This is NOT "
+                    f"proof it is free — a POST-only paywall (JSON-RPC, A2A) or an "
+                    f"unparseable challenge looks identical here. Use x402_probe for "
+                    f"the full read (method/body, accepts[], payability score)."))
             return self._ar(content=f"{params.url} requires x402 payment of ${price:.4f} USD")
         except Exception as e:
             logging.getLogger(__name__).error(f"x402_quote failed: {e}")
             return self._ar(error=f"x402_quote failed: {e}")
+
+    @BaseTool.action(
+        "Probe ONE endpoint read-only for an x402 paywall: price, accepts[], payment "
+        "routing and a 0-5 payability score. Costs $0 and never pays; needs no wallet.",
+        param_model=ProbeParams,
+    )
+    async def x402_probe(self, params: ProbeParams, execution_context=None,
+                         _fetch=None, _validator=None):
+        from tools.x402.discovery import probe_endpoint
+        try:
+            row = await probe_endpoint(params.url, method=params.method, body=params.body,
+                                       fetch=_fetch, validator=_validator)
+        except Exception as e:
+            logging.getLogger(__name__).error(f"x402_probe failed: {e}")
+            return self._ar(error=f"x402_probe failed: {e}")
+        return self._ar(content=_render_probe(row))
+
+    @BaseTool.action(
+        "Sweep MANY endpoints read-only for x402 paywalls and return a scored ledger "
+        "(outcome distribution + per-endpoint price/routing/score). Never pays.",
+        param_model=SweepParams,
+    )
+    async def x402_sweep(self, params: SweepParams, execution_context=None,
+                         _fetch=None, _validator=None):
+        from tools.x402.discovery import sweep_endpoints
+        try:
+            ledger = await sweep_endpoints(params.targets, fetch=_fetch, validator=_validator)
+        except ValueError as e:
+            return self._ar(error=str(e))
+        except Exception as e:
+            logging.getLogger(__name__).error(f"x402_sweep failed: {e}")
+            return self._ar(error=f"x402_sweep failed: {e}")
+        return self._ar(content=_render_sweep(ledger))
 
     @BaseTool.action(
         "Fetch a resource, auto-paying via x402 up to max_amount_usd (which must be "

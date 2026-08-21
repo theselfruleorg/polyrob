@@ -100,7 +100,8 @@ def test_owner_and_self_writers_do_not_interfere(tmp_path):
     assert "Owner fact A." in load_owner_doc(tmp_path, "u1")   # active unchanged
     assert "SELF note B." in load_self_doc(tmp_path, "u1")     # SELF unchanged
     # archived owner reject is namespaced, not sharing self's rejected.N.md
-    archived = list((tmp_path / "identity" / "rob" / "user_u1" / ".archived").glob("*.md"))
+    from core.instance import DEFAULT_INSTANCE_ID
+    archived = list((tmp_path / "identity" / DEFAULT_INSTANCE_ID / "user_u1" / ".archived").glob("*.md"))
     names = {p.name for p in archived}
     assert any(n.startswith("owner-rejected.") for n in names)
     assert not any(n == "rejected.0.md" for n in names)
@@ -108,9 +109,10 @@ def test_owner_and_self_writers_do_not_interfere(tmp_path):
 
 def test_owner_doc_pending_labeled_in_notification(tmp_path):
     from core import self_evolution as se
+    from core.instance import DEFAULT_INSTANCE_ID
     ow = OwnerDocWriter(tmp_path)
     ow.propose("Owner prefers async updates.", user_id="u1", created_by="agent", pending=True)
-    items = se.list_pending("u1", home_dir=tmp_path, instance_id="rob")
+    items = se.list_pending("u1", home_dir=tmp_path, instance_id=DEFAULT_INSTANCE_ID)
     kinds = {it["kind"] for it in items}
     assert se.KIND_OWNER in kinds
     note = se.build_pending_notification(items)

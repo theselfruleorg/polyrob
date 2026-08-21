@@ -190,6 +190,91 @@ class RealX402Client:
             return 6
 
     @staticmethod
+    def _decode_challenge(response) -> Optional[dict]:
+        """The ONE place a 402 challenge is decoded. Header first, then body.
+
+        Returns None when the response presents no challenge at all. Raises when
+        a challenge IS present but will not decode, so every caller inherits the
+        same fail-CLOSED treatment (never "free" on a broken challenge).
+        """
+        import base64
+        import json
+
+        header = (
+            response.headers.get("PAYMENT-REQUIRED")
+            or response.headers.get("payment-required")
+            or response.headers.get("X-PAYMENT-REQUIRED")
+        )
+        if header:
+            return json.loads(base64.b64decode(header + "=="))
+        # BODY FALLBACK. The header is NOT where the x402 spec puts the payment
+        # requirements — a compliant resource server answers 402 with a JSON BODY
+        # {x402Version, accepts[], error}. POLYROB's OWN seller does exactly that
+        # (modules/x402/middleware.py returns a bare JSONResponse, no such
+        # header), so header-only decoding reported every body-carrying server —
+        # our own gated routes included — as "not a paid resource".
+        return RealX402Client._decode_challenge_body(response)
+
+    @staticmethod
+    def _normalize_accepts(decoded: dict) -> list:
+        """Every accepts-shape seen in the wild → the plural list the SDK expects.
+
+        Plural ``accepts[]`` (the spec), legacy singular ``accept``, and the
+        nested ``error.accepts`` some servers return.
+        """
+        accepts = decoded.get("accepts")
+        if isinstance(accepts, dict):
+            return [accepts]
+        if isinstance(accepts, list) and accepts:
+            return accepts
+        singular = decoded.get("accept")
+        if isinstance(singular, dict):
+            return [singular]
+        if isinstance(singular, list) and singular:
+            return singular
+        nested = decoded.get("error")
+        if isinstance(nested, dict):
+            inner = nested.get("accepts")
+            if isinstance(inner, dict):
+                return [inner]
+            if isinstance(inner, list) and inner:
+                return inner
+        return []
+
+    @staticmethod
+    def _decode_challenge_body(response) -> Optional[dict]:
+        """Decode an x402 challenge carried in the 402 RESPONSE BODY.
+
+        Returns the decoded challenge dict, or None when the response carries no
+        body to read (a genuinely free resource must never be given a fake
+        challenge). A body that IS present but does not decode raises, so the
+        caller's fail-CLOSED handler marks it ``_unparseable`` — the same
+        contract the header path already has for a broken header.
+
+        Only a 402 is inspected: a 200 body that happens to contain an
+        ``accepts`` key is NOT a payment challenge.
+        """
+        import json
+
+        if getattr(response, "status_code", None) != 402:
+            return None
+        body = getattr(response, "text", None)
+        if not isinstance(body, str) or not body.strip():
+            return None
+        body = body.strip()
+        try:
+            decoded = json.loads(body)
+        except (json.JSONDecodeError, ValueError):
+            # JSON embedded in prose — take the outermost {...} span.
+            start, end = body.find("{"), body.rfind("}")
+            if not (0 <= start < end):
+                raise ValueError("402 body is present but not JSON")
+            decoded = json.loads(body[start:end + 1])
+        if not isinstance(decoded, dict):
+            raise ValueError("402 body did not decode to an object")
+        return decoded
+
+    @staticmethod
     def _parse_402_challenge(response) -> Optional[dict]:
         """Parse a 402 PAYMENT-REQUIRED challenge → {amount, network, pay_to}.
 
@@ -211,18 +296,10 @@ class RealX402Client:
         legacy compat) rather than refusing outright.
         """
         try:
-            import base64
-            import json
-
-            header = (
-                response.headers.get("PAYMENT-REQUIRED")
-                or response.headers.get("payment-required")
-                or response.headers.get("X-PAYMENT-REQUIRED")
-            )
-            if not header:
+            decoded = RealX402Client._decode_challenge(response)
+            if decoded is None:
                 return None
-            decoded = json.loads(base64.b64decode(header + "=="))
-            accepts = decoded.get("accepts", [])
+            accepts = RealX402Client._normalize_accepts(decoded)
             entry = accepts[0] if accepts else decoded  # V2 list, or V1 flat
             version = decoded.get("x402Version")
             # Minor (Task 4 review): tolerate a stringy "1"/"2" version marker

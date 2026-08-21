@@ -257,7 +257,7 @@ def _configured_owner_telegram_id() -> Optional[str]:
     """The single configured owner telegram id, for headless single-owner deploys.
 
     A goal/cron run started by the autonomy loops carries a non-numeric tenant id
-    (e.g. ``"rob"`` — now also the aliased tenant of the owner's OWN chat), so it
+    (the instance id — now also the aliased tenant of the owner's OWN chat), so it
     cannot self-resolve a telegram chat. When the deploy is owner-locked to exactly
     ONE telegram id via ``ALLOWED_TELEGRAM_USER_IDS`` (or an explicit
     ``POLYROB_OWNER_TELEGRAM_ID``), that id IS the owner's chat.

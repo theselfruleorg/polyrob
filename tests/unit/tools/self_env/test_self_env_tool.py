@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import agents.task.constants as c
+from core.instance import DEFAULT_INSTANCE_ID
 from tools.self_env.tool import (
     SelfEnvTool, InstallDepParams, ReadSourceParams, PatchSourceParams,
     RestartParams, GitPullParams,
@@ -50,7 +51,7 @@ def _tool(install_root, events=None):
 
 
 def _owner_ctx(**kw):
-    d = dict(role="orchestrator", is_sub_agent=False, user_id="rob",
+    d = dict(role="orchestrator", is_sub_agent=False, user_id=DEFAULT_INSTANCE_ID,
              session_id="s1", metadata={"turn_kind": None})
     d.update(kw)
     return ActionExecutionContext(**d)

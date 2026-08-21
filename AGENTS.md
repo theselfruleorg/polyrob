@@ -646,12 +646,13 @@ additive/seam-level:
   busy there → zero impact). This is what makes "create a goal mid-chat, it runs when you pause" safe.
 
 **Instance / identity / evolving-self (polyrob foundation, 2026-06-19, SHIPPED on `main`):** the
-groundwork for "rob = one bot INSTANCE on the polyrob FRAMEWORK." All default-inert (instance_id
-defaults `"rob"`; live behaviour byte-equivalent until an operator authors identity docs or binds
-an owner). The framework rename + two-axis DB keying are NOT done (deferred by design) — see the
-plan handoff `docs/plans/2026-06-21-polyrob-analyze-and-implement-HANDOFF.md`.
-- `core/instance.py` — `resolve_instance_id` (default `"rob"`, env `POLYROB_INSTANCE_ID`/
-  `BOT_INSTANCE_ID`), `resolve_owner_principal`/`is_owner`, `load_self_context` (SOUL — operator
+groundwork for "a named bot = one INSTANCE on the polyrob FRAMEWORK." All default-inert (live
+behaviour byte-equivalent until an operator authors identity docs or binds an owner). The
+two-axis DB keying is NOT done (deferred by design) — see the plan handoff
+`docs/plans/2026-06-21-polyrob-analyze-and-implement-HANDOFF.md`.
+- `core/instance.py` — `resolve_instance_id` (default `"polyrob"` since W1 2026-08-19; env
+  `POLYROB_INSTANCE_ID`/`BOT_INSTANCE_ID` win, then the active profile name),
+  `resolve_owner_principal`/`is_owner`, `load_self_context` (SOUL — operator
   authored, frozen), `load_self_doc` (SELF — agent-writable, load-side scan guard + cap),
   `self_tier_root` (`identity/{instance_id}/user_{uid}/`), `is_safe_tenant_id`.
 - `core/self_context_writer.py` (`SelfContextWriter` — `.pending` quarantine + atomic replace) +
@@ -660,6 +661,25 @@ plan handoff `docs/plans/2026-06-21-polyrob-analyze-and-implement-HANDOFF.md`.
   dispatcher.py` — owner-allowlist ingress gate (fail-open, default off).
 - SOUL + SELF are pinned as a frozen `SELF_CONTEXT` foundation message at session start
   (`agents/task/agent/core/construction.py`; `MessageOrigin.SELF_CONTEXT`).
+
+**Identity axes + named profiles (2026-08-19/20, SHIPPED):** the framework ships a NEUTRAL
+identity — `DEFAULT_INSTANCE_ID = "polyrob"` and one neutral `polyrob.character.json`; a specific
+bot's character (e.g. the owner's Rob) is *data* under `<data_dir>/characters/`, a profile, or
+`PERSONALITY_DEFAULT_CHARACTER`, never framework code. A **profile**
+(`~/.polyrob/profiles/<name>/`, SSOT `core/profiles.py`) is a whole isolated home — `.env`,
+characters, skills, `data/` (identity docs + memory/goals/cron/sessions) — selected by
+`-P`/`POLYROB_PROFILE` (strong: overwrites `POLYROB_HOME`+`POLYROB_DATA_DIR`) or a project pin
+`./.polyrob/profile` / sticky `active_profile` (weak: defers to explicit env with a one-shot
+mismatch warning). `activate_profile()` runs in the click group callback BEFORE any `load_env`
+(flags freeze at import). Landmines: never bind `polyrob_home()`/`resolve_data_home()` at module
+level (ratchet `tests/test_home_binding_ratchet.py` — import-time binding breaks `-P`); profile
+names are reject-never-rewrite; prod (explicit `POLYROB_DATA_DIR`, no selection) resolves to
+legacy mode and is byte-identical. CLI: `polyrob profile create/list/use/show/adopt/rename/
+delete/alias/export/import/install/update/info` (`cli/commands/profile*.py`); per-profile daemons
+via `polyrob profile create --service` (emits a unit; the private tree also carries the
+`deployment/polyrob@.service` template — profiles must live under the unit's
+`POLYROB_PROFILES_ROOT`, and each daemon needs its own surface token). Guide:
+`docs/guide/profiles.md`.
 
 **Project-context file (C9)** — `agents/task/agent/core/project_context.py`: on the local CLI (gated
 `PROJECT_CONTEXT_AUTOLOAD`, default ON under `POLYROB_LOCAL`), the agent auto-loads a per-repo context
@@ -958,6 +978,18 @@ engine; run via `polyrob email`. Admin: `polyrob owner {show,correspondents,appr
   - **Machine payer** — the x402 HTTP middleware (`modules/x402/middleware.py`) charges
     the A2A / OpenAI-compat surfaces per *billed* route (exact `(method,path)` gating,
     not prefix); the shared `build_x402_challenge` produces one challenge shape.
+  - **Discovery (read-only, $0, wallet-free)** — `tools/x402/discovery.py` behind the
+    `x402_probe` / `x402_sweep` actions: probe one endpoint or many and score
+    payability 0-5 (answered / 402 / parseable challenge / price disclosed / full
+    `asset`+`network`+`payTo` routing), naming what is missing below 5. Handles
+    POST-only paywalls and every `accepts` shape (plural, legacy singular `accept`,
+    nested `error.accepts`). Bounded (50 targets, 8 concurrent) and SSRF-validated
+    through the same validator `web_fetch` uses, since the URLs come from the model.
+    ⚠️ `RealX402Client._decode_challenge` is the ONE x402 challenge decoder — header
+    first, then the RESPONSE BODY (where the spec and our own middleware put the
+    requirements; a header-only parser reported every compliant server, POLYROB's own
+    gated routes included, as "not a paid resource"). Discovery delegates to it rather
+    than carrying a second parser; keep it that way.
 
 ## Common Commands
 

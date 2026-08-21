@@ -15,7 +15,10 @@ import re
 # counts the `environ.get`/`env.get` shapes it used to miss. Shrink-only, as ever.
 _BASELINE = 93
 _SKIP = {"tests", ".git", "node_modules", ".venv", "venv", "__pycache__",
-         "deployment", "docs", "scripts"}
+         "deployment", "docs", "scripts",
+         # generated build artifacts (a stale wheel tree double-counts every
+         # site and false-fails the ratchet after a release build)
+         "build", "dist"}
 # Widened 2026-08-09: the original shape missed `float(os.environ.get(...))`
 # and `float(env.get(...))` (injected-Mapping style) — core/wallet/config.py's
 # AGENT_WALLET_MAX_PER_TX_USD parse was invisible to the ratchet.
