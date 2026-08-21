@@ -25,9 +25,12 @@ def test_claude_md_stays_a_thin_pointer():
 
 
 def test_agents_md_is_the_resolved_canonical_doc():
-    """AGENTS.md must exist and stay substantial — CLAUDE.md points readers to it."""
+    """AGENTS.md must exist and carry real guidance — CLAUDE.md points readers to it.
+
+    The floor is deliberately modest: the public AGENTS.md is a concise
+    contributor guide, not the full internal architecture doc."""
     text = AGENTS_MD.read_text(encoding="utf-8")
-    assert len(text.splitlines()) > 200
+    assert len(text.splitlines()) > 40
 
 
 def test_agents_md_does_not_use_stale_rob_local_name():
