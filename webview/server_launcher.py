@@ -48,7 +48,7 @@ def setup_logging(log_level):
     )
     
     # Also create a file handler to log to a file
-    logs_dir = os.path.join(os.environ.get("WEBVIEW_INSTALL_PREFIX", "/opt/rob"), "logs")
+    logs_dir = os.path.join(os.environ.get("WEBVIEW_INSTALL_PREFIX", "/opt/polyrob"), "logs")
     os.makedirs(logs_dir, exist_ok=True)
     log_file = os.path.join(logs_dir, "webview.log")
     

@@ -403,6 +403,7 @@ def make_approval_hook(
     required_tools: Iterable[str],
     *,
     timeout: float = DEFAULT_APPROVAL_TIMEOUT_SEC,
+    exempt_fn: Optional[Callable[[str, Dict[str, Any]], Optional[str]]] = None,
 ) -> Callable:
     """Build a pre-tool-call hook gating ``required_tools`` through ``provider``.
 
@@ -412,12 +413,35 @@ def make_approval_hook(
     directly through the now-async hook pipeline, so a slow/interactive provider
     yields the loop instead of freezing it. The wait is bounded by
     ``asyncio.wait_for(..., timeout)``; timeout and error both DENY.
+
+    ``exempt_fn`` (023 §5.3 D3) is an optional per-CALL predicate for a gate whose
+    right answer depends on the params, not just the action name — e.g. an
+    on-chain spend verb whose ``dry_run=True`` simulation broadcasts nothing, or
+    one declaring an amount inside the autonomous ceiling. It returns a reason
+    string to skip the provider wait, or None to gate normally. It is consulted
+    ONLY for an already-gated action, and it FAILS CLOSED: a raising predicate
+    gates normally rather than waving the call through.
     """
     required = {t for t in (required_tools or []) if t}
 
     async def _hook(action_name, params, context):
         if action_name not in required:
             return None  # not gated -> allow
+        if exempt_fn is not None:
+            try:
+                exemption = exempt_fn(action_name, params or {})
+            except Exception as e:
+                # Fail CLOSED: a broken predicate must never widen the gate.
+                logger.error(
+                    f"approval.exempt_error action={action_name} "
+                    f"exc={type(e).__name__}: {e} — gating normally"
+                )
+                exemption = None
+            if exemption:
+                logger.info(f"approval.exempt action={action_name} reason={exemption}")
+                _emit_approval_event("resolved", action_name, context,
+                                     decision="exempt", waited_sec=0.0)
+                return None
         # 019 P0: the wait is a first-class visible state — emit the span pair
         # (awaiting → resolved) around the provider wait so a blocked approval
         # never renders as a silent stall. Events carry action name + timing,

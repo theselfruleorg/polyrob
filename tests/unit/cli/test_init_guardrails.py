@@ -16,6 +16,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from core.instance import DEFAULT_INSTANCE_ID
 from core.prefs import load_preferences
 from tools.controller.approval import DEFAULT_APPROVAL_REQUIRED_TOOLS
 
@@ -79,12 +80,12 @@ def test_full_flow_writes_expected_keys(tmp_path, monkeypatch):
     assert env.get("AUTONOMY_ENABLED") == "true"
     assert env.get("APPROVAL_REQUIRED_TOOLS") == ",".join(DEFAULT_APPROVAL_REQUIRED_TOOLS)
     assert env.get("APPROVAL_PROVIDER") == "interactive_cli"
-    # digest goes through prefs (owner uid "rob" known from Owner pairing defaults),
-    # NOT into the env file.
+    # digest goes through prefs (owner uid = the default instance id, known from
+    # Owner pairing defaults), NOT into the env file.
     assert "OWNER_DIGEST_ENABLED" not in env
 
     data_home = proj / ".polyrob"
-    prefs = load_preferences(data_home, "rob", "rob")
+    prefs = load_preferences(data_home, DEFAULT_INSTANCE_ID, DEFAULT_INSTANCE_ID)
     assert prefs.get("digest.channel") == "telegram"
     assert prefs.get("digest.enabled") is True
 
@@ -120,7 +121,7 @@ def test_blanks_take_section6_defaults(tmp_path, monkeypatch):
     assert "OWNER_DIGEST_ENABLED" not in env
 
     data_home = proj / ".polyrob"
-    prefs = load_preferences(data_home, "rob", "rob")
+    prefs = load_preferences(data_home, DEFAULT_INSTANCE_ID, DEFAULT_INSTANCE_ID)
     assert "digest.channel" not in prefs
     assert "digest.enabled" not in prefs
 
@@ -171,7 +172,7 @@ def test_digest_with_owner_writes_prefs_not_env(tmp_path, monkeypatch):
     assert "digest" not in " ".join(env.keys()).lower()
 
     data_home = proj / ".polyrob"
-    prefs = load_preferences(data_home, "rob", "rob")
+    prefs = load_preferences(data_home, DEFAULT_INSTANCE_ID, DEFAULT_INSTANCE_ID)
     assert prefs.get("digest.channel") == "email"
     assert prefs.get("digest.enabled") is True
 

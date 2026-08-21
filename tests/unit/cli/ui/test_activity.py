@@ -29,7 +29,7 @@ def _tty_console() -> tuple[Console, StringIO]:
 
 def test_compose_text_thinking_initially():
     line = ActivityLine(_non_tty_console(), clock=lambda: 0.0)
-    assert "rob" in line.compose_text()
+    assert "polyrob" in line.compose_text()
     assert "thinking" in line.compose_text()
 
 

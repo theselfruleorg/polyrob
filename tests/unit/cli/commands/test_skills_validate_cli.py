@@ -25,7 +25,7 @@ def test_count_authored_skills_matches_bundled_library_size():
         if d.is_dir() and (d / "SKILL.md").exists() and not d.name.startswith((".", "user_"))
     ]
     assert mgr.count_authored_skills() == len(on_disk)
-    assert mgr.count_authored_skills() == 26  # 26 bundled skills (polyrob-user-guide added 2026-07-12)
+    assert mgr.count_authored_skills() == 27  # 27 bundled skills (trading-doctrine added 2026-08-19)
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():
@@ -68,4 +68,4 @@ def test_doctor_report_shows_skills_compliance_line():
     lines = doctor_report({})
     blob = "\n".join(lines)
     assert "compliant" in blob.lower()
-    assert "26" in blob  # all 26 bundled skills currently compliant
+    assert "27" in blob  # all 27 bundled skills currently compliant

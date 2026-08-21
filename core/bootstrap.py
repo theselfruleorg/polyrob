@@ -181,6 +181,15 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     resolved = os.environ.get("CONFIG_ENV") or env or os.environ.get("ENV", "development")
     from core.paths import env_file_candidates
 
+    # Wrong-profile guard (Hermes scar): a process that reached load_env WITHOUT
+    # profile resolution while the sticky file names a profile would write into
+    # the DEFAULT home. One-shot stderr warning, never raises.
+    try:
+        from core.profiles import warn_profile_fallback_once
+        warn_profile_fallback_once()
+    except Exception:
+        pass
+
     if local_mode:
         # One-time ~/.rob -> ~/.polyrob home migration BEFORE any ~/.polyrob read
         # (copy-not-move, marker-gated, fail-open — never raises).
@@ -217,6 +226,15 @@ def load_env(env: Optional[str] = None, config_dir: str = "config",
     # loaded (this module imports core.config_policy at line 16) — re-freeze
     # them exactly once, now that the ladder is layered.
     _refreeze_frozen_policy_flags_once()
+
+    # W1 (neutral default): one-time identity/rob -> identity/polyrob copy in the
+    # resolved data home. AFTER the env files above so POLYROB_DATA_DIR /
+    # POLYROB_INSTANCE_ID from any layer are visible. Copy-not-move, fail-open.
+    try:
+        from core.home_migration import migrate_identity_instance_once
+        migrate_identity_instance_once()
+    except Exception:
+        pass
 
     return resolved
 

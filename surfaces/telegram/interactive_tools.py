@@ -50,7 +50,7 @@ def owner_interactive_tool_ids(user_id: Optional[str], env=None) -> Optional[Lis
     """Return the interactive toolset when ``user_id`` is THIS instance's owner principal,
     else None (keep the conservative default toolset for a non-owner sender).
 
-    The owner principal is ``resolve_owner_principal`` (e.g. ``"rob"`` — the id the
+    The owner principal is ``resolve_owner_principal`` (the instance id — the id the
     owner's telegram chat is aliased to, and the tenant of autonomy's own goals/memory).
     A random surface sender is hashed to a ``u_…`` id and can never equal it, so this
     never elevates a stranger.

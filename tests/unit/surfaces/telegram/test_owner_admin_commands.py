@@ -40,15 +40,16 @@ def _cmd(command, text, user="gleb"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    from core.instance import DEFAULT_INSTANCE_ID
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
 
 
 def _seed_pending_self(home, uid="gleb"):
     from core.self_context_writer import PROVENANCE_AGENT, SelfContextWriter
-    SelfContextWriter(home, instance_id="rob").propose(
+    SelfContextWriter(home).propose(  # default instance id, matching load_self_doc
         "Learned: escalate blockers to the owner proactively.",
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
 

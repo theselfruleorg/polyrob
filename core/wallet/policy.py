@@ -163,3 +163,15 @@ class PolicyGate:
     @property
     def audit_log(self) -> List[dict]:
         return list(self._audit)
+
+    @property
+    def has_daily_cap(self) -> bool:
+        """True when a rolling-24h aggregate spend cap is configured.
+
+        The autonomous (unattended) spend lane leans on this as its damage bound
+        — the per-tx ceiling alone cannot stop a within-ceiling loop draining the
+        treasury one ticket at a time. tx_guard refuses the autonomous lane when
+        this is False so an operator can't arm unattended trading with no
+        aggregate limit.
+        """
+        return self._daily_cap is not None

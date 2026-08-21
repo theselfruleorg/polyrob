@@ -59,7 +59,7 @@ def _shell(registry):
 
 def _ctx(sid):
     return ActionExecutionContext(role="orchestrator", is_sub_agent=False,
-                                  user_id="rob", session_id=sid, metadata={"turn_kind": None})
+                                  user_id="polyrob", session_id=sid, metadata={"turn_kind": None})
 
 
 @_needs_docker

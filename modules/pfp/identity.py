@@ -13,7 +13,9 @@ import random
 import string
 from typing import Any, Dict
 
-DEFAULT_SEED = "Rob Ottmachin"
+# Neutral framework seed — a specific bot's face rides its own config/profile,
+# never a person's name baked into the package (W1 neutral-identity rule).
+DEFAULT_SEED = "POLYROB"
 GENERATOR = "mindprint@v2"
 
 

@@ -36,6 +36,8 @@ _LAZY_SUBCOMMANDS = {
     "tools": "cli.commands.tools:tools",
     "init": "cli.commands.init:init_cmd",
     "config": "cli.commands.config:config",
+    "profile": "cli.commands.profile:profile",
+    "profiles": "cli.commands.profile:profile",  # product vocabulary alias
     "auth": "cli.commands.auth:auth",
     "doctor": "cli.commands.doctor:doctor",
     "telegram": "cli.commands.telegram:telegram",
@@ -75,6 +77,7 @@ _COMMAND_ALIASES = {
     "session": ("sessions",),
     "model": ("models",),
     "dashboard": ("webgate",),
+    "profile": ("profiles",),
 }
 _ALIAS_NAMES = {alias for aliases in _COMMAND_ALIASES.values() for alias in aliases}
 
@@ -93,7 +96,7 @@ _HELP_GROUPS = [
     ("Money",
      ["wallet", "finance"]),
     ("Inspect & admin",
-     ["tools", "kb", "knowledge", "owner", "journey", "pfp", "soul",
+     ["tools", "kb", "knowledge", "owner", "profile", "journey", "pfp", "soul",
       "x-account", "datagen"]),
 ]
 
@@ -177,9 +180,21 @@ class _LazyGroup(click.Group):
 @click.option("--model", "-m", default=None, help="Model for this REPL session (parity with `polyrob run`)")
 @click.option("--provider", "-p", default=None, help="Provider for this REPL session")
 @click.option("--toolset", default=None, help="Named toolset for this REPL session")
+@click.option("--profile", "-P", "profile", default=None, metavar="NAME",
+              help="Named profile to run as (an isolated home under "
+                   "~/.polyrob/profiles/<NAME>: its own .env, characters, "
+                   "memory, identity). See `polyrob profile --help`.")
 @click.pass_context
-def cli(ctx, plain, project, model, provider, toolset):
+def cli(ctx, plain, project, model, provider, toolset, profile):
     """POLYROB AI automation platform CLI."""
+    # Profile resolution MUST run before anything else — flags freeze at import
+    # and every subcommand's load_env refreezes them once; the profile env
+    # (POLYROB_HOME/POLYROB_DATA_DIR) has to be in place first.
+    from core.profiles import ProfileError, activate_profile
+    try:
+        activate_profile(profile)
+    except ProfileError as exc:
+        raise click.ClickException(str(exc))
     if project:
         import os
         from pathlib import Path

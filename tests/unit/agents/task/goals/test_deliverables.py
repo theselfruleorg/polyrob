@@ -9,9 +9,10 @@ import pytest
 
 from agents.task.goals.board import Goal
 from agents.task.goals.dispatcher import GoalDispatcher
+from core.instance import DEFAULT_INSTANCE_ID
 
 
-def _ws(monkeypatch, tmp_path, session_id="sess-d", user_id="rob"):
+def _ws(monkeypatch, tmp_path, session_id="sess-d", user_id=DEFAULT_INSTANCE_ID):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
     return pm().get_workspace_dir(session_id, user_id)
@@ -31,7 +32,7 @@ def test_build_deliverables_attaches_written_files(monkeypatch, tmp_path):
          "detail": '{\n  "success": true,\n  "filepath": "x402-recon.md"'},
         {"path": "x402-recon.md", "bytes": 22, "mtime": 1},
     ]
-    attachments, lines = build_deliverables(artifacts, "sess-d", "rob")
+    attachments, lines = build_deliverables(artifacts, "sess-d", DEFAULT_INSTANCE_ID)
     assert len(attachments) == 1
     assert attachments[0]["kind"] == "document"
     assert attachments[0]["path"].endswith("x402-recon.md")
@@ -54,7 +55,7 @@ def test_build_deliverables_ledger_attribution_filters_other_runs(monkeypatch, t
         {"path": "mine.md", "bytes": 4, "mtime": 1},
         {"path": "other.md", "bytes": 14, "mtime": 1},
     ]
-    attachments, lines = build_deliverables(artifacts, "sess-d", "rob")
+    attachments, lines = build_deliverables(artifacts, "sess-d", DEFAULT_INSTANCE_ID)
     assert [a["path"].endswith("mine.md") for a in attachments] == [True]
     other = [ln for ln in lines if "other.md" in ln]
     assert other and "server-only" in other[0] and "unattributed" in other[0]
@@ -71,7 +72,7 @@ def test_build_deliverables_attributes_all_write_kinds(monkeypatch, tmp_path):
         {"kind": "fs_write", "detail": '"file_path": "chart.png"'},
         {"path": "chart.png", "bytes": 16, "mtime": 1},
     ]
-    attachments, lines = build_deliverables(artifacts, "sess-d", "rob")
+    attachments, lines = build_deliverables(artifacts, "sess-d", DEFAULT_INSTANCE_ID)
     assert len(attachments) == 1 and attachments[0]["path"].endswith("chart.png")
 
 
@@ -84,7 +85,7 @@ def test_attached_line_carries_absolute_server_path(monkeypatch, tmp_path):
     from pathlib import Path
     (Path(ws) / "r.md").write_text("r")
     attachments, lines = build_deliverables(
-        [{"path": "r.md", "bytes": 1, "mtime": 1}], "sess-d", "rob")
+        [{"path": "r.md", "bytes": 1, "mtime": 1}], "sess-d", DEFAULT_INSTANCE_ID)
     assert len(attachments) == 1
     assert any("attached" in ln and str(Path(ws).resolve()) in ln for ln in lines)
 
@@ -96,7 +97,7 @@ def test_build_deliverables_oversize_listed_server_only(monkeypatch, tmp_path):
     from pathlib import Path
     (Path(ws) / "big.bin").write_bytes(b"x" * 4096)
     artifacts = [{"path": "big.bin", "bytes": 4096, "mtime": 1}]
-    attachments, lines = build_deliverables(artifacts, "sess-d", "rob")
+    attachments, lines = build_deliverables(artifacts, "sess-d", DEFAULT_INSTANCE_ID)
     assert attachments == []
     assert any("big.bin" in ln and "server-only" in ln for ln in lines)
 
@@ -110,7 +111,7 @@ def test_build_deliverables_respects_max_files(monkeypatch, tmp_path):
     (Path(ws) / "b.md").write_text("b")
     artifacts = [{"path": "a.md", "bytes": 1, "mtime": 1},
                  {"path": "b.md", "bytes": 1, "mtime": 1}]
-    attachments, lines = build_deliverables(artifacts, "sess-d", "rob")
+    attachments, lines = build_deliverables(artifacts, "sess-d", DEFAULT_INSTANCE_ID)
     assert len(attachments) == 1
     assert sum("server-only" in ln for ln in lines) == 1
 
@@ -118,7 +119,7 @@ def test_build_deliverables_respects_max_files(monkeypatch, tmp_path):
 def test_build_deliverables_empty_artifacts(monkeypatch, tmp_path):
     from agents.task.goals.deliverables import build_deliverables
     _ws(monkeypatch, tmp_path)
-    assert build_deliverables([], "sess-d", "rob") == ([], [])
+    assert build_deliverables([], "sess-d", DEFAULT_INSTANCE_ID) == ([], [])
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +180,7 @@ def test_notify_owner_done_threads_attachments(monkeypatch, tmp_path):
     monkeypatch.setenv("DELIVERABLES_ATTACH_ENABLED", "true")
     monkeypatch.setenv("WEBVIEW_PUBLIC_URL", "https://app.example.com")
     disp = _dispatcher()
-    goal = Goal(id="g1", user_id="rob", title="recon")
+    goal = Goal(id="g1", user_id=DEFAULT_INSTANCE_ID, title="recon")
     told = asyncio.run(disp._notify_owner_done(
         goal, "sess-n", "wrote report.md", verified="verified",
         artifacts=[{"path": "report.md", "bytes": 8, "mtime": 1}]))
@@ -205,7 +206,7 @@ def test_notify_owner_done_flag_off_lists_but_never_attaches(monkeypatch, tmp_pa
     monkeypatch.setenv("DELIVERABLES_ATTACH_ENABLED", "false")
     monkeypatch.delenv("WEBVIEW_PUBLIC_URL", raising=False)
     disp = _dispatcher()
-    goal = Goal(id="g1", user_id="rob", title="recon")
+    goal = Goal(id="g1", user_id=DEFAULT_INSTANCE_ID, title="recon")
     told = asyncio.run(disp._notify_owner_done(
         goal, "sess-n2", "wrote report.md", verified="verified",
         artifacts=[{"path": "report.md", "bytes": 8, "mtime": 1}]))

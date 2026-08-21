@@ -90,7 +90,7 @@ python -m playwright install chromium
 └── identity/
     ├── identity.md            # Operator-authored SOUL (frozen)
     ├── operating.md           # Operator-authored SOUL (frozen), optional
-    └── rob/user_<uid>/self.md # Agent-writable SELF doc (rob = instance id)
+    └── polyrob/user_<uid>/self.md # Agent-writable SELF doc (polyrob = instance id)
 ```
 
 ### Configuration Translation

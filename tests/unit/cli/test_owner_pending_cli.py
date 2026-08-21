@@ -4,20 +4,23 @@ import os
 from click.testing import CliRunner
 
 from cli.commands.owner import owner
+from core.instance import DEFAULT_INSTANCE_ID
 from core.self_context_writer import SelfContextWriter, PROVENANCE_AGENT
 
 
 def _seed_pending_self(home, uid):
-    SelfContextWriter(home, instance_id="rob").propose(
+    SelfContextWriter(home).propose(  # default instance id, matching load_self_doc
         "Learned: surface blockers to the owner proactively.",
         user_id=uid, created_by=PROVENANCE_AGENT, pending=True)
 
 
 def _env(tmp_path, monkeypatch):
     # Point the owner CLI's data home + owner tenant at an isolated tmp dir.
+    # Pin the instance id to the DEFAULT explicitly so an operator env file
+    # (load_env inside the command) can never repoint the identity tree.
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
-    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
 
 
 def test_pending_empty(tmp_path, monkeypatch):
@@ -122,11 +125,11 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path, monkeypatch
     from core.contract_writer import ContractWriter
     from core.prefs import propose_pref_change
 
-    ContractWriter(tmp_path, instance_id="rob").propose(
+    ContractWriter(tmp_path).propose(
         "Never spend more than $5 without asking.", user_id="gleb",
         created_by="user", pending=True)
     ok, result = propose_pref_change("gleb", "approvals.require", None, tmp_path,
-                                     instance_id="rob", op="remove_entry",
+                                     instance_id=DEFAULT_INSTANCE_ID, op="remove_entry",
                                      entry="git_push")
     assert ok, result
 

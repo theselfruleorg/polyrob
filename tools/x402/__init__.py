@@ -22,7 +22,8 @@ def register_x402_tool(force: bool = False) -> bool:
     if "x402_pay" not in TOOL_DESCRIPTORS:
         TOOL_DESCRIPTORS["x402_pay"] = ToolDescriptor(
             name="x402_pay",
-            description="Pay for paid resources via the x402 protocol (agent personal wallet)",
+            description=("Discover and pay x402 resources: probe/sweep endpoints read-only "
+                         "for price + payability (no wallet needed), and pay via the agent wallet"),
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,

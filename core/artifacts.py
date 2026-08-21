@@ -167,7 +167,11 @@ class ArtifactLedger:
         module exists to stop.
         """
         try:
-            abspath = os.path.abspath(path)
+            # realpath (not abspath) so the stored key matches the external
+            # callers that look a row up by realpath (tools/publish, deliverables)
+            # — otherwise a symlinked data home / macOS /tmp->/private/tmp made
+            # published_url_for miss the row and the URL never stamped.
+            abspath = os.path.realpath(path)
             if not os.path.isfile(abspath):
                 return None
             sha, size = hash_file(abspath)
@@ -309,3 +313,37 @@ def reset_artifact_ledger() -> None:
     """Drop the cached singleton (test isolation / a data-home change)."""
     global _LEDGER
     _LEDGER = None
+
+
+#: One extension→kind map so every write-time recorder classifies identically.
+_KIND_BY_EXT = {
+    ".html": KIND_PAGE, ".htm": KIND_PAGE,
+    ".py": KIND_CODE, ".js": KIND_CODE, ".ts": KIND_CODE, ".sh": KIND_CODE, ".css": KIND_CODE,
+    ".md": KIND_REPORT, ".txt": KIND_REPORT, ".rst": KIND_REPORT,
+    ".json": KIND_DATA, ".csv": KIND_DATA, ".yaml": KIND_DATA, ".yml": KIND_DATA,
+}
+
+
+def kind_for_path(path: str) -> str:
+    """Classify an artifact by extension (default KIND_FILE)."""
+    return _KIND_BY_EXT.get(os.path.splitext(path)[1].lower(), KIND_FILE)
+
+
+def record_artifact(user_id: Optional[str], path: str, *,
+                    session_id: str = "", kind: Optional[str] = None) -> None:
+    """Tool-agnostic write-time record into the ledger. Fail-open by construction.
+
+    The ledger is the reliable source the acceptance-check + retry-continuity
+    paths resolve through, so EVERY tool that produces a workspace file (coding,
+    not only the filesystem tool) must record here — otherwise a real deliverable
+    reads as "never produced". Never raises: a bookkeeping failure must not break
+    a write the agent already completed.
+    """
+    try:
+        if not user_id:
+            return
+        get_artifact_ledger().record(
+            str(user_id), path, session_id=str(session_id or ""),
+            kind=kind or kind_for_path(path))
+    except Exception:
+        logger.debug("artifact record skipped for %s", path, exc_info=True)

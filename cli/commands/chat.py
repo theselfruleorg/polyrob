@@ -424,6 +424,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     # so the API-key presence check below sees file-based keys, not just process
     # env. build_cli_container loads them again (idempotent with override=False).
     load_env(local_mode=True)
+    # Make the OAuth/store credential rungs visible to the key gate + resolver,
+    # which run before build_cli_container sets this. setdefault preserves an
+    # explicit POLYROB_LOCAL=0 opt-out. (See the same fix in cli/commands/run.py.)
+    os.environ.setdefault("POLYROB_LOCAL", "1")
 
     # Quiet logging / library noise for an interactive prompt.
     _logging.disable(_logging.CRITICAL)
@@ -493,7 +497,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
     from cli.config_store import resolve_provider_model
     # Honor the launch flags (parity with `polyrob run`); fall back to the resolver.
     provider, model = resolve_provider_model(provider, model)
-    if model is None:
+    if provider is not None and model is None:
         from modules.llm.llm_client_registry import get_default_model as _registry_default
         model = _registry_default(provider)
 

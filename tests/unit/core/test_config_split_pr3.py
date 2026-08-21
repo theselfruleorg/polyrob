@@ -81,7 +81,7 @@ def test_bot_config_extends_agent_config(monkeypatch):
     assert hasattr(bc, 'openai_api_key')
     assert hasattr(bc, 'session_ttl_seconds')
     assert bc.session_ttl_seconds == 86400
-    assert bc.default_character == 'rob'
+    assert bc.default_character == 'polyrob'
 
 
 def test_bot_config_keeps_server_fields():

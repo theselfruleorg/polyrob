@@ -189,7 +189,8 @@ def _auto_approval_text(tool_name: str, request_id: Optional[str], amount: Any,
 
 
 def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
-                                  taint_probe: Optional[Callable[[], bool]] = None):
+                                  taint_probe: Optional[Callable[[], bool]] = None,
+                                  skip_fn: Optional[Callable[[str, Any], bool]] = None):
     """PAYMENT_APPROVAL_MODE=auto: a payment-creation action is NOT queued through
     `owner_queue` — this post-tool-call hook instead fires ONE owner notification +
     a first-class ``payment_auto_approved`` audit event for every WITHIN-CAP
@@ -213,6 +214,16 @@ def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
             return
         if getattr(result, "error", None):
             return  # rejected by the tool's own caps — nothing to auto-approve
+        if skip_fn is not None:
+            # 023 D3: a call that moved no money is not worth an owner ping (a
+            # dry-run swap succeeds loudly but broadcasts nothing). Fail-OPEN —
+            # a broken predicate notifies, which is the noisy-but-honest side.
+            try:
+                if skip_fn(action_name, params or {}):
+                    return
+            except Exception:
+                logger.debug("auto_notify: skip predicate raised — notifying anyway",
+                             exc_info=True)
         if taint_probe is not None:
             try:
                 tainted = bool(taint_probe())

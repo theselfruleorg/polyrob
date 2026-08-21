@@ -43,3 +43,14 @@ def test_parse_unit_files_extracts_service_names():
 
 def test_parse_unit_files_empty_output():
     assert _parse_unit_files("") == []
+
+
+def test_parse_unit_files_skips_bare_template_keeps_instances():
+    # `systemctl stop polyrob@.service` is invalid (no instance) and would
+    # abort the && chain BEFORE `git pull` — the update would silently no-op.
+    out = (
+        "polyrob.service     enabled  enabled\n"
+        "polyrob@.service    disabled -\n"
+        "polyrob@rob.service enabled  enabled\n"
+    )
+    assert _parse_unit_files(out) == ["polyrob.service", "polyrob@rob.service"]

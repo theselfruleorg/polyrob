@@ -177,3 +177,33 @@ def test_usable_as_oauth_manager_store(tmp_path):
     loaded = mgr2.load_token("user1", "mock")
     assert loaded is not None
     assert loaded.access_token == "abc123"
+
+
+# --- two-instance clobber (the X session P0) -----------------------------------
+
+def test_two_instances_same_file_do_not_clobber(tmp_path):
+    """A delete via one instance must not erase a row another instance wrote.
+
+    The X login store (provider "x") and the signup-progress store
+    (provider "x_signup") are separate FileTokenStore objects over the SAME
+    .x_session.json. Before the read-before-mutate fix, a delete flushed a stale
+    whole-file snapshot and erased the just-saved login row.
+    """
+    path = tmp_path / TOKENS_FILENAME
+    login = FileTokenStore(path)          # snapshot A (empty)
+    progress = FileTokenStore(path)       # snapshot B (empty)
+
+    progress[("u1", "x_signup")] = b"progress-blob"
+    login[("u1", "x")] = b"login-blob"    # writes with A's stale snapshot
+
+    # A THIRD instance (fresh disk read) must see BOTH rows.
+    fresh = FileTokenStore(path)
+    assert fresh[("u1", "x")] == b"login-blob"
+    assert fresh[("u1", "x_signup")] == b"progress-blob"
+
+    # Deleting progress via B must not erase the login row.
+    progress[("u1", "x_signup")] = b"progress-blob2"  # B still has stale snapshot
+    del progress[("u1", "x_signup")]
+    fresh2 = FileTokenStore(path)
+    assert fresh2[("u1", "x")] == b"login-blob"
+    assert ("u1", "x_signup") not in fresh2

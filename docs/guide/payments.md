@@ -174,11 +174,43 @@ Moving the wallet to a fresh machine or a re-installed instance:
 
 ## 3. Paying for resources — x402 pay-side (`tools/x402/`)
 
-Lets the agent **pay** for a paywalled HTTP resource during a job. Off by default
-(`X402_CLIENT_ENABLED=false`; also needs `AGENT_WALLET_ENABLED`). Exposed as the
-`x402_pay` tool with three actions: `x402_quote` (price a URL without paying),
-`x402_fetch` (fetch, auto-paying via x402 up to a caller-set `max_amount_usd`), and
-`x402_wallet_status` (address, on-chain balance, caps, audit).
+Lets the agent **find** and **pay** for paywalled HTTP resources during a job. Off
+by default (`X402_CLIENT_ENABLED=false`). The paying verbs additionally need
+`AGENT_WALLET_ENABLED`; the read-only discovery verbs do **not** — pricing an
+endpoint costs $0, so an invoice-only deployment can still map the market.
+Exposed as the
+`x402_pay` tool. Two of its actions **pay**, three are **read-only**:
+
+| action | pays? | wallet? | what it does |
+|---|---|---|---|
+| `x402_probe` | no | not needed | Probe ONE endpoint: price, `accepts[]`, routing, payability score 0–5 |
+| `x402_sweep` | no | not needed | Probe MANY endpoints → one scored ledger |
+| `x402_quote` | no | not needed | Price a single URL (thin; `x402_probe` is the fuller read) |
+| `x402_fetch` | **yes** | required | Fetch, auto-paying up to a caller-set `max_amount_usd` |
+| `x402_wallet_status` | no | required | Address, on-chain balance, caps, audit |
+
+### Discovery (`x402_probe` / `x402_sweep`) — read-only, $0
+
+Before an agent can transact it has to answer three questions: does this endpoint
+charge, how much, and *can I actually pay it?* Discovery answers all three without
+a wallet and without ever sending a payment header.
+
+The **payability score** is 0–5, and names what is missing when it falls short:
+`+1` answered · `+1` HTTP 402 · `+1` parseable challenge body · `+1` price
+disclosed · `+1` full routing (`asset` **and** `network` **and** `payTo`). Only a
+5 means an agent could pay it today — a 402 that discloses no price or no routing
+is a paywall in name only, and is reported as such rather than as "payable".
+
+Both verbs handle POST-only paywalls (JSON-RPC, A2A `/v1`) via `method`/`body`,
+and read a challenge from the **response body** as well as the
+`PAYMENT-REQUIRED` header — the spec puts the requirements in the body, and
+POLYROB's own middleware emits exactly that shape. All decoding delegates to the
+one client-side parser (`RealX402Client._decode_challenge`), so the payer and the
+prober can never drift apart.
+
+Guardrails: bounded to 50 targets at 8 concurrent, and every agent-supplied URL
+goes through the same SSRF validator `web_fetch` uses (cloud metadata and RFC1918
+stay shut). A missing price is reported as unknown, never as `$0`.
 
 The `x402_fetch` flow (`tools/x402/service.py`, `real_client.py`):
 

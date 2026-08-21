@@ -99,10 +99,11 @@ def test_whatsapp_never_aliased_even_for_owner_value():
 
 def test_alias_uses_instance_default_when_no_explicit_principal():
     # Auto-derive: with ONLY the owner tg id configured (no explicit POLYROB_OWNER_USER_ID),
-    # the principal falls back to the instance id ("rob"), so the owner is still aliased.
-    # This is the whole point — the operator sets only POLYROB_OWNER_TELEGRAM_ID.
+    # the principal falls back to the instance id (DEFAULT_INSTANCE_ID), so the owner is
+    # still aliased. This is the whole point — the operator sets only POLYROB_OWNER_TELEGRAM_ID.
+    from core.instance import DEFAULT_INSTANCE_ID
     env = {"POLYROB_OWNER_TELEGRAM_ID": OWNER_TG}
-    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "rob"
+    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == DEFAULT_INSTANCE_ID
 
 
 def test_alias_uses_custom_instance_default():

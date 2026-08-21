@@ -142,6 +142,23 @@ class CodingTool(BaseTool):
             # action/CLI/webview seams, never by the coding tool.
             if is_protected_config_path(candidate):
                 raise CodingError(f"refusing to touch a protected config/identity file: {file_path}")
+        # W4 cross-profile guard (parity with tools/filesystem.py; defense-in-
+        # depth, not a security boundary): another profile's home is off-limits.
+        try:
+            from core.profiles import (cross_profile_access_allowed,
+                                       foreign_profile_of_path)
+            if not cross_profile_access_allowed():
+                for candidate in candidates:
+                    other = foreign_profile_of_path(candidate)
+                    if other:
+                        raise CodingError(
+                            f"refusing to touch profile '{other}' from outside it: "
+                            f"{file_path} (run with `polyrob -P {other}`, or set "
+                            f"POLYROB_ALLOW_CROSS_PROFILE=1 to bypass deliberately)")
+        except CodingError:
+            raise
+        except Exception:
+            pass
         return target
 
     # --- code_exec backend resolution (P1-B F7b) ------------------------------
@@ -247,6 +264,25 @@ class CodingTool(BaseTool):
         except Exception:
             return None
 
+    def _record_artifact(self, target: str, execution_context=None) -> None:
+        """Record a coding-tool write in the artifact ledger (fail-open).
+
+        The filesystem tool records its writes at its choke point; the coding
+        tool writes with bare open(), so without this a file the agent BUILT via
+        str_replace/apply_patch/create_file is invisible to the ledger and the
+        `artifact` acceptance check reports it "never produced" (a real goal
+        failing on evidence that exists)."""
+        try:
+            uid = getattr(execution_context, "user_id", None) or getattr(self, "user_id", None)
+            if not uid:
+                return
+            sid = getattr(execution_context, "session_id", None) or getattr(self, "session_id", None)
+            from core.artifacts import record_artifact
+            record_artifact(str(uid), target, session_id=str(sid or ""))
+        except Exception:
+            getattr(self, "logger", logging.getLogger(__name__)).debug(
+                "artifact ledger record skipped for %s", target, exc_info=True)
+
     async def _snapshot_before_edit(self, target: str, root: str, execution_context=None) -> None:
         """Best-effort pre-mutation snapshot (I-4 / H2): commit the single
         about-to-be-mutated file into the shadow git repo (see
@@ -293,6 +329,7 @@ class CodingTool(BaseTool):
             await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
+            self._record_artifact(target, execution_context)
             n = content.count(params.old_string) if params.replace_all else 1
             if rung == "exact" or params.replace_all:
                 msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
@@ -324,6 +361,7 @@ class CodingTool(BaseTool):
             await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
+            self._record_artifact(target, execution_context)
             msg = f"Patched {params.file_path}."
             return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:
@@ -425,6 +463,7 @@ class CodingTool(BaseTool):
             os.makedirs(os.path.dirname(target) or root, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(params.content or "")
+            self._record_artifact(target, execution_context)
             msg = f"Created {params.file_path} ({len(params.content or '')} bytes)."
             return self._ok(await self._with_diagnostics(msg, target, root))
         except CodingError as e:

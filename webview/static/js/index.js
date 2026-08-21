@@ -22,7 +22,7 @@ function renderIRCSession(session) {
     const statusDisplay = getStatusDisplay(session.status || 'completed');
     const modelInfo = `<span class="irc-model">[${escapeHtml(session.model || 'unknown')}/${escapeHtml(session.provider || 'unknown')}]</span>`;
     // Owner catalog (own_ops/local) aggregates every user dir — label whose
-    // session each row is (rob / local / u_…). Absent in per-tenant listings.
+    // session each row is (the instance id / local / u_…). Absent in per-tenant listings.
     const userChip = session.user ? `<span class="irc-user">@${escapeHtml(session.user)}</span>` : '';
     // WS-4 honesty chip: where does an active session actually live?
     // 'agent' = another process (watch via feed; console can't steer it),

@@ -17,7 +17,7 @@ def _client(monkeypatch, home):
 
 def _write_avatar(home):
     from core.instance import pfp_dir
-    d = pfp_dir(home, "rob")
+    d = pfp_dir(home, "polyrob")
     d.mkdir(parents=True)
     (d / "pfp.png").write_bytes(b"\x89PNG\r\n\x1a\npng")
     (d / "pfp.json").write_text(json.dumps(
@@ -124,7 +124,7 @@ def test_web_setup_generate_randomize_keep_flow(monkeypatch, tmp_path):
     body = r.json()
     assert body["ok"] is False and "once" in body["message"]
     from core.instance import load_pfp_meta
-    assert load_pfp_meta(tmp_path, "rob")["variant"] == kept_variant   # unchanged
+    assert load_pfp_meta(tmp_path, "polyrob")["variant"] == kept_variant   # unchanged
 
 
 def test_web_setup_generate_is_idempotent(monkeypatch, tmp_path):

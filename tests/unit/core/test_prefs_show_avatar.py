@@ -16,6 +16,6 @@ def test_show_avatar_resolves_default_true(tmp_path):
 
 
 def test_show_avatar_pref_false_wins(tmp_path):
-    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "rob")
+    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "polyrob")
     assert ok, err
     assert prefs.resolve("ui.show_avatar", "u1", tmp_path, env_value=None, default=True) is False

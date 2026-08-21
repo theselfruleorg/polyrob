@@ -30,7 +30,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Callable, Optional, Sequence, Tuple
 
-from core.env import float_env
+from core.env import bool_env, float_env
 from core.wallet import simulation
 
 logger = logging.getLogger(__name__)
@@ -108,13 +108,55 @@ def _halted() -> bool:
 # remembering to pass an argument.
 
 
+def autonomous_turn_trading_enabled() -> bool:
+    """Whether a GOAL/CRON-dispatched run may move funds (default OFF).
+
+    ``forged_fn`` answers one question — "is this turn anything other than a
+    genuine owner turn?" — and step 2 refuses on it. That is right for a leaf
+    sub-agent, a self-wake and a delegation-result re-entry, but it also covers
+    a goal-dispatched run, which is what an unattended treasury loop IS. With
+    this OFF (the default) the agent can only trade when the owner is driving.
+
+    ⚠️ Turning it ON is a real widening of the money surface, not a formality.
+    An autonomous run reads untrusted material (web pages, social posts, market
+    APIs) in the SAME session that holds the money verb, so an indirect prompt
+    injection reaches a signing path it otherwise never could. What bounds the
+    damage is not this gate but the caps underneath it — the per-transaction
+    ceiling, the rolling daily cap, and the simulation that holds the caller to
+    its declared intent. Enable it only on a treasury you can afford to lose
+    entirely in one day, and size ``WALLET_DAILY_CAP_USD`` as exactly that
+    number.
+    """
+    return bool_env("DEFI_AUTONOMOUS_TURN_TRADING", False)
+
+
+def _autonomous_turn_allowed(execution_context, tool_self, autonomous_ok_fn) -> bool:
+    """True only for a goal/cron-dispatched MAIN-agent turn, with the flag on.
+
+    Fails CLOSED on every uncertainty: flag off, no detector supplied, detector
+    says no, or detector raises. The detector is injected for the same layering
+    reason ``forged_fn`` is, and it must be STRICTER than ``forged_fn`` — it
+    answers "is this specifically an autonomous goal run?", never merely "is
+    this not a genuine owner turn?".
+    """
+    if not autonomous_turn_trading_enabled():
+        return False
+    if autonomous_ok_fn is None:
+        return False
+    try:
+        return bool(autonomous_ok_fn(execution_context, tool_self))
+    except Exception:
+        return False
+
+
 def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
               execution_context=None, tool_self=None,
               simulate_fn: Optional[Callable] = None,
               price_fn: Optional[Callable] = None,
               rpc_is_pinned_fn: Optional[Callable] = None,
               halted_fn: Optional[Callable] = None,
-              forged_fn: Optional[Callable] = None) -> Decision:
+              forged_fn: Optional[Callable] = None,
+              autonomous_ok_fn: Optional[Callable] = None) -> Decision:
     """Authorize *tx* against *intent*. Returns a Decision; never broadcasts.
 
     The caller must hold ``gate.reserve()`` across authorize → broadcast →
@@ -132,6 +174,7 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, f"refused: kill-switch probe failed ({exc}); failing closed")
 
     # -- 2. Turn origin ----------------------------------------------------
+    autonomous_origin = False
     if execution_context is not None:
         if forged_fn is None:
             return Decision(False, (
@@ -139,9 +182,16 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
                 "cannot prove the turn is genuine, so failing closed"))
         try:
             if forged_fn(execution_context, tool_self):
-                return Decision(False, (
-                    "refused: a forged/autonomous turn (self-wake, delegation-result, "
-                    "leaf, or autonomous run) cannot move funds"))
+                if not _autonomous_turn_allowed(execution_context, tool_self,
+                                                autonomous_ok_fn):
+                    return Decision(False, (
+                        "refused: a forged/autonomous turn (self-wake, delegation-result, "
+                        "leaf, or autonomous run) cannot move funds"))
+                # A genuine owner turn is not forged; only the unattended
+                # goal-dispatched lane reaches here forged-but-allowed. Remember
+                # it so step 9 can demand an aggregate damage bound (a daily cap)
+                # that an owner-driven trade doesn't need.
+                autonomous_origin = True
         except Exception as exc:
             return Decision(False, f"refused: could not prove the turn is genuine ({exc})")
 
@@ -314,6 +364,21 @@ def authorize(intent: TxIntent, tx: dict, *, holder: str, gate,
         return Decision(False, (
             f"owner approval required: ${amount_usd:.4f} is above the autonomous "
             f"ceiling ${autonomous_max_usd():.2f}"),
+            lane="owner_queue", amount_usd=amount_usd,
+            sim_gas_used=deltas.gas_used)
+
+    # An unattended, self-directed spend must have an aggregate damage bound. The
+    # per-tx ceiling ($25 default) alone cannot stop an injection during a trade
+    # leg from looping within-ceiling swaps that drain the treasury one ticket at
+    # a time. WALLET_DAILY_CAP_USD is that bound, and it is optional (unset = no
+    # cap) — so arming DEFI_AUTONOMOUS_TURN_TRADING with no daily cap would leave
+    # the loop unbounded. Refuse the autonomous lane in that case; an owner-driven
+    # turn is unaffected (autonomous_origin is False for a genuine owner turn).
+    if autonomous_origin and not getattr(gate, "has_daily_cap", False):
+        return Decision(False, (
+            "refused: unattended trading needs an aggregate damage bound — set "
+            "WALLET_DAILY_CAP_USD (the per-tx ceiling alone can be looped within "
+            "to drain the treasury). Owner-driven trades are unaffected."),
             lane="owner_queue", amount_usd=amount_usd,
             sim_gas_used=deltas.gas_used)
 

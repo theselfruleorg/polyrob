@@ -26,7 +26,7 @@ for running it as a persistent service.
 ## Naming: framework vs. instance
 
 **POLYROB** is the framework. A running deployment is one **instance** of it —
-by default the instance id is `"rob"` (`core/instance.py::DEFAULT_INSTANCE_ID`,
+by default the instance id is `"polyrob"` (`core/instance.py::DEFAULT_INSTANCE_ID`,
 overridable via `POLYROB_INSTANCE_ID`/`BOT_INSTANCE_ID`). The Console's product
 name is resolved independently of the instance id:
 

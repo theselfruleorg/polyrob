@@ -142,8 +142,16 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
     4. Route messages to active sessions
     """
 
-    def __init__(self, name: str = "task_agent", config=None, container=None):
-        """Initialize task agent wrapper."""
+    def __init__(self, name: str = "task_agent", config=None, container=None,
+                 owns_workspace_gc: bool = True):
+        """Initialize task agent wrapper.
+
+        owns_workspace_gc: whether THIS process runs the daily workspace GC.
+            The GC is destructive (rmtree), so exactly one process per box may
+            own it. Read-only consumers that happen to build a TaskAgent — the
+            webview console above all — must pass False. Default True keeps the
+            agent/API processes behaving exactly as before.
+        """
         # Get container if not provided - CRITICAL for tools
         if not container:
             from core.container import DependencyContainer
@@ -159,6 +167,9 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             config=config,
             container=container
         )
+
+        # Whether this process owns the destructive daily workspace GC (see __init__).
+        self._owns_workspace_gc = bool(owns_workspace_gc)
 
         # Store capabilities
         self.capabilities = ["automation", "browser", "planning", "multi-agent"]
@@ -365,9 +376,13 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
             self._bg_tasks.append(asyncio.create_task(self._periodic_cleanup()))
             logger.info(f"✓ Started periodic cleanup task (interval: {self.cleanup_interval}s, TTL: {self.session_ttl_seconds}s)")
 
-            # Start workspace cleanup task
-            self._bg_tasks.append(asyncio.create_task(self._periodic_workspace_cleanup()))
-            logger.info("✓ Started periodic workspace cleanup task")
+            # Start workspace cleanup task — ONLY in the process that owns it.
+            if getattr(self, "_owns_workspace_gc", True):
+                self._bg_tasks.append(asyncio.create_task(self._periodic_workspace_cleanup()))
+                logger.info("✓ Started periodic workspace cleanup task")
+            else:
+                logger.info("• Workspace cleanup task NOT started (this process does "
+                            "not own the workspace GC)")
 
         except ImportError as e:
             self._task_unavailable_reason = str(e)
@@ -2164,7 +2179,14 @@ class TaskAgent(ConversationResumeMixin, BaseAgent):
                 logger.error(f"Error in periodic cleanup: {e}")
 
     async def _periodic_workspace_cleanup(self):
-        """Periodically clean up old session workspaces."""
+        """Periodically clean up old session workspaces (destructive: rmtree).
+
+        Returns immediately in a process that does not own the GC. Belt to the
+        spawn-site brace: a second owner is a data-loss bug, not a slow tick.
+        """
+        if not getattr(self, "_owns_workspace_gc", True):
+            logger.debug("workspace GC not owned by this process — loop not running")
+            return
         while True:
             try:
                 # Run cleanup daily

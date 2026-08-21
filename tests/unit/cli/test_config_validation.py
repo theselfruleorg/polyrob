@@ -185,7 +185,8 @@ def test_pref_write_lands_in_preferences_toml(tmp_path, monkeypatch):
     r = CliRunner().invoke(config, ["set", "style.verbosity", "terse",
                                     "--user", "u1", "--home", str(tmp_path)])
     assert r.exit_code == 0, r.output
-    prefs_file = tmp_path / "identity" / "rob" / "user_u1" / "preferences.toml"
+    from core.instance import DEFAULT_INSTANCE_ID
+    prefs_file = tmp_path / "identity" / DEFAULT_INSTANCE_ID / "user_u1" / "preferences.toml"
     assert prefs_file.exists()
     assert "terse" in prefs_file.read_text()
 

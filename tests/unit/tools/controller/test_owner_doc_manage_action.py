@@ -46,8 +46,8 @@ async def test_update_is_always_quarantined_even_review_off(monkeypatch, tmp_pat
     upd = action.param_model(action="update", content="Owner prefers concise answers.")
     res = await action.function(upd, execution_context=ctx)
     assert res.extracted_content and "pending" in res.extracted_content.lower()
-    assert (tmp_path / "identity" / "rob" / "user_u1" / ".pending" / "owner.md").exists()
-    assert not (tmp_path / "identity" / "rob" / "user_u1" / "owner.md").exists()
+    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
+    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
 
 @pytest.mark.asyncio
@@ -79,7 +79,7 @@ async def test_forged_turn_cannot_promote(monkeypatch, tmp_path):
     forged = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
     res = await action.function(action.param_model(action="promote"), execution_context=forged)
     assert res.error and "owner" in res.error.lower()
-    assert not (tmp_path / "identity" / "rob" / "user_u1" / "owner.md").exists()
+    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
 
 @pytest.mark.asyncio

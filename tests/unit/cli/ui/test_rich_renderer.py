@@ -45,7 +45,7 @@ def test_step_event_renders_message_bubble():
     out = buf.getvalue()
     # The message text appears as the rob bubble...
     assert "hello" in out
-    assert "rob" in out
+    assert "polyrob" in out
     # ...but the demoted scaffolding does not (REPL message-only chat turn).
     assert "Step 1" not in out
     assert "→ send_message" not in out
@@ -230,9 +230,9 @@ def test_main_agent_step_renders_bubble_not_subagent_line():
     r.on_event(normalize(_REAL_STEP))
     out = buf.getvalue()
     assert "hello" in out
-    assert "rob" in out
+    assert "polyrob" in out
     # Not collapsed to a sub-agent one-liner.
-    assert "step 1" not in out.lower() or "rob" in out
+    assert "step 1" not in out.lower() or "polyrob" in out
 
 
 def test_session_start_emits_no_block():
@@ -493,7 +493,7 @@ def test_agent_message_has_speaker_mark():
     r.on_turn_start("hi")
     r.on_event(normalize(_MSG_STEP))
     out = buf.getvalue()
-    assert "● rob" in out
+    assert "● polyrob" in out
 
 
 def test_render_trace_replays_last_turn():

@@ -25,6 +25,15 @@ def _clean_approval_env(monkeypatch):
     approval._refreeze_approval_flags_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_cwd(tmp_path, monkeypatch):
+    """Run every CLI invoke from an isolated CWD so a dev box's project-local
+    ``./.polyrob/.env`` (e.g. a POLYROB_INSTANCE_ID pin) can never inject into
+    the test process through the command's load_env — the prefs written with
+    the default instance id must be the prefs the command reads."""
+    monkeypatch.chdir(tmp_path)
+
+
 def _invoke(args):
     from cli.commands.approvals import approvals as approvals_group
     return CliRunner().invoke(approvals_group, args)

@@ -51,6 +51,7 @@ capability instead of forgetting it when the task ends.
 - **Episodic activity log** — a durable "what happened last time" ledger bridges each new session so it never starts cold.
 - **Writes its own skills** — authored through a scanned, quarantined pipeline; every self-modification is reviewed before it takes effect, so a background turn can never silently rewrite a skill or the agent's identity.
 - **Evolving identity** — a per-user self-doc the agent updates (owner-gated) as it learns how you work.
+- **Named profiles** — run several isolated bots on one machine (`polyrob -P scout`), each with its own persona, memory, keys and daemons; export a profile or install one from a git repo. See [docs/guide/profiles.md](docs/guide/profiles.md).
 
 Skills use the open [agentskills.io](https://agentskills.io) `SKILL.md` format — the same format as
 Claude Code, read straight from `~/.claude/skills/`. Install from a local folder, a GitHub repo, or

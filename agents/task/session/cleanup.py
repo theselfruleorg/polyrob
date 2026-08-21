@@ -99,6 +99,30 @@ class SessionCleanupMixin:
         except Exception:
             pass
 
+    def _is_shared_tool_instance(self, tool_name: str, tool) -> bool:
+        """True if ``tool`` is a process-wide shared instance this session must
+        NOT tear down: the DependencyContainer's registered service (identity
+        check against both lookup names load_tools_from_container uses), or
+        the shared BrowserManager's browser.
+
+        Fail-open toward "session-owned" only when there is genuinely no
+        container to consult — a wrong "shared" answer merely leaks a
+        session-local tool; a wrong "owned" answer kills a singleton for the
+        whole process (the 2026-08-21 outage).
+        """
+        container = getattr(self, "container", None)
+        if container is not None and hasattr(container, "get_service"):
+            for candidate in (f"{tool_name}_tool", tool_name):
+                try:
+                    if container.has_service(candidate) and container.get_service(candidate) is tool:
+                        return True
+                except Exception:
+                    continue
+        browser_manager = getattr(self, "browser_manager", None)
+        if browser_manager is not None and getattr(browser_manager, "browser", None) is tool:
+            return True
+        return False
+
     async def cleanup(
         self,
         preserve_workspace: bool = False,
@@ -509,32 +533,48 @@ class SessionCleanupMixin:
                     except Exception as e:
                         self.logger.debug(f"Error flushing telemetry: {e}")
 
-                # Release controller tools with comprehensive cleanup
+                # Release SESSION-OWNED controller tools.
+                #
+                # 2026-08-21 incident: this loop used to call tool._cleanup()
+                # on EVERY controller tool — including process-wide container
+                # singletons (twitter, mcp, task, ...). One idle session's
+                # eviction nulled TwitterTool.client/MCPTool.server_manager
+                # for the whole process, and because the direct _cleanup()
+                # call skipped cleanup() (the only writer of _initialized),
+                # load_tools_from_container's `if not tool.is_initialized`
+                # re-init gate never fired again — dead until restart.
+                # See docs/ops/2026-08-21-twitter-singleton-teardown-incident.md.
+                #
+                # Rules now: (1) a tool instance owned by the container or the
+                # shared BrowserManager is NOT this session's to destroy —
+                # skip it; (2) session-owned tools are released via the PUBLIC
+                # cleanup() (which keeps _initialized honest), falling back to
+                # close() — NEVER the private _cleanup().
                 if self.controller:
                     try:
                         cleaned_count = 0
                         failed_count = 0
+                        skipped_shared = 0
 
                         for tool_name in self.controller.list_tools():
                             tool = self.controller.get_tool(tool_name)
                             if not tool:
                                 continue
 
+                            if self._is_shared_tool_instance(tool_name, tool):
+                                skipped_shared += 1
+                                self.logger.debug(
+                                    f"Skipping shared tool '{tool_name}' — "
+                                    f"container/browser-manager owned, not session property"
+                                )
+                                continue
+
                             try:
-                                # Try multiple cleanup patterns
                                 cleaned = False
 
-                                # Method 1: _cleanup() (preferred async)
-                                if hasattr(tool, '_cleanup') and callable(tool._cleanup):
-                                    import asyncio
-                                    if asyncio.iscoroutinefunction(tool._cleanup):
-                                        await tool._cleanup()
-                                    else:
-                                        tool._cleanup()
-                                    cleaned = True
-
-                                # Method 2: cleanup() (alternative)
-                                elif hasattr(tool, 'cleanup') and callable(tool.cleanup):
+                                # Public cleanup() — the ONLY sanctioned teardown
+                                # (updates _initialized so re-init works later).
+                                if hasattr(tool, 'cleanup') and callable(tool.cleanup):
                                     import asyncio
                                     if asyncio.iscoroutinefunction(tool.cleanup):
                                         await tool.cleanup()
@@ -542,7 +582,7 @@ class SessionCleanupMixin:
                                         tool.cleanup()
                                     cleaned = True
 
-                                # Method 3: close() (HTTP clients, etc.)
+                                # close() fallback (HTTP clients, etc.)
                                 elif hasattr(tool, 'close') and callable(tool.close):
                                     import asyncio
                                     if asyncio.iscoroutinefunction(tool.close):
@@ -563,9 +603,10 @@ class SessionCleanupMixin:
                                 failed_count += 1
                                 self.logger.error(f"Error cleaning up tool {tool_name}: {e}")
 
-                        if cleaned_count > 0 or failed_count > 0:
+                        if cleaned_count > 0 or failed_count > 0 or skipped_shared > 0:
                             self.logger.info(
-                                f"Cleaned up {cleaned_count} tool(s)"
+                                f"Cleaned up {cleaned_count} session-owned tool(s), "
+                                f"skipped {skipped_shared} shared"
                                 + (f" ({failed_count} failed)" if failed_count > 0 else "")
                             )
                     except Exception as e:

@@ -72,7 +72,7 @@ def _tool(backend):
 
 
 def _owner_ctx(**kw):
-    d = dict(role="orchestrator", is_sub_agent=False, user_id="rob",
+    d = dict(role="orchestrator", is_sub_agent=False, user_id="polyrob",
              session_id="s1", metadata={"turn_kind": None})
     d.update(kw)
     return ActionExecutionContext(**d)

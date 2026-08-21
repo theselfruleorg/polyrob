@@ -90,7 +90,10 @@ async def maybe_escalate_empty_pipeline(task_agent: Any, *,
             text += f"\nMy planner's last word: {planner_summary.strip()[:400]}"
         container = getattr(task_agent, "container", None)
         from core.self_evolution import push_owner_message
-        sent = await push_owner_message(container, text)
+        # An empty pipeline is "the board can't advance without you" — the same
+        # class as goal_blocked, not chatter. Ride the critical lane the daily
+        # cap cannot drop, or an idle-overnight board goes unseen.
+        sent = await push_owner_message(container, text, source="goal_blocked")
         if sent:
             logger.info("empty goal pipeline → owner escalation sent")
         return bool(sent)

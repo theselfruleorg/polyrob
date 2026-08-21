@@ -54,11 +54,18 @@ _MANUAL_STEPS = {
 
 
 def _parse_unit_files(output: str) -> list:
-    """Service names out of `systemctl list-unit-files 'polyrob*'` plain output."""
+    """Service names out of `systemctl list-unit-files 'polyrob*'` plain output.
+
+    A bare TEMPLATE ("polyrob@.service") is skipped: `systemctl stop
+    polyrob@.service` is invalid (no instance name), and since the manual steps
+    are one `&&` chain, including it would abort the chain BEFORE `git pull` —
+    the update would silently do nothing (the exact U3 failure class this
+    function exists to prevent). Live instances ("polyrob@rob.service") pass.
+    """
     units = []
     for line in output.splitlines():
         parts = line.split()
-        if parts and parts[0].endswith(".service"):
+        if parts and parts[0].endswith(".service") and not parts[0].endswith("@.service"):
             units.append(parts[0])
     return units
 

@@ -67,7 +67,10 @@ def valid_slug(slug: Any) -> bool:
     """Is *slug* safe as both a URL path segment and a directory name?"""
     if not isinstance(slug, str) or not slug or len(slug) > MAX_SLUG_LEN:
         return False
-    return bool(_SLUG_RE.match(slug))
+    # fullmatch, not match: `$` matches before a trailing newline, so match()
+    # accepted "abc\n" — a distinct DB key + a newline-named served directory for
+    # what reads as the same public address.
+    return bool(_SLUG_RE.fullmatch(slug))
 
 
 @dataclass

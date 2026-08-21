@@ -162,11 +162,11 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path):
     from core.contract_writer import ContractWriter
     from core.prefs import propose_pref_change
 
-    ContractWriter(tmp_path, instance_id="rob").propose(
+    ContractWriter(tmp_path, instance_id="polyrob").propose(
         "Never spend more than $5 without asking.", user_id="u1",
         created_by="user", pending=True)
     ok, result = propose_pref_change("u1", "approvals.require", None, tmp_path,
-                                     instance_id="rob", op="remove_entry",
+                                     instance_id="polyrob", op="remove_entry",
                                      entry="git_push")
     assert ok, result
 

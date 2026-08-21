@@ -35,14 +35,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from prompt_toolkit.key_binding import KeyBindings
 
 
-from core.paths import polyrob_home
-DEFAULT_HISTORY_PATH = polyrob_home() / "history"
-
-
 def default_history_path() -> Path:
-    """Return (and ensure the parent of) the default history file path."""
-    DEFAULT_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return DEFAULT_HISTORY_PATH
+    """Return (and ensure the parent of) the default history file path.
+
+    Resolved LAZILY on purpose (Hermes "Seam #1" landmine): a module-level
+    ``polyrob_home()`` binding freezes the home at import time, so a profile
+    selected afterwards (``-P``/``POLYROB_PROFILE`` set ``POLYROB_HOME``) would
+    silently keep writing history into the wrong home. The module-binding
+    ratchet (tests/test_home_binding_ratchet.py) forbids reintroducing one.
+    """
+    from core.paths import polyrob_home
+
+    path = polyrob_home() / "history"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 # ---------------------------------------------------------------------------

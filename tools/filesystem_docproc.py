@@ -200,7 +200,20 @@ class DocProcessingMixin:
     # ---------------------------------------------------------------------------
 
     async def _clean_text(self, text: str) -> str:
-        """Clean and normalize text content."""
+        """Normalize text EXTRACTED FROM A DOCUMENT (PDF/DOCX prose).
+
+        ⚠️ NEVER call this on file content the agent reads or writes. It strips
+        every line and collapses horizontal whitespace, so it DESTROYS the
+        indentation of Python, YAML and nested Markdown. It has bitten twice:
+        once on the write path (F9 — see tools/filesystem.py::write_file) and
+        once on the read path, where reading a .py returned source that no
+        longer compiled and the agent then edited from the corrupted copy.
+
+        Both call sites are gone; this is prose-extraction machinery only. If
+        you are reaching for it on a file read or write, you want the raw
+        content instead. Guarded by tests/unit/tools/test_filesystem_read_verbatim.py
+        and test_filesystem_write_verbatim.py.
+        """
         if not text:
             return ""
 

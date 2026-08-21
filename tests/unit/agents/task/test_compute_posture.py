@@ -16,6 +16,7 @@ AUTONOMY_POSTURE): how much host/compute capability the agent has (0 confined,
 import pytest
 
 import agents.task.constants as c
+from core.instance import DEFAULT_INSTANCE_ID
 from tools.controller.execution_context import ActionExecutionContext
 
 
@@ -47,9 +48,9 @@ def _freeze(monkeypatch, value):
 
 def _ctx(**kw):
     """A genuine owner-steered main-agent context (clean env: owner principal is
-    the instance default 'rob', so user_id='rob' is the owner tenant)."""
+    the instance default DEFAULT_INSTANCE_ID, so that user_id is the owner tenant)."""
     defaults = dict(
-        role="orchestrator", is_sub_agent=False, user_id="rob",
+        role="orchestrator", is_sub_agent=False, user_id=DEFAULT_INSTANCE_ID,
         session_id="s1", metadata={"turn_kind": None},
     )
     defaults.update(kw)
@@ -146,7 +147,7 @@ def test_gate_explicit_owner_principal_binding_wins(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     assert c.compute_posture_allows(_ctx(user_id="alice"), 1) is True
     # instance-id default no longer matches once an explicit owner is bound
-    assert c.compute_posture_allows(_ctx(user_id="rob"), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id=DEFAULT_INSTANCE_ID), 1) is False
 
 
 def test_gate_allows_owner_tenant_autonomous_session(monkeypatch):

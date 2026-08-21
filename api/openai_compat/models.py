@@ -51,7 +51,7 @@ class ChatCompletionResponse(BaseModel):
 class _ModelCard(BaseModel):
     id: str
     object: str = "model"
-    owned_by: str = "rob"
+    owned_by: str = "polyrob"
 
 
 class ModelsListResponse(BaseModel):

@@ -67,7 +67,7 @@ def _spy_resolve(monkeypatch):
 
 def _owner_ctx():
     return SimpleNamespace(session_id="s1", role="orchestrator", is_sub_agent=False,
-                           user_id="rob", metadata={})
+                           user_id="polyrob", metadata={})
 
 
 @pytest.mark.asyncio

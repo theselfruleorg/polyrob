@@ -314,7 +314,9 @@ def main():
     if args.all:
         # Look for sessions in common locations
         possible_paths = [
-            Path("/opt/rob/data/sessions"),
+            Path("/var/lib/polyrob/sessions"),
+            Path("/opt/polyrob/data/sessions"),
+            Path("/opt/rob/data/sessions"),  # legacy install prefix
             Path("./data/sessions"),
             Path("../data/sessions")
         ]

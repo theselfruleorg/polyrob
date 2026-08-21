@@ -510,6 +510,18 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     except Exception:
         lines.append("autonomy: unknown (AUTONOMY_ENABLED)")
 
+    # Active profile (multi-instance W4) — the first thing to check when the
+    # agent's identity looks wrong.
+    try:
+        from core.profiles import resolve_active_profile
+        _sel = resolve_active_profile()
+        if _sel is not None:
+            lines.append(f"profile: {_sel.name} (via {_sel.source}) at {_sel.home}")
+        else:
+            lines.append("profile: none (legacy/project mode)")
+    except Exception:
+        lines.append("profile: unknown")
+
     # Where this instance's data + config live — new-user orientation ("what's
     # running and where"). Data home mirrors schema_status_line's resolution.
     _data_home = (env.get("POLYROB_DATA_DIR") or "").strip()

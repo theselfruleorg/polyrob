@@ -1,13 +1,13 @@
 """Character management system."""
 
 import json
-import logging
 from typing import Optional, Dict, List
 from pathlib import Path
 
 from core.config import BotConfig
 from core.exceptions import ConfigurationError
 from .character import Character
+from .persona_resolver import DEFAULT_CHARACTER_NAME, resolve_characters_dir
 from core.logging import get_component_logger
 from core.container import DependencyContainer
 
@@ -23,15 +23,11 @@ class CharacterManager:
         self._active_character = None
         self._default_character = None
         
-        # Fix 1-B: Check for characters in data directory first, then package directory
-        data_chars_dir = Path(config.data_dir) / "characters" if hasattr(config, 'data_dir') else None
-        package_chars_dir = Path(__file__).parent / "characters"
-        
-        # Use data directory if it exists and has character files, otherwise use package directory
-        if data_chars_dir and data_chars_dir.exists() and list(data_chars_dir.glob("*.character.json")):
-            self.characters_dir = data_chars_dir
-        else:
-            self.characters_dir = package_chars_dir
+        # Fix 1-B + W3 (profiles): ONE precedence implementation —
+        # persona_resolver.resolve_characters_dir (<data_dir>/characters >
+        # <config home>/characters > the packaged neutral set).
+        self.characters_dir = resolve_characters_dir(
+            getattr(config, 'data_dir', None))
             
         self.logger = get_component_logger(f"CharacterManager.{name}")
         self._initialized = False
@@ -53,14 +49,27 @@ class CharacterManager:
                 raise ConfigurationError(f"Characters directory not found: {self.characters_dir}")
             
             # Create default character first
-            default_name = self.config.get('personality.default_character', 'rob')
+            default_name = self.config.get('personality.default_character',
+                                           DEFAULT_CHARACTER_NAME)
             self.logger.debug(f"Using default character name: {default_name}")
-            
-            # Load character from JSON file
+
+            # Load character from JSON file. A missing NAMED character degrades
+            # to the packaged neutral one (W1 upgrade shim) — an existing
+            # install must not hard-fail because its configured character left
+            # the package or its data-dir character set lacks the file.
             char_file = self.characters_dir / f"{default_name}.character.json"
             if not char_file.exists():
-                self.logger.error(f"Default character file not found: {char_file}")
-                raise ConfigurationError(f"Default character file not found: {char_file}")
+                fallback = (Path(__file__).parent / "characters"
+                            / f"{DEFAULT_CHARACTER_NAME}.character.json")
+                if fallback.exists():
+                    self.logger.warning(
+                        f"Default character file not found: {char_file}; "
+                        f"falling back to the neutral '{DEFAULT_CHARACTER_NAME}' character")
+                    default_name = DEFAULT_CHARACTER_NAME
+                    char_file = fallback
+                else:
+                    self.logger.error(f"Default character file not found: {char_file}")
+                    raise ConfigurationError(f"Default character file not found: {char_file}")
             
             try:
                 default_character = await self._load_character(char_file)
@@ -196,13 +205,11 @@ class CharacterManager:
         char_path = self.characters_dir / f"{character_name}.character.json"
         if char_path.exists():
             try:
-                with char_path.open('r', encoding='utf-8') as f:
-                    char_data = json.load(f)
-                    character = await self._load_character(char_path)
-                    if character:
-                        self.characters[character_name] = character
-                        self.logger.info(f"Loaded character {character_name}")
-                        return character
+                character = await self._load_character(char_path)
+                if character:
+                    self.characters[character_name] = character
+                    self.logger.info(f"Loaded character {character_name}")
+                    return character
             except Exception as e:
                 self.logger.error(f"Error loading character {character_name}: {e}")
 
@@ -231,12 +238,21 @@ class CharacterManager:
         """Get default character."""
         try:
             if not self._default_character:
-                default_name = getattr(self.config, 'default_character', 'rob')
+                default_name = getattr(self.config, 'default_character',
+                                       DEFAULT_CHARACTER_NAME)
                 char_file = self.characters_dir / f"{default_name}.character.json"
-                
+
                 if not char_file.exists():
-                    self.logger.error(f"Default character file not found: {char_file}")
-                    return None
+                    # W1 upgrade shim: degrade to the packaged neutral character.
+                    char_file = (Path(__file__).parent / "characters"
+                                 / f"{DEFAULT_CHARACTER_NAME}.character.json")
+                    if not char_file.exists():
+                        self.logger.error(
+                            f"Default character file not found for '{default_name}'")
+                        return None
+                    self.logger.warning(
+                        f"Default character '{default_name}' not found; using the "
+                        f"neutral '{DEFAULT_CHARACTER_NAME}' character")
                     
                 self._default_character = await self._load_character(char_file)
                 
@@ -294,16 +310,4 @@ class CharacterManager:
             return True
         return False
 
-    async def get_character_for_role(self, role: str) -> Optional[Character]:
-        """Get appropriate character for a specific role."""
-        role_character_map = {
-            'simulator': 'trump',  # Simulator agent uses Trump character
-            'main': 'rob',        # Main agent uses Rob character
-            'auto': 'rob'         # Auto agent uses Rob character
-        }
-        
-        character_name = role_character_map.get(role)
-        if not character_name:
-            return self._active_character  # Fall back to active character
-            
-        return await self.get_character(character_name) 
+ 

@@ -16,6 +16,7 @@ Running `polyrob` with no arguments opens the interactive REPL. Root options
 | Flag | Meaning |
 |------|---------|
 | `--plain` | Force plain, line-oriented output (no ANSI / toolbar) |
+| `-P, --profile NAME` | Run as a named profile (an isolated home: own `.env`, characters, memory, identity) — applies to EVERY subcommand, e.g. `polyrob -P scout telegram`. See [profiles.md](profiles.md) |
 | `--project PATH` | Persistent project workspace — the agent reads/writes here across sessions (sets `POLYROB_PROJECT_DIR`) |
 | `-m, --model` / `-p, --provider` | Model/provider for this REPL session (parity with `polyrob run`) |
 | `--toolset NAME` | Named toolset for this REPL session |
@@ -291,6 +292,7 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 | `polyrob gateway` | Run all enabled surfaces in one process |
 | `polyrob surface` | Inspect/pause/resume per-surface circuit breakers: `list`, `pause`, `resume` |
 | `polyrob owner` | Owner/correspondent admin: `show`, `correspondents`, `approve`, `invite`, `pending`/`show-pending`/`promote`/`reject` (self-evolution review), `asks`/`fulfill`, `allow`/`deny`/`allowlist` (outbound messaging), `invoices`/`settle` (x402), `groups` (group-chat allowlist) |
+| `polyrob profile` | Named profiles (isolated bot identities): `create`, `list`, `use`, `show`, `path`, `adopt`, `rename`, `delete`, `alias`, `export`/`import` (backup), `install`/`update`/`info` (git distribution) — see [profiles.md](profiles.md) |
 | `polyrob version` | Show version and environment info |
 
 ### Autonomy & workspace

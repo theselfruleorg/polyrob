@@ -60,5 +60,9 @@ def test_external_skill_is_catalog_visible_and_loadable(tmp_path, monkeypatch):
     monkeypatch.setattr(skill_discovery, "user_external_roots", lambda: [tmp_path / ".agents" / "skills"])
     monkeypatch.setattr(skill_discovery, "trust_project_skills_effective", lambda: False, raising=False)
     mgr = sm.SkillManager()
-    assert any(c["id"] == "widget" for c in mgr.get_catalog_skills())
+    # max_skills raised past the bundled-library size: this test asserts the
+    # MECHANISM (an external skill is discoverable + loadable), and the default
+    # top-20 cap starts evicting it as the bundled library grows (27 as of
+    # 2026-08-19's trading-doctrine skill).
+    assert any(c["id"] == "widget" for c in mgr.get_catalog_skills(max_skills=100))
     assert "BODY" in mgr._load_skill_content("widget", user_id=None)

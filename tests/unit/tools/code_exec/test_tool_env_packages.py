@@ -58,9 +58,9 @@ def _tool(backend):
 
 
 def _owner_ctx():
-    # clean env: owner principal defaults to the instance id 'rob'
+    # clean env: owner principal defaults to the instance id 'polyrob'
     return ActionExecutionContext(role="orchestrator", is_sub_agent=False,
-                                  user_id="rob", session_id="s1",
+                                  user_id="polyrob", session_id="s1",
                                   metadata={"turn_kind": None})
 
 

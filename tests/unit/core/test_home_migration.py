@@ -1,4 +1,4 @@
-"""Tests for core/home_migration.py::migrate_rob_home_once.
+"""Tests for core/home_migration.py (home + identity-instance migrations).
 
 Monkeypatch ``$HOME`` to a tmp_path so the copy is fully isolated.
 """
@@ -7,7 +7,12 @@ import shutil
 
 import pytest
 
-from core.home_migration import migrate_rob_home_once, _MARKER_NAME
+from core.home_migration import (
+    _IDENTITY_MARKER_NAME,
+    _MARKER_NAME,
+    migrate_identity_instance_once,
+    migrate_rob_home_once,
+)
 
 
 @pytest.fixture
@@ -65,3 +70,60 @@ def test_fail_open_on_copy_error(fake_home, monkeypatch):
     migrate_rob_home_once()
     # ... and must leave a usable ~/.polyrob behind.
     assert (fake_home / ".polyrob").exists()
+
+
+# ── W1: identity/rob -> identity/polyrob (DEFAULT_INSTANCE_ID rename) ───────
+
+
+@pytest.fixture
+def identity_home(monkeypatch, tmp_path):
+    monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("BOT_INSTANCE_ID", raising=False)
+    # A leaked POLYROB_PROFILE (resolve_instance_id tier 3) would make the
+    # migration see a non-default instance and skip — keep this order-robust.
+    monkeypatch.delenv("POLYROB_PROFILE", raising=False)
+    legacy = tmp_path / "identity" / "rob" / "user_owner"
+    legacy.mkdir(parents=True)
+    (legacy / "self.md").write_text("I am the evolving self doc.\n")
+    return tmp_path
+
+
+def test_identity_migration_copies_and_keeps_source(identity_home):
+    migrate_identity_instance_once(identity_home)
+    new_doc = identity_home / "identity" / "polyrob" / "user_owner" / "self.md"
+    assert new_doc.read_text() == "I am the evolving self doc.\n"
+    assert (identity_home / "identity" / _IDENTITY_MARKER_NAME).exists()
+    # copy-not-move: the legacy tree stays intact
+    assert (identity_home / "identity" / "rob" / "user_owner" / "self.md").exists()
+
+
+def test_identity_migration_is_idempotent(identity_home):
+    migrate_identity_instance_once(identity_home)
+    new_doc = identity_home / "identity" / "polyrob" / "user_owner" / "self.md"
+    new_doc.write_text("EVOLVED\n")
+    migrate_identity_instance_once(identity_home)
+    assert new_doc.read_text() == "EVOLVED\n"  # no re-copy/overwrite
+
+
+def test_identity_migration_skips_explicit_instance_id(identity_home, monkeypatch):
+    # Prod pins POLYROB_INSTANCE_ID=rob — its tree keeps working, no copy needed.
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    migrate_identity_instance_once(identity_home)
+    assert not (identity_home / "identity" / "polyrob").exists()
+
+
+def test_identity_migration_noop_without_legacy_tree(tmp_path, monkeypatch):
+    monkeypatch.delenv("POLYROB_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("BOT_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("POLYROB_PROFILE", raising=False)
+    migrate_identity_instance_once(tmp_path)
+    assert not (tmp_path / "identity").exists()
+
+
+def test_identity_migration_fail_open_on_copy_error(identity_home, monkeypatch):
+    def _boom(*args, **kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(shutil, "copytree", _boom)
+    migrate_identity_instance_once(identity_home)  # must not raise
+    assert (identity_home / "identity" / "rob").exists()  # source untouched

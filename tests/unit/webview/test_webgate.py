@@ -77,8 +77,9 @@ def test_bind_port_webview_port_fallback(webgate, monkeypatch):
     assert webgate.bind_port() == 7000
 
 
-def test_local_owner_id_falls_back_to_rob(webgate):
-    assert webgate.local_owner_id() == "rob"
+def test_local_owner_id_falls_back_to_instance_default(webgate):
+    from core.instance import DEFAULT_INSTANCE_ID
+    assert webgate.local_owner_id() == DEFAULT_INSTANCE_ID
 
 
 def test_local_owner_id_env_override(webgate, monkeypatch):

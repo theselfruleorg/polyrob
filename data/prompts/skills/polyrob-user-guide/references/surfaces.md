@@ -23,7 +23,7 @@ loop, several front doors — each surface adapts inbound/outbound to the SAME
   the live list.
 - `polyrob init` — first-run setup (provider keys, default provider/model,
   toolset, template); also pairs the instance to an **owner**
-  (`--owner`/`--instance-id`, both default `rob`). Re-runnable any time.
+  (`--owner`/`--instance-id`, both default `polyrob`). Re-runnable any time.
 - `polyrob doctor` — diagnostics: provider keys, resolved provider/model,
   memory backend + optional deps, workspace isolation, skill-library
   compliance. `polyrob doctor --flags` reports the live flag catalog.

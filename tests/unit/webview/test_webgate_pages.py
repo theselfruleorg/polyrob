@@ -211,7 +211,7 @@ def test_identity_page_hides_avatar_when_pref_false(monkeypatch, tmp_path):
     client, pages = _router_client()
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     monkeypatch.setattr(pages, "_effective_user_id", lambda request: "u1")
-    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "rob")
+    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "polyrob")
     assert ok, err
     r = client.get("/identity")
     assert r.status_code == 200

@@ -87,7 +87,7 @@ def build_inbound_message(update: dict, user_directory: Any,
     tg_id = str(from_user.get("id")) if from_user.get("id") is not None else str(chat_id)
 
     # Owner alias: an authenticated Telegram owner operates as the instance OWNER
-    # principal (e.g. "rob") so their chat shares autonomy's tenant (goals/memory/SELF)
+    # principal (the instance id) so their chat shares autonomy's tenant (goals/memory/SELF)
     # instead of a surface-hashed u_ id. Telegram-only + owner-only + fail-open to the
     # legacy hashed id (owner_surface_alias returns None for a non-owner / unbound owner).
     from core.instance import owner_surface_alias

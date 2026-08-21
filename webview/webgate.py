@@ -161,7 +161,7 @@ def local_owner_id() -> str:
     """The single owner of this instance in single-user mode.
 
     Reuses instance/owner resolution: the bound owner principal if any, else
-    ``POLYROB_LOCAL_OWNER``, else the instance id (defaults to ``"rob"``).
+    ``POLYROB_LOCAL_OWNER``, else the instance id (defaults to ``"polyrob"``).
     """
     return (
         # STRICT: an explicitly-bound owner wins, but POLYROB_LOCAL_OWNER must rank
@@ -169,7 +169,7 @@ def local_owner_id() -> str:
         # fold-in here and let the layered fallback below own the instance default.
         resolve_owner_principal(default_to_instance=False)
         or os.environ.get("POLYROB_LOCAL_OWNER")
-        or resolve_instance_id()  # defaults to "rob"
+        or resolve_instance_id()  # defaults to "polyrob"
     )
 
 
