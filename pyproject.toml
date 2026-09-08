@@ -39,11 +39,17 @@ crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0
 # carry a Rust-backed dependency it never imports.
 # ⚠️ `solana` is UPPER-bounded on purpose. The x402 SDK's SVM mechanism imports
 # `from solana.rpc.api import Client` — the SYNCHRONOUS client, which solana-py
-# removed in 0.36 (0.40 ships only `rpc/async_api.py`). An unbounded install
+# DELETED in 0.40.0 (0.40 ships only `rpc/async_api.py`). An unbounded install
 # resolves to a version where the SDK's own module cannot import, and the
 # failure surfaces as a confusing "install x402[svm]" error when x402[svm] is
 # already installed. Our OWN Solana code needs only `solders` and is unaffected.
-solana = ["solders>=0.21", "x402[svm]>=2.16.0", "solana>=0.34,<0.36"]
+# The bound is `<0.40`, NOT `<0.36`: `solana/rpc/api.py` is verified present in
+# 0.36.6, 0.36.12, 0.37.1, 0.38.0 and 0.39.0, and absent from 0.40.0 onward.
+# `<0.36` was also UNSATISFIABLE — every published x402 declares
+# `solana>=0.36.0` under its `svm` extra, so the pair had no solution and pip
+# backtracked through the whole x402 range into a cytoolz sdist that fails to
+# Cythonize on current toolchains (public CI, 0.13.0).
+solana = ["solders>=0.21", "x402[svm]>=2.16.0", "solana>=0.36,<0.40"]
 telegram = ["aiogram>=3.17.0"]
 twitter = ["tweepy>=4.14.0"]
 voice = ["faster-whisper>=1.0.0"]
