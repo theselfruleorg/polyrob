@@ -3,6 +3,15 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 
+# deployment/ units and scripts/ are operator-owned host tooling; neither ships
+# in the public framework export. On the private tree these always run.
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    not (REPO / "deployment").is_dir() or not (REPO / "scripts").is_dir(),
+    reason="deployment/ + scripts/ are operator tooling, absent from the public tree",
+)
+
 
 def test_unit_file_shape():
     text = (REPO / "deployment" / "polyrob-apps.service").read_text()

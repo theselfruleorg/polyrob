@@ -16,6 +16,15 @@ from agents.task.goals.board import GoalBoard
 
 ROOT = Path(__file__).resolve().parents[5]
 
+# `scripts/` is operator/deploy tooling and never ships in the public framework
+# export, so these tests have nothing to exercise there. Skip honestly rather
+# than fail: on the private tree, where the script exists, they always run.
+SEEDER = ROOT / "scripts" / "seed_streams.py"
+pytestmark = pytest.mark.skipif(
+    not SEEDER.is_file(),
+    reason="scripts/seed_streams.py is operator tooling, absent from the public tree",
+)
+
 
 def _load_script():
     spec = importlib.util.spec_from_file_location(

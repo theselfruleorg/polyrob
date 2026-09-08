@@ -8,6 +8,15 @@ import yaml
 from agents.task.goals.board import GoalBoard
 from agents.task.goals import streams as S
 
+# The shipped manifest is operator-authored instance data (the ONE place a money
+# verb may be granted to an autonomous goal), deliberately excluded from the
+# public framework export. Only the three tests that read it are conditional;
+# every other test here builds its own manifest inline and always runs.
+_requires_shipped_manifest = pytest.mark.skipif(
+    not os.path.isfile(S.default_manifest_path()),
+    reason="data/streams/streams.yaml is operator data, absent from the public tree",
+)
+
 
 @pytest.fixture
 def board(tmp_path):
@@ -228,6 +237,7 @@ def test_merge_payload_preserves_other_keys(board):
     assert p["tools"] == ["task"] and p["stream"] == "demo"
 
 
+@_requires_shipped_manifest
 def test_the_shipped_manifest_parses():
     """A malformed shipped manifest silently stops every stream — catch it in CI."""
     got = S.load_manifest(S.default_manifest_path())
@@ -469,6 +479,7 @@ def test_a_clean_run_closes_a_standing_stream_failure_ask(board):
 
 # --- 2026-08-29: standing missions are streams, not bounded projects ----------
 
+@_requires_shipped_manifest
 def test_the_shipped_manifest_carries_the_two_standing_missions_without_money():
     """"Promote POLYROB … build-in-public" and "Build and ship real software
     artifacts" hit the 25-goal lifetime budget on prod (2026-08-28) and stalled the
@@ -491,6 +502,7 @@ def test_the_shipped_manifest_carries_the_two_standing_missions_without_money():
         "Build and ship real software artifacts"
 
 
+@_requires_shipped_manifest
 def test_ship_software_stream_can_actually_ship():
     """Publishing & app-deployment evaluation 2026-09-05 (Wave 1): the goal body told
     the agent to run servers via the process tool while the grant omitted

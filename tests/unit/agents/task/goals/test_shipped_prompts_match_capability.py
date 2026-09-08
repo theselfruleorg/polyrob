@@ -23,6 +23,17 @@ ROOT = pathlib.Path(__file__).resolve().parents[5]
 MANIFEST = ROOT / "data" / "streams" / "streams.yaml"
 SKILL = ROOT / "data" / "prompts" / "skills" / "treasury-trading" / "SKILL.md"
 
+# The stream manifest is operator-authored instance data (it is the ONE place a
+# money verb may be granted) and is deliberately excluded from the public
+# framework export. Only the two tests that READ it are conditional — the rail
+# check and the two SKILL.md assertions ship and always run.
+import pytest
+
+_requires_manifest = pytest.mark.skipif(
+    not MANIFEST.is_file(),
+    reason="data/streams/streams.yaml is operator data, absent from the public tree",
+)
+
 #: Claims that were true pre-rail and are false now. Matched case-insensitively
 #: against the whole prompt text.
 _FALSIFIED = (
@@ -47,6 +58,7 @@ def test_the_solana_rail_actually_exists():
     assert (ROOT / "core" / "wallet" / "solana_rail.py").is_file()
 
 
+@_requires_manifest
 def test_no_shipped_prompt_claims_solana_has_no_signer():
     for name, text in _prompt_texts().items():
         low = text.lower()
@@ -56,6 +68,7 @@ def test_no_shipped_prompt_claims_solana_has_no_signer():
                 f"this tells the agent to refuse a capability it has")
 
 
+@_requires_manifest
 def test_the_trading_stream_reads_the_solana_balance_every_run():
     """The owner's actual complaint was 'he never informs about solana balance
     and positions'. The manifest hardcoded portfolio(chain='base'), so the
