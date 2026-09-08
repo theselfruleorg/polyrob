@@ -125,3 +125,46 @@ def test_consume_ask_grant_no_flag_present_is_a_noop(board):
 
 def test_consume_ask_grant_unknown_id_is_a_noop(board):
     assert board.consume_ask_grant("nope") is False
+
+
+def test_consume_ask_grant_survives_payload_compaction(board):
+    """Task 9b: the same bug class Task 9 fixed in
+    ``modules/x402/invoicing.py`` — a string ``REPLACE``/``LIKE`` match on a
+    spaced ``json.dumps`` literal silently stops matching once ANY
+    ``json_set`` touches the SAME blob (SQLite's ``json_set`` re-serializes
+    the WHOLE blob COMPACTLY). No ``json_set`` currently touches
+    ``goals.payload`` anywhere in this codebase — confirmed by a repo-wide
+    grep — so this was LATENT, not reachable today. This test simulates a
+    hypothetical future dedup/backfill routine (mirroring
+    ``modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index``,
+    the REAL routine that triggers the same class of bug on
+    ``x402_payment_requests.metadata``) touching this row with ``json_set``,
+    to prove ``consume_ask_grant``'s fix is robust to it landing later."""
+    from core.sqlite_util import execute_retry
+
+    a = board.create_ask(user_id="rob", what="Approve x402_request? [xyz]",
+                         extra_payload={"grant_consumed": False}, force=True)
+
+    # Recompact the payload blob the way a future json_set-based dedup would.
+    execute_retry(
+        board.db_path,
+        "UPDATE goals SET payload = json_set(payload, '$.dedup_touched', 1) WHERE id=?",
+        (a.id,),
+    )
+    # Prove the recompaction actually happened: the OLD spaced-literal
+    # REPLACE/LIKE predicate this test guards against no longer matches this
+    # row at all — without this assertion the test would not demonstrate the
+    # bug's precondition, only the fix's postcondition.
+    still_spaced = execute_retry(
+        board.db_path,
+        "SELECT id FROM goals WHERE id=? AND payload LIKE '%\"grant_consumed\": false%'",
+        (a.id,), fetch="all",
+    )
+    assert list(still_spaced or []) == [], (
+        "setup did not actually recompact the payload blob — this test "
+        "would not be exercising the Task 9b bug"
+    )
+
+    assert board.consume_ask_grant(a.id) is True
+    assert board.consume_ask_grant(a.id) is False  # already consumed
+    assert board.get(a.id).payload["grant_consumed"] is True

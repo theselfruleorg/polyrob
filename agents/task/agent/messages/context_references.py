@@ -105,7 +105,7 @@ def _load_folder(path: str, root: Optional[str] = None) -> Optional[str]:
 		full = os.path.join(path, name)
 		# Secret guard: omit (or redact) entries that look like credential files.
 		try:
-			from agents.task.agent.core.secret_guard import is_secret_path as _isp
+			from core.security.secret_guard import is_secret_path as _isp
 			_root = Path(root or os.getcwd())
 			if not os.path.isdir(full) and _isp(Path(full), root=_root):
 				entries.append(f"{name} <redacted secret>")
@@ -234,7 +234,7 @@ def preprocess_context_references(
 		# Secret / binary guard — runs for @file regardless of confine_to_root.
 		if kind == "file" and arg:
 			try:
-				from agents.task.agent.core.secret_guard import (
+				from core.security.secret_guard import (
 					is_binary_file as _ibf,
 					is_secret_path as _isp,
 				)

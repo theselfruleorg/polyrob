@@ -126,11 +126,16 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		persona_block: Optional[str] = None,  # S1: chat-mode persona for SystemPrompt <identity>
 		tool_ids: Optional[List[str]] = None,  # Session's loaded tool_ids for config-aware prompt gating
 		include_vision: bool = True,  # T1-06: session's use_vision → gates the vision prompt section
+		surface_profile: Optional[dict] = None,  # G6: bound chat surface -> <surface> block
 	):
 		# S1 (chat consolidation): persona text forwarded to the SystemPrompt class
 		# when this manager builds the system message itself (no prebuilt profile
 		# message). None/"" => byte-identical legacy prompt.
 		self._persona_block = persona_block
+		# G6: the bound chat surface's capabilities, forwarded to SystemPrompt so
+		# the agent knows the message cap / media capability it writes for.
+		# None => surface-agnostic, prompt unchanged.
+		self._surface_profile = surface_profile
 		# Set up logger with session ID
 		from agents.task.logging_config import get_task_logger
 		self.logger = get_task_logger("messages", session_id)
@@ -345,6 +350,11 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 					_prompt_kwargs["autonomous"] = True
 			except Exception:
 				pass
+			# G6: same policy for the surface block — only passed when a chat
+			# surface is bound, so surface-agnostic sessions and custom
+			# system_prompt_class implementations stay byte-identical.
+			if self._surface_profile:
+				_prompt_kwargs["surface"] = self._surface_profile
 			prompt_instance = self.system_prompt_class(
 				self.action_descriptions,
 				**_prompt_kwargs,

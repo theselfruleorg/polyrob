@@ -38,26 +38,79 @@ class ChainRow:
     another chain's value.
     """
     name: str
-    chain_id: int                       # pinned config, NEVER the RPC's claim
-    native_symbol: str
-    public_rpc: str                     # fallback only; the pin always wins
-    max_fee_wei_per_tx: int             # per-chain: L1 gas dwarfs an L2's
-    purpose: str                        # guidance the agent reads to pick a chain
+    #: ``"evm"`` or ``"svm"``. Everything else on this row is read through this:
+    #: address rules, the broadcast rail, what ``chain_id`` means. Defaulting to
+    #: ``"evm"`` keeps every existing row byte-identical.
+    family: str = "evm"
+    #: EVM ONLY: the EIP-155 chain id, pinned config and NEVER the RPC's claim.
+    #: A non-EVM row carries ``0``, which is not a lie by accident — ``0`` is
+    #: falsey, and ``signer.sign_transaction`` refuses to sign a transaction
+    #: with no chainId, so a non-EVM row can never be signed through the EVM
+    #: rail even if a caller reached it.
+    chain_id: int = 0
+    native_symbol: str = ""
+    #: Decimals of the WRAPPED native. 18 on every EVM chain; 9 on Solana. It is
+    #: a per-row field because the pin builder used to hardcode 18, which would
+    #: size a wSOL amount a billion times wrong.
+    native_decimals: int = 18
+    public_rpc: str = ""                # fallback only; the pin always wins
+    max_fee_wei_per_tx: int = 0         # per-chain: L1 gas dwarfs an L2's
+    purpose: str = ""                   # guidance the agent reads to pick a chain
     usdc: Optional[str] = None
     univ3_router: Optional[str] = None
     univ3_quoter: Optional[str] = None
     wrapped_native: Optional[str] = None
     dexscreener_id: Optional[str] = None
+    #: GeckoTerminal's own network slug. Deliberately a separate field from
+    #: ``dexscreener_id``: the two indexers disagree about names (``eth`` vs
+    #: ``ethereum``, ``polygon_pos`` vs ``polygon``), and deriving one from the
+    #: other would work for Base and silently query the wrong chain elsewhere.
+    #: Verified against ``/api/v2/networks``, 2026-08-24.
+    geckoterminal_id: Optional[str] = None
     goplus_id: Optional[str] = None
     alchemy_slug: Optional[str] = None
+    #: The LI.FI Diamond on THIS chain — the one address a third-party route may
+    #: be approved to spend from (proposal 029). Pinned per chain for the same
+    #: reason the routers are: the address is deterministic across deployments
+    #: TODAY, and pinning it means a repointed API cannot nominate its own
+    #: spender tomorrow. `None` = no aggregator route here, which is a refusal,
+    #: never a fallback to another chain's value.
+    aggregator_spender: Optional[str] = None
+    #: Route providers to try on this chain, IN ORDER. "univ3" builds the
+    #: calldata locally from the pinned quoter/router and is always tried first
+    #: where it exists; "lifi" is a third party and is consulted only when local
+    #: construction finds no pool.
+    route_hints: Tuple[str, ...] = ("univ3", "lifi")
     #: Whether value may MOVE on this chain. Set only for a chain whose row is
     #: fully verified; a pinned RPC alone must never arm a chain.
     money_enabled: bool = False
+    #: Whether this row's TOKEN ADDRESSES were checked on-chain. It is what the
+    #: canonical pin table means by "verified", and it is deliberately separate
+    #: from ``money_enabled``: Solana moves value through its own rail rather
+    #: than the EVM one, so it is not ``money_enabled``, yet its USDC mint is
+    #: the same constant ``core/wallet/solana_x402.py`` asset-pins the live
+    #: settlement rail against. Every ``money_enabled`` row is implicitly
+    #: verified (arming a chain required checking its addresses first), so only
+    #: a non-money row needs to set this explicitly.
+    assets_verified: bool = False
 
     @property
     def rpc_env(self) -> str:
         return f"DEFI_EVM_RPC_{self.name.upper()}"
 
+
+#: LI.FI's Diamond proxy. Deterministic across deployments, so the SAME address
+#: on every chain it is pinned to below — but "the same" is a claim, so each
+#: chain's row was verified independently: ``eth_getCode`` non-empty (10,354 hex
+#: chars, byte-identical across all four) PLUS a functional USDC->wrapped-native
+#: quote naming it as ``approvalAddress``, on ethereum / base / arbitrum /
+#: polygon, 2026-08-24. Robinhood is deliberately absent: LI.FI does not index
+#: it, and a chain with no verified spender must refuse, not borrow.
+#:
+#: ⚠️ One endpoint (rpc.ankr.com/polygon) returned EMPTY code for this address
+#: while publicnode returned the full bytecode. Verify against an endpoint you
+#: trust; a proxying RPC that answers "no code" would silently disarm this pin.
+_LIFI_DIAMOND = "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
 
 _ROWS: Dict[str, ChainRow] = {
     "ethereum": ChainRow(
@@ -79,8 +132,10 @@ _ROWS: Dict[str, ChainRow] = {
         univ3_quoter="0x61fFE014bA17989E743c5F6cB21bF9697530B21e",   # QuoterV2
         wrapped_native="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",  # WETH9
         dexscreener_id="ethereum",
+        geckoterminal_id="eth",
         goplus_id="1",
         alchemy_slug="eth-mainnet",
+        aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
     "base": ChainRow(
@@ -98,53 +153,156 @@ _ROWS: Dict[str, ChainRow] = {
         univ3_quoter="0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a",
         wrapped_native="0x4200000000000000000000000000000000000006",
         dexscreener_id="base",
+        geckoterminal_id="base",
         goplus_id="8453",
         alchemy_slug="base-mainnet",
+        aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
+    # Promoted from DATA-ONLY on 2026-08-25. The old row said "no Uniswap V3
+    # deployment and no independent price feed were verified here" — the first
+    # half is still true and the second went stale: DexScreener, GeckoTerminal
+    # AND GoPlus all index this chain now. It is also, measured that day, the #2
+    # chain by paid attention on DexScreener's boost surface (13 boosted tokens
+    # against Base's 0), with minutes-old pools and CASHCAT trading $35M/24h.
+    #
+    # Verified on-chain that day: eth_chainId == 4663, WETH symbol+decimals, the
+    # aggregator spender carries code, and a live WETH->CASHCAT quote routes.
+    #
+    # ⚠️ THE QUOTE ASSET IS WETH, NOT A STABLECOIN. LI.FI returns "no available
+    # quotes" for every stablecoin leg tried here (USDG, USDe). Trading on this
+    # chain therefore needs a WETH balance ON this chain — the treasury's USDC
+    # lives on Base and bridging is deliberately out of scope, so this row is
+    # armed but unfunded until the owner puts WETH here.
     "robinhood": ChainRow(
         name="robinhood",
         chain_id=4663,
         native_symbol="ETH",                  # Arbitrum Orbit; no native token
         public_rpc="https://rpc.mainnet.chain.robinhood.com",
+        # Measured 0.024 gwei: a 1.2M-gas aggregator route costs ~0.0000287 ETH,
+        # so this is ~70 such routes of headroom as an anomaly brake.
         max_fee_wei_per_tx=2 * 10 ** 15,
-        purpose=("Robinhood's tokenized-equity L2 (Arbitrum Orbit, ETH gas). "
-                 "Readable for balances and contract state, but no Uniswap V3 "
-                 "deployment and no independent price feed were verified here, "
-                 "so it is DATA-ONLY: reads work, value cannot move."),
-        # No canonical USDC, DEX, price feed or screen verified on this chain.
+        purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas) and currently one of "
+                 "the busiest memecoin venues by paid attention — minutes-old "
+                 "pools, real depth on the leaders. Cheap gas. No Uniswap V3 "
+                 "router is pinned, so swaps route through the aggregator "
+                 "(pons-v2 and the Uniswap V2/V3/V4 deployments there). "
+                 "⚠️ Pairs quote in WETH and there is NO routable stablecoin, so "
+                 "you need WETH on THIS chain to trade — USDC on another chain "
+                 "does not help you here."),
+        # No canonical stablecoin routes on this chain; WETH is the quote asset.
+        wrapped_native="0x0bD7d308F8e1639FAb988DF18a8011f41EacaD73",
+        dexscreener_id="robinhood",
+        geckoterminal_id="robinhood",
+        goplus_id="4663",
         alchemy_slug="robinhood-mainnet",
-        money_enabled=False,
+        # NOT the Diamond every other chain uses — that address carries no code
+        # here. Read from a live quote and verified with eth_getCode.
+        aggregator_spender="0xB477751B76CF82d00a686A1232f5fCD772414Af3",
+        route_hints=("lifi",),
+        money_enabled=True,
     ),
     # Read-only rows: these exist because venues settle on them
     # (onchain.VENUE_CHAIN — hyperliquid/polymarket) and balance reads need the
     # endpoint and the USDC pin. Nothing about their money path is verified, so
     # money_enabled stays False and the trade verbs refuse them by name.
+    # Armed 2026-08-25 (029 §4). Neither carries a verified Uniswap V3
+    # deployment, and before the route seam that meant "no swap is possible
+    # here" — the aggregator IS the route on both, which is what made arming
+    # them a one-row change rather than a research task. Every address below was
+    # re-verified on-chain that day: USDC symbol+decimals, wrapped-native
+    # symbol+decimals, the pinned chain id against eth_chainId, and a functional
+    # USDC->wrapped-native quote naming the aggregator spender.
     "arbitrum": ChainRow(
         name="arbitrum",
         chain_id=42161,
         native_symbol="ETH",
         public_rpc="https://arb1.arbitrum.io/rpc",
-        max_fee_wei_per_tx=2 * 10 ** 15,
-        purpose=("Where the Hyperliquid venue settles. Balance reads only — no "
-                 "swap route is verified here."),
+        # Measured 0.02 gwei; a 250k-gas tx costs ~0.000005 ETH, so this is
+        # ~400 transactions of headroom as an anomaly brake.
+        max_fee_wei_per_tx=2 * 10 ** 15,      # 0.002 ETH
+        purpose=("Cheap L2 with deep majors liquidity, and where the Hyperliquid "
+                 "venue settles. Gas is ETH and costs a fraction of a cent. No "
+                 "Uniswap V3 deployment is pinned here, so swaps route through "
+                 "the aggregator — which reaches Camelot, Ramses and the rest."),
         usdc="0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+        wrapped_native="0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",   # WETH, verified
+        geckoterminal_id="arbitrum",
         goplus_id="42161",
         alchemy_slug="arb-mainnet",
-        money_enabled=False,
+        aggregator_spender=_LIFI_DIAMOND,
+        money_enabled=True,
     ),
     "polygon": ChainRow(
         name="polygon",
         chain_id=137,
         native_symbol="POL",
         public_rpc="https://polygon-rpc.com",
-        max_fee_wei_per_tx=2 * 10 ** 15,
-        purpose=("Where the Polymarket venue settles. Balance reads only — no "
-                 "swap route is verified here."),
+        # ⚠️ NOT the 0.002 default the other rows use. Polygon gas is ~276 gwei
+        # (measured 2026-08-25), so a 250k-gas transaction costs ~0.069 POL —
+        # the inherited 0.002 covered ZERO transactions and would have made this
+        # a chain that looked armed and refused everything. 0.5 POL is ~7 such
+        # transactions: still an anomaly brake, not a budget. The USD caps in
+        # tx_guard/PolicyGate are what bound what a trade is worth.
+        max_fee_wei_per_tx=5 * 10 ** 17,      # 0.5 POL
+        purpose=("Cheap chain with a large long-tail token market, and where the "
+                 "Polymarket venue settles. Gas is POL, NOT ether, and is far "
+                 "pricier per unit than an L2's — budget for it. No Uniswap V3 "
+                 "deployment is pinned here, so swaps route through the "
+                 "aggregator (QuickSwap, SushiSwap and the rest)."),
         usdc="0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+        wrapped_native="0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270",   # WPOL, verified
+        geckoterminal_id="polygon_pos",
         goplus_id="137",
         alchemy_slug="polygon-mainnet",
+        aggregator_spender=_LIFI_DIAMOND,
+        money_enabled=True,
+    ),
+    # ---- non-EVM ---------------------------------------------------------
+    # Solana. `money_enabled=False` and `route_hints=()` are NOT "nothing is
+    # armed here" — they say value never moves through the EVM rail or the EVM
+    # route providers. Solana has its own signer (`solana_signer.py`), rail
+    # (`solana_rail.py`), simulation (`solana_simulation.py`) and swap verb
+    # (`defi_trade.solana_swap`, Jupiter route, SOLANA_TRADE_ENABLED), and the
+    # EVM money verbs refuse this chain BY NAME so the two can never be
+    # confused. The 2026-08-22 crypto security audit records the parity
+    # mismatches the money side had to decide.
+    #
+    # The READ tier is wider still: three of our providers (DexScreener,
+    # GeckoTerminal, GoPlus) index Solana, and refusing to look was a blind
+    # spot, not caution.
+    "solana": ChainRow(
+        name="solana",
+        family="svm",
+        # chain_id is EIP-155 and has no Solana analogue. 0 is falsey, and
+        # `signer.sign_transaction` refuses a transaction with no chainId, so
+        # this row cannot be signed through the EVM rail by accident.
+        chain_id=0,
+        native_symbol="SOL",
+        # wSOL is 9 decimals, not 18. See ChainRow.native_decimals.
+        native_decimals=9,
+        public_rpc="https://api.mainnet-beta.solana.com",
+        max_fee_wei_per_tx=0,           # not a wei-denominated chain
+        purpose=("Solana. Reads (prices, screens, pool discovery, portfolio) "
+                 "work here; the EVM money verbs do NOT — swaps go through the "
+                 "dedicated defi_trade.solana_swap verb (Jupiter route, "
+                 "simulate-and-assert guard, SOLANA_TRADE_ENABLED). Its "
+                 "addresses are base58 with NO checksum, so a mistyped one is "
+                 "a valid different account — verify before trusting any "
+                 "address here."),
+        # The circulating USDC mint — the SAME constant solana_x402.py pins the
+        # live settlement rail against, which is why `assets_verified` is True.
+        usdc="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        # The wSOL system mint. Jupiter wraps through it, so a SOL sell is
+        # backed by native SOL plus any wrapped account. Carrying it here kills
+        # the second copy that lived in tools/defi/trade_tool.py.
+        wrapped_native="So11111111111111111111111111111111111111112",
+        dexscreener_id="solana",
+        geckoterminal_id="solana",
+        goplus_id="solana",
+        route_hints=(),
         money_enabled=False,
+        assets_verified=True,
     ),
 }
 
@@ -160,6 +318,21 @@ def all_rows() -> List[ChainRow]:
     return list(_ROWS.values())
 
 
+def rows_of_family(family: str) -> List[ChainRow]:
+    """Every row in one chain family.
+
+    Exists so an EVM-only consumer (the JSON-RPC read table, the EIP-55 token
+    pins, the EVM broadcast rail) can say so explicitly instead of iterating
+    every row and quietly assuming. Iterating all_rows() from EVM code is how a
+    Solana mint ends up in an eth_call.
+    """
+    return [r for r in _ROWS.values() if r.family == family]
+
+
+def evm_rows() -> List[ChainRow]:
+    return rows_of_family("evm")
+
+
 def names() -> List[str]:
     return list(_ROWS)
 
@@ -171,7 +344,8 @@ def money_chains() -> List[str]:
 
 
 def swap_chains() -> List[str]:
-    return [r.name for r in _ROWS.values() if r.money_enabled and r.univ3_router]
+    """Chains where a swap may both move value and find a route."""
+    return [r.name for r in _ROWS.values() if r.money_enabled and swap_ready(r.name)[0]]
 
 
 def rpc_is_pinned(chain: str) -> bool:
@@ -194,8 +368,18 @@ def money_capable(chain: str) -> Tuple[bool, str]:
         return False, (f"chain {chain!r} is unknown — known chains: "
                        f"{', '.join(names())}")
     if not row.money_enabled:
-        return False, (f"chain {row.name!r} is read-only here: {row.purpose} "
-                       f"Nothing can be sent, approved or swapped on it.")
+        # The tail is family-aware. "Nothing can be sent, approved or swapped"
+        # is true of a row with NO rail, and false of one that simply moves
+        # value somewhere else: Solana has its own signer, simulation and swap
+        # verb, so the blanket wording contradicted the same message's own
+        # pointer to solana_swap. A self-contradicting refusal is how the agent
+        # concluded the chain was unusable and stopped reporting it at all.
+        if row.family == "evm":
+            tail = "Nothing can be sent, approved or swapped on it."
+        else:
+            tail = (f"These EVM money verbs do not reach it — use the "
+                    f"{row.family}-native verb named above instead.")
+        return False, f"chain {row.name!r} is read-only here: {row.purpose} {tail}"
     return True, ""
 
 
@@ -219,21 +403,32 @@ def money_ready(chain: str) -> Tuple[bool, str]:
 
 
 def swap_ready(chain: str) -> Tuple[bool, str]:
-    """(ok, reason) — is there a verified swap ROUTE on *chain*?
+    """(ok, reason) — is a swap ROUTE configured for *chain* at all?
 
     Route capability only. Whether value may move at all (money_enabled + a
     pinned RPC) is ``money_ready``'s question, and a caller that swaps must
     satisfy BOTH — kept apart so each refusal names one missing thing instead
     of a compound one.
+
+    Since proposal 029 this is a REGISTRY-level question, not a Uniswap one: a
+    chain is route-capable if it has a verified local DEX deployment **or** a
+    pinned aggregator spender. Which providers are actually live at runtime is
+    a tools-tier question (``tools.defi.providers.routes``) — ``core`` cannot
+    import ``tools`` (5-tier ratchet), and it should not: a flag being off is
+    not the same fact as a chain having no route.
     """
     row = get(chain)
     if row is None:
         return False, (f"chain {chain!r} is unknown — known chains: "
                        f"{', '.join(names())}")
-    if not (row.univ3_router and row.univ3_quoter):
-        return False, (f"no verified Uniswap V3 deployment on {row.name} — "
-                       f"swapping there would send funds to an address that "
-                       f"carries no code. {row.purpose}")
+    has_local = bool(row.univ3_router and row.univ3_quoter)
+    has_aggregator = bool(row.aggregator_spender)
+    if not row.route_hints or not (has_local or has_aggregator):
+        return False, (f"no verified swap route on {row.name} — neither a "
+                       f"Uniswap V3 deployment nor an aggregator spender is "
+                       f"pinned for it, and swapping without one would send "
+                       f"funds to an address that carries no code. "
+                       f"{row.purpose}")
     return True, ""
 
 

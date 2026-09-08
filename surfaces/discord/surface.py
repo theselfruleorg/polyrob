@@ -20,14 +20,10 @@ _DISCORD_MAX = 2000
 
 
 def channel_id_from_session_key(session_key: str) -> str:
-    """Chat-scoped keys: ``agent:main:discord:{type}:{chat}[...]`` → chat
-    segment (index 4); ``direct:discord:{chat}`` → last; else last segment."""
-    parts = session_key.split(":")
-    if parts and parts[0] == "direct":
-        return parts[-1]
-    if len(parts) >= 5:
-        return parts[4]
-    return parts[-1] if parts else session_key
+    """Delegates to the ONE inverse parser next to build_session_key
+    (030 WS-B3/E1 — this 6-line parse was copied into every surface)."""
+    from core.surfaces.session_chat_registry import chat_id_from_session_key as _p
+    return _p(session_key)
 
 
 class DiscordSurface(Surface):
@@ -47,6 +43,7 @@ class DiscordSurface(Surface):
             is_multi_tenant=True,
             max_message_bytes=_DISCORD_MAX,
             markdown_flavor="none",    # Discord renders common markdown as-is
+            media_out=True,            # 030 D6: uploads via multipart attachments
         )
 
     async def send(self, msg: OutboundMessage) -> SendResult:
@@ -59,11 +56,33 @@ class DiscordSurface(Surface):
                 sent = await self._client.send_message(
                     channel_id, chunk, reply_to=msg.reply_to)
                 last_id = (sent or {}).get("id")
+            if msg.media:
+                await self._send_media(channel_id, msg.media)
             return SendResult(success=True,
                               surface_message_id=str(last_id) if last_id else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("DiscordSurface.send to %s failed: %s", channel_id, e)
             return SendResult(success=False, error=str(e))
+
+    async def _send_media(self, channel_id: str, media: list) -> None:
+        """Upload each renderable entry after the text (030 D6). Fail-open per
+        entry — a missing file or a rejected upload never takes the text down."""
+        import os
+        for entry in media:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if not path:
+                continue
+            if not (os.path.isfile(path) and os.access(path, os.R_OK)):
+                logger.warning("DiscordSurface: media path missing/unreadable: %s", path)
+                continue
+            try:
+                await self._client.send_file(
+                    channel_id, path, filename=os.path.basename(path),
+                    content=entry.get("caption") or None)
+            except Exception as e:
+                logger.warning("DiscordSurface: failed to upload %s: %s", path, e)
 
     async def start(self, container) -> None:
         return None

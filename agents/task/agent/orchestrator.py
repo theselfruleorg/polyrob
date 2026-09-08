@@ -46,7 +46,6 @@ from agents.task.agent.views import ActionResult
 # Concern-group mixins (pure code-motion from this module)
 from agents.task.session.workspace import WorkspaceMixin
 from agents.task.session.feed import FeedMixin
-from agents.task.session.multi_agent import MultiAgentMixin
 from agents.task.session.browser_pool import BrowserPoolMixin
 from agents.task.session.hitl_ingress import HITLIngressMixin
 from agents.task.session.cleanup import SessionCleanupMixin
@@ -108,7 +107,7 @@ def _maybe_seed_owner_profile(db: Optional[Any]) -> None:
         )
 
 
-class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoolMixin, HITLIngressMixin, SessionCleanupMixin, SessionExecutionMixin, SessionHooksMixin):
+class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngressMixin, SessionCleanupMixin, SessionExecutionMixin, SessionHooksMixin):
     """Orchestrates sessions with multiple agents.
     
     The SessionOrchestrator is responsible for coordinating agents, services and
@@ -318,7 +317,6 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, MultiAgentMixin, BrowserPoo
         self.agent_names = {}  # agent_id -> agent name
         self.agent_creation_times = {}  # agent_id -> creation time
         self.agent_models = {}  # agent_id -> model name
-        self.agent_execution_sequence = []  # Track agent execution sequence
         
         # CRITICAL FIX (Nov 26, 2025): Pending messages for pre-agent queuing
         # When messages arrive before agents exist, store here for later delivery

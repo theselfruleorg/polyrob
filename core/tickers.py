@@ -77,6 +77,32 @@ class IntervalTicker:
                 pass
 
 
+def emit_loop_heartbeats(entries, *, source: str = "supervisor") -> None:
+    """Record one ``autonomy_tick`` per ``(name, task)`` — the ONE liveness
+    emitter (2026-08-28: ``core.autonomy_runtime.AutonomyHandles``, which the
+    API lifespan / REPL / Telegram surface actually use, never emitted; prod had
+    zero heartbeats in 16k telemetry rows). Also prunes the log to its retention
+    window. Fail-open."""
+    try:
+        from core.event_log import get_event_log, event_log_enabled
+        if not event_log_enabled():
+            return
+        log = get_event_log()
+        for name, task in entries:
+            alive = not task.done()
+            log.record("autonomy_tick", source=source, loop=name,
+                       alive=alive, reason=None if alive else "task_exited")
+        # Keep the event log bounded (retention discipline; fail-open).
+        try:
+            import time as _t
+            days = max(1, int_env("TELEMETRY_EVENT_LOG_RETENTION_DAYS", 30))
+            log.prune(older_than_ts=_t.time() - days * 86400)
+        except Exception:
+            logger.debug("autonomy_tick: event-log prune skipped", exc_info=True)
+    except Exception:
+        pass
+
+
 class TickerSupervisor:
     """Manage a collection of named ticker tasks for API lifespan use.
 
@@ -110,24 +136,8 @@ class TickerSupervisor:
         relied on a manual human tick-log. This makes idle-but-alive observable, and
         flags a ticker whose task has died. Fail-open; lazy import keeps core clean.
         """
-        try:
-            from agents.task.telemetry.event_log import get_event_log, event_log_enabled
-            if not event_log_enabled():
-                return
-            log = get_event_log()
-            for name, (task, _stop) in self._tasks.items():
-                alive = not task.done()
-                log.record("autonomy_tick", source="supervisor", loop=name,
-                           alive=alive, reason=None if alive else "task_exited")
-            # Keep the event log bounded (retention discipline; fail-open).
-            try:
-                import time as _t
-                days = max(1, int_env("TELEMETRY_EVENT_LOG_RETENTION_DAYS", 30))
-                log.prune(older_than_ts=_t.time() - days * 86400)
-            except Exception:
-                pass
-        except Exception:
-            pass
+        emit_loop_heartbeats([(name, task) for name, (task, _stop) in self._tasks.items()],
+                             source="supervisor")
 
     async def _heartbeat_loop(self) -> None:
         interval = _heartbeat_interval_sec()

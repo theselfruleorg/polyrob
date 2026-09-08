@@ -14,6 +14,7 @@ from core.container import DependencyContainer
 from core.exceptions import LLMError, LLMConfigError, ServiceError
 
 from modules.llm.llm_client import LLMClient
+from modules.llm.manager_inventory import InventoryMixin
 
 # NOTE: provider client classes (AnthropicClient/OpenAIClient/GeminiClient/…) are
 # deliberately NOT imported at module level — each drags its vendor SDK (openai,
@@ -60,7 +61,7 @@ def _provider_of(client_name: str) -> str:
     return (client_name or '').replace('_client', '').replace('_fallback', '')
 
 
-class LLMManager(BaseComponent):
+class LLMManager(InventoryMixin, BaseComponent):
     """Service for managing LLM clients and configurations."""
 
     @staticmethod
@@ -102,8 +103,7 @@ class LLMManager(BaseComponent):
         self._fallback_enabled = True  # Always enable fallback
         self._initialization_attempts = {}  # Track initialization attempts
         
-        # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10);
-        # the legacy literal is the LLM_PROVIDER_REGISTRY=off kill-switch path.
+        # Fallback hierarchy — derived from the ProviderSpec registry (024 seam 10).
         # NOTE: deepseek_client DISABLED - use OpenRouter's DeepSeek instead
         self.FALLBACK_HIERARCHY = self._build_fallback_hierarchy()
 
@@ -117,31 +117,23 @@ class LLMManager(BaseComponent):
         policy table (or the spec's own default for a providers.yaml row that
         opted into ``fallback_eligible: true``, appended after the built-ins).
         """
-        legacy = [
-            ('openai_client', 'gpt-5'),  # Ultimate fallback - GPT-5
-            ('anthropic_client', 'claude-sonnet-4-5'),
-            ('openrouter_client', 'z-ai/glm-5.2'),  # OpenRouter default = Z.AI GLM flagship
-            ('gemini_client', 'gemini-2.5-flash'),
-        ]
+        from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
         try:
-            from modules.llm.llm_client_registry import DEFAULT_MODELS
-            from modules.llm.provider_spec import get_specs, provider_registry_enabled
-            if not provider_registry_enabled():
-                return legacy
-            eligible = [s for s in get_specs() if s.fallback_eligible]
-            ranked = sorted(
-                (s for s in eligible if s.fallback_rank is not None),
-                key=lambda s: s.fallback_rank,
-            )
-            unranked = [s for s in eligible if s.fallback_rank is None]
-            out = []
-            for s in ranked + unranked:
-                model = s.default_model or DEFAULT_MODELS.get(s.name)
-                if model:
-                    out.append((f"{s.name}_client", model))
-            return out or legacy
+            specs = get_specs()
         except Exception:
-            return legacy
+            specs = BUILTIN_SPECS  # a broken providers.yaml must not blank the hierarchy
+        eligible = [s for s in specs if s.fallback_eligible]
+        ranked = sorted(
+            (s for s in eligible if s.fallback_rank is not None),
+            key=lambda s: s.fallback_rank,
+        )
+        unranked = [s for s in eligible if s.fallback_rank is None]
+        out = []
+        for s in ranked + unranked:
+            model = s.default_model or DEFAULT_MODELS.get(s.name)
+            if model:
+                out.append((f"{s.name}_client", model))
+        return out
 
     def _configure_client_token_limits(self, client: LLMClient, model_name: str) -> None:
         """Configure client with appropriate token limits from model registry.
@@ -611,120 +603,6 @@ class LLMManager(BaseComponent):
             self.logger.error(f"Error during LLM Manager cleanup: {e}")
             raise
 
-    async def get_available_models(self, provider: Optional[str] = None) -> List[Tuple[str, str]]:
-        """Get a flat list of available models with their providers.
-        
-        IMPORTANT: Only returns models from providers that have successfully
-        initialized clients. This prevents the UI from showing unavailable options.
-        
-        Args:
-            provider: Optional provider name to filter results
-            
-        Returns:
-            List of (provider, model_name) tuples for INITIALIZED providers only
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        # Get list of initialized providers (clients that successfully initialized)
-        initialized_providers = set()
-        for client_name in self.clients.keys():
-            # Extract provider name from client name (e.g., "openai_client" -> "openai")
-            prov = client_name.replace('_client', '').replace('_fallback', '')
-            initialized_providers.add(prov)
-
-        if provider:
-            # Only return if this specific provider is initialized
-            if provider not in initialized_providers and f"{provider}_client" not in self.clients:
-                self.logger.debug(f"Provider '{provider}' requested but not initialized")
-                return []
-            wanted = {provider}
-        else:
-            wanted = initialized_providers
-
-        # P0.6: delegate the model list to the ONE catalog (modules.llm.available_models)
-        # instead of reading AVAILABLE_MODELS directly. Same (provider, model) tuples for the
-        # same initialized providers (an initialized provider always has a usable key, so
-        # `usable ∩ wanted == wanted`); the registry model set is identical (non-deprecated).
-        from modules.llm.available_models import available_models as _build_models
-        choices = _build_models(initialized_only=True, initialized_providers=wanted)
-        return [(c.provider, c.model) for c in choices]
-
-    async def get_available_clients(self) -> Dict[str, Dict[str, Any]]:
-        """Get comprehensive information about all available LLM clients.
-        
-        Returns:
-            Dictionary mapping client names to their metadata including provider, model,
-            initialization status, and available models for each client
-        """
-        if not self._initialized:
-            await self.initialize()
-            
-        result = {}
-        
-        # First add clients that are already initialized
-        for name, client in self.clients.items():
-            provider = name.replace('_client', '')
-            is_primary = (name == self.primary_client_name)
-            
-            # FIXED: Get token limits from model registry if available
-            model_config = None
-            max_tokens = getattr(client, 'max_tokens', None)
-            if max_tokens is None:
-                # Try to get intelligent default from model registry
-                if hasattr(client, 'model_type') and client.model_type:
-                    model_config = get_model_config(client.model_type)
-                    if model_config and model_config.max_completion_tokens:
-                        max_tokens = model_config.max_completion_tokens
-                
-                # Fallback to conservative default instead of 1000
-                if max_tokens is None:
-                    max_tokens = 8000
-            
-            # Build comprehensive metadata
-            result[name] = {
-                'name': name,
-                'provider': provider,
-                'model': client.model_type,
-                'initialized': getattr(client, '_initialized', False),
-                'is_primary': is_primary,
-                'max_tokens': max_tokens,
-                'temperature': getattr(client, 'temperature', 0.7),
-                'available_models': AVAILABLE_MODELS.get(provider, []),
-                'context_window': model_config.context_window if model_config else None,
-                'pricing': {
-                    'input_price': model_config.pricing.input_price if model_config else None,
-                    'output_price': model_config.pricing.output_price if model_config else None
-                } if model_config else None
-            }
-        
-        # Also include clients that aren't initialized but have config
-        for provider in AVAILABLE_MODELS.keys():
-            client_name = f"{provider}_client"
-            if client_name not in result:
-                # Check if we have config for this provider
-                config_data = self.llm_config.get(provider, {})
-                if config_data and 'api_key' in config_data:
-                    model_name = config_data.get('model') or get_default_model(provider)
-                    model_config = get_model_config(model_name) if model_name else None
-                    
-                    result[client_name] = {
-                        'name': client_name,
-                        'provider': provider,
-                        'model': model_name,
-                        'initialized': False,
-                        'is_primary': False,
-                        'max_tokens': model_config.max_completion_tokens if model_config else 8000,
-                        'available_models': AVAILABLE_MODELS.get(provider, []),
-                        'context_window': model_config.context_window if model_config else None,
-                        'pricing': {
-                            'input_price': model_config.pricing.input_price if model_config else None,
-                            'output_price': model_config.pricing.output_price if model_config else None
-                        } if model_config else None
-                    }
-        
-        return result
-
     async def get_chat_model(self,
                                provider: str,
                                model: str,
@@ -897,11 +775,28 @@ class LLMManager(BaseComponent):
         # Try the primary, then each provider in the fallback hierarchy
         for client_name, fallback_model in candidates:
             provider = _provider_of(client_name)
-            
+
             # Skip excluded providers
             if provider in exclude_providers or client_name in exclude_providers:
                 self.logger.debug(f"Skipping excluded provider: {provider}")
                 continue
+
+            # Skip a provider the credit sentinel has latched as credit-dead. A
+            # keyed-but-unfunded provider (e.g. OpenRouter at $0) passes the
+            # health check below — its /models endpoint answers 200 with zero
+            # credits — and is then tried for the real call, which 402s. Prod
+            # 2026-08-24..28: this fallback rung was the remaining source of
+            # OpenRouter 402s once the cron/goal paths already preferred the
+            # funded seat. Fail-open: a sentinel probe error never blocks a
+            # candidate (returns False).
+            try:
+                from core.credit_sentinel import credit_sentinel_active
+                if credit_sentinel_active(provider):
+                    self.logger.debug(
+                        f"Skipping credit-dead provider (sentinel active): {provider}")
+                    continue
+            except Exception:
+                pass
             
             # Check if client is available
             if client_name not in self.clients:

@@ -378,6 +378,7 @@ _CLI_OPTIONAL_REGISTRARS = (
     ("tools.x402",             "register_x402_invoice_tool", ("x402_invoice",)),
     ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
     ("tools.publish",          "register_publish_tool",      ("publish",)),
+    ("tools.app_service",      "register_app_service_tool",  ("app_service",)),
 )
 
 # Static (always-present) descriptors the CLI serves — the lightweight, dependency-free
@@ -657,12 +658,20 @@ def _resolve_workspace_lock_dir(data_home, ws_is_project_root: bool, project_roo
 async def build_cli_container(
     env: Optional[str] = None,
     log_level: Optional[str] = None,
+    require_llm: bool = True,
 ):
     """Lightweight container for CLI: config + LLM + TaskAgent only.
 
     Skips heavy initialization (embeddings, Pinecone, browser, RAG,
     character loading, torch, transformers) for fast startup.
     Only registers what TaskAgent needs to create and run sessions.
+
+    require_llm=False (L11, proposal 030): the read-only admin verbs
+    (``polyrob session list/show/costs/export``) build the container even on a
+    zero-key box — a failed LLMManager init degrades to a container WITHOUT the
+    'llm' service instead of raising, since listing local session metadata must
+    never require a provider key. Anything that later tries to RUN a session
+    still fails loudly ("LLMManager not available in container").
     """
     from core.config import BotConfig
     from core.container import DependencyContainer
@@ -783,10 +792,21 @@ async def build_cli_container(
     from modules.llm.llm_manager import LLMManager
     from modules.llm.llm_client import LLMClient
     LLMClient._skip_validate = True
-    llm = LLMManager(name='llm', config=config, container=container)
-    await llm.initialize()
-    LLMClient._skip_validate = False
-    container.register_service('llm', llm)
+    try:
+        llm = LLMManager(name='llm', config=config, container=container)
+        await llm.initialize()
+        container.register_service('llm', llm)
+    except Exception:
+        if require_llm:
+            raise
+        # L11: read-only container on a zero-key box — no 'llm' service.
+        logging.getLogger(__name__).info(
+            "LLM unavailable (no usable provider key) — building read-only "
+            "container without the 'llm' service")
+    finally:
+        # Always restore the class flag, even when initialize() raises (the old
+        # inline form leaked _skip_validate=True on failure).
+        LLMClient._skip_validate = False
 
     # Lazily register the embedding model when KB / local_vector / local-mode is active.
     maybe_register_cli_embedder(container, config)

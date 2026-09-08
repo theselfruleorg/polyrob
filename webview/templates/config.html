@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Config{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Config{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page" id="config-root"
+     data-read-only="{{ '1' if read_only else '' }}"
+     data-flags-writable="{{ '1' if flags_writable else '' }}">
+    <div class="webgate-header">
+        <h2>Config</h2>
+        <p class="text-muted text-sm">
+            Every setting the config service knows — typed preferences and the
+            cataloged env flags — with its effective value, where it came from,
+            and what it does. The same brain <code>polyrob config</code>, the
+            REPL <code>/config</code> and the agent's <code>preferences</code>
+            action read, so this page can never drift from enforcement.
+            {% if read_only %}<strong>Read-only console: edits are disabled.</strong>
+            {% elif not flags_writable %}<strong>Env-flag edits need the owner
+            console (local/own_ops posture) — preferences stay editable.</strong>
+            {% endif %}
+        </p>
+    </div>
+    <div class="webgate-search" id="config-controls">
+        <input id="config-query" class="form-control" type="search"
+               placeholder="Search settings (name, group, description)…"
+               autocomplete="off">
+    </div>
+    <div id="config-count" class="webgate-caption text-muted text-sm" style="display:none;"></div>
+    <div id="config-list" class="webgate-list"><div class="loading">Loading…</div></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/pages/config.js?v=20260827"></script>
+{% endblock %}

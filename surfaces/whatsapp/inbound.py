@@ -67,7 +67,7 @@ class WhatsAppInbound(WebhookSurface):
         return "whatsapp"
 
     def verify_signature(self, headers: dict, body: bytes) -> bool:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         secret = SurfaceConfig.webhook_secret("whatsapp")
         if not secret:
             logger.warning("whatsapp: no WHATSAPP_WEBHOOK_SECRET set — rejecting")
@@ -80,7 +80,7 @@ class WhatsAppInbound(WebhookSurface):
         return hmac.compare_digest(got, want)
 
     def verify_challenge(self, params: dict) -> Optional[str]:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         token = SurfaceConfig.webhook_verify_token("whatsapp")
         if token and params.get("hub.verify_token") == token:
             return params.get("hub.challenge")

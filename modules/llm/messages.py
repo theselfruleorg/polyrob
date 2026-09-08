@@ -212,7 +212,7 @@ class AIMessage(BaseMessage):
     # THIS per-call AIMessage instance right after the raw provider response
     # is captured. Deliberately a dedicated field (not the generic ``id``
     # above, which is message-identity, not provider-completion-identity) so
-    # ``extract_stable_request_id`` (agents/task/agent/core/aux_metering.py)
+    # ``extract_stable_request_id`` (modules/llm/aux_metering.py)
     # can read a STABLE, per-call idempotency key for billing dedup without
     # racing a concurrent call that shares the same underlying LLM client
     # object (parallel sub-agent delegation shares `parent_agent.llm`

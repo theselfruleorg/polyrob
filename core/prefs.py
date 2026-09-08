@@ -117,6 +117,10 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
                       "(local time), e.g. '23-08'. Enforced on the user-delivery "
                       "rail: sends inside the window are held and released at "
                       "window-end (018 P0.3)"),
+    _spec("pause.phrases", "list", SENSITIVITY_SAFE, "union", "live",
+          description="Extra object-free WORDS for the deterministic owner stop gate "
+                      "(031): 'stop <these words>' still means stop EVERYTHING, e.g. "
+                      "['ghosts', 'bots'] (a multi-word entry is split into words)"),
     _spec("delivery.rate_per_hour", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_RATE_PER_HOUR", min_value=1,
           description="Proactive messages/hour; effective = min(pref, env)"),
@@ -438,6 +442,18 @@ _STYLE_LINE_FIELDS: tuple[tuple[str, str], ...] = (
     ("digest.quiet_hours", "quiet hours"),
 )
 
+#: What each ``style.verbosity`` value actually MEANS to the agent.
+#:
+#: "verbosity terse" is a bare adjective with no operational content — no line
+#: budget, no rule about what to do with the detail that does not fit. A model
+#: reading it has nothing to comply with (chat-first review 2026-08-22, G7).
+#: These phrases give each value a budget and say where the overflow goes.
+_VERBOSITY_GUIDANCE: dict[str, str] = {
+    "terse": "reply in 5 lines or fewer; attach or link anything longer",
+    "normal": "reply in 15 lines or fewer; attach or link anything longer",
+    "detailed": "full detail inline is welcome",
+}
+
 
 def render_style_line(prefs: dict[str, object]) -> str:
     """Deterministic one-line style summary from typed prefs.
@@ -485,6 +501,11 @@ def render_style_line(prefs: dict[str, object]) -> str:
         if key in _THREAT_SCANNED_PREF_KEYS:
             scan_ok, _scan_err = _threat_scan_pref_value(key, coerced)
             if not scan_ok:
+                continue
+        if key == "style.verbosity":
+            guidance = _VERBOSITY_GUIDANCE.get(str(coerced))
+            if guidance:
+                parts.append(f"{label} {coerced} ({guidance})")
                 continue
         parts.append(f"{label} {coerced}")
     if not parts:
@@ -716,10 +737,10 @@ def catalog_lookup(key: str) -> Optional[tuple[str, str]]:
     dynamic-pattern entries (matched by regex, not equality). ``None`` when
     *key* matches nothing in the catalog.
     """
-    for name, group, default in CATALOG:
+    for name, group, default, *_ in CATALOG:
         if "<" not in name and name == key:
             return group, default
-    for name, group, default in CATALOG:
+    for name, group, default, *_ in CATALOG:
         if "<" in name and _pattern_to_regex(name).match(key):
             return group, default
     return None
@@ -727,7 +748,7 @@ def catalog_lookup(key: str) -> Optional[tuple[str, str]]:
 
 def catalog_names() -> list[str]:
     """Static (non-pattern) CATALOG flag names — for closest-match suggestions."""
-    return [name for name, _group, _default in CATALOG if "<" not in name]
+    return [name for name, _group, _default, *_ in CATALOG if "<" not in name]
 
 
 def shape_of_default(documented_default: str) -> str:

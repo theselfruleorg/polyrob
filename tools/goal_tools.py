@@ -33,9 +33,16 @@ logger = logging.getLogger(__name__)
 # sanctions email outreach, telegram group/channel posting (`message` — every send is still
 # gated by the owner outbound allowlist) and x402 INVOICING (receivables only, capped;
 # x402_pay/spend stays excluded), plus knowledge notes.
+# Proposal 029 R5 (2026-08-24): `defi_data` joins the allowlist. It is READ-only
+# token sight — it constructs no signer and broadcasts nothing, and it is not in
+# the capability table's `money` set — so excluding it was a tax on
+# reconnaissance rather than a safety property: every screening goal had to wait
+# for an operator-seeded cycle. `defi_trade` stays excluded, and that is exactly
+# where the line belongs. (`portfolio` remains separately gated by NAME while
+# correspondent-tainted; adding the tool here does not touch that.)
 _SELF_GOAL_ALLOWED_TOOLS = frozenset(
     {"filesystem", "task", "browser", "perplexity", "mcp", "anysite", "coding", "web_fetch",
-     "twitter", "email", "message", "x402_invoice", "knowledge"}
+     "twitter", "email", "message", "x402_invoice", "knowledge", "defi_data"}
 )
 
 
@@ -84,6 +91,90 @@ def _infer_tools_from_text(*texts: Optional[str]) -> set:
     return found & allowed_self_goal_tools()
 
 
+# 2026-08-18 (intel finding, MEDIUM-HIGH — recurred across x402/video/micro-app goal
+# families): self-created goals that EXPLICITLY narrow `tools` and carry an `http_ok`
+# acceptance check are structurally doomed — dispatcher._resolve_goal_tools returns
+# `payload.tools` VERBATIM the moment it's non-empty (agents/task/goals/dispatcher.py,
+# "if own: return own"), with NO widening for compute posture, and shell/process/
+# code_execution can NEVER be added via goal_create in the first place (deliberately
+# excluded from both _SELF_GOAL_ALLOWED_TOOLS and AUTONOMOUS_MODE_TOOLS — a security
+# boundary: host/compute tools ride AGENT_COMPUTE_POSTURE only, never a self-grant).
+# So there is nothing to auto-append here; the only tools that could serve an http_ok
+# check are the ones this function is forbidden from ever adding. The fix is to warn
+# loudly at create time instead of letting the goal dispatch, burn its step budget
+# trying to work around a tool it can never have, and die the identical way as its
+# 3+ predecessors in this exact family (evidenced live: rob-status/video-render goals).
+_COMPUTE_TOOL_IDS = frozenset({"shell", "process", "code_execution"})
+
+
+def _dropped_tools_note(requested: Optional[List[str]]) -> str:
+    """What the caller asked for and did NOT get, said out loud.
+
+    The filter itself is correct and unchanged — an agent-created goal must
+    never be able to acquire a money-SPEND verb, because the turn-origin gate
+    treats a genuine autonomous goal turn as allowed, which makes this allowlist
+    the only line stopping an INJECTED goal from trading.
+
+    What was wrong is that the strip was SILENT. Dropped ids went to a log line
+    the agent never sees, so `goal_create` returned success and the caller
+    learned nothing; it then hit the gap at dispatch, filed "defi_trade not
+    granted" as an owner ask, and repeated — roughly fifty times across two
+    weeks of prod. A boundary the caller cannot see is one it cannot respect,
+    and the money case needs the stronger sentence: not "ask again", but "this
+    can never come from here".
+    """
+    if not requested:
+        return ""
+    allowed = allowed_self_goal_tools()
+    dropped = [t for t in requested if t not in allowed]
+    if not dropped:
+        return ""
+    from core.tool_capabilities import ids_with
+    money = sorted(set(dropped) & set(ids_with("money")))
+    note = ("\n⚠️ NOT granted (a goal you create yourself cannot carry these): "
+            f"{', '.join(dropped)}.")
+    if money:
+        note += (f" {', '.join(money)} " + ("is a money tool" if len(money) == 1
+                                            else "are money tools")
+                 + " and can NEVER be granted this way — do not retry with "
+                 "different wording. Only the owner/operator grants one: on a "
+                 "goal THEY seeded, or at session creation. If you have a "
+                 "candidate and no grant, write it where the granted run will "
+                 "read it, and escalate ONCE rather than every run.")
+    return note
+
+
+def _compute_tool_mismatch_warning(tools: Optional[List[str]],
+                                    acceptance_checks: Optional[List[Any]]) -> Optional[str]:
+    """None if no mismatch; else a warning string to surface in the create result.
+
+    Only fires when `tools` was explicitly set (narrowing away from the wide
+    default) AND an `http_ok` check is present AND none of the compute tools
+    are already in the list — i.e. exactly the combination that can never
+    succeed, not a mere heuristic guess.
+    """
+    if not tools:
+        return None
+    if set(tools) & _COMPUTE_TOOL_IDS:
+        return None
+    has_http_ok = any(
+        isinstance(c, dict) and c.get("type") == "http_ok" for c in (acceptance_checks or [])
+    )
+    if not has_http_ok:
+        return None
+    return (
+        "⚠️ tool/acceptance mismatch: this goal's acceptance_checks include an "
+        "http_ok probe (needs a live HTTP server), but self-created goals can NEVER "
+        "be granted shell/process/code_execution — those are host/compute tools "
+        "gated separately by AGENT_COMPUTE_POSTURE, not by this tool's `tools` "
+        "param. With an explicit tools list set, dispatch uses it VERBATIM with no "
+        "widening, so this goal will dispatch without compute tools and cannot "
+        "serve HTTP. Recreate this goal WITHOUT the `tools` param (omit it "
+        "entirely) so dispatch applies the wide autonomous default, which includes "
+        "compute tools at the current posture."
+    )
+
+
 class GoalCreateAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(..., description="Short title for the durable goal.", min_length=3)
@@ -112,13 +203,31 @@ class GoalCreateAction(BaseModel):
                      "{'type':'http_ok','url':'https://…'}, "
                      "{'type':'file_contains','path':'report.md','contains':['A','B'],"
                      "'mode':'all'}]. Prefer setting one when the outcome is mechanically "
-                     "checkable."),
+                     "checkable. file_contains is an EXACT literal-substring match — use it "
+                     "only for known-exact strings (an id, a file path, a specific number). "
+                     "Do NOT use it to assert a report 'discusses'/'covers' a topic (e.g. "
+                     "contains=['PnL'] to check the report mentions profit/loss) — a "
+                     "semantically-complete report using different wording will fail this "
+                     "check and force a wasted retry. For that kind of completeness, describe "
+                     "it in plain-English `acceptance` instead and let the completion judge "
+                     "read it."),
     )
 
 
 class GoalListAction(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    status: Optional[str] = Field(None, description="Filter: triage/ready/running/blocked/done/cancelled.")
+    status: Optional[str] = Field(
+        None,
+        description="Filter: triage/waiting/ready/running/blocked/done/cancelled. Omitted = "
+                    "LIVE goals only (triage/waiting/ready/running/blocked); pass 'done' or "
+                    "'cancelled' to see history.")
+    limit: int = Field(30, ge=1, le=200, description="Newest N rows to show (default 30).")
+
+
+#: What ``goal_list`` shows when no status filter is given: work that is still
+#: on the board. ``done``/``cancelled`` are history and dwarf the live rows
+#: within days (357 done vs 1 ready on prod, 2026-08-29).
+GOAL_LIST_LIVE_STATUSES = ("triage", "waiting", "ready", "running", "blocked")
 
 
 class GoalShowAction(BaseModel):
@@ -203,12 +312,38 @@ class GoalTool(BaseTool):
         from core.identity import resolve_identity
         return resolve_identity()  # owner principal or "local" — never the anon sentinel (ME-D4)
 
+    @staticmethod
+    def _creating_turn_is_forged(execution_context) -> bool:
+        """True unless this is a genuine owner turn (fail-closed on any probe error)."""
+        try:
+            from tools.controller.turn_origin import _is_forged_or_autonomous_turn
+            return bool(_is_forged_or_autonomous_turn(execution_context, None))
+        except Exception:
+            return True
+
     @BaseTool.action("Record a DURABLE goal pursued across sessions (beyond this turn). "
                      "Use for ongoing objectives; use `task` for this-turn TODOs and `cronjob` "
                      "for time-scheduled runs.", param_model=GoalCreateAction)
     async def goal_create(self, params: GoalCreateAction, execution_context=None) -> ActionResult:
         user_id = self._user(execution_context)
         payload: dict = {}
+        # 031: the AUDIT stamp — who created this goal — set on EVERY turn kind,
+        # so the planner's own outcome accounting can count the goals it queued.
+        # Distinct from origin_session_id (below), which is the WAKE target and
+        # is stamped only for a genuine owner turn.
+        _sid = getattr(execution_context, "session_id", None)
+        if _sid:
+            payload["created_by_session_id"] = str(_sid)
+        # The creating session is the only session with a stake in this goal's
+        # completion; the dispatcher's self-wake re-entry targets it (and ONLY it —
+        # see GoalDispatcher._self_wake). Only a GENUINE turn (the owner's chat
+        # session) is stamped: a planner/goal/cron session or a forged re-entry is
+        # itself finished by the time the goal completes, and waking it would just
+        # be the completion echo again — a planner session woken this way could
+        # even queue more goals. Fail-closed: an undecidable origin stamps nothing.
+        _origin = getattr(execution_context, "session_id", None)
+        if _origin and not self._creating_turn_is_forged(execution_context):
+            payload["origin_session_id"] = str(_origin)
         allowed: List[str] = []
         if params.tools:
             _allowed_set = allowed_self_goal_tools()
@@ -241,8 +376,8 @@ class GoalTool(BaseTool):
         board = self._resolve_board()
         parent_id = None
         if params.objective_id:
-            obj = board.get(params.objective_id)
-            if obj is None or obj.kind != "objective" or obj.user_id != user_id:
+            obj = board.get(params.objective_id, user_id=user_id)
+            if obj is None or obj.kind != "objective":
                 return ActionResult(error=f"Cannot create goal: objective `{params.objective_id}` not found.",
                                     include_in_memory=True)
             parent_id = obj.id
@@ -274,23 +409,45 @@ class GoalTool(BaseTool):
             return ActionResult(error=f"Cannot create goal: {e}", include_in_memory=True)
         tool_note = f" tools={payload['tools']}" if payload.get("tools") else ""
         dep_note = f" depends_on={board.dependencies(goal.id)}" if params.depends_on else ""
-        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}",
+        drop_note = _dropped_tools_note(params.tools)
+        mismatch_warning = _compute_tool_mismatch_warning(payload.get("tools"), params.acceptance_checks)
+        warn_note = f"\n{mismatch_warning}" if mismatch_warning else ""
+        return ActionResult(extracted_content=f"Created goal `{goal.id}` (status={goal.status}){tool_note}{dep_note}: {goal.title}{drop_note}{warn_note}",
                             include_in_memory=True)
 
-    @BaseTool.action("List your durable goals (optionally filtered by status).",
+    @BaseTool.action("List your durable goals, newest first — LIVE ones by default "
+                     "(pass status='done'/'cancelled' for history).",
                      param_model=GoalListAction)
     async def goal_list(self, params: GoalListAction, execution_context=None) -> ActionResult:
-        goals = self._resolve_board().list(user_id=self._user(execution_context), status=params.status)
+        # A VIEW must read newest-first over the tenant's rows. ``board.list`` is the
+        # dispatcher's ``priority DESC, created_at ASC LIMIT`` order: used here it
+        # showed the OLDEST 100 rows of a 409-row prod board and zero manifest stream
+        # legs (priority 2/3 sort after every priority-5 row), so the agent told the
+        # owner it had no trading goals while ten clean cycles had run (2026-08-29).
+        board = self._resolve_board()
+        user_id = self._user(execution_context)
+        statuses = (params.status,) if params.status else GOAL_LIST_LIVE_STATUSES
+        goals = board.list_recent(user_id=user_id, statuses=statuses, limit=params.limit)
+        counts = board.status_counts(user_id=user_id)
+        totals = ", ".join(f"{n} {status}" for status, n in sorted(counts.items())) or "0 rows"
         if not goals:
-            return ActionResult(extracted_content="No durable goals.", include_in_memory=True)
+            what = f"status={params.status}" if params.status else "live"
+            return ActionResult(
+                extracted_content=f"No {what} goals. Board totals: {totals}.",
+                include_in_memory=True)
+        head = (f"Durable goals (newest first, showing {len(goals)} "
+                f"{'status=' + params.status if params.status else 'live'}; "
+                f"board totals: {totals}):")
         lines = [f"- `{g.id}` [{g.status}] p{g.priority}: {g.title}" for g in goals]
-        return ActionResult(extracted_content="Durable goals:\n" + "\n".join(lines), include_in_memory=True)
+        return ActionResult(extracted_content=head + "\n" + "\n".join(lines),
+                            include_in_memory=True)
 
     @BaseTool.action("Show one goal's detail + recent events.", param_model=GoalShowAction)
     async def goal_show(self, params: GoalShowAction, execution_context=None) -> ActionResult:
         board = self._resolve_board()
-        g = board.get(params.goal_id)
-        if not g or g.user_id != self._user(execution_context):
+        user_id = self._user(execution_context)
+        g = board.get(params.goal_id, user_id=user_id)
+        if not g:
             return ActionResult(error="Goal not found.", include_in_memory=True)
         payload = g.payload or {}
         lines = [
@@ -323,7 +480,7 @@ class GoalTool(BaseTool):
             capped = ids[:10]
             parts = []
             for dep_id in capped:
-                dep_goal = board.get(dep_id)
+                dep_goal = board.get(dep_id, user_id=user_id)  # a foreign id shows as '?', never its title
                 parts.append(f"{dep_id} ({dep_goal.title if dep_goal else '?'})")
             text = ", ".join(parts)
             if len(ids) > len(capped):

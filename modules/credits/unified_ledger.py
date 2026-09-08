@@ -89,7 +89,7 @@ def _wallet_leg(user_id: str, days: int) -> Dict[str, Any]:
         # widen into the platform-wide spend aggregate (cross-tenant leak)
         return {"wallet_spend_usd": 0.0, "wallet_payments": 0, "wallet_metering": "disabled"}
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if not event_log_enabled():
             return {"wallet_spend_usd": 0.0, "wallet_payments": 0,
                     "wallet_metering": "disabled"}

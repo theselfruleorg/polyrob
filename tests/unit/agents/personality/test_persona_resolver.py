@@ -89,7 +89,7 @@ def test_async_resolver_prefers_container_character_manager(monkeypatch):
 def test_both_surfaces_delegate_to_the_resolver():
     import inspect
 
-    import agents.task_agent_lite as tal
+    import agents.task.task_agent_chat as tal  # the chat mixin hosts _resolve_chat_persona (S8 split)
     import cli.persona as cp
 
     assert "persona_resolver" in inspect.getsource(tal)

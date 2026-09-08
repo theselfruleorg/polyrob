@@ -27,21 +27,18 @@ class LoopDetectionConfig:
     if IS_DEVELOPMENT:
         MAX_REPETITIONS = _core_int_env('MAX_REPETITIONS', 2)  # FIX 4: Aggressive loop detection
         UNCHANGED_STATE_THRESHOLD = _core_int_env('UNCHANGED_STATE_THRESHOLD', 3)  # FIX 4: Aggressive
-        STATE_CHANGE_THRESHOLD = 3  # FIX 4: Detect loops after 2-3 repetitions
-        MAX_ALLOWED_REPETITIONS = 2  # FIX 4: Catch loops after just 2 repetitions
     else:
         MAX_REPETITIONS = _core_int_env('MAX_REPETITIONS', 3)  # FIX 4: Stricter for production
         UNCHANGED_STATE_THRESHOLD = _core_int_env('UNCHANGED_STATE_THRESHOLD', 4)  # FIX 4: Stricter
-        STATE_CHANGE_THRESHOLD = 4  # FIX 4: Lower threshold
-        MAX_ALLOWED_REPETITIONS = 3  # FIX 4: Catch loops faster in production
 
-    ACTION_SIMILARITY_THRESHOLD = 0.95  # Strict matching to avoid false positives
+    # S7 (2026-08-29): the two consumed thresholds ARE the documented env knobs. They used
+    # to be separate hard-coded twins with the same defaults, so MAX_REPETITIONS /
+    # UNCHANGED_STATE_THRESHOLD were catalogued flags that gated nothing. Byte-identical
+    # when the env is unset. (ACTION_SIMILARITY_THRESHOLD, DETECTION_WINDOW,
+    # LOOP_WARNING_THRESHOLD, ALTERNATING_PATTERN_MIN had zero readers — removed.)
+    MAX_ALLOWED_REPETITIONS = MAX_REPETITIONS
+    STATE_CHANGE_THRESHOLD = UNCHANGED_STATE_THRESHOLD
     MEMORY_WINDOW_SIZE = 25  # Larger window for better context
-    DETECTION_WINDOW = 15  # Longer detection window
-
-    # Aliases for compatibility
-    LOOP_WARNING_THRESHOLD = MAX_ALLOWED_REPETITIONS  # Threshold for warning about loops
-    ALTERNATING_PATTERN_MIN = 4  # Minimum pattern length to detect alternating actions
 
 # Memory management configuration
 class MemoryConfig:
@@ -224,23 +221,6 @@ def resolve_aux_chain(task, provider=None):
     return chain
 
 
-def reflection_llm_enabled_default() -> bool:
-    """Whether H-MEM phase reflection synthesizes summaries via the aux LLM (UP-09).
-
-    Default **ON** (mirrors the MEMORY_BACKEND default-on precedent). Disable with
-    REFLECTION_LLM_ENABLED in {none, off, false, 0, no, ''}.
-
-    SINGLE SOURCE OF TRUTH: both the model-provisioning site (construction.py) and the
-    runtime guard (TaskContextManager.__init__) MUST read this helper. The historical bug
-    (Fusion-validated 2026-06-16) was that the runtime guard read
-    `BotConfig.get("REFLECTION_LLM_ENABLED", False)` — and `BotConfig.get` is
-    `getattr(self, key, default)` with no such attribute, so it was ALWAYS False — while
-    construction.py read os.getenv. The two sources disagreed and reflection never fired.
-    """
-    val = os.getenv("REFLECTION_LLM_ENABLED", "true").strip().lower()
-    return val not in ("none", "off", "false", "0", "no", "")
-
-
 # WS-1 (2026-07-16): the autonomy/mode/posture/payment-policy cluster + AutonomyConfig
 # were relocated to the core tier (core/config_policy/policy.py) to break the
 # core<->agents.task import cycle. They are re-exported here UNCHANGED so every existing
@@ -298,6 +278,12 @@ class TimeoutConfig:
         'browser': _core_int_env('BROWSER_TIMEOUT_SECONDS', 120),   # Browser: page loads, DOM operations
         'filesystem': _core_int_env('FILESYSTEM_TIMEOUT_SECONDS', 30),  # Filesystem: fast local I/O
         'polymarket': _core_int_env('POLYMARKET_TIMEOUT_SECONDS', 60),  # Polymarket API
+        # Publishing evaluation 2026-09-05 (Wave 1): the build tools' own foreground
+        # ceiling (SHELL_MAX_TIMEOUT_SEC, default 300) never fired on prod — this
+        # 'default' 60 s cap killed every install/build first (tool_timeout x15).
+        # Sit ABOVE the ceiling so the tool's own clean kill (with output) wins.
+        'shell': _core_int_env('SHELL_TIMEOUT_SECONDS', 330),
+        'code_execution': _core_int_env('CODE_EXEC_TIMEOUT_SECONDS', 330),
         'default': _core_int_env('DEFAULT_TOOL_TIMEOUT_SECONDS', 60),   # Default for unknown tools
     }
 
@@ -432,6 +418,10 @@ AUTONOMOUS_MODE_TOOLS = (
     "twitter", "email", "anysite", "perplexity",
     "browser", "mcp", "coding", "x402_invoice",
     "goal", "cronjob",
+    # Build-in-public: the real-account X browser rail (x_post is owner-approval-
+    # gated → auto+notify under autonomous mode). Social-write, NOT money/host, so
+    # the MONEY_AND_HOST exclusion invariant (test_autonomous_toolset) is intact.
+    "x_browser",
 )
 
 # MCP Tool Throttling (single source of truth)

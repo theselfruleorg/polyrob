@@ -5,6 +5,8 @@ per-tenant caps (proposal 006's duplicate-spam class), while the cron layer
 keeps its own gates ([SILENT], allowlist, proactive send-policy)."""
 import asyncio
 
+import pytest
+
 from cron.delivery import deliver_result
 from cron.jobs import CronJob
 
@@ -66,3 +68,60 @@ def test_cron_delivery_resolves_digit_uid_as_chat():
     ta = _TaskAgent(sink)
     asyncio.run(deliver_result(ta, _job(user_id="424242"), "hello", target="telegram"))
     assert sink.sent and sink.sent[0][0] == "424242"
+
+
+@pytest.mark.asyncio
+async def test_router_surface_delivery_resolves_owner_address(monkeypatch):
+    """030 D8: a cron job can deliver to any router surface; the recipient is
+    the owner's address on that surface (owner-address contract)."""
+    monkeypatch.setenv("OWNER_SLACK_ID", "C0FFEE")
+
+    class _Router:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, chat_id, text, surface_id="telegram", media=None):
+            self.sent.append((surface_id, chat_id, text))
+            return True
+
+    router = _Router()
+
+    class _Container:
+        def get_service(self, name):
+            return router if name == "message_router" else None
+
+    class _Agent:
+        config = None
+        container = _Container()
+
+    class _Job:
+        id = "j1"
+        user_id = "rob"
+        task = "daily check"
+
+    from cron.delivery import deliver_result
+    ok = await deliver_result(_Agent(), _Job(), "all healthy", target="slack")
+    assert ok is True
+    assert router.sent == [("slack", "C0FFEE", "all healthy")]
+
+
+@pytest.mark.asyncio
+async def test_router_surface_without_owner_address_fails_soft(monkeypatch):
+    monkeypatch.delenv("OWNER_DISCORD_ID", raising=False)
+
+    class _Container:
+        def get_service(self, name):
+            return None
+
+    class _Agent:
+        config = None
+        container = _Container()
+
+    class _Job:
+        id = "j2"
+        user_id = "rob"
+        task = "t"
+
+    from cron.delivery import deliver_result
+    ok = await deliver_result(_Agent(), _Job(), "result", target="discord")
+    assert ok is False

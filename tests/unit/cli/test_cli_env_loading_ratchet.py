@@ -23,13 +23,16 @@ SEAM_MARKERS = (
     "run_surface(",           # _surface_runner envelope (preflight inside)
 )
 
-#: Modules exempt from the seam requirement. SHRINK-ONLY — never add a row.
-#: - __init__/_errors: structural, no command entry points that read flags.
+#: Modules exempt from the seam requirement. SHRINK-ONLY for command modules —
+#: never add a row for a module that registers commands.
+#: - __init__/_errors/_grouped: structural, no command entry points that read
+#:   flags (_grouped is the GroupedGroup help-rendering class, 030 WS-C5 D7).
 #: (auth.py was exempt while its parallel-session work was in flight on
 #: 2026-08-14; wired + removed 2026-08-15.)
 EXEMPT = {
     "__init__.py",
     "_errors.py",
+    "_grouped.py",
 }
 
 

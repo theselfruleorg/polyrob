@@ -38,7 +38,23 @@ DEFAULT_GAS_LIMIT = 120_000
 #: Ceiling on a SIZED gas limit (size_gas). A transaction whose simulation
 #: already used more than this is refused outright: broadcasting it with less
 #: gas would out-of-gas revert on-chain and burn the whole fee.
-MAX_GAS_LIMIT = 500_000
+#:
+#: Raised 500k -> 2M on 2026-08-25, after the first live aggregator entry was
+#: refused here. It was sized for a direct Uniswap V3 ``exactInputSingle``
+#: (130-190k). An aggregator route hops several pools through a Diamond proxy
+#: and legitimately costs far more: the refused route measured **1,112,721 gas**
+#: on Base. At 500k the multi-chain rail was reachable but not executable —
+#: every quote clean, every swap refused — which is the same failure as a fee
+#: ceiling that covers zero transactions.
+#:
+#: ⚠️ This is NOT the economic bound and must not be treated as one. What a
+#: transaction may COST is ``ChainRow.max_fee_wei_per_tx``, re-checked against
+#: the SIZED gas a few lines below in ``size_gas`` — so raising this number
+#: widens what may EXECUTE, never what may be SPENT. On Base, 2M gas at the
+#: measured 0.006 gwei is ~0.000012 ETH against a 0.002 ETH fee ceiling, so the
+#: fee check still binds first by two orders of magnitude. This stays an anomaly
+#: brake against a pathological simulation.
+MAX_GAS_LIMIT = 2_000_000
 _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 
 

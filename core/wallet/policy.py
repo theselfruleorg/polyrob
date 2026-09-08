@@ -81,6 +81,33 @@ class PolicyGate:
         async with self._reserve_lock:
             yield
 
+    def _sync_shared_ledger(self) -> None:
+        """Fold in spends recorded by ANOTHER process before deciding.
+
+        The durable sink is one file shared by every wallet-touching process, but
+        it was read once at construction — so a second process (the owner running
+        a CLI trade while the daemon trades) judged the rolling-24h cap and the
+        replay guard against a snapshot from its own start, and both could clear a
+        nearly-exhausted cap. `reserve()` serializes the check→spend→record window
+        WITHIN a process; this is what makes the numbers it checks shared.
+
+        Fail-open by design: a refresh error leaves the in-memory view in charge
+        rather than blocking a spend. Durable LOSS is a different signal, and the
+        sink's high-water mark already reports it loudly.
+        """
+        refresh = getattr(self._audit, "refresh", None)
+        if refresh is None:
+            return                      # plain list sink: nothing shared to sync
+        try:
+            if refresh():
+                # New entries may carry keys this process has never seen.
+                self._seen_idempotency = {
+                    e["idempotency_key"] for e in self._audit
+                    if e.get("idempotency_key")
+                }
+        except Exception as e:
+            logger.warning("wallet audit refresh failed — using in-process view: %s", e)
+
     def _rolling_24h_spend(self, venue: Optional[str] = None) -> float:
         window_start = self._now() - _DAY_SECONDS
         return sum(
@@ -118,6 +145,9 @@ class PolicyGate:
                 False, "owner kill-switch active — autonomy halted, money movement refused")
         if amount_usd > self._ceiling:
             return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}")
+        # Both guards below (replay, rolling-24h caps) are computed from the audit
+        # ledger, so pick up anything another process appended since we loaded it.
+        self._sync_shared_ledger()
         if idempotency_key and idempotency_key in self._seen_idempotency:
             return PolicyDecision(False, f"idempotency key '{idempotency_key}' already used (replay blocked)")
         if self._daily_cap is not None:

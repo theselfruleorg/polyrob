@@ -31,7 +31,9 @@ def test_digest_changes_when_file_added_or_renamed(tmp_path):
     assert _digest(tmp_path) != d2
 
 
-@pytest.mark.parametrize("skipdir", [".git", "coding_snapshots", "node_modules", "__pycache__"])
+@pytest.mark.parametrize("skipdir", [".git", "coding_snapshots", "__pycache__",
+                                    ".pytest_cache", ".mypy_cache", ".tox", ".venv", "venv",
+                                    ".pylibs"])
 def test_digest_skips_noise_dirs(tmp_path, skipdir):
     (tmp_path / "app.py").write_text("x")
     d1 = _digest(tmp_path)
@@ -82,3 +84,22 @@ def test_gate_refuses_when_edited_after_last_green_test(tmp_path, edited_after_t
     digest, reason = _gate(edited_after_test_orch, tmp_path)
     assert digest is None
     assert "edited" in reason.lower()
+
+
+def test_digest_covers_what_a_deploy_actually_ships(tmp_path):
+    """ONE exclusion policy (core/ship_tree.py). node_modules SHIPS (a read-only
+    container cannot install anything), so it must be hashed; a symlink and a
+    credential-shaped file never ship, so they must not be."""
+    import os
+    from core.ship_tree import SKIP_DIRS
+    from tools.hf_deploy.digest import _SKIP_DIRS
+    assert _SKIP_DIRS is SKIP_DIRS and "node_modules" not in SKIP_DIRS
+    (tmp_path / "app.py").write_text("x")
+    d1 = _digest(tmp_path)
+    (tmp_path / "node_modules").mkdir()
+    (tmp_path / "node_modules" / "dep.js").write_text("y")
+    assert _digest(tmp_path) != d1
+    d2 = _digest(tmp_path)
+    (tmp_path / ".env").write_text("SECRET=1")          # refused by the snapshot
+    os.symlink("/etc/hostname", tmp_path / "link")      # refused by the snapshot
+    assert _digest(tmp_path) == d2

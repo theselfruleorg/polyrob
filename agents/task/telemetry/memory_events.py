@@ -44,7 +44,7 @@ def emit_memory_event(kind: str, *, user_id: str = "", session_id: str = "",
     disabled/unavailable.
     """
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if not event_log_enabled():
             return None
         payload = dict(

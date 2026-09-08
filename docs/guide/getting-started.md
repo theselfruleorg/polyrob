@@ -324,7 +324,8 @@ This is a curated subset for everyday use — see the [full slash-command refere
 /autonomy                 — Show autonomy loops + scheduled cron jobs / open goals
 /tools                    — List the agent's registered tools/actions
 /sessions                 — List all known sessions
-/replay <session>         — Replay a session's feed (visual history, not a re-attach; /resume is an alias)
+/replay <session>         — Replay a session's feed (visual history, not a re-attach)
+/pause [scope…] [for 6h]  — Pause autonomous work now (live); /resume lifts it
 ```
 
 ### Example Session

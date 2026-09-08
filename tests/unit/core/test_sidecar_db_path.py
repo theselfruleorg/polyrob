@@ -58,7 +58,7 @@ def test_axis_parity_with_db_manifest(_home):
 def test_event_log_default_uses_sidecar_axis(_home, monkeypatch):
     """The event log's default resolution must route through the helper."""
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_PATH", raising=False)
-    import agents.task.telemetry.event_log as ev
+    import core.event_log as ev
     log = ev.get_event_log()
     try:
         assert Path(log.db_path).resolve() == (_home / "telemetry_events.db").resolve()

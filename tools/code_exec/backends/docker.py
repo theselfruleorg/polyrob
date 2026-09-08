@@ -41,6 +41,7 @@ import logging
 import os
 import shutil
 import signal
+import stat
 import tempfile
 import time
 import uuid
@@ -49,12 +50,31 @@ from typing import Awaitable, Callable, List, Optional, Tuple
 from tools.code_exec.backend import ExecutionBackend, ExecutionBackendError
 from tools.code_exec.backends._proc import run_group
 from tools.code_exec.env_policy import SECRET_PAT, build_child_env
+from tools.code_exec.limits import dev_exec_max_timeout_sec
 from tools.code_exec.result import ExecutionRequest, ExecutionResult
 
 logger = logging.getLogger(__name__)
 
 _PY = ("python", "python3", "py")
 _SH = ("bash", "sh", "shell")
+
+
+def widen_mode_for_container(mode: int) -> int:
+    """The permission bits a host-created file needs so the forced-unprivileged
+    container uid can edit it — derived from the file's OWN mode, never a flat
+    0o666.
+
+    A file the host wrote 0o644 becomes 0o666; one written 0o755 becomes 0o777, so
+    a script the agent generated stays runnable. A file with no owner-exec bit
+    never GAINS one (widening permissions must not turn data into something the
+    sandbox can execute). Only the low nine bits are touched — setuid/setgid/sticky
+    are never propagated.
+    """
+    mode = stat.S_IMODE(mode)
+    widened = mode | 0o066                     # group + other: read & write
+    if mode & stat.S_IXUSR:
+        widened |= 0o011                       # keep an executable file executable
+    return widened
 
 #: Label applied to every persistent container this backend creates — the marker
 #: ``reap_orphans`` filters ``docker ps`` on.
@@ -167,15 +187,24 @@ class DockerBackend(ExecutionBackend):
         self.memory_mb = int(os.getenv("CODE_EXEC_CONTAINER_MEMORY_MB", "1024"))
         self.cpus = os.getenv("CODE_EXEC_CONTAINER_CPUS", "1.0")
         self.pids_limit = int(os.getenv("CODE_EXEC_PIDS_LIMIT", "256"))
+        # Docker's default /dev/shm is 64MB regardless of --memory — the classic
+        # cause of a headless-Chromium SIGTRAP/crashpad crash under Puppeteer/
+        # Playwright/Remotion (they mmap frame buffers there; a plain page fetch
+        # or bare `chromium --headless` run doesn't hit it, only a real render
+        # does — exactly the shape of the 2026-08-27 release-video failure: four
+        # render attempts crashed identically while bare headless chromium
+        # worked). Not a security boundary (no cap/read-only/pids/memory relaxed).
+        self.shm_size_mb = int(os.getenv("CODE_EXEC_SHM_SIZE_MB", "1024"))
         # 014 B3: explicit CODE_EXEC_MAX_TIMEOUT_SEC always wins. Unset: dev mode
-        # aligns with the shell tool's 120s foreground contract
-        # (tools/shell/tool.py::_MAX_TIMEOUT_SEC) — pre-014 the backend re-clamp
-        # silently cut shell foreground commands to 30s; the confined default stays 30.
+        # follows the ONE foreground ceiling shell_run uses
+        # (tools/code_exec/limits.py::dev_exec_max_timeout_sec — SHELL_MAX_TIMEOUT_SEC,
+        # default 300, so an install fits) — pre-014 the backend re-clamp silently cut
+        # shell foreground commands to 30s; the confined default stays 30.
         _raw_max = os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC")
         if _raw_max is not None and _raw_max.strip():
             self.max_timeout = float(_raw_max)
         else:
-            self.max_timeout = 120.0 if dev_mode else 30.0
+            self.max_timeout = dev_exec_max_timeout_sec() if dev_mode else 30.0
         self.max_output = int(os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES", "100000"))
         # Container user precedence: explicit operator override (verbatim, even if root)
         # > non-root host uid:gid (keeps the mounted workspace writable) > forced-unprivileged
@@ -365,10 +394,10 @@ class DockerBackend(ExecutionBackend):
         self, *, network: str, workdir_host: str, install_host: Optional[str] = None
     ) -> List[str]:
         """PURE: the ONE hardening-flag list shared by the ephemeral ``docker run
-        --rm`` and the persistent container's ``docker run -d`` — kept in exactly one
-        place so the two paths can never drift apart. Order matches the pre-P1-B
-        ephemeral argv exactly (existing tests locate flags via ``.index()``, not
-        position, but keep this stable regardless).
+        --rm`` and the persistent container's ``docker run -d``. Since 032 the list
+        itself lives in ``core/container_hardening.py::hardening_flags`` (the
+        app-service supervisor runs the same flags from its own process); this
+        method binds the backend's limits to it. Byte-identical to the pre-lift argv.
 
         ``install_host`` (WS-1, sandbox-dev ONLY — callers pass it only for a
         posture-entitled dev run): bind an additional writable ``/install`` dir for
@@ -376,23 +405,12 @@ class DockerBackend(ExecutionBackend):
         the rootfs stays ``--read-only`` and every cap/pid/memory/user flag is
         unchanged. ``None`` (the default) is byte-identical to the pre-WS-1 argv.
         """
-        flags = [
-            "--network", network,
-            "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges",
-            "--read-only",
-            "--tmpfs", "/tmp",
-            "--pids-limit", str(self.pids_limit),
-            "--memory", f"{self.memory_mb}m",
-            "--memory-swap", f"{self.memory_mb}m",
-            "--cpus", str(self.cpus),
-            "--user", self.user,
-            "-v", f"{workdir_host}:/workspace",
-        ]
-        if install_host:
-            flags += ["-v", f"{install_host}:/install"]
-        flags += ["-w", "/workspace"]
-        return flags
+        from core.container_hardening import hardening_flags
+        return hardening_flags(
+            network=network, workdir_host=workdir_host, install_host=install_host,
+            pids_limit=self.pids_limit, memory_mb=self.memory_mb,
+            shm_size_mb=self.shm_size_mb, cpus=self.cpus, user=self.user,
+        )
 
     #: Env a sandbox-dev run gets by default: HOME points at /install (NOT /workspace —
     #: /workspace is the host bind-mount, owned by whatever host user ran docker, and
@@ -492,28 +510,30 @@ class DockerBackend(ExecutionBackend):
     @staticmethod
     def _ensure_workspace_writable(workdir_host: str) -> None:
         """Best-effort chmod so the FORCED-unprivileged container uid (65534, see
-        `_workspace_needs_chmod`) can write directly into the bind-mounted /workspace
-        tree — not just its top level or the `.pylibs` install dir. `pm().
-        get_workspace_dir()` creates the session workspace as the (root) host
-        process, mode 0o755; a HOST-side tool (e.g. `filesystem`'s create_directory,
-        or write_file's parent-dir auto-create) can likewise scaffold new
-        subdirectories under it AFTER container setup — still root-owned/0o755 —
-        so a container-side `mkdir` one level deeper than any already-fixed
-        directory hard-fails EACCES again (observed live: `mkdir
-        .../videos/rob-reboot/node_modules'`). Recurses, but PRUNES into any
-        directory already owned by a non-root uid (i.e. created by the container's
-        own forced uid) — those and everything below are already writable by that
-        same uid, so this stays cheap even once a large `node_modules` tree exists,
-        instead of re-chmod'ing thousands of entries on every call. Mirrors
-        `_ensure_install_dir`'s existing 0o777/best-effort tradeoff — the dir is
-        already session-confined, so this doesn't cross a tenant boundary.
+        `_workspace_needs_chmod`) can write the host-created tree — DIRECTORIES so
+        it can traverse and create, and the FILES inside them so it can edit what a
+        host-side tool wrote.
+
+        The file half was missing until 2026-09-08 and it was the expensive half:
+        prod runs the service as root, so every file the coding/filesystem tool
+        wrote landed root-owned 0644 and an in-container `shell_run` editing it
+        hard-failed EACCES (9,246 such files under the live project tree; the
+        journal shows ship-software runs burning steps on `PermissionError:
+        '/workspace/rob-status/trackrecord.html'`). Widening is derived from the
+        file's OWN mode (`widen_mode_for_container`) rather than a flat 0o666, so a
+        script stays executable and a non-executable file never gains an exec bit.
+
+        Only root-owned entries are touched, and only within the directories this
+        walk already visits — a directory owned by the container's own uid is
+        pruned (it and its subtree are already writable by that uid), which is what
+        keeps this cheap once a large `node_modules` exists.
         """
         try:
             os.chmod(workdir_host, 0o777)
         except Exception:
             logger.warning("could not chmod workspace dir writable: %s", workdir_host, exc_info=True)
             return
-        for root, dirs, _files in os.walk(workdir_host, topdown=True):
+        for root, dirs, files in os.walk(workdir_host, topdown=True):
             keep = []
             for d in dirs:
                 path = os.path.join(root, d)
@@ -527,6 +547,18 @@ class DockerBackend(ExecutionBackend):
                     logger.warning("could not chmod workspace subdir writable: %s", path, exc_info=True)
                     keep.append(d)  # best-effort — still try descendants
             dirs[:] = keep
+            for f in files:
+                path = os.path.join(root, f)
+                try:
+                    st = os.lstat(path)          # lstat: never follow a symlink out
+                    if not stat.S_ISREG(st.st_mode) or st.st_uid != 0:
+                        continue
+                    mode = stat.S_IMODE(st.st_mode)
+                    widened = widen_mode_for_container(mode)
+                    if widened != mode:
+                        os.chmod(path, widened)
+                except Exception:
+                    logger.warning("could not chmod workspace file writable: %s", path, exc_info=True)
 
     @staticmethod
     def _ensure_install_dir(workdir_host: str) -> str:
@@ -888,4 +920,99 @@ class DockerBackend(ExecutionBackend):
                 removed += 1
             else:
                 logger.warning("reap_orphans: 'rm -f %s' exited %s: %s", cid, rcode, rerr)
+        return removed
+
+    @staticmethod
+    async def reap_unowned(
+        live_session_ids,
+        docker_runner: Optional[DockerRunner] = None,
+        *,
+        min_age_sec: int = 900,
+    ) -> int:
+        """Force-remove sandbox containers whose owning session is GONE.
+
+        This is the periodic companion to :meth:`reap_orphans`, and it exists
+        because an age-based sweep cannot be run periodically: a chat session
+        that is merely idle between turns legitimately outlives any sane
+        ``max_age_sec``, so a recurring age sweep would kill live sessions. This
+        one keys on OWNERSHIP instead — it removes a container only when the
+        ``polyrob.session`` label names a session that is no longer resident in
+        the SessionRegistry. An idle-but-live session is still resident, so it is
+        never touched; an evicted or crashed session's container is.
+
+        Why it is needed: only two paths release a container today — the full
+        ``SessionCleanupMixin.cleanup`` and the one-shot autonomous run in
+        ``run_as_session``. A resident chat session gets the PARTIAL cleanup
+        (which deliberately keeps the container for continuous chat), so when its
+        orchestrator is later evicted the container is simply abandoned. Live on
+        prod 2026-08-24: 19 containers, the oldest 2 days old, on a disk at 80%.
+
+        ``min_age_sec`` is a creation-race guard, not an expiry: a container
+        younger than it is always left alone, so a session that is mid-creation
+        (labeled but not yet registered) can never be swept out from under itself.
+
+        Best-effort and fail-open: never raises. A container with no session
+        label, or an unparseable start time, is LEFT ALONE — the failure mode of
+        this sweep must be "leaked container", never "killed a live session".
+        Returns the number of containers actually removed.
+        """
+        live = {str(s) for s in (live_session_ids or ()) if s}
+        runner = docker_runner or _default_docker_runner
+        try:
+            code, out, err = await runner(["ps", "-aq", "--filter", f"label={_SANDBOX_LABEL}"])
+        except Exception:
+            logger.warning("reap_unowned: 'docker ps' raised", exc_info=True)
+            return 0
+        if code != 0:
+            logger.warning("reap_unowned: 'docker ps' exited %s: %s", code, err)
+            return 0
+        cids = [c for c in (out or "").split() if c.strip()]
+        if not cids:
+            return 0
+
+        fmt = '{{index .Config.Labels "polyrob.session"}}\t{{.State.StartedAt}}'
+        try:
+            icode, iout, ierr = await runner(["inspect", "-f", fmt, *cids])
+        except Exception:
+            logger.warning("reap_unowned: 'docker inspect' raised", exc_info=True)
+            return 0
+        if icode != 0:
+            logger.warning("reap_unowned: 'docker inspect' exited %s: %s", icode, ierr)
+            return 0
+
+        lines = (iout or "").splitlines()
+        now = time.time()
+        removed = 0
+        for i, cid in enumerate(cids):
+            raw = lines[i] if i < len(lines) else ""
+            sid, _, raw_ts = raw.partition("\t")
+            sid = sid.strip()
+            # No label (pre-label container, or a foreign one) -> leave it to the
+            # cold-start age sweep. Never guess.
+            if not sid or sid == "<no value>":
+                continue
+            if sid in live:
+                continue
+            age = _age_from_docker_timestamp(raw_ts.strip(), now)
+            if age is None:
+                logger.warning(
+                    "reap_unowned: could not parse start time for %s (%r); leaving it",
+                    cid, raw_ts,
+                )
+                continue
+            if age < min_age_sec:
+                continue  # creation-race guard
+            try:
+                rcode, _rout, rerr = await runner(["rm", "-f", cid])
+            except Exception:
+                logger.warning("reap_unowned: 'rm -f %s' raised", cid, exc_info=True)
+                continue
+            if rcode == 0:
+                removed += 1
+                logger.info(
+                    "reap_unowned: removed sandbox container %s (session %s is gone)",
+                    cid[:12], sid,
+                )
+            else:
+                logger.warning("reap_unowned: 'rm -f %s' exited %s: %s", cid, rcode, rerr)
         return removed

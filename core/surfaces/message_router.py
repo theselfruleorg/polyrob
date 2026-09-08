@@ -86,7 +86,7 @@ class MessageRouter:
             logger.debug("message_router: no surface %s subscribed", row.get("surface_id"))
             return
         # Durable path (final messages only): enqueue instead of sending directly.
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         if (self._queue is not None and not msg.partial
                 and SurfaceConfig.outbound_queue_enabled()):
             turn = msg.stream_id or msg.session_key
@@ -96,6 +96,7 @@ class MessageRouter:
                     idempotency_key=idem, session_key=msg.session_key,
                     surface_id=row.get("surface_id"), dest=row.get("chat_id"),
                     payload=scrubbed, kind=str(getattr(msg.kind, "value", msg.kind)),
+                    media=msg.media or None,  # 030 L4: media rides the queue row
                 )
             except Exception as e:  # fail-open: fall back to a direct send on a queue fault
                 logger.error("outbound enqueue failed, sending directly: %s", e)
@@ -140,9 +141,30 @@ class MessageRouter:
 
     async def send_message(self, chat_id: str, text: str, surface_id: str = "telegram",
                             media: list | None = None) -> bool:
-        """Back-compat shim for cron/delivery.py + the `message` tool. Returns True only
-        on a completed send. `media` defaults to None -> OutboundMessage(media=[]),
+        """Back-compat shim for cron/delivery.py + the `message` tool. Returns True on
+        a completed direct send, OR on durable acceptance into the cross-process
+        outbound queue (see below). `media` defaults to None -> OutboundMessage(media=[]),
         keeping today's shape byte-identical when no media is given.
+
+        2026-08-28: a surface not hosted in THIS process (e.g. the agent daemon
+        calling `surface_id="email"`, which only `polyrob-email.service` subscribes
+        locally) used to be an immediate, guaranteed False — `publish()` already had a
+        durable-queue path for exactly this cross-process case but this method never
+        used it, so a `message(surface="email")` call from an autonomous goal could
+        never succeed even though the SAME shared `outbox.db` queue, drained by every
+        surface daemon's own `OutboundDispatcher`, was right there. Now falls back to
+        enqueuing when the surface isn't local: True here means "handed off for
+        durable, retried delivery by whichever process owns that surface," not
+        "confirmed sent by THIS process" — an honest weaker guarantee, not a fake one
+        (the dispatcher's own retry/backoff/dead-letter still applies).
+
+        2026-08-30: this fallback no longer requires `OUTBOUND_QUEUE_ENABLED` — that
+        flag was ALSO gating whether the queue/dispatcher existed at all
+        (bootstrap.py), so with it off (the prod default) this fallback was
+        permanently dead code and every cross-process send just failed outright.
+        The queue is now built unconditionally; `OUTBOUND_QUEUE_ENABLED` still
+        governs ONLY `publish()`'s primary reply-routing decision (direct-send vs.
+        queued-with-retry for a locally-subscribed surface), which is unchanged.
 
         T1.5: gated by the dead-target registry (a provably-dead target is skipped
         without ever calling the surface, one info log) and result-aware — a
@@ -154,6 +176,27 @@ class MessageRouter:
         don't return a typed result."""
         surface = self._surfaces.get(surface_id)
         if surface is None:
+            # 2026-08-30: this cross-process fallback is keyed on queue EXISTENCE
+            # only, not OUTBOUND_QUEUE_ENABLED — that flag governs publish()'s
+            # primary reply-routing decision (see bootstrap.py), a different and
+            # separately-risky behavior change. The queue/dispatcher are now built
+            # unconditionally (bootstrap.py), so this fallback works regardless of
+            # that flag's setting.
+            if self._queue is not None:
+                try:
+                    idem = f"direct:{surface_id}:{chat_id}#{hash(text) & 0xffffffff}"
+                    self._queue.enqueue(
+                        idempotency_key=idem, session_key=f"direct:{surface_id}:{chat_id}",
+                        surface_id=surface_id, dest=chat_id, payload=text,
+                        kind="message", media=media or None,
+                    )
+                except Exception as e:
+                    logger.error("send_message: queue enqueue fallback failed: %s", e)
+                else:
+                    logger.info(
+                        "send_message: surface %s not local — enqueued for cross-process "
+                        "delivery", surface_id)
+                    return True
             logger.warning("send_message: no surface %s registered — delivery failed", surface_id)
             return False
         if (self._dt is not None and dead_target_registry_enabled()

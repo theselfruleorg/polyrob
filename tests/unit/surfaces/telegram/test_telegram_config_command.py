@@ -116,7 +116,9 @@ async def test_config_list_matches_prefs_reply_verbatim(env):
     from surfaces.telegram.harness import _prefs_reply
     from core.instance import resolve_instance_id
 
-    expected = _prefs_reply("gleb", str(env), resolve_instance_id())
+    # /config is the control plane: it keeps the FULL schema listing, which is
+    # `_prefs_reply(full=True)` — still one loop, not a second one (G15).
+    expected = _prefs_reply("gleb", str(env), resolve_instance_id(), full=True)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/config", "/config"))
     assert out == expected
 

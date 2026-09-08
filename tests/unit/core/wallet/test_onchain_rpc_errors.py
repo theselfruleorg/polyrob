@@ -98,14 +98,23 @@ def test_rpc_url_unknown_chain_is_empty(monkeypatch):
 # describing the same chains is precisely the drift the registry exists to end.
 
 def test_the_chain_table_is_derived_from_the_registry():
+    """EVM rows only: this table feeds eth_call/eth_getBalance, so a non-EVM row
+    in it would be an address handed to a JSON-RPC that cannot read it."""
     from core.wallet import chains, onchain
-    for row in chains.all_rows():
+    for row in chains.evm_rows():
         cfg = onchain._CHAIN.get(row.name)
         assert cfg is not None, f"{row.name} missing from the read table"
         rpc, usdc, native = cfg
         assert rpc == row.public_rpc
         assert usdc == row.usdc
         assert native == row.native_symbol
+
+
+def test_a_non_evm_chain_is_absent_from_the_evm_read_table():
+    from core.wallet import chains, onchain
+    for row in chains.all_rows():
+        if row.family != "evm":
+            assert row.name not in onchain._CHAIN, row.name
 
 
 def test_ethereum_is_readable_now_that_it_is_a_known_chain():

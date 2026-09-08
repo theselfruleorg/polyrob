@@ -74,6 +74,21 @@ app_state = {
 }
 
 # Background task for periodic cleanup
+def api_autonomy_runtime_enabled() -> bool:
+    """Whether THIS api process runs the shared autonomy loops.
+
+    Default ON — the single-process posture (`polyrob serve` as the only
+    entrypoint) must keep cron/goals/curator/settlement. Set
+    `API_AUTONOMY_RUNTIME=false` when the api runs ALONGSIDE another
+    entrypoint on the same data dir (the Tier-2 x402 endpoint unit does):
+    two runtimes on one goals.db/cron.db means two settlement watchers racing
+    the same `settlement_scan` checkpoint behind an in-process-only lock.
+    Mirrors `EMAIL_AUTONOMY_RUNTIME` in cli/commands/email.py.
+    """
+    from core.env import bool_env
+    return bool_env("API_AUTONOMY_RUNTIME", True)
+
+
 async def periodic_cleanup_task():
     """Run periodic cleanup tasks (nonces, expired sessions, etc.)."""
     import asyncio
@@ -193,12 +208,17 @@ async def lifespan(app: FastAPI):
         # shared runtime — the SINGLE place both the FastAPI server and the CLI
         # REPL start them. Each loop is independently gated + fail-open; one loop
         # failing to build never blocks the others.
-        from core.autonomy_runtime import start_autonomy
-        autonomy_data_dir = getattr(bot.container.config, "data_dir", "data")
-        autonomy_handles = start_autonomy(
-            task_agent=bot.container.get_agent("task_agent"),
-            data_dir=autonomy_data_dir,
-        )
+        autonomy_handles = None
+        if api_autonomy_runtime_enabled():
+            from core.autonomy_runtime import start_autonomy
+            autonomy_data_dir = getattr(bot.container.config, "data_dir", "data")
+            autonomy_handles = start_autonomy(
+                task_agent=bot.container.get_agent("task_agent"),
+                data_dir=autonomy_data_dir,
+            )
+        else:
+            logger.info("autonomy runtime disabled in api process "
+                        "(API_AUTONOMY_RUNTIME=off)")
 
         dispatcher = bot.container.get_service("outbound_dispatcher")
         if dispatcher is not None:

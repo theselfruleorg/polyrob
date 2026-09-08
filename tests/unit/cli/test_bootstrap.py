@@ -55,7 +55,7 @@ class _FakeDispatcher:
 def test_attach_dispatcher_event_log_wires_when_enabled(monkeypatch):
     """Final-review Fix 1: the CLI dispatcher-start seam attaches a real event log
     when TELEMETRY_EVENT_LOG_ENABLED is on."""
-    import agents.task.telemetry.event_log as event_log_mod
+    import core.event_log as event_log_mod
 
     sentinel = object()
     monkeypatch.setattr(event_log_mod, "event_log_enabled", lambda: True)
@@ -69,7 +69,7 @@ def test_attach_dispatcher_event_log_wires_when_enabled(monkeypatch):
 def test_attach_dispatcher_event_log_noop_when_disabled(monkeypatch):
     """When telemetry is disabled, the dispatcher is left untouched (None event_log,
     byte-identical legacy)."""
-    import agents.task.telemetry.event_log as event_log_mod
+    import core.event_log as event_log_mod
 
     monkeypatch.setattr(event_log_mod, "event_log_enabled", lambda: False)
 
@@ -81,7 +81,7 @@ def test_attach_dispatcher_event_log_noop_when_disabled(monkeypatch):
 def test_attach_dispatcher_event_log_fails_open_on_error(monkeypatch):
     """A raising event_log_enabled()/get_event_log() must never block a surface
     from starting — fail-open."""
-    import agents.task.telemetry.event_log as event_log_mod
+    import core.event_log as event_log_mod
 
     def _boom():
         raise RuntimeError("db unavailable")

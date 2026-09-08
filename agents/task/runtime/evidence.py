@@ -163,6 +163,22 @@ def _session_started_ts(orchestrator: Any) -> Optional[float]:
         return None
 
 
+def _is_shared_project_workspace() -> bool:
+    """True when the workspace is ONE shared project folder, not a per-session dir.
+
+    A per-session workspace only ever holds this run's files, so an unwindowed scan
+    of it is still honest. A SHARED project root holds every run's files and the
+    whole repo, so the same scan answers "everything on disk" — which is how a goal
+    completion came to list 20 unrelated files (chat-first review 2026-08-22, G1).
+    """
+    try:
+        from agents.task.path import pm
+        return bool(pm().is_project_root_workspace)
+    except Exception:
+        logger.debug("workspace-shape probe failed", exc_info=True)
+        return False
+
+
 def _scan_workspace(workspace_dir: str, started_ts: Optional[float]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     try:
@@ -215,6 +231,13 @@ def collect_artifacts(orchestrator: Any, *, workspace_dir: Optional[str] = None,
         workspace_dir = _resolve_workspace_dir(orchestrator)
     if started_ts is None:
         started_ts = _session_started_ts(orchestrator)
+    # A shared project-root workspace WITHOUT a time window would report the whole
+    # repo as this run's output. Refuse the scan instead of degrading to
+    # "everything" — the ledger descriptors above are still honest evidence, and
+    # claiming nothing beats claiming twenty files the run never touched.
+    if started_ts is None and workspace_dir and _is_shared_project_workspace():
+        logger.debug("artifact scan skipped: shared project workspace with no time window")
+        return arts
     remaining = MAX_ARTIFACTS - len(arts)
     if remaining > 0 and workspace_dir:
         arts.extend(_scan_workspace(workspace_dir, started_ts)[:remaining])

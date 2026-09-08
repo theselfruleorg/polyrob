@@ -78,6 +78,10 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # The ship rail. Outward-facing (a public URL), so delegate_blocked: a leaf
     # child never decides what the world sees under the owner's domain.
     "publish": frozenset({"high_impact", "delegate_blocked"}),
+    # The durable app service (032): a running process behind a public URL. The
+    # agent only writes a registry row (the owner-owned supervisor holds the docker/
+    # nginx privilege), but a leaf child never decides what the world runs.
+    "app_service": frozenset({"high_impact", "delegate_blocked"}),
     "tool_manage": frozenset({"high_impact", "delegate_blocked"}),  # aspirational
     # -- money ---------------------------------------------------------------
     "x402_pay": frozenset({"money", "high_impact", "delegate_blocked"}),

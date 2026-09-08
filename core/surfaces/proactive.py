@@ -72,7 +72,7 @@ async def resolve_proactive_send(
     if decision == SendDecision.ALLOW:
         return ("send", None)
     if decision == SendDecision.TEMPLATE_ONLY:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         return ("template", {"name": SurfaceConfig.whatsapp_template_name()})
     # SendDecision.DENY or any unknown value
     return ("suppress", None)

@@ -319,6 +319,10 @@ async function loadAllTransactions(append = false) {
         if (!append) {
             document.getElementById('transactions-body').innerHTML =
                 '<tr><td colspan="5" class="error-row">Error loading transactions</td></tr>';
+        } else if (window.errorHandler) {
+            // "Load more" failed — the existing rows stay; say so instead of
+            // silently doing nothing (030 D4).
+            window.errorHandler.notify('Failed to load more transactions — try again');
         }
     } finally {
         transactionState.loading = false;
@@ -363,6 +367,13 @@ function loadWalletAddress() {
                 }, 2000);
             } catch (error) {
                 console.error('Failed to copy wallet address:', error);
+                // Inline feedback on the element itself (mirrors the success path).
+                walletEl.textContent = 'Copy failed';
+                walletEl.style.color = 'var(--accent-red)';
+                setTimeout(() => {
+                    walletEl.textContent = walletAddress;
+                    walletEl.style.color = '';
+                }, 2000);
             }
         });
     } else {

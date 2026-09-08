@@ -15,12 +15,6 @@ def test_console_surface_refuses_credential_flags():
         assert "local CLI" in res.message, key
 
 
-def test_registry_kill_switch_in_unwritable_set():
-    # flipping LLM_PROVIDER_REGISTRY off from a console kills every user
-    # provider — it selects the inference surface exactly like the other four
-    assert "LLM_PROVIDER_REGISTRY" in config_service.CONSOLE_UNWRITABLE_FLAGS
-
-
 def test_local_surface_still_writes_credential_flags(monkeypatch):
     sentinel = config_service.SetResult(True, "written", "ok")
     monkeypatch.setattr(config_service, "_set_flag", lambda *a, **k: sentinel)

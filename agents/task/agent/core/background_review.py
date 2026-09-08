@@ -105,6 +105,9 @@ class BackgroundReviewMixin:
             # firing it while skills are read-only just burns an aux-model run
             # that is guaranteed to fail at the tool layer.
             return False
+        from core.autonomy_control import allows
+        if not allows("background_review").allowed:
+            return False  # 031 owner pause: no self-directed aux runs
         if getattr(self, "_is_sub_agent", False):
             return False  # a reviewer never forks a reviewer
         # §4.3 (intelligence-stack finalization): an AUTONOMOUS run's completion

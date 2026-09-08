@@ -206,7 +206,7 @@ def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
 
     ``item_id``/``created_by`` are the per-action defaults; the returned closure
     accepts per-call overrides. Mirrors the keyword surface of
-    ``agents.task.telemetry.self_events.emit_self_modification`` exactly.
+    ``core.self_events.emit_self_modification`` exactly.
     NOTE: the closure is an internal telemetry helper, never a registered action,
     so the registry's first-param-annotation introspection does not apply here.
     """
@@ -215,7 +215,7 @@ def self_mod_emitter(execution_context, controller, user_id, *, kind, source,
 
     def _self_mod_ev(action, item_id=None, *, pending=None, ok=True, created_by=None):
         try:
-            from agents.task.telemetry.self_events import emit_self_modification
+            from core.self_events import emit_self_modification
             emit_self_modification(
                 kind=kind, action=action,
                 item_id=str((item_id if item_id is not None else default_item_id) or ""),

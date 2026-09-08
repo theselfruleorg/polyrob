@@ -174,7 +174,7 @@ class HITLIngressMixin:
         if mm is None or not hasattr(mm, "push_ephemeral_message"):
             return False
         from modules.llm.messages import make_control_message, MessageOrigin
-        from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+        from core.security.untrusted_wrap import wrap_untrusted
         # Delimiter-injection defense (Fusion HIGH): neutralize any closing fence the
         # correspondent embeds, so they can't break out of the untrusted/correspondent
         # blocks and present forged text as trusted instruction.

@@ -35,7 +35,7 @@ def _ledger(user_id: str, days: int) -> Dict[str, Any]:
 
 def _event_aggregate(user_id: str, since_ts: Optional[float]) -> Dict[str, Any]:
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if not event_log_enabled():
             return {}
         return get_event_log().aggregate(since_ts=since_ts, user_id=user_id) or {}
@@ -68,6 +68,17 @@ def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
     return recent_episodes(user_id, since_ts)
 
 
+def _health_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
+    """Seam kept module-level for test monkeypatching (like ``_ledger``)."""
+    try:
+        from core.status_snapshot import build_status_snapshot
+        from core.status_render import render_health_lines
+        snap = build_status_snapshot(user_id, data_dir=data_dir, include_money=False)
+        return render_health_lines(snap, prefix="• ", limit=6)
+    except Exception as e:
+        return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+
+
 async def compose_digest(user_id: str, *, days: int = 1,
                          data_dir: Optional[str] = None, db=None) -> str:
     """Build the digest text from evidence. Pure-ish (all reads fail-open)."""
@@ -85,6 +96,10 @@ async def compose_digest(user_id: str, *, days: int = 1,
 
     period = "today" if days == 1 else f"last {days}d"
     lines = [f"Daily digest — {period}:"]
+    # 2026-08-28 status SSOT: the digest leads with the same health block
+    # /status renders. A degraded instance is the first thing the owner reads;
+    # a builder failure is one honest line, never a silently clean digest.
+    lines.extend(_health_lines(user_id, data_dir))
     lines.append(f"• Activity: {n_sessions} session(s), {n_goals} goal event(s), "
                  f"{n_self_mods} self-change(s)")
 

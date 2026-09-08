@@ -73,68 +73,8 @@ def build_session_agents(clean_id: str, *, path_manager=None) -> List[Dict[str, 
     logger.debug(f"Extracting agents data from feed for session {clean_id}")
 
     if feed_dir.exists():
-        # Check for multi_agent_relationship entries - they have the most complete agent info
-        relationship_files = sorted(feed_dir.glob("*multi_agent_relationship*.json"), reverse=True)
-
-        # Limit to latest 5 relationship files for efficiency
-        for file in relationship_files[:5]:
-            try:
-                with file.open("r") as f:
-                    entry = json.load(f)
-                    if entry.get("type") in ["multi_agent_relationship", "multi_agent_relationship_detailed"] and "data" in entry:
-                        data = entry["data"]
-                        # Look for agent_models first - this is the most reliable source
-                        if "agent_models" in data and isinstance(data["agent_models"], dict):
-                            for agent_id, model in data["agent_models"].items():
-                                if model:
-                                    agent_models[agent_id] = model
-                                    logger.debug(f"Found model info from relationship: {agent_id} -> {model}")
-
-                        # Store execution sequence if available
-                        if "execution_sequence" in data and isinstance(data["execution_sequence"], list) and data["execution_sequence"]:
-                            execution_sequence = data["execution_sequence"]
-                            logger.debug(f"Found execution sequence with {len(execution_sequence)} agents")
-                        elif "agent_ids" in data and isinstance(data["agent_ids"], list) and data["agent_ids"]:
-                            execution_sequence = data["agent_ids"]
-                            logger.debug(f"Using agent_ids as execution sequence with {len(execution_sequence)} agents")
-
-                        # Process agent details
-                        if "agent_details" in data and isinstance(data["agent_details"], list):
-                            for agent_detail in data["agent_details"]:
-                                agent_id = agent_detail.get("id") or agent_detail.get("agent_id")
-                                if not agent_id:
-                                    continue
-
-                                # Extract model info directly from agent_detail if available
-                                model_from_detail = agent_detail.get("model")
-                                if model_from_detail:
-                                    agent_models[agent_id] = model_from_detail
-                                    logger.debug(f"Found agent model in detail: {agent_id} -> {model_from_detail}")
-
-                                # Use the best available model info for this agent
-                                best_model = model_from_detail or agent_models.get(agent_id, '')
-
-                                if agent_id not in agent_ids:
-                                    agent = {
-                                        'id': agent_id,
-                                        'name': agent_detail.get("name") or agent_detail.get("agent_name") or agent_id,
-                                        'type': agent_detail.get("type") or agent_detail.get("agent_type") or "Unknown",
-                                        'model': best_model
-                                    }
-                                    agents.append(agent)
-                                    agent_ids.add(agent_id)
-                                    logger.debug(f"Added agent from relationship detail: {agent_id} with model {best_model}")
-                                # Update model for existing agents
-                                else:
-                                    for agent in agents:
-                                        if agent.get("id") == agent_id:
-                                            if not agent.get("model") and best_model:
-                                                agent["model"] = best_model
-                                                logger.debug(f"Updated agent model: {agent_id} -> {best_model}")
-                                            break
-            except Exception as e:
-                logger.debug(f"Error processing relationship file {file}: {e}")
-                continue
+        # (The multi_agent_relationship feed entries were never emitted — their only writer,
+        # MultiAgentMixin, was retired in S7; the reader went with it in S9.)
 
         # Look for agent_registration entries to find more agents
         registration_files = sorted(feed_dir.glob("agent_registration_*.json"), reverse=True)

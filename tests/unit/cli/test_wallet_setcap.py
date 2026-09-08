@@ -3,7 +3,10 @@
 Guided, confirmed write of the two money-authoritative env caps
 (WALLET_DAILY_CAP_USD / AGENT_WALLET_MAX_PER_TX_USD) to the GLOBAL env file.
 Money stays env-authoritative; a cap of 0 is deliberately rejected (not
-treated as "disabled" — that's a separate, explicit action: remove the var).
+treated as "disabled" — H3, 2026-08-22: the daily cap's separate, explicit
+disable action is now `set-cap daily none`, since an absent env var means
+the finite $100 default, not "no cap"; the per-tx ceiling has no disable
+value at all).
 """
 import pytest
 from click.testing import CliRunner
@@ -61,7 +64,30 @@ def test_zero_is_not_treated_as_disable(tmp_path):
     home = tmp_path / "home"
     res = _invoke(["set-cap", "daily", "0", "--yes", "--home", str(home)])
     assert res.exit_code != 0
-    assert "remove the env var" in res.output
+    # H3 (2026-08-22): "remove the env var" no longer disables the daily cap
+    # (unset now means the finite $100 default) — the guidance now points at
+    # the explicit disable sentinel instead.
+    assert "set-cap daily none" in res.output
+
+
+def test_daily_none_disables_the_cap(tmp_path):
+    """H3 (2026-08-22): the ONLY way to disable the daily cap now — an absent
+    env var means the finite default, not "no cap"."""
+    home = tmp_path / "home"
+    res = _invoke(["set-cap", "daily", "none", "--yes", "--home", str(home)])
+    assert res.exit_code == 0, res.output
+    content = (home / ".env").read_text()
+    assert "WALLET_DAILY_CAP_USD=none" in content
+    assert "DISABLED" in res.output
+
+
+def test_per_tx_has_no_disable_sentinel(tmp_path):
+    """Unlike daily, AGENT_WALLET_MAX_PER_TX_USD has no disable word — it is a
+    required money ceiling, always a positive number."""
+    home = tmp_path / "home"
+    res = _invoke(["set-cap", "per-tx", "none", "--yes", "--home", str(home)])
+    assert res.exit_code != 0
+    assert not (home / ".env").exists()
 
 
 def test_output_shows_file_new_cap_and_restart_note(tmp_path):

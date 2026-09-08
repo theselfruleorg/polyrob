@@ -97,7 +97,7 @@ class ToolResultOffloadMixin:
 		pointer's own UP-06 wrap can't cover, since `filesystem` is a trusted tool).
 		"""
 		try:
-			from agents.task.agent.core.untrusted_wrap import is_untrusted_tool
+			from core.security.untrusted_wrap import is_untrusted_tool
 			name = getattr(result, 'action_name', None) or getattr(result, 'action_type', None)
 			tool = None
 			controller = getattr(self, 'controller', None)
@@ -185,7 +185,7 @@ class ToolResultOffloadMixin:
 					content_to_write = result.extracted_content
 					if self._result_is_untrusted(result):
 						try:
-							from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+							from core.security.untrusted_wrap import wrap_untrusted
 							content_to_write = wrap_untrusted(str(action_type), result.extracted_content)
 						except Exception:
 							content_to_write = result.extracted_content  # fail-open

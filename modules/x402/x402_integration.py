@@ -161,6 +161,12 @@ async def record_x402_payment(
         resolved_amount = amount_atomic if amount_atomic is not None else str(amount_usd)
         resolved_deadline = deadline if deadline is not None else int(time.time())
 
+        # Address normalization goes through THE one chain-aware function —
+        # this row shares x402_payment_requests.recipient with invoicing, and a
+        # bare .lower() would destroy a base58 (SVM) address the moment this
+        # path gains a non-EVM network (the 1dadf3ad landmine, second writer).
+        from modules.x402.invoicing import normalize_recipient
+
         # Bare ON CONFLICT DO NOTHING makes a replayed PK/nonce a no-op while a
         # NOT NULL violation still RAISES (so a future missing-column bug is loud,
         # not silently swallowed like N1).
@@ -175,12 +181,12 @@ async def record_x402_payment(
         """, (
             payment_id,
             user_id,
-            wallet_address.lower(),
+            normalize_recipient(wallet_address, network),
             resolved_amount,
             amount_usd,
             asset,
             network,
-            recipient.lower(),
+            normalize_recipient(recipient, network),
             resolved_nonce,
             resolved_deadline,
             status,
@@ -301,6 +307,99 @@ async def mark_payment_refund_due(payment_id: str) -> bool:
         return False
 
 
+# One-time WARN guard for a treasury/env vs wallet-address mismatch (W1.1) —
+# module-level so every call site shares it; tests reset it directly.
+_TREASURY_MISMATCH_WARNED = False
+
+
+def resolve_treasury_address() -> str:
+    """The ONE pay_to resolver (W1.1, 2026-08-21): explicit
+    `X402_PAYMENT_RECIPIENT` always wins; when it is empty and
+    `X402_TREASURY_FROM_WALLET` (default ON) and the agent wallet is enabled,
+    the wallet's treasury-venue address fills in — read from memory at call
+    time, NEVER written to any env file (the agent keeps zero write path to
+    `/etc/polyrob/polyrob.env`). Fail-open to '' on any wallet fault, which
+    preserves the legacy "no treasury configured" refusal downstream.
+
+    When BOTH are set and differ, a one-time WARN fires: funds would land on
+    the env address while wallet-based views watch the wallet address."""
+    global _TREASURY_MISMATCH_WARNED
+    explicit = os.environ.get("X402_PAYMENT_RECIPIENT", "").strip()
+
+    wallet_addr = ""
+    try:
+        from core.env import bool_env
+        if bool_env("X402_TREASURY_FROM_WALLET", True):
+            from core.wallet.factory import get_agent_wallet
+            wallet = get_agent_wallet()
+            if wallet is not None:
+                # The TREASURY venue specifically — `wallet.address` is the
+                # OPERATIONAL venue, which is a different key whenever
+                # AGENT_WALLET_OPERATIONAL_VENUE=x402. `polyrob wallet init`
+                # funds and pins the treasury address, so resolving anything
+                # else would invoice an address the owner never funded.
+                signer_for = getattr(wallet, "signer_for", None)
+                if callable(signer_for):
+                    wallet_addr = (signer_for("treasury").address or "").strip()
+                else:
+                    wallet_addr = (wallet.address or "").strip()
+    except Exception:
+        wallet_addr = ""
+
+    if explicit:
+        if (wallet_addr and wallet_addr.lower() != explicit.lower()
+                and not _TREASURY_MISMATCH_WARNED):
+            _TREASURY_MISMATCH_WARNED = True
+            logger.warning(
+                "X402_PAYMENT_RECIPIENT (%s) differs from the agent wallet's "
+                "treasury address (%s) — invoices/challenges use the env value; "
+                "wallet-based balance views watch the wallet address",
+                explicit, wallet_addr)
+        return explicit
+    return wallet_addr
+
+
+def receive_rail_summary() -> str:
+    """One line describing THIS agent's receive rail, for agent-facing money
+    views (§5.2, 2026-08-21).
+
+    Why it exists: the historical "owner deploy package: mainnet-ready x402
+    endpoint" goal was cancelled, but board dedup ignores cancelled rows, so
+    nothing structurally stops the agent re-filing it. The durable fix is that
+    the agent can SEE — where it already looks for money state — that it can
+    already get paid with no endpoint at all, and that standing up an HTTP
+    endpoint is owner-only work with a named runbook (never an agent goal).
+
+    Pure read of config; returns '' on any fault (a status footer must never
+    break the view it decorates)."""
+    try:
+        treasury = resolve_treasury_address()
+        chain = os.environ.get("X402_DEFAULT_CHAIN", "base")
+        parts = []
+        if treasury:
+            parts.append(f"treasury {treasury} on {chain}")
+        else:
+            parts.append(f"no treasury configured on {chain} — invoices refuse "
+                         "until X402_PAYMENT_RECIPIENT or the agent wallet is set")
+
+        from modules.x402.invoicing import x402_settle_onchain_detect_enabled
+        parts.append("on-chain detect ON"
+                     if x402_settle_onchain_detect_enabled() else "on-chain detect OFF")
+
+        http_on = os.environ.get("X402_ENABLED", "false").lower() == "true"
+        base_url = (os.environ.get("A2A_BASE_URL") or "").strip().rstrip("/")
+        if http_on and base_url:
+            parts.append(f"HTTP endpoint {base_url}")
+        else:
+            parts.append("no HTTP endpoint (not needed to get paid — invoice + "
+                         "on-chain detect is the whole rail; standing one up is "
+                         "owner-only work, run by the owner from a full repo "
+                         "checkout: `scripts/setup_x402_endpoint.sh`)")
+        return "receive rail: " + " · ".join(parts)
+    except Exception:
+        return ""
+
+
 def get_x402_config() -> Dict[str, Any]:
     """Get x402 configuration from environment.
 
@@ -312,7 +411,7 @@ def get_x402_config() -> Dict[str, Any]:
     """
     return {
         "enabled": os.environ.get("X402_ENABLED", "false").lower() == "true",
-        "pay_to": os.environ.get("X402_PAYMENT_RECIPIENT", ""),
+        "pay_to": resolve_treasury_address(),
         "network": os.environ.get("X402_DEFAULT_CHAIN", "base"),
         "cdp_key_id": os.environ.get("CDP_API_KEY_ID", ""),
         "cdp_key_secret": os.environ.get("CDP_API_KEY_SECRET", ""),

@@ -310,6 +310,7 @@ class SkillWriterMixin:
         if res.ok and not res.pending:
             try:
                 os.remove(str(pending_file))
+                pending_file.parent.rmdir()
             except OSError:
                 pass
         return res
@@ -360,6 +361,10 @@ class SkillWriterMixin:
             archive_dir = self._user_root(uid) / ".archived" / skill_id
             archive_dir.mkdir(parents=True, exist_ok=True)
             os.replace(str(pending_file), str(archive_dir / "SKILL.md"))
+            try:
+                pending_file.parent.rmdir()
+            except OSError:
+                pass
             logger.info("rejected pending skill %s/%s (archived)", uid, skill_id)
             return True
         except Exception as e:

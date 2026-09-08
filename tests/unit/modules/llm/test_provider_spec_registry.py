@@ -152,12 +152,6 @@ class TestSpecLoading:
         finally:
             reset_provider_registry_cache()
 
-    def test_registry_off_ignores_user_file(self, user_providers, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER_REGISTRY", "false")
-        from modules.llm.provider_spec import get_spec, reset_provider_registry_cache
-        reset_provider_registry_cache()
-        assert get_spec("ollama") is None
-
     def test_builtin_override_merges_in_place(self, tmp_path, monkeypatch):
         path = tmp_path / "providers.yaml"
         path.write_text(

@@ -170,7 +170,7 @@ def _self_mod_ev(kind: str, action: str, item_id: str, user_id: str, ok: bool) -
     if not ok:
         return
     try:
-        from agents.task.telemetry.self_events import emit_self_modification
+        from core.self_events import emit_self_modification
         emit_self_modification(kind=kind, action=action, item_id=item_id,
                                user_id=user_id or "", pending=False,
                                created_by="owner", source="owner_review", ok=ok)
@@ -405,13 +405,15 @@ def _record_owner_notice(text: str) -> None:
     sees it via `polyrob telemetry` and the message is never silently lost. Owner-scoped,
     fail-open."""
     try:
-        from agents.task.telemetry.event_log import get_event_log
+        from core.event_log import get_event_log
         from core.instance import resolve_owner_principal
         owner = resolve_owner_principal() or ""
         get_event_log().record("owner_notice", user_id=str(owner),
                                 source="self_evolution", text=str(text)[:2000])
     except Exception:
-        pass
+        # Fail-open by design, but never silent: a lost owner notice is the
+        # "blind owner" class (2026-08-28 prod forensics).
+        logger.warning("self_evolution: owner_notice event not recorded", exc_info=True)
 
 
 async def _push_owner_message_outcome(container, text: Optional[str],

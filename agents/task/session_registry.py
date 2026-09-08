@@ -89,3 +89,23 @@ class SessionRegistry:
 
     def __iter__(self) -> Iterator[str]:
         return iter(list(self._orchestrators.keys()))
+
+
+def resident_session_ids(task_agent) -> List[str]:
+    """Session ids currently resident in ``task_agent``'s registry.
+
+    Lives here, not on TaskAgent, for two reasons. The file-size ratchet
+    (tests/test_file_size_ratchet.py) holds ``agents/task_agent_lite.py``
+    shrink-only, so new behaviour belongs in a module rather than that class.
+    And the private-attribute access this needs is legitimate *inside the module
+    that owns the registry concept* — it is exactly the seam this file exists to
+    be, whereas the same reach from ``core/autonomy_runtime`` would not be.
+
+    Returns an empty list if the agent has no registry. Callers that treat
+    "empty" as "every session is gone" MUST distinguish that from a genuine
+    empty registry themselves — see ``DockerBackend.reap_unowned``.
+    """
+    registry = getattr(task_agent, "_registry", None)
+    if registry is None or not hasattr(registry, "session_ids"):
+        return []
+    return list(registry.session_ids())

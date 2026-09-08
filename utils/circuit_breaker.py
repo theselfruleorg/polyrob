@@ -294,21 +294,6 @@ class CircuitBreaker:
         self._half_open_calls = 0
         self.logger.info(f"Circuit breaker '{self.name}' manually reset to CLOSED state")
 
-    def force_open(self):
-        """Manually open the circuit breaker."""
-        old_state = self.state
-        self.state = CircuitState.OPEN
-        self.stats.last_failure_time = time.time()
-
-        self.stats.state_changes.append({
-            "from": old_state.value,
-            "to": CircuitState.OPEN.value,
-            "timestamp": datetime.now().isoformat(),
-            "reason": "Manually forced open"
-        })
-
-        self.logger.warning(f"Circuit breaker '{self.name}' manually forced to OPEN state")
-
 class CircuitBreakerRegistry:
     """Registry for managing multiple circuit breakers."""
 
@@ -344,23 +329,6 @@ class CircuitBreakerRegistry:
 
         return self._breakers[name]
 
-    def get_all_stats(self) -> Dict[str, Dict[str, Any]]:
-        """Get statistics for all circuit breakers.
-
-        Returns:
-            Dictionary of breaker name to statistics
-        """
-        return {
-            name: breaker.get_stats()
-            for name, breaker in self._breakers.items()
-        }
-
-    def reset_all(self):
-        """Reset all circuit breakers."""
-        for name, breaker in self._breakers.items():
-            breaker.reset()
-        self.logger.info(f"Reset all {len(self._breakers)} circuit breakers")
-
 # Global registry (singleton pattern)
 _global_registry: Optional[CircuitBreakerRegistry] = None
 
@@ -375,15 +343,3 @@ def get_circuit_breaker_registry() -> CircuitBreakerRegistry:
         _global_registry = CircuitBreakerRegistry()
     return _global_registry
 
-def get_circuit_breaker(name: str, **kwargs) -> CircuitBreaker:
-    """Get or create a circuit breaker by name.
-
-    Args:
-        name: Name of the circuit breaker
-        **kwargs: Configuration for new breaker if created
-
-    Returns:
-        CircuitBreaker instance
-    """
-    registry = get_circuit_breaker_registry()
-    return registry.get_or_create(name, **kwargs)

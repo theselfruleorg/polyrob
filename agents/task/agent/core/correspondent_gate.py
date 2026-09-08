@@ -71,12 +71,17 @@ _HIGH_IMPACT_NAMES = frozenset({
     # single point of failure these name entries exist to remove. Same
     # rationale as transfer: irreversible, self-custodial value movement
     # (an approval is a standing claim whose drain lands in a later tx).
-    "defi_trade_swap", "defi_trade_approve_token", "defi_trade_revoke_approval",
+    "defi_trade_swap", "defi_trade_solana_swap",
+    "defi_trade_approve_token", "defi_trade_revoke_approval",
     # I-6: read-only runtime introspection (registered directly, no owning
     # tool_id) — reveals wallet balance + tenant ledger, the same money data the
     # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.
     # Info-disclosure only, but a correspondent-tainted turn must not read it.
     "agent_status",
+    # 031: the owner pause record. A tainted turn must not RESUME autonomy (the
+    # action refuses resume on its own too); pausing is the safe direction, but
+    # a third party steering the pause state at all is not the owner driving.
+    "autonomy_control",
     # Task 13 (Phase 3 R3): read-only tenant usage rollup + suggested-invoice
     # draft (registered directly, no owning tool_id). Same info-disclosure
     # reasoning as agent_status — a tainted session must not read cost data
@@ -328,7 +333,7 @@ def build_reply_allowed(
     """
     def _allowed(surface: str, address: str) -> bool:
         try:
-            from agents.task.surface_config import SurfaceConfig
+            from core.surfaces.config import SurfaceConfig
             if not SurfaceConfig.correspondent_reply_enabled():
                 return False
             max_rounds = SurfaceConfig.correspondent_reply_max_rounds()

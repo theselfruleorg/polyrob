@@ -293,6 +293,25 @@ class HyperliquidTool(BaseTool):
             from core.wallet.factory import get_agent_wallet
             agent_wallet = get_agent_wallet()
             if agent_wallet is not None:
+                # H4 (2026-08-22 audit, still open): on this branch the derived
+                # venue key fully OWNS the account it trades — the approveAgent
+                # master/agent split that gives Hyperliquid its withdrawal
+                # firewall is never constructed, so the ordering key could also
+                # withdraw. Refuse to hand out an exchange client while live
+                # trading is armed on this un-firewalled signer; dry-run and
+                # reads are unaffected, and the DB-credential delegated path
+                # below is not restricted.
+                from core.env import bool_env as _h4_bool_env
+                if _h4_bool_env("CRYPTO_TRADE_LIVE_ENABLED", False) and \
+                        _h4_bool_env("HYPERLIQUID_TRADING_ENABLED", False):
+                    return None, (
+                        "refused: live Hyperliquid trading is armed, but the "
+                        "polyrob wallet path signs with a key that fully owns "
+                        "its own account — the approveAgent withdrawal firewall "
+                        "(H4) is not in place. Keep HYPERLIQUID_TRADING_ENABLED "
+                        "off on this path, or configure delegated credentials "
+                        "(approve_agent) instead."
+                    )
                 account = agent_wallet.account_for("hyperliquid")
                 # SDK signature: Exchange(wallet: LocalAccount, base_url=None, ...,
                 # account_address=None). The agent key IS the signer here; the
@@ -1216,9 +1235,19 @@ class HyperliquidTool(BaseTool):
         # H11: a forged/autonomous turn OR the owner kill-switch can never mutate the
         # owner's live orders (parity with place_*_order).
         from tools.crypto_trade_gate import trade_turn_refusal
-        refusal = trade_turn_refusal(execution_context, self)
+        refusal = trade_turn_refusal(execution_context, self, risk_reducing=True)
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
+        # M10/R16: a cancel is a position-management action the OWNER may still
+        # perform BY HAND while halted — trade_turn_refusal's kill-switch bar lifts
+        # ONLY for a direct/CLI call (execution_context is None above), never for an
+        # agent-loop turn (even a genuine one). Still requires the live master +
+        # per-venue switches, same as an order.
+        from tools.crypto_trade_gate import evaluate_live_mutation
+        gate = evaluate_live_mutation("hyperliquid", risk_reducing=True)
+        if not gate.live:
+            return {"success": False, "error": gate.reason}
 
         await self.rate_limit("cancel_order")
 
@@ -1264,9 +1293,18 @@ class HyperliquidTool(BaseTool):
 
         # H11: forged/autonomous turns OR the owner kill-switch cannot mutate live orders.
         from tools.crypto_trade_gate import trade_turn_refusal
-        refusal = trade_turn_refusal(execution_context, self)
+        refusal = trade_turn_refusal(execution_context, self, risk_reducing=True)
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
+        # M10/R16: OWNER-only carve-out — permitted while halted ONLY for a
+        # direct/CLI call (execution_context is None above); any agent-loop turn is
+        # still refused by trade_turn_refusal's kill-switch bar. Still needs the
+        # live master + venue switches.
+        from tools.crypto_trade_gate import evaluate_live_mutation
+        gate = evaluate_live_mutation("hyperliquid", risk_reducing=True)
+        if not gate.live:
+            return {"success": False, "error": gate.reason}
 
         await self.rate_limit("cancel_all_orders")
 
@@ -1320,6 +1358,13 @@ class HyperliquidTool(BaseTool):
         refusal = trade_turn_refusal(execution_context, self)
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
+        # M10: a leverage change is NOT risk-reducing (raising leverage raises
+        # liquidation risk) — blocked like an order while autonomy is halted.
+        from tools.crypto_trade_gate import evaluate_live_mutation
+        gate = evaluate_live_mutation("hyperliquid", risk_reducing=False)
+        if not gate.live:
+            return {"success": False, "error": gate.reason}
 
         await self.rate_limit("update_leverage")
 
@@ -1387,6 +1432,27 @@ class HyperliquidTool(BaseTool):
         credentials = await self._get_user_credentials()
         if not credentials:
             return {"success": False, "error": "Credentials not configured"}
+
+        # The polyrob agent wallet, when configured, takes precedence in
+        # _get_exchange_client — report the ACTUAL signer on that path, not the
+        # DB delegation state (H4: that path has no approveAgent firewall).
+        try:
+            from core.wallet.factory import get_agent_wallet
+            polyrob_wallet = get_agent_wallet()
+        except Exception:
+            polyrob_wallet = None
+        if polyrob_wallet is not None:
+            return {
+                "success": True,
+                "delegated": False,
+                "signer": ("polyrob-wallet (derived key owns its own account; "
+                           "approveAgent firewall NOT in place — H4, live "
+                           "trading refuses to arm on this path)"),
+                "master_address": polyrob_wallet.account_for("hyperliquid").address,
+                "agent_address": None,
+                "agent_name": None,
+                "testnet": credentials.testnet,
+            }
 
         aw = credentials.agent_wallet
         return {

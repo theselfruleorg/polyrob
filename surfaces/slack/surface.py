@@ -20,12 +20,10 @@ _SLACK_MAX = 4000
 
 
 def channel_id_from_session_key(session_key: str) -> str:
-    parts = session_key.split(":")
-    if parts and parts[0] == "direct":
-        return parts[-1]
-    if len(parts) >= 5:
-        return parts[4]
-    return parts[-1] if parts else session_key
+    """Delegates to the ONE inverse parser next to build_session_key
+    (030 WS-B3/E1 — this 6-line parse was copied into every surface)."""
+    from core.surfaces.session_chat_registry import chat_id_from_session_key as _p
+    return _p(session_key)
 
 
 class SlackSurface(Surface):
@@ -45,6 +43,7 @@ class SlackSurface(Surface):
             is_multi_tenant=True,
             max_message_bytes=_SLACK_MAX,
             markdown_flavor="none",    # Slack mrkdwn accepts plain text safely
+            media_out=True,            # 030 D6: external-upload flow
         )
 
     async def send(self, msg: OutboundMessage) -> SendResult:
@@ -56,11 +55,32 @@ class SlackSurface(Surface):
             for chunk in split_message(msg.text or "", _SLACK_MAX):
                 sent = await self._client.send_message(channel, chunk)
                 last_ts = (sent or {}).get("ts")
+            if msg.media:
+                await self._send_media(channel, msg.media)
             return SendResult(success=True,
                               surface_message_id=str(last_ts) if last_ts else None)
         except Exception as e:  # fail-open
             logger.error("SlackSurface.send to %s failed: %s", channel, e)
             return SendResult(success=False, error=str(e))
+
+    async def _send_media(self, channel: str, media: list) -> None:
+        """Upload each renderable entry after the text (030 D6). Fail-open per
+        entry — an upload failure never takes the delivered text down."""
+        import os
+        for entry in media:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path")
+            if not path:
+                continue
+            if not (os.path.isfile(path) and os.access(path, os.R_OK)):
+                logger.warning("SlackSurface: media path missing/unreadable: %s", path)
+                continue
+            try:
+                await self._client.upload_file(
+                    channel, path, title=entry.get("caption") or None)
+            except Exception as e:
+                logger.warning("SlackSurface: failed to upload %s: %s", path, e)
 
     async def start(self, container) -> None:
         return None

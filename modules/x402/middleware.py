@@ -25,6 +25,11 @@ from .x402_integration import (
     get_x402_config,
     get_x402_price_usd,
 )
+# M1: the SAME normalization the invoicing replay guard applies at every
+# store/compare site — this middleware writes transaction_hash into the SAME
+# x402_payment_requests column via record_x402_payment, so a facilitator's
+# mixed-case hash must be lowercased HERE too, not only in invoicing.py.
+from .invoicing import _norm_tx
 
 logger = logging.getLogger(__name__)
 
@@ -423,7 +428,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 amount_usd=amount_usd,
                 network=network,
                 recipient=config["pay_to"],
-                transaction_hash=settle_response.transaction,
+                transaction_hash=_norm_tx(settle_response.transaction),
                 amount_atomic=str(amount_atomic),
             )
 

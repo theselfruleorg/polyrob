@@ -23,6 +23,15 @@ DELEGATION_INTERRUPTED = "delegation_interrupted"
 DELEGATION_DELIVERED = "delegation_delivered"   # T1.6: completed-undelivered drain stamp
 RUN_OUTCOME_DEGRADED = "run_outcome_degraded"
 CREDIT_SENTINEL = "credit_sentinel"
+AUTONOMY_PAUSED = "autonomy_paused"       # 031: owner/system pause record written
+AUTONOMY_RESUMED = "autonomy_resumed"     # 031: record cleared (owner, or expiry)
+PAUSE_VIOLATION = "pause_violation"       # 031: autonomous activity recorded after a pause
+
+# --- outbound content (public/irreversible surfaces) -----------------------------
+SOCIAL_WRITE = "social_write"       # 2026-08-28: durable cross-session cooldown for
+                                     # autonomous twitter_post/twitter_thread — the
+                                     # in-memory per-instance rate limiter never saw
+                                     # a repeat goal firing in a FRESH session
 
 # --- delivery / correspondence --------------------------------------------------
 USER_DELIVERY = "user_delivery"
@@ -44,6 +53,10 @@ PAYMENT_REQUESTED = "payment_requested"
 PAYMENT_SETTLED = "payment_settled"
 PAYMENT_EXPIRED = "payment_expired"
 PAYMENT_UNMATCHED = "payment_unmatched"
+#: An inbound treasury transfer confirmed as our OWN trade proceeds (an exact
+#: broadcast-hash match against the wallet audit ledger) rather than a payment.
+#: Not an owner notice — but never a silent skip either.
+PAYMENT_SELF_PROCEEDS = "payment_self_proceeds"
 PAYMENT_SETTLING_REVERTED = "payment_settling_reverted"
 PAYMENT_FEEDBACK_AUTHORIZED = "payment_feedback_authorized"
 
@@ -56,6 +69,12 @@ SUBSCRIPTION_SUSPENDED = "subscription_suspended"
 SUBSCRIPTION_CANCELED = "subscription_canceled"
 SUBSCRIPTION_APPLY_FAILED = "subscription_apply_failed"
 
+# --- durable app service (032) ----------------------------------------------------
+APP_REQUESTED = "app_requested"      # a NEW slug wrote a pending row (the owner ask)
+APP_APPROVED = "app_approved"        # owner approved the address / a redeploy was queued
+APP_LIVE = "app_live"                # supervisor: healthy behind its URL
+APP_FAILED = "app_failed"            # supervisor: docker/nginx/health failure
+APP_STOPPED = "app_stopped"          # owner kill / agent app_stop / pause edge
 # Infra/storage housekeeping
 DB_RELOCATED = "db_relocated"                 # R-2 T3 one-shot sidecar move ran
 

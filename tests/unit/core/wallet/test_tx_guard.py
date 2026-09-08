@@ -36,7 +36,8 @@ def _gate():
 
 
 def _authorize(intent=None, deltas=None, *, gate=None, ctx=None,
-               price=1.0, pinned_rpc=True, halted=False, forged=None):
+               price=1.0, fallback_price="_unset", pinned_rpc=True, halted=False,
+               entry_paused=False, forged=None):
     return tx_guard.authorize(
         intent or _intent(),
         {"to": USDC, "data": "0xa9059cbb", "value": 0, "chainId": 8453},
@@ -45,8 +46,11 @@ def _authorize(intent=None, deltas=None, *, gate=None, ctx=None,
         execution_context=ctx,
         simulate_fn=lambda **_: deltas if deltas is not None else _clean_deltas(),
         price_fn=lambda chain, addr: price,
+        fallback_price_fn=(
+            None if fallback_price == "_unset" else (lambda chain, addr: fallback_price)),
         rpc_is_pinned_fn=lambda chain: pinned_rpc,
         halted_fn=lambda: halted,
+        entry_paused_fn=lambda: entry_paused,
         forged_fn=(forged if forged is not None else (lambda ctx, tool: False)),
     )
 
@@ -72,6 +76,62 @@ def test_unprovable_turn_origin_refuses():
         raise RuntimeError("cannot resolve")
     d = _authorize(ctx=object(), forged=boom)
     assert d.allowed is False
+
+
+# --------------------------------------------------------------------------
+# Entry-pause (2026-08-28): refuses NEW positions, exits still pass
+# --------------------------------------------------------------------------
+
+def test_entry_pause_refuses_a_non_exit_intent():
+    """A plain transfer/entry-shaped intent (the default `_intent()`, not a
+    sell of a held token into the quote asset) is refused while paused."""
+    d = _authorize(entry_paused=True)
+    assert d.allowed is False
+    assert "pause" in d.reason.lower()
+
+
+def test_entry_pause_allows_an_exit_bounded_approve():
+    """An allowance grant that cannot exceed the wallet's own held balance is
+    exit-bounded (028) and still runs while entries are paused."""
+    exit_intent = _approve_intent(grant=1_000_000, held_balance_raw=1_000_000)
+    d = _authorize(intent=exit_intent, entry_paused=True,
+                   deltas=_approve_deltas(grant=1_000_000), price=1.0)
+    assert d.allowed is True, d.reason
+
+
+def test_entry_pause_allows_a_revoke():
+    """A revoke (allowance op, no grants) is always exit-shaped."""
+    revoke_intent = tx_guard.TxIntent(
+        chain="base", token=USDC, to=SPENDER, amount_raw=0,
+        max_spend_usd=2.0, is_allowance_op=True,
+        expected_allowance_grants=(), idempotency_key="krevoke")
+    d = _authorize(intent=revoke_intent, entry_paused=True,
+                   deltas=Deltas(ok=True, native_delta=0, token_deltas={USDC: 0},
+                                allowance_deltas={(USDC, SPENDER): 0}))
+    assert d.allowed is True, d.reason
+
+
+def test_entry_pause_off_by_default():
+    d = _authorize()
+    assert d.allowed is True, d.reason
+
+
+def test_entry_pause_probe_failure_refuses_closed():
+    def boom():
+        raise RuntimeError("probe unavailable")
+    d = tx_guard.authorize(
+        _intent(),
+        {"to": USDC, "data": "0xa9059cbb", "value": 0, "chainId": 8453},
+        holder=HOLDER, gate=_gate(), execution_context=None,
+        simulate_fn=lambda **_: _clean_deltas(),
+        price_fn=lambda chain, addr: 1.0,
+        rpc_is_pinned_fn=lambda chain: True,
+        halted_fn=lambda: False,
+        entry_paused_fn=boom,
+        forged_fn=lambda ctx, tool: False,
+    )
+    assert d.allowed is False
+    assert "entry-pause" in d.reason.lower() or "failing closed" in d.reason.lower()
 
 
 # --------------------------------------------------------------------------
@@ -144,6 +204,31 @@ def test_unknown_price_refuses():
 def test_outflow_over_declared_usd_refuses():
     d = _authorize(intent=_intent(max_spend_usd=0.10), price=1.0)
     assert d.allowed is False
+
+
+# 028 (2026-08-22): the same exit exemption applies to a bare OUTFLOW (a
+# swap's token_in leg), not just an allowance grant — a swap TxIntent is not
+# is_allowance_op and hits this branch, which the first cut of 028 missed
+# (found live: BPAD's approve went through, the swap itself still refused).
+
+def test_outflow_within_held_balance_uses_fallback_price_when_unpriceable():
+    d = _authorize(intent=_intent(held_balance_raw=250_000, max_spend_usd=1.0),
+                   price=None, fallback_price=2.0)
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == pytest.approx(0.5)   # 0.25 token at the $2 fallback
+
+
+def test_outflow_exceeding_held_balance_still_refuses():
+    d = _authorize(intent=_intent(held_balance_raw=249_999), price=None,
+                   fallback_price=2.0)
+    assert d.allowed is False
+    assert "price" in d.reason.lower()
+
+
+def test_outflow_exemption_is_inert_without_held_balance_declared():
+    d = _authorize(intent=_intent(), price=None, fallback_price=2.0)
+    assert d.allowed is False
+    assert "price" in d.reason.lower()
 
 
 def test_policygate_ceiling_refuses():
@@ -285,6 +370,66 @@ def test_an_unpriceable_approval_grant_is_refused():
     assert "price" in d.reason.lower()
 
 
+# --------------------------------------------------------------------------
+# 028 (2026-08-22): exit-bounded allowance exemption. A grant that cannot
+# exceed the wallet's OWN held balance of the token puts no NEW value at
+# risk, so it may be valued via a best-effort fallback price instead of
+# requiring the high-confidence bar — narrow, and additive (default None =
+# byte-identical to pre-028 behaviour, see test above).
+# --------------------------------------------------------------------------
+
+def test_exit_within_held_balance_uses_fallback_price_when_unpriceable():
+    d = _authorize(
+        intent=_approve_intent(grant=1_000_000, held_balance_raw=1_000_000),
+        deltas=_approve_deltas(grant=1_000_000), price=None, fallback_price=2.0)
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == pytest.approx(2.0)   # 1.0 token at the $2 fallback price
+
+
+def test_exit_grant_exceeding_held_balance_still_refuses():
+    """held_balance_raw bounds the exemption tightly — one wei over refuses
+    exactly like the pre-028 path, not a rounding-tolerant near-miss."""
+    d = _authorize(
+        intent=_approve_intent(grant=1_000_000, held_balance_raw=999_999),
+        deltas=_approve_deltas(grant=1_000_000), price=None, fallback_price=2.0)
+    assert d.allowed is False
+    assert "price" in d.reason.lower()
+
+
+def test_exit_exemption_without_a_fallback_price_values_at_zero():
+    """2026-08-26 exit untying: an exit-bounded grant NO source can price is
+    allowed at $0 instead of refusing — the old refusal left fired stop rules
+    (BPAD, BaseUnc at −54%) with no autonomous exit path at all. The swap that
+    follows is valued exactly (measured quote inflow) and capped; the grant is
+    still simulation-asserted to the declared spender and amount."""
+    d = _authorize(
+        intent=_approve_intent(grant=1_000_000, held_balance_raw=1_000_000),
+        deltas=_approve_deltas(grant=1_000_000), price=None, fallback_price=None)
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == 0.0
+
+
+def test_exit_exemption_is_inert_without_held_balance_declared():
+    """The default (held_balance_raw=None) is unaffected even when a
+    fallback price IS available — the caller must opt in explicitly."""
+    d = _authorize(intent=_approve_intent(), deltas=_approve_deltas(),
+                   price=None, fallback_price=2.0)
+    assert d.allowed is False
+    assert "price" in d.reason.lower()
+
+
+def test_exit_exemption_still_enforces_the_usd_and_policygate_caps():
+    """The exemption only waives the CONFIDENCE bar — every downstream cap
+    (max_spend_usd, PolicyGate, autonomous ceiling) still runs off whatever
+    the fallback price computes."""
+    d = _authorize(
+        intent=_approve_intent(grant=5_000_000, held_balance_raw=5_000_000,
+                               max_spend_usd=1.0),
+        deltas=_approve_deltas(grant=5_000_000), price=None, fallback_price=2.0)
+    assert d.allowed is False
+    assert "max_spend_usd" in d.reason or "exceeds" in d.reason.lower()
+
+
 def test_an_approval_grant_above_the_declared_usd_refuses():
     d = _authorize(intent=_approve_intent(grant=5_000_000, max_spend_usd=1.0),
                    deltas=_approve_deltas(grant=5_000_000), price=1.0)
@@ -391,3 +536,51 @@ def test_watch_spenders_are_measured_without_declaring_a_grant():
         rpc_is_pinned_fn=lambda chain: True, halted_fn=lambda: False)
     assert seen["spenders"] == [OTHER_SPENDER]
     assert d.allowed is True
+
+
+# --------------------------------------------------------------------------
+# 029 R6: an unpriceable refusal must say WHICH lever is missing
+#
+# The agent wrote a complete design proposal (reports/2026-08-22-tx-guard-fix-
+# proposal.md) for a deadlock that had already shipped as 028 and was live on
+# the deployed SHA. It could not tell, because the refusal string never changed:
+# "no trustworthy price" reads identically whether the exit exemption was never
+# eligible, was eligible but unfunded by a fallback price, or does not exist at
+# all. Three different situations, three different next moves, one sentence.
+# --------------------------------------------------------------------------
+
+def test_an_unpriceable_grant_with_no_held_balance_says_the_exemption_needs_one():
+    """held_balance_raw is None: the exit exemption was never eligible. The
+    agent's next move is to read its balance, not to file a proposal."""
+    d = _authorize(intent=_approve_intent(held_balance_raw=None),
+                   deltas=_approve_deltas(), price=None)
+    assert not d.allowed
+    assert "held balance" in d.reason.lower()
+
+
+def test_an_unpriceable_exit_bounded_grant_is_allowed_at_zero():
+    """2026-08-26 exit untying: eligible for the exemption and priceless by
+    every source — that used to dead-end on 'have the owner approve it by
+    hand', which on prod meant fired stop rules could never execute. Now $0,
+    loudly, and only for grants within the held balance."""
+    d = _authorize(intent=_approve_intent(held_balance_raw=10_000_000),
+                   deltas=_approve_deltas(), price=None, fallback_price=None)
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == 0.0
+
+
+def test_the_unpriceable_refusal_still_refuses_without_a_held_balance():
+    """The untying is bounded by ownership: with no declared held balance the
+    grant could put MORE at risk than is owned, and it still refuses."""
+    d = _authorize(intent=_approve_intent(held_balance_raw=None),
+                   deltas=_approve_deltas(), price=None, fallback_price=None)
+    assert not d.allowed
+    assert "held balance" in d.reason.lower()
+
+
+def test_an_exit_bounded_grant_that_the_fallback_CAN_price_still_passes():
+    """028's exemption must survive the message change untouched."""
+    d = _authorize(intent=_approve_intent(grant=1_000_000, held_balance_raw=2_000_000),
+                   deltas=_approve_deltas(grant=1_000_000), price=None,
+                   fallback_price=0.000001)
+    assert d.allowed is True, d.reason

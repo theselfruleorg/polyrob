@@ -44,10 +44,15 @@ def approvals():
               help="Tenant user id (default: local)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
-def list_cmd(user_id, home_dir_opt):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def list_cmd(user_id, home_dir_opt, as_json):
     """Show the effective gated-action set: per-entry source + provider."""
     home_dir = home_dir_opt or _default_home_dir()
     gates, provider = effective_approval_state(user_id, home_dir)
+    if as_json:
+        import json
+        click.echo(json.dumps({"gates": gates, "provider": provider}, indent=2))
+        return
     if not gates:
         click.echo("no approval gates configured")
     else:

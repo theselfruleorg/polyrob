@@ -205,6 +205,60 @@ def test_fingerprint_x402_tenant_scoped(data_dir, _x402_env):
     asyncio.run(_run())
 
 
+# --- Task 9b: the x402 leg must survive metadata compaction ------------------
+# `_x402_read` used to match `metadata LIKE '%"kind": "agent_invoice"%'` — a
+# spaced literal against `json.dumps`'s default spacing. ANY later `json_set`
+# on a row's metadata (e.g. the boot-time subscription dedup in
+# `modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index`)
+# re-serializes the WHOLE blob COMPACTLY, which the spaced LIKE then silently
+# stopped matching — the row fell off this fingerprint's radar entirely, so a
+# LATER settlement/expiry on that same row could never change the fingerprint
+# again, and `WAKE_CHANGE_GATE` could wrongly conclude "nothing changed" and
+# skip a wake tick that should have run.
+
+def test_fingerprint_reacts_to_settlement_after_metadata_compaction(data_dir, _x402_env):
+    async def _run():
+        db = await _setup_x402_db(data_dir)
+        try:
+            inv = await _create_invoice(db, "u1")
+
+            # Recompact the metadata blob exactly the way the boot-time
+            # subscription dedup does (modules/database/x402_tables.py).
+            await db.execute(
+                "UPDATE x402_payment_requests "
+                "SET metadata = json_set(metadata, '$.subscription_id', NULL) "
+                "WHERE id = ?",
+                (inv["request_id"],),
+            )
+            # Prove the recompaction actually happened: the OLD spaced-LIKE
+            # predicate this test guards against no longer matches this row
+            # at all — without this assertion the test would not demonstrate
+            # the bug's precondition, only the fix's postcondition.
+            still_spaced = await db.fetch_all(
+                "SELECT id FROM x402_payment_requests "
+                "WHERE id = ? AND metadata LIKE '%\"kind\": \"agent_invoice\"%'",
+                (inv["request_id"],),
+            )
+            assert still_spaced == [], (
+                "setup did not actually recompact the metadata blob — this "
+                "test would not be exercising the Task 9b bug"
+            )
+
+            fp_after_compact = compute_wake_fingerprint("u1", data_dir=data_dir)
+            settled = await invoicing.settle_payment_request(inv["request_id"], db=db)
+            assert settled is True
+            fp_after_settle = compute_wake_fingerprint("u1", data_dir=data_dir)
+
+            # The pre-fix bug: the compacted row was already invisible to the
+            # LIKE match, so settling it left the fingerprint UNCHANGED
+            # (`x402:None:` before and after) — a real state change the gate
+            # would have silently missed.
+            assert fp_after_compact != fp_after_settle
+        finally:
+            await db.close()
+    asyncio.run(_run())
+
+
 # --- store -------------------------------------------------------------------
 
 def test_store_roundtrip_and_first_seen(data_dir):

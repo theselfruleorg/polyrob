@@ -160,7 +160,21 @@ def _episode_cursor(user_id: str, data_dir: str) -> str:
 # table with raw SQL rather than importing the module, so this fingerprint
 # stays cheap and dependency-light (no fastapi_x402/web3 import chain on
 # every cron tick just to read a literal).
-_AGENT_INVOICE_LIKE = '%"kind": "agent_invoice"%'
+#
+# Task 9b (2026-08-22): this used to be matched via a spaced LIKE literal
+# (`'%"kind": "agent_invoice"%'`) against `metadata LIKE ?`. Normal rows are
+# written spaced by `json.dumps`, but ANY later `json_set` on the metadata
+# blob (e.g. the boot-time subscription dedup in
+# `modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index`)
+# re-serializes the WHOLE blob COMPACTLY (`"kind":"agent_invoice"`, no
+# space), which the spaced LIKE then silently stopped matching. That row
+# then dropped out of THIS fingerprint permanently — a settlement/expiry on
+# a compacted row would never change `_x402_cursor`'s output, so
+# `WAKE_CHANGE_GATE` could conclude "nothing changed" and skip a paid wake
+# tick that should have run. `json_extract` reads the value regardless of
+# the blob's whitespace (same fix already applied in
+# `modules/x402/invoicing.py`, Task 9).
+_AGENT_INVOICE_KIND = "agent_invoice"
 
 
 def _x402_cursor(user_id: str, data_dir: str) -> str:
@@ -187,15 +201,17 @@ def _x402_read(user_id: str, db: str) -> str:
     newest = execute_retry(
         db,
         "SELECT MAX(updated_at) AS m FROM x402_payment_requests "
-        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) AND metadata LIKE ?",
-        (user_id, user_id, _AGENT_INVOICE_LIKE), fetch="one",
+        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) "
+        "AND json_extract(metadata,'$.kind')=?",
+        (user_id, user_id, _AGENT_INVOICE_KIND), fetch="one",
     )
     counts = execute_retry(
         db,
         "SELECT status, COUNT(*) AS n FROM x402_payment_requests "
-        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) AND metadata LIKE ? "
+        "WHERE (user_id=? OR json_extract(metadata,'$.tenant_id')=?) "
+        "AND json_extract(metadata,'$.kind')=? "
         "GROUP BY status ORDER BY status",
-        (user_id, user_id, _AGENT_INVOICE_LIKE), fetch="all",
+        (user_id, user_id, _AGENT_INVOICE_KIND), fetch="all",
     )
     count_sig = ",".join(f"{r['status']}={r['n']}" for r in (counts or []))
     return f"x402:{(newest or {})['m'] if newest else None}:{count_sig}"

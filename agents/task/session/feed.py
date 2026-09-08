@@ -20,7 +20,7 @@ def build_stream_publish(
     never propagates into the run loop.
     """
     async def _publish(chunk: str, step: int = 0) -> None:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
 
         if not SurfaceConfig.singular_chat_enabled():
             return

@@ -250,6 +250,10 @@ config/.env.production
 !data/prompts/**
 !data/characters/
 !data/characters/**
+# Stream manifest: operator-authored, git-tracked, deployed with the code — the
+# one place a money tool may be granted to an autonomous goal (never agent-writable).
+!data/streams/
+!data/streams/**
 
 # Editor / scratch
 .cursor/

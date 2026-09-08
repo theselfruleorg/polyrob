@@ -643,9 +643,18 @@ class ProductTelemetry:
 			event: The enriched event dict to emit
 		"""
 		try:
+			import os as _os
+
 			import requests
+			# 030 D12: honor the configured console port (WEBVIEW_EMIT_URL wins,
+			# else WEBGATE_PORT/WEBVIEW_PORT) — this was hardcoded :5050.
+			url = (_os.getenv("WEBVIEW_EMIT_URL") or "").strip()
+			if not url:
+				port = (_os.getenv("WEBGATE_PORT") or _os.getenv("WEBVIEW_PORT")
+						or "5050").strip() or "5050"
+				url = f"http://127.0.0.1:{port}/api/internal/emit"
 			requests.post(
-				"http://127.0.0.1:5050/api/internal/emit",
+				url,
 				json={"session_id": session_id, "event": event},
 				timeout=0.1  # 100ms timeout, non-blocking
 			)

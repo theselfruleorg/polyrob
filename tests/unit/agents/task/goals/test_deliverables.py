@@ -242,3 +242,65 @@ def test_notify_owner_done_strips_attachments_on_tenant_mismatch(monkeypatch, tm
     text, attachments = calls[0]
     assert attachments is None  # stripped — never cross-tenant media
     assert "b.md" in text  # still listed honestly
+
+
+# ---------------------------------------------------------------------------
+# Reachability note (publishing & app-deployment evaluation 2026-09-05, Wave 1):
+# a done goal whose deliverables are all `url IS NULL` says so in the notice.
+# ---------------------------------------------------------------------------
+
+def test_reachability_note_names_unreachable_deliverables():
+    from agents.task.goals.deliverables import reachability_note
+    note = reachability_note(["- `a.md` (1 KB) — attached (`/x/a.md`)",
+                              "- `b.html` (2 KB) — server-only: `/x/b.html` (oversize)"],
+                             rail_available=False)
+    assert note and "public URL" in note
+    assert "PUBLISH_ENABLED" in note  # rail off => the note names the switch
+
+
+def test_reachability_note_names_unused_rail_when_registered():
+    from agents.task.goals.deliverables import reachability_note
+    for rail in (True, None):
+        note = reachability_note(
+            ["- `b.html` (2 KB) — server-only: `/x/b.html` (oversize)"],
+            rail_available=rail)
+        assert note and "public URL" in note
+        assert "PUBLISH_ENABLED" not in note
+        assert "publish" in note.lower()
+
+
+def test_publish_rail_available_reads_the_container():
+    from agents.task.goals.deliverables import publish_rail_available
+
+    class _C:
+        def __init__(self, names): self._n = names
+        def has_service(self, n): return n in self._n
+    assert publish_rail_available(_C({"publish"})) is True
+    assert publish_rail_available(_C(set())) is False
+    assert publish_rail_available(None) is None
+    assert publish_rail_available(object()) is None
+
+
+def test_reachability_note_silent_when_a_file_is_published():
+    from agents.task.goals.deliverables import reachability_note
+    assert reachability_note(
+        ["- `b.html` (2 KB) — published: https://pub.example.com/b/"]) is None
+
+
+def test_reachability_note_silent_without_deliverables():
+    from agents.task.goals.deliverables import reachability_note
+    assert reachability_note([]) is None
+    assert reachability_note(None) is None
+
+
+def test_completion_text_carries_reachability_note():
+    disp = _dispatcher()
+    goal = Goal(id="g1", user_id="u1", title="ship page")
+    text = disp._completion_text(
+        goal, "built it", verified="verified",
+        deliverable_lines=["- `page.html` (2 KB) — attached (`/x/page.html`)"])
+    assert "public URL" in text
+    published = disp._completion_text(
+        goal, "built it", verified="verified",
+        deliverable_lines=["- `page.html` (2 KB) — published: https://pub.example.com/p/"])
+    assert "public URL" not in published

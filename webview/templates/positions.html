@@ -1,0 +1,121 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ console_display_name() }} - Positions{% endblock %}
+{% block header_title %}{{ console_display_name() }} - Positions{% endblock %}
+
+{% block content %}
+<div class="terminal-container webgate-page">
+    <div class="webgate-header">
+        <h2>Positions</h2>
+        <p class="text-muted text-sm">The agent's on-chain book: its own holdings, read live from the chain, and the reconcile verdict — the position ledger's table diffed against actual balances, both directions. Read-only. A failed read renders as unavailable, never as an empty book.</p>
+    </div>
+    <form id="pos-controls" class="webgate-search" onsubmit="return false;">
+        <label class="text-sm text-muted" for="pos-chain">Chain</label>
+        <select id="pos-chain" class="form-control">
+            <option value="base" selected>base</option>
+            <option value="ethereum">ethereum</option>
+            <option value="arbitrum">arbitrum</option>
+            <option value="polygon">polygon</option>
+            <option value="solana">solana</option>
+        </select>
+    </form>
+    <div id="pos-error" class="webgate-note" style="display:none;"></div>
+    <div class="pos-section">
+        <h3>Wallet addresses</h3>
+        <div id="pos-addresses" class="pos-pre">Loading…</div>
+    </div>
+    <div class="pos-section">
+        <h3>Reconcile — ledger ⟷ chain</h3>
+        <div id="pos-verdict" class="pos-verdict" style="display:none;"></div>
+        <pre id="pos-reconcile" class="pos-pre">Loading…</pre>
+    </div>
+    <div class="pos-section">
+        <h3>Portfolio — live chain read</h3>
+        <pre id="pos-portfolio" class="pos-pre">Loading…</pre>
+    </div>
+</div>
+
+<style>
+.pos-section { margin: 16px 0; }
+.pos-section h3 { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.75; margin-bottom: 6px; }
+.pos-pre { border: 1px solid var(--border-color, #333); border-radius: 8px; padding: 12px 14px; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 0.82rem; max-height: 480px; overflow: auto; }
+.pos-verdict { display: inline-block; margin-bottom: 8px; padding: 4px 10px; border-radius: 6px; font-weight: 600; font-size: 0.85rem; }
+.pos-verdict.ok { color: #3ba55d; border: 1px solid #3ba55d; }
+.pos-verdict.bad { color: #d83c3e; border: 1px solid #d83c3e; }
+.pos-verdict.na { opacity: 0.6; border: 1px solid var(--border-color, #333); }
+.webgate-note { margin: 8px 0 4px; padding: 8px 12px; border-radius: 6px; border: 1px solid #b8860b; background: rgba(184, 134, 11, 0.12); font-size: 0.85rem; }
+</style>
+
+<script>
+(function () {
+    const chainSel = document.getElementById('pos-chain');
+    const errBox = document.getElementById('pos-error');
+    const addrBox = document.getElementById('pos-addresses');
+    const recPre = document.getElementById('pos-reconcile');
+    const recVerdict = document.getElementById('pos-verdict');
+    const portPre = document.getElementById('pos-portfolio');
+
+    function esc(s) {
+        const d = document.createElement('div');
+        d.textContent = s == null ? '' : String(s);
+        return d.innerHTML;
+    }
+
+    function renderBlock(pre, block, absentMsg) {
+        if (!block) { pre.textContent = absentMsg; return; }
+        if (block.error) { pre.textContent = 'UNAVAILABLE — ' + block.error; return; }
+        pre.textContent = block.text || absentMsg;
+    }
+
+    async function load() {
+        errBox.style.display = 'none';
+        recVerdict.style.display = 'none';
+        addrBox.textContent = 'Loading…';
+        recPre.textContent = 'Loading…';
+        portPre.textContent = 'Loading…';
+        let data;
+        try {
+            const res = await fetch('/api/webgate/positions?chain=' + encodeURIComponent(chainSel.value));
+            data = await res.json();
+        } catch (e) {
+            errBox.textContent = 'positions read failed: ' + e;
+            errBox.style.display = 'block';
+            addrBox.textContent = recPre.textContent = portPre.textContent = 'UNAVAILABLE';
+            return;
+        }
+        if (data.error) {
+            errBox.textContent = data.error;
+            errBox.style.display = 'block';
+        }
+        const a = data.addresses || {};
+        addrBox.innerHTML = (a.evm ? 'EVM (operational): <code>' + esc(a.evm) + '</code><br>' : '')
+            + (a.solana ? 'Solana: <code>' + esc(a.solana) + '</code>' : '')
+            || 'wallet not enabled — no addresses';
+        renderBlock(portPre, data.portfolio, 'no portfolio read');
+        if (data.reconcile) {
+            renderBlock(recPre, data.reconcile, 'no reconcile output');
+            const text = (data.reconcile.text || '') + (data.reconcile.error || '');
+            if (/DISAGREEMENT/i.test(text)) {
+                recVerdict.textContent = 'DISAGREEMENT';
+                recVerdict.className = 'pos-verdict bad';
+                recVerdict.style.display = 'inline-block';
+            } else if (/AGREEMENT|zero disagreements|AGREES/i.test(text)) {
+                recVerdict.textContent = 'IN AGREEMENT';
+                recVerdict.className = 'pos-verdict ok';
+                recVerdict.style.display = 'inline-block';
+            }
+        } else {
+            recPre.textContent = data.ledger_path
+                ? 'no reconcile output'
+                : 'no position ledger found (expected <data-home>/project/kb-root-position-ledger.md) — nothing to reconcile against';
+            recVerdict.textContent = 'NO LEDGER';
+            recVerdict.className = 'pos-verdict na';
+            recVerdict.style.display = 'inline-block';
+        }
+    }
+
+    chainSel.addEventListener('change', load);
+    load();
+})();
+</script>
+{% endblock %}

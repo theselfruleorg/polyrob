@@ -52,11 +52,18 @@ class ConversationResumeMixin:
         orchestrator unexpectedly exists for whatever it resolves to), it delivers
         into that session instead of minting a second one.
         """
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         # Deferred import (avoids a load-time circular import with
         # agents.task_agent_lite, which imports this mixin at module scope).
         from agents.task_agent_lite import _spawn_detached
         if not SurfaceConfig.conversation_resume_enabled() or not surface:
+            return False
+        # 031 owner pause: minting a replacement session and running it is
+        # autonomous work — held (the registry/store rows are untouched).
+        from core.autonomy_control import allows as _allows
+        _dec = _allows("resume_session")
+        if not _dec.allowed:
+            logger.warning("conversation resume HELD for %s (%s)", dead_session_id, _dec.reason)
             return False
         if not hasattr(self, "_resume_locks"):
             self._resume_locks = {}
@@ -162,7 +169,7 @@ class ConversationResumeMixin:
                     f"correspondent conversation resumed: {surface}:{source} re-pointed "
                     f"from dead session {dead_session_id} to new session {new_sid}")
                 try:
-                    from agents.task.telemetry.event_log import (event_log_enabled,
+                    from core.event_log import (event_log_enabled,
                                                                  get_event_log)
                     if event_log_enabled():
                         get_event_log().record(

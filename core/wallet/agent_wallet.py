@@ -83,6 +83,33 @@ class AgentWallet:
         # from, so it tracks the operational venue (not a hardcoded 'treasury').
         return self.operational_signer().address
 
+    # -- Solana (Phase 2) --------------------------------------------------
+    # A SECOND family off the same seed, not a second wallet. The EVM address is
+    # untouched by this existing — different curve, different derivation path,
+    # different account. The owner must fund both. Value moves through the
+    # guarded `defi_trade.solana_swap` verb (Phases 3-4: signer, rail,
+    # simulation, x402 SVM settle), gated by SOLANA_TRADE_ENABLED.
+
+    def solana_signer(self, account: int = 0):
+        """Signer for the agent's Solana account. Cached, like the EVM ones."""
+        key = f"__solana:{int(account)}"
+        cached = self._signers.get(key)
+        if cached is None:
+            from core.wallet.solana_signer import SolanaSigner
+            seed = getattr(self._config, "master_seed", None)
+            if not seed:
+                raise ValueError("no master seed configured")
+            cached = SolanaSigner.from_mnemonic(seed, account)
+            self._signers[key] = cached
+        return cached
+
+    @property
+    def solana_address(self) -> str:
+        """The agent's Solana address. NOT interchangeable with `address` —
+        showing one where the other belongs is how funds get stranded on a chain
+        the key cannot spend on."""
+        return self.solana_signer().address
+
     @property
     def config(self) -> WalletConfig:
         return self._config

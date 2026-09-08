@@ -48,7 +48,7 @@ def test_surfaces_discord_enabled_and_token_shows_plain_name(tmp_path):
 def test_surfaces_discord_falsey_denylist_arbitrary_truthy_value(tmp_path):
     # bool_env/parse_bool are a falsey-DENYlist (anything not in _FALSEY is truthy),
     # not an allow-list — DISCORD_SURFACE_ENABLED=enabled actually starts the surface
-    # at runtime (agents.task.surface_config -> core.env.bool_env), so doctor must
+    # at runtime (core.surfaces.config -> core.env.bool_env), so doctor must
     # report it as plain "discord", not a stale "token only" qualifier.
     lines = setup_lines({
         "POLYROB_DATA_DIR": str(tmp_path),

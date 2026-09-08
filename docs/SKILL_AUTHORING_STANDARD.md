@@ -22,6 +22,14 @@ If `perplexity` is available, use it for synthesis. If not, fall back to `anysit
 - **Never imply a tool can do something the session doesn't have access to.** The `tool_ids` field in a rule is METADATA for matching — it does NOT grant capabilities. If the tool isn't loaded for the session, the skill still activates but the tool won't be callable.
 - **State uncertainty.** If a data source might be paywalled or unavailable, say so and tell the agent to note it in the output.
 
+## 2a. Capability-denial claims must be re-checkable, never asserted as permanent fact
+
+Section 2 covers a tool being *unloaded for this session* — that's transient and self-correcting (the agent notices and falls back). A different, worse failure mode is a skill asserting that the underlying **capability itself doesn't exist** — "there is no Solana signer," "you cannot buy NFTs," "this tool cannot post" — as flat, permanent fact. That claim was true the day it was written and silently false the day the capability shipped, and nothing re-checks it: nothing calls a `SKILL.md`, so a stale denial doesn't error, it just makes the agent look like it's choosing not to act. This happened for real (2026-08-27): two prompts said Solana had no signer for weeks after the Solana rail shipped, and the agent repeated the false claim to its own owner every run.
+
+- **If you write "X cannot do Y" or "there is no Z," add a matching row to `tests/unit/agents/task/test_capability_claims_registry.py` in the same commit.** The registry re-checks the claim against the actual code (a method that doesn't exist, a tool excluded from a frozenset, a flag that's off) on every test run, so the moment the capability ships, CI fails at that row instead of the claim rotting silently.
+- **Prefer computing the fact at render time over hand-typing it**, wherever the rendering code already has the real answer — e.g. `agents/task/agent/prompts.py::_get_web_access_content` renders per-session tool availability from `self.tool_ids` rather than asserting a fixed list. A skill can't do this (it's static Markdown), which is exactly why it needs the registry instead.
+- **Word the claim so it's falsifiable by a specific check**, not vibes — "there is no marketplace integration (no Seaport, no Reservoir)" is checkable; "NFTs aren't really our thing" is not.
+
 ## 3. `tool_ids` are matching metadata, not capability grants
 
 The `tool_ids` array in `rules.json` under `triggers` tells the skill manager that this skill is relevant when those tools are loaded. It does **not** make those tools available.

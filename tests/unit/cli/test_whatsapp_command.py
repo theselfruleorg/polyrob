@@ -53,7 +53,7 @@ def test_whatsapp_surface_enabled_flag_default_off():
     """whatsapp_surface_enabled() must default to False (multi-tenant safe)."""
     import os
 
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     # Remove the env var if another session set it, verify we read False.
     original = os.environ.pop("WHATSAPP_SURFACE_ENABLED", None)
@@ -66,7 +66,7 @@ def test_whatsapp_surface_enabled_flag_default_off():
 
 def test_whatsapp_surface_enabled_reads_env(monkeypatch):
     monkeypatch.setenv("WHATSAPP_SURFACE_ENABLED", "true")
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     assert SurfaceConfig.whatsapp_surface_enabled() is True
 

@@ -212,6 +212,22 @@ class AgentConstructionMixin:
 	(in service.py) still builds AgentConfig/AgentDeps and calls cls(config, deps). Imports
 	above are service.py's full set so every name the constructor references resolves."""
 
+	def _resolve_surface_profile(self):
+		"""The bound chat surface's capabilities for the <surface> prompt block (G6).
+
+		Resolved through the ONE binding seam (``core.surfaces.binding``), which
+		reads the session_chat_registry the orchestrator was bound to before
+		``initialize()``. Returns None off a chat surface (goal/cron/`polyrob run`/
+		raw API) — the prompt then stays byte-identical to the pre-G6 build.
+		Fail-open: a resolution fault must never break agent construction.
+		"""
+		try:
+			from core.surfaces.binding import surface_profile
+			return surface_profile(self.orchestrator)
+		except Exception as e:
+			self.logger.debug(f"surface profile unresolved (non-fatal): {e}")
+			return None
+
 	def _load_project_context(self) -> None:
 		"""Auto-load the frozen PROJECT_CONTEXT foundation message (C9, P7 finalization:
 		extracted from __init__).
@@ -330,6 +346,43 @@ class AgentConstructionMixin:
 			raise ROBValidationError("task must be a non-empty string")
 		if not orchestrator:
 			raise ROBValidationError("orchestrator is required - Agent cannot run standalone")
+
+	def _wire_runtime_state(self) -> None:
+		"""Self-only runtime bookkeeping (B03, S7 2026-08-29): stall-detection counters,
+		the per-run ``session_data`` dict, the native-tools debug switch and the
+		loop-detection deques/thresholds. Extracted verbatim from ``__init__`` — this
+		block read no constructor locals, so it is safe to hoist; the ``locals()``-
+		consuming profile block above it is deliberately NOT extracted."""
+		# Stall detection tracking
+		self._last_action_count = 0
+		self._stall_check_interval = 30.0  # Check every 30 seconds
+		self._stall_check_task = None
+		self._llm_call_in_progress = False  # Track when waiting for LLM response
+		self._llm_call_start_time = None  # When the current LLM call started
+
+		# Create a session data dictionary for later use
+		self.session_data = {
+			"agent_id": self.agent_id,
+			"task": self.task,
+			"model_name": self.model_name,
+			"created_at": datetime.now().isoformat(),
+			"steps": [],
+			"llm_requests": []
+		}
+
+		# Native tools debug flag
+		self._native_tools_debug = os.environ.get('NATIVE_TOOLS_DEBUG', '').lower() == 'true'
+		if self._native_tools_debug:
+			self.logger.setLevel(logging.DEBUG)
+			self.logger.info("[NATIVE_TOOLS] Debug mode enabled")
+
+		# Loop detection variables with improved thresholds
+		self._previous_actions = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # Use consistent window size
+		self._action_repetition_counter = 0
+		self._max_allowed_repetitions = LoopDetectionConfig.MAX_ALLOWED_REPETITIONS
+		self._last_browser_states = deque(maxlen=3)  # MODIFIED: Use bounded deque instead of list
+		self._unchanged_state_count = 0
+		self._state_change_threshold = LoopDetectionConfig.STATE_CHANGE_THRESHOLD
 
 	def __init__(self, config: AgentConfig, deps: AgentDeps):
 		"""Initialize Agent from a config + deps pair.
@@ -645,7 +698,7 @@ class AgentConstructionMixin:
 		# failure must SURFACE — a tainted session that came up WITHOUT this
 		# fail-closed gate could run high-impact tools on untrusted correspondent
 		# DATA. When the model is OFF the `if` is false and nothing is registered.
-		from agents.task.surface_config import SurfaceConfig
+		from core.surfaces.config import SurfaceConfig
 		if SurfaceConfig.correspondent_access_enabled() and self.controller is not None \
 				and hasattr(self.controller, "register_pre_tool_call_hook"):
 			from agents.task.agent.core.correspondent_gate import (
@@ -677,6 +730,13 @@ class AgentConstructionMixin:
 		# Agent gets pre-configured ActionModel from Controller
 		self.ActionModel = self.controller.create_action_model()
 		self.AgentOutput = AgentOutput.type_with_custom_actions(self.ActionModel)
+		# Baseline snapshot for _ensure_action_model_current (llm_runner.py) — a
+		# mid-session load_tool() call registers new actions into the controller's
+		# registry without this snapshot, that per-step check would never fire.
+		try:
+			self._action_model_names = frozenset(self.controller.get_action_names())
+		except Exception:
+			self._action_model_names = None
 
 		self._set_version_and_source()
 		
@@ -961,6 +1021,9 @@ class AgentConstructionMixin:
 			# T1-06: the vision prompt section follows the session's real use_vision
 			# instead of claiming image abilities for use_vision=False sessions.
 			include_vision=bool(self.use_vision),
+			# G6: the bound chat surface's message cap / media capability, so the
+			# agent writes for the reader it actually has. None off a chat surface.
+			surface_profile=self._resolve_surface_profile(),
 		)
 
 		# Agent-level provider label SSOT. The step-loop billing path reads
@@ -1055,7 +1118,7 @@ class AgentConstructionMixin:
 				from core.instance import owner_awareness_line
 				_corr_on = False
 				try:
-					from agents.task.surface_config import SurfaceConfig
+					from core.surfaces.config import SurfaceConfig
 					_corr_on = SurfaceConfig.correspondent_access_enabled()
 				except Exception:
 					_corr_on = False
@@ -1128,7 +1191,7 @@ class AgentConstructionMixin:
 		# was last-writer-wins across tenants: session A's reflection then ran on
 		# session B's aux model. Deferred to the metering block below, which registers
 		# the model and the billing context together in one call.
-		from agents.task.constants import reflection_llm_enabled_default
+		from core.config_policy import reflection_llm_enabled_default
 		_reflection_llm = None
 		if reflection_llm_enabled_default():
 			try:
@@ -1208,41 +1271,12 @@ class AgentConstructionMixin:
 		if save_conversation_path:
 			self.logger.info(f'Saving conversation to {save_conversation_path}')
 
-		# Stall detection tracking
-		self._last_action_count = 0
-		self._stall_check_interval = 30.0  # Check every 30 seconds
-		self._stall_check_task = None
-		self._llm_call_in_progress = False  # Track when waiting for LLM response
-		self._llm_call_start_time = None  # When the current LLM call started
-
 		# Log registered commands
 		# Use Controller's high-level API instead of directly accessing registry
 		registered_commands = self.controller.get_action_names()
 		self.logger.debug(f"Registered commands: {len(registered_commands)} commands - {', '.join(registered_commands)}")
 		
-		# Create a session data dictionary for later use
-		self.session_data = {
-			"agent_id": self.agent_id,
-			"task": self.task,
-			"model_name": self.model_name,
-			"created_at": datetime.now().isoformat(),
-			"steps": [],
-			"llm_requests": []
-		}
-
-		# Native tools debug flag
-		self._native_tools_debug = os.environ.get('NATIVE_TOOLS_DEBUG', '').lower() == 'true'
-		if self._native_tools_debug:
-			self.logger.setLevel(logging.DEBUG)
-			self.logger.info("[NATIVE_TOOLS] Debug mode enabled")
-
-		# Loop detection variables with improved thresholds
-		self._previous_actions = deque(maxlen=LoopDetectionConfig.MEMORY_WINDOW_SIZE)  # Use consistent window size
-		self._action_repetition_counter = 0
-		self._max_allowed_repetitions = LoopDetectionConfig.MAX_ALLOWED_REPETITIONS
-		self._last_browser_states = deque(maxlen=3)  # MODIFIED: Use bounded deque instead of list
-		self._unchanged_state_count = 0
-		self._state_change_threshold = LoopDetectionConfig.STATE_CHANGE_THRESHOLD
+		self._wire_runtime_state()
 
 		# No need for these locks that can cause deadlocks
 

@@ -208,11 +208,14 @@ class TokenCounter:
         """Estimate cost for token usage"""
         from modules.llm.model_registry import calculate_cost
         
+        # Forward BOTH cache token classes (G-24 class of bug: dropping
+        # cache_creation_tokens under-reports the Anthropic 1.25x write surcharge).
         return calculate_cost(
             model_name,
             usage.prompt_tokens,
             usage.completion_tokens,
-            usage.cached_tokens
+            usage.cached_tokens,
+            getattr(usage, "cache_creation_tokens", 0) or 0,
         )
     
     def track_usage(self, model_name: str, usage: TokenUsage,

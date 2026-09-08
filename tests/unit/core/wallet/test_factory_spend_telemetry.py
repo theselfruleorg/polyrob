@@ -6,7 +6,7 @@ the TelemetryEventLog, so money movement is durable + queryable cross-session.
 
 
 def test_factory_gate_emits_wallet_spend(tmp_path, monkeypatch):
-    import agents.task.telemetry.event_log as el
+    import core.event_log as el
 
     monkeypatch.setattr(el, "_INSTANCES", {})
     test_log = el.TelemetryEventLog(str(tmp_path / "te.db"))

@@ -112,6 +112,17 @@ def test_promote_pending(sm, monkeypatch):
     assert not (sm.skills_dir / "user_u1" / ".pending" / "q" / "SKILL.md").exists()
 
 
+def test_promote_pending_removes_now_empty_pending_dir(sm, monkeypatch):
+    """REGRESSION 2026-08-27: promote removed SKILL.md but left the empty
+    .pending/<skill_id>/ directory behind forever (observed live on prod as
+    stale empty dirs from long-since-reviewed drafts)."""
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
+    sm.create_skill("q", GOOD, user_id="u1")
+    res = sm.promote_pending_skill("q", user_id="u1")
+    assert res.ok and not res.pending
+    assert not (sm.skills_dir / "user_u1" / ".pending" / "q").exists()
+
+
 # --- revalidation-round regression tests ------------------------------------
 
 def test_authored_active_skill_is_loadable_not_dead_write(sm, monkeypatch):
@@ -185,6 +196,15 @@ def test_reject_pending_skill_archives_and_removes(sm, monkeypatch):
     assert sm.list_pending_skills(user_id="u1") == []
     # archived (recoverable)
     assert (sm.skills_dir / "user_u1" / ".archived" / "bad-draft" / "SKILL.md").exists()
+
+
+def test_reject_pending_skill_removes_now_empty_pending_dir(sm, monkeypatch):
+    """REGRESSION 2026-08-27: reject archived SKILL.md but left the empty
+    .pending/<skill_id>/ directory behind forever, same bug as promote."""
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "true")
+    sm.create_skill("bad-draft-2", GOOD, user_id="u1", created_by="agent")
+    assert sm.reject_pending_skill("bad-draft-2", user_id="u1") is True
+    assert not (sm.skills_dir / "user_u1" / ".pending" / "bad-draft-2").exists()
 
 
 def test_reject_pending_skill_missing_is_false(sm):

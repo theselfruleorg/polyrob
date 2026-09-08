@@ -32,10 +32,8 @@ def address_from_session_key(session_key: str) -> str:
     segment (index 4). Falls back to the last segment for any other shape. The address
     can contain no ':' so index-4 is unambiguous.
     """
-    parts = session_key.split(":")
-    if len(parts) >= 5:
-        return parts[4]
-    return parts[-1] if parts else session_key
+    from core.surfaces.session_chat_registry import chat_id_from_session_key
+    return chat_id_from_session_key(session_key)
 
 
 class EmailSurface(Surface):

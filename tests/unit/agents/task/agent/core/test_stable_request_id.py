@@ -7,14 +7,14 @@ returned a fresh `uuid.uuid4().hex` on EVERY call, so two billings of the SAME
 completion always got different ids and the unique index never collided.
 
 This suite covers the fix: `extract_stable_request_id` (the STABLE
-idempotency-key extractor, agents/task/agent/core/aux_metering.py) and its
+idempotency-key extractor, modules/llm/aux_metering.py) and its
 wiring into `meter_aux_llm`.
 """
 import types
 
 import pytest
 
-from agents.task.agent.core.aux_metering import extract_stable_request_id, meter_aux_llm
+from modules.llm.aux_metering import extract_stable_request_id, meter_aux_llm
 
 
 # ── extract_stable_request_id: pure extraction logic ────────────────────────

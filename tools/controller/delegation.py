@@ -60,6 +60,7 @@ DELEGATE_BLOCKED_TOOLS: frozenset = _ids_with("delegate_blocked")
 DELEGATION_ACTION_NAMES: frozenset = frozenset({
     "subtask", "parallel_subtasks", "delegate_task",
     "preferences",
+    "autonomy_control",  # 031: a leaf never touches the owner pause record
 })
 
 _BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"

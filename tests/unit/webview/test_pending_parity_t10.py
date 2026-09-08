@@ -106,13 +106,24 @@ def test_promote_correspondent_approves_via_registry(monkeypatch, tmp_path):
     assert rows[0]["state"] == "active"
 
 
-def test_reject_correspondent_is_honest_not_a_500(monkeypatch, tmp_path):
-    """No CLI/registry reject primitive exists for a pending correspondent
-    (only approve()) — this must degrade to an honest ok:false, never a 500 or
-    a reimplemented grant/deny mechanism."""
-    _seed_pending_correspondent(tmp_path)
+def test_reject_correspondent_flips_the_row_via_registry(monkeypatch, tmp_path):
+    """030 WS-C C3: the registry gained the reject decision verb
+    (``CorrespondentRegistry.reject`` — pending -> expired), so the webview
+    reject is now WIRED instead of refused. Same-primitive rule holds: the
+    endpoint routes through the registry method, never a reimplemented deny."""
+    registry = _seed_pending_correspondent(tmp_path)
     client, _ = _client(monkeypatch, tmp_path)
     r = client.post("/api/webgate/pending/correspondent/email:third.party@example.com/reject")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    rows = registry.list(user_id="gleb")
+    assert rows[0]["state"] == "expired"
+
+
+def test_reject_unknown_correspondent_is_honest_not_a_500(monkeypatch, tmp_path):
+    """A miss stays an honest ok:false, never a 500."""
+    client, _ = _client(monkeypatch, tmp_path)
+    r = client.post("/api/webgate/pending/correspondent/email:nobody@example.com/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is False
 

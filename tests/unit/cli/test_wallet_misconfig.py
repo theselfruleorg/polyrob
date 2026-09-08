@@ -38,6 +38,11 @@ def test_bare_wallet_view_bootstraps_local_env(monkeypatch):
     so a seed written to ~/.polyrob/.env by `wallet init` in a PRIOR process is
     seen — instead of reporting 'not enabled' while `doctor` says 'on'."""
     # Simulate a fresh process: the seed lives only in the env FILE, not os.environ.
+    # AGENT_WALLET_DERIVATION must be genuinely unset too — an earlier test in
+    # the session can have leaked the dev box's 'bip44' into os.environ, which
+    # `resolve_scheme` takes as an override and which this fake 40-char seed
+    # cannot satisfy.
+    monkeypatch.delenv("AGENT_WALLET_DERIVATION", raising=False)
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
     monkeypatch.delenv("AGENT_WALLET_MASTER_SEED", raising=False)
 
@@ -123,6 +128,14 @@ def test_bare_wallet_view_friendly_on_invalid_bip44_seed(monkeypatch):
 
 
 def test_bare_wallet_view_shows_derivation(monkeypatch, tmp_path):
+    # Pin the derivation scheme as genuinely unset, like every sibling here.
+    # Without the load_env stub this test ran the REAL bootstrap, which reads a
+    # dev box's ~/.polyrob/.env and injects AGENT_WALLET_DERIVATION=bip44 —
+    # `resolve_scheme` takes that env override first, and this junk 40-char
+    # seed then dies as "not a valid BIP-39 mnemonic". (meta.json, the other
+    # scheme source, is already isolated by _isolate_wallet_audit_sink.)
+    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.delenv("AGENT_WALLET_DERIVATION", raising=False)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "w" * 40)
     runner = CliRunner()
@@ -161,9 +174,10 @@ def test_bare_wallet_view_enabled_with_bad_cap_names_key(monkeypatch):
     assert "seed missing/short" not in result.output
 
 
-def test_bare_wallet_view_annotates_unlimited_daily(monkeypatch):
-    """M13: the view annotates the per-tx CEILING and warns daily none = UNLIMITED,
-    with the set-cap hint — the real posture a new owner never saw."""
+def test_bare_wallet_view_shows_the_default_daily_cap(monkeypatch):
+    """H3 (2026-08-22): WALLET_DAILY_CAP_USD unset used to mean UNLIMITED; it
+    now means the finite $100/24h default, so the bare view's default posture
+    shows a real daily budget, not the unlimited warning."""
     monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "x" * 40)
@@ -172,14 +186,32 @@ def test_bare_wallet_view_annotates_unlimited_daily(monkeypatch):
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["--no-balances"])
     assert result.exit_code == 0, result.output
+    assert "daily $100.00" in result.output
+    assert "UNLIMITED" not in result.output
+
+
+def test_bare_wallet_view_annotates_unlimited_daily_when_explicitly_disabled(monkeypatch):
+    """M13: the view annotates the per-tx CEILING and warns daily none =
+    UNLIMITED, with the set-cap hint — but only when the operator has
+    EXPLICITLY disabled the aggregate cap (H3, 2026-08-22: unset alone is no
+    longer "no cap", it's the finite default — see the sibling test above)."""
+    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", "x" * 40)
+    monkeypatch.setenv("AGENT_WALLET_DERIVATION", "legacy")  # PBKDF2 — always derives
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "none")
+    runner = CliRunner()
+    result = runner.invoke(wallet_cmd, ["--no-balances"])
+    assert result.exit_code == 0, result.output
     assert "UNLIMITED" in result.output
     assert "CEILING" in result.output
     assert "set-cap daily" in result.output
 
 
-def test_doctor_wallet_on_reports_caps_and_unlimited_warning():
-    """H14c: doctor's 'wallet: on' line reports caps and flags no-daily-cap as
-    the real (UNLIMITED) posture."""
+def test_doctor_wallet_on_reports_the_default_daily_cap():
+    """H14c: doctor's 'wallet: on' line reports caps. H3 (2026-08-22): the
+    per-tx default dropped to $250 (was $1000) and unset daily now shows the
+    finite $100 default, not UNLIMITED."""
     lines = doctor_report({
         "AGENT_WALLET_ENABLED": "true",
         "AGENT_WALLET_MASTER_SEED": "x" * 40,
@@ -187,6 +219,23 @@ def test_doctor_wallet_on_reports_caps_and_unlimited_warning():
     })
     joined = "\n".join(lines)
     assert "wallet: on" in joined
-    assert "caps max $1000/tx" in joined
+    assert "caps max $250.00/tx" in joined
+    assert "daily $100.00" in joined
+    assert "UNLIMITED" not in joined
+
+
+def test_doctor_wallet_on_reports_unlimited_warning_when_explicitly_disabled():
+    """H14c: doctor still flags an EXPLICITLY disabled daily cap as the real
+    (UNLIMITED) posture (H3, 2026-08-22: no longer the default — see the
+    sibling test above)."""
+    lines = doctor_report({
+        "AGENT_WALLET_ENABLED": "true",
+        "AGENT_WALLET_MASTER_SEED": "x" * 40,
+        "AGENT_WALLET_DERIVATION": "legacy",
+        "WALLET_DAILY_CAP_USD": "none",
+    })
+    joined = "\n".join(lines)
+    assert "wallet: on" in joined
+    assert "caps max $250.00/tx" in joined
     assert "UNLIMITED" in joined
     assert "no daily cap" in joined.lower()

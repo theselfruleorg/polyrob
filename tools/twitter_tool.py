@@ -1491,9 +1491,123 @@ class TwitterTool(BaseTool):
     def _rate_record(self, *, is_dm: bool) -> None:
         (self._dm_times if is_dm else self._write_times).append(time.time())
 
+    #: New-content publishing actions — a repeat here is a duplicate POST, not
+    #: engagement. twitter_reply/twitter_quote are deliberately excluded: a
+    #: reply to a DIFFERENT tweet is not a repeat by construction.
+    _SOCIAL_COOLDOWN_ACTIONS = frozenset({"twitter_post", "twitter_thread"})
+
+    @staticmethod
+    def _social_cooldown_enabled() -> bool:
+        from core.env import bool_env
+        return bool_env("TWITTER_POST_COOLDOWN_ENABLED", True)
+
+    @staticmethod
+    def _social_cooldown_sec() -> int:
+        from core.env import int_env
+        return int_env("TWITTER_POST_COOLDOWN_SEC", 3600)
+
+    async def _social_cooldown_block(self, action_name: str, execution_context) -> Optional[str]:
+        """Durable, CROSS-SESSION minimum gap between autonomous posts.
+
+        2026-08-28 (observed in production): a recurring "track record"
+        goal re-fired repeatedly — each run a FRESH session with its own fresh
+        TwitterTool instance — and posted 30+ near-duplicate tweets over ~5
+        days. `_rate_available`'s in-memory bucket is per-instance, so it never
+        saw a sibling session's posts; it could not have caught this. This
+        check reads the durable event log instead (same pattern §3.2's
+        USER_DELIVERY dedup already uses for the owner-message equivalent).
+        Scoped to autonomous/forged turns only — a genuine owner-driven post
+        is never gated. Returns a refusal string, or None to proceed. Fail-open
+        on any probe error (never blocks a post over a broken telemetry DB)."""
+        if not self._social_cooldown_enabled():
+            return None
+        if action_name not in self._SOCIAL_COOLDOWN_ACTIONS:
+            return None
+        if execution_context is None:
+            return None  # owner-direct / CLI / programmatic call
+        try:
+            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+            if not _is_forged_or_autonomous_turn(execution_context, self):
+                return None  # genuine owner-interactive turn: never gated
+        except Exception:
+            return None  # can't prove autonomous origin -> don't gate (fail-open, not a money verb)
+        try:
+            from core.event_log import get_event_log, event_log_enabled
+            from core.event_kinds import SOCIAL_WRITE
+            if not event_log_enabled():
+                return None
+            user_id = str(getattr(execution_context, "user_id", "") or "")
+            cooldown = self._social_cooldown_sec()
+            since = time.time() - cooldown
+            rows = get_event_log().query(
+                since_ts=since, kind=SOCIAL_WRITE, user_id=user_id, limit=1)
+            if rows:
+                age_sec = time.time() - float(rows[0]["ts"])
+                return (
+                    f"Twitter write '{action_name}' blocked: a post from an "
+                    f"autonomous run went out {int(age_sec)}s ago, under the "
+                    f"{cooldown}s cooldown between autonomous posts (repeat-goal "
+                    f"guard, TWITTER_POST_COOLDOWN_SEC). Not an error — this run "
+                    f"is likely a re-fire of a goal that already posted."
+                )
+        except Exception:
+            logger.debug("twitter social-cooldown probe failed (fail-open)", exc_info=True)
+        return None
+
+    def _social_cooldown_record(self, action_name: str, execution_context) -> None:
+        if action_name not in self._SOCIAL_COOLDOWN_ACTIONS:
+            return
+        try:
+            from core.event_log import get_event_log, event_log_enabled
+            from core.event_kinds import SOCIAL_WRITE
+            if not event_log_enabled():
+                return
+            user_id = str(getattr(execution_context, "user_id", "") or "") if execution_context else ""
+            session_id = str(getattr(execution_context, "session_id", "") or "") if execution_context else ""
+            get_event_log().record(SOCIAL_WRITE, user_id=user_id, session_id=session_id,
+                                   source="twitter_tool", attrs={"action": action_name})
+        except Exception:
+            logger.debug("twitter social-cooldown record failed (fail-open)", exc_info=True)
+
+    def _pause_block(self, action_name: str, execution_context) -> Optional[str]:
+        """031 coupling: an autonomous/forged turn may not post while the owner
+        paused ``social`` (or everything).
+
+        ``allows("social_post")`` was declared on 2026-09-03 and called from
+        NOWHERE, so ``/pause social`` was a no-op: the owner could pause social
+        posting and the agent kept posting. This is its first consumer, and it
+        covers EVERY write verb, not just the two the cooldown knows about.
+
+        An OWNER-initiated turn is never gated — asking the agent to post IS the
+        owner being in the loop, the same polarity every money gate uses. Returns
+        a refusal string, or None to proceed. Fail-open on a probe error;
+        ``allows`` itself already fails CLOSED on an unreadable pause record."""
+        if execution_context is None:
+            return None  # owner-direct / CLI / programmatic call
+        try:
+            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+            if not _is_forged_or_autonomous_turn(execution_context, self):
+                return None
+            from core.autonomy_control import allows
+            dec = allows("social_post")
+            if dec.allowed:
+                return None
+        except Exception:
+            self.logger.debug("twitter pause probe failed (fail-open)", exc_info=True)
+            return None
+        return (f"Twitter write '{action_name}' blocked: autonomy is {dec.reason}. "
+                f"Resume with `/resume social` (or `/resume`) when you want it back.")
+
     async def _precheck_write(self, action_name: str, params, execution_context,
                               *, is_dm: bool = False):
-        """Rate-limit + approval gate. Returns an error ActionResult to block, or None to proceed."""
+        """Pause + rate-limit + approval gate. Returns an error ActionResult to
+        block, or None to proceed."""
+        pause_block = self._pause_block(action_name, execution_context)
+        if pause_block:
+            return self.create_action_result(error=pause_block, include_in_memory=True)
+        cooldown_block = await self._social_cooldown_block(action_name, execution_context)
+        if cooldown_block:
+            return self.create_action_result(error=cooldown_block, include_in_memory=True)
         if not self._rate_available(is_dm=is_dm):
             cap = self._dm_cap() if is_dm else self._write_cap()
             kind = "DMs" if is_dm else "writes"
@@ -1754,12 +1868,14 @@ class TwitterTool(BaseTool):
                     poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
                     execution_context=execution_context,
                 )
+                self._social_cooldown_record("twitter_post", execution_context)
                 return self._ok(f"🐦 Posted tweet {tweet.get('id')}")
             ids = await self._compose_thread(
                 parts, media_paths=params.media_paths,
                 poll_options=params.poll_options, poll_duration_minutes=params.poll_duration_minutes,
                 execution_context=execution_context,
             )
+            self._social_cooldown_record("twitter_post", execution_context)
             return self._ok(
                 f"🐦 Text exceeded 280 chars — posted as a {len(ids)}-tweet thread: {', '.join(ids)}"
             )
@@ -1835,6 +1951,7 @@ class TwitterTool(BaseTool):
                 )
                 prev_id = tweet.get("id")
                 ids.append(str(prev_id))
+            self._social_cooldown_record("twitter_thread", execution_context)
             return self._ok(f"🐦 Posted thread of {len(ids)} tweets: {', '.join(ids)}")
         except Exception as e:
             return self._err(f"Error posting thread: {e}")

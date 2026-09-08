@@ -7,6 +7,43 @@ from tools.controller._helpers import ToolInfo
 
 
 class ToolManagementMixin:
+	# ---- FIX 4: requested-but-unloadable tools are RECORDED, never silent ----
+
+	def get_tool_load_failures(self) -> Dict[str, str]:
+		"""``{tool_id: "gated:<reason> — <remedy>"}`` for every tool requested on
+		this Controller that did NOT load, and has not loaded since.
+
+		Read by the goal dispatcher so a tool-starved run can say "requested tool
+		`publish` is not registered (PUBLISH_ENABLED is off)" instead of failing
+		mutely (the `ship-software` stream shipping URL-less deliverables). Lazily
+		created so `Controller.__init__` needs no change.
+		"""
+		return dict(getattr(self, "_tool_load_failures", None) or {})
+
+	def _record_tool_load_failure(self, tool_id: str, reason: str) -> None:
+		failures = getattr(self, "_tool_load_failures", None)
+		if failures is None:
+			failures = {}
+			self._tool_load_failures = failures
+		failures[tool_id] = reason
+		self.logger.warning(f"✗ Tool '{tool_id}' not loaded — {reason}")
+
+	def tool_gap_note(self) -> str:
+		"""ONE line naming the requested tools that never registered, or ``""``.
+
+		The run/goal-level surface for :meth:`get_tool_load_failures` — the goal
+		dispatcher calls this duck-typed (it may not import the tools tier), so the
+		formatting lives here, next to the recording.
+		"""
+		from tools.controller.tool_load_report import format_tool_gap_note
+		return format_tool_gap_note(self.get_tool_load_failures())
+
+	def _clear_tool_load_failure(self, tool_id: str) -> None:
+		"""A later successful load (e.g. `load_tool`) retires the gap."""
+		failures = getattr(self, "_tool_load_failures", None)
+		if failures:
+			failures.pop(tool_id, None)
+
 	async def load_tools_from_container(self, tool_ids: List[str]) -> Dict[str, Any]:
 		"""
 		Load tools from the global DependencyContainer with initialization.
@@ -16,12 +53,19 @@ class ToolManagementMixin:
 
 		Returns:
 			Dict of tool_id -> tool_instance loaded from container
+
+		A requested id the container cannot serve is SKIPPED (unchanged — which
+		tools load is not altered here) but is now recorded with an honest reason
+		on `get_tool_load_failures()`; see tools/controller/tool_load_report.py.
 		"""
 		import asyncio
 		loaded = {}
 
 		if not self.container:
 			self.logger.error("No container available - cannot load tools")
+			for tool_id in (tool_ids or []):
+				self._record_tool_load_failure(
+					tool_id, "gated:unavailable-on-this-deploy — no container in this session")
 			return loaded
 
 		self.logger.debug(f"Attempting to load tools {tool_ids} from container")
@@ -72,6 +116,7 @@ class ToolManagementMixin:
 
 					self.add_tool(tool_id, tool)
 					loaded[tool_id] = tool
+					self._clear_tool_load_failure(tool_id)
 					self.logger.debug(f"✓ Loaded tool '{tool_id}' from container")
 
 					# MCP tool: Register individual MCP tools as direct actions
@@ -80,10 +125,14 @@ class ToolManagementMixin:
 						self.logger.info("✅ MCP tool loaded - registering individual MCP tools as direct actions")
 						await self._register_mcp_tools_as_direct_actions(tool)
 				else:
-					self.logger.warning(f"✗ Tool '{tool_id}' not found in container")
+					from tools.controller.tool_load_report import describe_missing_tool
+					self._record_tool_load_failure(tool_id, describe_missing_tool(
+						tool_id, container=self.container, loaded_ids=set(loaded)))
 
 			except Exception as e:
 				self.logger.error(f"Failed to load tool '{tool_id}': {e}", exc_info=True)
+				self._record_tool_load_failure(
+					tool_id, f"gated:load-failed — {type(e).__name__}: {str(e)[:160]}")
 
 		# Register backward compat aliases AFTER tools are loaded
 		# This ensures aliases point to actual registered actions

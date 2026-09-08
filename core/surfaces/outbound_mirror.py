@@ -16,7 +16,7 @@ def build_discrete_publish(
     router: Any, session_key: Optional[str]
 ) -> Callable[..., Awaitable[None]]:
     async def _publish(text: str) -> None:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
 
         if not SurfaceConfig.singular_chat_enabled():
             return

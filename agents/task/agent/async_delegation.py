@@ -45,7 +45,7 @@ def _frame_delegation_payload(result_text: str) -> str:
     text = re.sub(r"</\s*delegation-result\s*>", "<!-- /delegation-result -->", text,
                   flags=re.IGNORECASE)
     try:
-        from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+        from core.security.untrusted_wrap import wrap_untrusted
         return wrap_untrusted("async_delegation", text)
     except Exception:
         return text  # fail-open
@@ -99,6 +99,21 @@ class AsyncDelegationRegistry:
 
     def list(self) -> List[DelegationRecord]:
         return list(self._records.values())
+
+    def cancel_all(self, reason: str) -> int:
+        """031 owner pause: cancel every running background delegation of this
+        session. The record goes to ``cancelled`` (``_run_and_deliver``'s
+        CancelledError branch re-raises, so nothing is delivered). Returns the
+        number cancelled."""
+        n = 0
+        for rec in self._records.values():
+            t = rec.task
+            if rec.status == "running" and t is not None and not t.done():
+                t.cancel()
+                rec.status = "cancelled"
+                n += 1
+                logger.warning("async delegation %s cancelled: %s", rec.delegation_id, reason)
+        return n
 
     def _next_id(self) -> str:
         self._counter += 1

@@ -21,52 +21,6 @@ MAX_RESULT_CHARS = 25000
 MAX_RESULT_TOKENS = 6000  # ~4 chars per token
 
 
-# (removed) estimate_tokens: a dead "chars//4" helper with zero callers — a stale
-# twin of secret_guard.estimate_tokens_rough (which HAS the max(1, ...) floor this
-# one lacked). should_truncate below checks len(content) directly. P5 finalization.
-
-
-def should_truncate(content: str) -> bool:
-    """Check if content exceeds size limits.
-
-    Args:
-        content: Content to check
-
-    Returns:
-        True if content should be truncated/offloaded
-    """
-    return len(content) > MAX_RESULT_CHARS
-
-
-def truncate_with_notice(
-    content: str,
-    source: str = "content",
-    max_chars: int = MAX_RESULT_CHARS
-) -> str:
-    """Truncate content with notice about what was removed.
-
-    Args:
-        content: Content to truncate
-        source: Description of content source for notice
-        max_chars: Maximum characters to keep (default: MAX_RESULT_CHARS)
-
-    Returns:
-        Truncated content with notice, or original if under limit
-    """
-    if len(content) <= max_chars:
-        return content
-
-    truncated = content[:max_chars]
-    removed = len(content) - max_chars
-    removed_tokens = removed // 4
-
-    return (
-        f"{truncated}\n\n"
-        f"[... {removed:,} more chars (~{removed_tokens:,} tokens) truncated from {source}. "
-        f"Use pagination, filtering, or navigate to sub-sections for more detail.]"
-    )
-
-
 def smart_truncate_structure(
     data: Any,
     max_items: int = 5

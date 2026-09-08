@@ -240,6 +240,7 @@ async def test_hardening_flags_identical_between_ephemeral_and_persistent(monkey
         ("--pids-limit", str(ephemeral.pids_limit)),
         ("--memory", f"{ephemeral.memory_mb}m"),
         ("--memory-swap", f"{ephemeral.memory_mb}m"),
+        ("--shm-size", f"{ephemeral.shm_size_mb}m"),
         ("--cpus", str(ephemeral.cpus)),
         ("--user", ephemeral.user),
     ]

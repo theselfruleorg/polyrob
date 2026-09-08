@@ -1,4 +1,4 @@
-from agents.task.surface_config import SurfaceConfig
+from core.surfaces.config import SurfaceConfig
 
 
 def test_echo_default_on(monkeypatch):

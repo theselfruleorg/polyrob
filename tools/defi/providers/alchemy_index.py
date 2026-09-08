@@ -91,16 +91,26 @@ def fetch_balances(holder: str, timeout: float = 10.0, *,
     base_url = base_url_for(chain)
     if not base_url:
         return None
+    # ⚠️ The credential is in the URL PATH, so a name-keyed secret scrubber
+    # never sees it and `exc_info=True` publishes it verbatim — an httpx
+    # HTTPStatusError renders "... for url '<the whole keyed URL>'". The same
+    # pattern leaked a real key to the production journal from the x402
+    # settlement scan. Log the REDACTED endpoint, and scrub the key out of the
+    # exception text rather than printing a traceback that may embed it.
+    url = f"{base_url}/{key}"
     try:
         import httpx
         r = httpx.post(
-            f"{base_url}/{key}",
+            url,
             json={"jsonrpc": "2.0", "id": 1, "method": "alchemy_getTokenBalances",
                   "params": [holder]},
             timeout=timeout)
         if r.status_code != 200:
             return None
         return parse_balances(r.json())
-    except Exception:
-        logger.debug("alchemy_index: fetch failed for %s", holder, exc_info=True)
+    except Exception as exc:
+        from core.security.redaction import redact_url, scrub_secret
+        logger.debug("alchemy_index: fetch failed for %s via %s: %s", holder,
+                     redact_url(url),
+                     scrub_secret(f"{type(exc).__name__}: {exc}", key))
         return None

@@ -161,6 +161,15 @@ async function loadSettings() {
         document.getElementById('max-servers').textContent = data.max_servers;
     } catch (error) {
         console.error('Error loading settings:', error);
+        // Inline degraded state: '—' is distinguishable from a real Yes/No/number,
+        // and the toast names the failure (030 D4).
+        ['mcp-enabled-label', 'include-global-label', 'max-servers'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = '—';
+        });
+        if (window.errorHandler) {
+            window.errorHandler.notify('Failed to load MCP settings: ' + error.message);
+        }
     }
 }
 
@@ -185,6 +194,10 @@ async function saveSettings(key, value) {
             document.getElementById('mcp-enabled').checked = !value;
         } else if (key === 'include_global_servers') {
             document.getElementById('include-global').checked = !value;
+        }
+        // The toggle snapping back needs an explanation (030 D4).
+        if (window.errorHandler) {
+            window.errorHandler.notify('Failed to save setting — change reverted: ' + error.message);
         }
     }
 }
@@ -824,6 +837,12 @@ async function loadPolymarketStatus() {
     } catch (error) {
         console.error('Error loading Polymarket status:', error);
         polymarketStatus = { configured: false, error: true };
+        // 404/"Not Found" = the trading surface isn't mounted in this
+        // deployment — the card is deliberately hidden, no noise. Anything
+        // else is a real failure the user should hear about once (030 D4).
+        if (!/\b404\b|not found/i.test(error.message || '') && window.errorHandler) {
+            window.errorHandler.notify('Polymarket status unavailable: ' + error.message);
+        }
         renderGlobalServers();
     }
 }
@@ -1060,6 +1079,11 @@ async function loadHyperliquidStatus() {
     } catch (error) {
         console.error('Error loading Hyperliquid status:', error);
         hyperliquidStatus = { configured: false, error: true };
+        // Same contract as loadPolymarketStatus: 404 = deliberately absent,
+        // everything else surfaces once (030 D4).
+        if (!/\b404\b|not found/i.test(error.message || '') && window.errorHandler) {
+            window.errorHandler.notify('Hyperliquid status unavailable: ' + error.message);
+        }
         renderGlobalServers();
     }
 }

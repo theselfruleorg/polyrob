@@ -9,14 +9,16 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
+from tools.code_exec.limits import dev_exec_max_timeout_sec
 from tools.controller.types import ActionResult
 from tools.shell.state import ShellState
 from tools.shell.discipline import background_nudge
 from tools.shell.executor import DockerShellExecutor
 from tools.shell.process_registry import get_process_registry
 
-_MAX_TIMEOUT_SEC = 120.0
-_DEFAULT_TIMEOUT_SEC = 60.0
+# Foreground ceiling: tools/code_exec/limits.py (SHELL_MAX_TIMEOUT_SEC, default 300)
+# — shared with the dev-mode run_code cap. Default when the agent omits `timeout`:
+_DEFAULT_TIMEOUT_SEC = 120.0
 
 
 class ShellRunParams(BaseModel):
@@ -29,7 +31,10 @@ class ShellRunParams(BaseModel):
                     "job id; use the `process` tool to poll its log / status.",
     )
     timeout: Optional[float] = Field(
-        None, description="Foreground wall-clock seconds (clamped; ignored for background)."
+        None,
+        description="Foreground wall-clock seconds (default 120; clamped to "
+                    "SHELL_MAX_TIMEOUT_SEC, 300 unless set — raise it for installs and "
+                    "builds; ignored for background).",
     )
 
 
@@ -138,7 +143,7 @@ class ShellTool(BaseTool):
                 )
 
             timeout = params.timeout or _DEFAULT_TIMEOUT_SEC
-            timeout = max(1.0, min(float(timeout), _MAX_TIMEOUT_SEC))
+            timeout = max(1.0, min(float(timeout), dev_exec_max_timeout_sec()))
             state = self._state_for(sid)
             clean, new_state, rc = await executor.run_foreground(command, state, timeout=timeout)
             self._states[sid] = new_state

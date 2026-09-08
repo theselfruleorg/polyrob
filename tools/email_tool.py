@@ -360,11 +360,24 @@ class EmailTool(BaseTool):
                 else:
                     all_recipients.append(bcc)
 
-            # Send email
+            # Send email. A previously-live connection can go stale (e.g. the
+            # server closes it after a timeout) without smtp_connection becoming
+            # None, so `send_message` on it raises instead of triggering a
+            # reconnect. Retry once against a freshly-established connection
+            # rather than leaving the tool wedged until process restart.
             if not self.smtp_connection:
                 await self._connect_smtp()
-                
-            self.smtp_connection.send_message(msg)
+
+            try:
+                self.smtp_connection.send_message(msg)
+            except (smtplib.SMTPException, OSError) as e:
+                self.logger.warning(
+                    f"send_email_ex: SMTP send failed on existing connection ({e}), "
+                    "reconnecting and retrying once"
+                )
+                self.smtp_connection = None
+                await self._connect_smtp()
+                self.smtp_connection.send_message(msg)
 
             self.logger.info(f"Email sent successfully to {msg['To']}")
             return message_id
@@ -419,6 +432,21 @@ class EmailTool(BaseTool):
                 error=("target not on owner allowlist; ask the owner to run "
                        f"`polyrob owner allow email {params.to}`"),
                 include_in_memory=True)
+
+        # 2026-08-29: this escape-hatch send bypassed the same owner-resend
+        # cooldown the generic `message` tool enforces (tools/controller/
+        # action_registration.py::message), so a completion-judge retry could
+        # (and did, observed 2026-08-28 22:19Z) deliver the owner the
+        # same report twice within minutes. Mirror that gate here.
+        try:
+            from tools.controller.turn_origin import _autonomous_owner_resend_cooldown_refusal
+            cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
+                execution_context, None, container=self.container, user_id=user_id,
+                surface="email", target=params.to, owner_targets=owner_targets)
+            if cooldown_refusal is not None:
+                return cooldown_refusal
+        except Exception:
+            self.logger.debug("email_send owner cooldown check skipped (fail-open)", exc_info=True)
 
         session_id = getattr(execution_context, "session_id", None) or ""
 

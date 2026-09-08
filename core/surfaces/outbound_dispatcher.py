@@ -14,6 +14,18 @@ from core.rate_limit import TokenBucket
 
 logger = logging.getLogger(__name__)
 
+#: How long a row held by the owner's pause waits before it is looked at again.
+#: Same idiom as the circuit-breaker defer: attempts are NOT burned, so a hold can
+#: never dead-letter a message — it is released on the first tick after `resume`.
+_PAUSE_HOLD_SEC = 30.0
+
+#: 031: session_key prefix of the PROACTIVE, agent-initiated rail
+#: (``MessageRouter.send_message``'s cross-process fallback — the `message` tool
+#: and cron delivery). An interactive, session-bound reply (the owner's own chat,
+#: enqueued by ``publish()``) carries a real session_key and is NEVER held: R5
+#: says owner chat keeps working while paused.
+_PROACTIVE_SESSION_PREFIX = "direct:"
+
 # TYPE_CHECKING import avoids a circular-import risk; the breaker is pure.
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -36,7 +48,7 @@ class OutboundDispatcher:
         self._bucket = TokenBucket(rate_per_sec, burst)
         self._cb = circuit   # SurfaceCircuitBreaker | None
         self._dt = dead_targets   # DeadTargetStore | None
-        # Injected telemetry event log (e.g. agents.task.telemetry.event_log's
+        # Injected telemetry event log (e.g. core.event_log's
         # TelemetryEventLog) — None by default so this core-tier module never
         # imports the agents tier itself. Task 4's bootstrap wiring passes a
         # real instance in through its own (already-allowlisted) seam.
@@ -66,10 +78,64 @@ class OutboundDispatcher:
         except Exception:
             pass
 
+    def _pause_hold(self):
+        """031: ``(reason, since)`` when the owner's pause covers proactive
+        outbound, else None.
+
+        The durable queue carries no turn origin — a row is just text, a surface
+        and a destination — so the dispatcher takes the CONSERVATIVE reading of
+        the two kinds the `message` send gate distinguishes: if EITHER
+        ``social_post`` (``/pause social``) or ``lifecycle_ping`` (``/pause
+        pings``) is denied, the proactive rail is held. Fail-OPEN on a probe
+        error; ``allows`` itself already fails CLOSED on an unreadable record.
+        """
+        try:
+            from core.autonomy_control import allows, read_state
+            # Cheap gate for the hot path: `run()` ticks once a second and the
+            # record is a file probe, so ask the SAME SSOT once before spending
+            # two `allows` calls on the (overwhelmingly common) running state.
+            if not read_state().paused:
+                return None
+            for kind in ("social_post", "lifecycle_ping"):
+                dec = allows(kind)
+                if not dec.allowed:
+                    return dec.reason, getattr(dec.state, "since", None)
+        except Exception:
+            logger.debug("outbound pause probe failed (fail-open)", exc_info=True)
+        return None
+
+    @staticmethod
+    def _held_by_pause(row, since) -> bool:
+        """A row is held when it is on the PROACTIVE rail AND was queued at or
+        before the pause began. A row queued after the stop got past the send
+        gate on an owner turn (``perform_message_send`` refuses every autonomous
+        one), so holding it would delay the owner's own errand for no gain. An
+        unknown ``since``/``created_at`` reads conservative: hold."""
+        if not str(row.get("session_key") or "").startswith(_PROACTIVE_SESSION_PREFIX):
+            return False
+        if since is None:
+            return True
+        try:
+            return float(row.get("created_at") or 0) <= float(since)
+        except (TypeError, ValueError):
+            return True
+
     async def drain_once(self, now: float) -> int:
         delivered = 0
+        # One probe per drain (not per row): the record is a file read.
+        hold = self._pause_hold()
         for row in self._q.claim_due(now):
             surface_id = row["surface_id"]
+
+            # --- 031 owner pause: HOLD, never drop. State stays 'pending' and
+            # attempts are untouched, so the row survives the pause and is
+            # delivered on the first tick after `resume`. ---
+            if hold is not None and self._held_by_pause(row, hold[1]):
+                self._q.reschedule(row["id"], next_attempt_at=now + _PAUSE_HOLD_SEC,
+                                   attempts=row["attempts"])
+                logger.info("outbound HELD by owner pause: id=%s surface=%s dest=%s (%s)",
+                            row["id"], surface_id, row["dest"], hold[0])
+                continue
 
             # --- Circuit breaker: skip open surfaces; defer 30 s, attempts unchanged ---
             if self._cb is not None and self._cb.is_open(surface_id):
@@ -100,8 +166,22 @@ class OutboundDispatcher:
             ok, err = False, "no surface"
             if surface is not None:
                 try:
+                    # 030 L4: reconstruct media — the queue used to drop it, so
+                    # enabling durable delivery silently disabled every photo,
+                    # document and invoice card.
+                    media = []
+                    raw_media = row.get("media") if isinstance(row, dict) else None
+                    if raw_media:
+                        try:
+                            import json
+                            parsed = json.loads(raw_media)
+                            if isinstance(parsed, list):
+                                media = parsed
+                        except (TypeError, ValueError):
+                            logger.warning("outbound drain: bad media JSON on row %s", row["id"])
                     res = await surface.send(OutboundMessage(
                         session_key=row["session_key"], text=row["payload"],
+                        media=media,
                     ))
                     ok = bool(getattr(res, "success", False))
                     err = getattr(res, "error", None) or ("ok" if ok else "send returned False")

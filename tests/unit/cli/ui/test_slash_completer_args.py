@@ -175,8 +175,11 @@ def test_no_completion_without_slash():
 def test_replay_session_ids_still_complete():
     reg = build_default_registry()
     c = SlashCompleter(reg, sessions_provider=lambda: ["abc123", "abd999", "zzz"])
-    # alias `/resume` must route to the `replay` command's completion
-    assert set(_completions(c, "/resume ab")) == {"abc123", "abd999"}
+    # /replay completes session ids. (030 WS-C C2: /resume is no longer a
+    # replay alias — it is the owner kill-switch resume, which takes no
+    # session-id argument, so it must NOT complete session ids.)
+    assert set(_completions(c, "/replay ab")) == {"abc123", "abd999"}
+    assert _completions(c, "/resume ab") == []
 
 
 def test_unknown_command_with_arg_yields_nothing():

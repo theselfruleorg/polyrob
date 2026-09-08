@@ -110,7 +110,7 @@ async def notify_first_contact(container, user_id: str, session_id: str,
     this runs.
     """
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if event_log_enabled():
             get_event_log().record(
                 "outbound_open_send", user_id=str(user_id or ""),

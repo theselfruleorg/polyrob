@@ -56,11 +56,17 @@ def _read_env(home: Path) -> dict:
 _PRE_SECTION5_BLANKS = ["" for _ in range(8)]
 
 
-def _full_flow_input(*, local="", autonomy="", preset="", digest="", wallet="n") -> str:
-    # Section 6/6 order (0.9.0): interactive-local-tools confirm (default YES),
-    # autonomy confirm (default NO), approval preset, digest. Then Task 7's
-    # "Optional: agent crypto wallet" confirm (default No).
-    return "\n".join(_PRE_SECTION5_BLANKS + [local, autonomy, preset, digest, wallet]) + "\n"
+def _full_flow_input(*, local="", autonomy="", preset="", digest="", wallet="n",
+                     mode="") -> str:
+    # Section 6/6 order (0.9.0 + 030 F7): interactive-local-tools confirm
+    # (default YES), autonomy confirm (default NO), THEN — only when autonomy
+    # is yes — the autonomous-mode confirm (default NO), approval preset,
+    # digest. Then Task 7's "Optional: agent crypto wallet" confirm.
+    answers = [local, autonomy]
+    if (autonomy or "").strip().lower() in ("y", "yes"):
+        answers.append(mode)
+    answers += [preset, digest, wallet]
+    return "\n".join(_PRE_SECTION5_BLANKS + answers) + "\n"
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ error degrades to TASK_AGENT, never raises into the inbound handler.
 """
 import inspect
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Awaitable, Callable, Optional, Union
@@ -33,11 +34,30 @@ logger = logging.getLogger(__name__)
 # /allowlist), and the read-only status/recap/goals/prefs verbs (/status /recap
 # /goals /prefs). The surface handler owner-gates them by principal; routing here
 # only classifies them as COMMAND so they win over an active session.
+# A verb absent from this tuple is NOT a command: it falls through to STEER /
+# TASK_AGENT and reaches the agent as chat text. Every surface handler verb must
+# therefore appear here — pinned by
+# tests/unit/surfaces/telegram/test_owner_control_plane.py::
+# test_every_owner_verb_is_routable.
 _COMMANDS = ("/task", "/cancel", "/new", "/help",
              "/pending", "/approve", "/reject", "/asks", "/fulfill",
              "/allow", "/deny", "/allowlist",
-             "/status", "/recap", "/journey", "/goals", "/prefs", "/config",
-             "/kb", "/files")
+             "/halt", "/resume", "/pause",  # owner pause record (031; /halt = alias of /pause)
+             "/cron", "/goal", "/wallet", "/invoices", "/settle",  # G13 write verbs
+             "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
+             "/missed",
+             "/apps",  # 032 durable app service (approve an address, health, kill, logs)
+             "/kb", "/files",
+             "/dev",  # owner ↔ on-host dev-loop rail (proposal 027 WS-1)
+             "/start")  # Telegram first-contact convention -> welcome (030 L9);
+                        # NOT owner-gated, so it stays out of _OWNER_ADMIN_COMMANDS
+
+# 030 L9: a leading token that LOOKS like a command (Telegram command grammar,
+# optional @botname suffix) but isn't in _COMMANDS must still classify as COMMAND —
+# the surface answers with help + a suggestion in one cheap reply. Falling through
+# to STEER/TASK_AGENT burned a full LLM turn on every typo, and the harness's
+# "unknown command -> help" branch was unreachable from a real inbound.
+_COMMAND_SHAPE_RE = re.compile(r"^/[a-z][a-z0-9_]{0,31}$")
 
 ChitchatPredicate = Callable[[InboundMessage], Union[bool, Awaitable[bool]]]
 
@@ -130,7 +150,7 @@ async def route_inbound(
     _group_enabled = False
     if _chat_type != "dm":
         try:
-            from agents.task.surface_config import SurfaceConfig as _SC
+            from core.surfaces.config import SurfaceConfig as _SC
             _group_enabled = _SC.group_chat_enabled()
         except Exception as e:
             logger.debug("route_inbound group flag read failed (treat as off): %s", e)
@@ -149,7 +169,7 @@ async def route_inbound(
                 return RouteDecision(RouteKind.DENIED, session_key, silent=True)
             require_mention = True
             try:
-                from agents.task.surface_config import SurfaceConfig as _SC
+                from core.surfaces.config import SurfaceConfig as _SC
                 require_mention = _SC.group_require_mention()
             except Exception:
                 require_mention = True
@@ -191,7 +211,7 @@ async def route_inbound(
     # obey-path — a resolver/registry crash must not turn a gated sender into a steer.
     _corr_enabled = False
     try:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         _corr_enabled = SurfaceConfig.correspondent_access_enabled()
     except Exception as e:
         logger.debug("route_inbound tier flag read failed (treat as off): %s", e)
@@ -255,8 +275,10 @@ async def route_inbound(
     # 1) COMMAND — control verbs win even over an active session. Carry the bound
     #    session_id so /cancel/ /new actually act on it (was None -> silent no-op).
     if text.startswith("/"):
-        token = text.split()[0].lower()
-        if token in _COMMANDS:
+        # Telegram group syntax sends "/help@MyBot" — strip the @bot suffix so
+        # known commands still match (030 L9).
+        token = text.split()[0].lower().split("@", 1)[0]
+        if token in _COMMANDS or _COMMAND_SHAPE_RE.fullmatch(token):
             return RouteDecision(
                 RouteKind.COMMAND, session_key, command=token,
                 session_id=(row.get("session_id") if row else None),
@@ -272,7 +294,7 @@ async def route_inbound(
         try:
             import time as _time
             from core.surfaces.session_policy import should_start_fresh
-            from agents.task.surface_config import SurfaceConfig
+            from core.surfaces.config import SurfaceConfig
             fresh, _reason = should_start_fresh(
                 row, now=_time.time(),
                 idle_minutes=SurfaceConfig.session_idle_minutes(),
@@ -290,7 +312,7 @@ async def route_inbound(
 
     # 3) cold — optional ChatAgent fast-path (default-OFF cost optimization).
     if is_chitchat is not None:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         if SurfaceConfig.chat_intent_classifier_enabled():
             try:
                 verdict = is_chitchat(inbound)

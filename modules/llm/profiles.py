@@ -5,8 +5,8 @@ model, capability flags — and owns no client construction, credential rotation
 streaming. Since proposal 024 the profile table is a *derivation* of the
 ``ProviderSpec`` registry (``modules/llm/provider_spec.py``), which also carries
 user-declared providers from ``~/.polyrob/providers.yaml``. The legacy literal
-table is kept as the ``LLM_PROVIDER_REGISTRY=off`` kill-switch path (byte-identical;
-remove with the kill-switch after one release).
+table was retired with the ``LLM_PROVIDER_REGISTRY`` kill-switch (2026-08-29); a
+registry fault falls back to ``provider_spec.BUILTIN_SPECS``, never a second copy.
 
 The default model deliberately reads from ``llm_client_registry.DEFAULT_MODELS`` so
 the default-model *policy* stays single-sourced.
@@ -70,52 +70,11 @@ class ProviderProfile:
 # (2026-06-24): it is the preferred default client whenever its key is present —
 # explicit ``-p`` and operator pins (DEFAULT_PROVIDER/CHAT_PROVIDER) still win.
 #
-# Kill-switch path (LLM_PROVIDER_REGISTRY=off) ONLY — the live table is derived
-# from provider_spec.get_specs(). Keep in lockstep with BUILTIN_SPECS (pinned by
-# the characterization suite in both modes) until the kill-switch is removed.
-_LEGACY_PROFILES: Dict[str, ProviderProfile] = {
-    "openrouter": ProviderProfile(
-        name="openrouter", display_name="OpenRouter", env_key="OPENROUTER_API_KEY",
-        base_url="https://openrouter.ai/api/v1", supports_native_tools=True,
-        supports_vision=True, signup_url="https://openrouter.ai/",
-    ),
-    "anthropic": ProviderProfile(
-        name="anthropic", display_name="Anthropic", env_key="ANTHROPIC_API_KEY",
-        base_url="https://api.anthropic.com", supports_native_tools=True,
-        supports_vision=True, signup_url="https://console.anthropic.com/",
-    ),
-    "openai": ProviderProfile(
-        name="openai", display_name="OpenAI", env_key="OPENAI_API_KEY",
-        supports_native_tools=True, supports_vision=True,
-        signup_url="https://platform.openai.com/",
-    ),
-    "gemini": ProviderProfile(
-        name="gemini", display_name="Google Gemini", env_key="GEMINI_API_KEY",
-        supports_native_tools=True, supports_vision=True,
-        signup_url="https://aistudio.google.com/",
-    ),
-    "nvidia": ProviderProfile(
-        name="nvidia", display_name="NVIDIA NIM", env_key="NVIDIA_API_KEY",
-        base_url="https://integrate.api.nvidia.com/v1", supports_native_tools=True,
-        supports_vision=False, signup_url="https://build.nvidia.com/",
-    ),
-    "deepseek": ProviderProfile(
-        name="deepseek", display_name="DeepSeek", env_key="DEEPSEEK_API_KEY",
-        base_url="https://api.deepseek.com/v1", supports_native_tools=False,
-        supports_vision=False, signup_url="https://platform.deepseek.com/",
-        # Direct client disabled (tool-calling broken) — reach DeepSeek via OpenRouter
-        # (OPENROUTER_API_KEY + model deepseek/deepseek-chat). A DEEPSEEK_API_KEY alone
-        # cannot bootstrap the agent, so it must NOT count toward "has a usable key".
-        initializable=False,
-    ),
-}
-
-
-def _profiles_from_specs() -> Dict[str, ProviderProfile]:
+def _profiles_from_specs(specs=None) -> Dict[str, ProviderProfile]:
     """Derive the profile view from the ProviderSpec registry (proposal 024)."""
     from modules.llm.provider_spec import get_specs
     out: Dict[str, ProviderProfile] = {}
-    for s in get_specs():
+    for s in (get_specs() if specs is None else specs):
         out[s.name] = ProviderProfile(
             name=s.name,
             display_name=s.display_name,
@@ -146,11 +105,11 @@ class _LazyProfiles:
 
     def _ensure(self) -> Dict[str, ProviderProfile]:
         if self._snapshot is None:
-            from modules.llm.provider_spec import provider_registry_enabled
-            if provider_registry_enabled():
+            try:
                 self._snapshot = _profiles_from_specs()
-            else:
-                self._snapshot = dict(_LEGACY_PROFILES)
+            except Exception:
+                from modules.llm.provider_spec import BUILTIN_SPECS
+                self._snapshot = _profiles_from_specs(BUILTIN_SPECS)
         return self._snapshot
 
     def reset(self) -> None:
@@ -310,8 +269,7 @@ def usable_providers_with_keys(env=None) -> List[str]:
 # makes migrating a call site to these names safe.
 #
 # The ProviderProfile is passed straight through as the spec: resolve_credential
-# duck-types `env_key`/`auth_type`, and a profile has both. That keeps this
-# working with `LLM_PROVIDER_REGISTRY` off, where there are no ProviderSpecs.
+# duck-types `env_key`/`auth_type`, and a profile has both.
 
 @dataclass(frozen=True)
 class CredentialStatus:
@@ -588,7 +546,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
       base URL was redirected via providers.yaml / its ``base_url_env`` — merged into
       the literal block so clients that read config (OpenAIClient) see it.
 
-    Empty (byte-identical config) when the registry is off or no user file exists.
+    Empty (byte-identical config) when no user file exists.
     Fail-open: any registry error yields ``{}`` — config building must never break.
     """
     import os
@@ -598,10 +556,7 @@ def extra_llm_config_blocks(env=None) -> Dict[str, Dict[str, object]]:
             BUILTIN_SPECS,
             get_specs,
             needs_synthetic_config_block,
-            provider_registry_enabled,
         )
-        if not provider_registry_enabled():
-            return {}
         out: Dict[str, Dict[str, object]] = {}
         builtin_defaults = {b.name: b for b in BUILTIN_SPECS}
         for s in get_specs():

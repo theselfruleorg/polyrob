@@ -47,7 +47,8 @@ async def test_internal_emit_targets_joinable_room(monkeypatch):
         "client": ("127.0.0.1", 4321), "query_string": b"",
     }
     request = StarletteRequest(scope, receive)
-    await server.internal_emit(request)
+    from webview.emit_api import internal_emit  # 030 extraction
+    await internal_emit(request)
 
     clean = server.pm().clean_session_id("sess-42")
     assert ("feed_update", clean) in fake.emitted, (

@@ -86,7 +86,9 @@ def build_environment_context(session_id: str, user_id: Optional[str],
             f"when OFF you act only on the user's messages (no self-wake, goal "
             f"scheduling, or skill self-editing).",
             f"Host executables visible to enabled exec tools: {_host_capabilities()}.",
-            "For live status (steps/tools/context/budget) call agent_status.",
+            "For live status (steps/tools/context/budget/health) call agent_status. "
+            "A <live-health> note at the start of each turn carries the same health "
+            "facts the owner's /status shows — trust it over anything remembered.",
             "</environment>",
         ]
         from core.config_policy.policy import run_budget_usd

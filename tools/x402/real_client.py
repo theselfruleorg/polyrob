@@ -21,9 +21,23 @@ SDK sequence (x402 2.13+, verified against installed 2.15.0 source):
      (network/pay_to/amount) we actually signed for, independent of any probe.
      This is what powers the no-probe path for non-idempotent methods (G-7) and
      the `paid`/`amount_usd` determination below (G-6/2).
-  5. async with wrapHttpxWithPayment(x402_client) as http — intercepts 402, pays
-     (subject to (3)/(4)), retries.
+  5. async with httpx.AsyncClient(transport=x402AsyncTransport(x402_client,
+     transport=<inner>)) as http — intercepts 402, pays (subject to (3)/(4)),
+     retries. Built explicitly (rather than via the `wrapHttpxWithPayment`
+     convenience wrapper) SPECIFICALLY so the inner transport can be a
+     `tools.x402.net_guard.PinnedAsyncTransport` (H1b/N-D/N-E, audit
+     2026-08-22) — `wrapHttpxWithPayment` builds its own httpx.AsyncClient
+     internally with no transport seam, which would re-resolve the hostname
+     at connect time and reopen the validate-then-connect DNS-rebind window.
   6. http.request(method, url, content=body_bytes) — transparent auto-pay on 402.
+     The whole request is bounded by `net_guard.X402_HTTP_TIMEOUT_SEC` with
+     redirects disabled. A response body over `net_guard.MAX_X402_BODY_BYTES`
+     (N-F) is TRUNCATED (never discarded/raised) before it is placed in
+     `X402Result.body` — `paid`/`settle`/the policy record below all still run
+     on the untruncated `response`, so an oversized body never costs a real
+     settled payment its record in the spend cap or the idempotency guard
+     (Task 4 review ruling, 2026-08-22; see the code comment at the truncation
+     site for the full reasoning).
 
 Settlement success (Task 4 review Finding 1, G-6 scope): a resource server can
 answer HTTP 200 with a decoded PAYMENT-RESPONSE settle header whose `success`
@@ -598,7 +612,7 @@ class RealX402Client:
     # X402PaymentClient interface
     # ------------------------------------------------------------------
 
-    async def quote(self, url: str) -> Optional[float]:
+    async def quote(self, url: str, *, pinned_ip: Optional[str] = None) -> Optional[float]:
         """Best-effort price probe: return the required USD amount or None.
 
         Sends a plain GET without an X-PAYMENT header. If the server
@@ -609,10 +623,16 @@ class RealX402Client:
         NOTE: The x402 SDK has no dedicated price-only handshake. This
         approach works for compliant servers but is advisory only — the
         max_amount_usd guard in fetch_with_payment is the operative cap.
+
+        ``pinned_ip`` (H1b/N-D, audit 2026-08-22) is the IP the caller's SSRF
+        validator already resolved and cleared for *url*; connecting to it
+        instead of re-resolving the hostname closes the DNS-rebind window
+        between validation and connection. See tools/x402/net_guard.py.
         """
         try:
             import httpx
-            async with httpx.AsyncClient() as http:
+            from tools.x402.net_guard import client_kwargs
+            async with httpx.AsyncClient(**client_kwargs(url, pinned_ip)) as http:
                 resp = await http.get(url)
                 if resp.status_code == 402:
                     return self._parse_402_amount(resp)
@@ -630,6 +650,7 @@ class RealX402Client:
         signer: Signer,
         network: str,
         max_amount_usd: float,
+        pinned_ip: Optional[str] = None,
     ) -> X402Result:
         """Perform an auto-paying HTTP request via the x402 SDK.
 
@@ -657,7 +678,6 @@ class RealX402Client:
         from x402 import x402Client, AbortResult, max_amount
         from x402.mechanisms.evm.exact import register_exact_evm_client
         from x402.mechanisms.evm.signers import EthAccountSigner
-        from x402.http.clients.httpx import wrapHttpxWithPayment
 
         sdk_signer = EthAccountSigner(signer.account)  # type: ignore[attr-defined]
 
@@ -675,7 +695,8 @@ class RealX402Client:
         if run_probe:
             try:
                 import httpx as _httpx
-                async with _httpx.AsyncClient() as probe_client:
+                from tools.x402.net_guard import client_kwargs
+                async with _httpx.AsyncClient(**client_kwargs(url, pinned_ip)) as probe_client:
                     probe_kwargs: dict = {"method": method, "url": url}
                     if body_bytes:
                         probe_kwargs["content"] = body_bytes
@@ -799,12 +820,59 @@ class RealX402Client:
         x402_c.on_before_payment_creation(_abort_if_invalid_requirement)
         x402_c.on_after_payment_creation(_capture_payment_info)
 
-        # Auto-pay client: intercepts 402, signs + attaches X-PAYMENT, retries.
-        async with wrapHttpxWithPayment(x402_c) as http:
+        from x402.http.clients.httpx import x402AsyncTransport
+        from tools.x402.net_guard import (
+            PinnedAsyncTransport, X402_HTTP_TIMEOUT_SEC, MAX_X402_BODY_BYTES)
+        import httpx as _httpx
+        from urllib.parse import urlparse as _urlparse
+
+        _host = _urlparse(url).hostname
+        _inner = (PinnedAsyncTransport(_host, pinned_ip)
+                  if (pinned_ip and _host) else _httpx.AsyncHTTPTransport())
+        # x402AsyncTransport wraps an INNER transport (verified against the
+        # installed SDK: x402 2.15.0, `x402AsyncTransport.__init__(self, client,
+        # transport=None)`), which is what makes end-to-end DNS pinning reachable
+        # on the SDK's own paying leg — wrapHttpxWithPayment alone builds its own
+        # httpx.AsyncClient internally and would re-resolve the hostname at
+        # connect time, reopening the validate-then-connect rebind window.
+        async with _httpx.AsyncClient(
+                transport=x402AsyncTransport(x402_c, transport=_inner),
+                timeout=_httpx.Timeout(X402_HTTP_TIMEOUT_SEC),
+                follow_redirects=False) as http:
             req_kwargs: dict = {"method": method, "url": url}
             if body_bytes:
                 req_kwargs["content"] = body_bytes
             response = await http.request(**req_kwargs)
+
+        # N-F: bound what reaches the agent. The prober caps at the same number;
+        # this verb returns the body into the context window, so an unbounded read
+        # is both an OOM and a context bomb.
+        #
+        # Task 4 review ruling (2026-08-22, OVERRIDES the original Task 4 brief,
+        # which raised a ValueError here): raising BEFORE `paid` is computed below
+        # meant this exception unwound past the `paid`/`settle`/`X402Result`
+        # construction entirely, so service.py's `wallet.policy.record(...)` for a
+        # REAL settled payment never ran. An unrecorded settled payment is worse
+        # than an oversized body reaching the agent — it breaks the rolling-24h
+        # spend cap (real outflow under-counted) AND the idempotency replay-guard
+        # (the key is never marked seen, so an identical retry of the same fetch
+        # RE-PAYS). So this now TRUNCATES the body instead of discarding the whole
+        # result: everything below (`paid`, `settle`, `_reconcile_paid_amount`,
+        # `X402Result`) still runs unchanged on the untruncated `response` object,
+        # and only the text handed back to the agent is bounded. The marker is as
+        # loud as service.py's existing NO-PAYMENT-MADE marker — there is prior
+        # history in this repo (2026-07-19) of an under-marked money result being
+        # misreported by the agent as a completed payment.
+        _raw_body = response.content
+        if len(_raw_body) > MAX_X402_BODY_BYTES:
+            _body_text = (
+                f"[TRUNCATED: response body was {len(_raw_body)} bytes, capped at "
+                f"{MAX_X402_BODY_BYTES}. You are seeing the first {MAX_X402_BODY_BYTES} "
+                f"bytes. The payment, if any, DID settle — check x402_wallet_status.]\n"
+                + _raw_body[:MAX_X402_BODY_BYTES].decode("utf-8", errors="replace")
+            )
+        else:
+            _body_text = response.text
 
         # paid=True only when the SDK actually created+signed a payment payload
         # AND the retried response is no longer a 402 (a created-but-rejected
@@ -832,7 +900,7 @@ class RealX402Client:
         )
 
         return X402Result(
-            body=response.text,
+            body=_body_text,
             paid=paid,
             amount_usd=amount_paid or 0.0,
             tx_hash=tx_hash or None,

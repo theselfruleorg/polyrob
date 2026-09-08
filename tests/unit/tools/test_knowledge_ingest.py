@@ -156,7 +156,7 @@ class TestChunk:
 
     def test_honors_target_size(self):
         from tools.knowledge_ingest import _chunk
-        from agents.task.agent.core.secret_guard import estimate_tokens_rough
+        from core.security.secret_guard import estimate_tokens_rough
 
         # Create text large enough to force multiple chunks
         text = "word " * 2000  # ~10000 chars → ~2500 tokens

@@ -1792,9 +1792,19 @@ class PolymarketTool(BaseTool):
         # H11: a forged/autonomous turn OR the owner kill-switch can never mutate the
         # owner's live orders (parity with place_*_order).
         from tools.crypto_trade_gate import trade_turn_refusal
-        refusal = trade_turn_refusal(execution_context, self)
+        refusal = trade_turn_refusal(execution_context, self, risk_reducing=True)
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
+        # M10/R16: a cancel is a position-management action the OWNER may still
+        # perform BY HAND while halted — trade_turn_refusal's kill-switch bar lifts
+        # ONLY for a direct/CLI call (execution_context is None above), never for an
+        # agent-loop turn (even a genuine one). Still requires the live master +
+        # per-venue switches, same as an order.
+        from tools.crypto_trade_gate import evaluate_live_mutation
+        gate = evaluate_live_mutation("polymarket", risk_reducing=True)
+        if not gate.live:
+            return {"success": False, "error": gate.reason}
 
         await self.rate_limit("cancel_order")
 
@@ -1836,9 +1846,18 @@ class PolymarketTool(BaseTool):
 
         # H11: forged/autonomous turns OR the owner kill-switch cannot mutate live orders.
         from tools.crypto_trade_gate import trade_turn_refusal
-        refusal = trade_turn_refusal(execution_context, self)
+        refusal = trade_turn_refusal(execution_context, self, risk_reducing=True)
         if refusal:
             return {"success": False, "error": refusal, "forged_turn_blocked": True}
+
+        # M10/R16: OWNER-only carve-out — permitted while halted ONLY for a
+        # direct/CLI call (execution_context is None above); any agent-loop turn is
+        # still refused by trade_turn_refusal's kill-switch bar. Still needs the
+        # live master + venue switches.
+        from tools.crypto_trade_gate import evaluate_live_mutation
+        gate = evaluate_live_mutation("polymarket", risk_reducing=True)
+        if not gate.live:
+            return {"success": False, "error": gate.reason}
 
         await self.rate_limit("cancel_all_orders")
 

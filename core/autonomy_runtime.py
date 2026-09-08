@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from core.config_policy import AutonomyConfig, _mode_capability_default, autonomy_enabled
-from typing import List, Tuple
+from typing import Any, Dict, List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ def _curator_enabled() -> bool:
 
 
 def _surface_gc_enabled() -> bool:
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     return SurfaceConfig.surface_gc_enabled()
 
 
@@ -63,6 +63,11 @@ def _hf_deploy_enabled() -> bool:
 
 
 _SURFACE_GC_INTERVAL_SEC = 3600  # hourly
+
+#: How often to sweep sandbox containers whose owning session is gone
+#: (``_build_sandbox_reaper_ticker``). Ownership-keyed, so this is safe to run
+#: periodically — unlike the age-based cold-start ``reap_orphans``.
+_SANDBOX_REAP_INTERVAL_SEC = 900
 
 _QUIET_RELEASE_INTERVAL_SEC = 300  # window-end precision of ~5 min
 
@@ -102,7 +107,7 @@ def _build_surface_gc_ticker(task_agent):
     unboundedly. Resolves the registry from the task_agent's container (no extra
     plumbing through start_autonomy); fail-open and no-op when the chat bus is off."""
     from core.tickers import IntervalTicker
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     async def _tick():
         try:
@@ -142,6 +147,86 @@ def _build_surface_gc_ticker(task_agent):
     return IntervalTicker(_tick, interval_seconds=_SURFACE_GC_INTERVAL_SEC)
 
 
+def _live_session_ids(task_agent):
+    """Session ids currently resident, or ``None`` when that cannot be read.
+
+    ``None`` and ``[]`` mean different things here and the difference is
+    destructive: ``DockerBackend.reap_unowned`` treats an empty live set as
+    "every session is gone" and force-removes every labeled container past its
+    race guard. So an unreadable registry must be UNKNOWN (``None`` → the tick
+    skips), and only a registry that actually answered "nothing is resident"
+    may be ``[]``.
+
+    Duck-typed rather than imported: ``core/`` may not import ``agents.*``
+    (tests/test_layering_ratchet.py), and this needs no more than "does the
+    object expose a registry that can list session ids". The agents-tier
+    ``session_registry.resident_session_ids`` stays for callers inside that
+    tier — it collapses the two cases to ``[]``, which is safe there and is not
+    safe here.
+    """
+    registry = getattr(task_agent, "_registry", None)
+    lister = getattr(registry, "session_ids", None)
+    if not callable(lister):
+        return None
+    try:
+        return list(lister())
+    except Exception:
+        return None
+
+
+def _build_sandbox_reaper_ticker(task_agent):
+    """Periodically remove sandbox containers whose owning session is GONE.
+
+    ⚠️ Read ``_schedule_cold_start_orphan_reap`` first: it documents, correctly,
+    that the AGE-based ``reap_orphans`` must never be periodic, because an idle
+    chat session legitimately outlives any sane max age. This ticker does not
+    contradict that rule — it keys on OWNERSHIP, not age. A container is removed
+    only when its ``polyrob.session`` label names a session that is no longer
+    resident in the SessionRegistry, so an idle-but-live session is never
+    touched.
+
+    Why it exists: only the full ``SessionCleanupMixin.cleanup`` and the one-shot
+    autonomous ``run_as_session`` path release a container. A resident chat
+    session gets the PARTIAL cleanup (deliberately keeping its container for
+    continuous chat), so once its orchestrator is evicted the container is simply
+    abandoned until the next process restart. Live on prod 2026-08-24: 19
+    containers, oldest 2 days, disk at 80%.
+
+    No-op unless persistent docker sandboxes are enabled AND the docker CLI is
+    present. Fail-open: a tick must never disrupt the runtime.
+    """
+    from core.tickers import IntervalTicker
+
+    async def _tick():
+        try:
+            import shutil
+            from tools.code_exec import code_exec_docker_persistent_enabled
+
+            if not code_exec_docker_persistent_enabled():
+                return
+            if shutil.which("docker") is None:
+                return
+
+            # Resolve the live session set. If we cannot read the registry we must
+            # NOT sweep — an empty "live" set would look like "every session is
+            # gone" and reap every container. Bail out instead.
+            live = _live_session_ids(task_agent)
+            if live is None:
+                logger.debug("sandbox reap: session registry unavailable; skipping tick")
+                return
+
+            from tools.code_exec.backends.docker import DockerBackend
+            removed = await DockerBackend.reap_unowned(live)
+            if removed:
+                logger.info(
+                    "sandbox reap: removed %d container(s) whose session is gone", removed
+                )
+        except Exception as e:  # a reap tick must never disrupt the runtime
+            logger.debug("sandbox reap tick failed: %s", e)
+
+    return IntervalTicker(_tick, interval_seconds=_SANDBOX_REAP_INTERVAL_SEC)
+
+
 def _build_cron_ticker(task_agent, data_dir):
     from cron.runner import build_cron_ticker
     return build_cron_ticker(task_agent, data_dir=data_dir)
@@ -156,12 +241,20 @@ def _build_goal_ticker(task_agent, data_dir):
     try:
         import os as _os
         from agents.task.goals.board import GoalBoard
-        n = GoalBoard(_os.path.join(data_dir, "goals.db")).requeue_running_on_boot()
+        n = _requeue_on_boot(GoalBoard(_os.path.join(data_dir, "goals.db")))
         if n:
             logger.info("cold-start goal sweep: re-queued %d running goal(s)", n)
     except Exception:
         logger.debug("cold-start goal sweep skipped", exc_info=True)
     return build_goal_ticker(task_agent, data_dir=data_dir)
+
+
+def _requeue_on_boot(board) -> int:
+    """§5.1 cold-start requeue. NOT pause-gated (031 review): a `running` row after
+    a restart is a lie whatever the pause state, and requeueing starts nothing —
+    dispatch itself is gated. Leaving the rows `running` would let the unconditional
+    `reclaim_stale` count the restart as a failure once the claim TTL lapsed."""
+    return board.requeue_running_on_boot()
 
 
 def _build_curator_ticker(data_dir):
@@ -311,6 +404,45 @@ def _schedule_owner_profile_seed(task_agent) -> None:
         logger.warning("Could not schedule owner profile seed: %s", e)
 
 
+_self_binding_sweep_scheduled = False
+
+
+def _schedule_self_binding_sweep(task_agent) -> None:
+    """031 T15 cold-start sweep: expire any correspondent binding to the agent's
+    OWN email address. One such binding re-ran a finished treasury goal on every
+    restart (the agent's sent copy routed back in as correspondent DATA). Fail-open,
+    once per process; no-op without a correspondent registry."""
+    global _self_binding_sweep_scheduled
+    if _self_binding_sweep_scheduled:
+        return
+    _self_binding_sweep_scheduled = True
+
+    async def _sweep() -> None:
+        try:
+            from core.surfaces.seed import is_self_address
+            container = getattr(task_agent, "container", None)
+            registry = container.get_service("correspondent_registry") if container else None
+            if registry is None or not hasattr(registry, "deactivate"):
+                return
+            n = 0
+            for r in registry.list() or []:
+                if (r.get("surface") == "email" and r.get("state") == "active"
+                        and is_self_address(r.get("address") or "")):
+                    if registry.deactivate(surface=r["surface"], address=r["address"],
+                                           thread_id=r.get("thread_id") or None,
+                                           user_id=r.get("user_id")):
+                        n += 1
+            if n:
+                logger.warning("correspondent_self_binding_removed: %d binding(s) to the "
+                               "agent's own address expired", n)
+        except Exception as e:
+            logger.warning("self-binding sweep failed (non-fatal): %s", e)
+
+    task = asyncio.create_task(_sweep())
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+
 def _schedule_delegation_recovery(task_agent, data_dir: str | None = None) -> None:
     """Cold-start-only sweep over autonomy_state.db:
     a delegation row still 'running' at process start was crash-interrupted. Mark
@@ -330,6 +462,10 @@ def _schedule_delegation_recovery(task_agent, data_dir: str | None = None) -> No
 
     async def _sweep() -> None:
         try:
+            # 031: NOT pause-gated — marking a crash-interrupted row `interrupted`
+            # is the honest record either way; the self-wake it surfaces through is
+            # itself pause-gated (dropped with reason "paused"), and this sweep
+            # never runs again after boot.
             from agents.task.agent.autonomy_state import (
                 default_autonomy_state_db,
                 recover_interrupted_delegations,
@@ -381,14 +517,167 @@ class AutonomyHandles:
         #: Resolved AUTONOMY_ENABLED master at start (0.9.0). Query point for the
         #: awareness surfaces; the per-flag gates are the authoritative loop gate.
         self.autonomy_enabled: bool = True
+        self._hb_task: "asyncio.Task | None" = None
+        self._hb_stop: "asyncio.Event | None" = None
+        #: 031: name -> ticker, so the pause transition can reach the goal
+        #: dispatcher / cron scheduler that own the in-flight work.
+        self._loops: Dict[str, Any] = {}
+        self._task_agent: Any = None
+        self._watch_task: "asyncio.Task | None" = None
+        self._watch_stop: "asyncio.Event | None" = None
 
     def _add(self, name: str, ticker) -> None:
         stop = asyncio.Event()
         task = asyncio.create_task(ticker.run_forever(stop_event=stop))
         self._entries.append((name, task, stop))
+        self._loops[name] = ticker
         logger.info("autonomy loop started: %s", name)
+        self._ensure_heartbeat()
+
+    @property
+    def loops(self) -> Dict[str, Any]:
+        return dict(self._loops)
+
+    # --- 031 owner pause: ONE reconcile path for this process --------------------
+    # Two triggers, one body: the in-process transition hook (immediate, when
+    # THIS process wrote the record) and the pause watcher (a cheap poll of the
+    # record, so a pause written by ANOTHER process — the CLI, the web console,
+    # a script, a touched file — is honoured within seconds, not on the next
+    # 60 s tick). `_reconcile_pause` is idempotent: holds/cancels are CAS-shaped.
+    _PAUSE_WATCH_SEC = 3.0
+
+    def on_pause_transition(self, old, new) -> None:
+        """Registered with ``core.autonomy_control.register_transition_hook``."""
+        self._maybe_reconcile(old, new)
+
+    def _maybe_reconcile(self, old, new) -> None:
+        widened = new.paused and (not old.paused or set(new.scopes) != set(old.scopes))
+        if not widened:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return  # a CLI process without a loop: nothing of ours is running
+        task = loop.create_task(self._reconcile_pause(new))
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+    async def _pause_watch_loop(self, data_dir) -> None:
+        from core.autonomy_control import read_state
+        last = read_state(data_dir)
+        while self._watch_stop is not None and not self._watch_stop.is_set():
+            try:
+                await asyncio.wait_for(self._watch_stop.wait(), timeout=self._PAUSE_WATCH_SEC)
+                break
+            except asyncio.TimeoutError:
+                pass
+            try:
+                cur = read_state(data_dir)
+            except Exception:
+                continue
+            if cur.paused != last.paused or set(cur.scopes) != set(last.scopes):
+                logger.info("pause watcher: %s -> %s", "paused" if last.paused else "running",
+                            f"paused ({', '.join(cur.scopes)})" if cur.paused else "running")
+                self._maybe_reconcile(last, cur)
+                last = cur
+
+    def _start_pause_watcher(self, data_dir) -> None:
+        if self._watch_task is not None:
+            return
+        try:
+            self._watch_stop = asyncio.Event()
+            self._watch_task = asyncio.create_task(self._pause_watch_loop(data_dir))
+        except Exception as e:  # never let the watcher block startup
+            logger.warning("pause watcher not started: %s", e)
+
+    async def _reconcile_pause(self, state) -> None:
+        from core.autonomy_control import allows
+        scopes = ", ".join(state.scopes)
+        goals = self._loops.get("goals")
+        if goals is not None and not allows("dispatch").allowed:
+            try:
+                goals.dispatcher._paused_seen = True  # before the await: no double hold
+                held = await goals.dispatcher.hold_inflight(f"owner pause ({scopes})")
+                if held:
+                    logger.warning("pause: held %d in-flight goal run(s)", len(held))
+            except Exception:
+                logger.warning("pause: goal hold failed", exc_info=True)
+        cron = self._loops.get("cron")
+        if cron is not None:
+            try:
+                if cron.scheduler.cancel_inflight():
+                    logger.warning("pause: cancelled the in-flight cron run")
+            except Exception:
+                logger.warning("pause: cron cancel failed", exc_info=True)
+        if self._task_agent is not None and not allows("dispatch").allowed:
+            try:
+                # Duck-typed (core may not import agents.*): the TaskAgent cancels
+                # its autonomous sessions' background delegations, never the owner's.
+                cancel = getattr(self._task_agent, "cancel_autonomous_delegations", None)
+                n = int(cancel("owner pause") or 0) if callable(cancel) else 0
+                if n:
+                    logger.warning("pause: cancelled %d background delegation(s)", n)
+            except Exception:
+                logger.warning("pause: delegation cancel failed", exc_info=True)
+
+    # --- liveness heartbeat (2026-08-28, status SSOT D13) ------------------
+    # core/tickers.py::TickerSupervisor has emitted an `autonomy_tick` per loop
+    # since the 2026-07-04 audit — but the API lifespan, the REPL and the
+    # Telegram surface all start their loops through THIS class, which never
+    # did. Prod had 16k telemetry rows and zero heartbeats, so a dead cron/goal
+    # task rendered identically to a live one. Same emitter, same event.
+    def _ensure_heartbeat(self) -> None:
+        if self._hb_task is not None:
+            return
+        try:
+            self._hb_stop = asyncio.Event()
+            self._hb_task = asyncio.create_task(self._heartbeat_loop())
+        except Exception as e:  # never let liveness reporting block startup
+            logger.warning("autonomy heartbeat not started: %s", e)
+
+    def emit_heartbeats(self) -> None:
+        """Record one ``autonomy_tick`` per loop (alive = task not done). Fail-open."""
+        from core.tickers import emit_loop_heartbeats
+        emit_loop_heartbeats([(name, task) for name, task, _stop in self._entries],
+                             source="autonomy_runtime")
+
+    async def _heartbeat_loop(self) -> None:
+        from core.tickers import _heartbeat_interval_sec
+        interval = _heartbeat_interval_sec()
+        self.emit_heartbeats()  # first beat immediately: the status surfaces read it
+        while self._hb_stop is not None and not self._hb_stop.is_set():
+            try:
+                await asyncio.wait_for(self._hb_stop.wait(), timeout=interval)
+            except asyncio.TimeoutError:
+                pass
+            if self._hb_stop is not None and self._hb_stop.is_set():
+                break
+            self.emit_heartbeats()
 
     async def stop(self) -> None:
+        try:
+            from core.autonomy_control import unregister_transition_hook
+            unregister_transition_hook(self.on_pause_transition)
+        except Exception:
+            logger.debug("pause hook unregister failed", exc_info=True)
+        if self._watch_stop is not None:
+            self._watch_stop.set()
+        if self._watch_task is not None:
+            self._watch_task.cancel()
+            try:
+                await self._watch_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._watch_task = None
+        if self._hb_stop is not None:
+            self._hb_stop.set()
+        if self._hb_task is not None:
+            self._hb_task.cancel()
+            try:
+                await self._hb_task
+            except (asyncio.CancelledError, Exception):
+                pass
+            self._hb_task = None
         # Signal every loop to exit first, then await each so a loop that observes
         # its stop_event winds down gracefully (and runs its own cleanup). A bounded
         # timeout prevents a stubborn ticker (one that ignores stop_event, e.g. mid-job)
@@ -417,6 +706,24 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     from core.runtime_paths import data_dir_or_home
     data_dir = data_dir_or_home(data_dir)
     handles = AutonomyHandles()
+    handles._task_agent = task_agent
+
+    # 031: the owner pause record. Loops always start ARMED (a paused deployment
+    # keeps its tickers so a resume takes effect without a restart); each tick
+    # consults allows(). This process reconciles its own in-flight work on the
+    # paused edge through the transition hook.
+    try:
+        from core.autonomy_control import read_state, register_transition_hook
+        register_transition_hook(handles.on_pause_transition)
+        handles._start_pause_watcher(data_dir)
+        _st = read_state(data_dir)
+        if _st.paused:
+            logger.warning(
+                "autonomy is PAUSED (%s, by %s via %s) — loops start ARMED and idle; "
+                "resume takes effect without a restart",
+                ", ".join(_st.scopes), _st.set_by or _st.source, _st.via or "-")
+    except Exception:
+        logger.warning("autonomy pause probe failed at start (non-fatal)", exc_info=True)
 
     # 0.9.0 legibility: the AUTONOMY_ENABLED master governs the self-directed loop
     # DEFAULTS (via T1's per-flag gates). Record + log it as the single query point
@@ -457,6 +764,11 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     except Exception as e:
         logger.warning("Could not schedule cold-start orphan reap: %s", e)
     try:
+        # 031 T15: expire any correspondent binding to the agent's own address.
+        _schedule_self_binding_sweep(task_agent)
+    except Exception as e:
+        logger.warning("Could not schedule self-binding sweep: %s", e)
+    try:
         # One-shot recovery: delegations still 'running' in autonomy_state.db were
         # crash-interrupted — mark them and surface back to their sessions.
         _schedule_delegation_recovery(task_agent, data_dir)
@@ -482,6 +794,13 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("curator", _build_curator_ticker(data_dir))
         except Exception as e:
             logger.warning("Could not start skill curator: %s", e)
+    try:
+        # Ownership-keyed sandbox container sweep. Safe to run periodically (see
+        # the builder's docstring for why this does not violate the
+        # cold-start-only rule that governs the AGE-based reap_orphans).
+        handles._add("sandbox_reap", _build_sandbox_reaper_ticker(task_agent))
+    except Exception as e:
+        logger.warning("Could not start sandbox reaper ticker: %s", e)
     if _surface_gc_enabled():
         try:
             handles._add("surface_gc", _build_surface_gc_ticker(task_agent))

@@ -323,6 +323,16 @@ class LLMRunnerMixin:
 				f"{str(llm_error)[:200]}"
 			)
 			
+			# CREDIT-DEATH SENTINEL: a credit-dead provider that recovers via
+			# THIS in-method fallback never raises past this frame, so
+			# error_recovery.py's `_handle_step_error` (the ONLY other trip
+			# site) never runs -- every later call keeps trying the dead
+			# provider first, failing, and silently falling back again,
+			# forever (ops-session finding, 2026-08-27). Trip here, before
+			# the fallback attempt, exactly like error_recovery.py does --
+			# a no-op unless `llm_error` actually looks like credit death.
+			await self._trip_sentinel_if_credit_death(llm_error)
+
 			# Record the failure
 			self._emit_provider_failure_telemetry(
 				failed_provider=current_provider,
@@ -433,6 +443,14 @@ class LLMRunnerMixin:
 			current_provider = self._current_llm_provider(self.model_name)
 
 			self.logger.warning(f"🔄 Generic LLM error ({error_type}) - attempting fallback...")
+
+			# CREDIT-DEATH SENTINEL: same reasoning as the sibling except block
+			# above -- the real prod OpenRouter 402 arrives as exactly this
+			# generic LLMError (error_recovery.py's own comment), and a
+			# successful in-method fallback below never raises past this
+			# frame, so error_recovery.py's trip site never runs. Trip here,
+			# before the fallback attempt (ops-session finding, 2026-08-27).
+			await self._trip_sentinel_if_credit_death(generic_llm_error)
 
 			# Track error
 			self.state.track_llm_error(error_type, current_provider)

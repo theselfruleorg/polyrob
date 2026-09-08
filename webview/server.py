@@ -686,6 +686,22 @@ _templates.env.globals["get_version"] = get_version
 # pass `is_multitenant` fall back to the posture SSOT instead of "shown".
 _templates.env.globals["is_multitenant_posture"] = webgate.is_multitenant
 
+
+def _template_request_is_authenticated(request) -> bool:
+    """Jinja helper: auth state straight from request.state (C4 contract).
+
+    030 S5: layout.html shows a Logout link for the authenticated own_ops
+    owner. Registered as a global (same pattern as `is_multitenant_posture`)
+    so every server-rendered page gets it without threading a context var
+    through each route; lazy import matches the route-level style.
+    """
+    from utils.auth_utils import is_authenticated
+    return is_authenticated(request)
+
+
+_templates.env.globals["is_own_ops_posture"] = webgate.is_own_ops
+_templates.env.globals["request_is_authenticated"] = _template_request_is_authenticated
+
 # Multitenant-only: the wallet auth router is the JWT/SIWE surface. In single-user
 # mode it is simply not mounted (no /api/auth/* — single-user has no auth).
 if webgate.is_multitenant():
@@ -736,9 +752,19 @@ PAYMENT_ROUTER_MOUNTED = False
 # every posture). Each endpoint REUSES the underlying service (memory
 # provider / GoalBoard / CronService / core.instance / doctor_report); see
 # webview/pages.py. Fail-open: a mount failure must never break the webview boot.
+# 030 extraction: the telemetry fast-push + preview serve-token endpoints
+# (every posture; internal_emit enforces localhost-only itself).
+try:
+    from webview.emit_api import router as _emit_api_router
+    _fastapi.include_router(_emit_api_router)
+except Exception as _e:
+    logger.error(f"emit_api mount failed: {_e}")
+
 try:
     from webview.pages import router as webgate_pages_router
     _fastapi.include_router(webgate_pages_router)
+    from webview.apps_routes import router as apps_router  # 032 durable app service
+    _fastapi.include_router(apps_router)
     PAGES_ROUTER_MOUNTED = True
     logger.info("✅ Webgate v1 pages mounted (memory/autonomy/identity/system)")
 except Exception as e:
@@ -840,6 +866,7 @@ async def auth_middleware(request: Request, call_next):
         "/api/auth/verify",
         "/api/payments/pricing",  # Only pricing info is public (no user data)
         "/api/webview/sessions/",  # Internal streaming from agent (localhost only, verified in endpoint)
+        "/api/internal/emit",  # 030 D12: fast-push; endpoint enforces localhost-only
     ]
     # Shareable-link viewing (/session/, /api/session/ — which also covers the
     # workspace-file/screenshot sub-routes) stays public ONLY in the
@@ -870,6 +897,15 @@ async def auth_middleware(request: Request, call_next):
         # This allows detecting session owners vs viewers
         _manual_auth_check(request)
         return await call_next(request)
+
+    # 030 S1: the opaque-origin preview iframe sends no auth cookie — admit a
+    # /serve/ request carrying a VALID token for exactly its own session.
+    if path.startswith("/api/session/") and "/workspace/serve/" in path:
+        st = request.query_params.get("st")
+        sid = path[len("/api/session/"):].split("/", 1)[0]
+        if st and sid and _verify_serve_token(sid, st):
+            _manual_auth_check(request)
+            return await call_next(request)
 
     # Check for auth token in header or cookie
     auth_header = request.headers.get("Authorization")
@@ -1229,16 +1265,29 @@ def _sessions_for_request(request: Request) -> List[Dict[str, Any]]:
 async def signin_page(request: Request) -> Response:
     """Show wallet sign in page."""
     from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse("signin.html", {
+    return _templates.TemplateResponse(request, "signin.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": getattr(request.state, 'is_admin', False)
     })
 
 
-@_multitenant_get("/logout", response_class=HTMLResponse)
+@_posture_get("/logout", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
 async def logout(request: Request) -> Response:
-    """Logout user and redirect to signin."""
+    """Log out and return to the posture's login surface.
+
+    Registered for own_ops AND multitenant (030 S5 — it was `_multitenant_get`,
+    so the own_ops owner had NO way to end the 7-day owner session: the route
+    404'd there). own_ops answers with a real HTTP redirect + `delete_cookie`
+    (the auth middleware's own rule: real redirects, never a 200 JS-hack page —
+    the owner cookie is the only credential there). Multitenant keeps the
+    legacy HTML page: the wallet/SIWE JWT also lives in localStorage, which
+    only client-side JS can clear.
+    """
+    if webgate.is_own_ops():
+        response: Response = RedirectResponse(url="/owner-login", status_code=303)
+        response.delete_cookie("auth_token")
+        return response
     response = HTMLResponse(content="""
         <html>
             <head>
@@ -1296,6 +1345,19 @@ def _safe_return_to(raw) -> str:
     return to
 
 
+# 030 S1: serve tokens live in webview/serve_tokens.py; private aliases kept —
+# tests and the middleware resolve them off this module.
+from webview.serve_tokens import (SERVE_TOKEN_TTL_SEC as _SERVE_TOKEN_TTL_SEC,
+                                  mint_serve_token as _mint_serve_token,
+                                  verify_serve_token as _verify_serve_token)
+
+
+def _render_owner_login(request, *, return_to="/", error=None, status_code=200):
+    """030 S5 delegator — body in webview/owner_login_flow.py (ratchet)."""
+    from webview.owner_login_flow import render_owner_login
+    return render_owner_login(request, return_to=return_to, error=error,
+                              status_code=status_code)
+
 @_posture_get("/owner-login", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
 async def owner_login_page(request: Request) -> Response:
     """Owner username/password login page (Posture 1, own_ops).
@@ -1308,18 +1370,8 @@ async def owner_login_page(request: Request) -> Response:
     has no auth at all — no login surface needed or wanted, so it is NOT
     registered there (a request → 404).
     """
-    import secrets as _secrets
     return_to = _safe_return_to(request.query_params.get("return_to", "/"))
-    nonce = _secrets.token_hex(16)
-    response = _templates.TemplateResponse("owner_login.html", {
-        "request": request, "return_to": return_to, "error": None,
-        "csrf_token": _csrf_token_for(nonce),
-    })
-    response.set_cookie(
-        "csrf_nonce", nonce, max_age=600, httponly=True, samesite="lax",
-        secure=(os.environ.get("ENVIRONMENT", "production") == "production"), path="/owner-login",
-    )
-    return response
+    return _render_owner_login(request, return_to=return_to)
 
 
 @_posture_post("/owner-login", postures=("own_ops", "multitenant"))
@@ -1334,12 +1386,8 @@ async def owner_login_submit(request: Request) -> Response:
 
     client_ip = request.client.host if request.client else "unknown"
     if _login_throttled(client_ip):
-        return _templates.TemplateResponse(
-            "owner_login.html",
-            {"request": request, "return_to": "/",
-             "error": "Too many attempts. Try again in a few minutes.", "csrf_token": None},
-            status_code=429,
-        )
+        return _render_owner_login(request,
+            error="Too many attempts. Try again in a few minutes.", status_code=429)
     _record_login_attempt(client_ip)
 
     form = await request.form()
@@ -1351,20 +1399,12 @@ async def owner_login_submit(request: Request) -> Response:
     if os.environ.get("JWT_SECRET_KEY"):
         supplied = str(form.get("csrf_token", ""))
         if not expected_csrf or not hmac.compare_digest(supplied, expected_csrf):
-            return _templates.TemplateResponse(
-                "owner_login.html",
-                {"request": request, "return_to": return_to,
-                 "error": "Invalid or expired form. Please try again.", "csrf_token": None},
-                status_code=403,
-            )
+            return _render_owner_login(request, return_to=return_to,
+                error="Invalid or expired form. Please try again.", status_code=403)
 
     if not verify_owner_password(username, password):
-        return _templates.TemplateResponse(
-            "owner_login.html",
-            {"request": request, "return_to": return_to,
-             "error": "Invalid username or password.", "csrf_token": None},
-            status_code=401,
-        )
+        return _render_owner_login(request, return_to=return_to,
+            error="Invalid username or password.", status_code=401)
 
     response = RedirectResponse(url=return_to, status_code=303)
     issue_owner_session_cookie(response)
@@ -1375,7 +1415,7 @@ async def owner_login_submit(request: Request) -> Response:
 async def profile_page(request: Request) -> Response:
     """Show user profile page with credits and deposit information."""
     from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse("profile.html", {
+    return _templates.TemplateResponse(request, "profile.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": getattr(request.state, 'is_admin', False)
@@ -1386,7 +1426,7 @@ async def profile_page(request: Request) -> Response:
 async def settings_page(request: Request) -> Response:
     """Show user settings page (MCP servers, preferences, API keys)."""
     from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse("settings.html", {
+    return _templates.TemplateResponse(request, "settings.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": getattr(request.state, 'is_admin', False)
@@ -1417,7 +1457,7 @@ async def admin_dashboard(request: Request) -> Response:
             </html>
         """, status_code=403)
 
-    return _templates.TemplateResponse("admin/dashboard.html", {
+    return _templates.TemplateResponse(request, "admin/dashboard.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": True
@@ -1433,7 +1473,7 @@ async def admin_users_page(request: Request) -> Response:
     if not is_admin:
         return RedirectResponse(url="/", status_code=303)
 
-    return _templates.TemplateResponse("admin/users.html", {
+    return _templates.TemplateResponse(request, "admin/users.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": True
@@ -1449,7 +1489,7 @@ async def admin_user_detail_page(request: Request, user_id: str) -> Response:
     if not is_admin:
         return RedirectResponse(url="/", status_code=303)
 
-    return _templates.TemplateResponse("admin/user_detail.html", {
+    return _templates.TemplateResponse(request, "admin/user_detail.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": True,
@@ -1466,7 +1506,7 @@ async def admin_activity_page(request: Request) -> Response:
     if not is_admin:
         return RedirectResponse(url="/", status_code=303)
 
-    return _templates.TemplateResponse("admin/activity.html", {
+    return _templates.TemplateResponse(request, "admin/activity.html", {
         "request": request,
         "is_authenticated": is_authenticated(request),
         "is_admin": True
@@ -1498,7 +1538,7 @@ async def index(request: Request) -> Response:
     if webgate.posture() != "local" and not is_authenticated(request):
         from core.instance import resolve_instance_id
 
-        return _templates.TemplateResponse("status.html", {
+        return _templates.TemplateResponse(request, "status.html", {
             "request": request,
             "instance_id": resolve_instance_id(),
             "version": os.environ.get("WEBVIEW_VERSION", get_version()),
@@ -1511,8 +1551,7 @@ async def index(request: Request) -> Response:
     is_owner = True
     user_is_authenticated = is_authenticated(request)
 
-    return _templates.TemplateResponse(
-        "session.html",
+    return _templates.TemplateResponse(request, "session.html",
         {
             "request": request,
             "session_id": "new",  # Special value for empty state
@@ -1550,8 +1589,7 @@ async def sessions_list(request: Request) -> Response:
     # Get version from environment variable or use a default
     version = os.environ.get("WEBVIEW_VERSION", get_version())
 
-    return _templates.TemplateResponse(
-        "index.html",
+    return _templates.TemplateResponse(request, "index.html",
         {
             "request": request,
             "sessions": sessions,
@@ -1606,8 +1644,7 @@ async def session_page(request: Request, session_id: str) -> Response:
     else:
         logger.info(f"Session {clean_id}: viewing without authentication")
 
-    return _templates.TemplateResponse(
-        "session.html",
+    return _templates.TemplateResponse(request, "session.html",
         {
             "request": request,
             "session_id": session_id,
@@ -2509,54 +2546,6 @@ async def api_feed_events(request: Request, session_id: str, event_type: Optiona
     )
 
 
-@_fastapi.post("/api/internal/emit")
-async def internal_emit(request: Request) -> Response:
-    """Internal endpoint for direct event emission from telemetry service.
-
-    SECURITY: Only accepts requests from localhost (127.0.0.1).
-    This endpoint bypasses the file watcher for immediate event delivery.
-
-    Expected JSON body:
-        {
-            "session_id": "session_123",
-            "event": { ... event data with _seq, _ts_ms, _id ... }
-        }
-    """
-    # SECURITY: Localhost-only check
-    client_host = request.client.host if request.client else None
-    if client_host not in ("127.0.0.1", "::1", "localhost"):
-        logger.warning(f"Internal emit rejected from non-localhost: {client_host}")
-        raise HTTPException(403, "Forbidden: localhost only")
-
-    try:
-        body = await request.json()
-    except Exception as e:
-        logger.error(f"Internal emit: invalid JSON body: {e}")
-        raise HTTPException(400, "Invalid JSON body")
-
-    session_id = body.get("session_id")
-    event = body.get("event")
-
-    if not session_id or not event:
-        raise HTTPException(400, "Missing session_id or event")
-
-    # Clean the session ID for consistent room naming. NOTE: clients join the
-    # room named by the BARE clean id (join_session → enter_room(sid, clean_id))
-    # and the file watcher emits there too — a "session:" prefix here would be
-    # a dead room nobody joins (the old bug that silenced this fast path).
-    clean_id = pm().clean_session_id(session_id)
-    room = clean_id
-
-    # Enrich LLM cost if this is an llm_request event
-    _enrich_llm_event_with_cost(event)
-
-    # Emit directly to all clients in the session room
-    await _sio.emit("feed_update", event, room=room)
-    logger.debug(f"Internal emit: sent event to room {room}, _seq={event.get('_seq')}")
-
-    return JSONResponse({"status": "ok", "room": room})
-
-
 @_fastapi.get("/api/session/{session_id}/status", response_class=JSONResponse)
 async def api_session_status(request: Request, session_id: str) -> Response:
     """Return the status of a session.
@@ -2977,6 +2966,14 @@ async def _send_message_in_process(request: Request, clean_id: str, agent,
     return JSONResponse({"success": True, "message": "Message sent"})
 
 
+async def _maybe_handle_console_command(clean_id: str, user_id: str, text: str):
+    """030 WS-B6 delegator — body in webview/console_commands.py (ratchet).
+    Resolves the in-process agent HERE so tests can patch _in_process_task_agent."""
+    from webview.console_commands import maybe_handle_console_command
+    return await maybe_handle_console_command(
+        _in_process_task_agent(), clean_id, user_id, text)
+
+
 @_fastapi.post("/api/session/{session_id}/messages", response_class=JSONResponse)
 async def send_message_to_session(session_id: str, request: Request) -> Response:
     """Send user message to running session.
@@ -3024,6 +3021,16 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
         kind = data.get("kind", "comment")
         metadata = data.get("metadata", {})
         attached_files = data.get("attached_files")  # NEW: Forward attached files for vision
+
+        # 030 WS-B6 (Q1, finding G3): a slash VERB typed into the console chat
+        # box used to be forwarded to the LLM as prose — /halt did not halt.
+        # Route known owner verbs through the SAME handler chat surfaces use
+        # and answer inline. Plain text (and unknown slashes) still reach the
+        # agent unchanged.
+        cmd_reply = await _maybe_handle_console_command(clean_id, current_user_id, text)
+        if cmd_reply is not None:
+            return JSONResponse({"success": True, "message": "Command handled",
+                                 "command_reply": cmd_reply})
 
         # WS-3.1 (2026-07-07): single-service deploys (prod own_ops) have NO
         # :9000 api service — but the task router + TaskAgent live in THIS
@@ -3425,6 +3432,21 @@ async def join_session(sid, data):
         _session_clients[clean_id] = _session_clients.get(clean_id, 0) + 1
         logger.info("Client %s joined session %s (cleaned: %s)", sid, session_id, clean_id)
 
+        # 030 WS-G2 (D-8): a RECONNECTING client that already holds state sends
+        # after_seq — skip the full-feed replay (an unbounded glob + JSON parse
+        # of the whole feed dir on every network blip) and let its delta-sync
+        # (/feed/events?after_seq=) fill the gap. Room membership above is the
+        # part a reconnect actually needs.
+        try:
+            _after_seq = int(data.get("after_seq") or 0)
+        except (TypeError, ValueError):
+            _after_seq = 0
+        if _after_seq > 0:
+            if clean_id not in _watch_tasks:
+                _watch_tasks[clean_id] = asyncio.create_task(_feed_watcher(clean_id))
+            logger.info("join_session: reconnect with after_seq=%d — skipping full replay", _after_seq)
+            return
+
         # Send initial feed data to the client
         feed_dir = pm().get_feed_dir(clean_id)
         logger.info("join_session: checking feed_dir=%s, exists=%s", feed_dir, feed_dir.exists())
@@ -3787,8 +3809,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> Respon
     # Get version from environment variable or use a default
     version = os.environ.get("WEBVIEW_VERSION", get_version())
     
-    return _templates.TemplateResponse(
-        "error.html",
+    return _templates.TemplateResponse(request, "error.html",
         {
             "request": request,
             "error": f"HTTP {status_code}",

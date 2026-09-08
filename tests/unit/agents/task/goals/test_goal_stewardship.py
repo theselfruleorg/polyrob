@@ -31,7 +31,15 @@ def board(tmp_path):
 
 def test_cold_start_sweep_requeues_running_without_failure_increment(board):
     g = board.create(user_id="u1", title="mid-flight goal")
-    assert board.claim(g.id, "w1", ttl_seconds=900) is not None
+    # The claim of the PREVIOUS (now dead) process — the sweep's whole subject.
+    # It carries the dispatcher's real claim format so the ownership guard added
+    # in test_boot_requeue_claim_guard.py can tell "owner gone" from "owner live":
+    # only a claim that is expired OR provably ownerless is requeued here.
+    import subprocess
+    import sys
+    _p = subprocess.Popen([sys.executable, "-c", "pass"])
+    _p.wait()
+    assert board.claim(g.id, f"goal-dispatch-{_p.pid}", ttl_seconds=900) is not None
     assert board.get(g.id).status == STATUS_RUNNING
 
     n = board.requeue_running_on_boot()

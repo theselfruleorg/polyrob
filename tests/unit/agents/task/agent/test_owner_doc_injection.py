@@ -74,7 +74,11 @@ def test_style_line_skips_invalid_or_oversized_values():
         "style.tone": "B" * 5000,                                     # oversized
         "digest.quiet_hours": "A" * 300,                              # both
     })
-    assert line == "Style: verbosity terse"
+    # G7: verbosity carries its operational meaning; the invalid fields are
+    # still the thing under test, so assert they are absent rather than pinning
+    # the exact phrasing of the one valid field.
+    assert line.startswith("Style: verbosity terse (")
+    assert "language" not in line and "tone" not in line and "quiet hours" not in line
     # all four invalid -> no line at all
     assert render_style_line({"style.language": "x" * 40}) == ""
 
@@ -111,7 +115,8 @@ def test_style_line_appears_when_style_pref_set(tmp_path):
     assert ok, err
 
     _contract_block = _build_contract_block(tmp_path, "u1")
-    assert _contract_block == "Style: verbosity terse · language en"
+    assert _contract_block.startswith("Style: verbosity terse (")
+    assert _contract_block.endswith(" · language en")
 
     _soul = "SOUL"
     _self_doc = "SELF"

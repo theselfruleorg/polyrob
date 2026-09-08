@@ -87,8 +87,11 @@ def build_registration_file(
             }
         ))
     
-    # Agent Wallet (for payments/signing)
-    agent_wallet = config.agent_wallet or os.environ.get("X402_PAYMENT_RECIPIENT")
+    # Agent Wallet (for payments/signing) — W2.2 (2026-08-21): fall back to the
+    # SAME resolver invoices/the agent card use (env wins, wallet fills in),
+    # so every advertised address agrees.
+    from modules.x402.x402_integration import resolve_treasury_address
+    agent_wallet = config.agent_wallet or resolve_treasury_address()
     if agent_wallet:
         # Format: eip155:chainId:address
         endpoints.append(Endpoint(

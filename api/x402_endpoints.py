@@ -106,6 +106,17 @@ class PaymentHistoryResponse(BaseModel):
     payments: List[PaymentRequestInfo]
 
 
+def _pricing_recipient() -> str:
+    """The advertised payment address — the SAME resolver invoices, the 402
+    challenge, the agent card and the 8004 file use (env wins, agent wallet
+    fills an empty env). /pricing is the first endpoint an external agent
+    calls, so it must never say "Not configured" while every other surface
+    hands out a live address. Legacy `X402_PAYMENT_ADDRESS` kept as a last
+    fallback."""
+    from modules.x402.x402_integration import resolve_treasury_address
+    return resolve_treasury_address() or os.environ.get("X402_PAYMENT_ADDRESS", "")
+
+
 @router.get("/pricing")
 async def get_x402_pricing():
     """Get x402 pricing information (public endpoint).
@@ -113,8 +124,7 @@ async def get_x402_pricing():
     This is the first endpoint an external agent should call to understand
     payment options and pricing.
     """
-    # Try both env var names for payment address
-    recipient = os.environ.get("X402_PAYMENT_RECIPIENT", os.environ.get("X402_PAYMENT_ADDRESS", ""))
+    recipient = _pricing_recipient()
     facilitator = os.environ.get("X402_FACILITATOR_URL", "")
 
     from modules.x402.x402_integration import get_x402_price_usd

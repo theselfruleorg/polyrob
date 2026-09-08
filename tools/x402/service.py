@@ -135,8 +135,17 @@ class X402PayTool(BaseTool):
         # to refuse outright when the wallet was disabled — so an invoice-only
         # deployment could not see what anything charges. The paying verbs below
         # still demand a wallet; pricing does not.
+        # N-D (audit 2026-08-22): x402_quote needs NO wallet, is reachable on any
+        # turn, and issues a server-side GET to a model-supplied URL. Without the
+        # validator it is a blind-SSRF primitive. It stays wallet-free (an
+        # invoice-only deployment must still be able to see prices) — only the URL
+        # policy is added.
+        from tools.x402.net_guard import validate_x402_url
+        refusal, pinned_ip = await validate_x402_url(params.url)
+        if refusal:
+            return self._ar(error=f"x402_quote refused: {refusal}")
         try:
-            price = await self._get_client().quote(params.url)
+            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip)
             if price is None:
                 return self._ar(content=(
                     f"{params.url}: no x402 price found on a plain GET. This is NOT "
@@ -190,6 +199,22 @@ class X402PayTool(BaseTool):
         wallet = self._get_wallet()
         if wallet is None:
             return self._ar(error="agent wallet not enabled (set AGENT_WALLET_ENABLED=true)")
+        # H1a (audit 2026-08-22): turn-origin refusal — parity with tx_guard step 2
+        # and crypto_trade_gate.trade_turn_refusal. `x402_fetch` took an
+        # execution_context and never read it, so a forged self-wake /
+        # delegation-result / leaf / autonomous-goal turn could auto-sign a payment
+        # to an attacker-named payTo. Asset-pin and network-pin bind the asset and
+        # chain, never the recipient.
+        from tools.x402.spend_gate import x402_spend_refusal
+        refusal = x402_spend_refusal(execution_context, self)
+        if refusal:
+            return self._ar(error=refusal)
+        # H1b: the paying verb takes a model-supplied URL and returns the response
+        # BODY to the agent. Same validator + IP pin the read-only prober uses.
+        from tools.x402.net_guard import validate_x402_url
+        refusal, pinned_ip = await validate_x402_url(params.url)
+        if refusal:
+            return self._ar(error=f"x402_fetch refused: {refusal}")
         # Owner kill-switch: refuse ALL spend while autonomy is halted (defence beyond caps).
         # G-11: fail CLOSED. An import/probe failure must never silently disable the
         # halt check on a money path — refuse the payment and name the failure.
@@ -215,7 +240,7 @@ class X402PayTool(BaseTool):
         # When the probe can't price it, fail closed to the agent's authorized
         # ceiling (max_amount_usd) as the worst-case spend — never skip the gate.
         try:
-            price = await self._get_client().quote(params.url)
+            price = await self._get_client().quote(params.url, pinned_ip=pinned_ip)
         except Exception as e:
             return self._ar(error=f"x402 quote failed: {e}")
         if price is not None and price > params.max_amount_usd:
@@ -259,6 +284,7 @@ class X402PayTool(BaseTool):
                     url=params.url, method=params.method, body=params.body,
                     signer=signer, network=cfg.network,
                     max_amount_usd=params.max_amount_usd,
+                    pinned_ip=pinned_ip,
                 )
             except Exception as e:
                 logging.getLogger(__name__).error(f"x402_fetch failed: {e}")
@@ -300,6 +326,58 @@ class X402PayTool(BaseTool):
         addr = wallet.operational_signer().address
         cfg = wallet.config
         lines = [f"Agent wallet ({venue}) address: {addr}  [network={cfg.network}]"]
+        # Every identity the wallet controls (2026-08-27): the agent must be
+        # able to SEE its own addresses — Solana included — or it reports and
+        # funds the wrong ones. An address is public information; no key
+        # material is involved.
+        try:
+            treasury_addr = wallet.signer_for("treasury").address
+            if treasury_addr != addr:
+                lines.append(f"Treasury (invoice receive) address: {treasury_addr}")
+        except Exception:
+            pass
+        try:
+            sol_addr = wallet.solana_address
+        except Exception:
+            sol_addr = None
+        if sol_addr:
+            sol_line = f"Solana address: {sol_addr}"
+            if cfg.network == "mainnet":
+                # BOTH legs, because this verb answers "what can I actually
+                # spend". Reporting only SOL made the agent's spendable Solana
+                # USDC invisible here (2026-08-28). A failed read renders as
+                # "unavailable" and NEVER as $0.00 — unknown is not zero.
+                from core.wallet import chains, solana_onchain
+                try:
+                    sol_bal = solana_onchain.native_balance(sol_addr)
+                except Exception:
+                    sol_bal = None
+                try:
+                    raw = solana_onchain.token_balances(sol_addr)
+                    mint = (chains.get("solana") or None) and chains.get("solana").usdc
+                    sol_usdc = (None if raw is None or not mint
+                                else raw.get(mint, 0) / 1_000_000)
+                except Exception:
+                    sol_usdc = None
+                u = f"${sol_usdc:.2f} USDC" if sol_usdc is not None else "USDC unavailable"
+                g = f"{sol_bal:.5f}" if sol_bal is not None else "unavailable"
+                sol_line += f"  ({u} | gas {g} SOL)"
+            lines.append(sol_line)
+            # A seed derives many Solana accounts and this system reads exactly
+            # one. On 2026-08-25 a test script's payer (index 1) was funded with
+            # 1 SOL and sat unseen for three days, while this verb honestly
+            # reported an empty wallet — an empty canonical account looks
+            # identical to a broke agent. Fail-open; never blocks the status.
+            if cfg.network == "mainnet":
+                try:
+                    from core.wallet.solana_strays import (find_stray_accounts,
+                                                           format_stray_warning)
+                    warning = format_stray_warning(
+                        find_stray_accounts(wallet), sol_addr)
+                    if warning:
+                        lines.append(warning)
+                except Exception:
+                    pass
         # On-chain balance so the agent KNOWS what it can actually spend (fail-open).
         if cfg.network == "mainnet":
             try:

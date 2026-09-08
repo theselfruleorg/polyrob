@@ -106,6 +106,121 @@ async def dedupe_and_create_tx_hash_unique_index(db, log: logging.Logger) -> Non
         )
 
 
+async def normalize_tx_hash_case(db, log: logging.Logger) -> None:
+    """Shared by `X402Tables.create_tables()` and migration v1.8.0
+    (`migrations/versions/v1_8_0_x402_tx_hash_case_normalize.py`) — the
+    single application path for the M1 transaction_hash case backfill.
+
+    M1 (security audit 2026-08-22): the on-chain settlement scanner's hash
+    comes from `eth_getLogs` (always lowercase); a facilitator's settlement
+    hash is stored verbatim, whatever case it returns. `modules.x402.
+    invoicing` now normalizes every store/compare site to lowercase
+    (`_norm_tx`) going forward, but a pre-existing row may still hold a
+    mixed-case hash — a lowercased `WHERE transaction_hash = ?` parameter
+    would never match it. This backfill lowercases every stored
+    `transaction_hash` so old rows are found by the now-normalized guard too.
+
+    MUST run AFTER `dedupe_and_create_tx_hash_unique_index` (above), which
+    resolves any legacy EXACT-STRING duplicate first and creates the partial
+    UNIQUE index — so the only case-INSENSITIVE collisions left when this
+    runs are rows whose transaction_hash strings are genuinely DISTINCT yet
+    lower to the same value. Given real tx hashes are 64 hex chars, that is
+    for all practical purposes the SAME on-chain transaction recorded twice
+    under different casing — the signature of an M1 double-settle having
+    ALREADY happened. This function detects that collision set FIRST (before
+    touching anything), logs it loudly, and leaves those rows COMPLETELY
+    untouched (original casing preserved) rather than silently merging them
+    — a collision is evidence for owner reconciliation, not something this
+    backfill may decide on its own. Every non-colliding mixed-case row is
+    then lowercased.
+
+    Tolerant of a DB without `x402_payment_requests` yet. Idempotent: a DB
+    where everything is already lowercase (including a fresh DB) touches
+    zero rows. Degrades (logs, does not raise) on any unexpected DB error —
+    never crashes boot or the migration run.
+    """
+    try:
+        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
+    except Exception:
+        table_cols = None
+    if not table_cols:
+        log.info(
+            "  x402_payment_requests table not present yet — skipping "
+            "transaction_hash case backfill (self-heals once the table exists)"
+        )
+        return
+
+    collision_ids: list = []
+    try:
+        collision_groups = await db.fetch_all(
+            """SELECT lower(transaction_hash) AS lc, COUNT(*) AS ct
+               FROM x402_payment_requests
+               WHERE transaction_hash IS NOT NULL
+               GROUP BY lower(transaction_hash)
+               HAVING COUNT(*) > 1"""
+        )
+        for group in collision_groups or []:
+            lc = group["lc"]
+            rows = await db.fetch_all(
+                """SELECT id, transaction_hash FROM x402_payment_requests
+                   WHERE transaction_hash IS NOT NULL AND lower(transaction_hash) = ?
+                   ORDER BY created_at ASC, rowid ASC""",
+                (lc,),
+            )
+            ids = [r["id"] for r in rows or []]
+            if len(ids) < 2:
+                continue
+            collision_ids.extend(ids)
+            log.warning(
+                "x402 transaction_hash CASE-COLLISION found (M1 security "
+                "audit 2026-08-22, pre-fix double-settle signature): %d "
+                "rows resolve to the SAME lowercase hash %s under DIFFERENT "
+                "casing — request_id(s)=%s. This means the SAME on-chain "
+                "transfer very likely settled MORE THAN ONE invoice because "
+                "the old case-sensitive replay guard missed the reuse. NOT "
+                "auto-merged and NOT lowercased — left exactly as stored so "
+                "nothing is silently changed. The owner must manually "
+                "reconcile these invoices (verify on-chain which is the "
+                "real settlement, refund/cancel the other).",
+                len(ids), lc, ids,
+            )
+    except Exception as e:
+        log.error(
+            f"Error scanning x402_payment_requests.transaction_hash for "
+            f"case-collisions before the M1 backfill — skipping the "
+            f"backfill entirely this run rather than guessing: {e}"
+        )
+        return
+
+    try:
+        if collision_ids:
+            placeholders = ",".join("?" for _ in collision_ids)
+            await db.execute(
+                f"""UPDATE x402_payment_requests
+                       SET transaction_hash = lower(transaction_hash), updated_at = datetime('now')
+                     WHERE transaction_hash IS NOT NULL
+                       AND transaction_hash <> lower(transaction_hash)
+                       AND id NOT IN ({placeholders})""",
+                tuple(collision_ids),
+            )
+        else:
+            await db.execute(
+                """UPDATE x402_payment_requests
+                       SET transaction_hash = lower(transaction_hash), updated_at = datetime('now')
+                     WHERE transaction_hash IS NOT NULL
+                       AND transaction_hash <> lower(transaction_hash)"""
+            )
+    except Exception as e:
+        log.error(
+            f"Error lowercasing x402_payment_requests.transaction_hash "
+            f"(M1 backfill) — degrading, NOT crashing boot. The "
+            f"transaction_hash_already_settled pre-check in "
+            f"modules.x402.invoicing remains the primary replay guard "
+            f"regardless, but legacy mixed-case rows may stay unmatched "
+            f"until this is retried: {e}"
+        )
+
+
 async def dedupe_and_create_subscription_pending_unique_index(db, log: logging.Logger) -> None:
     """Shared by `X402Tables.create_tables()` and migration v1.7.0
     (`migrations/versions/v1_7_0_x402_subscription_pending_unique.py`) — the
@@ -385,6 +500,15 @@ class X402Tables:
             # deletes) before creating the index, and degrades (loud log, no
             # raise) if the index still can't be created.
             await dedupe_and_create_tx_hash_unique_index(self.db, self.logger)
+
+            # M1 (security audit 2026-08-22): lowercase every stored
+            # transaction_hash so the now-normalized replay guard
+            # (modules.x402.invoicing._norm_tx) can actually find legacy
+            # mixed-case rows. MUST run after the dedup+index step above —
+            # see normalize_tx_hash_case's docstring for why the ordering
+            # matters. Mirrored by migration v1.8.0 for explicit
+            # schema-version tracking.
+            await normalize_tx_hash_case(self.db, self.logger)
 
             # Task 14 review fix (Important, duplicate-renewal TOCTOU): at
             # most one PENDING invoice per subscription_id — see

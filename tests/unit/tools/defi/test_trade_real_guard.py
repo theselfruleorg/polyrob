@@ -82,15 +82,19 @@ def _approve_sim(**kw):
 
 
 def _swap_sim(**kw):
-    """Deltas shaped like a real exactInputSingle: token_in outflow, the
-    watched router allowance DECREASES, no grants, gasUsed measured."""
+    """Deltas shaped like a real exactInputSingle: token_in outflow, token_out
+    INFLOW (the guard watches the declared inflow token since 2026-08-26), the
+    watched router allowance DECREASES, no grants, gasUsed measured. Only the
+    outflow token emits a Transfer FROM the holder."""
     tokens, spenders = kw["tokens"], kw["spenders"]
+    token_in, inflows = tokens[0], tokens[1:]
+    deltas = {token_in: -1_000_000}
+    deltas.update({t: 500_000_000_000_000 for t in inflows})
     return Deltas(
         ok=True, native_delta=0,
-        token_deltas={t: -1_000_000 for t in tokens},
-        allowance_deltas={(t, s): -1_000_000 for t in tokens for s in spenders},
-        holder_transfers=tuple((t.lower(), "0x" + "aa" * 20, 1_000_000)
-                               for t in tokens),
+        token_deltas=deltas,
+        allowance_deltas={(token_in, s): -1_000_000 for s in spenders},
+        holder_transfers=((token_in.lower(), "0x" + "aa" * 20, 1_000_000),),
         gas_used=140_000,
     )
 
@@ -98,16 +102,36 @@ def _swap_sim(**kw):
 PRICES = {USDC: 1.0, WETH: 2000.0}
 
 
+def _route_fn(chain, token_in, token_out, amount_in_raw, *, holder, slippage_bps):
+    """The REAL UniV3RouteProvider over a stubbed pool quote.
+
+    This suite's whole point is that the guard is real, so the route must be a
+    real one too — a hand-built RouteQuote could carry calldata or a spender the
+    provider would never produce, and the delta assertions would then be
+    asserting against fiction.
+    """
+    import tools.defi.providers.univ3 as u
+    from tools.defi.providers import routes
+    from tools.defi.providers.routes.univ3_route import UniV3RouteProvider
+    real = u.best_quote
+    u.best_quote = lambda *a, **k: SwapQuote(
+        chain=chain, token_in=token_in, token_out=token_out,
+        amount_in_raw=amount_in_raw, amount_out_raw=500_000_000_000_000,
+        fee_tier=500, router=ROUTER, quoted_at=__import__("time").time())
+    try:
+        return routes.best_route_with_reason(
+            chain, token_in, token_out, amount_in_raw, holder=holder,
+            slippage_bps=slippage_bps, providers=(UniV3RouteProvider(),))
+    finally:
+        u.best_quote = real
+
+
 def _tool(price_fn=None):
     gate = PolicyGate(max_per_tx_usd=2.0, daily_cap_usd=10.0)
     tool = DefiTradeTool(
         wallet=_Wallet(gate), rail_factory=_Rail, guard_fn=None,   # REAL guard
         price_fn=price_fn or (lambda c, a: PRICES.get(a)),
-        quote_fn=lambda *a, **k: SwapQuote(
-            chain="base", token_in=USDC, token_out=WETH,
-            amount_in_raw=1_000_000, amount_out_raw=500_000_000_000_000,
-            fee_tier=500, router=ROUTER,
-            quoted_at=__import__("time").time()),
+        route_fn=_route_fn,
     )
     return tool, gate
 
@@ -164,7 +188,12 @@ async def test_an_unpriceable_grant_is_refused_by_the_real_guard(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_a_real_approve_broadcasts_and_records_the_grant_usd(monkeypatch):
+async def test_a_real_approve_broadcasts_and_records_zero_spend(monkeypatch):
+    """2026-08-26 exit untying: an approve is a PRECONDITION, not a spend —
+    recording the grant's USD consumed the daily cap the swap then needed,
+    charging one ticket twice. The grant is still CHECKED against headroom
+    before it lands (tx_guard runs gate.check on its value); only the
+    recorded spend is $0 — the swap records the real number."""
     monkeypatch.setattr(simulation, "simulate", _approve_sim)
     tool, gate = _tool()
     res = await tool.approve_token(
@@ -176,7 +205,7 @@ async def test_a_real_approve_broadcasts_and_records_the_grant_usd(monkeypatch):
     assert _Rail.last.sent is True
     entry = gate.audit_log[-1]
     assert entry["action"] == "approve"
-    assert entry["amount_usd"] == pytest.approx(1.0)   # the grant, not $0
+    assert entry["amount_usd"] == 0.0
 
 
 @pytest.mark.asyncio

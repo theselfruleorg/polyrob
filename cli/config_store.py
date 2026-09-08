@@ -189,39 +189,20 @@ def check_provider_model(provider: str, model: str) -> Tuple[bool, str]:
 # manager a provider it can't build → hard crash). An explicit `-p deepseek` flows
 # through `explicit_provider`, not `available_keys`, so it is unaffected. Reach
 # DeepSeek via OPENROUTER_API_KEY + model deepseek/deepseek-chat.
-# Kill-switch path (LLM_PROVIDER_REGISTRY=off) — the live list is derived from the
-# ProviderSpec registry by _key_to_provider() below.
-# Order mirrors BUILTIN_SPECS (openrouter first) so the kill-switch path
-# auto-detects the same provider the registry path would (027 rider — the old
-# anthropic-first order silently changed the pick for multi-key users).
-_KEY_TO_PROVIDER = [
-    ("OPENROUTER_API_KEY", "openrouter"),
-    ("ANTHROPIC_API_KEY", "anthropic"),
-    ("OPENAI_API_KEY", "openai"),
-    ("GEMINI_API_KEY", "gemini"),
-    ("NVIDIA_API_KEY", "nvidia"),
-]
-
-
 def _key_to_provider():
     """(env_key, provider) pairs for key-based auto-detection (024 seam 9).
 
-    Derived from the ProviderSpec registry (initializable + keyed specs — the
-    same deepseek-exclusion rule as the literal), so a providers.yaml provider
-    with an env key auto-detects like a built-in. Falls back to the legacy
-    literal with the registry off or on any error.
+    Derived from the ProviderSpec registry (initializable + keyed specs — so a
+    DEEPSEEK_API_KEY alone never auto-resolves), so a providers.yaml provider
+    with an env key auto-detects like a built-in. A registry fault falls back to
+    the built-in specs, never to a second literal table.
     """
+    from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
     try:
-        from modules.llm.provider_spec import get_specs, provider_registry_enabled
-        if provider_registry_enabled():
-            return [
-                (s.env_key, s.name)
-                for s in get_specs()
-                if s.env_key and s.initializable
-            ]
+        specs = get_specs()
     except Exception:
-        pass
-    return list(_KEY_TO_PROVIDER)
+        specs = BUILTIN_SPECS
+    return [(s.env_key, s.name) for s in specs if s.env_key and s.initializable]
 
 
 def resolve_provider_model(cli_provider, cli_model, *, available_keys=None):

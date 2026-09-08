@@ -32,7 +32,7 @@ def test_known_optional_ids_present():
         # tools/{goal,cronjob}_tools.py, tools/knowledge_ingest.py, tools/x402/__init__.py
         "shell", "process", "self_env", "hf_deploy", "github", "coding",
         "code_execution", "git", "goal", "cronjob", "knowledge",
-        "x402_pay", "x402_invoice",
+        "x402_pay", "x402_invoice", "app_service",
     }
     missing = expected - VALID_TOOL_IDS
     assert missing == set(), f"known optional tool ids missing: {sorted(missing)}"

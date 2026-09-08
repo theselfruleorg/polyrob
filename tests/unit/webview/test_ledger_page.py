@@ -195,6 +195,60 @@ def test_ledger_caps_drops_autonomy_budget(monkeypatch):
     assert "invoice_max_usd" in body["caps"]
 
 
+# --- H3 fix round 1 (2026-08-22 review, Important 1): the daily cap's
+# default / explicit / disabled / misconfigured states must never collapse
+# into the same displayed value — a reader answering "am I capped right now?"
+# must be able to tell all four apart. ---------------------------------------
+
+def test_ledger_caps_daily_cap_default_state(monkeypatch):
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setattr(pages, "build_ledger", _fake_ledger)
+    monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
+    body = _get_ledger(client)
+    assert body["caps"]["wallet_daily_cap_state"] == "default"
+    assert body["caps"]["wallet_daily_cap_usd"] == 100.0
+
+
+def test_ledger_caps_daily_cap_explicit_state(monkeypatch):
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setattr(pages, "build_ledger", _fake_ledger)
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "25")
+    body = _get_ledger(client)
+    assert body["caps"]["wallet_daily_cap_state"] == "explicit"
+    assert body["caps"]["wallet_daily_cap_usd"] == 25.0
+
+
+def test_ledger_caps_daily_cap_disabled_state(monkeypatch):
+    """An explicit disable sentinel is a deliberate posture (unbounded spend
+    IS in force) — distinct from "default" and from "misconfigured"."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setattr(pages, "build_ledger", _fake_ledger)
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "none")
+    body = _get_ledger(client)
+    assert body["caps"]["wallet_daily_cap_state"] == "disabled"
+    assert body["caps"]["wallet_daily_cap_usd"] is None
+
+
+def test_ledger_caps_daily_cap_misconfigured_state_never_looks_like_a_cap(monkeypatch):
+    """A malformed value means the real load_wallet_config() RAISES — nothing
+    is running with ANY cap. Before this fix this rendered identically to the
+    "disabled" state (both collapsed to `None`/"unset"), which a reader could
+    mistake for "the $100 default must be in force". They must never collide."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setattr(pages, "build_ledger", _fake_ledger)
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "1O0")  # letter O
+    body = _get_ledger(client)
+    assert body["caps"]["wallet_daily_cap_state"] == "misconfigured"
+    assert body["caps"]["wallet_daily_cap_usd"] is None
+    # And "misconfigured" must be its own distinct state, not merely equal to
+    # "disabled" by coincidence of both having amount=None.
+    assert body["caps"]["wallet_daily_cap_state"] != "disabled"
+
+
 def test_finance_page_renders_200(monkeypatch):
     monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
     monkeypatch.setenv("ENV", "development")

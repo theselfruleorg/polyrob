@@ -230,7 +230,7 @@ Rules worth knowing:
 - **The file is credential-equivalent** (it decides where your prompts and keys
   go): agent file tools are denied access to it, and it is not writable from
   the webview console. Keep it under `~/.polyrob/` with mode `600`.
-- Kill-switch: `LLM_PROVIDER_REGISTRY=off` restores the legacy built-in-only
+- (The `LLM_PROVIDER_REGISTRY` kill-switch was removed on 2026-08-29, two releases after it shipped; the registry is the only path. It used to restore the legacy built-in-only
   provider tables and ignores the file entirely.
 
 ---

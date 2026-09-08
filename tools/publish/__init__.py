@@ -9,8 +9,11 @@ from core.env import bool_env as _bool_env
 
 
 def publish_enabled() -> bool:
-    """Register the ``publish`` tool. Default OFF; NOT flipped by POLYROB_LOCAL."""
-    return _bool_env("PUBLISH_ENABLED", False)
+    """Register the ``publish`` tool. Default OFF; NOT flipped by POLYROB_LOCAL.
+    ON by default under ``AGENT_BUILDER_MODE=build|ship`` (032); explicit env wins.
+    The ONE reader is ``core.config_policy.builder_mode.publish_enabled``."""
+    from core.config_policy.builder_mode import publish_enabled as _core_publish_enabled
+    return _core_publish_enabled()
 
 
 def register_publish_tool(force: bool = False) -> bool:

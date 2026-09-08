@@ -16,6 +16,30 @@ _MIGRATION_RE = re.compile(r"v(\d+)_(\d+)_(\d+)_")
 _FALLBACK_SCHEMA_VERSION = "1.4.0"  # used only if the versions/ dir can't be read
 
 
+def migration_version_from_filename(path: Path) -> Optional[str]:
+    """THE filename -> version parser (``vMAJOR_MINOR_PATCH_<desc>.py`` -> ``"M.m.p"``).
+
+    One parser for the boot runner, the CLI runner and ``latest_migration_version`` —
+    S6 (2026-08-29) replaced three hand-rolled copies (two ``stem.split("_", 3)``
+    variants + this regex) that could disagree on an odd filename. Returns None for
+    anything that is not a versioned migration file (``__init__.py``, helpers).
+    """
+    match = _MIGRATION_RE.match(path.name)
+    if not match:
+        return None
+    return ".".join(match.groups())
+
+
+def shipped_migrations(versions_dir: Path = _VERSIONS_DIR):
+    """``[(version, path)]`` for every versioned migration file, sorted by filename."""
+    out = []
+    for p in sorted(versions_dir.glob("v*.py")):
+        v = migration_version_from_filename(p)
+        if v:
+            out.append((v, p))
+    return out
+
+
 def latest_migration_version(versions_dir: Path = _VERSIONS_DIR) -> str:
     """Highest schema version shipped in ``migrations/versions/``.
 
@@ -25,10 +49,8 @@ def latest_migration_version(versions_dir: Path = _VERSIONS_DIR) -> str:
     """
     versions: List[tuple] = []
     try:
-        for path in versions_dir.glob("v*.py"):
-            match = _MIGRATION_RE.match(path.name)
-            if match:
-                versions.append(tuple(int(part) for part in match.groups()))
+        for v, _path in shipped_migrations(versions_dir):
+            versions.append(tuple(int(part) for part in v.split(".")))
     except OSError:
         pass
     if not versions:
@@ -162,25 +184,13 @@ class DatabaseVersionManager:
         if not migrations_dir.exists():
             return []
 
-        # Get all migration files (v*.py only — versions/ is a regular package
-        # since 027 WP2, so a bare *.py glob would pick up __init__.py).
-        migration_files = sorted(migrations_dir.glob("v*.py"))
-
         # Get applied versions
         history = await self.get_version_history()
         applied_versions = {item['version'] for item in history}
 
-        # Filter out applied migrations
-        pending = []
-        for migration_file in migration_files:
-            # Extract version from filename (format: v1_0_0_description.py)
-            parts = migration_file.stem.split('_', 3)
-            if len(parts) >= 3:
-                version = f"{parts[0][1:]}.{parts[1]}.{parts[2]}"
-                if version not in applied_versions:
-                    pending.append(migration_file)
-
-        return pending
+        # Filter out applied migrations — ONE filename parser (shipped_migrations).
+        return [path for version, path in shipped_migrations(migrations_dir)
+                if version not in applied_versions]
 
     async def display_status(self):
         """Display current database version status."""

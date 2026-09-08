@@ -45,7 +45,10 @@ def test_anchor_mode_is_case_and_whitespace_insensitive():
     assert r["anchor"] is True
 
 
-def test_config_exposes_anchor_mode_flag():
-    # The class surfaces an explicit anchor flag derived from the resolver.
-    assert hasattr(RobustParseConfig, "STRIP_BASE64_ANCHOR_MODE")
-    assert isinstance(RobustParseConfig.STRIP_BASE64_ANCHOR_MODE, bool)
+def test_config_no_longer_exposes_the_dead_anchor_attr():
+    # 030 WS-F2: STRIP_BASE64_ANCHOR_MODE had ZERO production consumers — the
+    # resolver's "anchor" key is the live contract; the derived class attr was
+    # a dead mirror and was removed. The parse-strip attr remains the one the
+    # parse path reads.
+    assert not hasattr(RobustParseConfig, "STRIP_BASE64_ANCHOR_MODE")
+    assert isinstance(RobustParseConfig.STRIP_BASE64_IMAGES, bool)

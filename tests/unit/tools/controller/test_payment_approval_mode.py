@@ -223,11 +223,16 @@ def test_mode_auto_over_cap_rejection_never_notifies(tmp_path, monkeypatch):
 # for trading historically; since 023 T3 it also carries the on-chain money
 # verbs, which are irreversible and self-custodial with no venue to dispute
 # them (T4 review 2026-08-14: swap/approve/revoke had shipped on NO lane).
+# H1a (2026-08-22): x402_pay_x402_fetch joined too -- SPEND-side, absent from
+# PAYMENT_RECEIVE_APPROVAL_TOOLS, so it queues here like every other spend verb
+# whenever spend_lane's amount-keyed exemption doesn't apply (the `live` params
+# below carry no `max_amount_usd`, so it never exempts in these tests).
 _SPEND_VERBS = (
     "hyperliquid_place_limit_order", "hyperliquid_place_market_order",
     "polymarket_place_limit_order", "polymarket_place_market_order",
-    "defi_trade_transfer", "defi_trade_swap",
+    "defi_trade_transfer", "defi_trade_swap", "defi_trade_solana_swap",
     "defi_trade_approve_token", "defi_trade_revoke_approval",
+    "x402_pay_x402_fetch",
 )
 
 

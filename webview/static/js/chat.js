@@ -1825,7 +1825,9 @@ export class ChatManager {
     }
 
     _renderStatusChunk(time, data, message) {
-        const status = data.status || 'unknown';
+        // 030 S6: the status string rides an agent feed event — sanitize before it
+        // lands in a class attribute (attribute breakout).
+        const status = String(data.status || 'unknown').replace(/[^a-z0-9_-]/gi, '');
         const statusText = status.charAt(0).toUpperCase() + status.slice(1);
         return `${this._renderMessageHeader(time, 'agent')}<div class="chunk-status"><span class="status-indicator status-${status}">${escapeHtml(statusText)}</span></div>`;
     }
@@ -2979,6 +2981,17 @@ export class ChatManager {
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}`);
         }
+
+        // 030 WS-B6: an owner verb (/halt, /pending, /status, …) is handled by
+        // the shared command plane and answered inline — render the reply as a
+        // system bubble instead of waiting for an agent turn that never comes.
+        try {
+            const body = await response.clone().json();
+            if (body && body.command_reply) {
+                this._removeFromPendingQueue(text);
+                this.addMessage(this._createMessage('system', body.command_reply));
+            }
+        } catch (e) { /* non-JSON response: normal agent path */ }
 
         logger.debug('[Chat] Message sent successfully', attachedFiles.length > 0 ? `with ${attachedFiles.length} file(s)` : '');
     }

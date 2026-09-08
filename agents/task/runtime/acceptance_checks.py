@@ -119,7 +119,11 @@ async def _check_artifact(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[b
     except OSError as e:
         return False, f"artifact: unreadable ({str(e)[:100]})"
     mode = str(check.get("mode") or "all").lower()
-    hits = [n for n in needles if n in body]
+    # Case-insensitive for the same reason as file_contains below — a natural-
+    # language "contains" check on the goal's own report, not an exact-literal
+    # match.
+    body_lower = body.lower()
+    hits = [n for n in needles if n.lower() in body_lower]
     ok = (len(hits) == len(needles)) if mode != "any" else bool(hits)
     return ok, (f"artifact: {name or row.id} contains {len(hits)}/{len(needles)} "
                 f"(mode={mode})")
@@ -177,7 +181,17 @@ async def _check_file_contains(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tu
     except OSError as e:
         return False, f"file_contains: read failed ({str(e)[:80]})"
     mode = str(check.get("mode") or "all").strip().lower()
-    missing = [s for s in needles if s not in text]
+    # Case-insensitive on purpose (2026-08-28, third recurrence of the same
+    # false-negative): these checks assert a natural-language report DISCUSSES
+    # a concept ("verdict", "sell tax"), not an exact-string literal — a report
+    # that writes "Verdict:" as a section header (completely normal prose
+    # capitalization) failed this check three separate times because it looked
+    # for lowercase "verdict". Nothing in this codebase relies on file_contains
+    # being case-sensitive (no test asserts it); the risk of a false positive
+    # from case-folding a natural-language needle is far smaller than the
+    # proven, repeated cost of this false negative.
+    haystack = text.lower()
+    missing = [s for s in needles if s.lower() not in haystack]
     found = len(needles) - len(missing)
     # "any" = at least one present; anything else uses the stricter default "all"
     ok = found > 0 if mode == "any" else not missing

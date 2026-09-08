@@ -262,11 +262,20 @@
         els.panelOpen.href = '/session/' + encodeURIComponent(sessionId);
         els.panelBody.textContent = 'loading…';
 
+        // Failures are MARKED (_error), not silently coerced to {} — the panel
+        // must render "unavailable", never a fake "unknown"/empty state (030 D4).
         var statusP = fetch('/api/session/' + encodeURIComponent(sessionId) + '/status')
-            .then(function (r) { return r.ok ? r.json() : {}; }).catch(function () { return {}; });
+            .then(function (r) { return r.ok ? r.json() : { _error: 'HTTP ' + r.status }; })
+            .catch(function (e) {
+                console.error('[Activity] session status fetch failed:', e);
+                return { _error: String((e && e.message) || e) };
+            });
         var feedP = fetch('/api/session/' + encodeURIComponent(sessionId) + '/feed/events?limit=30')
-            .then(function (r) { return r.ok ? r.json() : { events: [] }; })
-            .catch(function () { return { events: [] }; });
+            .then(function (r) { return r.ok ? r.json() : { events: [], _error: 'HTTP ' + r.status }; })
+            .catch(function (e) {
+                console.error('[Activity] session feed fetch failed:', e);
+                return { events: [], _error: String((e && e.message) || e) };
+            });
 
         Promise.all([statusP, feedP]).then(function (results) {
             var status = results[0] || {};
@@ -274,16 +283,24 @@
             els.panelBody.textContent = '';
 
             var meta = document.createElement('div');
-            var statusText = String(status.status || 'unknown');
-            meta.className = 'meta status-' + statusText.toLowerCase();
-            meta.textContent = 'status: ' + statusText +
-                (status.task ? ' — ' + String(status.task).slice(0, 140) : '');
+            if (status._error) {
+                meta.className = 'meta status-error';
+                meta.textContent = 'status unavailable (' + status._error + ')';
+            } else {
+                var statusText = String(status.status || 'unknown');
+                meta.className = 'meta status-' + statusText.toLowerCase();
+                meta.textContent = 'status: ' + statusText +
+                    (status.task ? ' — ' + String(status.task).slice(0, 140) : '');
+            }
             els.panelBody.appendChild(meta);
 
             if (!feed.length) {
+                var feedErr = results[1] && results[1]._error;
                 var empty = document.createElement('div');
-                empty.className = 'meta';
-                empty.textContent = 'no feed events readable';
+                empty.className = 'meta' + (feedErr ? ' status-error' : '');
+                empty.textContent = feedErr
+                    ? 'feed unavailable (' + feedErr + ')'
+                    : 'no feed events readable';
                 els.panelBody.appendChild(empty);
                 return;
             }
@@ -303,9 +320,21 @@
 
     function backfill() {
         return fetch('/api/activity/backfill?limit=300')
-            .then(function (r) { return r.ok ? r.json() : { events: [] }; })
+            .then(function (r) {
+                if (!r.ok) {
+                    console.error('[Activity] backfill returned HTTP ' + r.status);
+                    hint('history backfill failed (HTTP ' + r.status + ') — showing live events only');
+                    return { events: [] };
+                }
+                return r.json();
+            })
             .then(function (body) { (body.events || []).forEach(append); })
-            .catch(function () { /* stream still attaches */ });
+            .catch(function (e) {
+                // Stream still attaches — but say so instead of an unexplained
+                // empty terminal (030 D4).
+                console.error('[Activity] backfill failed:', e);
+                hint('history backfill failed — showing live events only');
+            });
     }
 
     function connect() {

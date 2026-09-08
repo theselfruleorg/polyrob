@@ -50,27 +50,21 @@ class _LazyAvailableModels:
     (called by ``provider_spec.reset_provider_registry_cache``).
     """
 
-    _LEGACY_PROVIDERS = ('anthropic', 'openai', 'deepseek', 'gemini', 'openrouter', 'nvidia')
-
     def __init__(self) -> None:
         self._snapshot = None
 
     def _ensure(self):
         if self._snapshot is None:
             snap = {}
+            from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
             try:
-                from modules.llm.provider_spec import get_specs, provider_registry_enabled
-                registry_on = provider_registry_enabled()
+                specs = get_specs()
             except Exception:
-                registry_on = False
-            if registry_on:
-                for s in get_specs():
-                    base = _get_models_for_provider(s.name)
-                    declared = [m for m in s.models if m not in base]
-                    snap[s.name] = base + declared
-            else:
-                for name in self._LEGACY_PROVIDERS:
-                    snap[name] = _get_models_for_provider(name)
+                specs = BUILTIN_SPECS  # a broken providers.yaml must not blank the lists
+            for s in specs:
+                base = _get_models_for_provider(s.name)
+                declared = [m for m in s.models if m not in base]
+                snap[s.name] = base + declared
             self._snapshot = snap
         return self._snapshot
 
@@ -150,17 +144,16 @@ def get_default_model(provider: str) -> str:
     # override of a built-in). Built-in specs carry default_model=None, so with
     # no user file this is byte-identical to the DEFAULT_MODELS policy literal.
     try:
-        from modules.llm.provider_spec import get_spec, provider_registry_enabled
-        if provider_registry_enabled():
-            spec = get_spec(provider)
-            if spec is not None:
-                if spec.default_model:
-                    return spec.default_model
-                # A declared-models row without default_model: its own first
-                # model beats the openai literal below (requesting 'gpt-5' from
-                # an Ollama endpoint is never right).
-                if not spec.builtin and spec.models:
-                    return spec.models[0]
+        from modules.llm.provider_spec import get_spec
+        spec = get_spec(provider)
+        if spec is not None:
+            if spec.default_model:
+                return spec.default_model
+            # A declared-models row without default_model: its own first
+            # model beats the openai literal below (requesting 'gpt-5' from
+            # an Ollama endpoint is never right).
+            if not spec.builtin and spec.models:
+                return spec.models[0]
     except Exception:
         pass
     return DEFAULT_MODELS.get(provider, DEFAULT_MODELS['openai'])

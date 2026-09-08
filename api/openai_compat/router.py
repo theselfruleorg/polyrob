@@ -178,17 +178,14 @@ async def list_models():
     ``POLYROB_<PROVIDER>_MODEL`` / a spec's ``default_model``) plus every
     spec-declared model — so a providers.yaml row is *discoverable*, not just
     routable, and a non-initializable provider (deepseek direct) is never
-    advertised. Falls open to the legacy DEFAULT_MODELS literal (also the
-    ``LLM_PROVIDER_REGISTRY=off`` path).
+    advertised. Falls open to the DEFAULT_MODELS policy table on a registry fault.
     """
     from modules.llm.llm_client_registry import DEFAULT_MODELS, get_default_model
 
     cards = []
     try:
-        from modules.llm.provider_spec import get_specs, provider_registry_enabled
+        from modules.llm.provider_spec import get_specs
 
-        if not provider_registry_enabled():
-            raise RuntimeError("provider registry disabled")
         seen = set()
         for s in get_specs():
             if not s.initializable:

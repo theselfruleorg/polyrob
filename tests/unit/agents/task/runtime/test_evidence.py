@@ -135,6 +135,38 @@ def test_artifacts_fail_open_on_bad_dir():
     assert collect_artifacts(_orch([]), workspace_dir="/nonexistent/nope") == []
 
 
+def test_shared_workspace_without_a_time_window_is_not_scanned(tmp_path, monkeypatch):
+    """G1: with no `started_ts`, an unwindowed scan of a SHARED project-root
+    workspace answers 'everything on disk', not 'what this run produced' — the
+    shape that put 20 unrelated files in a goal completion push. Refuse the scan
+    rather than degrade to everything; the ledger descriptors stay honest."""
+    import agents.task.runtime.evidence as ev
+    from agents.task.runtime.evidence import collect_artifacts
+    ws = tmp_path / "project"
+    ws.mkdir()
+    (ws / "someone-elses-file.md").write_text("not mine")
+
+    monkeypatch.setattr(ev, "_is_shared_project_workspace", lambda: True)
+    assert collect_artifacts(_orch([]), workspace_dir=str(ws)) == []
+    # a per-session workspace is still scanned unwindowed (it only ever holds
+    # this session's files)
+    monkeypatch.setattr(ev, "_is_shared_project_workspace", lambda: False)
+    arts = collect_artifacts(_orch([]), workspace_dir=str(ws))
+    assert any(a.get("path", "").endswith("someone-elses-file.md") for a in arts)
+
+
+def test_shared_workspace_with_a_time_window_is_still_scanned(tmp_path, monkeypatch):
+    import agents.task.runtime.evidence as ev
+    from agents.task.runtime.evidence import collect_artifacts
+    ws = tmp_path / "project"
+    ws.mkdir()
+    (ws / "fresh.md").write_text("mine")
+    monkeypatch.setattr(ev, "_is_shared_project_workspace", lambda: True)
+    arts = collect_artifacts(_orch([]), workspace_dir=str(ws),
+                             started_ts=time.time() - 60)
+    assert any(a.get("path", "").endswith("fresh.md") for a in arts)
+
+
 # ---------------------------------------------------------------------------
 # §4.2 invariant: done() where EVERY substantive action errored → failure
 # ---------------------------------------------------------------------------

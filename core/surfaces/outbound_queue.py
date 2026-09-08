@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS outbound_queue (
     surface_id      TEXT NOT NULL,
     dest            TEXT,
     payload         TEXT NOT NULL,
+    media           TEXT,                      -- JSON list of media entries (030 L4)
     kind            TEXT DEFAULT 'agent_text',
     state           TEXT DEFAULT 'pending',   -- pending|inflight|delivered|dead
     attempts        INTEGER DEFAULT 0,
@@ -35,18 +36,31 @@ class OutboundDeliveryQueue:
         conn = wal_connect(db_path)
         try:
             conn.execute(_SCHEMA)
+            # 030 L4 additive migration: a pre-media queue DB gains the column on
+            # open. CREATE IF NOT EXISTS never alters an existing table.
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(outbound_queue)")}
+            if "media" not in cols:
+                conn.execute("ALTER TABLE outbound_queue ADD COLUMN media TEXT")
             conn.commit()
         finally:
             conn.close()
 
     def enqueue(self, *, idempotency_key: str, session_key: str, surface_id: str,
-                dest: Optional[str], payload: str, kind: str = "agent_text") -> bool:
+                dest: Optional[str], payload: str, kind: str = "agent_text",
+                media: Optional[list] = None) -> bool:
+        media_json: Optional[str] = None
+        if media:
+            try:
+                import json
+                media_json = json.dumps(media)
+            except (TypeError, ValueError):
+                logger.warning("outbound enqueue: media not JSON-serializable, dropped")
         inserted = execute_retry(
             self.db_path,
             """INSERT OR IGNORE INTO outbound_queue
-                 (idempotency_key, session_key, surface_id, dest, payload, kind, next_attempt_at)
-               VALUES (?, ?, ?, ?, ?, ?, 0)""",
-            (idempotency_key, session_key, surface_id, dest, payload, kind),
+                 (idempotency_key, session_key, surface_id, dest, payload, media, kind, next_attempt_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0)""",
+            (idempotency_key, session_key, surface_id, dest, payload, media_json, kind),
         )
         return inserted == 1
 

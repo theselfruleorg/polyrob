@@ -31,13 +31,11 @@ core/
 ├── exceptions.py                # Custom exception hierarchy
 ├── initialization.py            # Component initialization orchestration
 ├── logging.py                   # Logging configuration and utilities
-├── permissions.py               # Role-based permission system
 ├── security_logging_filter.py   # Security-aware log filtering
 ├── identity.py                  # Agent identity
 ├── instance.py                  # Bot instance / agent-identity scaffolding (multi-instance keying)
 ├── pairing.py                   # Device/surface pairing
 ├── self_context_writer.py       # Writable self-context support
-├── session_context.py           # Session context
 ├── interactive_gate.py          # Interactive idle-gate (REPL busy vs background tickers)
 ├── autonomy_runtime.py          # Shared autonomy runtime (cron/goal/curator tickers) for API + CLI
 ├── tickers.py                   # Ticker primitives
@@ -50,10 +48,13 @@ core/
 ├── home_migration.py            # One-time ~/.rob → ~/.polyrob home migration (copy, fail-open)
 ├── assets.py                    # Webgate static-asset resolver (packaged web_dist/ vs repo webview/)
 ├── embedding.py                 # LazyEmbedder — deferred sentence-transformers proxy
-├── seams.py                     # core⇄platform dependency-inversion contracts (LLMUsage, UsageRecorder, SessionAdmissionPolicy, PaymentVerifier)
+├── seams.py                     # core⇄platform seam seed: the frozen LLMUsage carrier (the UsageRecorder/admission/PaymentVerifier Protocols land with the seam-inversion plan)
 ├── secret_scan.py               # Workspace secret/VCS scan (SEC-1 launch-in-a-repo backstop)
 ├── secret_scrub.py              # Pattern-based secret redaction for persisted content
 ├── tool_catalog.py              # Product-facing tool catalog builder (from tools/descriptors.py)
+├── config_policy/               # Flag/policy resolvers: policy.py FACADE over _env, local_profile, autonomy_mode, autonomy_posture, compute_posture, payment_policy, capability_toggles, autonomy_config, runtime_gates (+ goal_flags, spend_lane, payment_tools, posture_card, flag_defaults, flag_enums, memory_policy)
+├── security/                    # Tier-0 security primitives (secret_guard, untrusted_wrap, forged_turns)
+├── llm_auth/                    # LLM credential store + resolution oracle + OAuth flows
 ├── surfaces/                    # Surface contracts (CLI/WebView/etc.)
 └── wallet/                      # Native agent wallet (signer, policy gate, audit sink)
 ```
@@ -231,31 +232,6 @@ Security-aware log filtering to prevent sensitive data exposure.
 - Credential filtering
 - Sensitive data redaction
 - Configurable filter patterns
-
-### 8. Permissions (`permissions.py`)
-
-Role-based access control system with fine-grained permission management.
-
-**Permission System**:
-```python
-ROLES = {
-    'super_admin': {'all_permissions': True},
-    'admin': {
-        'use_bot': True,
-        'manage_users': True,
-        'manage_modes': True,
-        'manage_knowledge': True,
-        'manage_prompts': True
-    },
-    'moderator': {
-        'use_bot': True,
-        'manage_modes': True
-    },
-    'user': {
-        'use_bot': True
-    }
-}
-```
 
 ### 9. Exceptions (`exceptions.py`)
 

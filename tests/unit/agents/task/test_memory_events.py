@@ -10,7 +10,7 @@ import asyncio
 
 import pytest
 
-from agents.task.telemetry.event_log import TelemetryEventLog
+from core.event_log import TelemetryEventLog
 from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_preview
 
 
@@ -18,7 +18,7 @@ from agents.task.telemetry.memory_events import emit_memory_event, scrubbed_prev
 def log(tmp_path, monkeypatch):
     lg = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(
-        "agents.task.telemetry.event_log.get_event_log", lambda db_path=None: lg
+        "core.event_log.get_event_log", lambda db_path=None: lg
     )
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
     return lg

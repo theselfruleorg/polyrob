@@ -1,6 +1,6 @@
 import pytest
 
-from core.surfaces.rendering import render_for_flavor
+from core.surfaces.rendering import markdown_to_html, render_for_flavor
 
 
 def test_none_flavor_splits_on_limit_without_loss():
@@ -134,3 +134,84 @@ def test_html_flavor_keeps_every_streamed_prefix_balanced():
         p.feed(markdown_to_html(full[:i]))
         p.close()
         assert p.ok and not p.stack, f"unbalanced HTML at prefix {i}: {markdown_to_html(full[:i])!r}"
+
+
+# --- 030 WS-D2: construct-aware splitting (L6), tables (L7a), UTF-16 (L7b) ---
+
+class TestChunkStraddle:
+    def test_fence_split_across_chunks_renders_pre_in_both(self):
+        text = "intro line here padding xx\n```python\nprint(1)\nprint(2)\n```\ndone"
+        chunks = render_for_flavor(text, "html", 30)
+        joined = "\n".join(chunks)
+        assert "```" not in joined  # never a literal fence in the output
+        assert sum(c.count("<pre>") for c in chunks) >= 1
+        for c in chunks:
+            assert c.count("<pre>") == c.count("</pre>")
+
+    def test_giant_fence_is_closed_and_reopened(self):
+        body = "\n".join(f"line_{i} = {i}" for i in range(40))
+        text = f"```python\n{body}\n```"
+        chunks = render_for_flavor(text, "html", 120)
+        assert len(chunks) > 1
+        for c in chunks:
+            assert "```" not in c
+            assert c.count("<pre>") == 1 and c.count("</pre>") == 1
+
+    def test_bold_split_across_chunks_never_shows_asterisks(self):
+        text = "aaaa bbbb cccc dddd **important thing** tail"
+        chunks = render_for_flavor(text, "html", 20)
+        joined = " ".join(chunks)
+        assert "**" not in joined
+        assert "<b>important thing</b>" in joined
+
+    def test_inline_code_split_across_chunks(self):
+        text = "run the command " + "pad " * 3 + "`polyrob doctor --flags` after"
+        chunks = render_for_flavor(text, "html", 24)
+        joined = " ".join(chunks)
+        assert "`" not in joined
+        assert "<code>polyrob doctor --flags</code>" in joined
+
+    def test_link_split_across_chunks(self):
+        # The limit (40) holds the whole link (34 chars) — the cut must move
+        # before it. A link LONGER than the limit itself is a hard-cut by
+        # necessity and out of contract.
+        text = "see docs " + "pad " * 3 + "[the guide](https://example.com/a) end"
+        chunks = render_for_flavor(text, "html", 40)
+        joined = " ".join(chunks)
+        assert "](" not in joined
+        assert '<a href="https://example.com/a">the guide</a>' in joined
+
+    def test_short_text_is_byte_identical_to_legacy(self):
+        text = "hello **world** `code` [x](https://e.co) plain"
+        assert render_for_flavor(text, "html", 4096) == [markdown_to_html(text)]
+
+
+class TestTables:
+    def test_markdown_table_degrades_to_pre(self):
+        text = "| a | b |\n|---|---|\n| 1 | 2 |"
+        out = markdown_to_html(text)
+        assert out.startswith("<pre>")
+        assert "| a | b |" in out
+
+    def test_table_inside_prose(self):
+        text = "before\n\n| h1 | h2 |\n| --- | --- |\n| x | y |\n\nafter"
+        out = markdown_to_html(text)
+        assert "<pre>" in out and "before" in out and "after" in out
+
+    def test_pipes_without_separator_are_not_a_table(self):
+        text = "a | b | c"
+        assert "<pre>" not in markdown_to_html(text)
+
+
+class TestUtf16Limits:
+    def test_emoji_dense_chunks_fit_in_utf16_units(self):
+        text = ("🚀" * 30 + " word ") * 10
+        chunks = render_for_flavor(text, "html", 64)
+
+        def u16(s):
+            return len(s) + sum(1 for ch in s if ord(ch) > 0xFFFF)
+
+        for c in chunks:
+            assert u16(c) <= 64
+        # nothing lost
+        assert "".join(chunks).count("🚀") == text.count("🚀")

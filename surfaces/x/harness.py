@@ -60,11 +60,8 @@ class XHarness:
         await self._route(inbound)
 
     async def _route(self, inbound) -> None:
-        from core.surfaces.dispatcher import route_inbound
-        from surfaces.telegram.harness import act_on_inbound
-        from surfaces.telegram.inbound import InboundResult
+        from surfaces._shared import route_and_act
 
-        decision = await route_inbound(self._container, inbound)
         participant_id = inbound.identity.source.chat_id
 
         async def _deliver(text: str) -> None:
@@ -73,13 +70,7 @@ class XHarness:
             except Exception:
                 logger.warning("x deliver failed", exc_info=True)
 
-        reply = await act_on_inbound(
-            self._task_agent,
-            InboundResult(inbound=inbound, decision=decision),
-            deliver=_deliver,
-        )
-        if reply:
-            await _deliver(reply)
+        await route_and_act(self._container, self._task_agent, inbound, _deliver)
 
     async def run(self) -> None:
         if not self._bot_user_id:
@@ -122,9 +113,12 @@ def build_x_harness(container: Any, task_agent: Any, *,
     harness._poller = XDMPoller(client, harness.handle_event, cursor,
                                 poll_sec=poll_sec)
 
-    router = container.get_service("message_router") if container else None
-    if router is not None:
-        router.subscribe("x", surface)
+    # 030 WS-B2: register_surface enforces the contract, joins the surface
+    # registry (so surface_profile() reaches the prompt) AND subscribes to
+    # the router — the old bare subscribe left the agent blind to the shape.
+    if container is not None:
+        from core.surfaces.registry import register_surface
+        register_surface(container, surface)
     if container is not None and container.get_service("x_sink") is None:
         container.register_service("x_sink", XSink(client))
 

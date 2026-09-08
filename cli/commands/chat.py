@@ -125,9 +125,12 @@ async def _conversation_loop(
                 renderer.on_turn_start(line)
 
             try:
-                from core.interactive_gate import interactive_turn
-                with interactive_turn():
-                    answer = await convo.respond(line)
+                # 031: a deterministic owner stop/resume never needs the model.
+                answer = _owner_pause_gate(line, container)
+                if answer is None:
+                    from core.interactive_gate import interactive_turn
+                    with interactive_turn():
+                        answer = await convo.respond(line)
             except KeyboardInterrupt:
                 # T16: interrupt-and-redirect — when INTERRUPT_REDIRECT is ON, prompt the
                 # user for a redirect instruction instead of silently dropping the turn.
@@ -225,6 +228,29 @@ def _make_repl_sigint_handler(loop, counter):
         raise KeyboardInterrupt
 
     return _handler
+
+
+def _owner_pause_gate(line: str, container) -> Optional[str]:
+    """031: the REPL twin of the Telegram owner-intent gate — the ONE decision path
+    (``owner_admin.apply_owner_intent``): a full stop / resume typed in prose is
+    applied to the pause record here, no model call, and the verified state is
+    the answer. Anything else returns ``None`` and goes to the agent. A gate
+    error on a stop-shaped line becomes the answer, never a silent fall-through."""
+    try:
+        from core.runtime_paths import data_dir_or_home
+        from core.surfaces.owner_admin import apply_owner_intent, owner_pause_phrases
+        from core.surfaces.owner_intent import owner_stop_intent
+        dd = data_dir_or_home(getattr(getattr(container, "config", None), "data_dir", None))
+        from core.identity import resolve_identity
+        intent = owner_stop_intent(line, extra_phrases=owner_pause_phrases(resolve_identity(), dd))
+        reply, _res = apply_owner_intent(intent, dd, via="repl", resume_hint="/resume",
+                                         halt_hint="/pause")
+        return reply
+    except Exception as e:
+        if any(w in (line or "").lower() for w in ("stop", "halt", "pause")):
+            return (f"⚠️ I could not apply that stop automatically ({type(e).__name__}: "
+                    f"{str(e)[:120]}). Use /pause to force it.")
+        return None
 
 
 def _make_default_slash_dispatch(convo, container, renderer, *, state=None, session_id="", user_id="local", task_agent=None, orchestrator=None):

@@ -70,7 +70,7 @@ class SelfEnvTool(BaseTool):
               execution_context=None, **attrs) -> None:
         """Emit a self_modification audit event (fail-open)."""
         try:
-            from agents.task.telemetry.self_events import emit_self_modification
+            from core.self_events import emit_self_modification
             emit_self_modification(
                 kind="self_env", action=action, item_id=item_id,
                 user_id=str(getattr(execution_context, "user_id", "") or ""),

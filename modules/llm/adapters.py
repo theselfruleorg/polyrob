@@ -52,13 +52,25 @@ def think_scrubber_enabled() -> bool:
 
 
 def token_streaming_enabled() -> bool:
-    """019 P5 gate for TRUE per-token streaming. Default OFF.
+    """019 P5 gate for TRUE per-token streaming.
 
     When ON and the wrapped client implements ``astream_agent_response``,
     ``LLMClientAdapter.astream`` yields real deltas instead of the legacy
-    single full-response chunk. OFF = byte-identical legacy behavior.
+    single full-response chunk.
+
+    030 WS-D5 (Q3): default ON under the local interactive profile
+    (``POLYROB_LOCAL``) — a 60-second turn showing only a spinner was the
+    default experience while the whole streaming pipeline sat unreachable.
+    Server default stays OFF (byte-identical); an explicit env value wins.
     """
-    return os.getenv("LLM_TOKEN_STREAMING", "0").lower() in ("1", "true", "yes", "on")
+    raw = os.getenv("LLM_TOKEN_STREAMING")
+    if raw is not None and raw.strip() != "":
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+    try:
+        from core.config_policy.policy import local_mode_enabled
+        return bool(local_mode_enabled())
+    except Exception:
+        return False
 
 
 def _client_provider_label(client) -> str:

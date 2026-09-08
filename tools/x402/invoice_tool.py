@@ -168,12 +168,20 @@ class X402InvoiceTool(BaseTool):
             f"  pay to: {inv['recipient']}\n"
             f"  purpose: {inv['purpose']}\n"
             f"  expires: epoch {inv['expires_at_epoch']}\n"
-            "Share these instructions with the payer (e.g. via the message tool). "
+            # W1.4: teach the CONCRETE delivery step (through the message tool,
+            # where seeding/approval/taint gates live) instead of a vague
+            # "share these instructions" — the payer otherwise never sees it.
+            "Deliver these instructions to the payer with the message tool — "
+            "e.g. message(surface=<surface>, target=<payer address>, "
+            "text=<the instructions above>). "
             "You will be woken in this session when it settles."
         )
         card_path = _maybe_render_invoice_card(inv, execution_context)
         if card_path:
-            content += f"\ninvoice card: {card_path}"
+            content += (
+                f"\ninvoice card: {card_path}\n"
+                f'Attach it when delivering: message(..., media_paths=["{card_path}"])'
+            )
         # Structured metadata (Task 9 / G-2): PAYMENT_APPROVAL_MODE=auto's
         # post-execution owner-notify hook reads this instead of parsing `content`.
         return self._ar(content=content, metadata={
@@ -225,7 +233,18 @@ class X402InvoiceTool(BaseTool):
         try:
             from modules.credits.unified_ledger import build_ledger, format_ledger
             ledger = await build_ledger(user_id, days=params.days, include_balances=True)
-            return self._ar(content=format_ledger(ledger))
+            content = format_ledger(ledger)
+            # §5.2: state the receive rail where the agent already looks for
+            # money state — it can get paid with no endpoint, and standing one
+            # up is owner-only work (so it never becomes an agent goal again).
+            try:
+                from modules.x402 import x402_integration
+                rail = x402_integration.receive_rail_summary()
+            except Exception:
+                rail = ""
+            if rail:
+                content = f"{content}\n\n{rail}"
+            return self._ar(content=content)
         except Exception as e:
             logger.error("accounting failed: %s", e, exc_info=True)
             return self._ar(error=f"accounting failed: {e}")

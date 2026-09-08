@@ -58,7 +58,7 @@ async def test_probe_works_with_no_wallet_at_all():
 @pytest.mark.asyncio
 async def test_quote_no_longer_requires_a_wallet():
     class _Client:
-        async def quote(self, url):
+        async def quote(self, url, **kwargs):
             return 0.25
 
     tool = X402PayTool(wallet=None, client=_Client())
@@ -74,7 +74,7 @@ async def test_quote_no_longer_requires_a_wallet():
 async def test_quote_points_at_probe_when_it_finds_no_challenge():
     """GET-only quote misses POST-only paywalls; say so instead of 'it's free'."""
     class _Client:
-        async def quote(self, url):
+        async def quote(self, url, **kwargs):
             return None
 
     tool = X402PayTool(wallet=None, client=_Client())

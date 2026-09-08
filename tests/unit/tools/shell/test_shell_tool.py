@@ -172,3 +172,31 @@ async def test_two_sessions_have_isolated_state(monkeypatch):
     # session s2 starts fresh at /workspace, not s1's /workspace/a
     await t.shell_run(ShellRunParams(command="pwd"), execution_context=_owner_ctx(session_id="s2"))
     assert "cd /workspace/a" not in be.runs[1].code
+
+
+# --- Publishing & app-deployment evaluation 2026-09-05 (Wave 1): the 60 s foreground
+# default cut every pip/npm install mid-stride (tool_timeout x15 on prod). ------------
+
+@pytest.mark.asyncio
+async def test_foreground_default_timeout_fits_an_install(monkeypatch):
+    _posture(monkeypatch, "1")
+    monkeypatch.delenv("SHELL_MAX_TIMEOUT_SEC", raising=False)
+    be = _FakeBackend()
+    t = _tool(be)
+    await t.shell_run(ShellRunParams(command="make build"), execution_context=_owner_ctx())
+    assert be.runs[-1].timeout == 120.0
+
+
+@pytest.mark.asyncio
+async def test_foreground_ceiling_is_env_driven(monkeypatch):
+    _posture(monkeypatch, "1")
+    be = _FakeBackend()
+    t = _tool(be)
+    monkeypatch.delenv("SHELL_MAX_TIMEOUT_SEC", raising=False)
+    await t.shell_run(ShellRunParams(command="make build", timeout=9999),
+                      execution_context=_owner_ctx())
+    assert be.runs[-1].timeout == 300.0
+    monkeypatch.setenv("SHELL_MAX_TIMEOUT_SEC", "45")
+    await t.shell_run(ShellRunParams(command="make build", timeout=9999),
+                      execution_context=_owner_ctx())
+    assert be.runs[-1].timeout == 45.0

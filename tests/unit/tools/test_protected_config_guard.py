@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from agents.task.agent.core.secret_guard import is_credential_file, is_protected_config_path
+from core.security.secret_guard import is_credential_file, is_protected_config_path
 
 
 # --- protected env/config file names (the WS-7 gap) ------------------------------
@@ -140,7 +140,7 @@ def test_install_tree_source_is_not_protected_config(path):
 # --- filesystem tool refuses the env file ----------------------------------------
 
 def test_filesystem_secret_guard_refuses_polyrob_env():
-    from agents.task.agent.core.secret_guard import is_credential_file
+    from core.security.secret_guard import is_credential_file
     # the guard the filesystem/coding write path calls must now catch polyrob.env
     assert is_credential_file(Path("/some/workspace/polyrob.env")) is True
 

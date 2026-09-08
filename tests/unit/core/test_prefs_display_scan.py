@@ -140,5 +140,8 @@ def test_style_line_never_renders_blocked_placeholder(tmp_path):
     # Even a hand-constructed dict with a directly-injected tone value must be
     # omitted, never rendered as a "[BLOCKED...]" segment.
     line = render_style_line({"style.verbosity": "terse", "style.tone": PAYLOAD})
-    assert line == "Style: verbosity terse"
+    # G7: verbosity renders with its operational meaning, so assert on the shape
+    # (verbosity kept, tone dropped) rather than on the exact phrasing.
+    assert line.startswith("Style: verbosity terse (")
+    assert "tone" not in line
     assert BLOCKED not in line

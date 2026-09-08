@@ -105,10 +105,55 @@ def _matches_own_bot_username(router, surface: str, target: str) -> bool:
     return target.strip().lstrip("@").lower() == str(own).strip().lstrip("@").lower()
 
 
+#: 031 owner pause -> the ``core.autonomy_control`` kind a send is judged by.
+#: The distinction is derivable at this seam from the resolved TARGET TIER: an
+#: autonomous ping to the owner is a lifecycle ping (``/pause pings``); a send to
+#: anyone else is an outward post (``/pause social``). Both are denied by a full
+#: ``/pause``. No new scope names — these are rows of ``KIND_SCOPES``.
+_PAUSE_KIND_BY_TIER = {"owner": "lifecycle_ping"}
+_PAUSE_DEFAULT_KIND = "social_post"
+#: the scope an owner would resume to unblock each kind (for the refusal text)
+_PAUSE_SCOPE_HINT = {"lifecycle_ping": "pings", "social_post": "social"}
+
+
+def message_pause_refusal(execution_context, controller, *, tier: str) -> Optional[str]:
+    """031 coupling: an autonomous/forged turn may not send while the owner paused.
+
+    ``perform_message_send`` had NO pause probe, so `/pause pings`, `/pause social`
+    and even `/pause all` left the dominant autonomous outbound path — a goal or
+    cron session calling the `message` action — wide open. This is that probe, and
+    it covers every surface the action can address.
+
+    Polarity is the same as every money/social gate: an OWNER-initiated turn is
+    never gated (asking the agent to send IS the owner being in the loop), and a
+    context-less programmatic/CLI call is not gated either (mirrors
+    ``TwitterTool._pause_block``). Returns a refusal string, or None to proceed.
+    Fail-OPEN on a probe error; ``allows`` itself already fails CLOSED on an
+    unreadable pause record.
+    """
+    if execution_context is None:
+        return None  # owner-direct / CLI / programmatic call
+    try:
+        from tools.controller.turn_origin import _is_forged_or_autonomous_turn
+        if not _is_forged_or_autonomous_turn(execution_context, controller):
+            return None
+        from core.autonomy_control import allows
+        kind = _PAUSE_KIND_BY_TIER.get(tier, _PAUSE_DEFAULT_KIND)
+        dec = allows(kind)
+        if dec.allowed:
+            return None
+    except Exception:
+        logger.debug("message pause probe failed (fail-open)", exc_info=True)
+        return None
+    return (f"message blocked: autonomy is {dec.reason}. Resume with "
+            f"`/resume {_PAUSE_SCOPE_HINT[kind]}` (or `/resume`) when you want it back.")
+
+
 async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                surface, target, text, action="send", reply_to=None,
                                message_id=None, media_paths=None, session_id=None,
-                               container=None) -> dict:
+                               container=None, execution_context=None,
+                               controller=None) -> dict:
     from core.surfaces.outbound_policy import resolve_outbound_daily_cap, resolve_outbound_policy
 
     if isinstance(target, str) and (
@@ -142,6 +187,16 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         return {"success": False, "tier": "denied", "surface": surface, "target": target,
                 "error": ("target not on owner allowlist; ask the owner to run "
                           f"`/allow {surface} {target}` (or `polyrob owner allow {surface} {target}`)")}
+    # 031 owner pause — BEFORE the daily-cap/seed/send rail, so a paused send
+    # never creates a correspondent binding or burns a cap slot either. The
+    # refusal is a real ActionResult error downstream (_message_action_result),
+    # so it lands in the step ledger + evidence pack, never silently swallowed.
+    pause_refusal = message_pause_refusal(execution_context, controller, tier=tier)
+    if pause_refusal is not None:
+        logger.info("message send refused by owner pause: %s:%s (%s)",
+                    surface, target, pause_refusal)
+        return {"success": False, "tier": tier, "surface": surface, "target": target,
+                "error": pause_refusal}
     if action not in ("send", "reply"):
         # edit/delete/react are capability-gated and deferred to P2; fail cleanly.
         return {"success": False, "tier": tier, "surface": surface, "target": target,
@@ -240,7 +295,9 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         logger.error("message send failed: %s", e, exc_info=True)
         return {"success": False, "tier": tier, "surface": surface, "target": target, "error": str(e)}
     # E1 (2026-07-13 review): append the proactive outbound to the durable
-    # conversation log (owner targets are not correspondent conversations).
+    # conversation log (owner targets are not correspondent conversations —
+    # this record is for the seed/first-contact/daily-cap machinery above,
+    # which owner sends are deliberately exempt from).
     if ok and tier != "owner" and container is not None:
         try:
             if store is None:
@@ -250,6 +307,24 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                       session_id=session_id or "")
         except Exception as e:
             logger.debug("message-send conversation record skipped: %s", e)
+    # 2026-08-27 dedup-guard fix: an owner send still needs SOME durable
+    # record — `_autonomous_owner_resend_cooldown_refusal` (turn_origin.py)
+    # reads this SAME store to refuse a repeat autonomous send within the
+    # cooldown window. Without this, that guard could never see a real send
+    # (the block above never fires for tier=="owner"), so it silently never
+    # gated anything — confirmed live 2026-08-27: a 5th duplicate owner-ask
+    # send went out 11 minutes AFTER the cooldown guard was deployed. `target`
+    # here is already the RESOLVED owner address (the alias resolution above
+    # ran before tier was computed), so this never collides with a literal
+    # 'owner'-keyed row from elsewhere.
+    elif ok and tier == "owner" and container is not None:
+        try:
+            owner_store = container.get_service("conversation_store")
+            if owner_store is not None:
+                owner_store.record_outbound(user_id or "", surface, str(target), text,
+                                            session_id=session_id or "")
+        except Exception as e:
+            logger.debug("owner-send conversation record skipped: %s", e)
 
     # T6: first-contact report — AFTER a successful send+record. A blocked or
     # failed send never "made contact", so this only fires on `ok`.
@@ -278,3 +353,70 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     if note:
         result["note"] = note
     return result
+
+
+#: Surface order used when the model omits `surface`: the owner's primary chat
+#: surface first, then the rest of the owner-address contract.
+_OWNER_SURFACE_ORDER = ("telegram", "email", "slack", "discord", "signal", "whatsapp", "x")
+
+
+def resolve_message_defaults(surface, target, owner_targets) -> tuple:
+	"""Fill an omitted `surface`/`target` with the owner's primary address.
+
+	Prod 2026-08-24..28: GLM-5 called `message(text=…, media_paths=[…])` 24 times
+	without `surface`/`target` — always the final "notify the owner" step of a
+	finished goal. Both fields were required, so validation failed, the executor
+	reported it as "action does not exist", counted the step as empty, and two
+	in a row tripped the thinking-loop escalation. The deliverable existed; the
+	owner was never told. An omitted target means the owner; an omitted surface
+	means whichever owner surface is bound (telegram first).
+	"""
+	tgt = (target or "").strip() or "owner"
+	sfc = (surface or "").strip()
+	if not sfc:
+		targets = owner_targets or {}
+		for sid in _OWNER_SURFACE_ORDER:
+			if targets.get(sid):
+				sfc = sid
+				break
+		else:
+			sfc = next(iter(targets), None) or "telegram"
+	return sfc, tgt
+
+
+def prepare_message_targets(container, user_id: str, surface, target) -> tuple:
+	"""``(owner_targets, surface, target)`` for one `message` call: the per-surface
+	owner addresses plus the (surface, target) the call effectively addresses
+	after owner defaults (see ``resolve_message_defaults``)."""
+	owner_targets = build_owner_targets(container, user_id)
+	sfc, tgt = resolve_message_defaults(surface, target, owner_targets)
+	return owner_targets, sfc, tgt
+
+
+def build_owner_targets(container, user_id: str) -> dict:
+	"""Per-surface owner addresses for ``message(target="owner")`` (030 WS-B1/D7).
+
+	telegram/email keep their canonical resolvers; every other surface resolves
+	through the owner-address contract, so a deploy that configured
+	OWNER_DISCORD_ID stops denying. Fail-open per surface.
+	"""
+	import os as _os
+
+	from core.instance import resolve_owner_email, resolve_owner_telegram_id
+	targets: dict = {}
+	tid = resolve_owner_telegram_id(_os.environ)
+	if tid:
+		targets["telegram"] = str(tid)
+	oem = resolve_owner_email(_os.environ)
+	if oem:
+		targets["email"] = oem
+	try:
+		from core.surfaces.owner_address import owner_address
+		for _sid in ("slack", "discord", "signal", "whatsapp", "x"):
+			if _sid not in targets:
+				_addr = owner_address(container, _sid, user_id)
+				if _addr:
+					targets[_sid] = str(_addr)
+	except Exception:
+		pass
+	return targets

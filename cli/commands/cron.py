@@ -93,10 +93,16 @@ def schedule(task: str, schedule_spec: str, user: Optional[str], max_duration: i
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @click.option("--all", "all_tenants", is_flag=True, default=False,
               help="List jobs across all tenants")
-def list_jobs(user: Optional[str], all_tenants: bool):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def list_jobs(user: Optional[str], all_tenants: bool, as_json: bool):
     """List cron jobs (newest schedule first)."""
     svc = _service()
     jobs = svc.list_jobs(user_id=None if all_tenants else _tenant(user))
+    if as_json:
+        import json
+        from dataclasses import asdict
+        click.echo(json.dumps([asdict(j) for j in jobs], indent=2, default=str))
+        return
     if not jobs:
         click.echo(click.style("no cron jobs", dim=True))
         return

@@ -9,6 +9,9 @@
         <h2>Memory</h2>
         <p class="text-muted text-sm">Cross-session recall for the local owner. Search, or leave blank to browse the most recent.</p>
     </div>
+    {% if memory_error %}
+    <div class="error-message error-message--block">memory backend unavailable: {{ memory_error }}</div>
+    {% endif %}
     <form id="memory-search" class="webgate-search" onsubmit="return false;">
         <input id="memory-q" type="text" class="form-control" placeholder="Search recall…" autocomplete="off" />
         <button id="memory-go" type="submit" class="btn btn-primary">Search</button>
@@ -28,6 +31,12 @@
             const params = new URLSearchParams({ q: q.value || '', limit: '20' });
             const res = await fetch('/api/webgate/memory?' + params.toString());
             const body = await res.json();
+            if (body && body.error) {
+                // 030 D4: a failed recall read is NOT "no memories yet".
+                out.innerHTML = '<div class="error-message error-message--block"></div>';
+                out.firstElementChild.textContent = 'memory unavailable: ' + body.error;
+                return;
+            }
             const items = Array.isArray(body) ? body : (body.items || []);
             const mode = body.mode || (q.value ? 'search' : 'browse');
             if (!items.length) {

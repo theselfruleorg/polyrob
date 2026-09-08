@@ -3,6 +3,8 @@ scan -> match -> claim -> settle -> the EXISTING settled-unnotified wake
 path, all the way through `SettlementWatcher.tick_once`. A new file (rather
 than extending test_settlement_watcher.py) to keep this shared-tree-heavy
 module's existing test file untouched."""
+import json
+
 import pytest
 
 from modules.database.connection import DatabaseConnection
@@ -55,12 +57,18 @@ class _FakeChain:
     `eth_getLogs` so checkpoint semantics are exercised for real (not just
     "always return everything")."""
 
-    def __init__(self, head=1000):
+    def __init__(self, head=1000, chain_id=8453):
         self.head = head
+        self.chain_id = chain_id
         self.logs = []
         self.get_logs_calls = 0
 
     def rpc(self, method, params):
+        if method == "eth_chainId":
+            # The scan verifies it is on the network its USDC address belongs
+            # to before reading logs (2026-08-24 audit) — a real RPC always
+            # answers this.
+            return hex(self.chain_id)
         if method == "eth_blockNumber":
             return hex(self.head)
         if method == "eth_getLogs":
@@ -102,9 +110,11 @@ async def test_detection_off_by_default_no_scan_no_tables_touched(tmp_path, monk
 
 
 @pytest.mark.asyncio
-async def test_detection_on_but_testnet_chain_no_scan(tmp_path, monkeypatch):
+async def test_detection_on_but_unsupported_chain_no_scan(tmp_path, monkeypatch):
+    # W1.2 (2026-08-21): base-sepolia became scannable (see
+    # test_settlement_watcher_testnet.py); an unsupported chain stays refused.
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
-    monkeypatch.setenv("X402_DEFAULT_CHAIN", "base-sepolia")
+    monkeypatch.setenv("X402_DEFAULT_CHAIN", "polygon")
     db = await _setup_db(tmp_path)
     try:
         chain = _FakeChain()
@@ -222,14 +232,14 @@ async def test_unmatched_transfer_emits_event_and_settles_nothing(tmp_path, monk
     monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
     events = []
     monkeypatch.setattr(
-        "agents.task.telemetry.event_log.event_log_enabled", lambda: True)
+        "core.event_log.event_log_enabled", lambda: True)
 
     class _FakeLog:
         def record(self, kind, **kw):
             events.append((kind, kw))
 
     monkeypatch.setattr(
-        "agents.task.telemetry.event_log.get_event_log", lambda: _FakeLog())
+        "core.event_log.get_event_log", lambda: _FakeLog())
 
     db = await _setup_db(tmp_path)
     try:
@@ -255,6 +265,73 @@ async def test_unmatched_transfer_emits_event_and_settles_nothing(tmp_path, monk
         row = await db.fetch_one(
             "SELECT status FROM x402_payment_requests WHERE id = ?", (inv["request_id"],))
         assert row["status"] == "pending"  # untouched — never settled on no-match
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_swap_router_proceeds_no_owner_notice(tmp_path, monkeypatch):
+    """A sell's proceeds return to the treasury as a plain inbound USDC
+    Transfer FROM our own trade tool's router — indistinguishable on-chain
+    from a stray payment. That must NOT fire `payment_unmatched` (owner-
+    reported 2026-08-27: a burst of unmatched-payment pings that lined up
+    exactly with a run of ledger-recorded sells).
+
+    The router address is the trigger, not the evidence (those routers are
+    shared public contracts): the skip now requires the transfer to correlate
+    to a trade in our OWN wallet audit ledger, so the test supplies one. The
+    uncorrelated case is covered in test_settlement_own_proceeds.py."""
+    monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "true")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path / "home"))
+    ledger = tmp_path / "home" / "wallet" / "audit.jsonl"
+    ledger.parent.mkdir(parents=True, exist_ok=True)
+    ledger.write_text(json.dumps({
+        "venue": "defi", "action": "swap", "amount_usd": 3.24,
+        "result_ref": "0xswapproceeds"}) + "\n", encoding="utf-8")
+    events = []
+    monkeypatch.setattr(
+        "core.event_log.event_log_enabled", lambda: True)
+
+    class _FakeLog:
+        def record(self, kind, **kw):
+            events.append((kind, kw))
+
+    monkeypatch.setattr(
+        "core.event_log.get_event_log", lambda: _FakeLog())
+
+    db = await _setup_db(tmp_path)
+    try:
+        from core.wallet import chains
+        router = chains.get("base").univ3_router
+
+        chain = _FakeChain(head=1000)
+        watcher = SettlementWatcher(_WakeAgent(), db=db, rpc_call=chain.rpc, usdc_addr=USDC)
+        await watcher.tick_once()  # seed
+
+        chain.head = 1010
+        # no pending invoice at all — from the chain's own swap router
+        chain.logs = [_log("0xswapproceeds", router, 3_240000, 1005)]
+        out = await watcher.tick_once()
+
+        assert out["onchain_settled"] == 0
+        assert out["onchain_unmatched"] == 0
+        assert not any(kind == "payment_unmatched" for kind, _ in events)
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_unrecognized_sender_still_notifies_when_no_chain_given(tmp_path):
+    """The legacy 2-arg direct-call shape (no `chain`) must behave exactly as
+    before — no router set is known, so nothing is silently swallowed."""
+    db = await _setup_db(tmp_path)
+    try:
+        watcher = SettlementWatcher(_WakeAgent(), db=db)
+        transfer = {"tx_hash": "0xdirect", "from": "0xPayerDirect",
+                    "amount_usd": 42.0, "block": 1}
+        settled, unmatched = await watcher._settle_or_flag([transfer], TREASURY.lower())
+        assert settled == 0
+        assert unmatched == 1
     finally:
         await db.close()
 

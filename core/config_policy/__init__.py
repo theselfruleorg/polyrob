@@ -20,3 +20,12 @@ from core.config_policy.policy import (  # noqa: F401  (underscored names: expli
     _safe_autonomy_default,
     reset_autonomy_mode_warnings,
 )
+from core.config_policy.builder_mode import (  # noqa: E402 — 032 bundle
+    _builder_capability_default,
+    agent_builder_mode,
+    builder_mode_display,
+    effective_builder_mode,
+    publish_enabled,
+    reset_builder_mode_warnings,
+    ship_clamp_reason,
+)

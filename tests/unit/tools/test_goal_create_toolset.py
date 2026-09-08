@@ -68,8 +68,14 @@ def test_goal_create_keeps_allowlisted_drops_blocked(tmp_path):
         _Ctx(),
     ))
     txt = res.extracted_content
-    assert "coding" in txt and "twitter" in txt
-    assert "x402_pay" not in txt and "cronjob" not in txt and "wallet" not in txt
+    # Assert on the GRANTED toolset segment, not the whole message: since 029 R5
+    # the result also NAMES what was dropped, so a blocked id legitimately
+    # appears in the text — as a refusal, which is the point.
+    toolset = txt.split("tools=", 1)[1].split(":", 1)[0]
+    assert "coding" in toolset and "twitter" in toolset
+    for danger in ("x402_pay", "cronjob", "wallet"):
+        assert danger not in toolset
+    assert "x402_pay" in txt, "the drop must be reported, not silent"
 
 
 def test_goal_create_without_tools_has_no_toolset(tmp_path):
@@ -224,3 +230,89 @@ def test_goal_create_inference_never_grants_money_spend(tmp_path):
         assert danger not in toolset
     # ("x402" token in the text legitimately infers the capped x402_invoice receivable tool)
     assert "x402_invoice" in toolset
+
+
+# --- 029 R5: a silent strip is why the agent kept retrying --------------------
+#
+# The filter is correct and stays. What was wrong is that it was SILENT: dropped
+# tools went to a log line the agent never sees, so goal_create returned success
+# and the agent learned nothing. It then discovered the gap at dispatch, filed
+# "defi_trade not granted" as an owner ask, and repeated - ~50 times in two
+# weeks of prod. A boundary the caller cannot see is one it cannot respect.
+
+def test_dropped_tools_are_reported_back_not_only_logged(tmp_path):
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest dropped tools are visible", body="b",
+                         tools=["coding", "cronjob"]),
+        _Ctx(),
+    ))
+    txt = res.extracted_content
+    assert "cronjob" in txt, "the agent must be told what it did not get"
+    assert "coding" in txt
+
+
+def test_a_dropped_money_tool_says_it_can_never_be_granted_this_way(tmp_path):
+    """The fact that ends the retry loop. Not 'ask again with better wording'."""
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest money tool drop is explained", body="b",
+                         tools=["defi_trade", "filesystem"]),
+        _Ctx(),
+    ))
+    txt = res.extracted_content.lower()
+    assert "defi_trade" in txt
+    assert "never" in txt
+    assert "owner" in txt or "operator" in txt
+
+
+def test_the_money_tool_is_still_actually_stripped(tmp_path):
+    """The message changes; the boundary does not."""
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest money stays stripped entirely", body="b",
+                         tools=["defi_trade", "filesystem"]),
+        _Ctx(),
+    ))
+    txt = res.extracted_content
+    toolset = txt.split("tools=", 1)[1].split(":", 1)[0]
+    assert "defi_trade" not in toolset
+    assert "filesystem" in toolset
+
+
+def test_nothing_dropped_means_no_noise(tmp_path):
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest clean grant no noise", body="b",
+                         tools=["coding"]),
+        _Ctx(),
+    ))
+    assert "not granted" not in res.extracted_content.lower()
+
+
+# --- 029 R5: the READ-only DeFi tool belongs in the self-goal allowlist -------
+
+def test_defi_data_is_self_grantable_but_defi_trade_is_not():
+    """defi_data constructs no signer and broadcasts nothing - it is token
+    SIGHT. Excluding it forced every screening goal to wait for an
+    operator-seeded cycle, which is a tax on reconnaissance, not a safety
+    property. The money verb stays excluded; that is where the line is."""
+    allowed = _SELF_GOAL_ALLOWED_TOOLS
+    assert "defi_data" in allowed
+    assert "defi_trade" not in allowed
+
+
+def test_adding_defi_data_did_not_smuggle_in_a_money_capability():
+    from core.tool_capabilities import ids_with
+    assert "defi_data" not in set(ids_with("money"))
+
+
+def test_a_self_created_screening_goal_can_carry_defi_data(tmp_path):
+    tool = _make_tool(tmp_path)
+    res = asyncio.run(tool.goal_create(
+        GoalCreateAction(title="captest screen fresh base launches today",
+                         body="screen new pools", tools=["defi_data"]),
+        _Ctx(),
+    ))
+    toolset = res.extracted_content.split("tools=", 1)[1].split(":", 1)[0]
+    assert "defi_data" in toolset

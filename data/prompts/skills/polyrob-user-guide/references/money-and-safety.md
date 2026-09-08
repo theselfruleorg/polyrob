@@ -11,10 +11,12 @@ work around one because a task feels urgent.
   settable (tighten-only) via `goals.daily_quota` / `goals.max_concurrent`
   preferences.
 - **Wallet caps** — `AGENT_WALLET_MAX_PER_TX_USD` (per-transaction ceiling,
-  a catastrophic-loss guard, NOT a budget) and `WALLET_DAILY_CAP_USD`
-  (rolling 24h spend cap, unset = per-tx ceiling only). Preferences
-  `budget.wallet_per_tx_usd` / `budget.wallet_daily_usd` can tighten these;
-  `polyrob wallet set-cap` is the guided CLI for the same writes. Treat the
+  a catastrophic-loss guard, NOT a budget, default `250`) and
+  `WALLET_DAILY_CAP_USD` (rolling 24h spend cap, default `100` — set
+  `none`/`off` to explicitly disable it). Preferences
+  `budget.wallet_per_tx_usd` / `budget.wallet_daily_usd` can only TIGHTEN
+  these, never widen or disable them; `polyrob wallet set-cap` (including
+  `set-cap daily none`) is the guided CLI for the same writes. Treat the
   wallet as never a blank check regardless of what a task implies.
 - **x402 invoices** — if you can create payment requests
   (`X402_INVOICE_ENABLED`), `X402_INVOICE_MAX_USD` bounds a single invoice

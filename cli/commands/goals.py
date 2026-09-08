@@ -73,7 +73,7 @@ def _format_goal(goal: Goal) -> str:
         STATUS_RUNNING: "yellow",
         STATUS_DONE: "blue",
         STATUS_BLOCKED: "red",
-        STATUS_CANCELLED: "dim",
+        STATUS_CANCELLED: "bright_black",
         STATUS_TRIAGE: "cyan",
     }.get(goal.status, "white")
 
@@ -417,19 +417,76 @@ def objective():
 @click.argument("title")
 @click.option("--body", "-b", default="", help="What success looks like; constraints.")
 @click.option("--priority", "-p", type=int, default=5)
+@click.option("--success-criteria", default=None,
+              help="What the planner measures against (shown in its prompt).")
+@click.option("--goal-budget", type=int, default=None,
+              help="Max LIVE child goals before creates are refused (0 = no cap).")
+@click.option("--stream-id", default=None,
+              help="Ties this objective to a data/streams/streams.yaml entry.")
 @click.option("--force", is_flag=True, help="Bypass near-duplicate rejection.")
-def objective_add(title, body, priority, force):
+def objective_add(title, body, priority, success_criteria, goal_budget, stream_id, force):
     from core.identity import resolve_identity
     board = _get_board()
+    payload = {}
+    if success_criteria:
+        payload["success_criteria"] = success_criteria
+    if goal_budget is not None:
+        payload["goal_budget"] = int(goal_budget)
+    if stream_id:
+        payload["stream_id"] = stream_id
     try:
         o = board.create_objective(user_id=resolve_identity(), title=title, body=body,
-                                   priority=priority, force=force)
+                                   priority=priority, force=force,
+                                   payload=payload or None)
     except DuplicateGoalError as e:
         click.echo(click.style("[polyrob] ERROR: ", fg="red")
                    + f"near-duplicate of {e.match_id} '{e.match_title}' "
                      f"(similarity {e.similarity:.2f}); use --force to override")
         sys.exit(1)
     click.echo(click.style("[polyrob] ", fg="green") + f"Created objective {o.id} [active]: {o.title}")
+
+
+@objective.command("show")
+@click.argument("objective_id")
+def objective_show(objective_id):
+    """Show one objective: criteria, budget use, and its live children."""
+    from core.identity import resolve_identity
+    board = _get_board()
+    user_id = resolve_identity()
+    o = board.get(objective_id)
+    # GoalBoard.get() has no tenant filter (it is a plain SELECT by id), so a
+    # known-id lookup must reject another tenant's row here rather than leak
+    # its title/body/payload. Same idiom as GoalBoard.update_fields: fetch via
+    # get(), then check user_id. Same message/exit as "not found" — a
+    # different one would itself be a cross-tenant existence oracle.
+    if o is None or o.kind != "objective" or o.user_id != user_id:
+        click.echo(click.style("[polyrob] ERROR: ", fg="red") + "no such objective")
+        sys.exit(1)
+    payload = o.payload or {}
+    click.echo(f"{o.id} [{o.status}] {o.title}")
+    if o.body:
+        click.echo(o.body)
+    if payload.get("stream_id"):
+        click.echo(f"stream: {payload['stream_id']}")
+    if payload.get("success_criteria"):
+        click.echo(f"success criteria: {payload['success_criteria']}")
+    children = board.children_of(user_id, o.id)
+    # children_of drops only cancelled/dropped, so `done` children are IN this
+    # list — which is correct for the budget (a lifetime tally) and wrong to call
+    # "live". Report the two numbers separately rather than one mislabelled one.
+    in_flight = [c for c in children if c.status != "done"]
+    budget = board.objective_budget(o)
+    if budget > 0:
+        click.echo(f"goal budget: {len(children)}/{budget} spent "
+                   f"({len(in_flight)} in flight, done children count)")
+    elif payload.get("stream_id"):
+        click.echo(f"goal budget: none — stream objectives are uncapped "
+                   f"({len(in_flight)} goal(s) in flight)")
+    else:
+        click.echo(f"goal budget: no cap ({len(in_flight)} goal(s) in flight, "
+                   f"{len(children)} incl. done)")
+    for c in children:
+        click.echo(f"  {c.id[:8]} [{c.status}] {c.title}")
 
 
 @objective.command("list")

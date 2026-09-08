@@ -68,10 +68,13 @@ async def test_known_command_on_cold(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_unknown_slash_is_not_a_command(tmp_path):
+async def test_unknown_slash_is_a_command_not_chat(tmp_path):
+    """030 L9 (deliberate contract flip): a command-shaped unknown token routes
+    COMMAND so the surface answers with help + suggestion in one cheap reply —
+    it must never fall through and burn an LLM turn on a typo."""
     c = _FakeContainer(_registry_with(tmp_path))
     d = await route_inbound(c, _inbound("/wat"))
-    assert d.kind == RouteKind.TASK_AGENT  # falls through (cold, classifier off)
+    assert d.kind == RouteKind.COMMAND and d.command == "/wat"
 
 
 @pytest.mark.asyncio

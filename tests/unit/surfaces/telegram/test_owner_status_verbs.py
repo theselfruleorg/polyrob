@@ -65,6 +65,13 @@ class _ResidentAgent(_Agent):
         self._session_id = session_id
         self._busy = busy
         self._orch = _FakeOrchestrator({"main": _FakeInnerAgent(model, ctx_pct)})
+        # D6 (2026-08-28): liveness = the per-session EXECUTION lock, which
+        # run_session holds for the whole run — not "is input queued".
+        import asyncio
+        lock = asyncio.Lock()
+        if busy:
+            lock._locked = True  # held without awaiting (test-only)
+        self._session_execution_locks = {session_id: lock}
 
     def get_orchestrator(self, session_id):
         return self._orch if session_id == self._session_id else None
@@ -162,7 +169,9 @@ async def test_status_reflects_goal_counts(env):
     board.create(user_id="gleb", title="Migrate the billing database",
                  status=STATUS_RUNNING)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))
-    assert "1 open" in out
+    # 2026-08-28: "open" answered the wrong question (D4) — the line now says
+    # what the board actually holds, ready/running/blocked/waiting.
+    assert "1 ready" in out
     assert "1 running" in out
 
 
@@ -198,8 +207,10 @@ async def test_status_renders_ledger_lines_and_requests_balances(env, monkeypatc
 
     out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))
 
-    assert "• Runtime cost (24h): $1.23 · $45.67 total." in out
-    assert "• Treasury: net $9.25." in out
+    # Labelled (2026-08-28 D7): runtime is the owner's compute bill; treasury
+    # is CASH FLOW and says so — held positions are not in that figure.
+    assert "runtime cost (owner's compute bill): $1.23 last 24h · $45.67 total" in out
+    assert "treasury cash flow (income − spend; open positions NOT included): net $+9.25" in out
     assert len(calls) == 1
     assert calls[0]["include_balances"] is True
 
@@ -219,15 +230,17 @@ async def test_status_ledger_lookup_failure_is_fail_open(env, monkeypatch):
 
     assert "no active session" in out.lower()
     assert "goals:" in out.lower()
-    assert "Runtime cost" not in out
-    assert "Treasury:" not in out
+    # 2026-08-28 (D5): a section that cannot be computed renders as
+    # `unavailable (<reason>)` — it must never silently vanish.
+    assert "Money: unavailable (RuntimeError: ledger boom)" in out
+    assert "money (RuntimeError: ledger boom)" in out  # named in the health headline too
 
 
 # --- /recap ------------------------------------------------------------------
 
 @pytest.mark.asyncio
 async def test_recap_happy_path(env):
-    from agents.task.telemetry import event_log as el
+    from core import event_log as el
     log = el.TelemetryEventLog(str(env / "telemetry_events.db"))
     log.record("goal_run", user_id="gleb", ts=time.time(), outcome="done")
 
@@ -285,13 +298,23 @@ async def test_prefs_shows_written_pref_with_pref_source(env):
 
     out = await act_on_inbound(_Agent(str(env)), _cmd("/prefs", "/prefs"))
     assert "style.verbosity = terse (pref)" in out
-    assert "tell me what to change — guarded changes arrive as /pending proposals" in out
+    # G15: bare /prefs is the SET-keys summary; the full schema listing (and its
+    # footer) is behind /prefs all.
+    assert "Set preferences" in out
+    full = await act_on_inbound(_Agent(str(env)), _cmd("/prefs", "/prefs all"))
+    assert "tell me what to change — guarded changes arrive as /pending proposals" in full
+    assert "[style]" in full
 
 
 @pytest.mark.asyncio
-async def test_prefs_default_source_when_nothing_written(env):
+async def test_prefs_summary_hides_untouched_defaults(env):
+    """G15: a phone-sized answer to 'what have I set?' — never 26 default rows."""
     out = await act_on_inbound(_Agent(str(env)), _cmd("/prefs", "/prefs"))
-    assert "(default)" in out or "(env)" in out
+    assert "(built-in)" not in out  # no untouched-default ROWS
+    assert "No preferences set" in out or "Set preferences" in out
+    full = await act_on_inbound(_Agent(str(env)), _cmd("/prefs", "/prefs all"))
+    assert len(full.splitlines()) > len(out.splitlines())
+    assert "(built-in)" in full or "(default)" in full or "(env)" in full
 
 
 # --- /help --------------------------------------------------------------------
@@ -313,3 +336,67 @@ def test_journey_alias_is_routable():
 async def test_journey_alias_behaves_like_recap(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/journey", "/journey"))
     assert "nothing to report" in out.lower()
+
+
+# --- /missed (2026-08-28 D2: 91/92 notices suppressed, nothing let the owner read them)
+
+@pytest.mark.asyncio
+async def test_missed_lists_suppressed_notices(env, monkeypatch):
+    from core.event_log import TelemetryEventLog
+    path = os.path.join(str(env), "telemetry_events.db")
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", path)
+    log = TelemetryEventLog(path)
+    log.record("owner_notice", user_id="gleb", source="user_delivery",
+               attrs={"text": "[suppressed by daily proactive-message cap; source=self_evolution] "
+                              "✅ Background goal 'Refresh trackrecord' completed."})
+    log.record("owner_notice", user_id="other", source="user_delivery",
+               attrs={"text": "[suppressed by daily proactive-message cap; source=x] not gleb's"})
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
+    assert "Last 1 suppressed owner message(s)" in out
+    assert "Refresh trackrecord" in out
+    assert "not gleb's" not in out          # tenant-scoped
+    assert "delivery.daily_cap" in out      # the remedy
+
+
+@pytest.mark.asyncio
+async def test_missed_empty_and_bad_arg(env, monkeypatch):
+    path = os.path.join(str(env), "telemetry_events.db")
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", path)
+    from core.event_log import TelemetryEventLog
+    TelemetryEventLog(path)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
+    assert "No suppressed owner messages" in out
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed abc"))
+    assert out.startswith("Usage: /missed")
+
+
+def test_missed_joins_the_three_lists():
+    """A chat verb must join _HELP_BODY, _OWNER_ADMIN_COMMANDS and the
+    dispatcher's command table or its handler is dead."""
+    from surfaces.telegram.harness import _HELP_BODY, help_commands
+    assert "/missed" in _OWNER_ADMIN_COMMANDS
+    assert "/missed" in _HELP_BODY
+    assert "missed" in {name for name, _ in help_commands()}
+    assert "/missed" in _COMMANDS
+
+
+@pytest.mark.asyncio
+async def test_status_leads_with_degraded_health(env, monkeypatch):
+    """The regression: a tripped sentinel + an open ask render FIRST, unprompted."""
+    import json, time
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(env))
+    monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")
+    with open(os.path.join(str(env), "CREDIT_SENTINEL"), "w") as f:
+        json.dump({"providers": {"openrouter": {"ts": time.time() - 60, "release_ts": None,
+                                               "reason": "Error code: 402"}}}, f)
+    from agents.task.goals.board import GoalBoard
+    GoalBoard(os.path.join(str(env), "goals.db")).create_ask(
+        user_id="gleb", what="Grant defi_trade on the treasury objective", why="")
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))
+    lines = out.splitlines()
+    assert lines[0] == "Status:"
+    # 031: the pause line leads every seat (running here), THEN health
+    assert lines[1].startswith("▶ RUNNING") or lines[1].startswith("⏸ PAUSED")
+    assert lines[2].startswith("Health: DEGRADED")
+    assert "credit sentinel TRIPPED for openrouter" in lines[3]
+    assert "Grant defi_trade" in out and "/fulfill" in out

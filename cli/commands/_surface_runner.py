@@ -32,6 +32,7 @@ shape (and its tests pin its source).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import signal as _signal
 import sys
@@ -219,6 +220,13 @@ async def run_surface(
                 autonomy_handles = start_autonomy(task_agent=task_agent,
                                                   data_dir=data_dir)
     except Exception:
+        # W1.6 (2026-08-21): fail-open but never SILENT — a surface process
+        # whose autonomy loops (cron/goals/settlement watcher) silently failed
+        # to start looks healthy while background work (including invoice
+        # settlement detection) is dead.
+        logging.getLogger(__name__).warning(
+            "autonomy runtime failed to start — cron/goal/settlement loops "
+            "are NOT running in this process", exc_info=True)
         autonomy_handles = None
 
     if job.announce is not None:

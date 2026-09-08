@@ -80,7 +80,8 @@ class _Rail:
 _PRICES = {USDC: 1.0, WETH: 2000.0}
 
 
-def _tool(*, allow=True, quote=None, price=None, captured=None):
+def _tool(*, allow=True, quote=None, price=None, captured=None,
+         balance="_none", fallback_price=None):
     gate = _Gate()
 
     def _guard(intent, tx, **kw):
@@ -96,10 +97,32 @@ def _tool(*, allow=True, quote=None, price=None, captured=None):
     else:
         price_fn = lambda c, a: price                   # noqa: E731
 
+    # Always wired (never left to fall through to a real on-chain read) so
+    # these tests never make a network call. "_none" (default) means "no
+    # position held" — the 028 exemption never engages unless a test opts in.
+    balance_fn = lambda c, h, t: (None if balance == "_none" else balance)  # noqa: E731
+
+    # The route seam runs the REAL UniV3RouteProvider over a stubbed pool quote,
+    # so these tests exercise the adapter and `best_route`'s own checks (spender
+    # pin, output floor) rather than hand-rolling a RouteQuote that could drift
+    # from what the provider actually produces.
+    def _route_fn(chain, ti, to_, amt, *, holder, slippage_bps):
+        import tools.defi.providers.univ3 as u
+        from tools.defi.providers import routes
+        from tools.defi.providers.routes.univ3_route import UniV3RouteProvider
+        real = u.best_quote
+        u.best_quote = lambda *a, **k: quote          # None => the provider finds nothing
+        try:
+            return routes.best_route_with_reason(
+                chain, ti, to_, amt, holder=holder, slippage_bps=slippage_bps,
+                providers=(UniV3RouteProvider(),))
+        finally:
+            u.best_quote = real
+
     return DefiTradeTool(
         wallet=_Wallet(gate), rail_factory=_Rail, guard_fn=_guard,
-        price_fn=price_fn,
-        quote_fn=(lambda *a, **k: quote) if quote is not None else (lambda *a, **k: None),
+        price_fn=price_fn, fallback_price_fn=(lambda c, a: fallback_price),
+        balance_fn=balance_fn, route_fn=_route_fn,
     ), gate
 
 
@@ -160,6 +183,45 @@ async def test_approve_declares_the_grant_so_the_guard_can_verify_it():
 
 
 @pytest.mark.asyncio
+async def test_approve_declares_the_wallets_held_balance_for_the_028_exemption():
+    """028: the guard can only waive the price bar for an exit if the caller
+    tells it what's already held. approve_token must read and declare it."""
+    captured = []
+    tool, _ = _tool(price=1.0, captured=captured, balance=5_000_000)
+    await tool.approve_token(ApproveParams(
+        token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
+    assert captured, "guard was never consulted"
+    assert captured[0].held_balance_raw == 5_000_000
+
+
+@pytest.mark.asyncio
+async def test_approve_declares_no_held_balance_when_the_read_fails():
+    """A balance-read failure must NOT invent a number — held_balance_raw
+    stays None, which is fail-closed (no exemption), not fail-open."""
+    captured = []
+    tool, _ = _tool(price=1.0, captured=captured)  # balance defaults to "no read"
+    await tool.approve_token(ApproveParams(
+        token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
+    assert captured[0].held_balance_raw is None
+
+
+@pytest.mark.asyncio
+async def test_approve_declares_no_held_balance_when_the_balance_fn_raises():
+    """A raising balance reader (RPC error, etc.) must be swallowed to None,
+    never propagate and crash the approval."""
+    captured = []
+    tool, _ = _tool(price=1.0, captured=captured)
+
+    def _boom(chain, holder, token):
+        raise RuntimeError("rpc unavailable")
+    tool._balance_fn = _boom
+    res = await tool.approve_token(ApproveParams(
+        token=USDC, spender=ROUTER, amount=1.0, max_spend_usd=2.0, dry_run=True))
+    assert res.error is None
+    assert captured[0].held_balance_raw is None
+
+
+@pytest.mark.asyncio
 async def test_approve_defaults_to_dry_run_and_does_not_broadcast():
     tool, gate = _tool(price=1.0)
     res = await tool.approve_token(ApproveParams(
@@ -196,7 +258,8 @@ async def test_swap_refuses_when_no_route_exists():
     tool, _ = _tool(quote=None)
     res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
                                      amount_in=1.0, max_spend_usd=2.0))
-    assert res.error and "no Uniswap V3 route" in res.error
+    assert res.error and "no route" in res.error
+    assert "univ3" in res.error, "the refusal must name who was asked (029 R6)"
 
 
 @pytest.mark.asyncio
@@ -275,6 +338,20 @@ async def test_swap_declares_no_allowance_grant(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_swap_declares_the_wallets_held_balance_of_token_in(monkeypatch):
+    """028: a swap's outflow-pricing check needs the same held-balance
+    exemption an approve gets — this is the leg that a first-cut fix missed
+    (the approve went through live, the swap itself still refused)."""
+    import tools.defi.providers.univ3 as u
+    monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
+    captured = []
+    tool, _ = _tool(quote=_quote(), captured=captured, balance=7_000_000)
+    await tool.swap(SwapParams(token_in=USDC, token_out=WETH, amount_in=1.0,
+                               max_spend_usd=2.0, dry_run=True))
+    assert captured[0].held_balance_raw == 7_000_000
+
+
+@pytest.mark.asyncio
 async def test_a_refused_guard_broadcasts_nothing(monkeypatch):
     import tools.defi.providers.univ3 as u
     monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
@@ -290,9 +367,16 @@ async def test_a_refused_guard_broadcasts_nothing(monkeypatch):
 
 def test_route_check_reads_unavailable_when_a_price_is_missing():
     """An unavailable screener must never read as 'route verified'."""
+    from tools.defi.providers.routes import RouteQuote
     tool = DefiTradeTool(price_fn=lambda c, a: None)
     ident = type("I", (), {"decimals": 18, "symbol": "X"})()
-    verdict, note = tool._route_sanity("base", _quote(), ident, ident)
+    route = RouteQuote(chain="base", token_in=USDC, token_out=WETH,
+                       amount_in_raw=1_000_000, amount_out_raw=500_000_000_000_000,
+                       amount_out_min_raw=495_000_000_000_000, spender=ROUTER,
+                       to=ROUTER, calldata="0x04e45aaf", value_raw=0,
+                       venue="uniswap-v3 fee 500", quoted_at=time.time(),
+                       locally_built=True)
+    verdict, note = tool._route_sanity("base", route, ident, ident)
     assert verdict == "UNAVAILABLE"
     assert "UNAVAILABLE" in note and "AGREES" not in note
 
@@ -333,26 +417,27 @@ async def test_swap_proceeds_with_a_loud_caution_when_no_independent_price(monke
 
 @pytest.mark.asyncio
 async def test_every_money_verb_refuses_a_read_only_chain():
-    """Arbitrum is readable (a venue settles there) but nothing about its money
-    path is verified, so no value may move on it. Was "only base is supported";
-    the door now asks the registry, and the refusal names THAT chain rather
-    than pointing at another one."""
+    """Solana is readable (balances and contract state) but nothing about its
+    money path is verified, so no value may move on it. Was "only base is
+    supported", then Arbitrum until 029 §4 verified and armed it — the door asks
+    the REGISTRY, so which chain plays this role changes and the refusal does
+    not. It names THAT chain rather than pointing at another one."""
     from tools.defi.trade_tool import TransferParams
     tool, _ = _tool(quote=_quote())
     calls = [
-        tool.transfer(TransferParams(chain="arbitrum", token=USDC, to=ROUTER,
+        tool.transfer(TransferParams(chain="solana", token=USDC, to=ROUTER,
                                      amount=1.0, max_spend_usd=1.0)),
-        tool.approve_token(ApproveParams(chain="arbitrum", token=USDC,
+        tool.approve_token(ApproveParams(chain="solana", token=USDC,
                                          spender=ROUTER, amount=1.0,
                                          max_spend_usd=1.0)),
-        tool.revoke_approval(RevokeParams(chain="arbitrum", token=USDC,
+        tool.revoke_approval(RevokeParams(chain="solana", token=USDC,
                                           spender=ROUTER)),
-        tool.swap(SwapParams(chain="arbitrum", token_in=USDC, token_out=WETH,
+        tool.swap(SwapParams(chain="solana", token_in=USDC, token_out=WETH,
                              amount_in=1.0, max_spend_usd=1.0)),
     ]
     for coro in calls:
         res = await coro
-        assert res.error and "arbitrum" in res.error, res.error
+        assert res.error and "solana" in res.error, res.error
 
 
 @pytest.mark.asyncio
@@ -383,12 +468,14 @@ async def test_ethereum_reaches_the_guard():
 
 @pytest.mark.asyncio
 async def test_a_swap_on_a_chain_without_a_dex_names_the_missing_route(monkeypatch):
-    monkeypatch.setenv("DEFI_EVM_RPC_ROBINHOOD", "https://pinned.example/rpc")
+    """Solana carries no route hints at all, so the refusal must name IT — the
+    role Robinhood played until 029 gave it an aggregator route."""
+    monkeypatch.setenv("DEFI_EVM_RPC_SOLANA", "https://pinned.example/rpc")
     tool, _ = _tool(quote=_quote())
-    res = await tool.swap(SwapParams(chain="robinhood", token_in=USDC,
+    res = await tool.swap(SwapParams(chain="solana", token_in=USDC,
                                      token_out=WETH, amount_in=1.0,
                                      max_spend_usd=1.0))
-    assert res.error and "robinhood" in res.error
+    assert res.error and "solana" in res.error
 
 
 def test_the_chain_field_teaches_the_agent_how_to_choose():
@@ -459,3 +546,67 @@ def test_guard_refuses_a_zero_amount_transfer_but_allows_a_zero_amount_approval(
         execution_context=None, tool_self=None, price_fn=lambda c, a: 1.0,
         forged_fn=_never_forged)
     assert "greater than zero" not in (d2.reason or "")
+
+
+# --- route-drift tolerance is configurable (owner directive 2026-08-25) -----
+
+def test_the_drift_tolerance_defaults_to_the_conservative_value(monkeypatch):
+    monkeypatch.delenv("DEFI_ROUTE_DRIFT_MAX_PCT", raising=False)
+    from tools.defi.trade_tool import _route_drift_max_pct
+    assert _route_drift_max_pct() == 3.0
+
+
+def test_an_operator_can_widen_it(monkeypatch):
+    """3% was tuned against majors. A fresh memecoin book routinely implies a
+    price several percent from a thin independent source, so the check was
+    refusing ordinary trades rather than manipulated ones."""
+    monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", "8")
+    from tools.defi.trade_tool import _route_drift_max_pct
+    assert _route_drift_max_pct() == 8.0
+
+
+def test_a_malformed_value_falls_back_rather_than_disarming(monkeypatch):
+    """A typo must never read as 'no drift limit'."""
+    for bad in ("", "abc", "-1", "0"):
+        monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", bad)
+        from tools.defi.trade_tool import _route_drift_max_pct
+        assert _route_drift_max_pct() == 3.0, bad
+
+
+def test_the_tolerance_is_capped_so_it_cannot_be_switched_off(monkeypatch):
+    """The check exists because a pool price is a number anyone with capital
+    can seed. An operator may widen it; nobody may remove it."""
+    monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", "500")
+    from tools.defi.trade_tool import _route_drift_max_pct, _ROUTE_DRIFT_CEILING_PCT
+    assert _route_drift_max_pct() == _ROUTE_DRIFT_CEILING_PCT
+    assert _ROUTE_DRIFT_CEILING_PCT <= 25.0
+
+
+@pytest.mark.asyncio
+async def test_a_widened_tolerance_lets_a_previously_refused_route_through(monkeypatch):
+    """The NVDAc case from prod: 10.06% drift refused at the 3% default."""
+    import tools.defi.providers.univ3 as u
+    monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
+    monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", "12")
+    # ~10% drift: 1 USDC -> 0.00045454 WETH implies $2,200/WETH against the
+    # independent $2,000. (The default fixture's 250e12 is a 100% drift, which
+    # must STILL refuse at 12% — see the test below.)
+    tool, _ = _tool(quote=_quote(amount_out=454_545_454_545_454))
+    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+                                     amount_in=1.0, max_spend_usd=2.0,
+                                     dry_run=True))
+    assert res.error is None or "DISAGREES" not in (res.error or "")
+
+
+@pytest.mark.asyncio
+async def test_a_widened_tolerance_still_refuses_a_grossly_wrong_route(monkeypatch):
+    """Widening is not disarming. A route implying double the independent price
+    is refused at any tolerance an operator may set."""
+    import tools.defi.providers.univ3 as u
+    monkeypatch.setattr(u, "read_allowance", lambda *a, **k: 10 ** 30)
+    monkeypatch.setenv("DEFI_ROUTE_DRIFT_MAX_PCT", "24")
+    tool, _ = _tool(quote=_quote(amount_out=250_000_000_000_000))   # 100% drift
+    res = await tool.swap(SwapParams(token_in=USDC, token_out=WETH,
+                                     amount_in=1.0, max_spend_usd=2.0,
+                                     dry_run=False))
+    assert res.error and "DISAGREES" in res.error

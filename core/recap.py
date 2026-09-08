@@ -104,7 +104,7 @@ def _events(user_id: str, since_ts: Optional[float],
     that fallback only kicks in when no home is given (library/legacy use).
     """
     try:
-        from agents.task.telemetry.event_log import (
+        from core.event_log import (
             TelemetryEventLog, get_event_log, event_log_enabled)
         if not event_log_enabled():
             return []
@@ -228,17 +228,30 @@ def build_recap(user_id: str, data_home: Optional[str] = None,
     return entries
 
 
-def format_recap_markdown(entries: List[RecapEntry], window: str) -> str:
+def format_recap_markdown(entries: List[RecapEntry], window: str,
+                          limit: Optional[int] = None) -> str:
     """Plain markdown rendering of a recap (no Rich) — a friendly empty-state
     line when there's nothing to show. Generic one-line-per-entry shape; a
     surface wanting a richer/grouped layout (e.g. ``/journey``) builds its own
-    view on top of the same ``entries`` list instead of this formatter."""
+    view on top of the same ``entries`` list instead of this formatter.
+
+    ``limit`` bounds the entry lines and reports the remainder as one count
+    line. A busy ``/recap 7d`` otherwise renders up to 200 events plus every
+    episode and authored skill, one line each — a multi-message flood on a
+    phone (chat-first review 2026-08-22, G14). None keeps the full listing for
+    a terminal or a file.
+    """
     scope = window.strip() if window and window.strip() else "all time"
     lines = [f"# Recap — {scope}", ""]
     if not entries:
         lines.append("_Nothing to report in this window._")
         return "\n".join(lines)
-    for e in entries:
+    shown = entries if limit is None else entries[:max(1, int(limit))]
+    for e in shown:
         amount_suffix = f" (${e.amount:.2f})" if e.amount else ""
         lines.append(f"- **{e.kind}**: {e.text}{amount_suffix}")
+    hidden = len(entries) - len(shown)
+    if hidden > 0:
+        lines.append(f"- _(+{hidden} more — ask for a narrower window, "
+                     f"or see the console)_")
     return "\n".join(lines)

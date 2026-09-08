@@ -272,10 +272,11 @@ tools (money, comms, code-exec) gated off until a genuine owner turn.
 POLYROB can act as an economic agent when you want it to — all of it gated behind flags and off by
 default:
 
-- **x402 pay-per-request** — anonymous USDC micropayments (Base, Avalanche, IoTeX) via the Coinbase facilitator; the agent can both charge for its API and pay for external resources.
-- **Native agent wallet** — an EOA wallet with per-transaction and rolling 24h spend caps; testnet by default.
-- **On-chain token sight** — a read-only tool for token identity, price, liquidity, a safety screen and the agent's own portfolio on Base. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
-- **Guarded on-chain transfers** — moving value goes through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. Nine fail-closed gates, `dry_run` by default, and anything above a configurable ceiling waits for an owner approval.
+- **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
+- **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default.
+- **On-chain token sight** — a read-only tool (9 verbs) for token identity, price, liquidity, a safety screen, pool discovery, and the agent's own portfolio across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
+- **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and anything above a configurable ceiling waits for an owner approval. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
+- **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
 - **SIWE** wallet auth for the multi-tenant posture.
 
@@ -397,7 +398,9 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/self-hosting.md](docs/guide/self-hosting.md) | Self-hosting / deployment |
 | [docs/guide/deployment-postures.md](docs/guide/deployment-postures.md) | Deployment postures (local / own_ops / multitenant) |
 | [docs/guide/console.md](docs/guide/console.md) | Web dashboard — capabilities & payments |
+| [docs/guide/payments.md](docs/guide/payments.md) | Payments, wallet & crypto — the complete money reference |
 | [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
+| [docs/guide/streams.md](docs/guide/streams.md) | Standing objectives at scale — fair dispatch, the stream manifest |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment-flag reference (SSOT) |

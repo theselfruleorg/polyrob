@@ -30,20 +30,31 @@ logger = logging.getLogger(__name__)
 _TELEGRAM_MAX = 4096
 _TELEGRAM_CAPTION_MAX = 1024  # Bot API cap for photo/document captions (< the 4096 message cap)
 
+# 030 L1: bounded flood-control honoring. A 429 carries the server's retry_after;
+# before this, the main send path answered it with a plain-text resend (which
+# 429s again) and swallowed the loss — a rate-limited owner message was gone.
+_FLOOD_RETRIES = 2          # retries per bot call, after the initial attempt
+_FLOOD_WAIT_CAP_SEC = 30.0  # never sleep longer than this per wait
+
+
+def _retry_after_seconds(e: Exception) -> Optional[float]:
+    """The server-stated flood delay, or None when *e* is not a RetryAfter.
+
+    Duck-typed on ``.retry_after`` (aiogram's TelegramRetryAfter) so this module
+    keeps its no-hard-aiogram-import rule and stays fake-testable.
+    """
+    ra = getattr(e, "retry_after", None)
+    try:
+        return float(ra) if ra is not None else None
+    except (TypeError, ValueError):
+        return None
+
 
 def chat_id_from_session_key(session_key: str) -> str:
-    """Extract the Telegram chat id from a session_key.
-
-    Chat-scoped keys: ``agent:main:telegram:{type}:{chat}[:user][:thread:..]`` -> the
-    chat segment (index 4). The cron back-compat shim uses ``direct:telegram:{chat}``
-    -> the last segment. Falls back to the last segment for any other shape.
-    """
-    parts = session_key.split(":")
-    if parts and parts[0] == "direct":
-        return parts[-1]
-    if len(parts) >= 5:
-        return parts[4]
-    return parts[-1] if parts else session_key
+    """Delegates to the ONE inverse parser next to build_session_key
+    (030 WS-B3/E1 — this 6-line parse was copied into every surface)."""
+    from core.surfaces.session_chat_registry import chat_id_from_session_key as _p
+    return _p(session_key)
 
 
 class TelegramSurface(Surface):
@@ -71,6 +82,35 @@ class TelegramSurface(Surface):
     def _parse_mode(self) -> str | None:
         return "HTML" if self.capabilities.markdown_flavor == "html" else None
 
+    async def _call_flood_controlled(self, chat_id: str, op: str, fn):
+        """Run one bot call, honoring RetryAfter with a bounded wait+retry (030 L1).
+
+        Non-flood exceptions propagate unchanged (the caller's markup-downgrade
+        logic handles those). Flood penalties are recorded on the rate limiter
+        for observability; recording failures never block the retry.
+        """
+        import asyncio
+        attempt = 0
+        while True:
+            try:
+                return await fn()
+            except Exception as e:
+                delay = _retry_after_seconds(e)
+                if delay is None or attempt >= _FLOOD_RETRIES:
+                    raise
+                attempt += 1
+                try:
+                    from surfaces.telegram.rate_limit import get_telegram_rate_limiter
+                    await get_telegram_rate_limiter().record_penalty(
+                        int(chat_id), delay, op)
+                except Exception:
+                    pass
+                wait = min(delay, _FLOOD_WAIT_CAP_SEC)
+                logger.warning(
+                    "TelegramSurface: flood control on %s (%s) — waiting %.1fs "
+                    "(retry %d/%d)", chat_id, op, wait, attempt, _FLOOD_RETRIES)
+                await asyncio.sleep(wait)
+
     def _render_chunks(self, text: str) -> list[str]:
         return self.render_outbound(text or "")
 
@@ -92,12 +132,18 @@ class TelegramSurface(Surface):
         last_id = None
         for body, source in zip(rendered, sources):
             try:
-                sent = await self._bot.send_message(chat_id, body, parse_mode=parse_mode)
+                sent = await self._call_flood_controlled(
+                    chat_id, "send",
+                    lambda b=body: self._bot.send_message(chat_id, b, parse_mode=parse_mode))
             except Exception as e:
-                if not parse_mode:
+                # A flood error is NOT a markup error — after bounded retries it
+                # propagates; a plain-text resend would just 429 again (030 L1).
+                if not parse_mode or _retry_after_seconds(e) is not None:
                     raise
                 logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
-                sent = await self._bot.send_message(chat_id, source, parse_mode=None)
+                sent = await self._call_flood_controlled(
+                    chat_id, "send",
+                    lambda s=source: self._bot.send_message(chat_id, s, parse_mode=None))
             last_id = getattr(sent, "message_id", None)
         return last_id
 
@@ -113,7 +159,7 @@ class TelegramSurface(Surface):
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.
             if msg.media:
-                await self._send_media(chat_id, msg.media, self._parse_mode(), msg.text or "")
+                await self._send_media(chat_id, msg.media, self._parse_mode())
             return SendResult(success=True, surface_message_id=str(last_id) if last_id is not None else None)
         except Exception as e:  # fail-open: never raise into the loop
             logger.error("TelegramSurface.send to %s failed: %s", chat_id, e, exc_info=True)
@@ -122,13 +168,26 @@ class TelegramSurface(Surface):
     def _caption_for(self, text: str) -> Optional[str]:
         if not text:
             return None
-        return render_for_flavor(text, self.capabilities.markdown_flavor, _TELEGRAM_CAPTION_MAX)[0]
+        chunks = render_for_flavor(text, self.capabilities.markdown_flavor, _TELEGRAM_CAPTION_MAX)
+        if len(chunks) == 1:
+            return chunks[0]
+        # 030 (F5): an over-length explicit caption was silently cut at 1024 —
+        # keep the cut, but say so instead of pretending the caption was whole.
+        head = render_for_flavor(text, self.capabilities.markdown_flavor,
+                                 _TELEGRAM_CAPTION_MAX - 1)[0]
+        return head + "…"
 
-    async def _send_media(self, chat_id: str, media: list, parse_mode, fallback_text: str) -> None:
+    async def _send_media(self, chat_id: str, media: list, parse_mode) -> None:
         """Send each renderable media entry (path + kind) as a photo/document, alongside
         the text already delivered by send(). Fail-open per entry: a missing/unreadable
         file or a raising bot call is logged at WARN and the next entry is tried — the
-        text above is never affected (this runs after the text send succeeds)."""
+        text above is never affected (this runs after the text send succeeds).
+
+        030 L8: the caption is the entry's EXPLICIT ``caption`` only. The message
+        text has already been sent as its own bubble — repeating its first 1024
+        chars under every photo/document doubled every media send (worst on the
+        spill path, where the gist reappeared as the report's caption). This also
+        aligns with ``TelegramBotSink._send_media``, which never duplicated."""
         # Lazy import — surfaces/telegram avoids a hard aiogram import at module load
         # (mirrors harness.py/voice.py); only paid when there is media to send.
         from aiogram.types import FSInputFile
@@ -142,13 +201,19 @@ class TelegramSurface(Surface):
             if not (os.path.isfile(path) and os.access(path, os.R_OK)):
                 logger.warning("TelegramSurface: media path missing/unreadable, skipping: %s", path)
                 continue
-            caption = self._caption_for(entry.get("caption") or fallback_text)
+            caption = self._caption_for(entry.get("caption") or "")
             try:
                 file = FSInputFile(path, filename=os.path.basename(path))
                 if entry.get("kind") == "image":
-                    await self._bot.send_photo(chat_id, file, caption=caption, parse_mode=parse_mode)
+                    await self._call_flood_controlled(
+                        chat_id, "send_photo",
+                        lambda: self._bot.send_photo(
+                            chat_id, file, caption=caption, parse_mode=parse_mode))
                 else:
-                    await self._bot.send_document(chat_id, file, caption=caption, parse_mode=parse_mode)
+                    await self._call_flood_controlled(
+                        chat_id, "send_document",
+                        lambda: self._bot.send_document(
+                            chat_id, file, caption=caption, parse_mode=parse_mode))
             except Exception as e:
                 logger.warning("TelegramSurface: failed to send media %s: %s", path, e)
 
@@ -156,14 +221,14 @@ class TelegramSurface(Surface):
     #     supplies the transport primitives (send/edit/overflow) + its policy hooks. ---
 
     def _incremental_streaming_enabled(self) -> bool:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         return SurfaceConfig.telegram_incremental_stream()
 
     def _stream_target(self, msg: OutboundMessage) -> str:
         return chat_id_from_session_key(msg.session_key)
 
     def _edit_min_interval_sec(self) -> float:
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         return SurfaceConfig.telegram_stream_edit_interval_sec()
 
     async def _open_stream_message(self, target: str, text: str):

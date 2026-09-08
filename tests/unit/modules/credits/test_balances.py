@@ -187,3 +187,61 @@ async def test_build_ledger_include_balances_true_populates_both_fields(monkeypa
     led = await build_ledger("rob", days=1, db=FakeDB(), include_balances=True)
     assert led["treasury"]["balance_usd"] == 12.34
     assert led["runtime"]["provider_balance_usd"] == 5.67
+
+
+# --- treasury balance must span every chain the wallet holds on -------------
+# The probe read ONE chain (X402_DEFAULT_CHAIN, EVM). The agent also holds a
+# Solana address with its own USDC, so the ledger's "treasury balance" silently
+# omitted it — the same class of blind spot as portfolio filing Solana USDC
+# under airdrop spam (2026-08-28).
+
+class _DualWallet:
+    def __init__(self, address, solana_address):
+        self.address = address
+        self.solana_address = solana_address
+
+
+@pytest.mark.asyncio
+async def test_treasury_balance_includes_solana_usdc(monkeypatch):
+    import core.wallet.factory as factory_mod
+    import core.wallet.onchain as onchain_mod
+    import core.wallet.solana_onchain as sol_mod
+
+    monkeypatch.setattr(factory_mod, "get_agent_wallet",
+                        lambda: _DualWallet("0xabc", "Brs111"))
+    monkeypatch.setattr(onchain_mod, "balances",
+                        lambda addr, chain, timeout=4.0: (0.5, 10.0))
+    monkeypatch.setattr(sol_mod, "token_balances",
+                        lambda owner: {
+                            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 2_500_000})
+    assert await B.treasury_balance_usd("rob") == 12.5
+
+
+@pytest.mark.asyncio
+async def test_a_failed_solana_read_makes_the_total_unknown_not_evm_only(monkeypatch):
+    """Returning the EVM leg alone would report a PARTIAL figure as the total —
+    a silent undercount, which is the same lie as rendering unknown as $0.00."""
+    import core.wallet.factory as factory_mod
+    import core.wallet.onchain as onchain_mod
+    import core.wallet.solana_onchain as sol_mod
+
+    monkeypatch.setattr(factory_mod, "get_agent_wallet",
+                        lambda: _DualWallet("0xabc", "Brs111"))
+    monkeypatch.setattr(onchain_mod, "balances",
+                        lambda addr, chain, timeout=4.0: (0.5, 10.0))
+    monkeypatch.setattr(sol_mod, "token_balances", lambda owner: None)
+    assert await B.treasury_balance_usd("rob") is None
+
+
+@pytest.mark.asyncio
+async def test_no_solana_address_keeps_the_evm_figure_complete(monkeypatch):
+    """A wallet with no Solana identity has nothing omitted, so the EVM leg IS
+    the whole answer — this must not degrade to unknown."""
+    import core.wallet.factory as factory_mod
+    import core.wallet.onchain as onchain_mod
+
+    monkeypatch.setattr(factory_mod, "get_agent_wallet",
+                        lambda: _DualWallet("0xabc", None))
+    monkeypatch.setattr(onchain_mod, "balances",
+                        lambda addr, chain, timeout=4.0: (0.5, 10.0))
+    assert await B.treasury_balance_usd("rob") == 10.0

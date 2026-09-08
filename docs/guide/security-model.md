@@ -102,19 +102,73 @@ remembered to put in `APPROVAL_REQUIRED_TOOLS` (or the posture-derived defaults)
 
 ### Money gates (`modules/x402`, `core/wallet/`)
 
-`WALLET_DAILY_CAP_USD`, per-venue caps, `PAYMENT_APPROVAL_MODE` (`approve` default,
-routes every outward payment through `owner_queue`; `auto` auto-approves within
-caps and notifies after), `X402_INVOICE_MAX_USD` / `X402_INVOICE_DAILY_MAX`, and
-the correspondent-taint gate (money tools are always `high_impact`) all compose to
-bound how much value the agent can move and under what conditions.
+More is enforced here than caps. The full set, composed (every one fail-closed
+on a probe error):
 
-What it stops: unbounded spend, and spend without a paper trail or a cap.
+- **The owner pause** (`polyrob autonomy pause` / `/pause` / a plain "stop" from the
+  owner; the legacy `AUTONOMY_HALT` file/env is a facet of it) refuses
+  ALL money movement — it is structurally inside `PolicyGate.check`
+  (`core/wallet/policy.py`), so every money verb inherits it, and it is probed
+  again at the top of `tx_guard.authorize`, the x402 pay path, and the venue
+  trade gate.
+- **Turn-origin refusal**: a forged self-wake, delegation-result, leaf, or
+  autonomous turn cannot reach a money verb — enforced independently at
+  `core/wallet/tx_guard.py` step 2 (on-chain), `tools/x402/spend_gate.py`
+  (x402 pay), `tools/crypto_trade_gate.py::trade_turn_refusal` (venue orders),
+  and the owner-queue approver. Two deliberate, flag-gated narrowings exist:
+  `DEFI_AUTONOMOUS_TURN_TRADING` admits goal/cron-dispatched runs, and
+  `DEFI_MONITOR_EXITS` admits EXIT-shaped operations only (close a held
+  position into the quote asset, measured inflow asserted) from a forged
+  main-agent turn. Both default OFF; both still ride every cap.
+- **Caps as a ladder**: `AGENT_WALLET_MAX_PER_TX_USD` (catastrophic ceiling),
+  `WALLET_DAILY_CAP_USD` (rolling 24h), per-venue caps, the
+  `DEFI_AUTONOMOUS_MAX_USD` autonomous ceiling (above it → the durable
+  `owner_queue` lane, never auto-execute), and a daily-cap-REQUIRED bar for
+  any unattended origin. An idempotency replay guard sits in the same gate.
+- **`PAYMENT_APPROVAL_MODE`** (`approve` default routes every outward payment
+  through `owner_queue`; `auto` auto-approves within caps and notifies after),
+  plus `X402_INVOICE_MAX_USD` / `X402_INVOICE_DAILY_MAX` on the receive side.
+- **The correspondent-taint gate** denies the money verbs by action name
+  (`defi_trade_*`, `x402_pay_x402_fetch`, `x402_invoice_x402_request`, the
+  venue order verbs) while a session is tainted — not only by tool_id.
+- **The RPC pin**: `tx_guard` refuses to move funds on the shared public RPC
+  (`DEFI_EVM_RPC_<CHAIN>`, `DEFI_SOLANA_RPC`) — the simulation, the deltas and
+  the caps are all read from it, so it cannot be the trust anchor by default.
+- **`secret_guard`** (`core/security/secret_guard.py`) hard-denies every
+  agent-writable file surface access to credential-shaped files — `.env*`,
+  `*.env`, key material, and the wallet's own `meta.json`/`audit.jsonl` (whose
+  rewrite would reset the rolling caps or flip an address).
+
+What it stops: unbounded spend, spend without a paper trail, spend from a turn
+the owner did not drive, and spend authorized by an endpoint an attacker chose.
 
 What it does not do: protect the wallet's *key material* from a host-level
 compromise — if the process itself is compromised (see §3's "process identity" gap),
 the caps are enforced by the same process an attacker would already control.
 
-### The pattern across all four
+### The on-chain transaction guard (`core/wallet/tx_guard.py`)
+
+Distinct enough from the caps to name on its own: **no value-moving EVM
+transaction is broadcast without simulating it, measuring the observed asset
+and allowance deltas, and asserting them against the declared intent** — a
+revert, an RPC error, an unreadable balance, an undeclared allowance grant, an
+unpriceable outflow, or a measured-zero outflow on a declared send all REFUSE.
+Effects are measured, never inferred from the caller's calldata. The
+`solana_swap` verb cannot route through `tx_guard` (there is no EVM
+transaction), so it mirrors the same step order against `simulateTransaction`
+deltas, with the SPL authority taxonomy (delegate/owner/close/freeze grants
+refuse) standing in for the allowance check.
+
+There are two money-gate architectures, split by mechanism, and the split is
+deliberate: `tx_guard`-style **simulate-and-assert** governs everything that
+signs a raw transaction; the PolicyGate/`crypto_trade_gate` **declared-amount**
+model governs venue orders and x402 payments, where there is no local
+transaction to simulate. The risk is a NEW money verb picking the weaker gate
+out of convenience — the bidirectional money-verb ratchet
+(`tests/unit/core/test_money_verb_registration.py`) is the enforcement point:
+any new money verb must name its gate.
+
+### The pattern across all five
 
 Every one of these is **software logic evaluated by the same interpreter that
 runs the agent loop**. They're real, they're tested, and defeating them requires
@@ -168,24 +222,24 @@ default OFF, but "OFF by default" is a flag, not a sandbox: turning either on
 anywhere except a fully-trusted single-user box means external binaries execute
 with the same host privileges as the whole agent process.
 
-### c) MCP stdio servers inherit the full process environment
+### c) MCP stdio servers run as sibling host processes (env now allowlisted)
 
-`tools/mcp/protocol.py` (~line 349):
+**FIXED (2026-08, H2 of the crypto audit) — this section used to document full
+environment inheritance; it no longer exists.** MCP children are now spawned
+through `tools/mcp/child_env.py::build_mcp_child_env` (called from
+`tools/mcp/protocol.py`), which constructs the child env from a **fixed
+allowlist** (PATH/HOME/locale/runtime-lookup vars only). Credential-shaped
+variables — `AGENT_WALLET_MASTER_SEED`, LLM provider keys, DB credentials — are
+excluded by construction, not by name-matching, and this is the only stdio
+spawn site in the package.
 
-```python
-full_env = {**os.environ, **(self.env or {})}
-self.process = subprocess.Popen(self.command, ..., env=full_env, ...)
-```
-
-Every configured MCP server (`config/mcp_config.json`) is spawned as a **full
-sibling host process that inherits every environment variable the main agent
-process has** — LLM provider keys, DB credentials, whatever else lives in the
-process env. There is no allowlist and no scrubbing at this layer. Contrast this
-with the `code_execution` tool's backends, which explicitly build a scrubbed,
-allowlisted child environment (`tools/code_exec/env_policy.py`) and (for
-`DockerBackend`) filter even the *caller-supplied* env through a
-`SECRET_PAT`-based deny list. An MCP server is either a fully-trusted process, or
-it shouldn't be in `mcp_config.json` at all — there is currently no middle ground.
+What remains true, and is the residual trade-off to respect: an MCP server is
+still a **full sibling host process** with the agent's own OS privileges (no
+sandbox), and values the operator explicitly writes into `config/mcp_config.json`
+are overlaid verbatim and deliberately NOT secret-filtered — that file is the
+sanctioned credential channel for a server that needs one, so anything you put
+there is handed over. Treat the server *binary* as fully-trusted code even
+though its environment is now scrubbed.
 
 ### d) `AGENT_COMPUTE_POSTURE=3` ("host") is designed but unwired
 
@@ -230,8 +284,9 @@ Given §3, here is what a real hard boundary looks like, concretely:
   hardening (`--network none`, `--cap-drop ALL`, read-only rootfs, non-root user,
   scrubbed env, pid/memory/cpu caps) does and doesn't cover.
 - **A curated MCP server allowlist**, treated as fully-trusted operator
-  configuration — never something a tenant or a correspondent can add to, given
-  §3(c)'s full-env inheritance.
+  configuration — never something a tenant or a correspondent can add to: the
+  child env is allowlisted now (§3c), but the server binary itself still runs
+  with the agent's full host privileges.
 - **Separate instances/containers per tenant** for genuinely adversarial
   multi-tenant trust. POLYROB's multi-tenant model is **single-process,
   multi-session**: tenancy is enforced by `user_id`-scoped software checks
@@ -260,8 +315,10 @@ harden the systemd units to a non-root user (§4); if `CODE_EXEC_ENABLED` is eve
 turned on, prefer `CODE_EXEC_BACKEND=docker` unless you specifically want the
 local-subprocess convenience for your *own* trusted use; keep `CODING_LSP_ENABLED`
 / `CODING_SNAPSHOT_ENABLED` off unless you're actively using them, since they have
-no sandbox at all (§3b); review `config/mcp_config.json` and remove any server you
-wouldn't hand your full environment to.
+no sandbox at all (§3b); review `config/mcp_config.json` and remove any server
+whose binary you wouldn't run with the agent's own host privileges (its env is
+allowlisted now, but any secret you configure for it in that file is handed over
+verbatim).
 
 **Multi-tenant server** — never set `POLYROB_LOCAL=1` (it collapses several
 independent trust decisions to "operator == owner"); `sandbox_guard.py` already

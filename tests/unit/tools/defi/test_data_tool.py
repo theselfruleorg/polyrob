@@ -270,3 +270,83 @@ async def test_portfolio_indexes_the_requested_chain(monkeypatch):
                  price_fn=lambda c, a: _price(p=1.0))
     await tool.portfolio(PortfolioParams(chain="ethereum"))
     assert seen["chain"] == "ethereum"
+
+
+# --------------------------------------------------------------------------
+# portfolio — the gas row (proposal 029 R2)
+#
+# The prod agent escalated "no ETH row in the portfolio — the gas tank may be
+# empty" ~10 times over two weeks while the treasury held 0.001021 ETH on Base
+# (~1,130 swaps of headroom). `portfolio` enumerated ERC-20s only, so a MISSING
+# row read as an EMPTY tank. These tests pin the three states apart.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_portfolio_shows_the_native_gas_balance():
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {USDC: 10_000_000},
+                 price_fn=lambda c, a: _price(p=1.0),
+                 native_fn=lambda h, c: 0.001021436159620694)
+    out = _text(await tool.portfolio(PortfolioParams()))
+    assert "0.001021" in out, "the gas balance itself must be on the page"
+    assert "ETH" in out
+    assert "gas" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_portfolio_native_unknown_is_not_empty():
+    """A failed read must never be readable as an empty tank."""
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {},
+                 native_fn=lambda h, c: None)
+    out = _text(await tool.portfolio(PortfolioParams()))
+    assert "UNKNOWN" in out
+    assert "empty" not in out.lower(), "unknown must not claim the tank is empty"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_native_zero_says_empty_out_loud():
+    """A genuine on-chain zero IS the blocking condition, and must say so."""
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {},
+                 native_fn=lambda h, c: 0.0)
+    out = _text(await tool.portfolio(PortfolioParams()))
+    assert "empty" in out.lower()
+    assert "broadcast" in out.lower(), "say what an empty tank actually blocks"
+
+
+@pytest.mark.asyncio
+async def test_portfolio_native_read_failure_does_not_break_the_report():
+    """Fail-open: a raising native read costs the row, never the whole report."""
+    def _boom(holder, chain):
+        raise RuntimeError("rpc down")
+
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {USDC: 10_000_000},
+                 price_fn=lambda c, a: _price(p=1.0),
+                 native_fn=_boom)
+    out = _text(await tool.portfolio(PortfolioParams()))
+    assert USDC in out, "the token rows must still render"
+    assert "UNKNOWN" in out
+
+
+@pytest.mark.asyncio
+async def test_portfolio_gas_row_uses_the_chains_own_native_symbol():
+    """Polygon's gas is POL, not ETH — the row must not borrow Base's symbol."""
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {},
+                 native_fn=lambda h, c: 5.0)
+    out = _text(await tool.portfolio(PortfolioParams(chain="polygon")))
+    assert "POL" in out
+    assert "5.000000 ETH" not in out
+
+
+@pytest.mark.asyncio
+async def test_portfolio_gas_is_not_summed_into_the_token_total():
+    """Gas is a fee reserve, not a position — it must not inflate the headline."""
+    tool = _tool(holder="0x" + "22" * 20,
+                 balances_fn=lambda h, c, toks: {USDC: 10_000_000},
+                 price_fn=lambda c, a: _price(p=1.0),
+                 native_fn=lambda h, c: 1.0)
+    out = _text(await tool.portfolio(PortfolioParams()))
+    assert "$10.00" in out, "the token total stays exactly the token total"

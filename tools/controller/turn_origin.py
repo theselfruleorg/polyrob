@@ -139,6 +139,64 @@ def _autonomous_message_refusal(execution_context, controller_self):
 		include_in_memory=True)
 
 
+def _autonomous_owner_resend_cooldown_refusal(
+		execution_context, controller_self, *, container, user_id: str,
+		surface: str, target: str, owner_targets: dict):
+	"""2026-08-27 dedup-guard fix: an autonomous/forged turn proactively
+	messaging the OWNER is rate-limited against resending within
+	``owner_message_cooldown_seconds()`` of the last real send to the SAME
+	owner address on the SAME surface — checked against the durable
+	conversation store's actual send history, never the model's own
+	self-report of elapsed time.
+
+	Confirmed live pattern this closes: a fresh goal session has no
+	visibility into a SIBLING session's send from ~2h earlier, so each retry
+	of a failed "deliver the owner ask" goal re-sent the identical content —
+	4 genuine sends of the same consolidated ask landed in the owner's
+	Telegram within ~4 hours, each with the goal's own narrative FALSELY
+	claiming "24h cadence respected" (observed 2026-08-27).
+
+	Returns a refusal ActionResult, or None when the send may proceed.
+	A genuine owner-initiated interactive turn is NEVER gated here — only
+	forged/autonomous turns. Fail-open: any error here must never block a
+	legitimate send.
+	"""
+	if not _is_forged_or_autonomous_turn(execution_context, controller_self):
+		return None
+	try:
+		from core.config_policy import owner_message_cooldown_seconds
+		cooldown = owner_message_cooldown_seconds()
+		if cooldown <= 0:
+			return None
+		from tools.controller.message_send import _OWNER_ALIASES
+		owner_addr = (owner_targets or {}).get(surface)
+		is_owner_send = owner_addr is not None and (
+			str(target) == str(owner_addr)
+			or (isinstance(target, str) and target.strip().lower() in _OWNER_ALIASES))
+		if not is_owner_send:
+			return None
+		store = container.get_service("conversation_store") if container else None
+		if store is None:
+			return None
+		count = store.outbound_count_since(user_id or "", surface, owner_addr, cooldown)
+		if count <= 0:
+			return None
+	except Exception:
+		logger.debug(
+			"owner resend cooldown check failed (fail-open)", exc_info=True)
+		return None
+	from tools.controller.types import ActionResult
+	hours = cooldown / 3600
+	return ActionResult(
+		extracted_content=(
+			f"message: an autonomous message already reached the owner on "
+			f"{surface} within the last {hours:.1f}h. Call `contact_history` "
+			f"(surface={surface!r}, address=<the owner address>) to see what "
+			f"was already sent — if nothing materially changed, skip this "
+			f"send entirely rather than repeating it."),
+		include_in_memory=True)
+
+
 _MESSAGE_TEXT_PREVIEW_CHARS = 200
 
 

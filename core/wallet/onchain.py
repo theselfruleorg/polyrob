@@ -46,7 +46,7 @@ def _read_table():
     """
     from core.wallet import chains
     return {r.name: (r.public_rpc, r.usdc, r.native_symbol)
-            for r in chains.all_rows()}
+            for r in chains.evm_rows()}
 
 
 _CHAIN = _read_table()
@@ -161,17 +161,49 @@ def token_balances(holder: str, chain: str, token_addresses, *, timeout: float =
         return {k: None for k in keys}
 
 
+#: chain -> Alchemy network slug, for composing an endpoint from
+#: ``ALCHEMY_API_KEY`` (see ``rpc_url_for_chain``). Only chains Alchemy actually
+#: serves appear here; anything else falls through to the public endpoint.
+_ALCHEMY_NETWORK = {
+    "ethereum": "eth-mainnet",
+    "base": "base-mainnet",
+    "arbitrum": "arb-mainnet",
+    "polygon": "polygon-mainnet",
+}
+
+
 def rpc_url_for_chain(chain: str) -> str:
     """Operator-pinnable RPC endpoint for *chain*.
 
-    Default is the historical public endpoint, so this is a no-op until an
-    operator sets `DEFI_EVM_RPC_<CHAIN>`. The public endpoints are shared,
-    rate-limited and unauthenticated; pinning a real one is the supported way to
-    stop a provider hiccup from degrading every read.
+    Resolution order:
+
+    1. ``DEFI_EVM_RPC_<CHAIN>`` — an explicit operator pin always wins.
+    2. ``ALCHEMY_API_KEY`` — compose the endpoint from the key.
+    3. the historical public endpoint.
+
+    Step 2 exists for a security reason, not convenience. An Alchemy endpoint
+    embeds its API key IN THE URL, so pinning it via ``DEFI_EVM_RPC_BASE`` puts
+    a live credential in the VALUE of a variable whose NAME carries no secret
+    marker. Every scrubber in this tree matches on the name
+    (``tools/code_exec/env_policy.py::SECRET_PAT``, ``core/flags.py``,
+    ``core/secrets.py`` — all keyed on ``API_KEY|SECRET|TOKEN|...``), so such a
+    URL sails through all of them and can reach a log line, a config dump, or a
+    sandbox environment that ``ALCHEMY_API_KEY`` would never reach. Naming the
+    credential properly and composing the URL here restores that protection.
+    (Found on prod 2026-08-24 with the key inline in three DEFI_EVM_RPC_* pins.)
+
+    The public endpoints are shared, rate-limited and unauthenticated; pinning a
+    real one is the supported way to stop a provider hiccup degrading reads.
     """
+    pinned = os.getenv(f"DEFI_EVM_RPC_{chain.upper()}", "").strip()
+    if pinned:
+        return pinned
+    alchemy_key = os.getenv("ALCHEMY_API_KEY", "").strip()
+    network = _ALCHEMY_NETWORK.get(chain)
+    if alchemy_key and network:
+        return f"https://{network}.g.alchemy.com/v2/{alchemy_key}"
     cfg = _CHAIN.get(chain)
-    default = cfg[0] if cfg else ""
-    return os.getenv(f"DEFI_EVM_RPC_{chain.upper()}", "").strip() or default
+    return cfg[0] if cfg else ""
 
 
 def _rpc(url: str, method: str, params: list, timeout: float = 4.0):

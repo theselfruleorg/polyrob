@@ -2,7 +2,7 @@
 the per-venue switch are on AND size <= the per-venue live cap; otherwise dry-run.
 """
 import pytest
-from tools.crypto_trade_gate import evaluate_live_trade
+from tools.crypto_trade_gate import evaluate_live_trade, evaluate_live_mutation
 
 
 def _env(monkeypatch, **kw):
@@ -247,4 +247,130 @@ def test_trade_turn_refusal_forged_probe_fails_closed(monkeypatch):
     from tools.crypto_trade_gate import trade_turn_refusal
     from tools.controller.execution_context import ActionExecutionContext
     r = trade_turn_refusal(ActionExecutionContext(role="orchestrator"), object())
+    assert r and ("forged" in r.lower() or "owner must drive" in r.lower())
+
+
+# ---- M10 (2026-08-22): evaluate_live_mutation — cancel/leverage kill-switch --------
+# (cancel_*/update_leverage previously reached the venue whenever
+# credentials.can_trade() was true, even with CRYPTO_TRADE_LIVE_ENABLED off.)
+
+def test_cancel_is_blocked_when_live_trading_is_off(monkeypatch):
+    monkeypatch.delenv("CRYPTO_TRADE_LIVE_ENABLED", raising=False)
+    d = evaluate_live_mutation("hyperliquid", risk_reducing=False)
+    assert d.live is False
+
+
+def test_cancel_is_ALLOWED_while_halted_because_it_reduces_risk(monkeypatch):
+    """A halted OWNER with an open position must still be able to close it by hand.
+    Blocking a cancel strands the position — the kill-switch is meant to stop new
+    risk, not to trap existing risk. NOTE (R16): this exercises evaluate_live_mutation
+    in isolation, which has no execution_context and cannot itself distinguish an
+    owner-direct call from an agent-loop turn — that OWNER-only narrowing is
+    trade_turn_refusal's job (see the trade_turn_refusal tests below); callers must
+    run both gates together, in order, as every real call site does."""
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
+    monkeypatch.setattr(
+        "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(lambda: True))
+    assert evaluate_live_mutation("hyperliquid", risk_reducing=True).live is True
+
+
+def test_update_leverage_is_NOT_risk_reducing_and_is_blocked_while_halted(monkeypatch):
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
+    monkeypatch.setattr(
+        "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(lambda: True))
+    assert evaluate_live_mutation("hyperliquid", risk_reducing=False).live is False
+
+
+def test_a_halt_probe_that_raises_blocks_a_non_reducing_mutation(monkeypatch):
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
+
+    def _boom():
+        raise RuntimeError("probe")
+    monkeypatch.setattr(
+        "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(_boom))
+    assert evaluate_live_mutation("hyperliquid", risk_reducing=False).live is False
+
+
+def test_mutation_master_off_blocks_even_if_venue_on(monkeypatch):
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "off")
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
+    assert evaluate_live_mutation("hyperliquid", risk_reducing=True).live is False
+
+
+def test_mutation_venue_off_blocks_even_if_master_on(monkeypatch):
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "off")
+    assert evaluate_live_mutation("hyperliquid", risk_reducing=True).live is False
+
+
+def test_mutation_not_probed_at_all_when_risk_reducing_and_not_halted(monkeypatch):
+    # A risk-reducing mutation is unconditionally allowed once the switches are on —
+    # it never needs to consult the halt probe.
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("POLYMARKET_TRADING_ENABLED", "true")
+    d = evaluate_live_mutation("polymarket", risk_reducing=True)
+    assert d.live is True
+
+
+def test_mutation_polymarket_leverage_analog_blocked_while_halted(monkeypatch):
+    # Polymarket has no leverage concept, but the same risk_reducing=False path
+    # must behave identically across venues (venue-agnostic gate logic).
+    monkeypatch.setenv("CRYPTO_TRADE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("POLYMARKET_TRADING_ENABLED", "true")
+    monkeypatch.setattr(
+        "core.config_policy.AutonomyConfig.autonomy_halted", staticmethod(lambda: True))
+    assert evaluate_live_mutation("polymarket", risk_reducing=False).live is False
+
+
+# ---- M10/R16: trade_turn_refusal's risk_reducing carve-out is OWNER-ONLY ----------
+# (default risk_reducing=False keeps every existing call site — orders, leverage,
+# approve/revoke_agent — byte-identical to before this change. And even with
+# risk_reducing=True, the kill-switch bar only lifts for a literal owner-direct call
+# — execution_context is None — never for an agent-loop turn, genuine or not.)
+
+def test_trade_turn_refusal_default_still_blocks_during_halt(monkeypatch):
+    monkeypatch.setenv("AUTONOMY_HALT", "1")
+    from tools.crypto_trade_gate import trade_turn_refusal
+    r = trade_turn_refusal(None, object())  # no risk_reducing kwarg -> default False
+    assert r and "halt" in r.lower()
+
+
+def test_trade_turn_refusal_owner_direct_risk_reducing_survives_halt(monkeypatch):
+    # (a) halted + execution_context is None (the owner acting directly) + risk_reducing
+    # => allowed. This is the ONLY combination the carve-out covers.
+    monkeypatch.setenv("AUTONOMY_HALT", "1")
+    from tools.crypto_trade_gate import trade_turn_refusal
+    r = trade_turn_refusal(None, object(), risk_reducing=True)
+    assert r is None  # not refused: no context (not forged) + risk-reducing skips bar 1
+
+
+def test_trade_turn_refusal_genuine_agent_turn_risk_reducing_STILL_blocked_by_halt(monkeypatch):
+    """R16 (2026-08-22): (b) halted + a genuine, NON-FORGED agent-loop turn
+    (role="orchestrator", no forged turn_kind) + risk_reducing=True must still be
+    REFUSED. This is the regression R16 closes: the review proved that without this
+    narrowing, `not risk_reducing` alone let ANY non-forged origin — including a
+    plain LLM-driven agent turn — bypass the kill-switch just because the verb
+    happened to be a cancel, so a halted owner's agent kept mutating live orders.
+    The carve-out is for a literal owner-direct call (execution_context is None)
+    ONLY; presence of a context — genuine or not — means an agent-loop turn, and
+    the kill-switch bar applies to it exactly as if risk_reducing were False."""
+    monkeypatch.setenv("AUTONOMY_HALT", "1")
+    from tools.crypto_trade_gate import trade_turn_refusal
+    from tools.controller.execution_context import ActionExecutionContext
+    ctx = ActionExecutionContext(role="orchestrator")  # genuine owner-turn, NOT forged
+    r = trade_turn_refusal(ctx, object(), risk_reducing=True)
+    assert r and "halt" in r.lower()
+
+
+def test_trade_turn_refusal_risk_reducing_still_blocks_forged_turn(monkeypatch):
+    # risk_reducing never weakens the forged-turn bar (bar 2), which is unconditional
+    # regardless of execution_context or halt state.
+    monkeypatch.delenv("AUTONOMY_HALT", raising=False)
+    from tools.crypto_trade_gate import trade_turn_refusal
+    from tools.controller.execution_context import ActionExecutionContext
+    ctx = ActionExecutionContext()  # role defaults to "leaf" == forged
+    r = trade_turn_refusal(ctx, object(), risk_reducing=True)
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())

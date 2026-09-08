@@ -88,7 +88,7 @@ def test_build_recap_malformed_window_raises_clear_error(tmp_path):
 def test_build_recap_reads_seeded_event_and_skill_fixtures(tmp_path, monkeypatch):
     """Real rows in a real (tmp_path) telemetry_events.db + skill_usage.db —
     not monkeypatched sources — flow through build_recap with correct kinds."""
-    from agents.task.telemetry import event_log as el
+    from core import event_log as el
     from modules.skills.skill_usage import get_skill_usage_store
 
     home = str(tmp_path)
@@ -126,7 +126,7 @@ def test_build_recap_reads_seeded_event_and_skill_fixtures(tmp_path, monkeypatch
 
 
 def test_build_recap_filters_events_by_window(tmp_path, monkeypatch):
-    from agents.task.telemetry import event_log as el
+    from core import event_log as el
 
     home = str(tmp_path)
     now = time.time()

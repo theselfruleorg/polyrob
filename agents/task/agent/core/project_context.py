@@ -123,7 +123,7 @@ def frame_project_context(content: str, *, trusted: bool) -> str:
     """
     if trusted:
         return content
-    from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+    from core.security.untrusted_wrap import wrap_untrusted
 
     return wrap_untrusted("project-context", content)
 
@@ -175,7 +175,7 @@ def load_project_context(
 def _load_project_context_impl(root: Path, *, cap_tokens: int,
                                confine_to_root: bool = False) -> Optional[str]:
     """Implementation (raises on error; caller wraps in try/except)."""
-    from agents.task.agent.core.secret_guard import is_secret_path, estimate_tokens_rough
+    from core.security.secret_guard import is_secret_path, estimate_tokens_rough
 
     # Resolve the threat-scanner once; None means scanner unavailable (fail-OPEN).
     try:

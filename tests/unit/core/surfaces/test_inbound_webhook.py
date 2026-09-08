@@ -102,3 +102,38 @@ async def test_voice_transcribed_text_reaches_route(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert route_calls == ["hello world"]        # transcribed text forwarded
     assert len(wa.immediate_calls) == 0          # no guard notice
+
+
+@pytest.mark.asyncio
+async def test_deliver_callback_is_threaded_and_reaches_send_immediate(tmp_path, monkeypatch):
+    """030 L5: act_on_inbound must receive a working deliver= — without it the
+    failed-run breadcrumb and LLM-outage notices never reach a webhook surface."""
+    seen = {}
+
+    async def fake_route(container, inbound, **k):
+        from core.surfaces.dispatcher import RouteDecision, RouteKind
+        return RouteDecision(RouteKind.TASK_AGENT, "sk")
+
+    async def fake_act(task_agent, result, **k):
+        deliver = k.get("deliver")
+        assert deliver is not None, "webhook must pass deliver= (030 L5)"
+        await deliver("run failed: honest breadcrumb")
+        seen["delivered"] = True
+        return None
+
+    monkeypatch.setattr("core.surfaces.inbound_webhook.route_inbound", fake_route)
+    monkeypatch.setattr("core.surfaces.inbound_webhook.act_on_inbound", fake_act)
+
+    class _DeliverWA(_WA):
+        def __init__(self, store):
+            super().__init__(store)
+            self.immediate = []
+
+        async def _send_immediate(self, inbound, text, reply_to=None):
+            self.immediate.append(text)
+
+    wa = _DeliverWA(IdempotencyStore(os.path.join(tmp_path, "d.db")))
+    await wa.handle_post(None, {"x-sig": "ok"}, b'{"id": "m9", "text": "do it"}',
+                         task_agent=object())
+    assert seen.get("delivered") is True
+    assert wa.immediate == ["run failed: honest breadcrumb"]

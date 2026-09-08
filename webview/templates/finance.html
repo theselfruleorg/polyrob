@@ -23,6 +23,28 @@
         <div class="loading">Loading…</div>
     </div>
     <div id="finance-breakdown" class="webgate-list"></div>
+
+    <div class="webgate-section" id="invoices-section"
+         data-read-only="{{ '1' if read_only else '' }}">
+        <div class="section-header">Invoices</div>
+        <p class="text-muted text-sm">
+            The agent's receivables (x402 payment requests) — the same rows
+            <code>polyrob owner invoices</code> and Telegram <code>/invoices</code> list.
+            {% if read_only %}<strong>Read-only console: Settle is disabled.</strong>
+            {% else %}Settle attests an invoice as PAID (owner attestation, not a payment).{% endif %}
+        </p>
+        <div class="webgate-search" id="invoice-controls">
+            <label class="text-sm text-muted" for="invoice-status">Status</label>
+            <select id="invoice-status" class="form-control">
+                <option value="" selected>all</option>
+                <option value="pending">pending</option>
+                <option value="completed">completed</option>
+                <option value="expired">expired</option>
+            </select>
+        </div>
+        <div id="invoices-note" class="webgate-note" style="display:none;"></div>
+        <div id="invoices-list" class="webgate-list"><div class="loading">Loading…</div></div>
+    </div>
 </div>
 
 <style>
@@ -36,6 +58,8 @@
 .kpi-value.unavailable { color: inherit; opacity: 0.5; }
 .webgate-brk-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border-color, #2a2a2a); }
 .webgate-brk-row .brk-k { opacity: 0.8; }
+.cap-error { color: #d83c3e; font-weight: 600; }
+.cap-warn { color: #b8860b; font-weight: 600; }
 .webgate-note {
     margin: 8px 0 4px; padding: 8px 12px; border-radius: 6px;
     border: 1px solid #b8860b; background: rgba(184, 134, 11, 0.12);
@@ -73,6 +97,28 @@
             '<span class="brk-v">' + v + '</span></div>';
     }
 
+    // H3 fix round 1 (2026-08-22 review, Important 1): an explicitly
+    // DISABLED daily cap (unbounded spend IS in force) and a MALFORMED one
+    // (the real wallet load RAISES — nothing is running with ANY cap) used
+    // to render as the same word "unset", which a reader could easily read
+    // as "the $100 default must still be in force". They must never look
+    // the same — render each `wallet_daily_cap_state` distinctly.
+    function walletCapDisplay(caps) {
+        var state = caps.wallet_daily_cap_state;
+        if (state === 'misconfigured') {
+            return '<span class="cap-error">MISCONFIGURED — cannot load, no cap is active</span>';
+        }
+        if (state === 'disabled') {
+            return '<span class="cap-warn">DISABLED — unlimited</span>';
+        }
+        if (caps.wallet_daily_cap_usd != null) {
+            return money(caps.wallet_daily_cap_usd) + (state === 'default' ? ' (default)' : '');
+        }
+        // No state field at all (unexpected backend shape) — never claim a
+        // cap is active when we can't tell; match the error styling.
+        return '<span class="cap-error">unknown</span>';
+    }
+
     async function load() {
         kpis.innerHTML = '<div class="loading">Loading…</div>';
         brk.innerHTML = '';
@@ -108,7 +154,7 @@
                 row('Platform credits spent', money(d.credits_spent)) +
                 row('Invoice ceiling', caps.invoice_max_usd != null ? money(caps.invoice_max_usd) : '—') +
                 row('Daily invoicing cap', caps.invoice_daily_max != null ? String(caps.invoice_daily_max) : '—') +
-                row('Wallet daily cap', caps.wallet_daily_cap_usd != null ? money(caps.wallet_daily_cap_usd) : 'unset') +
+                row('Wallet daily cap', walletCapDisplay(caps)) +
                 // A None balance is OMITTED, never rendered as $0.00 (H14b) —
                 // treasury.balance_usd and runtime.provider_balance_usd are
                 // independent (either can be present without the other).
@@ -124,4 +170,5 @@
     load();
 })();
 </script>
+<script src="/static/js/pages/invoices.js?v=20260827"></script>
 {% endblock %}

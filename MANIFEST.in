@@ -1,7 +1,14 @@
 graft data/prompts
+graft data/streams
 graft webview/static
 graft webview/templates
 graft avatar
 recursive-include agents/personality/characters *.json
 include config/*.template
 include README.md LICENSE
+# 030 WS-F6 (E7): ship the user guide + flag SSOT in the SDIST so a pip
+# source install has the documentation its docstrings reference. (Wheels are
+# unchanged: no runtime code path reads docs/ — the agent-facing copy ships in
+# data/prompts/skills/polyrob-user-guide/.)
+graft docs/guide
+include docs/CONFIGURATION.md

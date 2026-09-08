@@ -155,6 +155,17 @@ to an empty state rather than a broken one. Read-only; goals/cron are
 created by the agent itself (`goal_create`/`cronjob_schedule` tools) or the
 CLI, not from this page.
 
+**Pause panel.** The page leads with the owner pause state
+(`GET /api/webgate/pause` → `{paused, scopes, since, until, set_by, via, reason,
+source, env_scopes, halted, env_halt}`; `halted` = the `all` scope), read
+from the ONE pause record every loop honours (`<data>/AUTONOMY_PAUSE.json`).
+On the owner console `POST /api/webgate/pause` (`{scopes?, duration_minutes?}`)
+pauses everything or the selected scopes (an unknown scope is a 400, like
+`/pause`), and `POST /api/webgate/resume` (`{scopes?}`) lifts it (`still_halted`
+= any scope still paused); the message shown is the verified read-back state,
+never a checkmark on a write. `/api/webgate/halt` stays as an alias of
+"pause everything". See `docs/guide/owner-controls.md`.
+
 ### 6. Identity (`/identity`)
 
 Read-only view of the instance's SOUL and SELF context:

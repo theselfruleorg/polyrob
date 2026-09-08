@@ -414,7 +414,7 @@ def add_cmd(provider, validate_opt):
 
 @auth.command("remove")
 @click.argument("provider")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation.")
 def remove_cmd(provider, yes):
     """Forget PROVIDER's stored credential (does NOT revoke it upstream)."""
     from core.llm_auth.flows import disconnect

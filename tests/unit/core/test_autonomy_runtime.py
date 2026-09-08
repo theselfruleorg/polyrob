@@ -90,7 +90,7 @@ async def test_start_autonomy_starts_surface_gc_when_enabled(monkeypatch):
 async def test_surface_gc_tick_purges_stale_bindings(monkeypatch):
     """The GC tick resolves the registry from the task_agent container and purges with
     the configured horizon. Fail-open: no registry -> no error."""
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     purged = {}
     class _Reg:
@@ -230,8 +230,15 @@ async def test_start_autonomy_schedules_one_cold_start_orphan_reap_when_enabled(
     await asyncio.sleep(0.05)  # let the fire-and-forget sweep task run
 
     assert len(calls) == 1
-    # not wired as a recurring ticker — no extra entry in the handles' loop list
-    assert handles._entries == []
+    # The AGE-based sweep is not wired as a recurring ticker. The only recurring
+    # entry allowed here is the ownership-keyed `sandbox_reap` (added 2026-08-24),
+    # which is a different mechanism: it removes a container only when its
+    # `polyrob.session` label names a session no longer in the registry, so an
+    # idle-but-live session is never swept. The rule this test protects — never
+    # run reap_orphans on a timer — is asserted explicitly below.
+    names = [name for name, _task, _stop in handles._entries]
+    assert names in ([], ["sandbox_reap"])
+    assert "orphan_reap" not in names and "docker_reap" not in names
     await handles.stop()
 
 
@@ -306,7 +313,9 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
     await asyncio.sleep(0.01)
 
     names = [name for name, _task, _stop in handles._entries]
-    assert sorted(names) == ["cron", "curator", "goals", "surface_gc"]
+    assert sorted(names) == ["cron", "curator", "goals", "sandbox_reap", "surface_gc"]
+    # The AGE-based sweep is still forbidden as a recurring entry — `sandbox_reap`
+    # above is the ownership-keyed one, which cannot kill an idle live session.
     assert "orphan_reap" not in names and "docker_reap" not in names
 
     await handles.stop()
@@ -598,3 +607,73 @@ async def test_boot_migrations_skipped_without_container(monkeypatch):
     await asyncio.sleep(0.01)
     assert calls == []
     await handles.stop()
+
+
+# --------------------------------------------------------------------------
+# The sandbox reaper's live-session resolver (2026-08-25)
+#
+# Two problems in one place. The ratchet one: core/ imported
+# agents.task.session_registry, which is an upward edge the layering ratchet
+# forbids. The dangerous one: that helper returns [] when the registry is
+# unreadable, while the call site only bails on None — and reap_unowned treats
+# an empty live set as "every session is gone" and force-removes every labeled
+# container older than its race guard. The comment above the call already said
+# the intent ("If we cannot read the registry we must NOT sweep"); the code did
+# the opposite.
+# --------------------------------------------------------------------------
+
+def test_live_sessions_returns_none_when_there_is_no_registry():
+    """UNKNOWN, never empty. Empty means 'every session is gone' downstream."""
+    from core.autonomy_runtime import _live_session_ids
+    assert _live_session_ids(object()) is None
+    assert _live_session_ids(None) is None
+
+
+def test_live_sessions_returns_none_when_the_registry_cannot_list():
+    from core.autonomy_runtime import _live_session_ids
+    agent = type("A", (), {"_registry": object()})()
+    assert _live_session_ids(agent) is None
+
+
+def test_live_sessions_returns_none_when_listing_raises():
+    from core.autonomy_runtime import _live_session_ids
+
+    class _Boom:
+        def session_ids(self):
+            raise RuntimeError("db gone")
+
+    agent = type("A", (), {"_registry": _Boom()})()
+    assert _live_session_ids(agent) is None
+
+
+def test_a_genuinely_empty_registry_is_an_empty_list_not_none():
+    """The one case where sweeping everything IS correct: the registry answered,
+    and it answered 'nothing is resident'."""
+    from core.autonomy_runtime import _live_session_ids
+
+    class _Empty:
+        def session_ids(self):
+            return []
+
+    agent = type("A", (), {"_registry": _Empty()})()
+    assert _live_session_ids(agent) == []
+
+
+def test_live_sessions_passes_through_resident_ids():
+    from core.autonomy_runtime import _live_session_ids
+
+    class _Reg:
+        def session_ids(self):
+            return ["s1", "s2"]
+
+    agent = type("A", (), {"_registry": _Reg()})()
+    assert _live_session_ids(agent) == ["s1", "s2"]
+
+
+def test_the_reaper_resolver_needs_no_upward_import():
+    """The layering fix, pinned: core must not reach into agents.* for this."""
+    import inspect
+
+    import core.autonomy_runtime as ar
+    src = inspect.getsource(ar)
+    assert "agents.task.session_registry" not in src

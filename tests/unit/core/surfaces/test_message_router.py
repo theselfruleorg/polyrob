@@ -273,6 +273,92 @@ async def test_send_message_returns_true_on_successful_send_result(router, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_send_message_falls_back_to_queue_when_surface_not_local(router, tmp_path, monkeypatch):
+    """2026-08-28: `message(surface="email")` from the telegram daemon process used to
+    be a guaranteed False — "email" is only subscribed in polyrob-email.service's OWN
+    MessageRouter instance. When a durable queue is attached, an unrecognized surface
+    now enqueues for cross-process delivery (drained by whichever process DOES host
+    that surface) instead of failing immediately."""
+    from core.surfaces.outbound_queue import OutboundDeliveryQueue
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "true")
+    r, _ = router
+    q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
+    r.attach_queue(q)
+    # no "email" surface subscribed at all
+    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    assert result is True
+    rows = q.claim_due(now=__import__("time").time() + 1)
+    assert len(rows) == 1
+    assert rows[0]["surface_id"] == "email"
+    assert rows[0]["dest"] == "rob@example.com"
+    assert rows[0]["payload"] == "hi"
+    assert rows[0]["session_key"] == "direct:email:rob@example.com"
+
+
+@pytest.mark.asyncio
+async def test_send_message_queue_fallback_threads_media(router, tmp_path, monkeypatch):
+    from core.surfaces.outbound_queue import OutboundDeliveryQueue
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "true")
+    r, _ = router
+    q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
+    r.attach_queue(q)
+    media = [{"kind": "document", "path": "/tmp/report.pdf", "caption": None}]
+    result = await r.send_message(chat_id="rob@example.com", text="see attached",
+                                  surface_id="email", media=media)
+    assert result is True
+    rows = q.claim_due(now=__import__("time").time() + 1)
+    assert len(rows) == 1
+    import json
+    assert json.loads(rows[0]["media"]) == media
+
+
+@pytest.mark.asyncio
+async def test_send_message_no_queue_still_returns_false_for_unknown_surface(router):
+    """Byte-identical legacy behavior when no queue is attached at all (the
+    OUTBOUND_QUEUE_ENABLED=false / not-yet-installed default)."""
+    r, _ = router
+    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_send_message_fallback_ignores_flag_uses_attached_queue(router, tmp_path, monkeypatch):
+    """2026-08-30: the cross-process fallback is keyed on queue EXISTENCE only, not
+    OUTBOUND_QUEUE_ENABLED — that flag governs ONLY publish()'s primary reply-routing
+    decision (bootstrap.py now constructs the queue unconditionally). With a queue
+    attached, this fallback works regardless of the flag's setting, closing the gap
+    where `message(surface="email")` from an autonomous goal permanently failed on a
+    prod deploy that never turned the flag on (observed 2026-08-28/2026-08-30)."""
+    from core.surfaces.outbound_queue import OutboundDeliveryQueue
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "false")
+    r, _ = router
+    q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
+    r.attach_queue(q)
+    result = await r.send_message(chat_id="rob@example.com", text="hi", surface_id="email")
+    assert result is True
+    rows = q.claim_due(now=__import__("time").time() + 1)
+    assert len(rows) == 1
+    assert rows[0]["surface_id"] == "email"
+
+
+@pytest.mark.asyncio
+async def test_send_message_known_surface_never_touches_queue(router, tmp_path, monkeypatch):
+    """A locally-subscribed surface always sends directly — the queue fallback is
+    only reached when the surface lookup itself misses."""
+    from core.surfaces.outbound_queue import OutboundDeliveryQueue
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "true")
+    r, _ = router
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+    q = OutboundDeliveryQueue(str(tmp_path / "outbox.db"))
+    r.attach_queue(q)
+    result = await r.send_message(chat_id="555", text="hi", surface_id="telegram")
+    assert result is True
+    assert len(surf.sent) == 1
+    assert q.claim_due(now=__import__("time").time() + 1) == []
+
+
+@pytest.mark.asyncio
 async def test_send_message_mark_fault_does_not_flip_returned_result(router, tmp_path):
     """A dead-target STORE fault while marking a failed send must not change the
     (already-False) result returned to the caller — the send outcome is still

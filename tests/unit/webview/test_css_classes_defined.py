@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
-_CSS_ROOT = Path(__file__).resolve().parents[3] / "webview" / "static" / "css"
+_WEBVIEW_ROOT = Path(__file__).resolve().parents[3] / "webview"
+_CSS_ROOT = _WEBVIEW_ROOT / "static" / "css"
+_TEMPLATES_ROOT = _WEBVIEW_ROOT / "templates"
 
 # (selector, ...) — every one must be defined in at least one css file.
 _SELECTORS = [
@@ -27,6 +29,27 @@ _SELECTORS = [
     "filter-select",
     "loading",
 ]
+
+# 030 D-6 — the webgate component classes are not a hardcoded list: scan the
+# templates for every `webgate-*` class token actually referenced (both HTML
+# `class="…"` attributes and JS `el.className = '…'` assignments, which is how
+# memory.html applies `webgate-caption`/`webgate-item`).
+_CLASS_ASSIGN_RE = re.compile(r"""class(?:Name)?\s*=\s*["']([^"']+)["']""")
+_WEBGATE_TOKEN_RE = re.compile(r"webgate-[A-Za-z0-9_-]+")
+
+
+def _webgate_classes_in_templates() -> list:
+    found = set()
+    for tpl in sorted(_TEMPLATES_ROOT.rglob("*.html")):
+        text = tpl.read_text(encoding="utf-8", errors="ignore")
+        for match in _CLASS_ASSIGN_RE.finditer(text):
+            for token in match.group(1).split():
+                if _WEBGATE_TOKEN_RE.fullmatch(token):
+                    found.add(token)
+    return sorted(found)
+
+
+_WEBGATE_CLASSES = _webgate_classes_in_templates()
 
 
 def _all_css_text() -> str:
@@ -46,6 +69,26 @@ def test_selector_defined_somewhere(selector):
     # A real definition is `.<selector>` used as a selector (followed by a
     # combinator / brace / comma / pseudo / whitespace), not a substring of a
     # longer class name.
+    pattern = re.compile(r"\." + re.escape(selector) + r"(?![\w-])")
+    assert pattern.search(text), f".{selector} is not defined in any {_CSS_ROOT} css file"
+
+
+def test_webgate_scan_finds_the_known_core_classes():
+    """Guard the scanner itself — if the regex rots, the parametrized list
+    silently shrinks to nothing and the suite goes green vacuously."""
+    for expected in ("webgate-page", "webgate-header", "webgate-list",
+                     "webgate-empty", "webgate-caption"):
+        assert expected in _WEBGATE_CLASSES, (
+            f"template scan lost {expected!r} — scanner regex or templates changed"
+        )
+
+
+@pytest.mark.parametrize("selector", _WEBGATE_CLASSES)
+def test_webgate_class_defined_in_css(selector):
+    """030 D-6: every webgate-* class a template references must resolve to a
+    real definition in some webview/static/css/**/*.css file (webgate.css is
+    the component layer) — inline template <style> blocks don't count."""
+    text = _all_css_text()
     pattern = re.compile(r"\." + re.escape(selector) + r"(?![\w-])")
     assert pattern.search(text), f".{selector} is not defined in any {_CSS_ROOT} css file"
 

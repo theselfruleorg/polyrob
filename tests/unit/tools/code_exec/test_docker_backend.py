@@ -22,7 +22,23 @@ def test_argv_has_hardening_flags(monkeypatch):
     assert "--read-only" in argv
     assert "--pids-limit" in argv
     assert "--memory" in argv
+    assert "--shm-size" in argv
     assert "--cpus" in argv
+
+
+def test_shm_size_defaults_well_above_dockers_64mb(monkeypatch):
+    """Docker's own default (64MB) is the classic cause of a headless-Chromium
+    SIGTRAP/crashpad crash under Puppeteer/Playwright/Remotion (2026-08-27
+    release-video finding). Confirm the flag is present with a real, env-
+    overridable value — not just present-but-empty."""
+    argv = _argv(monkeypatch, ExecutionRequest(language="python", code="print(1)"))
+    assert argv[argv.index("--shm-size") + 1] == "1024m"
+
+
+def test_shm_size_env_override(monkeypatch):
+    argv = _argv(monkeypatch, ExecutionRequest(language="python", code="print(1)"),
+                 CODE_EXEC_SHM_SIZE_MB="256")
+    assert argv[argv.index("--shm-size") + 1] == "256m"
     assert "--user" in argv and argv[argv.index("--user") + 1]  # non-empty
     assert "-v" in argv and "/tmp/ws:/workspace" in argv        # workspace-only mount
     assert argv[argv.index("-w") + 1] == "/workspace"

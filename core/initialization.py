@@ -17,13 +17,11 @@ from core.exceptions import (
     ComponentInitializationError
 )
 from core.logging import get_component_logger
-from core.permissions import Permissions
 from core.container import DependencyContainer, ServiceScope, ServiceRegistration
 
 # Core utilities
 from modules import MODULE_INIT_ORDER
 from utils.rate_limit_manager import RateLimitManager
-from utils.metrics import Metrics  # Add import for Metrics
 
 # Database and Memory
 from modules.database import DatabaseManager
@@ -320,19 +318,6 @@ async def initialize_core(container: DependencyContainer) -> None:
         )
         logger.info("  ✓ Rate limit manager initialized")
         
-        # Initialize metrics
-        metrics = Metrics(
-            name='metrics',
-            config=container.config
-        )
-        await metrics.initialize()
-        container.register_core_service(
-            'metrics',
-            metrics,
-            scope=ServiceScope.SINGLETON
-        )
-        logger.info("  ✓ Metrics initialized")
-        
         # Initialize cache
         cache_manager = CacheManager(
             name='cache_manager',
@@ -379,23 +364,9 @@ async def initialize_core(container: DependencyContainer) -> None:
         )
         logger.info("  ✓ Memory manager initialized")
         
-        # Initialize permissions after database and memory are ready
-        permissions = Permissions(
-            config=container.config
-        )
-        # Set container reference for permissions
-        permissions.container = container
-        await permissions.initialize()
-        container.register_core_service(
-            'permissions',
-            permissions,
-            scope=ServiceScope.SINGLETON
-        )
-        logger.info("  ✓ Permissions manager initialized")
-
-        # (Dead UserProfileManager link removed 2026-07-11: Permissions never had
-        # a set_user_profile_manager method — the call always raised and was
-        # swallowed. Real RBAC reads roles via direct SQL in core/permissions.py.)
+        # (The Telegram-era `permissions` service was retired 2026-08-28: it was
+        # built here with four DB reads and never read by anything — admin
+        # questions are answered by core.constants.is_admin / api.auth_constants.)
 
         logger.info("✓ Core initialization complete")
         return
@@ -942,7 +913,6 @@ async def _cleanup_component_type(container: DependencyContainer, component_type
             
         elif component_type == 'core':
             core = [
-                container.get_service('permissions'),
                 container.get_service('rate_limit_manager')
             ]
             components = [c for c in core if c is not None]
