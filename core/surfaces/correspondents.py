@@ -166,6 +166,96 @@ class CorrespondentRegistry:
         n = execute_retry(self.db_path, sql, tuple(params))
         return bool(n)
 
+    def reject(
+        self,
+        *,
+        surface: str,
+        address: str,
+        thread_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> bool:
+        """Owner decision: reject a PENDING binding (pending -> expired).
+
+        The counterpart to :meth:`approve` (030 WS-C C3 — before this the only
+        way to clear a pending contact was to approve it or wait out the TTL).
+        Same key shape and the same cross-tenant safety guard as ``approve``:
+        an unscoped call that would span more than one tenant is REFUSED.
+
+        Only a *pending* row flips — an ACTIVE binding is never demoted here
+        (revoking an active correspondent is a separate, deliberate act). The
+        rejected row becomes an EXPIRED tombstone (the same terminal state the
+        TTL sweep produces): ``resolve`` never routes it, the pending listing
+        drops it, and the idempotent :meth:`seed` cannot silently re-open the
+        same contact as a fresh pending row. Returns True if a row flipped.
+        """
+        ts = time.time() if now is None else now
+        addr = _norm_addr(address)
+        tid = thread_id or ""
+        if user_id is None:
+            # Safety guard: never let an unscoped rejection cross tenants.
+            distinct = execute_retry(
+                self.db_path,
+                "SELECT DISTINCT user_id FROM correspondents "
+                "WHERE surface=? AND address=? AND thread_id=? AND state=?",
+                (surface, addr, tid, STATE_PENDING),
+                fetch="all",
+            ) or []
+            if len(distinct) > 1:
+                logger.warning(
+                    "correspondents.reject refused: %s:%s (thread %r) has pending rows "
+                    "for %d tenants; pass user_id to disambiguate",
+                    surface, addr, tid, len(distinct),
+                )
+                return False
+        sql = ("UPDATE correspondents SET state=?, updated_at=? "
+               "WHERE surface=? AND address=? AND thread_id=? AND state=?")
+        params = [STATE_EXPIRED, ts, surface, addr, tid, STATE_PENDING]
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
+        n = execute_retry(self.db_path, sql, tuple(params))
+        return bool(n)
+
+    def deactivate(
+        self,
+        *,
+        surface: str,
+        address: str,
+        thread_id: Optional[str] = None,
+        user_id: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> bool:
+        """Revoke an ACTIVE binding (active -> expired tombstone) — the deliberate
+        counterpart :meth:`reject` leaves alone. 031 T15: used by the boot sweep
+        that removes a binding to the agent's OWN address. Same cross-tenant
+        guard as ``reject``: an unscoped call spanning tenants is refused.
+        Returns True if a row flipped."""
+        ts = time.time() if now is None else now
+        addr = _norm_addr(address)
+        tid = thread_id or ""
+        if user_id is None:
+            distinct = execute_retry(
+                self.db_path,
+                "SELECT DISTINCT user_id FROM correspondents "
+                "WHERE surface=? AND address=? AND thread_id=? AND state=?",
+                (surface, addr, tid, STATE_ACTIVE),
+                fetch="all",
+            ) or []
+            if len(distinct) > 1:
+                logger.warning(
+                    "correspondents.deactivate refused: %s:%s (thread %r) is active for %d "
+                    "tenants; pass user_id to disambiguate", surface, addr, tid, len(distinct))
+                return False
+        sql = ("UPDATE correspondents SET state=?, updated_at=? "
+               "WHERE surface=? AND address=? AND thread_id=? AND state=?")
+        params = [STATE_EXPIRED, ts, surface, addr, tid, STATE_ACTIVE]
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params.append(user_id)
+        n = execute_retry(self.db_path, sql, tuple(params))
+        return bool(n)
+
     def seed_thread_anchor(
         self,
         *,
@@ -318,7 +408,7 @@ class CorrespondentRegistry:
         if len(tenants) > 1:
             return None
         try:
-            from agents.task.surface_config import SurfaceConfig
+            from core.surfaces.config import SurfaceConfig
             latest_ok = SurfaceConfig.correspondent_resolve_latest()
         except Exception:
             latest_ok = True

@@ -10,12 +10,20 @@ from typing import List, Optional
 import click
 
 from cli.commands._bootstrap import cli_container
+from cli.commands._grouped import GroupedGroup
 from cli.ui.events import normalize as _normalize_event
 from cli.ui.plain_renderer import PlainRenderer
 from cli.ui.state import SessionState
 
+# D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
+_SESSION_HELP_SECTIONS = [
+    ("Inspect", ["list", "show", "history", "tail", "artifacts", "costs", "tools"]),
+    ("Control", ["cancel", "pause", "resume", "export"]),
+]
 
-@click.group("session")
+
+@click.group("session", cls=GroupedGroup, help_sections=_SESSION_HELP_SECTIONS,
+             epilog="Continue a session's execution with: polyrob run --resume <id>")
 def session():
     """Manage task sessions."""
     pass
@@ -102,7 +110,9 @@ def session_list(show_all: bool, as_json: bool):
 
 
 async def _session_list(show_all: bool, as_json: bool):
-    container = await cli_container()
+    # L11 (proposal 030): read-only — listing local session metadata must never
+    # require a provider key, so skip the LLM key preflight.
+    container = await cli_container(require_llm=False)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -262,7 +272,7 @@ def session_show(session_id: str, as_json: bool):
 
 
 async def _session_show(session_id: str, as_json: bool):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)  # read-only (L11)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -288,16 +298,6 @@ async def _session_show(session_id: str, as_json: bool):
         click.echo(f"  model: {session_info.get('model')}")
     if session_info.get('provider'):
         click.echo(f"  provider: {session_info.get('provider')}")
-
-
-@session.command("attach")
-@click.argument("session_id")
-def session_attach(session_id: str):
-    """Attach to a running session (NOT YET IMPLEMENTED — use `polyrob run --resume`)."""
-    click.echo(click.style("[polyrob] ", fg="yellow")
-               + "attach is not yet implemented - continue a session with "
-                 "'polyrob run --resume <id>', or 'polyrob session tail <id>' to watch it")
-    click.echo("To monitor an existing session, use: polyrob session tail <id>")
 
 
 @session.command("pause")
@@ -385,7 +385,7 @@ def _render_training_format(session_id, session_info, session_dir, fmt) -> dict:
 
 
 async def _session_export(session_id: str, output: Optional[str], format: str):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)  # read-only (L11)
 
     from agents.task.path import pm
 
@@ -577,7 +577,7 @@ def session_costs(session_id: str, as_json: bool):
 
 
 async def _session_costs(session_id: str, as_json: bool):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)  # read-only (L11)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:

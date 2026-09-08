@@ -21,6 +21,22 @@ def build_session_key(source: SessionSource, user_id: Optional[str] = None) -> s
     return base
 
 
+def chat_id_from_session_key(session_key: str) -> str:
+    """The inverse of :func:`build_session_key`'s chat segment (030 WS-B3/E1).
+
+    Chat-scoped keys ``agent:main:{surface}:{type}:{chat}[...]`` → index 4; the
+    cron back-compat shim ``direct:{surface}:{chat}`` → last segment; any other
+    shape falls back to the last segment. This 6-line parse used to be copied
+    verbatim into every surface module — ONE inverse next to the builder now.
+    """
+    parts = session_key.split(":")
+    if parts and parts[0] == "direct":
+        return parts[-1]
+    if len(parts) >= 5:
+        return parts[4]
+    return parts[-1] if parts else session_key
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS session_chat_map (
     session_key TEXT PRIMARY KEY,

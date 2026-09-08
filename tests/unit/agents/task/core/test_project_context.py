@@ -138,7 +138,7 @@ class TestLoadProjectContext:
         # is_secret_path is imported inside the impl function; patch it at its
         # source module so the inner import picks up the mock.
         with patch(
-            "agents.task.agent.core.secret_guard.is_secret_path",
+            "core.security.secret_guard.is_secret_path",
             return_value=True,
         ):
             result = load_project_context(tmp_path)
@@ -566,7 +566,7 @@ _orig_impl = None
 
 def _patched_impl_with_scanner(scanner_fn):
     """Return a patched _load_project_context_impl that uses a custom scanner."""
-    from agents.task.agent.core.secret_guard import is_secret_path, estimate_tokens_rough
+    from core.security.secret_guard import is_secret_path, estimate_tokens_rough
     from agents.task.agent.core.project_context import (
         _find_git_root, _CONTEXT_FILENAMES, _FILE_HEADER_TPL,
     )

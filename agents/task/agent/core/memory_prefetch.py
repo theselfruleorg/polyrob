@@ -60,7 +60,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
         try:
             from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
             if UNTRUSTED_TOOL_RESULT_WRAP:
-                from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+                from core.security.untrusted_wrap import wrap_untrusted
                 recalled = wrap_untrusted("cross_session_memory", recalled)
         except Exception as e:  # framing must never break prefetch
             logger.debug("memory recall wrap skipped: %s", e)
@@ -85,7 +85,7 @@ async def build_prefetch_message(query: str, *, session_id: str,
                     try:
                         from agents.task.constants import UNTRUSTED_TOOL_RESULT_WRAP
                         if UNTRUSTED_TOOL_RESULT_WRAP:
-                            from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+                            from core.security.untrusted_wrap import wrap_untrusted
                             kb_recalled = wrap_untrusted("knowledge_base", kb_recalled)
                     except Exception as e:  # wrap failure must never break KB branch
                         logger.debug("kb recall wrap skipped: %s", e)

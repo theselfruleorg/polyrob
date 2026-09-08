@@ -123,9 +123,16 @@ async def api_knowledge_episodes(request: Request, since_hours: int = 0,
 
 @router.get("/api/webgate/knowledge/skills")
 async def api_knowledge_skills(request: Request):
-    """Skill catalog + reuse stats + pending drafts (previously web-invisible)."""
+    """Skill catalog + reuse stats + pending drafts (previously web-invisible).
+
+    030 D4: a failed CATALOG read is reported via an ``error`` field (same JSON
+    shape, still HTTP 200 so the page renders) — a bare ``count: 0`` is
+    indistinguishable from a genuinely empty catalog. The usage-stats leg stays
+    silently fail-open (it only decorates catalog rows).
+    """
     user_id = _effective_user_id(request)
     catalog, pending, usage = [], [], {}
+    error = None
     try:
         from modules.skills.skill_usage import get_skill_usage_store
         rows = get_skill_usage_store(_data_dir()).list_authored(user_id=user_id)
@@ -146,10 +153,12 @@ async def api_knowledge_skills(request: Request):
             })
         if hasattr(sm, "list_pending_skills"):
             pending = sm.list_pending_skills(user_id) or []
-    except Exception:
-        pass
-    return JSONResponse({"catalog": catalog, "pending": pending,
-                         "count": len(catalog)})
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:200]
+    payload = {"catalog": catalog, "pending": pending, "count": len(catalog)}
+    if error:
+        payload["error"] = error
+    return JSONResponse(payload)
 
 
 @router.get("/api/webgate/knowledge/skill/{skill_id}")
@@ -205,7 +214,7 @@ async def api_knowledge_changes(request: Request, limit: int = 50):
     limit = max(1, min(int(limit or 50), 200))
     items = []
     try:
-        from agents.task.telemetry.event_log import get_event_log
+        from core.event_log import get_event_log
         log = get_event_log()
         for kind in _CHANGE_KINDS:
             for e in (log.query(kind=kind, user_id=user_id, limit=limit) or []):
@@ -223,7 +232,7 @@ async def api_knowledge_changes(request: Request, limit: int = 50):
 
 @router.get("/knowledge", response_class=HTMLResponse)
 async def knowledge_page(request: Request):
-    return _TEMPLATES.TemplateResponse("knowledge.html", _page_context(request))
+    return _TEMPLATES.TemplateResponse(request, "knowledge.html", _page_context(request))
 
 
 __all__ = ["router"]

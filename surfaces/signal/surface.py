@@ -31,12 +31,10 @@ def _min_interval() -> float:
 
 
 def target_from_session_key(session_key: str) -> str:
-    parts = session_key.split(":")
-    if parts and parts[0] == "direct":
-        return parts[-1]
-    if len(parts) >= 5:
-        return parts[4]
-    return parts[-1] if parts else session_key
+    """Delegates to the ONE inverse parser next to build_session_key
+    (030 WS-B3/E1 — this 6-line parse was copied into every surface)."""
+    from core.surfaces.session_chat_registry import chat_id_from_session_key as _p
+    return _p(session_key)
 
 
 def parse_envelope(envelope: dict, account: str,

@@ -52,6 +52,8 @@ _LAZY_SUBCOMMANDS = {
     "gateway": "cli.commands.gateway:gateway",
     "goals": "cli.commands.goals:goals",
     "cron": "cli.commands.cron:cron",
+    "autonomy": "cli.commands.autonomy:autonomy",  # 030 WS-E4 intent verbs
+    "apps": "cli.commands.apps:apps",  # 032 durable app service (owner seat + supervisor)
     "subagents": "cli.commands.subagents:subagents",
     "todos": "cli.commands.todos:todos",
     "update": "cli.commands.update:update_cmd",
@@ -61,7 +63,7 @@ _LAZY_SUBCOMMANDS = {
     "finance": "cli.commands.finance:finance",
     "wallet": "cli.commands.wallet:wallet_cmd",
     "datagen": "cli.commands.datagen:datagen",
-    "knowledge": "cli.commands.knowledge:knowledge",
+    "knowledge": "cli.commands.knowledge:knowledge",  # hidden deprecated alias for `kb export` (030 D10)
     "approvals": "cli.commands.approvals:approvals",
     "discord": "cli.commands.discord:discord",
     "slack": "cli.commands.slack:slack",
@@ -96,7 +98,7 @@ _HELP_GROUPS = [
     ("Money",
      ["wallet", "finance"]),
     ("Inspect & admin",
-     ["tools", "kb", "knowledge", "owner", "profile", "journey", "pfp", "soul",
+     ["tools", "kb", "owner", "profile", "journey", "pfp", "soul",
       "x-account", "datagen"]),
 ]
 

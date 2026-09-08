@@ -116,6 +116,22 @@ def test_file_contains_no_workspace_or_empty_contains_fail(tmp_path):
     assert results[0]["ok"] is False
 
 
+def test_file_contains_is_case_insensitive(tmp_path):
+    """2026-08-28, third recurrence: a report writes 'Verdict:' as a normal
+    prose section header; a check for lowercase 'verdict' false-negatived a
+    genuinely complete report three separate times (2026-08-23/24, 08-27,
+    08-28) before this was fixed at the root instead of patched per-report."""
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / "report.md").write_text(
+        "- **Verdict: honeypot NO, sell tax 0% — PASS both screens.**\n")
+    results = _run([{"type": "file_contains", "path": "report.md",
+                     "contains": ["verdict", "SELL TAX"]}],
+                   workspace_dir=str(ws))
+    assert results[0]["ok"] is True, results[0]["detail"]
+    assert "2/2" in results[0]["detail"]
+
+
 def test_unknown_check_type_fails_closed():
     results = _run([{"type": "wallet_delta", "min": 1}])
     assert results[0]["ok"] is False

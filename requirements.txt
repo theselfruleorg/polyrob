@@ -9,15 +9,21 @@ python-dotenv>=1.0.0
 # NOTE: Pinned because starlette 1.0.0 broke TemplateResponse signature
 # (old: TemplateResponse(name, context); new: TemplateResponse(request, name, context)).
 # Until webview/server.py is migrated, keep these on the AWS-prod-tested versions.
-fastapi==0.123.9
-starlette==0.50.0
+# 2026-08-24: the ENTIRE starlette 0.5x line carries CVE-2026-48818 (SSRF +
+# NTLM credential theft via UNC paths in StaticFiles), CVE-2026-54283
+# (request.form() limits silently ignored), CVE-2026-48710/48817/54282. Only
+# starlette 1.x is clean, and fastapi 0.123.9 caps starlette <0.51.0 — so the
+# framework pair has to move together.
+fastapi==0.141.1
+starlette==1.6.0
 uvicorn[standard]==0.38.0
 Jinja2==3.1.6
 watchfiles>=1.0.0
 python-multipart>=0.0.6  # Required for file uploads
 
 # Async HTTP and file I/O utilities
-aiohttp>=3.8.0
+aiohttp>=3.14.3  # CVE-2026-69244 (OOB heap read in the C response parser), CVE-2026-69243, CVE-2026-59881
+h2>=4.4.1  # CVE-2026-71554 (duplicate Host header -> request smuggling); transitive, floored explicitly
 aiofiles>=23.0.0
 
 # Realtime UI (Socket.IO) and templating for webview
@@ -63,7 +69,7 @@ requests>=2.30.0
 certifi>=2024.0.0
 
 # Security
-cryptography>=40.0.0
+cryptography>=50.0.0  # CVE-2026-69247 (Bleichenbacher oracle in PKCS#7 EnvelopedData)
 pyjwt>=2.8.0  # JWT handling for Privy auth
 
 # Blockchain and Web3 (for deposit wallets and payment monitoring)
@@ -74,7 +80,7 @@ x402>=2.13.0
 
 # File and document processing
 python-docx>=0.8.0
-pypdf>=4.0.0
+pypdf>=6.15.0  # CVE-2026-71870, CVE-2026-71852 (unbounded memory/runtime on hostile PDFs)
 markdown>=3.5.0
 markdownify>=0.11.0
 pillow>=11.0.0

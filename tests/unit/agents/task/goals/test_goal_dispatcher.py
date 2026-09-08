@@ -57,7 +57,8 @@ async def test_dispatch_runs_and_completes(board, monkeypatch):
     monkeypatch.setenv("GOAL_MAX_CONCURRENT", "5")
     # self-wake is gated OFF by default (P5 T7); enable it here to exercise the feed.
     monkeypatch.setenv("GOAL_SELF_WAKE_ENABLED", "true")
-    g = board.create(user_id="u1", title="do it", body="the work")
+    g = board.create(user_id="u1", title="do it", body="the work",
+                     payload={"origin_session_id": "chat-origin"})  # 2026-08-28: wake targets the creator, never the run session
     agent = _FakeAgent(final="done well")
     d = GoalDispatcher(board, agent)
     n = await d.dispatch_once()
@@ -69,6 +70,7 @@ async def test_dispatch_runs_and_completes(board, monkeypatch):
     assert got.result == "done well"
     assert agent.ran == [("u1", "sess-u1")]
     assert agent.woke and agent.woke[0][2]["goal_id"] == g.id  # self-wake fed
+    assert agent.woke[0][0] == "chat-origin"  # ...to the CREATING session, not sess-u1
 
 
 @pytest.mark.asyncio
@@ -99,7 +101,8 @@ async def test_self_wake_marks_episode_surfaced(board, monkeypatch):
     monkeypatch.setattr(
         "modules.memory.registry.get_memory_registry", lambda: _FakeRegistry())
 
-    g = board.create(user_id="u1", title="do it", body="the work")
+    g = board.create(user_id="u1", title="do it", body="the work",
+                     payload={"origin_session_id": "chat-origin"})  # 2026-08-28: wake targets the creator, never the run session
     agent = _FakeAgent(final="done well")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
@@ -138,7 +141,8 @@ async def test_self_wake_not_marked_when_delivery_fails(board, monkeypatch):
             self.woke.append((session_id, text, metadata))
             return False  # not delivered
 
-    g = board.create(user_id="u1", title="do it", body="the work")
+    g = board.create(user_id="u1", title="do it", body="the work",
+                     payload={"origin_session_id": "chat-origin"})  # 2026-08-28: wake targets the creator, never the run session
     agent = _NoWakeAgent(final="done well")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()

@@ -1,0 +1,574 @@
+/**
+ * POLYROB Design System - Webgate page components (030 D-6)
+ *
+ * Baseline component layer for every `.webgate-*` class the webgate v1
+ * single-user pages reference (memory, autonomy, system, identity,
+ * preferences, pending, finance, knowledge, positions). Before this file
+ * none of these classes existed in any stylesheet, so the pages rendered
+ * unstyled.
+ *
+ * Design contract:
+ * - Tokens only — everything comes from variables.css (colors, spacing,
+ *   typography, borders). Terminal aesthetic: square corners, thin borders,
+ *   mono type.
+ * - This is the BASELINE. Some templates still carry inline <style> blocks
+ *   (finance, knowledge, positions, …); those load after this file and are
+ *   allowed to override it. Do not delete them from here.
+ */
+
+/* =============================================================================
+   PAGE SHELL
+   .webgate-page rides on .terminal-container (flex column, height 100%,
+   inner overflow). Webgate pages are documents, not panels: constrain to
+   the unified content width, center, and let the document scroll.
+   ============================================================================= */
+
+.terminal-container.webgate-page {
+    display: block;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    width: 100%;
+    max-width: var(--content-max-width);
+    margin: 0 auto;
+    padding: var(--spacing-xl) var(--content-padding) var(--spacing-2xl);
+}
+
+/* Small-caption utility the webgate templates pair with .text-muted.
+   Scoped to the webgate shell — .text-sm is not defined globally. */
+.webgate-page .text-sm {
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-normal);
+}
+
+/* =============================================================================
+   PAGE HEADER
+   <div class="webgate-header"><h2>Title</h2><p class="text-muted text-sm">…
+   ============================================================================= */
+
+.webgate-header {
+    margin-bottom: var(--spacing-xl);
+    padding-bottom: var(--spacing-md);
+    border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.webgate-header h2 {
+    margin: 0 0 var(--spacing-sm);
+    font-size: var(--font-size-xl);
+    font-weight: var(--font-weight-normal);
+    color: var(--color-accent-green);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+.webgate-header p {
+    margin: 0;
+    max-width: 72ch;
+    line-height: var(--line-height-relaxed);
+}
+
+/* =============================================================================
+   SEARCH / CONTROL ROW
+   <form class="webgate-search"> — a text input or select plus a button/label.
+   ============================================================================= */
+
+.webgate-search {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+}
+
+.webgate-search .form-control {
+    flex: 1 1 auto;
+    min-width: 0;
+    width: auto;
+}
+
+.webgate-search select.form-control {
+    flex: 0 1 160px;
+}
+
+.webgate-search .btn,
+.webgate-search button {
+    flex: 0 0 auto;
+}
+
+.webgate-search label {
+    flex: 0 0 auto;
+    color: var(--color-text-secondary);
+}
+
+/* =============================================================================
+   LISTS + ITEMS + STATES
+   ============================================================================= */
+
+.webgate-list {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.webgate-item {
+    padding: var(--spacing-md) var(--spacing-xs);
+    border-bottom: var(--border-width) solid var(--color-border);
+    font-size: var(--font-size-base);
+    line-height: var(--line-height-normal);
+    overflow-wrap: anywhere;
+    transition: background var(--transition-fast);
+}
+
+.webgate-item:last-child {
+    border-bottom: none;
+}
+
+.webgate-item:hover {
+    background: var(--color-bg-card);
+}
+
+.webgate-item .badge {
+    margin-right: var(--spacing-sm);
+    border: var(--border-width) solid var(--color-border);
+    color: var(--color-text-secondary);
+}
+
+/* Result-count caption injected above list results (memory.html JS). */
+.webgate-caption {
+    padding: var(--spacing-sm) var(--spacing-xs);
+    border-bottom: var(--border-width) solid var(--color-border);
+}
+
+/* Empty / error state — quiet, clearly not data. */
+.webgate-empty {
+    padding: var(--spacing-xl);
+    border: var(--border-width) dashed var(--color-border);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    text-align: center;
+}
+
+/* =============================================================================
+   SECTIONS
+   <div class="webgate-section"><div class="section-header">…</div>…</div>
+   (.section-header itself lives in components.css.)
+   ============================================================================= */
+
+.webgate-section {
+    margin-bottom: var(--spacing-2xl);
+}
+
+.webgate-section .section-header {
+    margin-top: 0;
+}
+
+/* =============================================================================
+   DOCUMENTS
+   <pre class="webgate-doc"> — SOUL/SELF docs, doctor report.
+   ============================================================================= */
+
+.webgate-doc {
+    margin: 0;
+    padding: var(--spacing-lg);
+    background: var(--color-bg-card);
+    border: var(--border-width) solid var(--color-border);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-relaxed);
+    color: var(--color-text-primary);
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overflow-x: auto;
+}
+
+/* =============================================================================
+   META STRIP
+   <div class="webgate-meta"><div><span class="meta-label">…</span>
+   <span class="meta-value">…</span></div>…</div>
+   ============================================================================= */
+
+.webgate-meta {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-xl);
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--color-bg-card);
+    border: var(--border-width) solid var(--color-border);
+    font-size: var(--font-size-sm);
+}
+
+.webgate-meta > div {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    min-width: 0;
+}
+
+/* The global .meta-value is built for sidebar grids (right-aligned, nowrap,
+   ellipsis) — inside the meta strip values must stay readable and wrap. */
+.webgate-meta .meta-value {
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+    color: var(--color-text-highlight);
+}
+
+/* =============================================================================
+   AVATAR (identity page)
+   ============================================================================= */
+
+.webgate-avatar {
+    display: flex;
+    justify-content: center;
+    padding: var(--spacing-sm) 0 var(--spacing-xs);
+}
+
+.webgate-avatar canvas,
+.webgate-avatar img {
+    max-width: 100%;
+    height: auto;
+    border: var(--border-width) solid var(--color-border);
+    background: var(--color-bg-terminal);
+}
+
+/* =============================================================================
+   NOTE / WARNING CALLOUT (finance, positions)
+   ============================================================================= */
+
+.webgate-note {
+    margin: var(--spacing-sm) 0 var(--spacing-xs);
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: var(--border-width) solid var(--color-accent-yellow);
+    border-left-width: var(--border-width-accent);
+    background: rgba(226, 192, 112, 0.08);
+    color: var(--color-text-primary);
+    font-size: var(--font-size-sm);
+    line-height: var(--line-height-normal);
+}
+
+/* =============================================================================
+   TABS (knowledge page)
+   ============================================================================= */
+
+.webgate-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-lg);
+}
+
+.webgate-tabs .btn.active {
+    color: var(--color-accent-green);
+    border-color: var(--color-accent-green);
+}
+
+/* =============================================================================
+   KPI TILES + BREAKDOWN ROWS (finance page)
+   ============================================================================= */
+
+.webgate-kpi-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-md);
+    margin: var(--spacing-md) 0;
+}
+
+.webgate-kpi {
+    flex: 1 1 140px;
+    min-width: 0;
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--color-bg-card);
+    border: var(--border-width) solid var(--color-border);
+}
+
+.webgate-kpi .kpi-label {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+.webgate-kpi .kpi-value {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-medium);
+    color: var(--color-text-highlight);
+}
+
+.webgate-kpi .kpi-sub {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.webgate-brk-row {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-xs);
+    border-bottom: var(--border-width) solid var(--color-border);
+    font-size: var(--font-size-sm);
+}
+
+.webgate-brk-row:last-child {
+    border-bottom: none;
+}
+
+.webgate-brk-row .brk-k {
+    color: var(--color-text-secondary);
+}
+
+.webgate-brk-row .brk-v {
+    color: var(--color-text-highlight);
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+
+/* =============================================================================
+   OWNER CONTROLS (030 WS-C C3) — kill switch, per-row actions, config page
+   ============================================================================= */
+
+/* Kill-switch panel (autonomy page). */
+.webgate-halt {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-md);
+    padding: var(--spacing-md) var(--spacing-lg);
+    background: var(--color-bg-card);
+    border: var(--border-width) solid var(--color-border);
+}
+
+.webgate-halt-state {
+    flex: 1 1 240px;
+    min-width: 0;
+    font-size: var(--font-size-sm);
+}
+
+.webgate-halt-actions {
+    flex: 0 0 auto;
+}
+
+.webgate-halt-badge {
+    display: inline-block;
+    padding: 1px var(--spacing-sm);
+    border: var(--border-width) solid var(--color-border);
+    font-size: var(--font-size-xs);
+    letter-spacing: 1px;
+}
+
+.webgate-halt-badge.halted {
+    color: var(--color-accent-red, #d83c3e);
+    border-color: var(--color-accent-red, #d83c3e);
+}
+
+.webgate-halt-badge.running {
+    color: var(--color-accent-green);
+    border-color: var(--color-accent-green);
+}
+
+/* Error variant of the note callout (halt-not-effective etc.). */
+.webgate-note--error {
+    border-color: var(--color-accent-red, #d83c3e);
+    background: rgba(216, 60, 62, 0.08);
+}
+
+/* Per-row action strip (goal verbs, cron cancel, invoice settle, config). */
+.webgate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
+}
+
+.webgate-actions button.form-control,
+.webgate-actions .form-control {
+    flex: 0 0 auto;
+    width: auto;
+    font-size: var(--font-size-xs);
+    padding: 2px var(--spacing-sm);
+}
+
+.webgate-action-msg {
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+}
+
+.webgate-action-msg.ok {
+    color: var(--color-accent-green);
+}
+
+.webgate-action-msg.err {
+    color: var(--color-accent-red, #d83c3e);
+}
+
+/* Short id tag next to a row title (goals, invoices). */
+.webgate-row-id {
+    margin-left: var(--spacing-sm);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-muted);
+    overflow-wrap: anywhere;
+}
+
+/* Config page rows. */
+.webgate-cfg-group {
+    padding: var(--spacing-md) var(--spacing-xs) var(--spacing-xs);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: var(--border-width) solid var(--color-border);
+}
+
+.webgate-cfg-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--spacing-sm);
+    min-width: 0;
+}
+
+.webgate-cfg-key {
+    overflow-wrap: anywhere;
+}
+
+.webgate-cfg-badge {
+    display: inline-block;
+    padding: 0 var(--spacing-xs);
+    border: var(--border-width) solid var(--color-border);
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-xs);
+}
+
+.webgate-cfg-badge.guarded {
+    color: var(--color-accent-yellow);
+    border-color: var(--color-accent-yellow);
+}
+
+.webgate-cfg-badge.cli-only {
+    color: var(--color-accent-red, #d83c3e);
+    border-color: var(--color-accent-red, #d83c3e);
+}
+
+.webgate-cfg-value {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-highlight);
+    overflow-wrap: anywhere;
+}
+
+.webgate-cfg-source {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+}
+
+.webgate-cfg-input {
+    flex: 1 1 200px;
+    min-width: 0;
+}
+
+.webgate-cfg-explain {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-bg-card);
+    border: var(--border-width) solid var(--color-border);
+    font-size: var(--font-size-sm);
+}
+
+.webgate-cfg-desc {
+    margin-bottom: var(--spacing-xs);
+}
+
+.webgate-cfg-chain {
+    margin-top: var(--spacing-xs);
+}
+
+.webgate-cfg-chain-row {
+    padding: 2px 0;
+    color: var(--color-text-secondary);
+    font-family: var(--font-family-mono);
+    font-size: var(--font-size-xs);
+    overflow-wrap: anywhere;
+}
+
+/* =============================================================================
+   RESPONSIVE — the pages must stay readable at 375px
+   ============================================================================= */
+
+@media (max-width: 600px) {
+    .terminal-container.webgate-page {
+        padding: var(--spacing-md) var(--spacing-sm) var(--spacing-xl);
+    }
+
+    .webgate-header h2 {
+        font-size: var(--font-size-lg);
+        letter-spacing: 1px;
+    }
+
+    .webgate-search {
+        flex-wrap: wrap;
+    }
+
+    .webgate-search .form-control {
+        flex: 1 1 100%;
+    }
+
+    .webgate-search select.form-control {
+        flex: 1 1 auto;
+    }
+
+    .webgate-meta > div {
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .webgate-kpi {
+        flex: 1 1 100%;
+    }
+
+    .webgate-kpi .kpi-value {
+        font-size: var(--font-size-xl);
+    }
+
+    .webgate-brk-row {
+        flex-wrap: wrap;
+    }
+
+    .webgate-doc {
+        padding: var(--spacing-md);
+        font-size: var(--font-size-xs);
+    }
+
+    .webgate-halt {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .webgate-cfg-input {
+        flex: 1 1 100%;
+    }
+}
+
+/* --- Apps page (032 durable app service) ---------------------------------- */
+.webgate-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+.webgate-table th,
+.webgate-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    vertical-align: top;
+}
+.webgate-pre {
+    white-space: pre-wrap;
+    font-size: 0.8rem;
+    margin-top: 12px;
+}
+.apps-btn {
+    margin-right: 6px;
+}

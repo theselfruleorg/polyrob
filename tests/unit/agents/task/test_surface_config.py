@@ -1,7 +1,7 @@
 """SurfaceConfig session-boundary defaults (a6 + #7): reset-mode defaults to `idle`
 everywhere now that the recreate-race (#2) and mute-on-resume (#0) fixes that make a
 reset safe have landed. The idle WINDOW still differs (720 local / 1440 server)."""
-from agents.task.surface_config import SurfaceConfig
+from core.surfaces.config import SurfaceConfig
 
 
 def test_session_reset_mode_default_idle_under_local(monkeypatch):

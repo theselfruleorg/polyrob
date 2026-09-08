@@ -36,6 +36,29 @@ logger = logging.getLogger(__name__)
 INVOICE_KIND = "agent_invoice"
 
 
+def _norm_tx(tx_hash) -> Optional[str]:
+    """Canonical form for a transaction hash used as a replay key.
+
+    M1 (audit 2026-08-22): eth_getLogs returns lowercase; a facilitator returns
+    whatever it likes. A raw string compare let the SAME settlement transfer be
+    re-detected on-chain and settle a SECOND same-amount invoice. Normalize at
+    EVERY store and compare site — one side is not enough.
+
+    Ethereum tx hashes are hex, so lowercasing them is safe and lossless. A
+    SOLANA transaction signature is base58 — CASE-SIGNIFICANT — so folding it
+    destroys provenance: the stored value resolves on no explorer and matches
+    no RPC ``getTransaction`` (the same landmine ``normalize_recipient`` closes
+    for addresses, one column over). The shape is unambiguous: an EVM hash is
+    ``0x`` + hex, a Solana signature never starts with ``0x`` — so fold ONLY
+    the ``0x`` form and keep everything else verbatim. Replay-guard semantics
+    are unchanged either way (store and compare fold identically).
+    """
+    if not tx_hash:
+        return None
+    tx = str(tx_hash).strip()
+    return tx.lower() if tx.startswith(("0x", "0X")) else tx
+
+
 def invoice_max_usd() -> float:
     try:
         return float(os.getenv("X402_INVOICE_MAX_USD", "50"))
@@ -76,13 +99,20 @@ def x402_invoicing_enabled() -> bool:
 def x402_settle_onchain_detect_enabled() -> bool:
     """Task 11 (Phase 2): whether the settlement watcher additionally scans
     the treasury address for plain USDC transfers (no facilitator) and
-    auto-settles the matching pending invoice. Default OFF — the watcher
-    ALSO requires a configured mainnet chain + treasury before it actually
-    scans (see `settlement_watcher.py::SettlementWatcher._scan_onchain`);
-    this getter is the single flag-parse SSOT shared by that gate and the
+    auto-settles the matching pending invoice. Default OFF; ON under effective
+    AUTONOMY_MODE=autonomous via _mode_capability_default (W1.5, 2026-08-21 —
+    receive-side only, same lane as X402_INVOICE_ENABLED; explicit env always
+    wins). The watcher ALSO requires a scannable chain + treasury before it
+    actually scans (see `settlement_watcher.py::_resolve_scan_target`); this
+    getter is the single flag-parse SSOT shared by that gate and the
     amount-jitter gate below."""
     from core.env import bool_env
-    return bool_env("X402_SETTLE_ONCHAIN_DETECT", False)
+    try:
+        from core.config_policy import _mode_capability_default
+        default = _mode_capability_default("X402_SETTLE_ONCHAIN_DETECT")
+    except Exception:
+        default = False
+    return bool_env("X402_SETTLE_ONCHAIN_DETECT", default)
 
 
 def x402_invoice_amount_jitter_enabled() -> bool:
@@ -103,12 +133,17 @@ def x402_invoice_amount_jitter_enabled() -> bool:
     return bool_env("X402_INVOICE_AMOUNT_JITTER", True)
 
 
-def _jitter_should_apply() -> bool:
+def _jitter_should_apply(chain: Optional[str] = None) -> bool:
     """The ACTUAL jitter gate `create_payment_request` uses (I2 fix): jitter
     is forced ON whenever on-chain detection is on, regardless of the
     ``X402_INVOICE_AMOUNT_JITTER`` value — logging a notice when the flag was
     explicitly set to disable it. When detection is off, jitter stays fully
     inert (byte-identical legacy amounts) exactly as before."""
+    # Solana carries a per-invoice REFERENCE key, which is an exact correlator.
+    # Jitter exists solely to disambiguate amount-matching on EVM, so applying it
+    # here would perturb the amount for no benefit at all.
+    if chain and _chain_family(chain) == "svm":
+        return False
     detect_on = x402_settle_onchain_detect_enabled()
     if not detect_on:
         return False
@@ -218,6 +253,51 @@ def is_invoice_row(row: Dict[str, Any]) -> bool:
     return _row_metadata(row).get("kind") == INVOICE_KIND
 
 
+def normalize_recipient(address: str, chain: Optional[str] = None) -> str:
+    """Store/lookup form for a recipient address.
+
+    Lowercasing is an EVM-hex CONVENIENCE — hex is case-insensitive, so folding
+    it makes comparisons total. base58 is not: folding a Solana address yields
+    different bytes, or nothing decodable at all, so the stored value would be
+    an address nobody holds and every lookup would miss.
+
+    This is THE function for that decision. Every site that writes a recipient
+    or matches on one calls it, because a store that folds and a lookup that
+    does not (or the reverse) can never match — which is how an svm invoice
+    would sit pending forever while its payment sat on-chain.
+    """
+    address = (address or "").strip()
+    if chain and _chain_family(chain) == "svm":
+        return address
+    return address.lower()
+
+
+def _svm_treasury() -> Optional[str]:
+    """The agent's Solana receiving address, or "" when unavailable."""
+    try:
+        from core.wallet.factory import get_agent_wallet
+        wallet = get_agent_wallet()
+        return wallet.solana_address if wallet else None
+    except Exception:
+        return None
+
+
+def _chain_family(chain: str) -> str:
+    """``"evm"`` or ``"svm"`` for an invoice's chain, from the registry.
+
+    Fails SAFE rather than open: an unrecognised chain keeps the long-standing
+    EVM behaviour instead of silently entering a Solana path that cannot serve
+    it. Guessing from the chain NAME would be the same mistake the address
+    validator refuses to make.
+    """
+    try:
+        from core.wallet import chains
+        row = chains.get(chain)
+        return row.family if row is not None else "evm"
+    except Exception:
+        return "evm"
+
+
 def _sanitize_correspondent_ref(ref: Optional[Dict[str, Any]]) -> Optional[dict]:
     """Keep only the correspondent registry key fields (surface/address/thread_id),
     stringified and bounded, so a settled invoice can be delivered as DATA on the
@@ -269,6 +349,7 @@ async def create_payment_request(
     expiry_hours: float = 72.0,
     correspondent_ref: Optional[Dict[str, Any]] = None,
     subscription_id: Optional[str] = None,
+    chain: Optional[str] = None,
     db=None,
 ) -> Dict[str, Any]:
     """Create a pending invoice row. Returns payment instructions, or raises
@@ -312,7 +393,25 @@ async def create_payment_request(
         )
     from modules.x402.x402_integration import get_x402_config
     cfg = get_x402_config()
-    recipient = (cfg.get("pay_to") or "").strip()
+    # The chain is a property of THIS invoice. It used to come only from global
+    # config, so there was no way to request a Solana invoice at all — every row
+    # came out evm-family with no reference and `_scan_solana` skipped it, which
+    # made Phase 4's wiring unreachable in practice. The env workaround
+    # (X402_DEFAULT_CHAIN=solana) is process-wide and would silently retarget any
+    # EVM invoice created alongside it, so it is deliberately not the fix.
+    chain = (chain or cfg.get("network") or "base").strip().lower()
+    family = _chain_family(chain)
+    if family == "svm":
+        # A DIFFERENT key entirely — the EVM `pay_to` is not an address anyone
+        # holds on Solana, and paying it there strands the funds permanently.
+        recipient = _svm_treasury()
+        if not recipient:
+            raise ValueError(
+                f"cannot invoice on {chain}: the agent wallet has no Solana "
+                f"address to receive at (needs AGENT_WALLET_ENABLED and a "
+                f"BIP-39 master seed)")
+    else:
+        recipient = (cfg.get("pay_to") or "").strip()
     if not recipient:
         raise ValueError("no treasury configured — set X402_PAYMENT_RECIPIENT")
 
@@ -346,7 +445,6 @@ async def create_payment_request(
     expiry_hours = max(0.1, float(expiry_hours))
     deadline = int(time.time() + expiry_hours * 3600)
     contact = (payer_contact or payer_hint or "").strip()[:200] or None
-    chain = cfg.get("network") or "base"
     # user_id has an FK to user_profiles; an agent tenant (e.g. "rob") may not
     # exist there. Pre-check and store NULL in the column when absent — the
     # tenant stays queryable via metadata.tenant_id (every reader matches both).
@@ -360,8 +458,17 @@ async def create_payment_request(
         column_user = None
 
     async def _insert(final_amount: float) -> None:
+        # Phase 4: which watcher pass owns this row, and — for Solana — the
+        # payer-facing marker. Stamped at CREATION because the family is a
+        # property of the invoice, not something a scanner should infer later.
+        solana_reference = None
+        if family == "svm":
+            from modules.x402.solana_settlement import reference_for_invoice
+            solana_reference = reference_for_invoice(request_id)
         metadata = json.dumps({
             "kind": INVOICE_KIND,
+            "chain_family": family,
+            "solana_reference": solana_reference,
             "session_id": session_id,
             "tenant_id": user_id,
             "purpose": purpose.strip()[:500],
@@ -377,7 +484,8 @@ async def create_payment_request(
                        deadline, status, metadata, created_at, updated_at
                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
                 (request_id, column_user, str(final_amount), final_amount, "usdc", chain,
-                 recipient.lower(), nonce, deadline, "pending", metadata),
+                 normalize_recipient(recipient, chain), nonce, deadline,
+                 "pending", metadata),
             )
         except sqlite3.IntegrityError as e:
             # Task 14 review Finding 2 (duplicate-renewal TOCTOU): with
@@ -414,13 +522,13 @@ async def create_payment_request(
     # either has inserted, so BOTH keep the exact amount (defeating the
     # jitter). Hold the per-treasury lock across the dedupe SELECT + INSERT
     # so the second racer's SELECT always sees the first racer's row.
-    if _jitter_should_apply():
+    if _jitter_should_apply(chain):
         # M5: the partial UNIQUE index is the CROSS-process backstop for the
         # in-process dedupe below. Created only here (jitter-active path).
         await _ensure_pending_amount_unique_index(database)
-        async with _treasury_lock(recipient.lower()):
+        async with _treasury_lock(normalize_recipient(recipient, chain)):
             candidate = await _dedupe_amount_for_treasury(
-                amount_usd, recipient.lower(), cap, database)
+                amount_usd, normalize_recipient(recipient, chain), cap, database)
             # The dedupe SELECT closes the SAME-process TOCTOU; the index closes
             # the CROSS-process one (workers>1). If a concurrent worker inserted
             # this exact (recipient, amount) between our SELECT and INSERT, the
@@ -580,7 +688,12 @@ async def get_payment_request_by_tx_hash(transaction_hash: str, *, db=None) -> O
     is a safe, unambiguous lookup. Returns ``None`` for a missing/empty hash
     or a non-invoice row (mirrors :func:`get_payment_request`'s
     ``is_invoice_row`` filter); the caller decides what "not found" means
-    (typically: refuse to treat the referencing proof as verified)."""
+    (typically: refuse to treat the referencing proof as verified).
+
+    M1: normalized (:func:`_norm_tx`) before both the emptiness guard and the
+    query parameter — a caller passing a mixed-case/checksummed hash must
+    still find a row stored (post-backfill) in lowercase."""
+    transaction_hash = _norm_tx(transaction_hash)
     if not transaction_hash:
         return None
     database = await _resolve_db(db)
@@ -701,7 +814,7 @@ async def revert_stale_settling(*, max_age_seconds: int = 600, db=None,
     )
     reverted = []
     for row in rows or []:
-        tx = row.get("transaction_hash")
+        tx = _norm_tx(row.get("transaction_hash"))
         if tx and await transaction_hash_already_settled(tx, db=database):
             # Genuinely settled elsewhere (should be 'completed', not 'settling')
             # — never resurrect it back to pending.
@@ -740,7 +853,12 @@ async def transaction_hash_already_settled(transaction_hash: str, *, db=None) ->
     payer's funds to settle someone else's bill. `transaction_hash` is only
     ever stamped by a successful `settle_payment_request` call, and a
     completed row can never leave that terminal status, so a bare existence
-    check is sufficient (no status filter needed)."""
+    check is sufficient (no status filter needed).
+
+    M1: normalized (:func:`_norm_tx`) before the query parameter — a
+    lowercase on-chain hash and a mixed-case facilitator hash for the SAME
+    transfer must compare equal."""
+    transaction_hash = _norm_tx(transaction_hash)
     if not transaction_hash:
         return False
     database = await _resolve_db(db)
@@ -768,7 +886,13 @@ async def settle_payment_request(
     `X402Tables.create_tables`; also tracked by migration v1.6.0) is
     defense-in-depth against a genuine concurrent-write race this pre-check
     alone can't close — a `sqlite3.IntegrityError` from that race is treated
-    the same as "refused", never raised past this function."""
+    the same as "refused", never raised past this function.
+
+    M1: `transaction_hash` is normalized (:func:`_norm_tx`) ONCE here, up
+    front, so the SAME lowercase form is used for the guard call AND stamped
+    by the UPDATE below — a mixed-case facilitator hash is stored (and
+    matched) canonically."""
+    transaction_hash = _norm_tx(transaction_hash)
     database = await _resolve_db(db)
     if database is None:
         return False
@@ -836,15 +960,30 @@ async def expire_stale_requests(*, db=None, now: Optional[float] = None) -> List
 
 
 async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
-    """Settled agent invoices whose originating session has not been woken yet."""
+    """Settled agent invoices whose originating session has not been woken yet.
+
+    M3 (audit 2026-08-22): this used to match the spaced literal
+    ``'%"wake_delivered": false%'`` via ``LIKE``. Normal rows are written
+    spaced by ``json.dumps``, but ANY later ``json_set`` on the metadata blob
+    (e.g. the boot-time subscription dedup in
+    ``modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index``)
+    re-serializes the WHOLE blob compactly (``"wake_delivered":false``), and
+    the spaced LIKE silently stopped matching — dropping the wake forever.
+    ``json_extract`` reads the value regardless of the blob's spacing.
+    ``json_extract`` on a JSON boolean returns SQLite integer ``0``/``1``, so
+    compare against ``0`` (not the string ``'false'``). A row where the key
+    is ABSENT returns SQL ``NULL``, which ``= 0`` does not match — this is
+    deliberately preserved (absent ⇒ not eligible), matching the old LIKE's
+    behaviour on such rows."""
     database = await _resolve_db(db)
     if database is None:
         return []
     rows = await database.fetch_all(
         """SELECT * FROM x402_payment_requests
            WHERE status IN ('completed', 'settled_no_tx')
-             AND json_extract(metadata, '$.kind') = ? AND metadata LIKE ?""",
-        (INVOICE_KIND, '%"wake_delivered": false%'),
+             AND json_extract(metadata, '$.kind') = ?
+             AND json_extract(metadata, '$.wake_delivered') = 0""",
+        (INVOICE_KIND,),
     )
     out = []
     for row in rows or []:
@@ -884,8 +1023,9 @@ async def expired_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
     rows = await database.fetch_all(
         """SELECT * FROM x402_payment_requests
            WHERE status = 'expired'
-             AND json_extract(metadata, '$.kind') = ? AND metadata LIKE ?""",
-        (INVOICE_KIND, '%"wake_delivered": false%'),
+             AND json_extract(metadata, '$.kind') = ?
+             AND json_extract(metadata, '$.wake_delivered') = 0""",
+        (INVOICE_KIND,),
     )
     out = []
     for row in rows or []:
@@ -904,19 +1044,28 @@ async def expired_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
 async def claim_wake(request_id: str, *, db=None) -> bool:
     """Atomically claim the settlement notification for one invoice.
 
-    A string REPLACE on the machine-written ``"wake_delivered": false`` token,
-    guarded by a LIKE on the same token and checked via rowcount — so when two
-    watcher processes race, exactly ONE wins the claim and delivers the wake/
-    event (claim-then-notify, never notify-then-mark)."""
+    M3 (audit 2026-08-22): this used to do a string ``REPLACE`` on the
+    machine-written ``"wake_delivered": false`` token, guarded by a LIKE on
+    the same spaced token. A ``json_set`` elsewhere (e.g. the boot-time
+    subscription dedup) re-serializes the WHOLE metadata blob compactly,
+    which the spaced LIKE then never matched again — the claim silently
+    always failed for such a row. Now uses ``json_set``/``json_extract``,
+    which are agnostic to the blob's whitespace. ``json_set(..., json('true'))``
+    (NOT the bare number ``1``) keeps the stored shape a genuine JSON boolean
+    so ``json_extract(...) = 0`` keeps working for the still-false case.
+
+    Still a single atomic ``UPDATE ... WHERE id = ? AND
+    json_extract(metadata, '$.wake_delivered') = 0``, checked via rowcount —
+    so when two watcher processes race, exactly ONE wins the claim and
+    delivers the wake/event (claim-then-notify, never notify-then-mark)."""
     database = await _resolve_db(db)
     if database is None:
         return False
     cur = await database.execute(
         """UPDATE x402_payment_requests
-           SET metadata = REPLACE(metadata, '"wake_delivered": false',
-                                            '"wake_delivered": true'),
+           SET metadata = json_set(metadata, '$.wake_delivered', json('true')),
                updated_at = datetime('now')
-           WHERE id = ? AND metadata LIKE '%"wake_delivered": false%'""",
+           WHERE id = ? AND json_extract(metadata, '$.wake_delivered') = 0""",
         (request_id,),
     )
     return bool(getattr(cur, "rowcount", 0))
@@ -981,7 +1130,7 @@ async def advance_scan_checkpoint(treasury: str, last_block: int, *, db=None) ->
 
 
 async def match_pending_invoice_by_amount(
-    amount_usd: float, treasury: str, *, db=None,
+    amount_usd: float, treasury: str, *, chain: Optional[str] = None, db=None,
 ) -> Optional[Dict[str, Any]]:
     """The on-chain settlement-detection ambiguity policy (Task 11): among
     PENDING agent invoices for this treasury at an EXACT amount match, the
@@ -1006,7 +1155,8 @@ async def match_pending_invoice_by_amount(
            WHERE status = 'pending' AND recipient = ? AND amount_usd = ?
              AND json_extract(metadata, '$.kind') = ?
            ORDER BY created_at ASC, rowid ASC LIMIT 1""",
-        (treasury.lower(), round(float(amount_usd), 6), INVOICE_KIND),
+        (normalize_recipient(treasury, chain), round(float(amount_usd), 6),
+         INVOICE_KIND),
     )
     if not row:
         return None

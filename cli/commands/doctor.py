@@ -447,8 +447,9 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
                 lines.append(f"  ! {row_name}: {reason} — row skipped")
             if rep.get("file_error"):
                 lines.append(f"  ! file: {rep['file_error']}")
-    except Exception:
-        pass
+    except Exception as e:
+        # A read we could not perform is not the same as "no providers.yaml".
+        lines.append(f"providers file: unavailable ({type(e).__name__}: {e})")
 
     if usable_providers:
         provider, model = resolve_provider_model(None, None, available_keys=usable_keys)
@@ -460,14 +461,24 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
 
     # Owner/instance pairing (complements `polyrob init`): show who this instance
     # answers to and its instance id, plus the session-registry backend posture.
+    _owner = None
     try:
         from core.instance import resolve_instance_id, resolve_owner_principal
         _instance = resolve_instance_id(env)
         _owner = resolve_owner_principal(env, default_to_instance=False)
         lines.append(f"instance id: {_instance}")
         lines.append(f"owner: {_owner or '(unpaired — set POLYROB_OWNER_USER_ID or run `polyrob init`)'}")
-    except Exception:
-        pass
+    except Exception as e:
+        # Losing BOTH lines silently reads as an instance with no identity; say so.
+        lines.append(f"instance id / owner: unavailable ({type(e).__name__}: {e})")
+
+    # 2026-08-28 status SSOT: the SAME health block Telegram /status, the
+    # webview /system page and the agent's agent_status render — credit
+    # sentinel, live provider, open asks, blocked goals, suppressed owner
+    # notices, dead loops. A section the snapshot cannot read renders as
+    # `unavailable (<reason>)`; a builder failure renders as its own line —
+    # never silence. Tenant = the bound owner (the instance's one principal).
+    lines.extend(health_lines(_owner))
     _reg = (env.get("SESSION_REGISTRY_BACKEND") or "memory").strip().lower()
     lines.append(f"session registry backend: {_reg}"
                  + ("  (workers>1 needs sqlite + sticky routing)" if _reg == "memory" else ""))
@@ -483,18 +494,33 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     except Exception:
         lines.append("autonomy mode: unknown")
 
+    # 030 WS-E5: the effective-posture card — the SAME card /autonomy, the
+    # webview /system page and Telegram /status render, so every seat gives one
+    # answer to "what is this instance allowed to do right now, and why".
+    try:
+        from core.config_policy.posture_card import render_posture_card
+        lines.append("posture:")
+        lines.extend(render_posture_card(prefix="  "))
+    except Exception:
+        lines.append("posture: unavailable")
+
     # 027 rider: an env/file value for an import-frozen policy flag that the
     # process never re-read is INERT — this used to be visible only in
     # `doctor --flags`, so the plain report silently implied it works.
     try:
-        for name, frozen in _frozen_flag_truth().items():
+        _frozen, _frozen_errs = _frozen_flag_truth()
+        for name, frozen in _frozen.items():
             raw = env.get(name)
             if raw is not None and not _frozen_values_agree(raw, frozen):
                 lines.append(
                     f"! {name}: env value {raw!r} is INERT — frozen at import "
                     f"as {frozen!r}; restart to apply")
-    except Exception:
-        pass
+        for _err in _frozen_errs:
+            lines.append(f"! frozen-flag check: unavailable ({_err}) — an INERT "
+                         "env value for those flags cannot be detected")
+    except Exception as e:
+        lines.append(f"! frozen-flag check: unavailable ({type(e).__name__}: {e}) "
+                     "— an INERT env value cannot be detected")
 
     # 0.9.0: the AUTONOMY_ENABLED master switch — OFF by default for new local
     # installs. Say so plainly + what autonomy would add, so a new user knows the
@@ -537,8 +563,8 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         _cfg = next((str(c.path) for c in env_file_candidates(local_mode=rob_local)
                      if c.path.exists()), None)
         lines.append(f"config file: {_cfg or '(none found — using process env / defaults)'}")
-    except Exception:
-        pass
+    except Exception as e:
+        lines.append(f"config file: unavailable ({type(e).__name__}: {e})")
 
     # An ABSENT POLYROB_LOCAL means ON for run/chat (see rob_local above) —
     # report that honestly (surfacing this footgun is doctor's job). An
@@ -593,9 +619,16 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
             _deriv.derive_key((env.get("AGENT_WALLET_MASTER_SEED") or "").strip(), "treasury", _scheme)
             # H14c: report caps too, so "on" is informative — and flag "no daily
             # cap" as the real (unlimited) posture, mirroring the wallet view (M13).
-            _max_tx = (env.get("AGENT_WALLET_MAX_PER_TX_USD") or "1000").strip() or "1000"
-            _daily = (env.get("WALLET_DAILY_CAP_USD") or "").strip()
-            _caps = f"caps max ${_max_tx}/tx · daily {('$' + _daily) if _daily else 'UNLIMITED'}"
+            # H3 (2026-08-22): delegate to the SAME parsers load_wallet_config()
+            # uses (never a second, divergent "1000"/blank-means-unlimited
+            # display parser) — this also means a malformed cap correctly falls
+            # into the `except Exception` MISCONFIGURED branch below, matching
+            # what actually happens when the wallet is used.
+            from core.wallet.config import _cap_float, _req_float, DEFAULT_DAILY_CAP_USD, DEFAULT_MAX_PER_TX_USD
+            _max_tx_val = _req_float(env, "AGENT_WALLET_MAX_PER_TX_USD", DEFAULT_MAX_PER_TX_USD)
+            _daily_val = _cap_float(env, "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
+            _daily = f"${_daily_val:.2f}" if _daily_val is not None else ""
+            _caps = f"caps max ${_max_tx_val:.2f}/tx · daily {_daily if _daily else 'UNLIMITED'}"
             lines.append(f"wallet: on (network={_net}, derivation={_scheme}, {_caps}; "
                          "addresses: `polyrob wallet`, backup: `polyrob wallet export`)")
             if not _daily:
@@ -605,6 +638,45 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
             lines.append(f"! wallet ENABLED but MISCONFIGURED: {e}")
     else:
         lines.append("! wallet ENABLED but AGENT_WALLET_MASTER_SEED missing/short — run `polyrob wallet init`")
+
+    # x402 treasury source (W1.1, 2026-08-21): where invoice money lands and
+    # WHY — explicit env, the wallet auto-fill, or nothing (with the remedy).
+    # Pure over `env` (never touches the live wallet), mirroring the
+    # resolve_treasury_address() precedence in modules/x402/x402_integration.py.
+    _treasury_env = (env.get("X402_PAYMENT_RECIPIENT") or "").strip()
+    # Parse EXACTLY as bool_env does (blank -> the default, not false), or a
+    # present-but-empty X402_TREASURY_FROM_WALLET makes doctor report "none"
+    # while invoicing happily resolves the wallet address.
+    _raw_from_wallet = env.get("X402_TREASURY_FROM_WALLET")
+    _from_wallet = (True if _raw_from_wallet is None or str(_raw_from_wallet).strip() == ""
+                    else str(_raw_from_wallet).strip().lower() not in _FALSEY)
+    if _treasury_env:
+        lines.append(f"x402 treasury: {_treasury_env} (env X402_PAYMENT_RECIPIENT)")
+    elif _wallet_on and _seed_ok and _from_wallet:
+        lines.append("x402 treasury: agent wallet address (auto — "
+                     "X402_TREASURY_FROM_WALLET; addresses: `polyrob wallet`)")
+    else:
+        lines.append("x402 treasury: none (invoicing refuses until set — set "
+                     "X402_PAYMENT_RECIPIENT or enable the agent wallet)")
+
+    # x402 Tier-2 endpoint state (§5.3, 2026-08-21): a machine-callable 402 URL
+    # needs a domain + cert + the api service, which an agent can never
+    # self-provision — so the absent case names the owner runbook instead of
+    # leaving "we need an endpoint" as an unclosable ask. Tier-1 receive
+    # (invoice + on-chain detect) needs none of this; say so in the same line.
+    _x402_http_on = str(env.get("X402_ENABLED", "")).strip().lower() == "true"
+    _base_url = (env.get("A2A_BASE_URL") or "").strip().rstrip("/")
+    if _x402_http_on and _base_url:
+        lines.append(f"x402 endpoint: {_base_url} (machine-callable 402 surface)")
+    elif _x402_http_on:
+        lines.append("x402 endpoint: enabled but no A2A_BASE_URL — the agent card "
+                     "advertises a guessed host; set A2A_BASE_URL to the public URL")
+    else:
+        lines.append("x402 endpoint: not configured (optional — invoices are "
+                     "unaffected; for a machine-callable 402 URL run "
+                     "`X402_HOST=<host> bash scripts/setup_x402_endpoint.sh` as "
+                     "root from a full repo checkout — the install tree has no "
+                     "deployment/ templates)")
 
     # sqlite-vec probe — never crash doctor on import/connection failure.
     try:
@@ -661,12 +733,43 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     return lines
 
 
-def _frozen_flag_truth() -> dict:
-    """Effective values of the import-frozen flags, from the SAME frozen accessors
-    the runtime consults (026 P0.2). The report must print THESE as effective —
-    an env/file value the process never re-read is inert, and saying `[env]` for
-    it is a lie about the most security-critical flags. Fail-open per seam."""
+def health_lines(owner: "str | None", *, prefix: str = "  ") -> list[str]:
+    """The status-snapshot health block for the doctor report (pure over the
+    resolved owner; the snapshot reads the data home read-only)."""
+    try:
+        from core.status_snapshot import build_status_snapshot
+        from core.status_render import pause_headline, render_health_lines
+        if not owner:
+            return ["health: unavailable (no owner principal bound — the snapshot is "
+                    "tenant-scoped; set POLYROB_OWNER_USER_ID)"]
+        snap = build_status_snapshot(str(owner), include_money=False)
+        # 031: the pause state leads every seat, before health (CLI verbs here).
+        out = ([pause_headline(snap, resume_hint="`polyrob autonomy resume`",
+                               pause_hint="`polyrob autonomy pause`")]
+               + render_health_lines(snap, prefix=prefix))
+        # the doctor report is lower-case; the health line is index 1 (the pause
+        # line leads since 031)
+        for _i, _ln in enumerate(out):
+            if _ln.startswith("Health:"):
+                out[_i] = _ln.replace("Health:", "health:", 1)
+                break
+        return out
+    except Exception as e:
+        return [f"health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+
+
+def _frozen_flag_truth() -> tuple:
+    """``(values, errors)`` for the import-frozen flags, from the SAME frozen
+    accessors the runtime consults (026 P0.2). The report must print THESE as
+    effective — an env/file value the process never re-read is inert, and saying
+    `[env]` for it is a lie about the most security-critical flags.
+
+    Fail-open per seam, but NEVER silent (2026-08-28 status SSOT): a seam that
+    could not be probed comes back in *errors* so the caller can say the INERT
+    check is blind for those flags, rather than reporting a clean bill of health
+    it never actually checked."""
     out: dict = {}
+    errors: list = []
     try:
         from core.config_policy.policy import (approval_grant_ttl_hours,
                                                compute_posture,
@@ -676,16 +779,16 @@ def _frozen_flag_truth() -> dict:
         out["PAYMENT_APPROVAL_MODE"] = payment_approval_mode()
         out["APPROVAL_TIMEOUT_SEC"] = payment_approval_timeout_sec()
         out["APPROVAL_GRANT_TTL_HOURS"] = approval_grant_ttl_hours()
-    except Exception:
-        pass
+    except Exception as e:
+        errors.append(f"compute/payment posture: {type(e).__name__}: {e}")
     try:
         from tools.controller.approval import (frozen_approval_provider,
                                                frozen_approval_required_tools)
         out["APPROVAL_PROVIDER"] = frozen_approval_provider()
         out["APPROVAL_REQUIRED_TOOLS"] = ",".join(sorted(frozen_approval_required_tools()))
-    except Exception:
-        pass
-    return out
+    except Exception as e:
+        errors.append(f"approval provider/tools: {type(e).__name__}: {e}")
+    return out, errors
 
 
 def _frozen_values_agree(reported, frozen) -> bool:
@@ -703,7 +806,27 @@ def _frozen_values_agree(reported, frozen) -> bool:
     return set_a == set_b
 
 
-def flags_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
+_NO_FLAGS_MATCH = "no flags match the given --group/--search/--changed filters"
+
+
+def _changed_from_default(r, dynamic_default) -> bool:
+    """Whether a resolved flag's effective value differs from what it would
+    resolve to with NO explicit env value (documented or dynamic default).
+    Only an env-sourced row can be a change; a resolution error keeps the row
+    visible rather than hiding it (fail-open toward showing)."""
+    if r.source != "env":
+        return False
+    from core.flags import resolve_flag
+    try:
+        baseline = resolve_flag(r.name, {}, dynamic_default)
+    except Exception:
+        return True
+    return r.value != baseline.value and str(r.value) != str(baseline.value)
+
+
+def flags_report(env: dict, local_absent_means_on: bool = True, *,
+                 group: str | None = None, search: str | None = None,
+                 changed: bool = False) -> list[str]:
     """Resolved env-flag registry dump (SA-05), grouped, secrets masked.
 
     Pure over ``env`` for explicit values; posture/local-derived DEFAULTS come
@@ -717,9 +840,21 @@ def flags_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     026 P0.2/P0.3: an import-frozen flag whose env value differs from the frozen
     effective value is printed as the FROZEN value with the env value marked
     INERT; the resolved autonomy mode (incl. clamp state) heads the report.
+
+    030 C5 filters (combine as AND; group headers survive for matching rows,
+    empty groups are skipped): ``group`` keeps only groups whose name contains
+    the substring (case-insensitive); ``search`` keeps only flags whose NAME
+    contains the substring (case-insensitive); ``changed`` keeps only flags
+    whose effective value differs from their default, plus the frozen/INERT
+    rows (always interesting). A filtered report with zero matching flags
+    collapses to the one-line "no flags match" message.
     """
     from core.config_policy.flag_defaults import dynamic_flag_default
     from core.flags import resolve_all
+
+    group_needle = group.lower() if group else None
+    search_needle = search.lower() if search else None
+    filtering = bool(group_needle or search_needle or changed)
 
     resolve_as_local = (
         local_absent_means_on
@@ -740,32 +875,58 @@ def flags_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
             from core.config_policy.policy import autonomy_mode_display
             lines.append(f"autonomy mode: {autonomy_mode_display()}")
         except Exception:
-            pass
-        frozen_truth = _frozen_flag_truth()
-        current_group = None
+            # Matches the plain report's wording — the line never just vanishes.
+            lines.append("autonomy mode: unknown")
+        frozen_truth, frozen_errs = _frozen_flag_truth()
+        for _err in frozen_errs:
+            lines.append(f"! frozen-flag check: unavailable ({_err}) — an INERT "
+                         "env value for those flags cannot be detected")
+        emitted_group = None
+        matched = 0
         for r in resolve_all(env, dynamic_default=dynamic_flag_default):
-            if r.group != current_group:
-                current_group = r.group
-                lines.append(f"## {current_group}")
-            if (r.name in frozen_truth and r.source == "env"
-                    and not _frozen_values_agree(r.value, frozen_truth[r.name])):
+            if group_needle is not None and group_needle not in r.group.lower():
+                continue
+            if search_needle is not None and search_needle not in r.name.lower():
+                continue
+            frozen_inert = (r.name in frozen_truth and r.source == "env"
+                            and not _frozen_values_agree(r.value, frozen_truth[r.name]))
+            if (changed and not frozen_inert
+                    and not _changed_from_default(r, dynamic_flag_default)):
+                continue
+            if r.group != emitted_group:
+                emitted_group = r.group
+                lines.append(f"## {r.group}")
+            if frozen_inert:
                 lines.append(
                     f"  {r.name} = {frozen_truth[r.name]}  "
                     f"[frozen at import — env value {r.value} INERT]")
-                continue
-            lines.append(f"  {r.name} = {r.value}  [{r.source}]")
+            else:
+                lines.append(f"  {r.name} = {r.value}  [{r.source}]")
+            matched += 1
     finally:
         if resolve_as_local:
             os.environ.pop("POLYROB_LOCAL", None)
+    if filtering and matched == 0:
+        return [_NO_FLAGS_MATCH]
     return lines
 
 
 @click.command("doctor")
 @click.option("--flags", "show_flags", is_flag=True,
               help="Dump every registered env flag with its resolved value and source.")
+@click.option("--group", "flag_group", metavar="SUBSTRING", default=None,
+              help="Only flag groups whose name contains SUBSTRING "
+                   "(case-insensitive). Implies --flags.")
+@click.option("--search", "flag_search", metavar="SUBSTRING", default=None,
+              help="Only flags whose name contains SUBSTRING "
+                   "(case-insensitive). Implies --flags.")
+@click.option("--changed", "flag_changed", is_flag=True,
+              help="Only flags set away from their default, plus the "
+                   "frozen/INERT ones. Implies --flags.")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit the report as JSON ({\"report\": [lines]}).")
-def doctor(show_flags: bool, as_json: bool):
+def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
+           flag_changed: bool, as_json: bool):
     """Show resolved providers/model, memory backend, and config footguns."""
     # Load env the same way the REPL does (./.polyrob, ~/.polyrob, root .env, config/.env.*
     # + the local-mode key backfill) so doctor reports the keys `rob` actually sees,
@@ -774,7 +935,10 @@ def doctor(show_flags: bool, as_json: bool):
     setup_project_path()
     setup_sqlite_compat()
     load_env(local_mode=True)
-    report = flags_report(dict(os.environ)) if show_flags else doctor_report(dict(os.environ))
+    show_flags = show_flags or bool(flag_group) or bool(flag_search) or flag_changed
+    report = (flags_report(dict(os.environ), group=flag_group,
+                           search=flag_search, changed=flag_changed)
+              if show_flags else doctor_report(dict(os.environ)))
     if as_json:
         import json as _json
         click.echo(_json.dumps({"report": report}, indent=2))

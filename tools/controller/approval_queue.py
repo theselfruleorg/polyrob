@@ -123,7 +123,15 @@ def list_pending_tool_approvals(board: Any, user_id: str) -> List[Dict[str, Any]
         payload = a.payload or {}
         if payload.get("ask_kind") != TOOL_APPROVAL_ASK_KIND:
             continue
-        preview = (a.body or a.title or "")[:160]
+        # 030 WS-E1 (C-5): action-first preview, not the machine string
+        # "tool=… params={json} session=…" triple-truncated downstream.
+        try:
+            from tools.controller.grant_card import render_pending_preview
+            preview = render_pending_preview(
+                payload.get("tool_name") or (a.title or ""),
+                payload.get("params_summary") or "")
+        except Exception:
+            preview = (a.body or a.title or "")[:160]
         out.append({
             "kind": TOOL_APPROVAL_ASK_KIND,
             "id": tap_display_id(a.id),
@@ -134,16 +142,50 @@ def list_pending_tool_approvals(board: Any, user_id: str) -> List[Dict[str, Any]
 
 
 def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
-                         approved: bool) -> tuple:
+                         approved: bool, task_agent: Any = None) -> tuple:
     """Resolve a (possibly ``tap-``-prefixed) ask id back to the real ask id and
     record the owner's decision. Returns ``(ok, message)`` — the shared handler
     behind Telegram `/approve` `/reject` and `polyrob owner promote/reject
-    tool_approval`."""
+    tool_approval`.
+
+    030 WS-E3 (resume-on-grant): a POST-timeout approval used to rely on the
+    agent happening to retry a byte-identical call within the grant TTL. When
+    the deciding seat runs in the agent process (``task_agent`` passed), an
+    approval now wakes the originating session via the self-wake rail so the
+    grant is redeemed immediately. Fire-and-forget, fail-open; seats without a
+    live agent (the CLI) simply skip it and the one-shot grant still applies.
+    """
     real_id = strip_tap_prefix(display_id) or display_id
+    row = None
+    try:
+        row = board.get(real_id)  # unscoped on purpose: decide_ask below is the tenant gate
+    except Exception:
+        row = None
     ok, _ = board.decide_ask(real_id, user_id=user_id, approved=approved)
     if not ok:
         return False, f"no open tool-approval request '{display_id}'"
     verb = "approved" if approved else "rejected"
+    if approved and task_agent is not None and row is not None:
+        try:
+            payload = getattr(row, "payload", None) or {}
+            session_id = payload.get("session_id")
+            tool_name = payload.get("tool_name") or "the gated action"
+            deliver = getattr(task_agent, "deliver_self_wake", None)
+            if session_id and callable(deliver):
+                import asyncio
+                text = (f"Owner approved {tool_name} ({display_id}). Retry it "
+                        f"now — the one-shot grant applies to the next "
+                        f"identical attempt.")
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
+                if loop is not None:
+                    loop.create_task(deliver(session_id, user_id, text,
+                                             metadata={"kind": "approval_granted",
+                                                       "ask_id": display_id}))
+        except Exception:
+            logger.debug("resume-on-grant wake skipped (fail-open)", exc_info=True)
     return True, f"tool-approval request {display_id} {verb}"
 
 
@@ -164,7 +206,7 @@ def _emit_payment_auto_approved(user_id: str, session_id: str, tool_name: str,
                                 request_id: Optional[str], amount: Any,
                                 purpose: Optional[str]) -> None:
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if event_log_enabled():
             get_event_log().record(
                 "payment_auto_approved", user_id=user_id or "", session_id=session_id or "",
@@ -257,7 +299,7 @@ def _emit_tool_auto_approved(user_id: str, session_id: str, action_name: str) ->
     """Durable ``tool_auto_approved`` audit event for an act-and-report execution
     (013 T4; mirrors :func:`_emit_payment_auto_approved`). Fail-open."""
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if event_log_enabled():
             get_event_log().record(
                 "tool_auto_approved", user_id=user_id or "", session_id=session_id or "",
@@ -495,11 +537,26 @@ class OwnerQueueApprover(ApprovalProvider):
                 force=True,  # exact-hash dedup above already did the real work
             )
         if created_new:
-            await _push_owner_notification(
-                self._resolve_container(), user_id,
-                f"🔐 Approval needed: {action_name}\n{_params_summary(norm_params)}\n"
-                f"Reply /approve {tap_display_id(ask.id)} or /reject {tap_display_id(ask.id)}",
-            )
+            # 030 WS-E1: a human grant card (amount/target/purpose + deadline +
+            # the one-shot-grant explainer), never a raw JSON dump.
+            try:
+                from tools.controller.approval import approval_wait_timeout_sec
+                from tools.controller.grant_card import render_grant_card
+                _ttl = None
+                try:
+                    from core.config_policy import approval_grant_ttl_hours
+                    _ttl = approval_grant_ttl_hours()
+                except Exception:
+                    pass
+                card = render_grant_card(
+                    action_name, norm_params, tap_display_id(ask.id),
+                    timeout_sec=approval_wait_timeout_sec("owner_queue"),
+                    grant_ttl_hours=_ttl)
+            except Exception:
+                card = (f"🔐 Approval needed: {action_name}\n"
+                        f"Reply /approve {tap_display_id(ask.id)} or "
+                        f"/reject {tap_display_id(ask.id)}")
+            await _push_owner_notification(self._resolve_container(), user_id, card)
 
         self._active_polls += 1
         try:

@@ -63,6 +63,17 @@ try:
     _TEMPLATES.env.globals["get_version"] = get_version
 except Exception:
     _TEMPLATES.env.globals["get_version"] = lambda: ""
+# Own-ops Logout visibility (030 S5) — same globals as server.py's/pages.py's
+# envs: the layout shows a Logout link for the authenticated own_ops owner.
+# Defensive import matching this module's standalone-friendly style; the
+# fallback reads the same request.state field the helper does (C4 contract).
+_TEMPLATES.env.globals["is_own_ops_posture"] = webgate.is_own_ops
+try:
+    from utils.auth_utils import is_authenticated as _request_is_authenticated
+except Exception:
+    def _request_is_authenticated(request) -> bool:
+        return getattr(getattr(request, "state", None), "authenticated", False)
+_TEMPLATES.env.globals["request_is_authenticated"] = _request_is_authenticated
 
 # Feed kinds that are pure token-stream noise in a global terminal. They stay
 # visible in the per-session view; the global stream drops them.
@@ -653,8 +664,7 @@ def _cold_backfill(limit: int) -> List[Dict[str, Any]]:
 @router.get("/activity", response_class=HTMLResponse)
 async def activity_page(request: Request) -> Any:
     _require_activity_access(request)
-    return _TEMPLATES.TemplateResponse(
-        "activity.html",
+    return _TEMPLATES.TemplateResponse(request, "activity.html",
         {"request": request, "read_only": webgate.read_only()},
     )
 

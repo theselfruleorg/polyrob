@@ -222,7 +222,7 @@ class TaskContextManager(BaseComponent):
         # getattr(self,key,default) with no such attr => always False => reflection never
         # fired even with the env set.) reflection_llm stays None until construction.py
         # provisions it; when None, _llm_consolidate returns None => concat fallback.
-        from agents.task.constants import reflection_llm_enabled_default
+        from core.config_policy import reflection_llm_enabled_default
         self.reflection_llm_enabled = reflection_llm_enabled_default()
         self.reflection_llm = None
         # A3: metering context (usage_tracker/user_id/session_id/agent_id) for billing

@@ -1,7 +1,25 @@
 """`polyrob run --resume <id>` continues an existing session (B9.1)."""
 from unittest.mock import MagicMock
 
+import pytest
 from click.testing import CliRunner
+
+
+@pytest.fixture
+def resolved_provider(monkeypatch):
+    """Pin provider/model resolution.
+
+    `run` calls `resolve_provider_model` AFTER the preflight these tests stub,
+    and on a box with zero provider keys it returns (None, None) and exits 1
+    with the no-key message — before any resume logic runs. That made these
+    tests pass only where the developer happened to have a key in the
+    environment, and fail on a clean CI runner. Resume routing is the subject
+    here; credential resolution has its own tests.
+    """
+    monkeypatch.setattr(
+        "cli.config_store.resolve_provider_model",
+        lambda provider, model, **kw: ("openai", "gpt-5"),
+    )
 
 
 def test_run_requires_task_xor_resume():
@@ -17,7 +35,7 @@ def test_run_requires_task_xor_resume():
     assert "either a TASK or --resume" in res.output
 
 
-def test_run_resume_unknown_session_errors(monkeypatch):
+def test_run_resume_unknown_session_errors(monkeypatch, resolved_provider):
     from cli.commands import run as run_mod
 
     task_agent = MagicMock()
@@ -40,7 +58,7 @@ def test_run_resume_unknown_session_errors(monkeypatch):
     task_agent.create_session.assert_not_called()
 
 
-def test_run_resume_recreates_and_runs(monkeypatch):
+def test_run_resume_recreates_and_runs(monkeypatch, resolved_provider):
     # A known session: resume rehydrates the orchestrator and calls run_session
     # (not create_session).
     from cli.commands import run as run_mod

@@ -2,8 +2,12 @@
 acceptance-contract leg 1: "the thing you deploy is the thing you just tested").
 
 ``compute_workspace_digest`` is a pure, deterministic sha256 over the sorted
-relative file paths + bytes of a workspace tree (noise dirs excluded at any
-depth). ``tested_tree_digest`` is the gate itself: it refuses (returns
+relative file paths + bytes of a workspace tree. WHICH files that is comes from
+``core/ship_tree.py`` — the ONE exclusion policy, shared with
+``core/app_service/snapshot.py``, so the digest identifies exactly the bytes a
+deploy ships (before, the two filtered different trees and the recorded digest
+did not describe the shipped tree). ``tested_tree_digest`` is the gate itself:
+it refuses (returns
 ``(None, reason)``) unless the session's action ledger shows a SUCCESSFUL
 ``run_tests`` with no edit action after it — reusing
 ``agents.task.runtime.edit_verify.edited_since_last_test`` (same ledger walker
@@ -14,36 +18,29 @@ import hashlib
 import os
 
 from agents.task.runtime.edit_verify import TEST_ACTIONS as _TEST_ACTIONS
-
-# Skipped at ANY depth — build/vcs/cache noise that must never perturb the
-# tested-tree digest.
-_SKIP_DIRS = frozenset({".git", "coding_snapshots", "node_modules", "__pycache__"})
+from core.ship_tree import SKIP_DIRS as _SKIP_DIRS  # noqa: F401  (kept importable)
+from core.ship_tree import walk_shippable
 
 
 def compute_workspace_digest(root: str) -> str:
     """Deterministic sha256 over the workspace tree.
 
     Sorted relative paths (so rename/add/remove always changes the digest) +
-    file bytes. Noise directories (``_SKIP_DIRS``) are pruned at any depth;
-    an otherwise-empty directory (e.g. one that contains only a skipped
-    subdirectory) contributes nothing — only FILES are hashed.
+    file bytes, over exactly the files a deploy would ship
+    (``core.ship_tree.walk_shippable``): noise directories are pruned at any
+    depth, symlinks / special files / credential-shaped files are excluded
+    because the snapshot refuses them, and an otherwise-empty directory
+    contributes nothing — only FILES are hashed.
     """
     root = os.path.abspath(root)
-    rel_paths = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS)
-        for fname in filenames:
-            full = os.path.join(dirpath, fname)
-            rel = os.path.relpath(full, root).replace(os.sep, "/")
-            rel_paths.append(rel)
-    rel_paths.sort()
+    paths = {rel: full for rel, full in walk_shippable(root)}
 
     h = hashlib.sha256()
-    for rel in rel_paths:
+    for rel in sorted(paths):
         h.update(rel.encode("utf-8", errors="replace"))
         h.update(b"\x00")
         try:
-            with open(os.path.join(root, rel), "rb") as f:
+            with open(paths[rel], "rb") as f:
                 h.update(f.read())
         except OSError:
             pass  # a file that vanished mid-walk contributes no bytes, not a crash

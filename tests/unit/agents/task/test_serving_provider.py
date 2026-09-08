@@ -93,7 +93,7 @@ def test_aux_metering_attributes_the_serving_provider():
     no `llm_provider` attribute, so identity fell through to model-name
     detection, which credits glm-4.6 to OpenRouter.
     """
-    from agents.task.agent.core.aux_metering import _llm_identity
+    from modules.llm.aux_metering import _llm_identity
 
     class _Adapter:
         model_name = "glm-4.6"

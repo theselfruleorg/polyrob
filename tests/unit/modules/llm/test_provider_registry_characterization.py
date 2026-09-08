@@ -2,8 +2,8 @@
 
 Pins the CURRENT resolution behavior of the twelve provider seams BEFORE the
 ``ProviderSpec`` refactor, so the derived outputs can be proven byte-identical.
-After the refactor these tests run with ``LLM_PROVIDER_REGISTRY`` both on and
-off (the ``registry_flag`` fixture) and must pass unchanged in both modes.
+The ``LLM_PROVIDER_REGISTRY`` kill-switch was removed 2026-08-29; the
+``registry_flag`` fixture now only isolates the registry cache and user file.
 
 Covered seams (proposal 024 §2.2):
   1  modules/llm/profiles.py PROFILES + the three oracles
@@ -12,8 +12,8 @@ Covered seams (proposal 024 §2.2):
   6  llm_factory.create_chat_model unknown-provider guard
   7  schema_generators.SCHEMA_GENERATORS routing
   10 llm_manager.FALLBACK_HIERARCHY
-  11 api/openai_compat/model_map._KNOWN_PROVIDERS
-  12 api/openai_compat/model_map._PREFIX_TO_PROVIDER
+  11 api/openai_compat/model_map._known_providers
+  12 api/openai_compat/model_map._prefix_to_provider
   +  core/runtime_config.resolve_runtime_config precedence matrix
 """
 import pytest
@@ -24,9 +24,8 @@ import pytest
 # Before the ProviderSpec refactor lands the flag is unknown to the code and
 # setting it is a no-op, so this fixture is safe from day one.
 # ---------------------------------------------------------------------------
-@pytest.fixture(params=["on", "off"])
-def registry_flag(request, monkeypatch):
-    monkeypatch.setenv("LLM_PROVIDER_REGISTRY", "true" if request.param == "on" else "false")
+@pytest.fixture
+def registry_flag(monkeypatch):
     # Ensure no user providers.yaml leaks into characterization runs.
     monkeypatch.setenv("LLM_CUSTOM_PROVIDERS", "")
     try:
@@ -34,7 +33,7 @@ def registry_flag(request, monkeypatch):
         provider_spec.reset_provider_registry_cache()
     except ImportError:
         pass  # pre-refactor tree
-    yield request.param
+    yield "on"
     try:
         from modules.llm import provider_spec
         provider_spec.reset_provider_registry_cache()
@@ -46,11 +45,7 @@ CANONICAL_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia", "dee
 INITIALIZABLE_ORDER = ["openrouter", "anthropic", "openai", "gemini", "nvidia"]
 
 #: Subscription/flat-rate rows appended by 024 T0. They exist ONLY on the
-#: registry path — the kill-switch (``LLM_PROVIDER_REGISTRY=off``) path is the
-#: frozen legacy literal table, which cannot know about them. That divergence is
-#: deliberate and is the first behavioral difference between the two modes; the
-#: SIX legacy providers must still resolve identically in both, which is what
-#: the rest of this suite pins. Because these rows are appended AFTER the six,
+#: registry path. Because these rows are appended AFTER the six,
 #: the canonical "first provider with a key" preference order is unchanged for
 #: every provider an existing install actually has a key for.
 SUBSCRIPTION_ROWS = [
@@ -89,10 +84,7 @@ class TestProfilesOracles:
         # The six legacy providers keep their exact identity AND order in both
         # modes — that is the parity this suite exists to protect.
         assert names[:6] == CANONICAL_ORDER
-        if registry_flag == "off":
-            assert names == CANONICAL_ORDER      # frozen legacy literal table
-        else:
-            assert names == CANONICAL_ORDER + SUBSCRIPTION_ROWS
+        assert names == CANONICAL_ORDER + SUBSCRIPTION_ROWS
 
     def test_subscription_rows_never_displace_the_legacy_six(self, registry_flag):
         """A 024 T0 row must not steal preference, fallback, or bootstrap.
@@ -102,8 +94,6 @@ class TestProfilesOracles:
         """
         from modules.llm.profiles import PROFILES, providers_with_keys
         assert providers_with_keys(ALL_KEYS) == CANONICAL_ORDER
-        if registry_flag == "off":
-            return
         from modules.llm.provider_spec import get_spec
         for name in SUBSCRIPTION_ROWS:
             spec = get_spec(name)

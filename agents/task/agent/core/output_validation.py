@@ -78,7 +78,7 @@ class OutputValidationMixin:
 		provider-charged completion went unbilled whenever the judge's structured
 		output failed to bind.
 		"""
-		from agents.task.agent.core.aux_metering import meter_aux_llm
+		from modules.llm.aux_metering import meter_aux_llm
 		await meter_aux_llm(
 			usage_tracker=getattr(self, "usage_tracker", None),
 			user_id=getattr(self, "user_id", None),

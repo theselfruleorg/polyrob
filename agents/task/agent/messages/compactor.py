@@ -494,7 +494,7 @@ class CompactorMixin:
 			_t0 = _time.time()
 			response = await compaction_llm.ainvoke([HumanMessage(content=prompt)])
 			# A3: meter this aux LLM call through the single deduction path (fail-open).
-			from agents.task.agent.core.aux_metering import meter_aux_llm
+			from modules.llm.aux_metering import meter_aux_llm
 			await meter_aux_llm(
 				usage_tracker=getattr(self, "usage_tracker", None),
 				user_id=getattr(self, "metering_user_id", None),

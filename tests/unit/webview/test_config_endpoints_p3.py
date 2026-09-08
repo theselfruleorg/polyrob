@@ -77,8 +77,7 @@ def test_credential_surface_flags_never_console_writable(monkeypatch, tmp_path):
     refused on the console PATCH surface even at the owner (local) posture."""
     c = _client(monkeypatch, tmp_path, posture="local")
     for key in ("LLM_CUSTOM_PROVIDERS", "POLYROB_AUTH_STORE",
-                "LLM_AUTH_STORE_ENABLED", "LLM_CREDENTIAL_BORROW",
-                "LLM_PROVIDER_REGISTRY"):
+                "LLM_AUTH_STORE_ENABLED", "LLM_CREDENTIAL_BORROW"):
         r = c.patch(f"/api/webgate/config/{key}", json={"value": "x"})
         assert r.status_code == 403, key
         assert "not writable from the console" in r.json()["error"]

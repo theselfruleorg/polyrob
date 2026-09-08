@@ -408,9 +408,14 @@ class MCPStdioTransport(MCPTransport):
     async def connect(self) -> None:
         """Start the subprocess and establish connection."""
         try:
-            import os
-            full_env = {**os.environ, **(self.env or {})}
-            
+            # H2 (audit 2026-08-22): NEVER `{**os.environ, ...}`. A stdio MCP
+            # server is third-party code the agent can install; inheriting the
+            # process environment handed it AGENT_WALLET_MASTER_SEED and every
+            # API key. Allowlist-only inheritance; explicitly configured values
+            # (mcp_config.json, ${VAR}-resolved) still pass.
+            from tools.mcp.child_env import build_mcp_child_env
+            full_env = build_mcp_child_env(self.env)
+
             # Debug logging
             self.logger.debug(f"Starting MCP process with command: {self.command}")
             if self.env:

@@ -10,6 +10,14 @@ Per-run attribution: on a shared project-root workspace the time-window scan
 lists OTHER goals' files too (assessment §3.9), so when the ledger carries
 ``filesystem_write_file`` descriptors, only THEIR files are considered this
 run's deliverables; the scan is the fallback when no write descriptor exists.
+
+Two bounds are UNCONDITIONAL (chat-first review 2026-08-22, G1/G4). Attribution
+only exists when the ledger carried a write descriptor, so a run that produced
+files through any other action had no bound at all and listed everything the
+scan found — 20 unreadable lines on a phone. The line cap and the roll-up below
+do not depend on attribution, and every path is emitted inside backticks so the
+renderer marks it as code (Telegram otherwise auto-links a ``*.md`` filename as
+a Moldovan domain — G2).
 """
 import logging
 import os
@@ -26,6 +34,26 @@ _FILEPATH_RE = re.compile(r'"(?:filepath|file_path|filePath)"\s*:\s*"([^"]+)"')
 _MAX_UNATTRIBUTED_LINES = 5
 
 
+def deliverables_max_lines() -> int:
+    """Hard cap on individually-listed deliverable lines in one owner message.
+
+    The remainder becomes ONE roll-up line plus the console link. This is the
+    bound that holds regardless of ledger attribution.
+    """
+    from core.env import int_env
+    return max(1, int_env("DELIVERABLES_MAX_LINES", 5))
+
+
+def _code(text: str) -> str:
+    """Render a path/filename as a code span.
+
+    ``core.surfaces.rendering`` only emits ``<code>`` for backticked source, and
+    a bare ``report.md`` in prose is auto-linked by Telegram as a domain (``.md``
+    is Moldova's TLD), giving the owner a tappable link to nowhere.
+    """
+    return f"`{text}`"
+
+
 def deliverable_line_for(rel: str, size: str, *, url: Optional[str] = None,
                          fallback: Optional[str] = None) -> str:
     """One deliverable line, preferring a PUBLISHED URL over a server path.
@@ -36,8 +64,8 @@ def deliverable_line_for(rel: str, size: str, *, url: Optional[str] = None,
     gets a link, instead of the 2026-07-19 bare-filename failure mode.
     """
     if url:
-        return f"- {rel} ({size}) — published: {url}"
-    return fallback if fallback is not None else f"- {rel} ({size})"
+        return f"- {_code(rel)} ({size}) — published: {url}"
+    return fallback if fallback is not None else f"- {_code(rel)} ({size})"
 
 
 def published_url_for(user_id: str, path: str) -> Optional[str]:
@@ -112,10 +140,16 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
                                            screen_attachment_path,
                                            validate_media_paths)
     max_files = attach_max_files()
+    max_lines = deliverables_max_lines()
     attachments: List[dict] = []
     lines: List[str] = []
     skipped_unattributed = 0
-    for f in files:
+    overflow = 0
+    # Files this run is known to have written come FIRST, so the line cap spends
+    # its budget on this run's own output rather than on whatever the scan swept
+    # up from a shared workspace.
+    ordered = sorted(files, key=lambda f: str(f["path"]) in unattributed)
+    for f in ordered:
         rel = str(f["path"])
         size = _fmt_size(f.get("bytes"))
         real: Optional[str] = None
@@ -149,10 +183,83 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
             # The absolute path rides IN the line (review Important #3): a
             # quiet-held/capped/fallback re-delivery is text-only, so the text
             # alone must keep the file reachable.
-            lines.append(f"- {rel} ({size}) — attached ({real})")
+            lines.append(f"- {_code(rel)} ({size}) — attached ({_code(real)})")
+        elif len(lines) >= max_lines:
+            # The unconditional bound: an unreachable file beyond the cap becomes
+            # part of the roll-up. Attached and published files are never rolled
+            # up — the owner HAS those, so naming them is the point of the block.
+            overflow += 1
         else:
-            where = real or (os.path.join(workspace_dir, rel) if workspace_dir else rel)
-            lines.append(f"- {rel} ({size}) — server-only: {where} ({reason})")
-    if skipped_unattributed:
-        lines.append(f"- (+{skipped_unattributed} more unattributed shared-workspace file(s))")
+            # A console link is a real address the owner can tap; a server path is
+            # only an address to someone with a shell. Prefer the link, fall back
+            # to the path so the file stays reachable either way.
+            link = _artifact_link(session_id, rel)
+            if link:
+                lines.append(f"- {_code(rel)} ({size}) — console: {link} ({reason})")
+            else:
+                where = real or (os.path.join(workspace_dir, rel) if workspace_dir else rel)
+                lines.append(f"- {_code(rel)} ({size}) — server-only: {_code(where)} ({reason})")
+    rolled = skipped_unattributed + overflow
+    if rolled:
+        lines.append(_rollup_line(rolled, session_id))
     return attachments, lines
+
+
+_PUBLISHED_MARK = "— published: "
+
+
+def reachability_note(lines: Optional[List[str]], *,
+                      rail_available: Optional[bool] = None) -> Optional[str]:
+    """ONE line when a run's deliverables exist and none is at a public URL.
+
+    Publishing & app-deployment evaluation (2026-09-05): 336 artifacts on prod,
+    0 with a URL, and every completion notice read as shipped. The block already
+    prefers a URL over a path (:func:`deliverable_line_for`); this names the gap
+    when there is none — and names the switch when the ``publish`` tool is not
+    registered (``rail_available`` False; None = unknown) — so "done" never
+    implies "reachable" again. None when there are no deliverables or one of
+    them is published.
+    """
+    if not lines:
+        return None
+    if any(_PUBLISHED_MARK in ln for ln in lines):
+        return None
+    if rail_available is False:
+        return ("No file above is at a public URL — the publish rail is not "
+                "registered (PUBLISH_ENABLED).")
+    return "No file above is at a public URL — the run did not publish."
+
+
+def publish_rail_available(container) -> Optional[bool]:
+    """Whether the ``publish`` tool is registered in this process (None = unknown)."""
+    try:
+        if container is None or not hasattr(container, "has_service"):
+            return None
+        return bool(container.has_service("publish"))
+    except Exception:
+        return None
+
+
+def _artifact_link(session_id: str, rel: str) -> Optional[str]:
+    """Console URL that serves this file, when a console is configured."""
+    try:
+        from core.surfaces.deep_link import webview_artifact_link
+        return webview_artifact_link(session_id, rel)
+    except Exception:
+        logger.debug("deliverables: artifact link resolution failed", exc_info=True)
+        return None
+
+
+def _rollup_line(count: int, session_id: str) -> str:
+    """ONE line for everything the cap held back, pointing at the detail plane.
+
+    Seventeen unreachable paths are noise; one line plus a link the owner can
+    tap is the same information in a form a phone can carry.
+    """
+    try:
+        from core.surfaces.deep_link import webview_session_link
+        link = webview_session_link(session_id)
+    except Exception:
+        link = None
+    tail = f" — see {link}" if link else " — see the session workspace"
+    return f"- (+{count} more file(s){tail})"

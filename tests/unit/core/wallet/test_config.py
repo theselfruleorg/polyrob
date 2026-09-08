@@ -16,7 +16,11 @@ def test_defaults_are_safe():
     assert cfg.backend == "local_eoa"
     assert cfg.master_seed is None
     assert cfg.x402_facilitator_url == TESTNET_FACILITATOR_URL
-    assert cfg.daily_cap_usd is None  # disabled by default = legacy behavior
+    # H3 (2026-08-22): daily_cap_usd used to default to None ("disabled" —
+    # NO aggregate spend bound at all). The per-tx ceiling alone cannot stop a
+    # within-ceiling loop, so the default is now finite ($100/24h); write
+    # WALLET_DAILY_CAP_USD=none to restore the old unbounded behaviour.
+    assert cfg.daily_cap_usd == 100.0
 
 
 def test_repr_excludes_master_seed():
@@ -32,9 +36,13 @@ def test_repr_excludes_master_seed():
 
 def test_daily_cap_parsed_when_set():
     assert load_wallet_config({"WALLET_DAILY_CAP_USD": "5"}).daily_cap_usd == 5.0
-    # blank / unparseable → disabled (None), never a crash
-    assert load_wallet_config({"WALLET_DAILY_CAP_USD": ""}).daily_cap_usd is None
-    assert load_wallet_config({"WALLET_DAILY_CAP_USD": "abc"}).daily_cap_usd is None
+    # H3 (2026-08-22): blank used to mean "disabled" (None); it now means
+    # "use the finite default" — same as fully unset. Only an explicit
+    # disable sentinel (see test_cap_can_be_disabled_only_by_an_explicit_sentinel)
+    # or a genuinely absent key produces the default; garbage now RAISES
+    # instead of silently disabling the cap (see
+    # test_malformed_daily_cap_raises_naming_the_key below).
+    assert load_wallet_config({"WALLET_DAILY_CAP_USD": ""}).daily_cap_usd == 100.0
 
 
 def test_reads_env():
@@ -144,3 +152,107 @@ def test_zero_arg_call_unaffected_by_fail_open_owner_home_resolution():
     cfg = load_wallet_config(env)
     assert cfg.daily_cap_usd == 10.0
     assert cfg.max_per_tx_usd == 250.0
+
+
+# --- H3 (2026-08-22): finite daily-cap default, loud malformed cap ----------
+
+def test_daily_cap_has_a_finite_default():
+    """H3: an unset WALLET_DAILY_CAP_USD used to mean NO aggregate bound, and the
+    per-tx ceiling alone cannot stop a within-ceiling loop (x402's idempotency
+    key is URL-keyed, so a loop mints a fresh key every iteration)."""
+    from core.wallet.config import load_wallet_config
+    cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false"})
+    assert cfg.daily_cap_usd == 100.0
+
+
+def test_explicit_daily_cap_wins():
+    """Minor 3 (fix round 1, 2026-08-22 review): the original assertion here
+    used `25` (below the $100 default), which passes unchanged against the
+    pre-H3 code too and so proved nothing about the new default. The
+    discriminating case is an explicit value ABOVE the default — the one that
+    would break if the cap-resolution logic ever silently clamped an explicit
+    operator value down to the default (e.g. via an accidental min-merge)."""
+    from core.wallet.config import load_wallet_config
+    cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                              "WALLET_DAILY_CAP_USD": "500"})
+    assert cfg.daily_cap_usd == 500.0
+    cfg2 = load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                               "WALLET_DAILY_CAP_USD": "25"})
+    assert cfg2.daily_cap_usd == 25.0
+
+
+def test_malformed_daily_cap_raises_naming_the_key():
+    """H3-sub: `1O0` (letter O) silently parsed to None = NO cap, while the owner
+    believed a cap was active. The per-tx ceiling already raises; parity."""
+    import pytest
+    from core.wallet.config import load_wallet_config
+    with pytest.raises(ValueError) as exc:
+        load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                            "WALLET_DAILY_CAP_USD": "1O0"})
+    assert "WALLET_DAILY_CAP_USD" in str(exc.value)
+
+
+def test_infinite_daily_cap_raises():
+    import pytest
+    from core.wallet.config import load_wallet_config
+    with pytest.raises(ValueError):
+        load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                            "WALLET_DAILY_CAP_USD": "inf"})
+
+
+def test_cap_can_be_disabled_only_by_an_explicit_sentinel():
+    """An operator who genuinely wants no aggregate bound must say so in words,
+    so the choice is visible in the env file rather than implied by absence.
+
+    Minor 3 (fix round 1, 2026-08-22 review): the original version of this
+    test (verbatim from the brief) asserted ONLY the `none` case, which also
+    passes against the entirely unmodified pre-H3 code (the old `_opt_float`
+    parsed "none" to None too via its unparseable-string fallback) — it
+    pinned nothing about the actual H3 change and would not fail if the
+    default were reverted to None. This version additionally asserts the two
+    things that WOULD fail on a revert: unset resolves to the finite default,
+    never None, and "0" is a literal $0 cap — never a disable synonym."""
+    from core.wallet.config import load_wallet_config
+    cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                              "WALLET_DAILY_CAP_USD": "none"})
+    assert cfg.daily_cap_usd is None
+    unset_cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false"})
+    assert unset_cfg.daily_cap_usd == 100.0
+    zero_cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false",
+                                   "WALLET_DAILY_CAP_USD": "0"})
+    assert zero_cfg.daily_cap_usd == 0.0
+
+
+def test_per_tx_default_is_the_lowered_catastrophe_stop():
+    from core.wallet.config import load_wallet_config
+    cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false"})
+    assert cfg.max_per_tx_usd == 250.0
+
+
+def test_has_daily_cap_is_true_by_default():
+    """tx_guard's autonomous lane refuses without one; the default must satisfy it."""
+    from core.wallet.config import load_wallet_config
+    from core.wallet.policy import PolicyGate
+    cfg = load_wallet_config({"AGENT_WALLET_ENABLED": "false"})
+    gate = PolicyGate(max_per_tx_usd=cfg.max_per_tx_usd,
+                      daily_cap_usd=cfg.daily_cap_usd)
+    assert gate.has_daily_cap is True
+
+
+def test_daily_cap_pref_cannot_widen_above_the_new_default(tmp_path):
+    """Controller ruling (H3 threading review): the old code passed
+    `env_value=None` to the pref min-merge when WALLET_DAILY_CAP_USD was
+    unset, SPECIFICALLY so a pref alone could set a cap where the operator set
+    none. Now that "unset" resolves to a finite $100 default, that same
+    None-passthrough would let a WIDER pref (e.g. $500) win outright via the
+    `env_value is None -> return pref` branch — silently raising the
+    effective cap above the operator's (default) ceiling. The fix threads the
+    RESOLVED default as the env leg, so `min(pref, default)` still applies."""
+    from core.wallet.config import effective_daily_cap_usd
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 500.0)
+    # WALLET_DAILY_CAP_USD is unset -> resolves to the $100 default -> a $500
+    # pref must NOT be able to raise the effective cap above that default.
+    assert effective_daily_cap_usd("u1", tmp_path, env={}) == 100.0
+    # A pref that's actually tighter than the default still wins, unaffected.
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 30.0)
+    assert effective_daily_cap_usd("u1", tmp_path, env={}) == 30.0

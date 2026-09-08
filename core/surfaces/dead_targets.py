@@ -1,4 +1,5 @@
-"""Dead-target registry: store + liveness classifier (T1.5, Task 1 — pure/unwired).
+"""Dead-target registry: store + liveness classifier (T1.5). Wired: message_router skips a
+dead target before sending and marks one on a classified send failure.
 
 Every surface's send path collapses exception TYPES to a plain string
 (``SendResult(success=False, error=str(e))`` — telegram ``surface.py:112-114`` +

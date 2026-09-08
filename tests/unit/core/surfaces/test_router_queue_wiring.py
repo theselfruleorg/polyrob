@@ -91,3 +91,67 @@ async def test_publish_no_queue_attached(tmp_path, monkeypatch):
     r.subscribe("wa", surf)
     await r.publish(OutboundMessage(session_key="sk", text="hello"))
     assert surf.sent == ["hello"]  # sent directly (no queue)
+
+
+@pytest.mark.asyncio
+async def test_queue_carries_media_end_to_end(tmp_path, monkeypatch):
+    """030 L4: enqueue must persist OutboundMessage.media and the dispatcher must
+    reconstruct it — enabling the queue used to silently drop every photo,
+    document and invoice card."""
+    import time as _t
+
+    from core.surfaces.outbound_dispatcher import OutboundDispatcher
+
+    monkeypatch.setenv("OUTBOUND_QUEUE_ENABLED", "true")
+    reg = SessionChatRegistry(os.path.join(tmp_path, "reg.db"))
+    reg.bind("sk", "sid", "u1", "wa", "123")
+    q = OutboundDeliveryQueue(os.path.join(tmp_path, "o.db"))
+    r = MessageRouter(reg)
+    r.attach_queue(q)
+
+    class _MediaSurface(_Surface):
+        def __init__(self):
+            super().__init__()
+            self.media = []
+
+        async def send(self, msg):
+            self.sent.append(msg.text)
+            self.media.append(msg.media)
+            return SendResult(success=True)
+
+    surf = _MediaSurface()
+    r.subscribe("wa", surf)
+    media = [{"kind": "image", "path": "/tmp/card.png", "caption": "invoice #7"}]
+    await r.publish(OutboundMessage(session_key="sk", text="your invoice", media=media))
+    assert q.counts()["pending"] == 1 and surf.sent == []
+
+    d = OutboundDispatcher(q, lambda sid: surf, rate_per_sec=1000, burst=1000)
+    delivered = await d.drain_once(_t.time())
+    assert delivered == 1
+    assert surf.sent == ["your invoice"]
+    assert surf.media == [media]
+
+
+def test_media_column_added_to_a_preexisting_queue_db(tmp_path):
+    """The media column arrives via an additive ALTER on open — an existing queue
+    DB from an older version must keep working."""
+    import sqlite3
+
+    db = os.path.join(tmp_path, "legacy.db")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """CREATE TABLE outbound_queue (
+             id INTEGER PRIMARY KEY AUTOINCREMENT,
+             idempotency_key TEXT UNIQUE, session_key TEXT NOT NULL,
+             surface_id TEXT NOT NULL, dest TEXT, payload TEXT NOT NULL,
+             kind TEXT DEFAULT 'agent_text', state TEXT DEFAULT 'pending',
+             attempts INTEGER DEFAULT 0, next_attempt_at REAL DEFAULT 0,
+             last_error TEXT, created_at REAL DEFAULT (strftime('%s','now')),
+             updated_at REAL DEFAULT (strftime('%s','now')))""")
+    conn.commit()
+    conn.close()
+    q = OutboundDeliveryQueue(db)
+    assert q.enqueue(idempotency_key="k1", session_key="sk", surface_id="wa",
+                     dest="1", payload="t", media=[{"kind": "image", "path": "/x.png"}])
+    row = q.claim_due(9999999999.0)[0]
+    assert row["media"]

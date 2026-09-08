@@ -283,60 +283,6 @@ class SessionStartFormatter(BaseFeedFormatter):
         }
 
 
-class MultiAgentRelationshipFormatter(BaseFeedFormatter):
-    """Formatter for multi-agent relationship events."""
-
-    def format(self, event: BaseTelemetryEvent) -> Dict[str, Any]:
-        """Format multi-agent relationship event for feed."""
-        relationship_data = event.properties
-
-        # Build enhanced agent data
-        agent_details = []
-        agent_types = relationship_data.get('agent_types', {})
-        agent_sequence = relationship_data.get('execution_sequence',
-                                        relationship_data.get('agent_sequence', []))
-
-        for agent_id in relationship_data.get('agent_ids', []):
-            agent_type = agent_types.get(agent_id, "Unknown")
-
-            agent_name = "Unknown"
-            if '_' in agent_id:
-                prefix = agent_id.split('_')[0]
-                agent_name = prefix.capitalize()
-
-            sequence_position = -1
-            if agent_id in agent_sequence:
-                sequence_position = agent_sequence.index(agent_id)
-
-            agent_details.append({
-                'id': agent_id,
-                'agent_id': agent_id,
-                'name': agent_name,
-                'agent_name': agent_name,
-                'type': agent_type,
-                'agent_type': agent_type,
-                'model': relationship_data.get('agent_models', {}).get(agent_id, 'Unknown'),
-                'sequence_position': sequence_position
-            })
-
-        # Sort by sequence position
-        agent_details.sort(key=lambda x: x['sequence_position'] if x['sequence_position'] >= 0 else 999)
-
-        return {
-            'type': 'multi_agent_relationship',
-            'timestamp': time.time(),
-            'datetime': datetime.now().isoformat(),
-            'data': {
-                'agent_ids': relationship_data.get('agent_ids', []),
-                'agent_types': relationship_data.get('agent_types', {}),
-                'agent_sequence': relationship_data.get('agent_sequence', []),
-                'agent_models': relationship_data.get('agent_models', {}),
-                'orchestrator_type': relationship_data.get('orchestrator_type', 'default'),
-                'agent_details': agent_details
-            }
-        }
-
-
 class ControllerRegisteredFunctionsFormatter(BaseFeedFormatter):
     """Formatter for controller registered functions events.
 
@@ -618,9 +564,6 @@ class FeedFormatterRegistry:
             'llm_request': LLMRequestFormatter(),
             'session_start': SessionStartFormatter(),
             'session_completion': SessionCompletionFormatter(),
-            'multi_agent_relationship': MultiAgentRelationshipFormatter(),
-            'multi_agent_relationship_detailed': MultiAgentRelationshipFormatter(),
-            'session_relationship': MultiAgentRelationshipFormatter(),
             'controller_registered_functions': ControllerRegisteredFunctionsFormatter(),
             'tool_execution': ToolExecutionFormatter(),
             'error': ErrorFormatter(),

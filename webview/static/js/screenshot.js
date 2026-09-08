@@ -101,10 +101,26 @@ class ScreenshotManager {
     async loadScreenshot(forceRefresh = false) {
         // Skip if screenshot elements don't exist on this page
         if (!this.isActive) return;
-        
+
         // First clear any existing timer to prevent stacking requests
         clearTimeout(this.screenshotTimer);
-        
+
+        // 030 WS-G2 (D-14): quiesce — a hidden tab or a finished session must
+        // not hammer the screenshot endpoint every 2s forever. A hidden tab
+        // re-checks slowly; a terminal-state session stops (tab:activated /
+        // a status change can restart it via loadScreenshot(true)).
+        try {
+            if (document.visibilityState === 'hidden' && !forceRefresh) {
+                this.screenshotTimer = setTimeout(() => this.loadScreenshot(), 15000);
+                return;
+            }
+            const st = String(sessionState.status || '').toLowerCase();
+            if (!forceRefresh && ['completed', 'failed', 'cancelled', 'error'].includes(st)) {
+                logger.debug('[ScreenshotManager] session %s is %s — polling stopped', this.sessionId, st);
+                return;
+            }
+        } catch (e) { /* fail-open: keep legacy polling */ }
+
         // Prevent multiple simultaneous requests
         if (this.isLoadingScreenshot) {
             // Schedule next check and return

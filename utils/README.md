@@ -19,7 +19,7 @@ The `utils` package provides a comprehensive collection of utility functions, he
 
 ```
 utils/
-├── __init__.py                     # Utility exports and registry
+├── __init__.py                     # Package marker (no re-exports; import modules directly)
 ├── README.md                       # This documentation
 │
 ├── rate_limit_manager.py           # Comprehensive rate limiting system
@@ -27,7 +27,6 @@ utils/
 ├── auth_utils.py                   # Authentication utilities
 │
 ├── time_utils.py                   # Performance timing and measurement
-├── metrics.py                      # Application metrics collection
 ├── circuit_breaker.py              # Circuit breaker pattern
 │
 ├── gif_utils.py                    # GIF generation utilities
@@ -115,40 +114,12 @@ async def get_reset_time(self, operation: str) -> float:
 
 User management, validation, and data processing.
 
-**User Data Extraction**:
 ```python
-def extract_user_data(user: dict) -> Dict[str, Any]:
-    """Extract structured data from user object"""
-
-async def get_or_create_user_from_data(
-    data: Dict[str, Any],
-    user_manager
-) -> Dict[str, Any]:
-    """Get or create user profile from data"""
-
-def format_user_display_name(user_data: Dict) -> str:
-    """Format user display name"""
-```
-
-**Validation Functions**:
-```python
-def validate_email(email: str) -> Tuple[bool, str]:
-    """Validate email format with detailed feedback"""
-
 def validate_wallet_address(address: str) -> Tuple[bool, str]:
     """Validate Ethereum wallet address"""
-```
 
-**ID Management**:
-```python
 def generate_user_id(seed=None) -> str:
     """Generate unique hash-based user ID"""
-
-def is_valid_hash_id(user_id: str) -> bool:
-    """Validate hash-based user ID format"""
-
-def get_id_type(user_id: str) -> str:
-    """Determine ID type: 'hash_id', 'wallet', 'email', or 'unknown'"""
 ```
 
 ### 3. Authentication Utilities (`auth_utils.py`)
@@ -162,14 +133,8 @@ def get_authenticated_user_id(request: Request) -> str:
 def get_user_tier(request: Request) -> str:
     """Get the user's tier"""
 
-def get_user_wallet(request: Request) -> Optional[str]:
-    """Get the user's wallet address, if any"""
-
 def is_admin(request: Request) -> bool:
     """Whether the request is from an admin"""
-
-def get_user_role(request: Request) -> str:
-    """Get the user's role"""
 
 def is_authenticated(request: Request) -> bool:
     """Whether the request is authenticated"""
@@ -215,30 +180,8 @@ async def async_expensive_operation():
 **Helpers**:
 ```python
 get_current_timestamp() -> float
-parse_timestamp_to_float(ts_value) -> float
 parse_date_to_timestamp(date_string: str) -> int
 timestamp_to_date(timestamp: int) -> str
-```
-
-### 6. Metrics (`metrics.py`)
-
-Application metrics collection and analysis.
-
-**Features**:
-- Performance metrics tracking
-- Usage statistics collection
-- Health monitoring
-- Custom metric framework
-
-`Metrics` is a `BaseComponent` (with async `_initialize()`/`_cleanup()` lifecycle).
-
-```python
-class Metrics(BaseComponent):
-    def record(self, metric_name: str, value: Any, tags: Optional[Dict[str, str]] = None) -> None:
-        """Record a metric value (appended under metric_name)"""
-
-    def get_metrics(self) -> Dict[str, Any]:
-        """Get all recorded metrics"""
 ```
 
 ### 7. Circuit Breaker (`circuit_breaker.py`)
@@ -270,8 +213,8 @@ class CircuitBreaker:
 ```
 
 A blocked call raises `CircuitBreakerError`. A process-wide registry is also
-available (`CircuitBreakerRegistry`, `get_circuit_breaker_registry()`,
-`get_circuit_breaker(name, **kwargs)`).
+available (`CircuitBreakerRegistry` via `get_circuit_breaker_registry()`;
+`get_or_create(name, **kwargs)` is how the MCP server manager obtains one).
 
 **Usage**:
 ```python
@@ -365,12 +308,6 @@ class BoundedDict(Generic[K, V]):
 
     def __init__(self, max_size: int = 1000):
         ...
-
-class BoundedSet(Generic[V]):
-    """Set with maximum size limit (FIFO eviction)"""
-
-    def __init__(self, max_size: int = 10000):
-        ...
 ```
 
 ## Integration Patterns
@@ -392,9 +329,6 @@ class AgentManager:
     @time_execution_async
     async def process_request(self, request):
         result = await self.agent.process(request)
-        
-        metrics.record('agent_processing_time', timer.duration)
-        
         return result
 ```
 

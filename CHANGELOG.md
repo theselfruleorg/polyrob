@@ -6,6 +6,718 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-09-08
+
+### Two-week release audit — money, autonomy and app-service hardening (2026-09-08)
+
+A full audit of the two weeks since 0.12.0 produced 6 critical and 13 high findings;
+every one is fixed with a regression test.
+
+- **Solana swap guard sees the whole transaction** (`core/wallet/solana_tx_inspect.py`): a
+  Token-2022 transfer no longer bypasses the balance-delta check, the guard reads the
+  full instruction set instead of the first transfer, and it REFUSES what it cannot
+  observe rather than passing it.
+- **A Solana swap reports whether it actually landed** — a submitted-but-unconfirmed
+  signature is no longer recorded as a completed trade.
+- **A real x402 payment is no longer swallowed** by the settlement watcher while one of
+  our own swaps moves the same amount through the treasury in the same window.
+- **`polyrob autonomy pause` writes to the resolved data home**, not the process CWD —
+  the CLI could previously report a verified pause that the running agent never saw.
+- **`/pause` stops the `message` tool** (the dominant autonomous send path) and the
+  `wallet` daily spend cap + replay guard now hold ACROSS processes, not per-process.
+- **The cold-start requeue no longer rips a goal from a live claim** — the boot sweep
+  takes the same CAS guard the dispatcher does.
+- **A goal run that produced every deliverable is no longer failed** for a missing
+  `done()`, and an unanswered owner approval no longer counts as a cron job's failure.
+- **A goal says WHICH declared tool never loaded, and why**, instead of failing opaquely.
+- **The stream seeder takes a lock** so a manual run cannot double-seed a money leg;
+  planner stall/backoff bookkeeping is tenant-scoped.
+- **The agent recognises a sub-addressed copy of its own address** (`me+tag@…`) as itself,
+  closing a self-correspondent binding loop.
+- **Sandbox container uid can edit host-written files**, not merely enter their directories.
+- **The Alchemy key cannot reach the log** from the DeFi index provider.
+- **App service (032) hardening:** approval binds to the approved CONFIG (not just the
+  slug), app egress admits only public addresses and is re-asserted every supervisor tick,
+  and the tested-tree digest describes exactly the tree that ships.
+
+### Telemetry — every external write records its effect (2026-09-08)
+
+- **`wallet_spend` rows carry the tenant.** They were written tenantless, so the unified
+  ledger read a confident `$0.00` over real spend.
+- **Cron delivery goes through the gated `twitter` / `email` ACTIONS**, not the raw tool
+  helpers — so a scheduled post is rate-limited, approval-gated, cooldown-checked and
+  recorded like every other send.
+- **`/pause social` actually stops autonomous posting.** Seven of the pause scopes had
+  zero consumers; the social scope is now enforced at the send path.
+- **Shrink-only ratchet** (`tests/test_external_write_telemetry_ratchet.py`) pinning every
+  external writer that still records no effect telemetry, so the list can only get smaller.
+
+### Refactors (2026-09-08)
+
+Behaviour-preserving extractions that bring three oversized modules back under the size
+ratchet: the controller's document-authoring actions, `TaskAgent`'s public session-control
+verbs, and the LLM manager's read-only client/model inventory each move to their own mixin.
+
+### 032 — durable app service (2026-09-07)
+
+An agent-built app now runs as
+its own hardened container on the box, survives session end / agent restart / reboot,
+and is reachable at `https://<slug>.<APP_SERVICE_BASE_DOMAIN>`; the owner approves the
+address once and `/halt` stops it. Off by default (`APP_SERVICE_ENABLED`); ONE bundle
+turns it on: `AGENT_BUILDER_MODE=ship` (+ `APP_SERVICE_BASE_DOMAIN`).
+
+- **Registry** (`core/app_service/registry.py`, `app_services.db`): tenant-keyed rows,
+  address-sticky approval, CAS claims, caps counters; a cross-tenant slug rejects.
+- **Tool** `app_service` (`deploy`/`stop`/`list_apps`/`logs`): the `publish` gate shape,
+  the 031 pause predicate, workspace confinement, ship==tested, caps, secret-shaped env
+  refused. **The pending row is the owner ask** (the owner-queue provider denies an
+  autonomous goal-run turn with no ask — the turn the `ship-software` stream uses).
+- **Supervisor** (`polyrob apps supervise`, `deployment/polyrob-apps.service`): snapshot
+  of the tested tree, per-app bridge + nft egress deny, `docker run -d` with the ONE
+  hardening list (`core/container_hardening.py`, lifted from the sandbox backend),
+  health, a two-substitution nginx stanza, `artifacts.url` stamped on go-live (021),
+  breaker, logs; pause edge tears live containers down and resume redeploys.
+- **Owner seats**: `polyrob apps …`, Telegram `/apps …`, REPL `/apps`, the console Apps
+  page, the status snapshot `apps` section (pending approvals lead as CRIT).
+- **`AGENT_BUILDER_MODE=off|build|ship`**: the fifth named default bundle — `build` =
+  `PUBLISH_ENABLED` + `GITHUB_TOOL_ENABLED` and `publish` in the goal toolset; `ship` =
+  + `APP_SERVICE_ENABLED`/`APP_SERVICE_ALLOW_PUBLIC` and `app_service` in the goal
+  toolset; clamps to `build` without domain + cert; never money/host/secrets.
+- **Serving side** (owner-run once): `scripts/setup_apps_vhost.sh` — wildcard cert via
+  manual DNS-01, the nginx include dir, the unit. `deploy_prod.sh` restarts it with the
+  family. Guides: `docs/guide/deployment-postures.md`, `docs/guide/owner-controls.md`.
+
+### Publishing & app-deployment evaluation — Wave 1 (2026-09-06)
+
+A production audit found 336 agent artifacts, 0 with a URL, and the built
+`publish`/`hf_deploy`/`github` rails all switched off. Wave 1 stops the ship loop from satisfying itself. Wave 0
+(enable the built static rail on the box) is an owner step; Wave 2 is proposal 032.
+
+- **`ship-software` stream** (`data/streams/streams.yaml`): the grant now carries
+  `publish`, `shell`, `process` (the goal body already told the agent to use the process
+  tool the grant omitted); the success criterion demands a URL the owner can open — or
+  the exact reason it cannot be — and states that a loopback curl alone does not satisfy
+  it. The manifest re-syncs prose and criteria on the next hourly seed.
+- **Build-command timeouts.** The binding 60 s on prod was the controller's per-action
+  `default` cap (`shell`/`code_execution` had no row), not the tools' own ceilings.
+  `TimeoutConfig.TOOL_TIMEOUTS` gains `shell`/`code_execution` (330 s;
+  `SHELL_TIMEOUT_SECONDS`/`CODE_EXEC_TIMEOUT_SECONDS`), and ONE foreground ceiling
+  `SHELL_MAX_TIMEOUT_SEC` (default 300, `tools/code_exec/limits.py`) now governs both
+  `shell_run` (120 when the agent omits `timeout`) and the dev-mode `run_code` cap.
+- **Unreachable deliverables are named.** A completion notice whose deliverables carry
+  no published URL ends with one line saying so — naming `PUBLISH_ENABLED` when the
+  rail is not registered (`agents/task/goals/deliverables.py::reachability_note`).
+
+### 031 — stop everything by prompting the agent (2026-09-03)
+
+The owner's "stop" (text or
+voice, any words) now stops every autonomous activity in seconds, survives restarts, and
+every seat reports the verified state; "resume" reverses it.
+
+- **One pause record + one predicate + a ratchet.** `core/autonomy_control.py` owns
+  `<data>/AUTONOMY_PAUSE.json` (scopes, optional expiry, atomic, fail-closed); every
+  autonomous starter calls `allows(kind)` (`tests/test_autonomy_control_ratchet.py`). The
+  three legacy sentinels (`AUTONOMY_HALT`, `TREASURY_ENTRY_PAUSE`, `STREAM_SEEDING_PAUSE`)
+  are read-only facets of it — a `touch` still works, nothing writes them any more.
+- **Deterministic owner stop gate** on Telegram (text or voice, before any queue, model
+  call or tool) and in the REPL: "stop" / "stop everything" / "autonomy off" pauses
+  everything from the text alone; "resume"/"continue" lifts a pause; a scoped "stop
+  trading" goes to the agent unless the model is credit-dead or the session is busy, in
+  which case everything is paused as the safe default. The directive is recorded into
+  the session as ALREADY APPLIED so a later drain can never re-apply a stale stop.
+- **`autonomy_control` agent action** (owner-only; forged, leaf and non-owner turns
+  refused; a correspondent-tainted session cannot reach it) so "stop trading
+  for 6 hours" becomes state, not a row cancellation. The security prompt tells the agent
+  to call it FIRST on any stop/pause/resume ask.
+- **`/pause [scope…] [for 6h]` `/resume [scope…]`** on Telegram, the REPL and the web
+  console (`/api/webgate/pause|resume`); `polyrob autonomy pause|halt|resume|status`;
+  `/halt` and `polyrob owner halt|pause-entries|pause-streams` kept as aliases. One
+  renderer pair produces the verified confirmation text on every seat.
+- **In-flight work is cancelled on the paused edge**: goal runs return to `ready` with no
+  failure increment, the running cron job returns to `scheduled`, background delegations
+  of autonomous sessions are cancelled; loops stay armed (resume needs no restart); the
+  a 3 s pause watcher reconciles a pause written by another process (CLI, console,
+  script, touched file) the same way; the cold-start requeue stays unconditional (a
+  `running` row after a restart is a lie; dispatch is gated).
+- **Status leads with the pause line** on every seat (`⏸ PAUSED (…) since … by … via …`
+  or `▶ RUNNING — n goal run(s), n cron run(s), loops alive x/y`); a `pause_violation`
+  CRITICAL health item names autonomous activity recorded after a pause. A missing
+  cron/goal store no longer blanks the loops section.
+- **Out-of-process actors honour the record**: `ops_alert.py` suppresses non-`--critical`
+  alerts (durably logged) while `oversight`/`all` is paused; the maint/intel watchdogs
+  neither nudge nor relaunch; `dev_inject.sh` appends only; the loop prompts run a
+  read-only "paused tick".
+- **Fixes the pause needed to hold**: the agent's own email can never be seeded as a
+  correspondent (its sent copy re-ran a finished treasury goal on every restart; a boot
+  sweep expires existing self-bindings); a correspondent reply into a FINISHED session
+  gets a bounded reply task instead of re-running the original goal; a paused stream
+  objective is honoured, not re-created; `payload.created_by_session_id` is stamped on
+  every goal so the planner's outcome accounting is honest; every self-wake row carries
+  its reason.
+- Deferred, recorded: the 60 s no-reply fallback for a scoped Telegram intent (§3.4), the
+  `ops_alert.py --realert` counter (§3.9), the outbound-queue `held` state, multi-clause
+  stop messages (a "Stop\nquestion?" goes to the agent, which calls the action).
+- New pref `pause.phrases` (extra object-free words for the stop gate); new event kinds
+  `autonomy_paused` / `autonomy_resumed` / `pause_violation`. Guide:
+  `docs/guide/owner-controls.md`.
+
+### "No goals" forensics — goal board, planner, streams, owner escalation (2026-08-29)
+
+The owner received
+"🫗 My goal pipeline is empty — I have nothing queued for Promote POLYROB…" twice in five
+hours while the trading stream had run ten clean 3-leg cycles; the agent's own `goal_list`
+showed the OLDEST 100 rows of a 409-row board and zero stream legs.
+
+- **`goal_list` / Telegram `/goals` are newest-first VIEWS** (`GoalBoard.list_recent` /
+  `status_counts`): live goals by default (`status=` for history, `limit=`), board totals
+  in the header. `board.list` (priority DESC, created_at ASC) stays the dispatcher order.
+- **Empty-pipeline escalation is honest** (`GoalDispatcher._maybe_escalate_empty_pipeline`):
+  not a stall while work is in flight (running/waiting/triage), while a manifest stream is
+  idle between cycles (`streams.next_seed_at`), or when every objective is a covered stream
+  / at its budget with the spent-ask open. Names a SERVABLE objective (starved order). The
+  streak and the once-per-stall marker are durable `goal_events` (`mark_planner_outcome`,
+  `mark_stall_escalated`) — 14 restarts in 36 h had re-armed the in-memory flag.
+- **Planner backoff** (`planner_backoff_multiplier`): cooldown ×1, ×1, ×2, ×4 (cap) after
+  consecutive runs that queued nothing (read from the board via
+  `count_created_by_session`, not the model's summary). Cooldown compares on the board clock.
+- **Planner prompt: OPEN ASKS ground truth** — the board's open asks are listed; anything
+  remembered or found in a report file that is not listed is RESOLVED, and an objective
+  whose only blocker is listed is "queue healthy", not a REAL BLOCKER.
+- **Stream cadence tolerance** (`CADENCE_TOLERANCE_SEC`, 15 min, ≤ cadence/4): a 4 h
+  stream no longer runs at 5 h whenever the hourly timer lands seconds early.
+  `stream_overdue_by` + `SEEDER_GRACE_SEC` (75 min) tell "waiting for the next tick" from
+  "the seeder missed it".
+- **Spent-objective ask closes itself** once the objective is no longer spent (stream
+  adoption, budget raise, cancelled children) — `escalate_spent_objectives`.
+- **Manifest:** the two standing missions ("Promote POLYROB … build-in-public", "Build and
+  ship real software artifacts") are now streams (`promote-build-in-public`,
+  `ship-software`, 24 h cadence, one live goal, no money verb), adopted by exact title.
+
+### Layer re-evaluation S9 — goals / telemetry / cron / autonomy runtime (2026-08-29)
+
+- **⚠ Owner-visible (B26):** a stream objective's title/body now follow `streams.yaml` while the
+  row still carries the manifest prose it last followed; an in-app edit of the prose diverges
+  the row and wins forever (pre-feature rows are stamped, never rewritten).
+- **`GoalBoard.get` tenant filter (B25):** `get(goal_id, *, user_id=None)`; the goal tool's
+  show / create / dependency reads pass the tenant, so a foreign goal id is simply not found
+  (its title no longer leaks through a hand-typed dependency id).
+- **Event-kind reverse contract (B27):** `tests/test_event_kind_contract.py` — every kind
+  literal recorded on the durable event log must be in `core/event_kinds.py`, and every
+  catalogued kind must be used in code. A free-typed kind now fails CI.
+- **Dead multi-agent telemetry readers removed (B52):** `capture_multi_agent_relationship`,
+  `MultiAgentRelationshipFormatter`, the `agent_graph` relationship-file branch — their only
+  writer went in S7.
+
+### Layer re-evaluation S8 — `task_agent_lite.py` + session layer (2026-08-29)
+
+- **`TaskAgent` split (B01):** `agents/task/task_agent_chat.py` (chat front door, per-chat
+  lock, model hot-swap, reply extraction), `task_agent_delivery.py` (self-wake / correspondent
+  DATA / ensure-and-deliver / recreate-from-disk), `task_agent_lifecycle.py` (cleanup,
+  eviction, limits, credits, lookup) and `task_agent_support.py` (`SessionRequest`, the
+  strong-ref task sets, runtime resolvers). Every method verbatim; `task_agent_lite`
+  re-exports the support names so importers and test seams see the same objects.
+  2589 → 1096 lines.
+- **In-package tests moved (B17/B53):** the 13 `test_*.py` files under `agents/` now live
+  under `tests/unit/agents/...`; pytest stays in rootdir import mode (no package markers).
+
+### Layer re-evaluation S7 — `agents/task/agent/core/` (2026-08-29)
+
+Behaviour-preserving unless noted.
+
+- **`_get_next_action_internal` (B02, partial):** four verbatim extractions — `_stream_with_tools`
+  (the third inline `stream_with_timeout` copy), `_extract_response_content`,
+  `_parse_fallback_content`, `_safe_default_output` (replaces two hand-built safe defaults).
+- **`Agent.__init__` (B03, partial):** `_wire_runtime_state` hoists the self-only
+  stall/session-data/debug/loop-state block; the `locals()`-consuming profile block stays.
+- **Loop detection (B12):** the inline hash-repetition + A-B-A-B detector moved from `step.py`
+  into `LoopDetectionMixin._record_action_for_loop_detection` (regression test).
+  `MAX_REPETITIONS` / `UNCHANGED_STATE_THRESHOLD` — documented env knobs that gated nothing —
+  now ARE the consumed thresholds (same defaults; identical when unset); four orphan constants gone.
+- **One brain-state key set (B13):** `modules.llm.brain_scrubber.BRAIN_KEYS` (widest union,
+  `immediate_step` + `phase`); `utils_json`, `task_agent_lite` and the CLI read it.
+- **`MultiAgentMixin` deleted (B14):** a write-only sink whose `update_*` called a telemetry
+  method that did not exist; its one live call and the orchestrator base are gone. The
+  fail-open feed readers are B52 (S9).
+
+### Layer re-evaluation S6 — money modules + `migrations/` (2026-08-29)
+
+- **⚠ Owner-visible: a SETTLED invoice now also produces an owner notice (B10).** The
+  settlement watcher used to re-enter only the originating session on settlement, while an
+  expiry always pushed an owner notice too — so when the session was not wakeable the owner
+  never heard that money had arrived. Settlement and expiry now ride one session-side helper
+  (correspondent DATA else self-wake) and one unconditional owner notice over the durable
+  delivery rail (`Invoice <id> SETTLED: $x received (tx …)`); caps/dedup apply. Regression test
+  `tests/unit/modules/x402/test_settlement_owner_notice.py`.
+- **`settlement_watcher.py` split (B09):** four mixins — `settlement_scan.py` (chain checks,
+  Base + Solana scans, matching, sweeps + the scan helpers), `settlement_notify.py`,
+  `settlement_subscriptions.py`, `settlement_reputation.py`; the watcher keeps the tick loop
+  (330 lines, from 1428). Behaviour otherwise byte-identical.
+- **One migration filename parser (B17):** `migrations/version_manager.py::migration_version_from_filename`
+  + `shipped_migrations` replace the three hand-rolled copies in `boot.py` and the pending-list.
+- **Fernet credential store moved to core:** `core/security/encryption.py` (`MCPEncryption`,
+  `get_encryption`, key loading) — `tools/mcp/security.py` re-exports it for its callers; the
+  three `modules/database` handlers import it downward (3 layering rows deleted).
+- `FAIL_ON_INSUFFICIENT_CREDITS` gets its catalog row (the tier's one uncatalogued env read).
+
+### Layer re-evaluation S5 — `modules/memory/`, `skills/`, `transcription/`, `pfp/` (2026-08-29)
+
+- **`sqlite_memory_provider.py` split (B09):** the curated-notes, KB and episodes stores are
+  mixins (`sqlite_curated_store.py`, `sqlite_kb_store.py`, `sqlite_episodes_store.py`) each
+  owning its schema hook; `wikilinks.py` holds the notes parser. Class, MRO tail and every
+  method unchanged; the local-vector subclass untouched. Ceiling 1238 → 492.
+- **Two `modules→agents` edges removed:** `reflection_llm_enabled_default` is a
+  `core.config_policy` accessor (exact semantics kept: an explicit empty value disables);
+  `aux_metering` moved to `modules/llm/aux_metering.py` and its helpers
+  (`detect_llm_provider` / `resolve_serving_provider` / `extract_token_usage`) to
+  `modules/llm/usage_extract.py` — `agents/task/utils.py` re-exports them downward.
+- `phase_manager.py`: a bare `except:` around the clue embedding now narrows and logs.
+
+### Layer re-evaluation S4 — `modules/llm/` (2026-08-29)
+
+- **`model_registry.py` split (B09):** `model_types.py` (enum, pricing/capability/config
+  dataclasses, cache multipliers), `model_catalog.py` (the 77 built-in `ModelConfig` rows —
+  data only), `model_pricing.py` (`calculate_cost`), `model_registry.py` (registry + helpers +
+  `PROVIDER_CONFIG`); every public name is re-exported, importers unchanged.
+- **`LLM_PROVIDER_REGISTRY` kill-switch REMOVED** (shipped 0.10.0 as "remove after one
+  release"; two releases passed) together with the six duplicate legacy literal tables it kept
+  alive (`_LEGACY_PROFILES`, `_LEGACY_PROVIDERS`, the legacy fallback hierarchy and
+  `PROVIDER_CONFIG` tables, `_KNOWN_PROVIDERS`/`_PREFIX_TO_PROVIDER`, `_KEY_TO_PROVIDER`).
+  Every seam derives from `provider_spec.get_specs()` and falls back to `BUILTIN_SPECS` on a
+  registry fault. The flag row is gone from `docs/CONFIGURATION.md` (an env value is inert).
+- **`ProviderSpec.cache_strategy`** (B17): the per-provider prompt-cache answer is a spec
+  field (validated, user-settable in `providers.yaml`); `cache_hints.provider_cache_strategy`
+  derives from it (OpenRouter stays model-dependent).
+- **Telemetry cost estimate (B11):** `TokenCounter.estimate_cost` now forwards
+  `cache_creation_tokens` (the Anthropic 1.25x cache-write surcharge was dropped on the
+  display estimate). `cost_utils.py` no longer claims a delegation that does not exist.
+- **Guardrails:** `modules/` joins the file-size ratchet (15 rows, shrink-only);
+  provider-registry ratchet allowlist −4 stale rows (+1 for the moved enum tables).
+- Deferred with a design: `DeepSeekClient` → serve `deepseek` through `OpenAICompatClient`
+  after a live-key tool-call check (B16).
+
+### Layer re-evaluation S1-leftovers + S2 config plane + S3 core surfaces/wallet/auth/security (2026-08-29)
+
+Wave 1 complete.
+All behaviour-preserving; suites green (see the review docs for the exact runs).
+
+- **`core/config_policy/policy.py` split (F-3c map, backlog B19):** nine submodules — `_env`,
+  `local_profile`, `autonomy_mode`, `autonomy_posture`, `compute_posture`, `payment_policy`,
+  `capability_toggles`, `autonomy_config`, `runtime_gates` (a DAG) — behind a 112-line
+  `policy.py` facade that re-exports every public and externally-referenced private name, so
+  `core.config_policy.policy.X` / `from core.config_policy.policy import X` and the
+  `agents/task/constants.py` shim are unaffected. Frozen state (compute posture, payment
+  approval) lives with its accessors + refreeze in one submodule. File-size ratchet row
+  1377 → 120.
+- **Retired services with zero readers:** the Telegram-era `Permissions` (built at server start
+  with four DB reads, never read; `ADMIN_IDS` field + its layering row + pin test gone) and the
+  `Metrics` component; the container's write-only component-group set; `utils/__init__.py` is a
+  bare package marker (its re-exports had no importer and pulled PIL on any `utils.*` import).
+- **Two more core-tier relocations (B41, B44):** `SurfaceConfig` → `core/surfaces/config.py` and the
+  durable telemetry event log + `emit_self_modification` → `core/event_log.py` / `core/self_events.py`.
+  Both imported only core and were imported upward by a dozen core files each; every importer
+  (incl. `docs/CONFIGURATION.md` anchors) now names the core module, no shims. The core→agents
+  layering allowlist shrinks 34 → 12 rows over wave 1.
+- **Agents-tier security shims retired (B16):** `agents/task/agent/core/untrusted_wrap.py` and
+  `secret_guard.py` — every importer and monkeypatch target now names `core.security.*`.
+- Five fail-open `except: pass` sites that hid a real failure now log it (`owner_notice` and
+  `credit_sentinel` event writes at WARNING; pref rung / identity export / event-log prune at DEBUG).
+- Adjudicated, not changed: `core/pairing.py` IS wired (dispatcher stage 0 + access + CLI — the
+  08-09 "gates nothing" claim was stale); every direct `POLYROB_DATA_DIR` read is a documented
+  last-resort behind `resolve_data_home` (B22 closed); the 17 inline `== "true"` parses are
+  per-flag decisions for their owning tiers (B20) — `WEBVIEW_AUTH_ENABLED=1` turning auth OFF is
+  the one that looks like a defect (S17); `ServerConfig` ctor IO split deferred with a design (B08).
+
+### Layer re-evaluation S0+S1 — program tooling, `core/` foundation + `utils/` (2026-08-28)
+
+Wave 1 of the layer re-evaluation program. Behaviour-preserving.
+
+- **`scripts/arch_inventory.py`** (S0): AST-based, read-only inventory — per-package file/LOC
+  table, import edges in/out by tier with upward edges marked, zero-live-importer modules via a
+  repo-wide reverse index (test/aux importers + string refs reported separately), env reads not
+  in the flags catalog, files over a size threshold. `--all`, `--json`, `--working-tree`.
+- **Dead-but-plausible `core/` cluster deleted** (08-09 §2.18, every symbol verified zero live
+  callers): 15 `DependencyContainer` methods incl. the authz façade (`is_admin` config fallback)
+  and a `create_permissions_service` that would have raised `TypeError`; the moderator tier of
+  `Permissions` (members, DB load, the `get_user_role` branch that resolved to level 0),
+  `require_permission`, `get_stats`, `ServerConfig.moderator_ids` + the reader-less `roles`
+  matrix; `ServerConfig._setup_logger/_log_config_details/load_twitter_config` (`self._logger`
+  was never initialised); `runtime_config.env_keys_present`; `core/session_context.py`
+  (Protocol with zero adopters); utils members (`result_size.should_truncate/truncate_with_notice`,
+  circuit-breaker `get_circuit_breaker/force_open/get_all_stats/reset_all`, five `user_utils`
+  helpers, `time_utils.parse_timestamp_to_float`, `auth_utils.get_user_wallet/get_user_role`,
+  `BoundedSet`).
+- **`core/surfaces/rate_bucket.py` shim removed** (08-09 §2.16) with its duplicate test; the
+  stale re-export note in `core/rate_limit.py` corrected.
+- **Layering ratchet:** `utils` is now ranked tier 0 (core imports it) so its upward edges are
+  policed; `utils/auth_utils` no longer imports `agents.task.constants` (uses
+  `core.identity.ANON_USER_ID`, the SSOT it aliased); `core/container.py → tools.filesystem`
+  row removed (net shrink); `utils/gif_utils.py → agents.task.path` seeded.
+- `core/knowledge_export.sanitize_filename` → `slug_stem` (it is a kebab slug for a vault
+  stem, not the upload-name sanitizer in `utils/path_validator.py`).
+- Docs: `core/README.md` / `utils/README.md` drift fixed (four-role matrix, phantom seam
+  Protocols, deleted members). Not fixed here: the "no core→tools ratchet" claim was stale —
+  R-4's `ALLOWLISTED_UPWARD_EDGES` already polices it.
+
+### Owner questions 2026-08-29 — stray OpenRouter calls + "defi_trade always ungranted"
+
+- **In-session LLM fallback skips a credit-dead provider**
+  (`modules/llm/llm_manager.py::get_fallback_chat_model`): a keyed-but-unfunded
+  provider (OpenRouter at $0) passes the `/models` health check, so the fallback
+  ladder tried it for the real call and 402'd whenever the funded primary
+  (zai-coding) hiccuped. It now skips any provider the credit sentinel has
+  latched. With cron + goal dispatch already preferring the funded seat
+  (2026-08-28) this was the last code path still reaching OpenRouter.
+- **Treasury skill — the trade grant is standing, not on-demand**
+  (`data/prompts/skills/treasury-trading/SKILL.md`): `defi_trade` rides the
+  recurring "Treasury: manage open positions and take a screened entry" cycle
+  every run. The agent was ALSO inventing its own "execute the first trade once
+  `defi_trade` is granted" goals — which `goal_create` strips the money verb
+  from by design — then escalating for a grant it already had; the owner granted
+  it repeatedly and the loop never cleared (~50 runs). The skill now forbids
+  creating that goal and forbids escalating the grant. It also kills the
+  self-imposed "no entries until every position has an exit route" pause: a
+  rugged/illiquid position that returns NO ROUTE on every venue is written down
+  like dust and must not freeze new entries — two dead coins were holding the
+  whole strategy hostage.
+
+### Prod log forensics 2026-08-24..28 — "blind owner" / "repeats itself" (2026-08-28)
+
+Four days of `polyrob.service` logs + goals/cron/telemetry DBs were audited.
+Fixes, each with its regression test:
+
+- **Cron provider pin** (`cron/runner.py::resolve_job_provider`): an unpinned job
+  (`payload={}`) now prefers `CHAT_PROVIDER`/`DEFAULT_PROVIDER` like goal dispatch
+  does. It used to resolve to the canonical-first provider — credit-dead OpenRouter
+  on prod — so every status/exit-monitor tick 402'd first, fell back, and re-tripped
+  the credit sentinel every 6h (1,323 402 lines, five false credit alerts).
+  `provider_rerouted` is only emitted when a real stored pin was overridden.
+- **`message` tool owner defaults** (`tools/controller/views.py`,
+  `message_send.py::resolve_message_defaults`): `surface`/`target` are optional;
+  omitted = the owner on their primary bound surface. GLM-5 omitted both 24× at the
+  final notify-owner step, validation failed, and the owner never heard about a
+  finished deliverable.
+- **Honest rejected-tool-call error + model feedback**
+  (`agents/task/agent/core/next_action_internal.py`): a call whose arguments fail
+  validation is reported as exactly that (was: "these actions don't exist in
+  registry"), and the reason is pushed to the model as an ephemeral message so it
+  can correct the call instead of repeating it blind into a "thinking loop".
+- **Goal self-wake targets the CREATING session only**
+  (`agents/task/goals/dispatcher.py::_self_wake`, `goal_create` stamps
+  `payload.origin_session_id`): the run session is never woken with its own result.
+  126 of 134 prod wakes were "completion echo" turns (9.25M input tokens).
+- **Lifecycle delivery bucket** — new `USER_DELIVERY_LIFECYCLE_DAILY_CAP` (`10`):
+  `▶ goal started` / `✅ completed` / `▶ cron run started` pings get their own
+  smaller daily ceiling so they cannot crowd the agent's own reports out of the
+  shared 30/day cap (on 08-27 only 3 of 171 agent messages reached the owner).
+- **Planner prompt**: RECENTLY DONE is labelled dedup-protected (63 of 94 planner
+  runs ended in `dedup_rejected` re-proposing yesterday's work under a new suffix).
+- **Step tool-call cap 3 → 5** (`step_execution.py`): 175 steps deferred 319
+  actions in four days, each deferral a ~60k-token extra round trip.
+- **EIP-55 refusal hint** (`core/wallet/tokens.py`): tells the model to pass the
+  address all-lowercase when it is sure of it (55 refusals in four days).
+
+### Status SSOT — no more confident-and-wrong status (2026-08-28)
+
+The owner's Telegram `/status` rendered "Goals: 0 open, 0 running · kill switch:
+clear" while OpenRouter was credit-dead (sentinel tripped 4× in 24h), 76 of 110
+owner messages had been suppressed by the daily cap, two asks were open (one for
+13 days), a goal was blocked on the owner and two objectives sat at their
+lifetime goal budget. Seven renderers each assembled a partial view and dropped
+any section whose read failed.
+
+- **`core/status_snapshot.py`** — ONE typed, sectioned builder (session /
+  providers / goals / approvals / loops / delivery / posture / money). Every
+  section is always present; one that cannot be computed is
+  `unavailable (<reason>)`, never a zero or a missing line. A mandatory,
+  ranked **health** block leads: credit sentinel per provider (+ whether any
+  provider can serve), open asks, blocked goals, pending approvals,
+  budget-exhausted objectives, suppressed owner messages (cap consumption),
+  loop heartbeats, kill switch, open surface circuits, tool timeouts, degraded
+  runs. `OK` lists what was checked; an unreadable health source ⇒ `PARTIAL`.
+  Reads the durable telemetry log (24h), tenant-scoped, no network read unless
+  `include_balances`. `core/status_render.py` renders it identically on every
+  seat.
+- **Ported renderers**: Telegram `/status` (health first, `/mode` and `/recap`
+  carry the header), `polyrob doctor` (`health:` block), `polyrob autonomy
+  status` (+ `--json health`), webview `/system` (Health + Status panels via
+  `/api/webgate/doctor`), the daily digest, and the agent's `agent_status`
+  action (extracted to `tools/controller/agent_status_action.py`). A test pins
+  that `/status` and `agent_status` render the same health block.
+- **Agent self-awareness**: `LIVE_HEALTH_CONTEXT` (default ON) injects a
+  `<live-health>` control note at the first step of every turn from the same
+  snapshot, so "how's it going?" in prose is answered from live facts.
+- **`/missed [n]`** — read the owner notices the daily cap suppressed.
+- **Money labelled**: treasury renders as *cash flow (income − spend; open
+  positions NOT included)*; runtime as the owner's compute bill. Never summed.
+- **Session liveness** now reads the per-session execution lock (a step is
+  executing), not "input is queued"; no signal ⇒ `state unknown`.
+- **Fixed**: `AutonomyHandles` (the runtime the API lifespan, REPL and
+  Telegram surface actually use) never emitted the `autonomy_tick` liveness
+  heartbeat — prod had zero in 16k rows, so a dead loop rendered as healthy.
+  `core.tickers.emit_loop_heartbeats` is now the one emitter.
+- **Ratchet**: `tests/test_status_silence_ratchet.py` freezes the count of
+  silent `except` handlers in status render paths (shrink-only; the SSOT
+  modules pinned at 0).
+- Public reader `core.credit_sentinel.credit_sentinel_status()`; the latch now
+  preserves each provider's trip `reason` across expiry rewrites.
+
+### 030 — UI & surface unification (2026-08-27)
+
+Proposal 030 — UI & surface unification, implemented the same day.
+
+**Security (webview)**
+- The workspace preview iframe no longer voids its own sandbox
+  (`allow-same-origin` dropped) — agent-authored HTML can never run with the
+  owner's console origin/cookie. Authed previews keep working via scoped,
+  expiring `?st=` serve-tokens. Rendered markdown is sanitized; the
+  `onclick`-string XSS sink is deleted; path/status interpolations escaped.
+- `/logout` works in own_ops (real redirect + cookie delete, nav link); a
+  failed owner login re-mints the CSRF token instead of bricking the form.
+
+**Delivery correctness**
+- Telegram honors RetryAfter with bounded wait+retry — a rate-limited owner
+  message is no longer permanently lost; flood errors never trigger the doomed
+  plain-text resend.
+- Construct-aware chunking: fenced code blocks close/reopen across the 4096
+  boundary; bold/strike/inline-code/links never render raw; markdown tables
+  degrade to `<pre>`; limits are UTF-16-aware (Telegram's meter).
+- The durable outbound queue carries media (it silently dropped every photo,
+  document and invoice card); media captions never duplicate the message body.
+- `WebhookSurface` threads `deliver=` — WhatsApp gets failure breadcrumbs.
+
+**One control plane, equal seats**
+- The owner-address contract (`OWNER_SURFACE` + per-surface addresses):
+  approval prompts, credit-sentinel halts and settlement alerts reach the
+  configured surface chain — critical notices broadcast. Cron delivery and
+  `message(target="owner")` reach every chat surface.
+- `register_surface` enforces the surface contract; all 7 transports register;
+  the correspondent registry installs centrally (was email-seat-only, so a
+  telegram-only deploy DENIED every third party). Discord + Slack gain real
+  media upload; their `media_out` is now truthful.
+- REPL owner-verb parity: `/halt /resume /asks /fulfill /allow /deny
+  /allowlist /invoices /settle` over the same core seams; `/resume` now clears
+  the kill switch. Telegram: unknown/typo commands answer with help +
+  suggestion (never an LLM turn), `/start` welcome, grouped `/help` +
+  `/help <verb>`, `@botname` suffixes stripped.
+- Approvals: grant cards (amount/target/purpose, deadline, one-shot-grant
+  explainer) replace raw JSON; the non-payment owner-queue lane gets the 300s
+  remote round-trip timeout (was 30s); an owner approval wakes the originating
+  session (resume-on-grant).
+
+**Config & help plane**
+- The flags catalog keeps the description column — every `explain`/`search`
+  surface shows real descriptions for all documented flags.
+- `polyrob autonomy status|on|off|halt|resume` intent verbs (026 P3);
+  `polyrob config get/list/search/explain`; `doctor --flags
+  --group/--search/--changed`; one effective-posture card (all 4+1 axes,
+  clamp/INERT truth) rendered by doctor, `/autonomy`, Telegram
+  `/status`+`/mode` and init's closing summary.
+- `polyrob session list/show/costs/export` work on a keyless box.
+- Token streaming defaults ON under `POLYROB_LOCAL` (`polyrob run` live box).
+
+**Webview**
+- The eight webgate pages get a real component stylesheet (they rendered
+  unstyled); nav wraps on mobile + Sessions/Chat links; ~40 silent
+  catch-blocks now surface failures; silent-empty endpoints carry an explicit
+  error state; reconnect is delta-sync-only; screenshot polling quiesces;
+  a JS syntax gate covers the frontend; `surface list --status` shows
+  per-surface health.
+
+### Security (crypto finalization, 2026-08-27)
+- **`solana_swap` gains the full guard stack its docstring promised.** The verb
+  never read `max_spend_usd`, never probed the kill switch, never checked turn
+  origin, never consulted PolicyGate and never recorded a spend. It now mirrors
+  `tx_guard`'s step order: kill-switch → turn-origin (incl. the
+  `DEFI_AUTONOMOUS_TURN_TRADING` goal lane and a `DEFI_MONITOR_EXITS`
+  sell-to-USDC exit lane — Solana now has exit parity) → sell-side delta
+  assertion → valuation (pinned USDC → price → exit-bounded fallback →
+  measured USDC receipt) → declared ceiling in cents → PolicyGate caps under
+  one reservation → autonomous `owner_queue` lane → daily-cap-required →
+  pinned `DEFI_SOLANA_RPC` required to broadcast → audit record.
+- **Hyperliquid refuses to arm live on the un-firewalled signer** (H4): the
+  polyrob-wallet path signs with a key that fully owns its own account, so the
+  approveAgent withdrawal firewall does not exist there — with
+  `HYPERLIQUID_TRADING_ENABLED` set, the exchange client now refuses, naming
+  H4. `agent_status` reports the actual signer. CollabLand DEBUG key-prefix
+  logs trimmed 10→5 chars (H5 residual).
+- **base58 survives normalization**: `_norm_tx` folds only `0x`-hex — a Solana
+  settlement signature is case-significant and was being destroyed at record
+  time; `record_x402_payment` now routes both addresses through the one
+  chain-aware `normalize_recipient`.
+
+### Added (2026-08-27)
+- **Wallet address visibility, Solana included**: `x402_wallet_status` (all
+  identities + treasury/operational split), `agent_status`
+  (`wallet_addresses:` line), `polyrob wallet` (solana row + `--json` field),
+  Telegram `/wallet` (Solana fund line + balances).
+- **Console `/positions` page**: the agent's on-chain book — every wallet
+  address, the live per-chain portfolio read, and the ledger⟷chain reconcile
+  verdict — read-only over the same `defi_data` verbs the agent uses.
+
+### Docs (2026-08-27)
+- `docs/guide/payments.md` brought a feature-era forward (defi_data 9 verbs
+  multichain, the 5 trade verbs + swap rail + Solana + reconcile + exit lanes,
+  11 missing flags, armed-posture honesty); `security-model.md` §3(c)
+  corrected (the MCP env hole is FIXED — allowlist) and §2 now names the
+  actually-enforced money gates; `docs/CONFIGURATION.md` gains a dedicated
+  `## DeFi / on-chain trading` section; README crypto section corrected;
+  `docs/examples.md` gains a worked end-to-end money loop.
+
+### Changed (exit untying, 2026-08-26 — closes what blocked live position closes)
+- A sell of a held token to the chain's quote asset whose outflow token has no
+  price by ANY source is now valued at the simulation's MEASURED quote-asset
+  inflow instead of refusing — the caps run against the exact receipt. An
+  exit-bounded allowance grant on such a token values at $0 (loudly) instead
+  of dead-ending on "have the owner approve it by hand". Grants beyond the
+  held balance still refuse.
+- `DEFI_MONITOR_EXITS` (default OFF): a forged main-agent turn (self-wake /
+  delegation-result — the monitor loop) may execute EXIT-shaped operations
+  only: revoke, exit-bounded approve, sell-to-quote within held balance with
+  a measured quote inflow. Entries and transfers stay refused on those turns.
+- An approve/revoke no longer consumes the rolling daily cap (it records $0);
+  the grant is still checked against headroom before it lands, and the swap
+  records the real value. One ticket now costs the cap once, not twice.
+- Cap arithmetic runs in cents — sub-cent quote drift ($1.9903 vs a declared
+  $1.99) no longer refuses.
+- A declared sell amount within 1% above the held balance clamps to the
+  balance (full exits no longer fail on dust rounding / STF).
+
+### Added
+- `defi_data.reconcile(chain, ledger_path)` — compares the position ledger's
+  `## Open positions` markdown table against actual on-chain holdings, in both
+  directions: ledger rows the chain does not back, chain holdings the ledger
+  does not explain, size mismatches, and failed reads reported as UNVERIFIED
+  (unknown is never zero). Quote asset and wrapped native count as working
+  capital; confidently-priced sub-$0.25 holdings classify as dust. Motivated by
+  a live incident where the agent's ledger said "book flat" while three
+  recorded positions sat on-chain — and the agent published the wrong side.
+  The bundled `treasury-trading` skill (v5) now mandates reconcile as step 0
+  of every trading run and before any public claim.
+
+### Security (breaking for an unconfigured mainnet deployment)
+- `WALLET_DAILY_CAP_USD` now defaults to **$100/24h** instead of "no cap", and
+  `AGENT_WALLET_MAX_PER_TX_USD` drops from $1000 to $250. Set
+  `WALLET_DAILY_CAP_USD=none` to restore the old unbounded behaviour explicitly.
+  An unset daily cap used to mean NO aggregate spend bound at all — the per-tx
+  ceiling is a catastrophe stop, not a budget, and cannot alone stop a
+  within-ceiling loop (`x402_fetch`'s idempotency key is URL-keyed, so a loop
+  mints a fresh key every iteration and the replay guard never correlates it).
+- A set-but-unparseable `WALLET_DAILY_CAP_USD` now raises at load instead of
+  silently meaning "no cap" (parity with the per-tx ceiling).
+- A negative `WALLET_DAILY_CAP_USD`, `AGENT_WALLET_MAX_PER_TX_USD`, or
+  `WALLET_VENUE_DAILY_CAP_<VENUE>_USD` now raises at load naming the key and
+  value — a negative cap was never meaningful and previously parsed as a
+  literal (never-satisfiable) ceiling.
+- `WALLET_VENUE_DAILY_CAP_<VENUE>_USD` (per-venue caps) now raises on a
+  malformed value instead of silently dropping that venue's cap — the last
+  silent-cap-drop of this class in `core/wallet/config.py`. The daily cap's
+  disable sentinel (`none`/`off`/`unlimited`/`disabled`) is now also accepted
+  here (no-op, same effect as leaving the var unset — for consistency).
+- The Finance page's "Wallet daily cap" row no longer collapses "explicitly
+  disabled" (unbounded spend IS in force) and "misconfigured" (the wallet
+  cannot load at all — no cap is active) into the same "unset" label; they
+  now render distinctly, and neither can be mistaken for the $100 default
+  being in force.
+
+### Security
+- `x402_fetch` now runs on the owner payment-approval lane (`PAYMENT_APPROVAL_TOOLS`)
+  and refuses forged/autonomous turns. A payment at or below the new
+  `X402_AUTONOMOUS_MAX_USD` (default $1.00) still runs unattended; above it the
+  owner is asked. Previously this verb had neither gate.
+- Stdio MCP servers no longer inherit the process environment (they previously
+  received `AGENT_WALLET_MASTER_SEED` and every API key). Only a small
+  process-launch allowlist plus values explicitly configured in
+  `config/mcp_config.json` are passed. A server that relied on an ambient
+  variable must now declare it in its `env` block.
+- The x402 settlement replay guard (`transaction_hash_already_settled` /
+  `get_payment_request_by_tx_hash` / `settle_payment_request`) now compares
+  `transaction_hash` case-insensitively — normalized to lowercase at every
+  store AND compare site, plus a one-time backfill migration (v1.8.0) for
+  existing rows. Previously a mixed-case facilitator settlement hash could
+  be re-observed by the (always-lowercase) on-chain scanner and settle a
+  SECOND, unrelated same-amount invoice from the same real payment. A
+  legacy pair of rows that already differ only by case is left untouched
+  and logged loudly for owner reconciliation, never silently merged (M1).
+
+### Added — self-contained x402 rail: Tier-1 no-infra receive + Tier-2 one-command endpoint
+
+- **Treasury auto-wire from the agent wallet** (`X402_TREASURY_FROM_WALLET`,
+  default ON): with `X402_PAYMENT_RECIPIENT` unset, invoices/challenges/the
+  agent card/the ERC-8004 registration all use the wallet's treasury address
+  via one resolver (`resolve_treasury_address()`); explicit env always wins,
+  and a one-time WARN fires when both are set and differ. `polyrob doctor`
+  shows the resolved treasury and its source.
+- **On-chain settlement detection on `base-sepolia`**: the settlement watcher
+  scan-gate accepts `base` (mainnet) and `base-sepolia` (testnet USDC contract
+  + `https://sepolia.base.org`), so the full quote → invoice → pay → auto-settle
+  → self-wake loop can be validated on testnet with no server and no domain.
+  An unscannable chain now logs a one-time WARN instead of a silent no-op.
+- **Scan RPC is operator-pinnable** (`X402_SETTLEMENT_RPC`; mainnet also honors
+  `DEFI_EVM_RPC_BASE` — parity with balance reads, which the scan previously
+  bypassed).
+- **`X402_SETTLE_ONCHAIN_DETECT` defaults ON under effective
+  `AUTONOMY_MODE=autonomous`** (receive-side, scan-only; explicit env wins).
+- **Invoice results teach the delivery step**: `x402_request` now returns the
+  concrete `message(...)` call (and the `media_paths` attach form when the
+  invoice card renders) instead of "share these instructions".
+- **Tier-2 endpoint runbook**: `scripts/setup_x402_endpoint.sh` — one owner
+  command (auth preflight fail-closed, DNS check, deny-by-default nginx vhost,
+  certbot, idempotent env block, `polyrob-x402-api.service` on loopback :9000,
+  live 402 verification).
+- Autonomy-runtime start failure in surface processes is now a WARN with
+  traceback instead of a silent pass.
+
+### Added
+- **Fair goal dispatch across objectives** (`GOAL_FAIR_DISPATCH`, default ON;
+  `GOAL_PER_OBJECTIVE_CAP`, default 0). The ready queue is round-robined by objective
+  instead of ordered globally by `priority DESC, created_at`, so one standing objective's
+  backlog can no longer take every concurrency slot. Priority still orders the first pick
+  and throughput is unchanged when only one objective has ready work.
+- **Declarative stream manifest** `data/streams/streams.yaml` plus `scripts/seed_streams.py`
+  and the `polyrob-streams` systemd timer — N operator-granted recurring streams from one
+  file on one hourly schedule, each with its own `cadence_hours` and `max_live_goals`.
+  Supersedes `scripts/seed_trading_cycle.py`, which is deprecated for one release as the
+  rollback path.
+- `polyrob goals objective add --success-criteria --goal-budget --stream-id` and
+  `polyrob goals objective show <id>`; a `/goal objective <list|pause|activate|drop>`
+  subverb so a phone-only owner can steer a whole stream.
+
+### Changed
+- The goal planner is handed a computed starvation order over objectives (fewest live
+  children, then oldest activity) instead of choosing which objective to serve itself.
+- The planner's three numeric limits are derived from the active-objective count rather
+  than hardcoded in prompt prose, and are individually pinnable:
+  `GOAL_PLANNER_READY_CEILING` (default `0` = `max(5, active_objectives)`),
+  `GOAL_PLANNER_GOALS_PER_RUN` (`3`), `GOAL_PLANNER_MAX_SOCIAL` (`1`). The `_maybe_plan`
+  thinness gate scales with the same ceiling, so a wide board no longer has to nearly empty
+  before the planner may refill it. `GOAL_PLANNER_SCALING` (default ON) reverts that whole
+  planner half in one flag, the way `GOAL_FAIR_DISPATCH` does for dispatch — pinning the
+  ready ceiling cannot serve as the revert, because the derived value is a `max()` of it.
+- A **stream objective** (one carrying `payload.stream_id`) is exempt from the lifetime
+  `OBJECTIVE_GOAL_BUDGET` (`GoalBoard.objective_budget`). That budget counts `done` children
+  forever and nothing sweeps them, which is the right rail for a bounded project and fatal
+  for a standing stream: a 3-leg cycle against `goal_budget: 12` jammed permanently after
+  four cycles. A manifest stream stays bounded by `max_live_goals` + `cadence_hours`.
+- A stream's throttles and objective lookup now use tag/kind-filtered SQL
+  (`GoalBoard.stream_goals`, `GoalBoard.objectives`) instead of a
+  `board.list(limit=1000)` window. The window is ordered `priority DESC`, and a manifest
+  stream's rows sit below the board default priority by design, so unrelated traffic evicted
+  its LIVE rows first — inverting both throttles into "seed another cycle" and making
+  `ensure_objective` mint a duplicate objective every run.
+- `stream_live_goals` also counts the legacy `payload.cycle` tag, so the old
+  `seed_trading_cycle` timer and the new one are not blind to each other during the cutover.
+- The manifest's declared objective fields (`success_criteria`, `goal_budget`, `stream_id`)
+  are applied on every run, including when an existing objective is adopted — adoption used
+  to stamp `stream_id` alone and discard the rest permanently.
+- `seed_stream` is all-or-nothing (a mid-cycle refusal rolls back the legs already written),
+  and `scripts/seed_streams.py` isolates each stream, exits non-zero on failure, and files a
+  durable owner ask on the existing goal-board ask rail — an hourly timer's failures used to
+  reach nobody but journald.
+- `data/streams/streams.yaml` is hard-denied to every agent-writable file surface
+  (`secret_guard.is_protected_config_path`), and ships in the wheel (`MANIFEST.in` +
+  `[tool.setuptools.package-data]`).
+- `scripts/deploy_prod.sh` now syncs `data/streams` as bundled content.
+
 ## [0.12.0] — 2026-08-21
 
 ### Fixed — session eviction killed the shared Twitter/X and MCP tools (13h prod outage)

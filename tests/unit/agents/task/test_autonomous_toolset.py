@@ -38,6 +38,14 @@ def test_default_goal_tools_autonomous_full_set(monkeypatch):
     assert MONEY_AND_HOST.isdisjoint(set(tools))
 
 
+def test_autonomous_set_includes_x_browser(monkeypatch):
+    """Autonomous goals get the X browser posting rail (build-in-public) — it is a
+    social-write tool, not money/host, so the money-exclusion invariant still holds.
+    x_post stays owner-approval-gated (auto+notify under autonomous mode)."""
+    assert "x_browser" in constants.AUTONOMOUS_MODE_TOOLS
+    assert "x_browser" not in MONEY_AND_HOST
+
+
 def test_cron_mirrors_goal_default(monkeypatch):
     _enable_full(monkeypatch)
     from cron.runner import default_cron_tools

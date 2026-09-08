@@ -1,7 +1,8 @@
-"""Validation follow-up (2026-07-23): two loggers owned their handlers and
-never propagated to root, so they bypassed setup_logging's handler-level
-SecretScrubbingFilter undisclosed — the "config" logger (core/config.py) and
-the webview server_launcher's root handlers. Both must carry the filter."""
+"""Validation follow-up (2026-07-23): a logger that owns its handlers and never
+propagates to root bypasses setup_logging's handler-level SecretScrubbingFilter
+undisclosed — the webview server_launcher's root handlers must carry the filter.
+(The "config" logger half was retired 2026-08-28: ``ServerConfig._setup_logger``
+had no live caller, so that surface never existed at runtime.)"""
 import logging
 
 from core.security_logging_filter import SecretScrubbingFilter
@@ -9,37 +10,6 @@ from core.security_logging_filter import SecretScrubbingFilter
 
 def _has_scrub_filter(handler) -> bool:
     return any(isinstance(f, SecretScrubbingFilter) for f in handler.filters)
-
-
-def test_config_logger_handlers_carry_secret_filter(tmp_path):
-    from core.config import ServerConfig
-
-    class _Shim:
-        # reuse the real method on a minimal stand-in — constructing the full
-        # pydantic ServerConfig has side effects (data dirs, env parsing)
-        _setup_logger = ServerConfig._setup_logger
-        base_dir = ""
-        log_level = "INFO"
-
-    shim = _Shim()
-    shim.base_dir = str(tmp_path)
-    cfg_logger = logging.getLogger("config")
-    saved = list(cfg_logger.handlers)
-    cfg_logger.handlers.clear()
-    try:
-        shim._setup_logger()
-        handlers = cfg_logger.handlers
-        assert handlers, "config logger should have gotten handlers"
-        for h in handlers:
-            assert _has_scrub_filter(h), f"{h} lacks SecretScrubbingFilter"
-    finally:
-        for h in list(cfg_logger.handlers):
-            cfg_logger.removeHandler(h)
-            try:
-                h.close()
-            except Exception:
-                pass
-        cfg_logger.handlers.extend(saved)
 
 
 def test_server_launcher_root_handlers_carry_secret_filter(tmp_path, monkeypatch):

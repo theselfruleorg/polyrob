@@ -10,6 +10,8 @@ class ErrorHandler {
         this.maxErrors = 10; // Prevent error spam
         this.errorTimeout = 60000; // Reset count after 1 minute
         this.lastErrorReset = Date.now();
+        // Per-message dedupe map for notify() (message -> last shown ts).
+        this._recentNotifications = new Map();
 
         this.setupGlobalHandlers();
     }
@@ -88,6 +90,74 @@ class ErrorHandler {
                 notification.remove();
             }
         }, 5000);
+    }
+
+    /**
+     * Surface a SPECIFIC failure message to the user (030 D4 error-UX adoption).
+     *
+     * Unlike handleError() (generic "something went wrong"), the caller passes
+     * the exact message the user should read. Identical messages are deduped
+     * within `dedupeMs` so repeated-poll failure paths can call this without
+     * producing toast spam. The message is rendered via textContent (it often
+     * embeds server/error text — never treat it as HTML).
+     *
+     * @param {string} message - user-facing text
+     * @param {Object} [opts]
+     * @param {number} [opts.dedupeMs=30000] - suppress identical messages within this window
+     * @returns {boolean} true if a notification was actually shown
+     */
+    notify(message, opts = {}) {
+        const text = String(message || 'Something went wrong.');
+        const dedupeMs = opts.dedupeMs === undefined ? 30000 : opts.dedupeMs;
+        const now = Date.now();
+
+        const last = this._recentNotifications.get(text);
+        if (last !== undefined && now - last < dedupeMs) {
+            return false;
+        }
+        this._recentNotifications.set(text, now);
+        // Keep the dedupe map bounded (Map preserves insertion order).
+        while (this._recentNotifications.size > 50) {
+            this._recentNotifications.delete(this._recentNotifications.keys().next().value);
+        }
+
+        // Share the global spam guard with handleError(); past the threshold
+        // the console record (made by the caller) is the surviving trail.
+        if (now - this.lastErrorReset > this.errorTimeout) {
+            this.errorCount = 0;
+            this.lastErrorReset = now;
+        }
+        this.errorCount++;
+        if (this.errorCount >= this.maxErrors) {
+            return false;
+        }
+
+        const notification = document.createElement('div');
+        notification.className = 'error-notification';
+        const content = document.createElement('div');
+        content.className = 'error-notification-content';
+        const icon = document.createElement('span');
+        icon.className = 'error-icon';
+        icon.textContent = '⚠️';
+        const msg = document.createElement('span');
+        msg.className = 'error-message';
+        msg.textContent = text;
+        const close = document.createElement('button');
+        close.className = 'error-close';
+        close.textContent = '×';
+        close.addEventListener('click', () => notification.remove());
+        content.appendChild(icon);
+        content.appendChild(msg);
+        content.appendChild(close);
+        notification.appendChild(content);
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+            if (notification.parentElement) {
+                notification.remove();
+            }
+        }, 8000);
+        return true;
     }
 
     showCriticalError() {
@@ -222,5 +292,11 @@ document.head.appendChild(errorStyles);
 
 // Initialize error handler
 const errorHandler = new ErrorHandler();
+
+// Bridge for CLASSIC (non-module) scripts — profile.js / settings.js /
+// activity.js load without type="module" and cannot import this file. They
+// use `window.errorHandler?.notify(...)` (guarded: module scripts execute
+// after classic ones, so the global may not exist at their top-level run).
+window.errorHandler = errorHandler;
 
 export { errorHandler };

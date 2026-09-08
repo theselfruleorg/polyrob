@@ -14,6 +14,8 @@ Real-world examples of what you can build with POLYROB, organized by complexity 
 - [Scheduled Tasks](#scheduled-tasks)
 - [Integrations](#integrations)
 - [Advanced Workflows](#advanced-workflows)
+- [Payments & Crypto](#payments--crypto)
+- [Cost control, goal dependencies & remote execution](#cost-control-goal-dependencies--remote-execution)
 - [Tips for Best Results](#tips-for-best-results)
 - [Getting Help](#getting-help)
 
@@ -649,6 +651,96 @@ Start a project launch:
 8. Compile feedback into project plan
 "
 ```
+
+---
+
+## Payments & Crypto
+
+> ⚠️ These features are **unaudited, OFF by default, and move real value on
+> mainnet**. Validate on testnets first. The complete reference — every flag,
+> gate and cap — is [guide/payments.md](guide/payments.md).
+
+### The Full Money Loop
+
+**Task:** Walk the whole shipped loop once, end to end: create a wallet, screen a
+token, run a guarded swap, reconcile the book, invoice a client, and watch the
+payment settle on-chain.
+
+**1. Create the wallet** (operator, once — prints the mnemonic a single time):
+
+```bash
+polyrob wallet init
+polyrob wallet          # every address: per-venue EVM + the Solana address, balances, caps
+```
+
+**2. Enable sight + guarded trading** (in your env file; see
+[CONFIGURATION.md](CONFIGURATION.md#defi--on-chain-trading)):
+
+```bash
+DEFI_DATA_ENABLED=true
+DEFI_TRADE_ENABLED=true
+DEFI_EVM_RPC_BASE=https://base-mainnet.your-provider.example/v2/KEY   # money refuses unpinned
+DEFI_AUTONOMOUS_MAX_USD=5
+WALLET_DAILY_CAP_USD=25
+PAYMENT_APPROVAL_MODE=approve
+```
+
+**3. Screen, then trade — address-first, dry-run-first:**
+
+```bash
+polyrob run "
+Resolve the ticker TOSHI with defi_data.token_resolve and show me every candidate
+contract address with its liquidity — do not pick one for me.
+Then run defi_data.token_info on 0x8544FE9D190fD7EC52860abBf45088E81Ee24a8c
+and report the safety screen verbatim.
+If the screen is clean, quote a $2 swap from USDC into it with swap_quote,
+then run defi_trade.swap with max_spend_usd=2 as a DRY RUN and show me the
+guard's verdict, the simulated deltas, and the lane.
+"
+```
+
+The agent calls `token_resolve` → `token_info` → `swap_quote` → `defi_trade.swap`
+(`dry_run=true`). Re-running the swap with `dry_run=false` broadcasts only after
+the same guard passes; above `DEFI_AUTONOMOUS_MAX_USD` it queues for your
+`/approve` tap instead of executing.
+
+**4. Reconcile the book against the chain** (the anti-"phantom position" check):
+
+```bash
+polyrob run "
+Run defi_data.reconcile for chain base against project/position-ledger.md and
+report every disagreement in both directions. If the verdict is DISAGREEMENT,
+update the ledger's Open positions table to match the chain and say what changed.
+"
+```
+
+**5. Invoice a client and let the chain settle it:**
+
+```bash
+X402_INVOICE_ENABLED=true
+X402_SETTLE_ONCHAIN_DETECT=true       # facilitator-free: a plain USDC transfer settles it
+INVOICE_CARD_ENABLED=true             # branded QR card attached to the delivery
+```
+
+```bash
+polyrob run "
+Create a \$5 invoice for 'site audit — example.com' billed to
+'Alice <alice@example.com>' with x402_request, and send her the invoice card
+by email.
+"
+```
+
+The agent calls `x402_request` (owner-approved under `approve` mode), renders the
+QR card, and emails it. When Alice sends USDC to the treasury address, the
+settlement watcher matches the exact amount, marks the invoice `completed`, wakes
+the originating session, and the payment appears under Income in `polyrob finance`
+and the console's `/finance` page — never summed with your compute costs.
+
+**Solana variant:** arm `SOLANA_TRADE_ENABLED=true` + pin `DEFI_SOLANA_RPC`, fund
+the Solana address shown by `polyrob wallet` with SOL for fees, and ask for a swap
+by **mint address** — the agent uses `defi_trade.solana_swap` (Jupiter route,
+simulated and asserted, same caps and audit; `dry_run` by default). Invoices can
+settle on Solana too (`X402_SOLANA_SETTLE=true`, reference-key matching).
 
 ---
 

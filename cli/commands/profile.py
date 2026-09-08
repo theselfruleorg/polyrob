@@ -17,6 +17,8 @@ from pathlib import Path
 
 import click
 
+from cli.commands._grouped import GroupedGroup
+
 _WRAPPER_MARKER = "# polyrob-profile-wrapper:"
 
 #: Config files cloned by ``create --from <profile>`` (local duplication of an
@@ -233,7 +235,16 @@ def create_profile(name: str, *, from_profile: str = None, from_project: str = N
     return {"home": home, "copied": copied}
 
 
-@click.group()
+# D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
+_PROFILE_HELP_SECTIONS = [
+    ("Lifecycle",
+     ["create", "list", "use", "show", "path", "rename", "delete", "adopt",
+      "alias"]),
+    ("Distribution", ["export", "import", "install", "update", "info"]),
+]
+
+
+@click.group(cls=GroupedGroup, help_sections=_PROFILE_HELP_SECTIONS)
 def profile():
     """Manage named profiles (isolated bot identities). See docs/guide."""
     # 026 P1.2 seam: file-set values (e.g. POLYROB_PROFILES_ROOT written via
@@ -342,10 +353,21 @@ def create_cmd(name, from_profile, from_project, include_data, description,
 
 
 @profile.command("list")
-def list_cmd():
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def list_cmd(as_json):
     """List profiles (active one marked with *)."""
+    import json
+
     from core.profiles import list_profiles, read_sticky_profile
     infos = list_profiles()
+    if as_json:
+        active = (os.environ.get("POLYROB_PROFILE") or "").strip() or read_sticky_profile()
+        click.echo(json.dumps([
+            {"name": info.name, "home": str(info.home),
+             "description": info.description, "active": info.name == active,
+             "data_size_bytes": _dir_size(info.home / "data")}
+            for info in infos], indent=2))
+        return
     if not infos:
         click.echo("No profiles yet. Create one with: polyrob profile create <name>")
         return
@@ -477,7 +499,7 @@ def rename_cmd(old, new):
 
 @profile.command("delete")
 @click.argument("name")
-@click.option("--yes", is_flag=True, default=False, help="Skip the confirmation prompt.")
+@click.option("--yes", "-y", is_flag=True, default=False, help="Skip the confirmation prompt.")
 @click.option("--force", is_flag=True, default=False,
               help="Delete even when the profile looks in use.")
 def delete_cmd(name, yes, force):

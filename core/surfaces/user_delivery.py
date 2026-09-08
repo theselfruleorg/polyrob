@@ -84,6 +84,27 @@ def _reserved_slots() -> int:
     return int_env("USER_DELIVERY_RESERVED_SLOTS", 8)
 
 
+#: Framework lifecycle chatter — "▶ goal started", "✅ Background goal … completed",
+#: "▶ cron run started" — all ride ``source="self_evolution"``. It shares the
+#: owner's daily cap with the agent's OWN reports, and with ~35 goal runs/day it
+#: alone produces ~70 pings/day against a 30-slot cap: prod 2026-08-24..28 sent
+#: exactly 30/30/30/23/25 a day, 200 start pings + 58 completion pings were
+#: capped, and on 08-27 only 3 of the agent's 171 attempted messages reached the
+#: owner. The lifecycle bucket below is a SEPARATE, smaller ceiling for this
+#: source, so it can never crowd the agent's voice out of the shared cap.
+_LIFECYCLE_SOURCES = frozenset({"self_evolution"})
+#: 031: sources the owner pause holds AT THE RAIL (one choke point, not N call
+#: sites) -> the autonomy_control kind that decides it. Critical sources
+#: (crash/security/credit) are never listed here.
+_PAUSE_KIND_BY_SOURCE = {"self_evolution": "lifecycle_ping", "goal_blocked": "escalate"}
+
+
+def _lifecycle_daily_cap() -> int:
+    """Max ``self_evolution`` (lifecycle ping) sends per tenant per rolling 24h.
+    ``0`` disables the bucket (lifecycle traffic then only obeys the shared cap)."""
+    return int_env("USER_DELIVERY_LIFECYCLE_DAILY_CAP", 10)
+
+
 def resolve_priority(source: str, priority: Optional[str]) -> str:
     """Explicit *priority* wins; otherwise derive it from *source*.
 
@@ -167,7 +188,7 @@ def _content_hash(text: str) -> str:
 
 def _default_event_log():
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if event_log_enabled():
             return get_event_log()
     except Exception:
@@ -200,7 +221,7 @@ def _record_notice(event_log: Any, user_id: str, text: str) -> None:
     ``_record_owner_notice`` gave — so it falls back to the raw event log."""
     if event_log is None:
         try:
-            from agents.task.telemetry.event_log import get_event_log
+            from core.event_log import get_event_log
             event_log = get_event_log()
         except Exception:
             return
@@ -273,6 +294,19 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     h = _content_hash(body)
     now = time.time()
 
+    # 031 owner pause: a lifecycle ping / escalation is held, durably recorded as
+    # an owner_notice (visible in /missed + the digest), never silently dropped.
+    _pk = _PAUSE_KIND_BY_SOURCE.get(str(source or ""))
+    if _pk is not None:
+        from core.autonomy_control import allows as _allows
+        _dec = _allows(_pk)
+        if not _dec.allowed:
+            if event_log is not None:
+                _record_notice(event_log, uid, f"[held by owner pause; source={source}] {body}")
+                _record(event_log, uid, session_id, source, "paused", h, text=body,
+                        attachments=attachments)
+            return "paused"
+
     # --- the rail's memory (fail-open when the event log is unavailable) ----
     try:
         if event_log is not None:
@@ -308,6 +342,17 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             lane = resolve_priority(source, priority)
             allowance = effective_cap_for_priority(
                 effective_daily_cap(uid, _home_dir), lane)
+            _lc_cap = _lifecycle_daily_cap()
+            if lane != PRIORITY_CRITICAL and source in _LIFECYCLE_SOURCES and _lc_cap > 0:
+                lifecycle_day = [e for e in day if e.get("source") in _LIFECYCLE_SOURCES]
+                if len(lifecycle_day) >= _lc_cap:
+                    _record_notice(
+                        event_log, uid,
+                        f"[suppressed by daily proactive-message cap; "
+                        f"source={source}; bucket=lifecycle] {body}")
+                    _record(event_log, uid, session_id, source, "capped", h,
+                            text=body, attachments=attachments)
+                    return "capped"
             if lane != PRIORITY_CRITICAL and len(day) >= allowance:
                 # 019 #2: a capped message must not be silently lost — unlike
                 # its siblings ("fallback" writes a durable owner_notice,
@@ -331,36 +376,87 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     except Exception:
         logger.debug("user_delivery: gate check failed (fail-open)", exc_info=True)
 
-    # --- resolve + send ------------------------------------------------------
+    # --- long-body spill (G8) ------------------------------------------------
+    # A chat message is not a document. Over the threshold the body becomes an
+    # attached report and the owner reads a gist. Applied AFTER the gates so
+    # dedup/rate/cap still key on the ORIGINAL content, and the durable fallback
+    # below still records the full body — a spill must never lose content.
+    send_body = body
+    send_attachments = list(attachments or [])
+    try:
+        from core.surfaces.spill import maybe_spill
+        spilled = maybe_spill(body, home_dir=_home_dir_for_container(container),
+                              source=source)
+        if spilled is not None:
+            send_body, entry = spilled
+            send_attachments.append(entry)
+    except Exception:
+        logger.debug("user_delivery: spill skipped (fail-open)", exc_info=True)
+        send_body, send_attachments = body, list(attachments or [])
+
+    # --- resolve + send (030 WS-B1: surface-aware owner fan-out) -------------
+    # Legacy (OWNER_SURFACE unset) is byte-compatible: one telegram target,
+    # telegram_sink preferred. With OWNER_SURFACE set, the chain is primary +
+    # fallback; a CRITICAL-lane notice broadcasts to every configured surface.
     sent = False
     try:
-        chat_id = recipient_override or _resolve_recipient(container, uid)
-        sink = None
+        from core.surfaces.owner_address import owner_address, owner_surface_order
+        if recipient_override:
+            targets = [("telegram", str(recipient_override))]
+        else:
+            targets = []
+            for _sid in owner_surface_order():
+                _addr = owner_address(container, _sid, uid)
+                if _addr:
+                    targets.append((_sid, str(_addr)))
+        tg_sink = router = None
         if container is not None:
             try:
-                sink = (container.get_service("telegram_sink")
-                        or container.get_service("message_router"))
+                tg_sink = container.get_service("telegram_sink")
+                router = container.get_service("message_router")
             except Exception:
-                sink = None
-        if sink is not None and chat_id:
-            if attachments:
+                tg_sink = router = None
+
+        async def _send_one(_sid: str, _addr: str) -> bool:
+            sink = tg_sink if (_sid == "telegram" and tg_sink is not None) else router
+            if sink is None:
+                return False
+            kwargs = {} if _sid == "telegram" and sink is tg_sink else {"surface_id": _sid}
+            if send_attachments:
                 try:
-                    res = sink.send_message(str(chat_id), body, media=attachments)
+                    res = sink.send_message(_addr, send_body,
+                                            media=send_attachments, **kwargs)
                 except TypeError:
-                    # pre-QW-1 sink shape (no media kwarg): text still delivers
-                    res = sink.send_message(str(chat_id), body)
+                    # pre-QW-1 sink shape (no media kwarg): the attachment cannot
+                    # ride, so send the FULL body — a gist pointing at a file the
+                    # owner will never receive is worse than a long message.
+                    try:
+                        res = sink.send_message(_addr, body, **kwargs)
+                    except TypeError:
+                        res = sink.send_message(_addr, body)
             else:
-                res = sink.send_message(str(chat_id), body)
+                try:
+                    res = sink.send_message(_addr, body, **kwargs)
+                except TypeError:
+                    res = sink.send_message(_addr, body)
             if hasattr(res, "__await__"):
                 res = await res
-            sent = bool(res)
+            return bool(res)
+
+        lane = resolve_priority(source, priority)
+        broadcast = lane == PRIORITY_CRITICAL and len(targets) > 1
+        for _sid, _addr in targets:
+            ok = await _send_one(_sid, _addr)
+            sent = sent or ok
+            if sent and not broadcast:
+                break
     except Exception as e:
         logger.debug("user_delivery: send failed: %s", e)
         sent = False
 
     if sent:
         _record(event_log, uid, session_id, source, "sent", h,
-                attachments=attachments)
+                attachments=send_attachments)
         return "sent"
     # Durable fallback — the message is never silently lost.
     _record_notice(event_log, uid, body)
@@ -428,16 +524,33 @@ async def release_quiet_held(container: Any, *, event_log: Any = ...,
 
 async def maybe_deliver_autonomous_send(orchestrator: Any, session_id: str, text: str,
                                         *, event_log: Any = ...) -> Optional[str]:
-    """§3.1: route an autonomous session's send_message to its OWN principal.
+    """§3.1: route a send_message to its session's OWN principal when nothing
+    else will.
 
-    Returns None when not routed (interactive session, flag off); otherwise the
-    rail outcome. Fail-open: never raises into the send_message action.
+    Two cases reach this rail: a goal/cron-spawned AUTONOMOUS session (the
+    original case — no interactive surface exists at all), and an interactive
+    session whose orchestrator has no LIVE chat surface bound in THIS process
+    (``_message_router``/``_chat_session_key`` unset). The second case covers
+    ``polyrob run --resume`` and any other recreation path that rebuilds the
+    orchestrator without rebinding the chat mirror (``_rebind_recreated_chat``
+    is best-effort and the in-process ``is_autonomous`` marker never survives
+    a process boundary, so a resumed chat session looked "interactive" here
+    and its reply was silently dropped — confirmed live 2026-08-28, the reply
+    never reached the owner despite send_message reporting success).
+
+    Returns None only when a live mirror IS bound (it already handles
+    delivery — routing here too would risk a double-send); otherwise the rail
+    outcome. Fail-open: never raises into the send_message action.
     """
     try:
         if not send_message_user_delivery_enabled():
             return None
         from agents.task.goals.autonomy_marker import is_autonomous
-        if not is_autonomous(session_id):
+        has_live_mirror = bool(
+            getattr(orchestrator, "_message_router", None)
+            and getattr(orchestrator, "_chat_session_key", None)
+        )
+        if has_live_mirror and not is_autonomous(session_id):
             return None
         container = getattr(orchestrator, "container", None)
         user_id = str(getattr(orchestrator, "user_id", "") or "")

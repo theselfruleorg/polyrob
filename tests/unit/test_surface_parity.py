@@ -37,14 +37,31 @@ CAPABILITY_MATRIX = {
     "wallet-caps":    ("wallet",    None,       None,                       None),
     "approval-gates": ("approvals", "approve",  None,                       None),
     "surfaces-admin": ("surface",   None,       None,                       None),
+    # 030 WS-C C2 (finding G1): the owner kill switch + money/admin verbs are
+    # reachable from every interactive owner seat. The webview column stays
+    # None here deliberately until G2/C3 ships its control surface.
+    "kill-switch-halt":   ("owner", "halt",      "/api/webgate/halt",       "/halt"),
+    "kill-switch-resume": ("owner", "resume",    "/api/webgate/resume",     "/resume"),
+    # 031: the owner pause record — /pause on every seat (halt stays an alias)
+    "owner-pause":        ("autonomy", "pause",  "/api/webgate/pause",      "/pause"),
+    "asks":               ("owner", "asks",      None,                      "/asks"),
+    "asks-fulfill":       ("owner", "fulfill",   None,                      "/fulfill"),
+    "outbound-allow":     ("owner", "allow",     None,                      "/allow"),
+    "outbound-deny":      ("owner", "deny",      None,                      "/deny"),
+    "outbound-allowlist": ("owner", "allowlist", None,                      "/allowlist"),
+    "invoices":           ("owner", "invoices",  "/api/webgate/invoices",   "/invoices"),
+    "invoices-settle":    ("owner", "settle",    None,                      "/settle"),
+    # 032: the durable app service — approve an address / kill on every owner seat
+    "apps":               ("apps",  "apps",      "/api/webgate/apps",       "/apps"),
 }
 
 
 def _webview_paths():
+    import webview.apps_routes as apps_routes
     import webview.knowledge as knowledge
     import webview.pages as pages
     paths = set()
-    for router in (pages.router, knowledge.router):
+    for router in (pages.router, knowledge.router, apps_routes.router):
         for route in router.routes:
             paths.add(route.path)
     return paths

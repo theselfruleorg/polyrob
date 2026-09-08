@@ -56,11 +56,8 @@ class SlackHarness:
         await self._route(inbound)
 
     async def _route(self, inbound) -> None:
-        from core.surfaces.dispatcher import route_inbound
-        from surfaces.telegram.harness import act_on_inbound
-        from surfaces.telegram.inbound import InboundResult
+        from surfaces._shared import route_and_act
 
-        decision = await route_inbound(self._container, inbound)
         channel = inbound.identity.source.chat_id
 
         async def _deliver(text: str) -> None:
@@ -69,13 +66,7 @@ class SlackHarness:
             except Exception:
                 logger.warning("slack deliver failed", exc_info=True)
 
-        reply = await act_on_inbound(
-            self._task_agent,
-            InboundResult(inbound=inbound, decision=decision),
-            deliver=_deliver,
-        )
-        if reply:
-            await _deliver(reply)
+        await route_and_act(self._container, self._task_agent, inbound, _deliver)
 
     async def run(self) -> None:
         try:
@@ -101,9 +92,12 @@ def build_slack_harness(container: Any, task_agent: Any, *,
     dedup = IdempotencyStore(os.path.join(data_dir, "slack_dedup.db"))
     surface = SlackSurface(client)
 
-    router = container.get_service("message_router") if container else None
-    if router is not None:
-        router.subscribe("slack", surface)
+    # 030 WS-B2: register_surface enforces the contract, joins the surface
+    # registry (so surface_profile() reaches the prompt) AND subscribes to
+    # the router — the old bare subscribe left the agent blind to the shape.
+    if container is not None:
+        from core.surfaces.registry import register_surface
+        register_surface(container, surface)
     if container is not None and container.get_service("slack_sink") is None:
         container.register_service("slack_sink", SlackSink(client))
 

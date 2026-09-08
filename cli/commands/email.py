@@ -93,7 +93,7 @@ async def _run_email(poll_opt: Optional[int], verbose: bool):
         from tools.email_tool import EmailTool
         email_tool = EmailTool("email", container.config, container)
 
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         poll_sec = poll_opt if poll_opt is not None else SurfaceConfig.email_imap_poll_sec()
 
         from surfaces.email.harness import build_email_harness

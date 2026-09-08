@@ -78,6 +78,7 @@ from agents.task.agent.core.llm_runner import LLMRunnerMixin
 from agents.task.agent.core.memory_writer import MemoryWriterMixin
 from agents.task.agent.core.result_offload import ToolResultOffloadMixin
 from agents.task.agent.core.memory_prefetch import MemoryPrefetchMixin
+from agents.task.agent.core.live_health import LiveHealthMixin
 from agents.task.agent.core.background_review import BackgroundReviewMixin
 from agents.task.agent.core.step import StepMixin
 from agents.task.agent.core.history_io import HistoryIOMixin
@@ -296,7 +297,7 @@ _AGENT_DEP_KEYS = frozenset({
 })
 
 
-class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, TurnInputMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
+class Agent(AgentConstructionMixin, RunLoopMixin, StepMixin, StepExecutionMixin, StepTelemetryMixin, ResultProcessingMixin, LLMRunnerMixin, NextActionInternalMixin, ErrorRecoveryMixin, OutputValidationMixin, MemoryWriterMixin, ToolResultOffloadMixin, MemoryPrefetchMixin, LiveHealthMixin, BackgroundReviewMixin, HistoryIOMixin, LoggingIOMixin, SafetyLifecycleMixin, UserIngressMixin, TurnInputMixin, LLMProvisioningMixin, ModelSwapMixin, ModelIntrospectionMixin, LoopDetectionMixin, ResourceMixin, SessionMetadataMixin):
 	@classmethod
 	def from_params(cls, **kwargs) -> "Agent":
 		"""Build an Agent from the legacy flat keyword arguments.

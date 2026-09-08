@@ -39,8 +39,11 @@ BRAIN_KEYS = frozenset(
         "macro_goal",
         "subgoal",
         "phase",
+        "immediate_step",
     }
 )
+# S7 (2026-08-29): THE brain-state key set. agents/task/utils_json, agents/task_agent_lite
+# and cli/ui/dialog all read this one (the four hand-copies had drifted by one key each).
 _MIN_BRAIN_KEYS = 2
 
 #: Kimi-K2 tool-call control tokens (NVIDIA NIM intermittently leaks these as text).

@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 
 def test_goal_ev_records_to_event_log(tmp_path, monkeypatch):
-    import agents.task.telemetry.event_log as el
+    import core.event_log as el
     monkeypatch.setattr(el, "_INSTANCES", {})
     test_log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: test_log)

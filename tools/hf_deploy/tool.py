@@ -37,7 +37,7 @@ from tools.hf_deploy.broker import BrokerError, HFSpacesBroker
 from tools.hf_deploy.digest import tested_tree_digest
 from tools.hf_deploy import hf_deploy_daily_max, hf_deploy_min_interval_sec
 
-import agents.task.telemetry.self_events as self_events
+import core.self_events as self_events
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ def _emit_event(kind: str, execution_context, attrs: Dict[str, Any]) -> None:
     """First-class hf_deploy telemetry (fail-open). Module-level so tests can
     monkeypatch this exact seam."""
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if not event_log_enabled():
             return
         uid = getattr(execution_context, "user_id", "") or ""

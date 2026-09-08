@@ -215,7 +215,8 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 				import tools.controller.approval_interactive  # noqa: F401
 			except Exception:
 				pass
-			from tools.controller.approval import get_approval_provider_or_deny, make_approval_hook
+			from tools.controller.approval import (
+				approval_wait_timeout_sec, get_approval_provider_or_deny, make_approval_hook)
 			if _provider_name == "auto_notify":
 				# 013 T4: act-and-report under effective AUTONOMY_MODE=autonomous —
 				# TWO lanes instead of the single supervised hook. The always-gated
@@ -263,7 +264,11 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 						if isinstance(_q_provider, OwnerQueueApprover):
 							_q_provider.set_taint_probe(_taint_probe)
 						self.register_pre_tool_call_hook(
-							make_approval_hook(_q_provider, _queued),
+							# 030 WS-E2 (L10): the durable queue gets the remote
+							# round-trip timeout, never the in-process 30s default.
+							make_approval_hook(
+								_q_provider, _queued,
+								timeout=approval_wait_timeout_sec("owner_queue")),
 							fail_mode="closed",  # approval failure must DENY
 						)
 					if _reported:
@@ -298,7 +303,11 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 				)
 				try:
 					self.register_pre_tool_call_hook(
-						make_approval_hook(_provider, _required),
+						# 030 WS-E2 (L10): timeout follows the provider — a durable
+						# owner_queue wait gets the remote round-trip budget.
+						make_approval_hook(
+							_provider, _required,
+							timeout=approval_wait_timeout_sec(_provider_name)),
 						fail_mode="closed",  # approval failure must DENY
 					)
 					self.logger.info(
@@ -326,7 +335,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 			# owner tap. Returns None for everything else, so the lane below is
 			# unchanged for every other verb and every other deployment.
 			from core.config_policy.spend_lane import (
-				DEFI_SPEND_VERBS, autonomous_ceiling_usd, defi_spend_exemption,
+				DEFI_SPEND_VERBS, autonomous_ceiling_usd, spend_exemption,
 				tiered_spend_lane_enabled)
 			_payment_tools = set(PAYMENT_APPROVAL_TOOLS)
 			_receive_tools = _payment_tools & set(PAYMENT_RECEIVE_APPROVAL_TOOLS)
@@ -370,7 +379,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 					self.register_pre_tool_call_hook(
 						make_approval_hook(_pay_provider, _payment_tools,
 						                   timeout=payment_approval_timeout_sec(),
-						                   exempt_fn=defi_spend_exemption),
+						                   exempt_fn=spend_exemption),
 						fail_mode="closed",  # approval failure must DENY
 					)
 					self.logger.info(
@@ -413,7 +422,7 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 						self.register_pre_tool_call_hook(
 							make_approval_hook(_pay_provider, _spend_tools,
 							                   timeout=payment_approval_timeout_sec(),
-							                   exempt_fn=defi_spend_exemption),
+							                   exempt_fn=spend_exemption),
 							fail_mode="closed",  # approval failure must DENY
 						)
 						self.logger.info(
@@ -472,6 +481,10 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 
 		# Register only core 'done' action
 		self._register_default_actions()
+		# 031: the owner-only pause/resume action — unconditional (not a tool_id),
+		# in its own module (action_registration.py is at its size ceiling).
+		from tools.controller.autonomy_control_action import register_autonomy_control_action
+		register_autonomy_control_action(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion

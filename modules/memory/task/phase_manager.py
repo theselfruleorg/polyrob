@@ -489,8 +489,8 @@ class PhaseManager:
                     emb = self.semantic_retriever.embed_text(clue_finding)
                     if emb is not None:
                         clue_embedding = emb.tolist()
-                except:
-                    pass
+                except Exception:
+                    logger.debug("phase_manager: clue embedding skipped", exc_info=True)
 
             # Add to new phase as special finding
             self.memory.add_finding_to_phase(new_phase, clue_finding, clue_embedding)

@@ -5,10 +5,13 @@ correspondents the agent is talking to, and approve a pending one. This is the s
 admin seam for the WS-A three-tier access model (owner can command; correspondents are
 DATA-only; unknown senders are denied).
 """
+import json
 import logging
 import os
 
 import click
+
+from cli.commands._grouped import GroupedGroup
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +44,39 @@ def _do_allowlist(allowlist, user_id):
 
 def _data_dir() -> str:
     """Resolve the SAME data home the surface daemons use — via the ONE core
-    policy seam ``core.runtime_paths.resolve_data_home`` (POLYROB_DATA_DIR wins,
-    else <cwd>/.polyrob). The old `POLYROB_DATA_DIR or "data"` pointed owner
-    admin at ./data while the daemon wrote to <cwd>/.polyrob/correspondents.db —
-    so `owner correspondents/approve/invite` silently operated on a DB the
-    surface never read. Never re-implement resolution here.
+    seam ``core.admin_data_home.admin_data_home``. The old `POLYROB_DATA_DIR or
+    "data"` pointed owner admin at ./data while the daemon wrote to
+    <cwd>/.polyrob/correspondents.db — so `owner correspondents/approve/invite`
+    silently operated on a DB the surface never read. Never re-implement
+    resolution here.
+
+    031: the seam is `admin_data_home`, not `resolve_data_home` — the latter
+    never applies the server default, so an owner SSHed into the production box
+    with no `POLYROB_DATA_DIR` in their shell halted `~/.polyrob` and was told it
+    worked. `admin_data_home` adopts the deployed home when it can read it and
+    REFUSES when it cannot; a purely local box is unchanged and silent.
     """
-    from core.runtime_paths import resolve_data_home
-    return str(resolve_data_home())
+    from core.admin_data_home import AmbiguousDataHome, admin_data_home
+    try:
+        return admin_data_home(echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
 
 
-@click.group()
+# D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
+_OWNER_HELP_SECTIONS = [
+    ("Access & pairing",
+     ["correspondents", "invite", "approve", "allow", "deny", "allowlist",
+      "pair", "groups"]),
+    ("Pending & asks",
+     ["pending", "show-pending", "promote", "reject", "asks", "fulfill"]),
+    ("Money", ["invoices", "settle", "sub"]),
+    ("Control", ["halt", "resume", "pause-entries", "resume-entries",
+                 "pause-streams", "resume-streams", "show"]),
+]
+
+
+@click.group(cls=GroupedGroup, help_sections=_OWNER_HELP_SECTIONS)
 def owner():
     """Inspect/manage who can command the agent and who it talks to."""
     # Bootstrap env BEFORE any subcommand reads config: file-set values written by
@@ -84,45 +109,83 @@ def show():
 
 @owner.command("halt")
 def halt_cmd():
-    """Kill-switch: stop ALL autonomous dispatch + agent spend (no restart needed).
+    """Pause EVERYTHING autonomous now (alias of `polyrob autonomy pause`).
 
-    Writes an AUTONOMY_HALT file to the resolved data home; every autonomous loop,
-    trade, and payment refuses while it exists. Clear it with `polyrob owner resume`.
+    Writes the ONE 031 pause record (<data>/AUTONOMY_PAUSE.json); every autonomous
+    loop, trade, and payment refuses while it holds. Lift it with
+    `polyrob owner resume` / `polyrob autonomy resume`.
     """
-    import os
-    base = _data_dir()
-    os.makedirs(base, exist_ok=True)
-    path = os.path.join(base, "AUTONOMY_HALT")
-    with open(path, "w") as fh:
-        fh.write("halted by `polyrob owner halt`\n")
-    click.echo(click.style("⛔ Autonomy HALTED", fg="red", bold=True)
-               + f" — wrote {path}.")
-    click.echo("No autonomous dispatch, trade, or agent spend will run until "
-               "`polyrob owner resume`.")
+    from core.surfaces.owner_admin import pause_autonomy, render_pause_result
+    res = pause_autonomy(_data_dir(), scopes=("all",), reason="`polyrob owner halt`", via="cli")
+    click.echo(render_pause_result(res, resume_hint="`polyrob owner resume`",
+                                   status_hint="`polyrob autonomy status`", chat=False))
 
 
 @owner.command("resume")
 def resume_cmd():
-    """Clear the kill-switch set by `polyrob owner halt`."""
-    import os
-    path = os.path.join(_data_dir(), "AUTONOMY_HALT")
-    if os.path.exists(path):
-        os.remove(path)
-        click.echo(click.style("✅ Autonomy RESUMED", fg="green", bold=True)
-                   + f" — removed {path}.")
-    else:
-        click.echo("Autonomy was not halted (no halt file).")
-    if (os.environ.get("AUTONOMY_HALT") or "").strip():
-        click.echo(click.style(
-            "⚠ AUTONOMY_HALT is still set in the environment — that ALSO halts. "
-            "Unset it in your env file to fully resume.", fg="yellow"))
+    """Lift every pause (alias of `polyrob autonomy resume`)."""
+    from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
+    res = resume_autonomy_scopes(_data_dir(), via="cli")
+    click.echo(render_resume_result(res, halt_hint="`polyrob owner halt`"))
+
+
+@owner.command("pause-entries")
+def pause_entries_cmd():
+    """Refuse NEW treasury positions while still allowing exits (no restart needed).
+
+    The `trading` scope of the 031 pause record: every treasury entry — ad-hoc
+    goal, stream-manifest goal, cron, owner-direct — refuses while it holds.
+    Sells to the chain's quote asset and revokes still run. Lift it with
+    `polyrob owner resume-entries`.
+    """
+    from core.surfaces.owner_admin import pause_autonomy, render_pause_result
+    res = pause_autonomy(_data_dir(), scopes=("trading",),
+                         reason="`polyrob owner pause-entries`", via="cli")
+    click.echo(render_pause_result(res, resume_hint="`polyrob owner resume-entries`",
+                                   status_hint="`polyrob autonomy status`", chat=False))
+
+
+@owner.command("resume-entries")
+def resume_entries_cmd():
+    """Lift the entry-pause set by `polyrob owner pause-entries`."""
+    from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
+    res = resume_autonomy_scopes(_data_dir(), scopes=("trading",), via="cli")
+    click.echo(render_resume_result(res, halt_hint="`polyrob owner pause-entries`"))
+
+
+@owner.command("pause-streams")
+def pause_streams_cmd():
+    """Refuse NEW stream-manifest reseeds (no restart needed).
+
+    The `streams` scope of the 031 pause record: every declared stream
+    (`data/streams/streams.yaml`) refuses to seed fresh goals on its cadence while
+    it holds. Goals already live, ad-hoc goals, and cron are untouched. Lift it
+    with `polyrob owner resume-streams`.
+    """
+    from core.surfaces.owner_admin import pause_autonomy, render_pause_result
+    res = pause_autonomy(_data_dir(), scopes=("streams",),
+                         reason="`polyrob owner pause-streams`", via="cli")
+    click.echo(render_pause_result(res, resume_hint="`polyrob owner resume-streams`",
+                                   status_hint="`polyrob autonomy status`", chat=False))
+
+
+@owner.command("resume-streams")
+def resume_streams_cmd():
+    """Lift the stream-seeding pause set by `polyrob owner pause-streams`."""
+    from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
+    res = resume_autonomy_scopes(_data_dir(), scopes=("streams",), via="cli")
+    click.echo(render_resume_result(res, halt_hint="`polyrob owner pause-streams`"))
 
 
 @owner.command("correspondents")
 @click.option("--user", default=None, help="Filter to one tenant user_id")
-def correspondents(user):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def correspondents(user, as_json):
     """List the third-party correspondents the agent is talking to."""
     rows = _registry(_data_dir()).list(user_id=user)
+    if as_json:
+        click.echo(json.dumps(rows, indent=2, default=str))
+        return
     if not rows:
         click.echo(click.style("no correspondents", dim=True))
         return
@@ -206,34 +269,18 @@ def _money_tenant(user) -> str:
     return user or resolve_identity()
 
 
-def _pending_correspondent_items(registry, tenant):
-    """Pure handler (unit-testable without click): pending correspondent bindings
-    for TENANT as owner-pending items (E5 — previously invisible outside
-    `owner correspondents`, so replies silently DENIED until manual approval)."""
-    items = []
-    try:
-        for r in registry.list(user_id=tenant):
-            if r.get("state") != "pending":
-                continue
-            items.append({
-                "kind": "correspondent",
-                "id": f"{r['surface']}:{r['address']}",
-                "chars": 0,
-                "preview": (f"{r['surface']}:{r['address']} -> session "
-                            f"{r['session_id']}  (approve: polyrob owner approve "
-                            f"{r['surface']} {r['address']})"),
-            })
-    except Exception:
-        # L10 (2026-07-15): was a silent `except: pass` — a broken correspondent
-        # registry would hide pending contacts with no trace. Log it (the pending
-        # listing still degrades gracefully to whatever was collected).
-        logger.warning("owner pending: correspondent registry read failed", exc_info=True)
-    return items
+#: Shared with the Telegram `/pending` verb — one listing, two seats
+#: (`core.surfaces.owner_admin.pending_correspondent_items`). Kept as a
+#: module-level name because existing callers/tests import it from here.
+from core.surfaces.owner_admin import (  # noqa: E402
+    pending_correspondent_items as _pending_correspondent_items,
+)
 
 
 @owner.command("pending")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-def pending(user):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def pending(user, as_json):
     """List the agent's PENDING self-evolution proposals (identity notes + skills),
     queued tool-approval requests (Task 9 / G-2 — PAYMENT_APPROVAL_MODE=approve),
     AND pending correspondent bindings (their replies are unroutable until approved).
@@ -248,6 +295,9 @@ def pending(user):
                                         instance_id=_instance_id())
     items = items + list_pending_tool_approvals(_goal_board(), tenant)
     items = items + _pending_correspondent_items(_registry(_data_dir()), tenant)
+    if as_json:
+        click.echo(json.dumps(items, indent=2, default=str))
+        return
     if not items:
         click.echo(click.style("no pending proposals", dim=True))
         return
@@ -348,7 +398,8 @@ def _goal_board():
 
 @owner.command("asks")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-def asks(user):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def asks(user, as_json):
     """List the agent's OPEN asks — concrete needs blocking its progress (§7.2b).
 
     Fulfil one with `polyrob owner fulfill <id>` after providing what it asks for;
@@ -362,6 +413,10 @@ def asks(user):
     tenant = _owner_tenant(user)
     rows = [a for a in _goal_board().asks(user_id=tenant, status=ASK_OPEN)
             if (a.payload or {}).get("ask_kind") != "tool_approval"]
+    if as_json:
+        from dataclasses import asdict
+        click.echo(json.dumps([asdict(a) for a in rows], indent=2, default=str))
+        return
     if not rows:
         click.echo(click.style("no open asks", dim=True))
         return
@@ -475,10 +530,14 @@ def deny(surface, target, user):
 
 @owner.command("allowlist")
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
-def allowlist(user):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def allowlist(user, as_json):
     """List the outbound-send allowlist for a tenant."""
     tenant = _allowlist_tenant(user)
     rows = _do_allowlist(_allowlist(_data_dir()), tenant)
+    if as_json:
+        click.echo(json.dumps(rows, indent=2, default=str))
+        return
     if not rows:
         click.echo(click.style("no allowlist entries", dim=True))
         return
@@ -556,24 +615,35 @@ def _warn_if_subscriptions_off() -> None:
 @owner.command("invoices")
 @click.option("--user", default=None, help="Tenant user_id (default: all invoice rows)")
 @click.option("--status", default=None, help="Filter: pending|completed|expired")
-def invoices(user, status):
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def invoices(user, status, as_json):
     """List agent-created x402 payment requests (invoices)."""
     import asyncio
 
     async def run(db):
-        from modules.x402.invoicing import list_payment_requests
+        from modules.x402.invoicing import INVOICE_KIND, list_payment_requests
         if user:
             return await list_payment_requests(user_id=user, status=status, db=db)
         # L10 (2026-07-15): apply the --status filter IN SQL, before LIMIT 50 —
         # filtering in Python after the LIMIT silently dropped older matching rows
         # (e.g. an old pending invoice past 50 newer completed ones vanished).
-        params = ['%"kind": "agent_invoice"%']
+        # Task 9b (2026-08-22): was `metadata LIKE '%"kind": "agent_invoice"%'` —
+        # a spaced-literal match against `json.dumps`'s default spacing. ANY
+        # `json_set` on this row's metadata (e.g. the boot-time subscription
+        # dedup, `modules/database/x402_tables.py`) re-serializes the WHOLE
+        # blob COMPACTLY (`"kind":"agent_invoice"`, no space), which the spaced
+        # LIKE then silently stopped matching — dropping the row from the
+        # owner's OWN invoice listing. `json_extract` reads the value
+        # regardless of the blob's whitespace (mirrors the same fix already
+        # applied in `modules/x402/invoicing.py`, Task 9).
+        params: list = [INVOICE_KIND]
         status_clause = ""
         if status:
             status_clause = "AND status = ? "
             params.append(status)
         rows = await db.fetch_all(
-            "SELECT * FROM x402_payment_requests WHERE metadata LIKE ? "
+            "SELECT * FROM x402_payment_requests "
+            "WHERE json_extract(metadata, '$.kind') = ? "
             f"{status_clause}ORDER BY created_at DESC LIMIT 50",
             tuple(params))
         import json as _json
@@ -596,9 +666,15 @@ def invoices(user, status):
 
     ok, rows = asyncio.run(_with_bot_db(run))
     if not ok:
-        click.echo(click.style(str(rows), fg="yellow"))
+        if as_json:
+            click.echo(json.dumps({"error": str(rows)}, indent=2))
+        else:
+            click.echo(click.style(str(rows), fg="yellow"))
         return
-    _warn_if_invoicing_off()
+    _warn_if_invoicing_off()  # stderr — --json stdout stays machine-readable
+    if as_json:
+        click.echo(json.dumps(rows, indent=2, default=str))
+        return
     # M16 (2026-07-15): always print the tenant scope so the owner is never confused
     # about which bucket a listing is for (sibling money views default to different
     # scopes — finance/sub resolve one tenant, `owner invoices` no-`--user` = ALL).

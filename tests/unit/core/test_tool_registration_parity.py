@@ -74,6 +74,7 @@ _ALL_FLAGS = [
     "GITHUB_TOOL_ENABLED", "SHELL_TOOLS_ENABLED", "SELF_ENV_ENABLED", "KB_ENABLED",
     "X402_CLIENT_ENABLED", "X402_INVOICE_ENABLED", "AGENT_WALLET_ENABLED",
     "HF_DEPLOY_ENABLED", "MCP_ENABLED", "PUBLISH_ENABLED",
+    "APP_SERVICE_ENABLED",  # 032 durable app service
 ]
 
 
@@ -82,6 +83,36 @@ _ALL_FLAGS = [
 # client construction rejects dummy creds they're excluded from the strict assertion
 # (creds-gated, not flag-gated drift).
 _CREDS_GATED = {"twitter", "github"}
+
+
+@pytest.fixture(autouse=True)
+def _restore_tool_registry():
+    """Roll back the process-global tool registry after every test in this file.
+
+    `_enable_everything` flips every gate ON and the registration paths then call
+    `register_optional_tool`, which mutates process-global state: `TOOL_DESCRIPTORS`
+    gains rows and `TOOL_COMPONENTS` grows. `monkeypatch.setenv` restores the ENV but
+    not those side effects, so a flag-gated tool kept looking REGISTERED to every
+    later test in the same process — that made
+    `tools/controller/tool_load_report._tool_is_registered` answer True for `publish`
+    with PUBLISH_ENABLED off, and the tool-gap diagnostic reported
+    "unavailable-on-this-deploy" instead of naming the flag. Same hazard, same
+    remedy as `test_action_name_parity.py::runtime_action_names`, which documents it.
+    """
+    from tools.descriptors import TOOL_COMPONENTS as _COMPONENTS, TOOL_DESCRIPTORS
+
+    before_keys = set(TOOL_DESCRIPTORS)
+    before_classes = {k: getattr(v, "tool_class", None) for k, v in TOOL_DESCRIPTORS.items()}
+    before_components = list(_COMPONENTS)
+    try:
+        yield
+    finally:
+        for key in set(TOOL_DESCRIPTORS) - before_keys:
+            TOOL_DESCRIPTORS.pop(key, None)
+        for key, cls in before_classes.items():
+            if key in TOOL_DESCRIPTORS:
+                TOOL_DESCRIPTORS[key].tool_class = cls
+        _COMPONENTS[:] = before_components
 
 
 def _enable_everything(monkeypatch):

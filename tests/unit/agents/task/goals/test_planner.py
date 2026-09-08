@@ -46,7 +46,9 @@ def test_prompt_sections(board, tmp_path):
     assert "welcome.md" in p and "# Welcome post" not in p  # listing has heading text
     assert "Welcome post" in p
     assert "objective_id" in p and "acceptance" in p and "tools" in p
-    assert "at most ONE" in p.lower() or "at most one" in p.lower()
+    # T5: the social ceiling is now derived (default 1), rendered as a digit,
+    # not the literal word "ONE" the prompt used to hardcode.
+    assert "at most 1 goal" in p.lower()
 
 
 def test_prompt_anti_paralysis_floor(board, tmp_path):
@@ -209,7 +211,8 @@ def test_planner_fires_when_conditions_met(board, monkeypatch):
     asyncio.run(asyncio.sleep(0.05))  # let fire-and-forget task run
     assert any("STANDING OBJECTIVES" in r.get("task", "").upper() or
                "OBJECTIVE" in r.get("task", "") for r in agent.requests)
-    assert board.last_planner_run_at() is not None
+    # FIX 5: planner bookkeeping is keyed to the tenant the run served.
+    assert board.last_planner_run_at(user_id="rob") is not None
 
 
 def test_planner_skips_without_active_objective(board, monkeypatch):
@@ -257,7 +260,7 @@ def test_planner_fires_when_ready_queue_below_min(board, monkeypatch):
     asyncio.run(asyncio.sleep(0.05))
     assert any("STANDING OBJECTIVES" in r.get("task", "").upper() or
                "OBJECTIVE" in r.get("task", "") for r in agent.requests)
-    assert board.last_planner_run_at() is not None
+    assert board.last_planner_run_at(user_id="rob") is not None
 
 
 class _Sink:

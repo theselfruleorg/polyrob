@@ -27,7 +27,11 @@ function formatContentWithUrls(content) {
         // Clean up the URL by removing trailing punctuation that shouldn't be part of the link
         const cleanUrl = url.replace(/[.,;:!?]+$/, '');
         logger.debug('✨ Converting URL to link:', cleanUrl);
-        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="content-url" title="${cleanUrl}" onclick="logger.debug('🖱️ Link clicked: ${cleanUrl}'); return true;">${cleanUrl}</a>`;
+        // 030 S2: NO inline onclick here — the URL comes from file content, and
+        // HTML attributes entity-decode BEFORE the JS parses, so an embedded
+        // &#39; broke out of the string literal (stored XSS). Entity-escaped
+        // href/title attribute contexts are safe; a JS string context is not.
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="content-url" title="${cleanUrl}">${cleanUrl}</a>`;
     });
     
     logger.debug('📝 formatContentWithUrls result contains links:', result.includes('<a href'));
@@ -449,7 +453,7 @@ async function loadFilePreview(path) {
         if (contentType.startsWith('image/')) {
             // Handle image files
             const blobUrl = URL.createObjectURL(await response.blob());
-            previewContent.innerHTML = `<div class="image-preview"><img src="${blobUrl}" alt="${path}"></div>`;
+            previewContent.innerHTML = `<div class="image-preview"><img src="${blobUrl}" alt="${escapeHtml(path)}"></div>`;
         } else if (contentType.includes('application/pdf')) {
             // Handle PDF files
             const blobUrl = URL.createObjectURL(await response.blob());
@@ -480,7 +484,7 @@ async function loadFilePreview(path) {
             const isPresentation = isPresentationFile(path);
             if (currentFileName) {
                 currentFileName.innerHTML = `
-                    <span class="file-name-text">${path}</span>
+                    <span class="file-name-text">${escapeHtml(path)}</span>
                     <button class="header-toggle-btn" data-view="rendered">
                         <span class="view-rendered active">Rendered</span>
                         <span class="view-divider">|</span>
@@ -493,7 +497,18 @@ async function loadFilePreview(path) {
             // Use /serve/ endpoint for HTML to enable relative paths (presentations, multi-file HTML)
             // This serves files directly instead of embedding via srcdoc
             // Don't encode the path - keep directory structure for relative path resolution
-            const serveUrl = `/api/session/${sessionState.sessionId}/workspace/serve/${path}`;
+            let serveUrl = `/api/session/${sessionState.sessionId}/workspace/serve/${path}`;
+            // 030 S1: the sandboxed iframe has an opaque origin and sends no
+            // auth cookie — fetch a scoped serve-token from THIS (authed) page
+            // and pass it in the URL. Null token = no-auth posture, no ?st=.
+            try {
+                const tok = await fetchJSON(`/api/session/${sessionState.sessionId}/workspace/serve-token`);
+                if (tok && tok.token) {
+                    serveUrl += `?st=${encodeURIComponent(tok.token)}`;
+                }
+            } catch (e) {
+                logger.debug('serve-token unavailable (no-auth posture?):', e);
+            }
 
             // Show rendering indicator
             previewContent.innerHTML = `
@@ -508,10 +523,16 @@ async function loadFilePreview(path) {
 
             previewContent.innerHTML = `
                 <div class="html-preview-container" style="display: block;">
+                    <!-- 030 S1: NEVER add allow-same-origin here. Combined with
+                         allow-scripts it voids the sandbox: agent-authored HTML
+                         would run with the owner's console origin + cookie and
+                         could drive every console API (prompt-injection ->
+                         console takeover). Opaque origin = scripts run, but no
+                         credentialed console access. -->
                     <iframe
                         src="${serveUrl}"
                         class="html-iframe"
-                        sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        sandbox="allow-scripts allow-forms allow-popups"
                         style="display: block;">
                     </iframe>
                 </div>
@@ -577,7 +598,7 @@ async function loadFilePreview(path) {
                 // Add toggle button to header
                 if (currentFileName) {
                     currentFileName.innerHTML = `
-                        <span class="file-name-text">${path}</span>
+                        <span class="file-name-text">${escapeHtml(path)}</span>
                         <button class="header-toggle-btn" data-view="rendered">
                             <span class="view-rendered active">Rendered</span>
                             <span class="view-divider">|</span>
@@ -637,7 +658,7 @@ async function loadFilePreview(path) {
                     // Add toggle button to header
                     if (currentFileName) {
                         currentFileName.innerHTML = `
-                            <span class="file-name-text">${path}</span>
+                            <span class="file-name-text">${escapeHtml(path)}</span>
                             <button class="header-toggle-btn" data-view="table">
                                 <span class="view-table active">Table</span>
                                 <span class="view-divider">|</span>
@@ -784,6 +805,39 @@ function getLanguageClass(fileExt) {
     return languageMap[fileExt] || '';
 }
 
+// 030 S3: strip active content from rendered markdown. Workspace files are
+// AGENT-AUTHORED (untrusted vs the owner's console origin) — raw HTML in a .md
+// file used to execute here. Element/attribute allow-by-removal over a real
+// DOM parse; no external sanitizer dependency.
+const _BLOCKED_TAGS = new Set([
+    'SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'LINK', 'META', 'BASE'
+]);
+
+function sanitizeRenderedHtml(html) {
+    let doc;
+    try {
+        doc = new DOMParser().parseFromString(html, 'text/html');
+    } catch (e) {
+        return escapeHtml(html);
+    }
+    doc.body.querySelectorAll('*').forEach((el) => {
+        if (_BLOCKED_TAGS.has(el.tagName)) {
+            el.remove();
+            return;
+        }
+        for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase();
+            const value = (attr.value || '').trim().toLowerCase();
+            if (name.startsWith('on') ||
+                ((name === 'href' || name === 'src' || name === 'xlink:href') &&
+                 (value.startsWith('javascript:') || value.startsWith('data:text/html')))) {
+                el.removeAttribute(attr.name);
+            }
+        }
+    });
+    return doc.body.innerHTML;
+}
+
 // Render Markdown content to HTML
 async function renderMarkdown(content) {
     // Check if marked is available
@@ -792,16 +846,15 @@ async function renderMarkdown(content) {
         return escapeHtml(content);
     }
 
-    // Configure marked with safe defaults
     marked.setOptions({
         breaks: true,
         gfm: true,
         headerIds: true,
-        mangle: false,
-        sanitize: false // We trust workspace files
+        mangle: false
     });
 
-    return marked.parse(content);
+    // 030 S3: never trust workspace files — they are written by the agent.
+    return sanitizeRenderedHtml(marked.parse(content));
 }
 
 // Render CSV data as an HTML table

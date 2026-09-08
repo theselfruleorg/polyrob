@@ -26,6 +26,9 @@ MONEY_VERBS = (
     "defi_trade_swap",
     "defi_trade_approve_token",
     "defi_trade_revoke_approval",
+    # Solana Phase 3. One verb, not three: Jupiter needs no standing delegate,
+    # so approve/revoke have no meaning on that chain.
+    "defi_trade_solana_swap",
 )
 
 

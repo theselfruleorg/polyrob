@@ -36,10 +36,25 @@ class SurfaceRegistry:
 
 
 def register_surface(container, surface) -> None:
+    """Register + subscribe a surface, ENFORCING the contract (030 WS-B2).
+
+    A malformed surface used to fail silently much later (no capabilities ->
+    ``surface_profile()`` None -> the agent never told the surface's shape;
+    no send -> messages dropped). Registration-time errors are startup errors.
+    """
+    sid = getattr(surface, "surface_id", "") or ""
+    if not isinstance(sid, str) or not sid.strip():
+        raise ValueError("register_surface: surface has no surface_id")
+    if getattr(surface, "capabilities", None) is None:
+        raise ValueError(f"register_surface: surface '{sid}' declares no capabilities")
+    if not callable(getattr(surface, "send", None)):
+        raise ValueError(f"register_surface: surface '{sid}' has no send()")
     reg = container.get_service("surface_registry")
     if reg is None:
         reg = SurfaceRegistry()
-        container.register_service("surface_registry", reg)
+        register = getattr(container, "register_service", None)
+        if callable(register):
+            register("surface_registry", reg)
     reg.add(surface)
     router = container.get_service("message_router")
     if router is not None and hasattr(router, "subscribe"):

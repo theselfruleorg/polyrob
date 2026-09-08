@@ -59,7 +59,16 @@ SIDECAR_DB_NAMES = (
     "deployed_apps.db",     # tools/hf_deploy/registry.py
     "artifacts.db",         # core/artifacts.py (one row per produced file)
     "publications.db",      # core/publish.py (the ship rail: slug -> served dir)
+    "app_services.db",      # core/app_service/registry.py (032: durable app rows)
     "dead_targets.db",      # core/surfaces/bootstrap.py (DeadTargetStore, T1.5)
+    # 2026-08-22: THIRD generation of the D11 class. Every correspondent binding
+    # — who the agent may talk to and which session their replies route into —
+    # lived only here, and backup/rollback skipped the file. A rollback silently
+    # unbound every correspondent. Opened from cli/commands/{owner,email,gateway}.py,
+    # webview/pages.py and surfaces/telegram/harness.py; the grep contract test
+    # only covers surfaces/, so it stayed invisible until a surface-tier call site
+    # appeared.
+    "correspondents.db",    # core/surfaces/correspondents.py (CorrespondentRegistry)
 )
 
 _PathLike = Union[str, Path]

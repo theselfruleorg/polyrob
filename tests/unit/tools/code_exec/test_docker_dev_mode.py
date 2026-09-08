@@ -305,11 +305,17 @@ def test_effective_network_ephemeral_dev_is_env_driven(monkeypatch):
 # (pre-014 the backend re-clamp silently cut shell_run foreground commands to 30s:
 #  shell/tool.py clamps to 120, executor passes through, backend re-clamped to 30).
 
-def test_dev_mode_timeout_ceiling_120_when_unset(monkeypatch):
+def test_dev_mode_timeout_ceiling_follows_shell_max_when_unset(monkeypatch):
+    # Publishing evaluation 2026-09-05 (Wave 1): ONE ceiling for shell_run and
+    # dev-mode run_code (`SHELL_MAX_TIMEOUT_SEC`, default 300 — an install fits).
     monkeypatch.delenv("CODE_EXEC_MAX_TIMEOUT_SEC", raising=False)
+    monkeypatch.delenv("SHELL_MAX_TIMEOUT_SEC", raising=False)
     b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
-    assert b.max_timeout == 120.0
-    assert b._clamp_timeout(999) == 120.0
+    assert b.max_timeout == 300.0
+    assert b._clamp_timeout(9999) == 300.0
+    monkeypatch.setenv("SHELL_MAX_TIMEOUT_SEC", "200")
+    b = DockerBackend(docker_runner=_RecordingDocker(), dev_mode=True)
+    assert b.max_timeout == 200.0
 
 
 def test_explicit_max_timeout_env_wins_in_dev_mode(monkeypatch):

@@ -27,7 +27,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-ALLOWED_TARGETS = ("telegram", "email", "twitter")
+# 030 WS-B1 (D8): every router-reachable surface can carry an owner-bound cron
+# report; the owner address resolves through the owner-address contract.
+# "twitter" stays the PUBLIC-post sink (TwitterTool), distinct from the "x" DM
+# surface.
+ALLOWED_TARGETS = ("telegram", "email", "twitter",
+                   "slack", "discord", "signal", "whatsapp", "x")
+_ROUTER_TARGETS = ("slack", "discord", "signal", "whatsapp", "x")
 SILENT_MARKER = "[SILENT]"
 
 
@@ -122,6 +128,9 @@ async def deliver_result(
             ok = await _deliver_twitter(task_agent, job, final)
         elif target == "telegram":
             ok = await _deliver_telegram(task_agent, job, final, deliver_target)
+        elif target in _ROUTER_TARGETS:
+            ok = await _deliver_router_surface(task_agent, job, final, target,
+                                               deliver_target)
     except Exception as e:  # fail-open: a delivery error never fails the job
         logger.error("cron delivery to %s failed for job %s: %s",
                      target, getattr(job, "id", "?"), e, exc_info=True)
@@ -167,21 +176,94 @@ async def _deliver_email(task_agent: Any, job: Any, final: str, deliver_target: 
         logger.info("cron delivery: no email recipient for job %s", getattr(job, "id", "?"))
         return False
     config, container = _config_and_container(task_agent)
-    from tools.email_tool import EmailTool
-    tool = EmailTool("email", config, container)
+    from tools.email_tool import EmailSendAction
+    tool = _build_email_tool(config, container)
     await tool.ensure_initialized()
     subject = f"[POLYROB cron] {getattr(job, 'task', 'scheduled task')[:60]}"
-    return bool(await tool.send_email(to_email=to_email, subject=subject, body=final))
+    # 033 T0.2: route through the ACTION, never EmailTool.send_email(). The raw
+    # method has none of email_send's gates — owner/allowlisted tier resolution,
+    # the open-tier daily cap, correspondent seeding, first-contact reporting.
+    res = await tool.email_send(
+        EmailSendAction(to=to_email, subject=subject, body=final),
+        execution_context=_delivery_context(job))
+    if getattr(res, "error", None):
+        logger.warning("cron delivery: email_send refused for job %s: %s",
+                       getattr(job, "id", "?"), res.error)
+        return False
+    return True
+
+
+async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
+                                  surface_id: str,
+                                  deliver_target: Optional[str]) -> bool:
+    """030 D8: deliver to any subscribed chat surface via the router shim. The
+    recipient is the job OWNER's address on that surface (owner-address
+    contract); an explicit deliver_target is honored only when the operator
+    opted in (checked by the caller)."""
+    config, container = _config_and_container(task_agent)
+    from core.surfaces.owner_address import owner_address
+    addr = deliver_target or owner_address(
+        container, surface_id, getattr(job, "user_id", "") or "")
+    if not addr:
+        logger.info("cron delivery: no %s owner address for job %s",
+                    surface_id, getattr(job, "id", "?"))
+        return False
+    router = container.get_service("message_router") if container else None
+    if router is None:
+        logger.info("cron delivery: no message_router for %s", surface_id)
+        return False
+    res = router.send_message(str(addr), final, surface_id=surface_id)
+    if hasattr(res, "__await__"):
+        res = await res
+    return bool(res)
+
+
+def _build_twitter_tool(config: Any, container: Any) -> Any:
+    """Construction seam (033 T0.2) so a test can assert the ACTION is used."""
+    from tools.twitter_tool import TwitterTool
+    return TwitterTool("twitter", config, container)
+
+
+def _build_email_tool(config: Any, container: Any) -> Any:
+    """Construction seam (033 T0.2), mirroring :func:`_build_twitter_tool`."""
+    from tools.email_tool import EmailTool
+    return EmailTool("email", config, container)
+
+
+def _delivery_context(job: Any) -> Any:
+    """A cron delivery is an AUTONOMOUS turn. ``role="leaf"`` is what makes
+    ``_is_forged_or_autonomous_turn`` answer True (``turn_kind`` only covers the
+    forged self-wake / delegation-result kinds), so every gate keyed on turn
+    origin — the repeat-post cooldown, the approval lane, the 031 pause gate —
+    treats it as autonomous rather than as a genuine owner turn."""
+    from tools.controller.execution_context import ActionExecutionContext
+    return ActionExecutionContext(
+        session_id=str(getattr(job, "session_id", "") or ""),
+        user_id=str(getattr(job, "user_id", "") or ""),
+        role="leaf",
+        metadata={"turn_kind": "cron"},
+    )
 
 
 async def _deliver_twitter(task_agent: Any, job: Any, final: str) -> bool:
     config, container = _config_and_container(task_agent)
-    from tools.twitter_tool import TwitterTool
-    tool = TwitterTool("twitter", config, container)
+    from tools.twitter_tool import TwitterPostAction
+    tool = _build_twitter_tool(config, container)
     text = final.strip()
     if len(text) > 280:
         text = text[:277] + "..."
-    return bool(await tool.post(text=text))
+    # 033 T0.2: route through the ACTION, never TwitterTool.post(). The raw
+    # helper skips _check_ready (so TWITTER_ENABLED=false did not stop it), the
+    # hourly rate limit, TWITTER_REQUIRE_APPROVAL, the cross-session repeat-post
+    # cooldown, the 031 pause gate and the social_write record — a cron job with
+    # deliver=twitter published with zero governance.
+    res = await tool.twitter_post(TwitterPostAction(text=text),
+                                  execution_context=_delivery_context(job))
+    if getattr(res, "error", None):
+        logger.warning("cron delivery: twitter_post refused for job %s: %s",
+                       getattr(job, "id", "?"), res.error)
+        return False
+    return True
 
 
 async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> bool:

@@ -6,7 +6,7 @@ aux model (H-MEM §3.3), with fail-open fallback to None on any error so the
 caller can substitute a simple concat.
 
 Gate: ``REFLECTION_LLM_ENABLED`` — read once at construction time via the
-single-source helper ``agents.task.constants.reflection_llm_enabled_default()``.
+single-source helper ``core.config_policy.reflection_llm_enabled_default()``.
 The aux LLM is provisioned externally (by ``construction.py``) and injected as
 the ``llm`` parameter; when ``llm is None`` the service returns None immediately
 (fail-open, same as disabled).
@@ -35,7 +35,7 @@ class ReflectionService:
 
     Args:
         enabled: Whether LLM consolidation is active.  Typically set from
-            ``constants.reflection_llm_enabled_default()``.
+            ``core.config_policy.reflection_llm_enabled_default()``.
         llm: Provisioned aux model (any object with an ``ainvoke`` coroutine
             that accepts a list of messages and returns an object with a
             ``content`` attribute).  Pass ``None`` to run in concat-only mode.
@@ -72,7 +72,7 @@ class ReflectionService:
         """
         try:
             import asyncio
-            from agents.task.agent.core.aux_metering import meter_aux_llm
+            from modules.llm.aux_metering import meter_aux_llm
             coro = meter_aux_llm(
                 usage_tracker=mc["usage_tracker"], user_id=mc["user_id"],
                 session_id=mc.get("session_id", ""), agent_id=mc.get("agent_id", "") or "",

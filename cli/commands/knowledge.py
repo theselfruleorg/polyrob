@@ -1,4 +1,10 @@
-"""`polyrob knowledge` — export the agent's knowledge as an Obsidian vault (C3).
+"""`polyrob knowledge` — DEPRECATED hidden alias for ``polyrob kb export`` (D10).
+
+Proposal 030 WS-C5: ``knowledge`` and ``kb`` were two top-level nouns for one
+concept. The vault-export implementation (``run_export``) still lives here and
+``kb export`` calls it directly; the ``knowledge`` group is now hidden and
+prints a one-line deprecation notice before delegating. Remove the alias one
+release after 2026-08-27.
 
 Thin Click wrapper over ``core.knowledge_export.build_vault``. Bootstrap follows
 ``cli/commands/kb.py``: wire the active memory provider (with the embedder when
@@ -60,20 +66,8 @@ async def _resolve_provider_and_data_dir():
     return provider, data_dir
 
 
-@click.group("knowledge")
-def knowledge():
-    """Inspect and export what the agent knows."""
-
-
-@knowledge.command("export")
-@click.option("--out", "out_dir", default="./knowledge-vault", show_default=True,
-              help="Vault output directory (opened directly in Obsidian).")
-@click.option("--since", "since", default=None,
-              help="Only episodes newer than this (8h / 2d / ISO date).")
-@click.option("--user", "user", default="local", show_default=True,
-              help="Tenant to export.")
-def export(out_dir: str, since, user: str):
-    """Write notes/episodes/skills/identity/goals as a markdown vault."""
+def run_export(out_dir: str, since, user: str) -> None:
+    """The one vault-export implementation — `kb export` calls this directly."""
     _bootstrap()
 
     async def go():
@@ -98,4 +92,27 @@ def export(out_dir: str, since, user: str):
         dim=True))
 
 
-__all__ = ["knowledge"]
+@click.group("knowledge", hidden=True)
+def knowledge():
+    """Deprecated alias for `polyrob kb export`."""
+
+
+@knowledge.command("export")
+@click.option("--out", "out_dir", default="./knowledge-vault", show_default=True,
+              help="Vault output directory (opened directly in Obsidian).")
+@click.option("--since", "since", default=None,
+              help="Only episodes newer than this (8h / 2d / ISO date).")
+@click.option("--user", "user", default="local", show_default=True,
+              help="Tenant to export.")
+def export(out_dir: str, since, user: str):
+    """Write notes/episodes/skills/identity/goals as a markdown vault.
+
+    Deprecated — use `polyrob kb export` (same flags, same implementation).
+    """
+    click.echo(click.style(
+        "`polyrob knowledge export` is deprecated — use `polyrob kb export` "
+        "(same flags).", fg="yellow"), err=True)
+    run_export(out_dir, since, user)
+
+
+__all__ = ["knowledge", "run_export"]

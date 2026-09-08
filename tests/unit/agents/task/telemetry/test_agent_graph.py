@@ -55,23 +55,6 @@ def test_corrupt_cache_falls_through_to_feed(tmp_path):
     assert out == [{"id": "a3", "name": "Gamma", "type": "Unknown", "model": "m3"}]
 
 
-def test_relationship_execution_sequence_orders_roster(tmp_path):
-    session_dir, feed_dir, pm = _session(tmp_path)
-    _write(feed_dir / "multi_agent_relationship_1.json", {
-        "type": "multi_agent_relationship",
-        "data": {
-            "execution_sequence": ["a2", "a1"],
-            "agent_details": [
-                {"id": "a1", "name": "Alpha", "type": "worker", "model": "m1"},
-                {"id": "a2", "name": "Beta", "type": "lead", "model": "m2"},
-            ],
-        },
-    })
-    out = build_session_agents("sess", path_manager=pm)
-    assert [a["id"] for a in out] == ["a2", "a1"]
-    assert out[0] == {"id": "a2", "name": "Beta", "type": "lead", "model": "m2"}
-
-
 def test_registration_adds_and_id_sorted_without_sequence(tmp_path):
     session_dir, feed_dir, pm = _session(tmp_path)
     _write(feed_dir / "agent_registration_b_1.json",

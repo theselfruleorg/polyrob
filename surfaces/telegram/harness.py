@@ -71,39 +71,146 @@ def _agent_name() -> str:
         return "the agent"
 
 
+# SSOT for /help AND the setMyCommands menu (help_commands() parses the "/"
+# lines; section headers are plain lines and are skipped). 030 WS-C4: grouped —
+# 28 verbs as one flat wall hid the kill-switch between /fulfill and /resume.
 _HELP_BODY = (
+    "— Tasks —\n"
     "/task <goal> — start a new task\n"
     "/cancel — stop the current task\n"
     "/new — start a fresh conversation\n"
+    "— Control —\n"
+    "/pause [scope…] [for 6h] — stop autonomous work now (all, or: trading streams planner cron social oversight pings)\n"
+    "/resume [scope…] — lift the pause\n"
+    "/halt — alias of /pause (everything)\n"
+    "/status — health first, then session, goals, loops, delivery, posture, money\n"
+    "/mode — effective autonomy posture (all axes) and how to change it\n"
+    "/missed [n] — owner messages the daily cap suppressed (default 5)\n"
+    "— Approvals & asks —\n"
     "/pending — proposals I've learned, awaiting your approval\n"
     "/approve <id> — activate a pending proposal\n"
     "/reject <id> — discard a pending proposal\n"
     "/asks — what I need from you to unblock work\n"
     "/fulfill <id> — mark an ask fulfilled (unblocks its goals)\n"
+    "— Autonomy —\n"
+    "/cron [list|show|add|cancel] — durable scheduled runs\n"
+    "/goal <show|ready|pause|resume|retry|cancel> <id> — steer one goal\n"
+    "/goal objective <list|pause|activate|drop> [id] — steer a whole stream\n"
+    "/goals — goal board summary\n"
+    "/apps [show|approve|reject|kill|logs <slug>] — durable apps: approve an address, health, kill\n"
+    "/recap [window] — what I've done (default 24h, e.g. 30m/24h/7d; alias /journey)\n"
+    "— Money —\n"
+    "/wallet [balances] — addresses, network and spend caps\n"
+    "/invoices [status] — what I've billed and who owes me\n"
+    "/settle <id> [tx] — mark an invoice paid\n"
+    "— Access —\n"
     "/allow <surface> <target> — allow me to message that target\n"
     "/deny <surface> <target> — revoke that permission\n"
     "/allowlist — show who I'm allowed to message\n"
-    "/status — session + autonomy snapshot\n"
-    "/recap [window] — what I've done (default 24h, e.g. 30m/24h/7d; alias /journey)\n"
-    "/goals — goal board summary\n"
-    "/prefs — your effective preferences (read-only)\n"
+    "— Settings & files —\n"
+    "/prefs [all] — the preferences you have set (add 'all' for every key)\n"
     "/config — read or set preferences (safe keys write immediately; "
     "guarded keys queue for /pending review)\n"
     "/kb <query> — search my knowledge base\n"
     "/files [n] — recent files I produced (default 10)\n"
-    "/help — show this help\n"
+    "/dev [message] — message the dev/ops loop (Claude) directly; bare /dev = rail status\n"
+    "/help [verb] — this help, or one verb's detail\n"
     "Or just send a message to talk to {name}."
+)
+
+#: G11: the slash list is not the whole control surface — the agent can act
+#: through its own tools when asked in prose ("schedule a check every morning at
+#: 9", "add a goal to …"). That path predates the slash verbs and is strictly
+#: wider than them, but nothing ever told the owner it existed, so /help read as
+#: an exhaustive list of what was possible.
+_HELP_PROSE_NOTE = (
+    "\n\nYou don't have to use a command. Ask me in plain words — "
+    "\"schedule a check every morning at 9\", \"add a goal to …\", "
+    "\"what did you spend this week\" — and I'll use my own tools."
 )
 
 
 def _help_text() -> str:
     name = _agent_name()
-    return f"{name} commands:\n" + _HELP_BODY.format(name=name)
+    return f"{name} commands:\n" + _HELP_BODY.format(name=name) + _HELP_PROSE_NOTE
+
+
+def _help_for(verb: str) -> str:
+    """`/help <verb>` (030 WS-C4): the verb's line(s) from the SSOT — including
+    subverb lines like `/goal objective …` — without triggering the verb."""
+    v = "/" + verb.strip().lstrip("/").lower()
+    lines = [ln for ln in _HELP_BODY.splitlines()
+             if ln.startswith(v + " ") or ln.startswith(v + "\n") or
+             ln.split(" ")[0] == v]
+    if not lines:
+        return _unknown_command_text(v)
+    return "\n".join(lines)
+
+
+def _welcome_text() -> str:
+    """First-contact reply for /start (030 L9) — short, not the verb catalog."""
+    name = _agent_name()
+    return (
+        f"👋 I'm {name}. Send a message in plain words to give me a task, "
+        "or /help for the command list."
+    )
+
+
+def _unknown_command_text(cmd: str) -> str:
+    """Cheap teaching reply for a command-shaped token no handler owns (030 L9).
+
+    Before this, an unknown/typo verb fell through to the LLM as chat text —
+    a spawned session, typing indicator and tokens for `/statsu`. Suggest the
+    closest real verbs from the `_HELP_BODY` SSOT and point at /help.
+    """
+    import difflib
+    known = [f"/{name}" for name, _ in help_commands()]
+    matches = difflib.get_close_matches(cmd, known, n=2, cutoff=0.6)
+    hint = f" Did you mean {' or '.join(matches)}?" if matches else ""
+    return f"Unknown command {cmd}.{hint} Send /help for the full list."
 
 _OWNER_ADMIN_COMMANDS = ("/pending", "/approve", "/reject", "/asks", "/fulfill",
                          "/allow", "/deny", "/allowlist",
-                         "/status", "/recap", "/journey", "/goals", "/prefs", "/config",
-                         "/kb", "/files")
+                         "/halt", "/resume", "/pause",
+                         "/cron", "/goal", "/wallet", "/invoices", "/settle",
+                         "/status", "/mode", "/recap", "/journey", "/goals", "/prefs", "/config",
+                         "/missed", "/apps",
+                         "/kb", "/files", "/dev")
+
+
+def help_commands() -> list:
+    """``(command, description)`` pairs parsed from the ``_HELP_BODY`` SSOT.
+
+    Feeds Telegram's ``setMyCommands`` so the phone gets a real "/" menu with
+    autocomplete instead of the owner having to remember 21 verbs. Sourced from
+    the help text rather than a second list, so the menu can never drift from it
+    (chat-first review 2026-08-22, G12).
+    """
+    out = []
+    seen = set()
+    for line in _HELP_BODY.splitlines():
+        if not line.startswith("/"):
+            continue
+        head, _, desc = line.partition(" — ")
+        name = head.split()[0].lstrip("/").strip()
+        desc = desc.strip()
+        if not name or not desc:
+            continue
+        # Telegram: lowercase a-z/0-9/_ only, and a 256-char description cap.
+        if not name.replace("_", "").isalnum() or not name.islower():
+            continue
+        # A help line for a SUBVERB of an existing top-level command (e.g.
+        # "/goal objective ..." under "/goal ...") parses to the same command
+        # name. Telegram's setMyCommands rejects a duplicate name in the whole
+        # call, and _publish_command_menu wraps that call in a broad
+        # `except Exception: logger.debug(...)` — so one duplicate would
+        # silently stop the ENTIRE menu from refreshing, not just this entry.
+        # Keep the first (top-level) occurrence; do not "simplify" this away.
+        if name in seen:
+            continue
+        seen.add(name)
+        out.append((name, desc[:256]))
+    return out
 
 
 def owner_allowed(tg_user_id) -> Optional[bool]:
@@ -349,96 +456,121 @@ def _is_admin_owner(user_id: str) -> bool:
 
 async def _status_reply(task_agent: Any, user_id: str, session_id: Optional[str],
                         data_dir: str, board: Optional[Any] = None) -> str:
-    """owner-UX P4 T2: one-message snapshot — bound-session state + an autonomy
-    one-liner. Degrades gracefully: model/ctx% are only shown for a RESIDENT
-    session (no new plumbing — reused from what `orch.agents`/`message_manager`
-    already expose); a missing goal board / cron store / ledger never raises,
-    it's just omitted from the line.
+    """`/status` — rendered from the ONE status snapshot (core/status_snapshot.py).
 
-    ``board`` lets a caller that already opened a ``GoalBoard`` for this
-    request (e.g. ``_handle_owner_admin``) share that connection instead of
-    this function opening a second one against the same ``goals.db`` (owner-UX
-    P4 T4 review hardening); a bare call without one still opens its own.
+    2026-08-28: this used to assemble its own view (ready/running counts + the
+    posture card + two money lines) and drop any section whose read failed, so
+    it rendered "Goals: 0 open, 0 running · kill switch: clear" over a
+    credit-dead provider, 91 suppressed owner notices, two open asks and a
+    blocked goal. Now: health first (never empty), every section typed, an
+    unreadable source renders ``unavailable (<reason>)`` instead of vanishing.
+
+    ``board`` is accepted for call-site compatibility; the snapshot reads the
+    same ``goals.db`` read-only. Runs in a worker thread so the network balance
+    probe (a display surface opts in) never blocks the polling loop.
     """
-    lines = ["Status:"]
-    if not session_id:
-        lines.append("• Session: no active session.")
-    else:
-        short = session_id[:12] + ("…" if len(session_id) > 12 else "")
-        session_line = f"• Session: bound ({short})"
+    from core.status_snapshot import build_status_snapshot
+    from core.status_render import render_status_text
+    snap = await asyncio.to_thread(
+        build_status_snapshot, user_id, data_dir=data_dir, task_agent=task_agent,
+        session_id=session_id, include_balances=True)
+    return render_status_text(snap, title="Status:", prefix="• ", health_limit=_STATUS_HEALTH_LIMIT)
+
+
+#: Health lines one chat `/status` renders before rolling the rest into a count
+#: (a phone screen; the console/CLI keep the full list).
+_STATUS_HEALTH_LIMIT = 8
+
+
+async def _health_header(user_id: str, data_dir: str, task_agent: Any = None,
+                         limit: int = 4) -> list:
+    """The mandatory health block other read verbs (/mode, /recap, /goals)
+    prepend — a degraded instance renders first on EVERY seat. Cheap path (no
+    money, no balances). Never raises: a builder failure renders as its own
+    'unavailable' line rather than silently producing no header."""
+    try:
+        from core.status_snapshot import build_status_snapshot
+        from core.status_render import render_health_lines
+        from core.status_render import pause_headline
+        snap = await asyncio.to_thread(
+            build_status_snapshot, user_id, data_dir=data_dir, task_agent=task_agent,
+            include_money=False)
+        # 031: the pause state leads every seat, before health.
+        return [pause_headline(snap)] + render_health_lines(snap, prefix="• ", limit=limit)
+    except Exception as e:
+        logger.warning("telegram health header failed: %s", e, exc_info=True)
+        return [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+
+
+def _pause_line(data_dir: str) -> str:
+    """The cheap (no snapshot) pause line for verbs that build no header (/goals)."""
+    try:
+        from core.status_render import pause_headline_from
+        from core.surfaces.owner_admin import pause_state
+        return pause_headline_from(pause_state(data_dir).to_dict())
+    except Exception as e:
+        logger.warning("telegram pause line failed: %s", e, exc_info=True)
+        return f"autonomy: unavailable ({type(e).__name__}: {str(e)[:120]})"
+
+
+def _missed_reply(user_id: str, data_dir: str, args: list) -> str:
+    """`/missed [n]` — the owner notices the daily cap SUPPRESSED (durable
+    ``owner_notice`` rows the rail writes instead of dropping the text), newest
+    first. 2026-08-28: 91 of 92 notices in 24h were capped and nothing let the
+    owner read them."""
+    try:
+        n = max(1, min(20, int(args[0]))) if args else 5
+    except (TypeError, ValueError):
+        return "Usage: /missed [n] (1-20, default 5)"
+    try:
+        from core.runtime_paths import sidecar_db_path
+        from core.sqlite_util import execute_retry
+        path = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
+        if not path:
+            local = os.path.join(data_dir, "telemetry_events.db")
+            path = local if os.path.exists(local) else str(sidecar_db_path("telemetry_events.db"))
+        if not os.path.exists(path):
+            return f"Missed messages: unavailable (telemetry log not found at {path})"
+        rows = execute_retry(
+            path,
+            "SELECT ts, attrs FROM telemetry_events WHERE kind='owner_notice' AND user_id=? "
+            "AND attrs LIKE '%[suppressed by daily proactive-message cap%' "
+            "ORDER BY ts DESC LIMIT ?", (user_id, n), fetch="all") or []
+    except Exception as e:
+        return f"Missed messages: unavailable ({type(e).__name__}: {str(e)[:120]})"
+    if not rows:
+        return "No suppressed owner messages on record."
+    import json as _json
+    import time as _time
+    lines = [f"Last {len(rows)} suppressed owner message(s) (newest first):"]
+    for r in rows:
         try:
-            get_orch = getattr(task_agent, "get_orchestrator", None)
-            orch = get_orch(session_id) if get_orch is not None else None
-            if orch is None:
-                session_line += " — idle (not resident)."
-            else:
-                has_pending = getattr(task_agent, "_session_has_pending_input", None)
-                busy = bool(has_pending(session_id)) if has_pending is not None else False
-                session_line += " — running." if busy else " — idle."
-                try:
-                    agent_obj = next(iter((getattr(orch, "agents", None) or {}).values()), None)
-                    if agent_obj is not None:
-                        model = getattr(agent_obj, "model_name", None)
-                        mm = getattr(agent_obj, "message_manager", None)
-                        ctx_pct = mm.get_context_usage_percent() if mm is not None else None
-                        extra = []
-                        if model:
-                            extra.append(f"model={model}")
-                        if ctx_pct is not None:
-                            extra.append(f"ctx={ctx_pct:.0f}%")
-                        if extra:
-                            session_line += " " + " ".join(extra)
-                except Exception as e:
-                    logger.debug("telegram /status agent detail skipped: %s", e)
-        except Exception as e:
-            logger.debug("telegram /status session check failed: %s", e)
-            session_line += " — unknown."
-        lines.append(session_line)
-
-    try:
-        from agents.task.goals.board import GoalBoard, STATUS_READY, STATUS_RUNNING
-        gb = board if board is not None else GoalBoard(os.path.join(data_dir, "goals.db"))
-        open_n = len(gb.list(user_id=user_id, status=STATUS_READY, limit=1000))
-        running_n = len(gb.list(user_id=user_id, status=STATUS_RUNNING, limit=1000))
-        autonomy = f"• Goals: {open_n} open, {running_n} running."
-    except Exception as e:
-        logger.debug("telegram /status goal counts failed: %s", e)
-        autonomy = "• Goals: unavailable."
-    try:
-        from cron.jobs import CronJobStore
-        from cron.service import CronService
-        svc = CronService(CronJobStore(os.path.join(data_dir, "cron.db")))
-        upcoming = [j.next_run_at for j in svc.list_jobs(user_id=user_id)
-                   if j.enabled and j.next_run_at]
-        if upcoming:
-            autonomy += f" Next cron: {min(upcoming).isoformat(timespec='minutes')}."
-    except Exception as e:
-        # Not cheaply reachable (or no cron for this tenant) — omit, no error.
-        logger.debug("telegram /status cron lookup omitted: %s", e)
-    lines.append(autonomy)
-
-    try:
-        from agents.task.constants import autonomy_mode_display
-        lines.append(f"• Autonomy mode: {autonomy_mode_display()}")
-    except Exception as e:
-        logger.debug("telegram /status autonomy mode line failed: %s", e)
-
-    try:
-        from modules.credits.unified_ledger import build_ledger
-        ledger = await build_ledger(user_id, days=1, include_balances=True)
-        r = ledger.get("runtime") or {}
-        t = ledger.get("treasury") or {}
-        spend = float(r.get("spend_window_usd") or 0.0)
-        total = float(r.get("spend_total_usd") or 0.0)
-        lines.append(f"• Runtime cost (24h): ${spend:.2f} · ${total:.2f} total.")
-        lines.append(f"• Treasury: net ${float(t.get('net_usd') or 0.0):.2f}.")
-    except Exception as e:
-        logger.debug("telegram /status ledger lookup failed: %s", e)
+            text = str((_json.loads(r["attrs"]) or {}).get("text") or "")
+        except Exception:
+            text = ""
+        # strip the rail's marker prefix "[suppressed by …; source=x] "
+        if text.startswith("[") and "] " in text:
+            text = text.split("] ", 1)[1]
+        text = text.strip().replace("\n", " ")
+        if len(text) > 240:
+            text = text[:237] + "…"
+        stamp = _time.strftime("%m-%d %H:%M", _time.gmtime(float(r["ts"])))
+        lines.append(f"• {stamp}Z — {text}")
+    lines.append("Raise the cap: /config set delivery.daily_cap N")
     return "\n".join(lines)
 
 
+#: Entry lines one chat `/recap` may render before rolling the rest into a count.
+_RECAP_CHAT_LIMIT = 15
+
+
 def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
-    """owner-UX P4 T2: `/recap [window]` (default 24h) over core.recap (T1)."""
+    """owner-UX P4 T2: `/recap [window]` (default 24h) over core.recap (T1).
+
+    Bounded for chat (G14): an unbounded `/recap 7d` renders every event,
+    episode and authored skill one line each — several phone messages of
+    scrollback. The terminal keeps the full listing.
+    """
     from core.recap import build_recap, format_recap_markdown
     window = args[0] if args else "24h"
     try:
@@ -446,7 +578,7 @@ def _recap_reply(user_id: str, data_dir: str, args: list) -> str:
     except ValueError:
         return (f"Invalid recap window {window!r} — expected e.g. '30m' / '24h' / '7d' "
                 "(a bare number of seconds also works).")
-    return format_recap_markdown(entries, window)
+    return format_recap_markdown(entries, window, limit=_RECAP_CHAT_LIMIT)
 
 
 def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> str:
@@ -457,19 +589,21 @@ def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> st
     ``_status_reply``'s docstring); a bare call without one opens its own.
     """
     from agents.task.goals.board import (
-        KIND_GOAL, STATUS_READY, STATUS_RUNNING, STATUS_TRIAGE, GoalBoard)
+        STATUS_READY, STATUS_RUNNING, STATUS_TRIAGE, GoalBoard)
     gb = board if board is not None else GoalBoard(os.path.join(data_dir, "goals.db"))
-    goals = [g for g in gb.list(user_id=user_id, limit=1000) if g.kind == KIND_GOAL]
-    if not goals:
+    # Counts over EVERY row and a newest-first open list, both in SQL. The old
+    # ``gb.list(limit=1000)`` scan is a ``priority DESC`` window that evicts the
+    # newest low-priority rows (the manifest stream legs) first once the board
+    # outgrows the limit — the exact eviction the agent's goal_list hit at 100
+    # rows on 2026-08-29.
+    counts = gb.status_counts(user_id=user_id)
+    total = sum(counts.values())
+    if not total:
         return "No goals yet."
-    counts: dict = {}
-    for g in goals:
-        counts[g.status] = counts.get(g.status, 0) + 1
-    lines = [f"{len(goals)} goal(s): " +
+    lines = [f"{total} goal(s): " +
             ", ".join(f"{status}={n}" for status, n in sorted(counts.items()))]
     open_states = (STATUS_TRIAGE, STATUS_READY, STATUS_RUNNING)
-    recent = sorted((g for g in goals if g.status in open_states),
-                    key=lambda g: g.created_at, reverse=True)[:5]
+    recent = gb.list_recent(user_id=user_id, statuses=open_states, limit=5)
     if recent:
         lines.append("Recent open/running:")
         for g in recent:
@@ -477,19 +611,51 @@ def _goals_reply(user_id: str, data_dir: str, board: Optional[Any] = None) -> st
     return "\n".join(lines)
 
 
-def _prefs_reply(user_id: str, data_dir: str, instance_id: str) -> str:
+def _is_configured_source(source: str) -> bool:
+    """True when a preference's effective value came from real configuration.
+
+    ``built-in`` / ``default(...)`` mean nobody set it — those rows are the bulk
+    of the listing and carry no information the owner asked for.
+    """
+    s = str(source or "")
+    return not (s == "built-in" or s.startswith("default"))
+
+
+def _prefs_reply(user_id: str, data_dir: str, instance_id: str,
+                 full: bool = False) -> str:
     """owner-UX P4 T2: read-only resolved-preferences summary via the display
     SSOT (`core.prefs.display_effective`) — never the raw file, always the
-    effective (pref/env/merged) value + source."""
+    effective (pref/env/merged) value + source.
+
+    Bare `/prefs` shows only what is actually SET (G15): the full schema is 26
+    keys across group headers, which is ~35 lines on a phone in answer to what
+    is usually a one-key question. `/prefs all` (and `/config list`) keep the
+    complete listing.
+    """
     from core.prefs import PREF_SCHEMA, display_effective
-    by_group: dict = {}
+    rows = []
     for key in sorted(PREF_SCHEMA):
-        by_group.setdefault(key.split(".", 1)[0], []).append(key)
+        value, source = display_effective(key, user_id, data_dir, instance_id=instance_id)
+        rows.append((key, value, source))
+    if not full:
+        configured = [r for r in rows if _is_configured_source(r[2])]
+        if not configured:
+            return ("No preferences set — everything is on its built-in default.\n"
+                    "See them all with /prefs all; change one with "
+                    "/config set <key> <value>.")
+        lines = [f"Set preferences ({len(configured)} of {len(rows)}):"]
+        lines += [f"  {key} = {value} ({source})" for key, value, source in configured]
+        lines.append("")
+        lines.append(f"The other {len(rows) - len(configured)} are on built-in defaults "
+                     "— /prefs all shows everything.")
+        return "\n".join(lines)
+    by_group: dict = {}
+    for key, value, source in rows:
+        by_group.setdefault(key.split(".", 1)[0], []).append((key, value, source))
     lines = ["Your preferences (read-only):"]
     for group in sorted(by_group):
         lines.append(f"[{group}]")
-        for key in by_group[group]:
-            value, source = display_effective(key, user_id, data_dir, instance_id=instance_id)
+        for key, value, source in by_group[group]:
             lines.append(f"  {key} = {value} ({source})")
     lines.append("")
     lines.append("tell me what to change — guarded changes arrive as /pending proposals")
@@ -515,7 +681,9 @@ def _config_reply(user_id: str, data_dir: str, instance_id: str, args: list) -> 
         except the confirm bypass itself — Telegram has no `--confirm` here).
     """
     if not args or args[0].lower() == "list":
-        return _prefs_reply(user_id, data_dir, instance_id)
+        # `/config` and `/config list` keep the FULL schema listing — this is the
+        # control plane, where seeing every writable key is the point.
+        return _prefs_reply(user_id, data_dir, instance_id, full=True)
     sub = args[0].lower()
     if sub != "set":
         return ("Usage: /config [list] | /config set <key> <value>\n"
@@ -600,7 +768,9 @@ async def _files_reply(user_id: str, args) -> str:
             size = a.get("bytes")
             size_s = (f" ({float(size) / 1024:.1f} KB)"
                       if isinstance(size, (int, float)) else "")
-            lines.append(f"• {path}{size_s}"
+            # Backticked so the renderer emits <code>: a bare `report.md` is
+            # auto-linked by Telegram as a Moldovan domain (G2).
+            lines.append(f"• `{path}`{size_s}"
                          + (f" — session {sid[:8]}" if sid else ""))
             if len(lines) >= n:
                 break
@@ -617,6 +787,93 @@ async def _files_reply(user_id: str, args) -> str:
     except Exception:
         pass
     return "\n".join(out)
+
+
+def _pause_reply(data_dir: str, cmd: str, args: list) -> str:
+    """`/pause`, `/halt` (alias) and `/resume` from the phone — thin over the
+    ONE owner-admin pause API (031); the reply is the VERIFIED (read-back)
+    state, never a checkmark on a write."""
+    from core.surfaces.owner_admin import (pause_autonomy, render_pause_result,
+                                           render_resume_result, resume_autonomy_scopes)
+    from core.surfaces.owner_intent import parse_pause_args
+    try:
+        scopes, minutes = parse_pause_args([] if cmd == "/halt" else list(args))
+    except ValueError as e:
+        return f"⚠️ {e}"
+    if cmd == "/resume":
+        if minutes is not None:
+            return "⚠️ /resume takes scopes only (no duration) — e.g. /resume trading"
+        res = resume_autonomy_scopes(data_dir, scopes=None if scopes == ("all",) else scopes,
+                                     via="telegram")
+        return render_resume_result(res, halt_hint="/pause")
+    res = pause_autonomy(data_dir, scopes=scopes, duration_minutes=minutes,
+                         reason=f"{cmd} {' '.join(args)}".strip(), via="telegram")
+    return render_pause_result(res, resume_hint="/resume")
+
+
+def _mode_reply() -> str:
+    """`/mode` — JUST the effective-posture card + how to change it (030 WS-E4,
+    read-only v1).
+
+    `/status` already embeds the card inside a long snapshot; `/mode` answers
+    the single question "what may this instance do right now, and why" with
+    nothing else around it. Writes stay on the CLI seat: `/config set` is
+    prefs-only from chat, and mode/posture are env flags.
+    """
+    lines = ["Effective posture (all axes):"]
+    try:
+        from core.config_policy.posture_card import render_posture_card
+        lines.extend(render_posture_card(prefix="• "))
+    except Exception:
+        logger.debug("telegram /mode posture card failed", exc_info=True)
+        return ("Could not read the posture card — run `polyrob autonomy status` "
+                "on the box.")
+    lines.append("")
+    lines.append("To change: `/config set` is prefs-only; mode/posture are env "
+                 "flags — `polyrob autonomy on|off [--mode supervised|autonomous]` "
+                 "(restart applies). Live pause: /pause and /resume.")
+    return "\n".join(lines)
+
+
+def _correspondent_decision(data_dir: str, target: str, user_id: str,
+                            *, approve: bool) -> Optional[str]:
+    """Approve a pending `<surface>:<address>` correspondent from chat.
+
+    Returns None when TARGET is not a pending correspondent, so the caller falls
+    through to the self-evolution proposal path (an id may legitimately contain
+    a colon). 030 C3: the registry now has a real ``reject()`` (pending →
+    expired tombstone, blocks a silent re-seed) — chat uses it, matching the
+    webview Review page.
+    """
+    surface, _, address = target.partition(":")
+    if not surface or not address:
+        return None
+    from core.surfaces.correspondents import CorrespondentRegistry
+    registry = CorrespondentRegistry(os.path.join(data_dir, "correspondents.db"))
+    try:
+        pending = [r for r in registry.list(user_id=user_id)
+                   if r.get("state") == "pending"
+                   and f"{r['surface']}:{r['address']}" == target]
+    except Exception as e:
+        logger.warning("telegram correspondent decision: registry read failed: %s", e,
+                       exc_info=True)
+        return None
+    if not pending:
+        return None
+    if not approve:
+        try:
+            ok = registry.reject(surface=surface, address=address, user_id=user_id)
+        except Exception:
+            ok = False
+        if ok:
+            return (f"🚫 Rejected {target} — the pending binding is tombstoned "
+                    "and cannot silently re-seed.")
+        return (f"'{target}' stays pending — a pending contact is already denied "
+                "(their replies never reach me).")
+    ok = registry.approve(surface=surface, address=address, user_id=user_id)
+    if ok:
+        return f"✅ Approved {target} — their replies now reach me as data."
+    return f"Failed to approve {target} — see `polyrob owner approve {surface} {address}`."
 
 
 async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) -> str:
@@ -642,14 +899,27 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         return await _status_reply(task_agent, user_id, result.decision.session_id,
                                    data_dir, board=board)
 
+    if cmd == "/mode":  # 030 WS-E4: the posture card + how to change it — health first
+        header = await _health_header(user_id, data_dir, task_agent)
+        return "\n".join(header) + "\n" + _mode_reply()
+
     if cmd in ("/recap", "/journey"):  # one recap vocabulary across surfaces
-        return _recap_reply(user_id, data_dir, args)
+        header = await _health_header(user_id, data_dir, task_agent, limit=3)
+        return "\n".join(header) + "\n" + _recap_reply(user_id, data_dir, args)
+
+    if cmd == "/missed":
+        return _missed_reply(user_id, data_dir, args)
 
     if cmd == "/goals":
-        return _goals_reply(user_id, data_dir, board=board)
+        return _pause_line(data_dir) + "\n" + _goals_reply(user_id, data_dir, board=board)
+
+    if cmd == "/apps":
+        from surfaces.telegram.apps_ops import apps_reply  # 032 durable app service
+        return _pause_line(data_dir) + "\n" + apps_reply(user_id, data_dir, args)
 
     if cmd == "/prefs":
-        return _prefs_reply(user_id, data_dir, instance_id)
+        return _prefs_reply(user_id, data_dir, instance_id,
+                            full=bool(args) and args[0].lower() in ("all", "full"))
 
     if cmd == "/config":
         return _config_reply(user_id, data_dir, instance_id, args)
@@ -662,11 +932,43 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
     if cmd == "/files":
         return await _files_reply(user_id, args)
 
+    if cmd == "/dev":
+        # Owner ↔ on-host dev-loop rail (proposal 027 WS-1). Raw text, not
+        # `args` — the loop should see exactly what the owner typed.
+        from surfaces.telegram.dev_rail import perform_dev_command, strip_dev_prefix
+        return await perform_dev_command(strip_dev_prefix(result.inbound.text))
+
+    if cmd in ("/halt", "/resume", "/pause"):
+        return _pause_reply(data_dir, cmd, args)
+
+    # G13: the owner write verbs that used to exist only on the CLI seat. Thin
+    # plumbing over the same primitives, kept in owner_ops so this file (already
+    # god-file sized) does not grow another five handlers.
+    if cmd in ("/cron", "/goal", "/wallet", "/invoices", "/settle"):
+        from surfaces.telegram import owner_ops
+        if cmd == "/cron":
+            return owner_ops.cron_reply(user_id, data_dir, args)
+        if cmd == "/goal":
+            return owner_ops.goal_reply(user_id, data_dir, args, board=board)
+        if cmd == "/wallet":
+            return owner_ops.wallet_reply(args)
+        if cmd == "/invoices":
+            return await owner_ops.invoices_reply(user_id, args)
+        return await owner_ops.settle_reply(user_id, args)
+
     if cmd == "/pending":
         from tools.controller.approval_queue import list_pending_tool_approvals
+        from core.surfaces.correspondents import CorrespondentRegistry
+        from core.surfaces.owner_admin import pending_correspondent_items
         items = self_evolution.list_pending(user_id, home_dir=data_dir,
                                             instance_id=instance_id)
         items = items + list_pending_tool_approvals(board, user_id)
+        # Pending correspondent bindings belong here too. The CLI has always
+        # aggregated all THREE queues; chat aggregated two, so a third party the
+        # agent contacted stayed unroutable with no chat-visible trace for a
+        # phone-only owner (chat-first review 2026-08-22, G10).
+        items = items + pending_correspondent_items(
+            CorrespondentRegistry(os.path.join(data_dir, "correspondents.db")), user_id)
         if not items:
             return "No pending proposals."
         lines = [f"{len(items)} pending proposal(s):"]
@@ -687,9 +989,20 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
         # with a self-evolution proposal id.
         from tools.controller.approval_queue import decide_tool_approval, strip_tap_prefix
         if strip_tap_prefix(target) is not None:
+            # 030 WS-E3: pass the live agent so an approval wakes the
+            # originating session (resume-on-grant) instead of waiting for a
+            # byte-identical retry to happen by luck.
             ok, msg = decide_tool_approval(board, target, user_id=user_id,
-                                           approved=(cmd == "/approve"))
+                                           approved=(cmd == "/approve"),
+                                           task_agent=task_agent)
             return msg if ok else f"Failed: {msg}"
+        # A correspondent item's id is `<surface>:<address>` — listing it in
+        # /pending without a way to act on it would just move the dead end.
+        if ":" in target:
+            reply = _correspondent_decision(data_dir, target, user_id,
+                                            approve=(cmd == "/approve"))
+            if reply is not None:
+                return reply
         items = self_evolution.list_pending(user_id, home_dir=data_dir,
                                             instance_id=instance_id)
         match = next((it for it in items if str(it["id"]) == target), None)
@@ -761,13 +1074,20 @@ async def _handle_owner_admin(task_agent: Any, result: InboundResult, cmd: str) 
 async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver=None) -> Optional[str]:
     cmd = (result.decision.command or "").lower()
     if cmd == "/help":
+        args = (result.inbound.text or "").split()[1:]
+        if args:
+            return _help_for(args[0])
         return _help_text()
+    if cmd == "/start":
+        return _welcome_text()
     if cmd in _OWNER_ADMIN_COMMANDS:
         try:
             return await _handle_owner_admin(task_agent, result, cmd)
         except Exception as e:
             logger.error("owner admin command %s failed: %s", cmd, e, exc_info=True)
-            return f"Command failed: {e}"
+            # 030 C-14: cap + soften — raw exception text can carry absolute
+            # paths/DB errors/provider bodies, and it is unbounded.
+            return f"Command failed: {str(e)[:200]} (details in the server log)"
     if cmd == "/cancel":
         sid = result.decision.session_id
         if sid:
@@ -800,7 +1120,7 @@ async def _handle_command(task_agent: Any, result: InboundResult, spawn, deliver
         result.inbound.text = goal
         await _start_task_session(task_agent, result, spawn, deliver)
         return None
-    return _help_text()  # unknown command -> help
+    return _unknown_command_text(cmd)  # unknown command -> suggestion + /help (030 L9)
 
 
 async def act_on_inbound(
@@ -921,6 +1241,22 @@ async def _act_on_inbound_locked(
             # The queue is full, so THIS message was rejected (not enqueued) — be honest
             # rather than implying it'll be handled next. Don't double-spawn run_session
             # (one is already draining) and don't mint a fresh amnesiac session.
+            # 031: a SCOPED stop ("stop trading") that could not even be queued must
+            # not evaporate — pause everything as the safe default and say so.
+            if _is_admin_owner(result.inbound.identity.user_id):
+                from core.surfaces.owner_intent import owner_stop_intent
+                from surfaces.telegram.owner_intent_gate import handle_owner_intent
+                _intent = owner_stop_intent(result.inbound.text)
+                if _intent is not None and _intent.kind == "scoped":
+                    try:
+                        _reply = await handle_owner_intent(
+                            task_agent, result, _intent, _admin_data_dir(task_agent), busy=True)
+                        if _reply:
+                            return _reply
+                    except Exception as e:
+                        logger.error("telegram busy-branch pause failed: %s", e, exc_info=True)
+                        return (f"⚠️ Busy, and the safe-default pause failed "
+                                f"({type(e).__name__}: {str(e)[:120]}). Send /pause to force it.")
             return ("⏳ I'm still working through your earlier messages and can't take this "
                     "one yet — please send it again in a moment.")
         # status == "gone": truly gone (no on-disk metadata) -> a fresh session.
@@ -960,12 +1296,12 @@ class TelegramHarness:
     transport for outbound send + update delivery. The Bot is injected so this is
     testable with a fake.
 
-    Two transports:
-      - webhook (webhook_base set): start() sets the Telegram webhook; the FastAPI
-        route body is handle_update.
-      - polling (webhook_base None): run_polling() long-polls getUpdates and feeds
-        each update to handle_update. This is the local battle-test path — no public
-        URL / SSL needed.
+    Transport: polling (run_polling() long-polls getUpdates and feeds each
+    update to handle_update) — the ONLY wired transport today; both production
+    call sites pass webhook_base=None. 030 C-7 honesty note: the webhook branch
+    (start() would call set_webhook) is RESERVED — no FastAPI route exists for
+    it, so setting webhook_base would break inbound until a route body calling
+    handle_update is mounted (api/webhooks.py serves WebhookSurface impls only).
     """
 
     def __init__(self, bot, container, task_agent, *, webhook_base, dedup, user_directory,
@@ -979,6 +1315,7 @@ class TelegramHarness:
         self.poll_timeout = poll_timeout
         self.typing_interval = typing_interval
         self._running = False
+        self._bootstrap_replied: set = set()  # 030 C-9: one bootstrap reply per sender
         self.bot_username: Optional[str] = None
         from surfaces.telegram.surface import TelegramSurface
         self.surface = TelegramSurface(bot)
@@ -990,7 +1327,7 @@ class TelegramHarness:
 
         The transcriber is now built via get_transcriber(container) — registered once on
         the container and shared across surfaces (Task 1.6 core-seam migration)."""
-        from agents.task.surface_config import SurfaceConfig
+        from core.surfaces.config import SurfaceConfig
         if not SurfaceConfig.voice_transcription_enabled():
             return None
         try:
@@ -1040,6 +1377,7 @@ class TelegramHarness:
             # own-handle owner-alias (message_send.py) just stay inert, same
             # as today, if getMe() is unavailable (e.g. a test double Bot).
             logger.debug("telegram get_me (bot_username resolve) failed: %s", e)
+        await self._publish_command_menu()
         if self.webhook_base:
             url = self.webhook_base.rstrip("/") + derive_webhook_path()
             await self.bot.set_webhook(url)
@@ -1050,6 +1388,31 @@ class TelegramHarness:
                 await self.bot.delete_webhook()
             except Exception as e:
                 logger.debug("telegram delete_webhook (poll start) failed: %s", e)
+
+    async def _publish_command_menu(self) -> None:
+        """Register the verb list with Telegram so the phone gets a "/" menu.
+
+        Without this there is no command menu, no autocomplete and no
+        descriptions on mobile — the owner has to remember 21 verbs or type
+        /help and scroll (chat-first review 2026-08-22, G12). Sourced from the
+        `_HELP_BODY` SSOT, so the menu cannot drift from the help text.
+        Fail-open: a bot without setMyCommands (or a test double) is unaffected.
+        """
+        try:
+            from aiogram.types import BotCommand
+        except Exception:
+            return  # aiogram absent (tests inject a fake bot) — nothing to publish
+        setter = getattr(self.bot, "set_my_commands", None)
+        if setter is None:
+            return
+        try:
+            commands = [BotCommand(command=name, description=desc)
+                        for name, desc in help_commands()]
+            if commands:
+                await setter(commands)
+                logger.info("telegram command menu published (%d verbs)", len(commands))
+        except Exception as e:
+            logger.debug("telegram set_my_commands failed: %s", e)
 
     async def stop(self) -> None:
         self._running = False
@@ -1188,8 +1551,14 @@ class TelegramHarness:
                 if gate is None:
                     # No allowlist set: reveal the sender's id so the operator can lock
                     # the bot, and do NOT run the agent (bootstrap mode).
+                    # 030 C-9: at most ONE reply per sender per process — this ran
+                    # pre-dedup, so a Telegram redelivery (or any stranger's every
+                    # message) re-sent it: unbounded reply amplification.
                     chat_id = _tg_chat_id(update)
-                    if chat_id is not None:
+                    if chat_id is not None and tg_id not in self._bootstrap_replied:
+                        self._bootstrap_replied.add(tg_id)
+                        if len(self._bootstrap_replied) > 1000:  # bound memory
+                            self._bootstrap_replied.clear()
                         await self.bot.send_message(
                             chat_id,
                             "🔓 This bot has no allowlist set, so it is locked by default.\n"
@@ -1248,7 +1617,7 @@ class TelegramHarness:
             # build_inbound_message, so the guard no longer inspects the raw update dict.
             if _core_vg.voice_needs_guard(result.inbound.media, result.inbound.text):
                 await reporter.finish()
-                from agents.task.surface_config import SurfaceConfig
+                from core.surfaces.config import SurfaceConfig
                 guard = _core_vg.voice_unavailable_message(SurfaceConfig.voice_transcription_enabled())
                 if chat_id:
                     try:
@@ -1268,11 +1637,37 @@ class TelegramHarness:
                 await reporter.finish()
                 return {"ok": True}
 
+            # 031: deterministic owner stop/resume — BEFORE any model call, any
+            # queue, any tool. A full stop/resume is applied here from the text
+            # alone (voice included) and confirmed from the read-back state.
+            if (_is_admin_owner(result.inbound.identity.user_id)
+                    and getattr(result.decision, "kind", None) != RouteKind.COMMAND):
+                from core.surfaces.owner_admin import owner_pause_phrases
+                from core.surfaces.owner_intent import owner_stop_intent
+                from surfaces.telegram.owner_intent_gate import handle_owner_intent
+                _dd = _admin_data_dir(self.task_agent)
+                _intent = owner_stop_intent(
+                    result.inbound.text,
+                    extra_phrases=owner_pause_phrases(result.inbound.identity.user_id, _dd))
+                _gate_reply = None
+                if _intent is not None:
+                    try:
+                        _gate_reply = await handle_owner_intent(self.task_agent, result, _intent, _dd)
+                    except Exception as e:
+                        # Never fall through to the model on a stop: say it failed.
+                        logger.error("telegram owner intent gate failed: %s", e, exc_info=True)
+                        _gate_reply = (f"⚠️ I could not apply that automatically "
+                                       f"({type(e).__name__}: {str(e)[:120]}). Send /pause to force it.")
+                if _gate_reply:
+                    await reporter.finish()
+                    await _send_telegram_text(self.bot, chat_id, _gate_reply)
+                    return {"ok": True}
+
             # Persistent transcript echo (voice only): post '🎙️ Transcript: …' quoting the
             # voice note so the user sees what ROB heard, BEFORE the answer. Fail-open —
             # never blocks the turn. Gated VOICE_TRANSCRIPT_ECHO (default ON).
             from core.surfaces.voice_echo import voice_transcript, voice_echo_message
-            from agents.task.surface_config import SurfaceConfig
+            from core.surfaces.config import SurfaceConfig
             if SurfaceConfig.voice_transcript_echo_enabled():
                 _t = voice_transcript(result.inbound.media)
                 if _t and chat_id:

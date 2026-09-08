@@ -1,51 +1,36 @@
 """Map an OpenAI `model` string to POLYROB's (provider, model)."""
 from core.runtime_config import resolve_runtime_config
 
-# Kill-switch path (LLM_PROVIDER_REGISTRY=off) — the live sets are derived from
-# the ProviderSpec registry by _known_providers()/_prefix_to_provider() below
-# (024 seams 11/12), so a providers.yaml provider routes instead of silently
-# falling through to the env-default provider.
-_KNOWN_PROVIDERS = ("openai", "anthropic", "gemini", "deepseek", "openrouter", "nvidia")
-_PREFIX_TO_PROVIDER = (("gpt", "openai"), ("o1", "openai"), ("o3", "openai"),
-                       ("claude", "anthropic"), ("gemini", "gemini"),
-                       ("deepseek", "deepseek"), ("kimi", "nvidia"))
+def _specs():
+    from modules.llm.provider_spec import BUILTIN_SPECS, get_specs
+    try:
+        return get_specs()
+    except Exception:
+        return BUILTIN_SPECS  # a broken providers.yaml must not blank the routing tables
 
 
 def _known_providers() -> tuple:
-    """Provider names (and aliases) accepted as a `provider/model` slug head."""
-    try:
-        from modules.llm.provider_spec import get_specs, provider_registry_enabled
-        if provider_registry_enabled():
-            names = []
-            for s in get_specs():
-                names.append(s.name)
-                names.extend(s.aliases)
-            return tuple(names)
-    except Exception:
-        pass
-    return _KNOWN_PROVIDERS
+    """Provider names (and aliases) accepted as a `provider/model` slug head
+    (024 seam 11 — derived from the ProviderSpec registry)."""
+    names = []
+    for s in _specs():
+        names.append(s.name)
+        names.extend(s.aliases)
+    return tuple(names)
 
 
 def _prefix_to_provider() -> tuple:
-    """(model-prefix, provider) routing pairs, spec-declared prefixes included.
-
-    Built-in prefixes keep the legacy literal order (first match wins); user
-    specs' ``model_prefixes`` append after, in registry order.
-    """
-    try:
-        from modules.llm.provider_spec import get_specs, provider_registry_enabled
-        if provider_registry_enabled():
-            pairs = list(_PREFIX_TO_PROVIDER)
-            seen = {p for p, _ in pairs}
-            for s in get_specs():
-                for prefix in s.model_prefixes:
-                    if prefix not in seen:
-                        pairs.append((prefix, s.name))
-                        seen.add(prefix)
-            return tuple(pairs)
-    except Exception:
-        pass
-    return _PREFIX_TO_PROVIDER
+    """(model-prefix, provider) routing pairs in registry order, first match wins
+    (024 seam 12 — every prefix, built-in or user-declared, comes from the spec's
+    ``model_prefixes``)."""
+    pairs = []
+    seen = set()
+    for s in _specs():
+        for prefix in s.model_prefixes:
+            if prefix not in seen:
+                pairs.append((prefix, s.name))
+                seen.add(prefix)
+    return tuple(pairs)
 
 
 def _provider_owning(model: str) -> str | None:

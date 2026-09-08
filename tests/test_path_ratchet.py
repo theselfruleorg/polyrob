@@ -11,8 +11,7 @@ delete) its row here so the ratchet tightens. Adding a violation to a clean file
 raising a file's count — fails.
 
 Known baked-in non-violations kept in the baseline rather than special-cased:
-``webview/server.py`` (a ``"data" not in entry`` dict-key check) and ``cli/commands/
-owner.py`` (a docstring mentioning the OLD behaviour). ``core/runtime_paths.py``'s
+``webview/server.py`` (a ``"data" not in entry`` dict-key check). ``core/runtime_paths.py``'s
 ``_LEGACY_SESSIONS_DEFAULT`` and ``core/wallet/audit_sink.py``'s loudly-logged legacy
 return are deliberate. ``core/config.py`` Field defaults are anchored to the data home by
 bootstrap; ``core/bootstrap.py``'s DATA_ROOT path_manager default and the messages/
@@ -46,7 +45,8 @@ ROOTS = ("core", "agents", "tools", "modules", "cli", "api", "cron",
 BASELINE = {
     "api/app.py": 1,
     "api/kb/endpoints.py": 1,
-    "cli/commands/owner.py": 1,       # docstring mention of the OLD behaviour
+    # cli/commands/owner.py: row DROPPED 2026-09-08 — its last violation (a
+    # docstring mention of the OLD behaviour) went with the admin_data_home fix.
     # cli/commands/* + persona/h_self swept through data_dir_or_home() 2026-07-16;
     # the data/characters mirror moved to persona_resolver.character_search_dirs
     # (2026-08-20) — handlers.py keeps 1 remaining hit.

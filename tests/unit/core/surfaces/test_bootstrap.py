@@ -112,6 +112,27 @@ def test_dead_target_store_passed_to_dispatcher(tmp_path, monkeypatch):
     assert dispatcher._dt is dt
 
 
+def test_queue_and_dispatcher_constructed_even_with_flag_off(tmp_path, monkeypatch):
+    """2026-08-30: queue/dispatcher CONSTRUCTION is decoupled from
+    OUTBOUND_QUEUE_ENABLED, which now governs ONLY publish()'s primary
+    reply-routing decision (see message_router.py). Before this, a prod deploy
+    that never flips the flag (the default) meant `message_router.send_message`'s
+    cross-process fallback (e.g. `message(surface="email")` from the telegram
+    daemon process) could never work at all, since no queue existed to fall back
+    to. Construction must succeed regardless of the flag."""
+    monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
+    monkeypatch.delenv("OUTBOUND_QUEUE_ENABLED", raising=False)
+    c = _FakeContainer()
+    installed = _bootstrap().install_surface_bus(c, str(tmp_path / "surfaces.db"))
+    assert installed is True
+
+    router = c.get_service("message_router")
+    assert router._queue is not None
+    assert c.get_service("outbound_queue") is not None
+    assert c.get_service("outbound_dispatcher") is not None
+    assert c.get_service("surface_circuit_breaker") is not None
+
+
 def test_dead_target_store_survives_idempotent_reinstall(tmp_path, monkeypatch):
     """A second install_surface_bus call (reusing the existing router) must not drop
     the dead-target wiring."""

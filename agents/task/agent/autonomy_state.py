@@ -367,7 +367,7 @@ def stamp_delivered_from_drain(session_id: str, user_id: str, kind: str,
     if not changed:
         return  # CAS: already stamped by an earlier drain — no duplicate event
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if event_log_enabled():
             get_event_log().record(
                 "delegation_delivered", user_id=user_id or "", session_id=session_id,
@@ -431,7 +431,7 @@ async def recover_interrupted_delegations(task_agent: Any, db_path: str) -> int:
                            session_id, delegation_id, exc_info=True)
             continue
         try:
-            from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+            from core.event_log import get_event_log, event_log_enabled
             if event_log_enabled():
                 get_event_log().record(
                     "delegation_interrupted", user_id=row.get("user_id", ""),

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from tools.controller.types import ActionResult
 from tools.controller.views import DoneAction, SendMessageAction
+from tools.controller.doc_authoring import DocAuthoringMixin
 from tools.controller._helpers import (
 	build_load_skill_result,
 	build_session_search_hint,
@@ -26,6 +27,7 @@ from tools.controller.turn_origin import (  # noqa: F401 — re-exported: extern
 	# which reads THIS module's namespace — so monkeypatching here still works.
 	_MESSAGE_TEXT_PREVIEW_CHARS,
 	_autonomous_message_refusal,
+	_autonomous_owner_resend_cooldown_refusal,
 	_is_autonomous_goal_turn,
 	_is_forged_or_autonomous_turn,
 	_message_action_result,
@@ -33,8 +35,41 @@ from tools.controller.turn_origin import (  # noqa: F401 — re-exported: extern
 
 logger = logging.getLogger(__name__)
 
+# Outcomes from core.surfaces.user_delivery.deliver_user_message (via
+# maybe_deliver_autonomous_send) that mean the text did NOT reach the user
+# live, so send_message's own report must say so instead of a blanket
+# "sent" — a resumed/recreated session (e.g. `polyrob run --resume`) has no
+# other delivery path, and a blind "success" here is what let a genuinely
+# undelivered owner reply go unnoticed on 2026-08-28 (fixed alongside this).
+_ROUTE_OUTCOME_NOT_DELIVERED = {
+	"capped": "the owner's daily message cap was already reached",
+	"rate_limited": "the owner's hourly rate limit was already reached",
+	"deduped": "an identical message was already sent recently",
+	"quiet_held": "quiet hours are in effect",
+	"failed": "the delivery attempt raised an error",
+	"empty": "the message text was empty",
+}
 
-class ActionRegistrationMixin:
+
+def _describe_route_outcome(route_outcome: Optional[str]) -> Optional[str]:
+	"""Honest suffix for send_message's ActionResult, or None to change nothing.
+
+	``None``/``"sent"`` mean either a live mirror already handled delivery or
+	the fallback rail genuinely delivered — the default "sent" wording stays
+	accurate. Anything else means the text was NOT delivered to the user this
+	way; say so rather than reporting a blanket success.
+	"""
+	if route_outcome in (None, "sent"):
+		return None
+	if route_outcome == "fallback":
+		return ("no live delivery channel — queued as a durable owner notice "
+				"(not an instant push; check `polyrob owner` on the next contact)")
+	reason = _ROUTE_OUTCOME_NOT_DELIVERED.get(
+		route_outcome, f"outcome={route_outcome}")
+	return f"NOT delivered to the user — {reason}"
+
+
+class ActionRegistrationMixin(DocAuthoringMixin):
 	def _register_default_actions(self):
 		"""Register core 'done' action for task completion.
 
@@ -138,6 +173,7 @@ class ActionRegistrationMixin:
 					# delivery rail (dedup + rate caps + durable fallback). Strict
 					# scope: own principal only; arbitrary recipients stay the gated
 					# `message` tool's job. Fail-open — never fails the action.
+					_route_outcome = None
 					try:
 						from core.surfaces.user_delivery import maybe_deliver_autonomous_send
 						_route_outcome = await maybe_deliver_autonomous_send(
@@ -170,20 +206,27 @@ class ActionRegistrationMixin:
 							metadata={'conversational_reply': True}
 						)
 					self.logger.info("💬 Message sent. Stopping execution to wait for user response via continuous chat")
+					_route_status = _describe_route_outcome(_route_outcome)
+					_paused_summary = (f"Message sent to user. Task paused - will resume when user responds. — {_route_status}"
+						if _route_status else "Message sent to user. Task paused - will resume when user responds.")
 					return ActionResult(
-						extracted_content=f"Message sent to user. Task paused - will resume when user responds.",
+						extracted_content=_paused_summary,
 						include_in_memory=True,
-						is_done=True  # Stop execution, wait for user via continuous chat
+						is_done=True,  # Stop execution, wait for user via continuous chat
+						metadata={'delivery_outcome': _route_outcome}
 					)
 
 				# Non-blocking message sent.
 				# R1: tag it so the run loop can recognize a turn whose only output was a
 				# user-facing reply (no productive tool work) and end it — otherwise a
 				# chat reply loops and re-greets, since non-blocking sends keep is_done False.
+				_route_status = _describe_route_outcome(_route_outcome)
+				_send_summary = (f"Message sent to user (non-blocking) — {_route_status}"
+					if _route_status else "Message sent to user (non-blocking)")
 				return ActionResult(
-					extracted_content=f"Message sent to user (non-blocking)",
+					extracted_content=_send_summary,
 					include_in_memory=False,
-					metadata={'conversational_reply': True}
+					metadata={'conversational_reply': True, 'delivery_outcome': _route_outcome}
 				)
 
 			@self.registry.action('Complete the current task and provide final output', param_model=DoneAction)
@@ -1096,14 +1139,8 @@ class ActionRegistrationMixin:
 			param_model=MessageTargetAction,
 		)
 		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
-			import os
-			from core.instance import resolve_owner_telegram_id, resolve_owner_email
-
-			# Forged/untrusted/autonomous turns must not reach ARBITRARY targets
-			# (sub-agent, self-wake/delegation-result re-entry into the main agent,
-			# or an autonomous goal/cron/planner-spawned session). With the owner
-			# opt-in MESSAGE_AUTONOMOUS_ALLOWLISTED the send proceeds to the tier
-			# gate below, which still denies anything not owner/owner-allowlisted.
+			# Forged/untrusted/autonomous turns must not reach ARBITRARY targets;
+			# MESSAGE_AUTONOMOUS_ALLOWLISTED only forwards to the tier gate below.
 			refusal = _autonomous_message_refusal(execution_context, self)
 			if refusal is not None:
 				return refusal
@@ -1112,25 +1149,27 @@ class ActionRegistrationMixin:
 			container = getattr(self, "container", None)
 			router = container.get_service("message_router") if container else None
 			allowlist = container.get_service("outbound_allowlist") if container else None
-
-			owner_targets = {}
-			tid = resolve_owner_telegram_id(os.environ)
-			if tid:
-				owner_targets["telegram"] = str(tid)
-			oem = resolve_owner_email(os.environ)
-			if oem:
-				owner_targets["email"] = oem
-
+			from tools.controller.message_send import prepare_message_targets
+			owner_targets, surface, target = prepare_message_targets(container, user_id, params.surface, params.target)
 			session_id = (getattr(execution_context, 'session_id', None)
 			              or getattr(self, 'session_id', '') or "")
 
+			# 2026-08-27 dedup-guard fix: refuse a repeat autonomous send to the
+			# owner within the cooldown window (checked against the durable
+			# conversation store, not the model's own elapsed-time claim).
+			cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
+				execution_context, self, container=container, user_id=user_id,
+				surface=surface, target=target, owner_targets=owner_targets)
+			if cooldown_refusal is not None:
+				return cooldown_refusal
+
 			res = await perform_message_send(
 				router=router, allowlist=allowlist, owner_targets=owner_targets,
-				user_id=user_id, surface=params.surface, target=params.target,
+				user_id=user_id, surface=surface, target=target,
 				text=params.text, action=params.action, reply_to=params.reply_to,
 				message_id=params.message_id, media_paths=params.media_paths,
-				session_id=session_id, container=container)
-			return _message_action_result(res, params.surface, params.target, params.text)
+				session_id=session_id, container=container, execution_context=execution_context, controller=self)
+			return _message_action_result(res, surface, target, params.text)
 
 	def _register_contact_history_action(self):
 		"""Register the read-only `contact_history` action (E3, 2026-07-13 review):
@@ -1140,7 +1179,7 @@ class ActionRegistrationMixin:
 		this module — no `from __future__ import annotations` (registry-closure
 		introspection)."""
 		try:
-			from agents.task.surface_config import SurfaceConfig
+			from core.surfaces.config import SurfaceConfig
 			if not SurfaceConfig.correspondent_access_enabled():
 				return
 		except Exception:
@@ -1183,296 +1222,6 @@ class ActionRegistrationMixin:
 			from core.security.untrusted_wrap import wrap_untrusted
 			return ActionResult(extracted_content=wrap_untrusted(
 				f"{params.surface}:{params.address}", ctx), include_in_memory=True)
-
-	def _register_self_context_manage_action(self):
-		"""Register the evolving SELF-identity tool `self_context_manage`, gated
-		SELF_CONTEXT_WRITABLE (default OFF; ON under POLYROB_LOCAL).
-
-		Lets the agent refine its own per-(instance,user) ``self.md`` — the learned
-		"how I work with this user" layer. Safety lives in SelfContextWriter:
-		tenant-confined + anon-blocked, identity-scanned fail-CLOSED (self-voice
-		subversion + invisible-unicode), over-cap ERRORS (forces consolidation),
-		forged turns forced to .pending and barred from active docs, atomic write,
-		archive-never-delete. The SOUL tier (identity.md/operating.md) is NEVER
-		reachable here — it stays operator-only. Writes apply NEXT session (the
-		foundation snapshot is frozen at session start). Registered in this module —
-		no `from __future__ import annotations` (registry-closure introspection)."""
-		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.self_context_writable():
-				return
-		except Exception:
-			return
-
-		from typing import Literal as _Literal
-
-		class SelfContextManageAction(BaseModel):
-			action: _Literal["update", "patch", "read", "promote"]
-			content: Optional[str] = None      # update: full self.md body (≤2200 chars)
-			old_string: Optional[str] = None   # patch: exact text to replace
-			new_string: Optional[str] = None   # patch: replacement
-			replace_all: bool = False
-
-		@self.registry.action(
-			"Refine your evolving SELF context — durable notes about how you work with "
-			"THIS user (preferences, conventions, what you've learned). action='read' "
-			"returns the current text; action='update' replaces it (≤2200 chars — "
-			"consolidate, don't sprawl); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). Updates/patches "
-			"are QUARANTINED for review and apply next session. This is NOT your core "
-			"identity/boundaries (those are operator-owned).",
-			param_model=SelfContextManageAction,
-		)
-		async def self_context_manage(params: SelfContextManageAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			if not user_id:
-				return ActionResult(error="self-context requires a user (tenant scope).",
-				                    include_in_memory=True)
-
-			# T4-06: every effected self-context mutation records a first-class
-			# self_modification event (durable log → /telemetry + /activity). Fail-open.
-			_self_mod_ev = self_mod_emitter(
-				execution_context, self, user_id,
-				kind="self_context", source="self_context_manage",
-				item_id=user_id, created_by="")
-			# Resolve the instance home dir (same as construction).
-			_cfg = getattr(getattr(self, 'container', None), 'config', None)
-			data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
-			try:
-				from core.instance import resolve_instance_id
-				from core.self_context_writer import (
-					SelfContextWriter, PROVENANCE_AGENT, PROVENANCE_BACKGROUND,
-				)
-				writer = SelfContextWriter(data_dir, instance_id=resolve_instance_id())
-			except Exception as e:
-				self.logger.debug(f"self_context_manage init failed: {e}")
-				return ActionResult(error=f"self_context_manage unavailable: {e}", include_in_memory=True)
-
-			if params.action == "read":
-				body = writer.read(user_id)
-				# Apply the same load-side [BLOCKED] guard as session-start injection
-				# (load_self_doc) so a direct-FS-poisoned doc is never returned raw to
-				# the model mid-session. Fail-closed on a missing/raising scanner.
-				if body:
-					try:
-						from modules.memory.task.threat_scan import is_identity_suspicious
-						if is_identity_suspicious(body):
-							body = "[BLOCKED: self-context failed the identity safety scan]"
-					except Exception:
-						body = "[BLOCKED: identity scanner unavailable]"
-				return ActionResult(
-					extracted_content=(body or "(no self-context yet)"),
-					include_in_memory=True,
-				)
-
-			# Forged/autonomous detection (C7): a sub-agent/leaf OR an autonomous
-			# goal/cron/planner-spawned run must never promote its own pending
-			# self-context (autonomous top-level runs are owner_ok under POLYROB_LOCAL).
-			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
-
-			if params.action == "promote":
-				# Activation is OWNER-only (Phase D). The caller is the owner when this
-				# is the single-user local CLI OR their user_id matches the bound owner
-				# principal (POLYROB_OWNER_USER_ID / first SURFACE_SUPER_ADMIN_USER_IDS).
-				# A non-owner or any forged turn can never self-promote — that is what
-				# keeps a self-wake / injected / sub-agent turn from activating its own
-				# pending identity, on the server as well as locally.
-				try:
-					from core.config_policy import local_mode_enabled
-					from core.instance import is_owner_local_safe, resolve_owner_principal
-					# The local bypass is honored ONLY for the genuine single-user local
-					# operator tenant — NOT any uid under the global POLYROB_LOCAL flag.
-					# This action runs inside a session and has no surface id, so it can't
-					# use the _LOCAL_OWNER_SURFACES filter that access.py/pairing.py apply;
-					# is_owner_local_safe is the surface-independent equivalent (a forgeable
-					# network sender's uid is never the local tenant). See permissions audit F4.
-					owner_ok = is_owner_local_safe(
-						user_id, owner_principal=resolve_owner_principal(),
-						local_enabled=local_mode_enabled())
-				except Exception:
-					owner_ok = False
-				if is_forged or not owner_ok:
-					return ActionResult(
-						error="promote is owner-only; your pending self-context awaits operator review.",
-						include_in_memory=True)
-				res = writer.promote(user_id=user_id)
-				if not res.ok:
-					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
-					                    include_in_memory=True)
-				_self_mod_ev("promote", pending=False, created_by="owner")
-				return ActionResult(extracted_content="Self-context promoted (active next session).",
-				                    include_in_memory=True)
-
-			# update / patch: ALWAYS quarantine to .pending (pending=True below) — the
-			# action never writes the active doc directly; activation is the owner-gated
-			# `promote` above. `created_by` still reflects real forged status so the
-			# writer additionally bars a forged turn from even reading/patching an active
-			# doc, while a normal turn may patch the active doc INTO a pending edit.
-			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			try:
-				if params.action == "update":
-					if not params.content:
-						return ActionResult(error="update requires `content`.", include_in_memory=True)
-					res = writer.propose(params.content, user_id=user_id, created_by=created_by,
-					                     pending=True)
-				else:  # patch
-					if params.old_string is None or params.new_string is None:
-						return ActionResult(error="patch requires `old_string` and `new_string`.",
-						                    include_in_memory=True)
-					res = writer.patch(user_id=user_id, old_string=params.old_string,
-					                   new_string=params.new_string, replace_all=params.replace_all,
-					                   created_by=created_by, pending=True)
-			except Exception as e:
-				self.logger.debug(f"self_context_manage failed: {e}")
-				return ActionResult(error=f"self_context_manage failed: {e}", include_in_memory=True)
-
-			if not res.ok:
-				return ActionResult(error=f"Self-context rejected: {'; '.join(res.errors)}",
-				                    include_in_memory=True)
-			_self_mod_ev(params.action, pending=True, created_by=created_by)
-			# §7.1: proactively tell the owner a proposal is waiting (fail-open,
-			# gated SELF_EVOLUTION_TRANSPARENCY). Closes the "owner never told" gap.
-			try:
-				from core import self_evolution as _se
-				await _se.maybe_notify_owner_pending(
-					getattr(self, 'container', None), user_id,
-					home_dir=data_dir, instance_id=resolve_instance_id())
-			except Exception as _e:
-				self.logger.debug(f"self-evolution notify skipped: {_e}")
-			return ActionResult(
-				extracted_content="Self-context saved (pending review; applies next session).",
-				include_in_memory=True,
-			)
-
-	def _register_owner_doc_manage_action(self):
-		"""Register the bounded owner-facts tool `owner_doc_manage`, gated
-		OWNER_DOC_WRITABLE (default OFF; ON under POLYROB_LOCAL).
-
-		Lets the agent maintain a small per-(instance,user) ``owner.md`` — durable
-		facts/preferences about the OWNER, injected each session alongside SOUL/SELF.
-		Same safety as self-context (OwnerDocWriter): tenant-confined + anon-blocked,
-		identity-scanned fail-CLOSED, over-cap ERRORS, forged turns forced .pending
-		and barred from active docs, atomic write, archive-never-delete. Writes apply
-		NEXT session. No `from __future__ import annotations` (registry-closure
-		introspection)."""
-		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.owner_doc_writable():
-				return
-		except Exception:
-			return
-
-		from typing import Literal as _Literal
-
-		class OwnerDocManageAction(BaseModel):
-			action: _Literal["update", "patch", "read", "promote"]
-			content: Optional[str] = None      # update: full owner.md body (≤1600 chars)
-			old_string: Optional[str] = None   # patch: exact text to replace
-			new_string: Optional[str] = None   # patch: replacement
-			replace_all: bool = False
-
-		@self.registry.action(
-			"Maintain durable facts about your OWNER — their preferences, timezone, "
-			"projects, how they like to be helped (a small owner.md, ≤1600 chars). "
-			"action='read' returns it; action='update' replaces it (consolidate, keep "
-			"only durable facts); action='patch' edits by exact-string replace; "
-			"action='promote' activates your pending draft (owner-only). Updates/patches "
-			"are QUARANTINED for review and apply next session.",
-			param_model=OwnerDocManageAction,
-		)
-		async def owner_doc_manage(params: OwnerDocManageAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			if not user_id:
-				return ActionResult(error="owner-facts doc requires a user (tenant scope).",
-				                    include_in_memory=True)
-
-			_self_mod_ev = self_mod_emitter(
-				execution_context, self, user_id,
-				kind="owner_doc", source="owner_doc_manage",
-				item_id=user_id, created_by="")
-
-			_cfg = getattr(getattr(self, 'container', None), 'config', None)
-			data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
-			try:
-				from core.instance import resolve_instance_id
-				from core.owner_doc_writer import (
-					OwnerDocWriter, PROVENANCE_AGENT, PROVENANCE_BACKGROUND,
-				)
-				writer = OwnerDocWriter(data_dir, instance_id=resolve_instance_id())
-			except Exception as e:
-				self.logger.debug(f"owner_doc_manage init failed: {e}")
-				return ActionResult(error=f"owner_doc_manage unavailable: {e}", include_in_memory=True)
-
-			if params.action == "read":
-				body = writer.read(user_id)
-				if body:
-					try:
-						from modules.memory.task.threat_scan import is_identity_suspicious
-						if is_identity_suspicious(body):
-							body = "[BLOCKED: owner-facts doc failed the identity safety scan]"
-					except Exception:
-						body = "[BLOCKED: identity scanner unavailable]"
-				return ActionResult(
-					extracted_content=(body or "(no owner-facts doc yet)"),
-					include_in_memory=True,
-				)
-
-			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
-
-			if params.action == "promote":
-				try:
-					from core.config_policy import local_mode_enabled
-					from core.instance import is_owner_local_safe, resolve_owner_principal
-					owner_ok = is_owner_local_safe(
-						user_id, owner_principal=resolve_owner_principal(),
-						local_enabled=local_mode_enabled())
-				except Exception:
-					owner_ok = False
-				if is_forged or not owner_ok:
-					return ActionResult(
-						error="promote is owner-only; your pending owner-facts doc awaits operator review.",
-						include_in_memory=True)
-				res = writer.promote(user_id=user_id)
-				if not res.ok:
-					return ActionResult(error=f"Promote failed: {'; '.join(res.errors)}",
-					                    include_in_memory=True)
-				_self_mod_ev("promote", pending=False, created_by="owner")
-				return ActionResult(extracted_content="Owner-facts doc promoted (active next session).",
-				                    include_in_memory=True)
-
-			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			try:
-				if params.action == "update":
-					if not params.content:
-						return ActionResult(error="update requires `content`.", include_in_memory=True)
-					res = writer.propose(params.content, user_id=user_id, created_by=created_by,
-					                     pending=True)
-				else:  # patch
-					if params.old_string is None or params.new_string is None:
-						return ActionResult(error="patch requires `old_string` and `new_string`.",
-						                    include_in_memory=True)
-					res = writer.patch(user_id=user_id, old_string=params.old_string,
-					                   new_string=params.new_string, replace_all=params.replace_all,
-					                   created_by=created_by, pending=True)
-			except Exception as e:
-				self.logger.debug(f"owner_doc_manage failed: {e}")
-				return ActionResult(error=f"owner_doc_manage failed: {e}", include_in_memory=True)
-
-			if not res.ok:
-				return ActionResult(error=f"Owner-facts doc rejected: {'; '.join(res.errors)}",
-				                    include_in_memory=True)
-			_self_mod_ev(params.action, pending=True, created_by=created_by)
-			try:
-				from core import self_evolution as _se
-				await _se.maybe_notify_owner_pending(
-					getattr(self, 'container', None), user_id,
-					home_dir=data_dir, instance_id=resolve_instance_id())
-			except Exception as _e:
-				self.logger.debug(f"self-evolution notify skipped: {_e}")
-			return ActionResult(
-				extracted_content="Owner-facts doc saved (pending review; applies next session).",
-				include_in_memory=True,
-			)
 
 	def _register_preferences_action(self):
 		"""Register the agent-callable `preferences` tool (owner-UX P2 T2), gated
@@ -1755,7 +1504,7 @@ class ActionRegistrationMixin:
 
 			def _audit(server_id: str, outcome: str, **extra):
 				try:
-					from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+					from core.event_log import event_log_enabled, get_event_log
 					if event_log_enabled():
 						get_event_log().record(
 							"mcp_install", user_id=user_id, session_id=session_id,
@@ -1843,210 +1592,15 @@ class ActionRegistrationMixin:
 			return ActionResult(extracted_content=msg + tail, include_in_memory=True)
 
 	def _register_insights_action(self):
-		"""Register the read-only `insights` tool (W7), gated INSIGHTS_TOOL.
-
-		Reports whether the agent's self-authored skills actually get reused — the
-		measurement the writable-skills safety brief requires. Tenant-scoped, no writes.
-		"""
-		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.insights_tool():
-				return
-		except Exception:
-			return
-
-		class InsightsAction(BaseModel):
-			pass
-
-		@self.registry.action(
-			"Show insights about your own learning: how many durable skills you've "
-			"authored and how often you reuse them (authored-skill reuse rate).",
-			param_model=InsightsAction,
-		)
-		async def insights(params: InsightsAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			try:
-				from modules.skills.skill_usage import get_skill_usage_store
-				summary = get_skill_usage_store().authored_reuse_summary(user_id=user_id)
-			except Exception as e:
-				self.logger.debug(f"insights failed: {e}")
-				return ActionResult(extracted_content="No insights available.", include_in_memory=False)
-			rate = round(summary["reuse_rate"] * 100)
-			top = ", ".join(f"{t['skill_id']}({t['loads']})" for t in summary["top"][:5]) or "—"
-			return ActionResult(
-				extracted_content=(
-					f"## Skill insights\n"
-					f"- authored skills: {summary['authored_total']}\n"
-					f"- reused at least once: {summary['authored_reused']} ({rate}%)\n"
-					f"- by author: {summary['by_author']}\n"
-					f"- most-used: {top}"
-				),
-				include_in_memory=True,
-			)
+		"""Delegates to tools/controller/insights_action.py (ratchet extraction)."""
+		from tools.controller.insights_action import register_insights_action
+		register_insights_action(self)
 
 	def _register_agent_status_action(self):
-		"""Register the read-only `agent_status` introspection tool (I-6), gated
-		AGENT_STATUS_TOOL (default false; ON under POLYROB_LOCAL).
-
-		Reports the agent's own runtime state — steps used/remaining, active
-		tools, context-token usage, wallet balance, and the tenant ledger — so
-		the agent can answer "how much budget/context do I have left" in-context
-		(harness review I-6). Every section fails soft
-		INDEPENDENTLY: one unavailable organ (no orchestrator, wallet off,
-		ledger DB absent) never blanks the rest.
-		"""
-		try:
-			from core.config_policy import AutonomyConfig
-			if not AutonomyConfig.agent_status_tool():
-				return
-		except Exception:
-			return
-
-		class AgentStatusAction(BaseModel):
-			pass
-
-		@self.registry.action(
-			"Report your own runtime state: steps used/remaining, active tools, "
-			"context usage, and wallet/ledger balance. Read-only.",
-			param_model=AgentStatusAction,
-		)
-		async def agent_status(params: AgentStatusAction, execution_context=None) -> ActionResult:
-			user_id = getattr(execution_context, 'user_id', None) or getattr(self, 'user_id', None)
-			lines = []
-			agent = None
-			# 1) steps used / budget — live AgentState (max_steps is persisted by
-			#    run_loop.run since I-6; resolve the agent like send_message does:
-			#    execution_context.agent_id first, else the first agent).
-			try:
-				orch = getattr(self, 'orchestrator', None)
-				if orch is not None and getattr(orch, 'agents', None):
-					agent_id = getattr(execution_context, 'agent_id', None)
-					if agent_id and agent_id in orch.agents:
-						agent = orch.agents[agent_id]
-					else:
-						agents = list(orch.agents.values())
-						agent = agents[0] if agents else None
-				st = getattr(agent, 'state', None)
-				if st is not None:
-					mx = getattr(st, 'max_steps', None)
-					lines.append(f"steps: {st.n_steps}/{mx if mx is not None else '?'}")
-			except Exception as e:
-				self.logger.debug(f"agent_status: steps section unavailable: {e}")
-			# 2) active tools
-			try:
-				tools = sorted(self.list_tools())
-				lines.append("tools: " + (", ".join(tools) if tools else "(none)"))
-			except Exception as e:
-				self.logger.debug(f"agent_status: tools section unavailable: {e}")
-			# 3) context-token usage
-			try:
-				mm = getattr(agent, 'message_manager', None)
-				if mm is not None:
-					used = mm.get_token_count()
-					max_in = getattr(mm, 'max_input_tokens', 0) or 0
-					if max_in > 0:
-						lines.append(
-							f"context_tokens: {used}/{max_in} ({used / max_in * 100:.0f}%)")
-					else:
-						lines.append(f"context_tokens: {used}")
-			except Exception as e:
-				self.logger.debug(f"agent_status: context section unavailable: {e}")
-			# 4) wallet — the agent's own (operator-owned singleton) wallet;
-			#    on-chain read mirrors x402_wallet_status (mainnet only, fail-open).
-			try:
-				from core.wallet.factory import get_agent_wallet
-				wallet = get_agent_wallet()
-				if wallet is not None and wallet.config.network == "mainnet":
-					from core.wallet.onchain import balances, venue_chain
-					addr = wallet.operational_signer().address
-					native, usdc = balances(addr, venue_chain(wallet.operational_venue) or "base")
-					if usdc is not None or native is not None:
-						u = f"${usdc:.2f}" if usdc is not None else "unavailable"
-						g = f"{native:.5f}" if native is not None else "unavailable"
-						lines.append(f"wallet: {u} USDC | gas {g}")
-			except Exception as e:
-				self.logger.debug(f"agent_status: wallet section unavailable: {e}")
-			# 5) tenant ledger — two statements, never summed: treasury (the
-			#    agent's own USDC — income/spend/pending/net) and runtime (the
-			#    owner's LLM/API bill — spend/calls). build_ledger refuses an
-			#    empty user_id by contract — skip rather than trip that guard.
-			#    include_balances=True: this is a DISPLAY surface, so it's worth
-			#    the extra network probes for the on-chain/provider balances.
-			try:
-				if user_id:
-					from modules.credits.unified_ledger import build_ledger, format_ledger
-					lines.append(format_ledger(await build_ledger(user_id, include_balances=True)))
-			except Exception as e:
-				self.logger.debug(f"agent_status: ledger section unavailable: {e}")
-			# 6) config — resolved pref values/sources for the session tenant, posture
-			#    axes, and which autonomy loops are enabled (owner-UX P3 T3). Fail-soft
-			#    like every other section, but — because "what's my effective config"
-			#    is itself the answer being asked for — a failure here degrades to an
-			#    explicit "config: unavailable" line instead of silently vanishing.
-			#    Secret hygiene: nothing below reads a raw env VALUE — pref values are
-			#    schema-guaranteed non-secret (core.prefs: "NO secret-typed keys, ever"),
-			#    posture/autonomy accessors return enums/ints/bools. The rendered block
-			#    is still run through the core (agent-visible-content) secret-shape
-			#    scrubber as a defensive backstop.
-			try:
-				from core.prefs import PREF_SCHEMA, display_effective
-				from core.secret_scrub import scrub_secret_shapes
-				from core.instance import resolve_instance_id
-				from core.config_policy import (
-					compute_posture, autonomy_posture, autonomy_mode_display,
-					local_mode_enabled, AutonomyConfig,
-				)
-				from tools.cronjob_tools import cron_enabled as _cron_enabled
-
-				_cfg = getattr(getattr(self, 'container', None), 'config', None)
-				data_dir = data_dir_or_home(getattr(_cfg, 'data_dir', None))
-				instance_id = resolve_instance_id()
-
-				cfg_lines = ["config:"]
-				# 018 P4: mode is the CLAMPED display (never a raw 'autonomous'
-				# the single-owner guard actually refused).
-				cfg_lines.append(
-					f"  posture: compute={compute_posture()} autonomy={autonomy_posture()} "
-					f"mode={autonomy_mode_display()} local={local_mode_enabled()}"
-				)
-				cfg_lines.append(
-					"  autonomy_loops: goals={} cron={} self_wake={} digest={}".format(
-						AutonomyConfig.goals_enabled(), _cron_enabled(),
-						AutonomyConfig.self_wake_enabled(), AutonomyConfig.owner_digest_enabled(),
-					)
-				)
-				by_group: dict = {}
-				for key in sorted(PREF_SCHEMA):
-					by_group.setdefault(key.split(".", 1)[0], []).append(key)
-				for group in sorted(by_group):
-					cfg_lines.append(f"  [{group}]")
-					for key in by_group[group]:
-						value, source = display_effective(key, user_id, data_dir, instance_id)
-						cfg_lines.append(f"    {key} = {value} ({source})")
-				lines.append(scrub_secret_shapes("\n".join(cfg_lines)))
-			except Exception as e:
-				self.logger.debug(f"agent_status: config section unavailable: {e}")
-				lines.append("config: unavailable")
-			# 7) capabilities — ground-truth tool availability (intel finding
-			#    2026-07-19: without this, the agent can only see the tool_ids
-			#    loaded into ITS OWN session and conflates "not in my session's
-			#    toolset" with "maybe disabled globally," producing wrong owner
-			#    asks like "please enable X" when X is already on. Reuses the
-			#    S1 dynamic-tool-rig catalog (tools/tool_disclosure.py) — the
-			#    SAME resolver the <tool-catalog> foundation message uses, so
-			#    this reports ground truth (container-resolved loaded/loadable/
-			#    gated+remedy) regardless of whether TOOL_PROGRESSIVE_DISCLOSURE
-			#    is on for this deploy.
-			try:
-				is_leaf = getattr(execution_context, 'role', None) == 'leaf'
-				lines.append(self.render_tool_catalog(is_leaf=is_leaf))
-			except Exception as e:
-				self.logger.debug(f"agent_status: capabilities section unavailable: {e}")
-				lines.append("capabilities: unavailable")
-			return ActionResult(
-				extracted_content="\n".join(lines) or "status unavailable",
-				include_in_memory=True,
-			)
+		"""Delegates to tools/controller/agent_status_action.py (ratchet extraction,
+		2026-08-28 status SSOT: the action renders from core/status_snapshot.py)."""
+		from tools.controller.agent_status_action import register_agent_status_action
+		register_agent_status_action(self)
 
 	def _register_usage_summary_action(self):
 		"""Register the read-only `usage_summary` action (Task 13, Phase 3 R3 —

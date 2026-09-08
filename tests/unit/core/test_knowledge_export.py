@@ -12,17 +12,17 @@ import time
 
 import pytest
 
-from core.knowledge_export import build_vault, sanitize_filename
+from core.knowledge_export import build_vault, slug_stem
 from modules.memory.provider import EpisodeRecord
 from modules.memory.sqlite_memory_provider import SqliteMemoryProvider
 
 USER = "owner-1"
 
 
-def test_sanitize_filename():
-    assert sanitize_filename("prod deploys") == "prod-deploys"
-    assert sanitize_filename("a/b\\c: d?") == "a-b-c-d"
-    assert sanitize_filename("") == "untitled"
+def test_slug_stem():
+    assert slug_stem("prod deploys") == "prod-deploys"
+    assert slug_stem("a/b\\c: d?") == "a-b-c-d"
+    assert slug_stem("") == "untitled"
 
 
 @pytest.fixture

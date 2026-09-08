@@ -28,7 +28,7 @@ def attach_dispatcher_event_log(dispatcher) -> None:
     from starting, so any import/lookup error is swallowed silently.
     """
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
     except Exception:
         return
     try:
@@ -64,7 +64,7 @@ def ensure_env_loaded() -> None:
     _env_loaded = True
 
 
-async def cli_container(log_level: str = "ERROR"):
+async def cli_container(log_level: str = "ERROR", require_llm: bool = True):
     """Standard non-interactive container bootstrap for admin subcommands.
 
     The one home for the preamble every ``polyrob session …`` verb repeated
@@ -72,6 +72,12 @@ async def cli_container(log_level: str = "ERROR"):
     build, the non-interactive key preflight (exits 1 when keys are missing —
     same as the inline copies did), and ``build_cli_container``.  Returns the
     built container with logging restored.
+
+    require_llm=False (L11, proposal 030): the READ-ONLY session verbs
+    (``list``/``show``/``costs``/``export``) skip the key preflight and build a
+    container that tolerates a zero-key box (no 'llm' service registered) —
+    listing local session metadata must never require a provider key.  Verbs
+    that run/resume/mutate sessions keep the default preflight.
     """
     import logging as _logging
 
@@ -81,10 +87,17 @@ async def cli_container(log_level: str = "ERROR"):
     setup_sqlite_compat()
 
     _logging.disable(_logging.CRITICAL)
-    from cli.keys import preflight_or_onboard
-    if not preflight_or_onboard(interactive=False):
-        sys.exit(1)
-    container = await build_cli_container(log_level=log_level)
+    if require_llm:
+        from cli.keys import preflight_or_onboard
+        if not preflight_or_onboard(interactive=False):
+            sys.exit(1)
+    # else: no preflight — env layering still happens at the same point it does
+    # on the keyed path (the very top of build_cli_container calls
+    # load_env(local_mode=True) before any flag-freezing agent import), so e.g.
+    # POLYROB_DATA_DIR from ~/.polyrob/.env is honored keyless too. Deliberately
+    # NO ensure_env_loaded() here: tests that mock build_cli_container would
+    # otherwise leak the developer's real env files into the test process.
+    container = await build_cli_container(log_level=log_level, require_llm=require_llm)
     _logging.disable(_logging.NOTSET)
     return container
 

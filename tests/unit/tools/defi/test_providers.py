@@ -45,18 +45,40 @@ def test_search_is_ranked_by_liquidity_descending():
 
 
 def test_unsupported_chains_are_dropped_deliberately():
-    """The real fixture carries Solana pairs; a Base-only tier drops them by an
-    explicit chain filter, not by accident of address validation."""
-    all_pairs = _fx("dexscreener_search.json")["pairs"]
-    assert any(p["chainId"] != "base" for p in all_pairs), "fixture must contain other chains"
+    """Dropped by an EXPLICIT chain filter, not by accident of address
+    validation. The fixture's own chains (base, solana) are both carried since
+    Solana Phase 1, so the drop is demonstrated against a chain the registry
+    genuinely does not carry — which is the only way this test can still be
+    about the filter rather than about EIP-55 happening to reject base58."""
+    payload = {"pairs": _fx("dexscreener_search.json")["pairs"] + [{
+        "chainId": "bsc",
+        "baseToken": {"address": "0x" + "ab" * 20, "symbol": "AERO", "name": "x"},
+        "liquidity": {"usd": 9_999_999.0}, "priceUsd": "1.0",
+    }]}
+    cands = dexscreener.parse_search(payload)
+    assert cands, "the carried chains must still come through"
+    assert all(c.chain != "bsc" for c in cands)
+    assert {c.chain for c in cands} <= set(dexscreener.SUPPORTED_CHAINS)
+
+
+def test_search_addresses_are_canonical_for_their_own_family():
+    """EVM candidates are EIP-55 checksummed; Solana mints are byte-exact,
+    because base58 is case-SENSITIVE and 'normalizing' one changes which
+    account it is."""
     cands = dexscreener.parse_search(_fx("dexscreener_search.json"))
-    assert cands and all(c.chain == "base" for c in cands)
-
-
-def test_search_addresses_are_checksummed():
-    for c in dexscreener.parse_search(_fx("dexscreener_search.json")):
+    assert cands
+    evm = [c for c in cands if c.chain == "base"]
+    svm = [c for c in cands if c.chain == "solana"]
+    assert evm and svm, "the fixture carries both families"
+    for c in evm:
         assert c.address.startswith("0x") and len(c.address) == 42
         assert c.address != c.address.lower(), "must be EIP-55 checksummed"
+    raw = {p["baseToken"]["address"]
+           for p in _fx("dexscreener_search.json")["pairs"]
+           if p["chainId"] == "solana"}
+    for c in svm:
+        assert not c.address.startswith("0x")
+        assert c.address in raw, "a Solana mint must survive byte-for-byte"
 
 
 def test_search_carries_chain_so_identity_is_chain_scoped():
@@ -215,8 +237,13 @@ def test_dexscreener_chain_scope_comes_from_the_registry():
     assert set(dexscreener.SUPPORTED_CHAINS) == expected
     assert "ethereum" in dexscreener.SUPPORTED_CHAINS
     assert "base" in dexscreener.SUPPORTED_CHAINS
-    # Robinhood is not indexed there — claiming it would fabricate a price.
-    assert "robinhood" not in dexscreener.SUPPORTED_CHAINS
+    # A row WITHOUT a dexscreener_id must never appear: claiming a chain the
+    # indexer does not cover would fabricate a price. Asserted as a property so
+    # it does not rot when a chain gains coverage (Robinhood did, 2026-08-25).
+    uncovered = {r.name for r in chains.all_rows() if not r.dexscreener_id}
+    assert uncovered, "no uncovered chain left to prove the exclusion with"
+    for name in uncovered:
+        assert name not in dexscreener.SUPPORTED_CHAINS
 
 
 def test_the_price_filter_uses_the_providers_own_chain_id(monkeypatch):
@@ -248,7 +275,10 @@ def test_goplus_chain_ids_come_from_the_registry():
     for row in chains.all_rows():
         if row.goplus_id:
             assert goplus.CHAIN_IDS.get(row.name) == row.goplus_id, row.name
-    assert "robinhood" not in goplus.CHAIN_IDS
+        else:
+            # Property, not a named chain: a row with no id is absent, so an
+            # unscreenable chain reports UNAVAILABLE rather than a clean pass.
+            assert row.name not in goplus.CHAIN_IDS, row.name
 
 
 def test_alchemy_url_is_built_from_the_chains_slug():

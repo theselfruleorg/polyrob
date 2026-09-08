@@ -362,8 +362,13 @@ class StepExecutionMixin:
 			execution_context = self._build_execution_context(browser_context)
 
 			# FIX (Jan 2026): Tool call rate limiting to prevent context overflow
-			# Limit parallel tool calls to prevent 60K+ token additions in a single step
-			MAX_TOOL_CALLS_PER_STEP = 3  # Allow up to 3 parallel calls
+			# Limit parallel tool calls to prevent 60K+ token additions in a single step.
+			# 2026-08-28 forensics: at 3 the cap fired on 175 prod steps in four days
+			# (319 deferred actions, 74% of them from 4-5-call steps); every deferral is
+			# a whole extra LLM round trip (~60k input tokens) to re-request work the
+			# model had already decided on. 5 covers the common read-only fan-out while
+			# keeping a hard ceiling on single-step context growth.
+			MAX_TOOL_CALLS_PER_STEP = 5  # Allow up to 5 parallel calls
 			actions_to_execute = model_output.action
 			deferred_actions = []
 
@@ -383,7 +388,7 @@ class StepExecutionMixin:
 						f"{len(deferred_actions)} tool calls were deferred to prevent context overflow:\n"
 						f"- {', '.join(deferred_names[:5])}"
 						f"{'...' if len(deferred_names) > 5 else ''}\n\n"
-						f"Process these in your next step, 1-3 at a time."
+						f"Process these in your next step, 1-{MAX_TOOL_CALLS_PER_STEP} at a time."
 					))
 				)
 

@@ -87,10 +87,23 @@ def resolve_tool_status(
     caps = caps or frozenset()
 
     if "money" in caps:
+        # ⚠️ Do NOT reintroduce "request it on the goal payload" here. A goal the
+        # agent creates itself can never carry a money tool: goal_create filters
+        # the whole money-SPEND set out (tools/goal_tools.py), deliberately, so
+        # an injected goal cannot launder itself into a trade. Naming that as
+        # the remedy sent the prod agent round a loop — try it, watch it get
+        # stripped, file "defi_trade not granted" as an owner ask, repeat — ~50
+        # times in two weeks. A refusal naming an impossible remedy is worse
+        # than one naming none.
         return ToolStatus(
             display, "gated", "money",
-            "money tools are explicit-grant-only — request it on the goal "
-            "payload or ask the owner to grant it at session creation")
+            "money tools are explicit-grant-only. A goal you create yourself can "
+            "NEVER carry one — goal_create strips money tools by design, so do "
+            "not retry by adding it to your own goal payload. Only the "
+            "owner/operator grants it: on a goal THEY seeded (the standing "
+            "trading cycle already carries it), or at session creation. If you "
+            "have a candidate and no grant, record it where the granted run will "
+            "read it and say so plainly — then escalate ONCE, not every run.")
 
     if is_leaf:
         from tools.controller.delegation import get_blocked_child_tools

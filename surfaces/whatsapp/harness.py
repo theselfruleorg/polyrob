@@ -48,9 +48,10 @@ def build_whatsapp_harness(container, task_agent, *, data_dir: str = "data"):
     surface = WhatsAppSurface(client)
     surface.attach_window(window)
 
-    router = container.get_service("message_router")
-    if router is not None:
-        router.subscribe("whatsapp", surface)
+    # 030 WS-B2: register_surface enforces the contract, joins the surface
+    # registry (so surface_profile() reaches the prompt) AND subscribes.
+    from core.surfaces.registry import register_surface
+    register_surface(container, surface)
 
     registry = container.get_service("webhook_surfaces") or {}
     registry["whatsapp"] = inbound

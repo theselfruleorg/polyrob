@@ -1,7 +1,7 @@
 """UP-06 — untrusted-tool-result wrapping (pure classifier + wrapper)."""
 import pytest
 
-from agents.task.agent.core.untrusted_wrap import (
+from core.security.untrusted_wrap import (
     UNTRUSTED_WRAP_MIN_CHARS,
     is_untrusted_tool,
     maybe_wrap,

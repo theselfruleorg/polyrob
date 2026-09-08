@@ -36,6 +36,10 @@ REPO = Path(__file__).resolve().parents[3]
 _DIRECT_ACTION_MODULES = (
     "tools/controller/action_registration.py",
     "tools/controller/tool_search_actions.py",
+    "tools/controller/insights_action.py",
+    "tools/controller/agent_status_action.py",  # extracted 2026-08-28 (status SSOT)
+    "tools/controller/autonomy_control_action.py",  # 031: owner pause/resume (extracted)
+    "tools/controller/doc_authoring.py",  # self_context_manage/owner_doc_manage (extracted 2026-09-08)
 )
 
 

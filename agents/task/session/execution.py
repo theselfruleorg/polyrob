@@ -281,10 +281,6 @@ class SessionExecutionMixin:
                     result = await agent.run(max_steps=max_steps)
                     end_time = time.time()
 
-                    # Track execution - include agent_type parameter
-                    agent_type = type(agent).__name__
-                    self.track_agent_execution(agent_id, agent_type, start_time, end_time)
-
                     # Store result
                     err_text = _terminal_error_text(result)
                     results[agent_id] = {

@@ -41,10 +41,56 @@ class JsonlAuditSink(list):
         self._path = path
         self._hwm_path = path + ".hwm"
         self._hwm = 0
+        #: Bytes of the JSONL already folded into the in-memory list. Advanced by
+        #: both `_load` and `append`, so `refresh()` reads only what ANOTHER writer
+        #: added and can never double-count this process's own entries.
+        self._offset = 0
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
         self._load()
+
+    def refresh(self) -> int:
+        """Fold in entries appended by another process; return how many.
+
+        The ledger is a single file shared by every wallet-touching process, but it
+        was read once at construction — so a second process (the owner running a
+        CLI trade while the daemon trades) computed its rolling-24h spend from a
+        snapshot taken at its own start and never saw the other's later spends.
+        Both could clear a nearly-exhausted daily cap. Reading forward from the
+        byte offset makes the durable file, not one process's memory, the shared
+        view. Fail-open: an I/O or parse error leaves the in-memory list intact.
+        """
+        try:
+            size = os.path.getsize(self._path)
+        except OSError:
+            return 0
+        if size <= self._offset:
+            # Truncation (size < offset) is the tamper case the high-water mark
+            # already reports loudly; don't silently re-read from 0 here.
+            return 0
+        added = 0
+        try:
+            with open(self._path, "r", encoding="utf-8") as fh:
+                fh.seek(self._offset)
+                for line in fh:
+                    if not line.endswith("\n"):
+                        break            # a partial line: another writer mid-append
+                    self._offset += len(line.encode("utf-8"))
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        list.append(self, json.loads(line))  # base append: no re-write
+                        added += 1
+                    except json.JSONDecodeError:
+                        continue
+        except OSError as e:
+            logger.warning("wallet audit sink refresh failed (%s): %s", self._path, e)
+            return added
+        if added:
+            self._hwm = max(self._hwm, len(self))
+        return added
 
     def _read_hwm(self) -> Optional[int]:
         try:
@@ -72,6 +118,10 @@ class JsonlAuditSink(list):
                             list.append(self, json.loads(line))  # base append: no re-write
                         except json.JSONDecodeError:
                             continue  # skip a corrupt line, keep the rest
+                try:
+                    self._offset = os.path.getsize(self._path)
+                except OSError:
+                    self._offset = 0
             except OSError as e:
                 logger.warning("wallet audit sink load failed (%s): %s", self._path, e)
         # Tamper check: a persisted high-water mark greater than what we recovered
@@ -94,6 +144,9 @@ class JsonlAuditSink(list):
         try:
             with open(self._path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
+            # Consume our own write so `refresh()` never re-reads it as another
+            # process's entry (which would double-count it against the cap).
+            self._offset = os.path.getsize(self._path)
         except OSError as e:
             logger.warning("wallet audit sink write failed (%s): %s", self._path, e)
         self._hwm = max(self._hwm, len(self))

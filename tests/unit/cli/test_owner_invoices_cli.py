@@ -135,3 +135,53 @@ def test_invoices_empty_still_works(tmp_path, monkeypatch):
     res = CliRunner().invoke(owner, ["invoices"])
     assert res.exit_code == 0
     assert "no invoices" in res.output
+
+
+# --- Task 9b: the no-`--user` path must survive metadata compaction --------
+# `owner.py`'s fallback query used to match `metadata LIKE '%"kind": "agent_invoice"%'`
+# — a spaced literal against `json.dumps`'s default spacing. ANY later
+# `json_set` on the row (e.g. the boot-time subscription dedup in
+# `modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index`)
+# re-serializes the WHOLE metadata blob COMPACTLY, which the spaced LIKE then
+# silently stopped matching — the owner's OWN invoice listing dropped the row.
+# `--user rob` (which delegates to `list_payment_requests`, already fixed in
+# Task 9 to use `json_extract`) is unaffected; this proves the OTHER path.
+
+def test_invoices_all_users_path_survives_metadata_compaction(tmp_path, monkeypatch):
+    db_path = tmp_path / "bot.db"
+
+    async def setup():
+        db = await _seed_db(db_path)
+        try:
+            inv = await invoicing.create_payment_request(
+                user_id="rob", session_id="s1", amount_usd=5.0,
+                purpose="compacted widget", db=db)
+            # Recompact the metadata blob exactly the way the boot-time
+            # subscription dedup does (modules/database/x402_tables.py).
+            await db.execute(
+                "UPDATE x402_payment_requests "
+                "SET metadata = json_set(metadata, '$.subscription_id', NULL) "
+                "WHERE id = ?",
+                (inv["request_id"],))
+            # Prove the recompaction actually happened: the OLD spaced-LIKE
+            # predicate this test guards against no longer matches this row
+            # at all — without this assertion the test would not demonstrate
+            # the bug's precondition, only the fix's postcondition.
+            still_spaced = await db.fetch_all(
+                "SELECT id FROM x402_payment_requests "
+                "WHERE id = ? AND metadata LIKE '%\"kind\": \"agent_invoice\"%'",
+                (inv["request_id"],))
+            assert still_spaced == [], (
+                "setup did not actually recompact the metadata blob — this "
+                "test would not be exercising the Task 9b bug"
+            )
+        finally:
+            await db.close()
+
+    asyncio.run(setup())
+    monkeypatch.setenv("DB_PATH", str(db_path))
+
+    res = CliRunner().invoke(owner, ["invoices"])
+    assert res.exit_code == 0
+    assert "compacted widget" in res.output
+    assert "no invoices" not in res.output

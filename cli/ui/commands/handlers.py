@@ -21,6 +21,10 @@ from cli.ui.commands.registry import (
     ReplExit,
 )
 
+# 030 extraction: /autonomy lives in h_autonomy.py; re-exported here for the
+# registry wiring and the legacy test import path.
+from cli.ui.commands.h_autonomy import _autonomy_snapshot, _h_autonomy  # noqa: E402,F401
+
 
 def _print_scrubbed(out, renderable) -> None:
     """Route a direct Rich print through the same secret scrub ``emit`` uses.
@@ -976,110 +980,6 @@ def _h_session(ctx: CommandContext) -> None:
     ctx.emit(candy.kv_lines(rows), title="session")
 
 
-def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
-    """Gather autonomy loop flags + open-goal / cron-job counts into structured data.
-
-    Only the flag-table assembly lives here; the goal/cron COUNTS come from
-    ``cli.ui.autonomy_poll.read_autonomy_snapshot``, which guards every store read
-    with ``os.path.exists`` — a missing ``cron.db``/``goals.db`` is skipped, never
-    CREATED (opening a store would mkdir/create the DB as a side effect; the
-    path-concerns landmine). Fail-open: a poll error degrades to zero counts
-    instead of raising into the REPL.
-    """
-    from agents.task.constants import AutonomyConfig, autonomy_enabled, local_mode_enabled
-    from cli.ui.autonomy_poll import read_autonomy_snapshot
-    from core.config_policy.policy import autonomy_mode_display, autonomy_posture
-
-    # 026 P0.5: CRON_ENABLED via its own runtime resolver (posture default
-    # honored); fail-open to off — the ticker gate lives in the tools tier.
-    try:
-        from tools.cronjob_tools import cron_enabled
-        cron_flag = bool(cron_enabled())
-    except Exception:
-        cron_flag = False
-
-    flags = [
-        ("self-wake", AutonomyConfig.self_wake_enabled()),
-        ("goals", AutonomyConfig.goals_enabled()),
-        ("curator", AutonomyConfig.curator_enabled()),
-        ("cron", cron_flag),
-        ("cron-run-loop", AutonomyConfig.cron_run_loop()),
-        ("background-review", AutonomyConfig.background_review_enabled()),
-    ]
-
-    try:
-        counts = read_autonomy_snapshot(user_id, data_dir) or {}
-    except Exception:  # fail-open: stores may not exist yet
-        counts = {}
-
-    try:
-        halted = bool(AutonomyConfig.autonomy_halted())
-    except Exception:
-        halted = False
-
-    return {
-        "local_mode": local_mode_enabled(),
-        "autonomy_enabled": autonomy_enabled(),
-        "mode_display": autonomy_mode_display(),
-        "posture": autonomy_posture(),
-        "halted": halted,
-        "flags": flags,
-        "cron_count": int(counts.get("cron", 0) or 0),
-        "goal_count": int(counts.get("goals", 0) or 0),
-    }
-
-
-def _h_autonomy(ctx: CommandContext) -> None:
-    """Show autonomy loop state + cron-job / open-goal counts (read-only)."""
-    from cli.ui import candy
-
-    # 026 P0.5: `/autonomy on` used to print the status panel and silently
-    # ignore the argument — error honestly and name the real write path.
-    if ctx.args:
-        ctx.emit(
-            f"/autonomy takes no arguments yet (got: {' '.join(ctx.args)}).\n"
-            "It is read-only today — to turn autonomy on/off use:\n"
-            "  /config set AUTONOMY_ENABLED true   (restart applies)\n"
-            "For an immediate freeze/unfreeze of all loops use "
-            "`polyrob owner halt` / `polyrob owner resume` (live, no restart).",
-            title="autonomy",
-        )
-        return
-
-    data_dir = "data"
-    try:
-        cfg = getattr(ctx.container, "config", None)
-        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
-    except Exception:
-        pass
-
-    snap = _autonomy_snapshot(ctx.user_id or "local", data_dir)
-
-    rows = [("local mode", "on" if snap["local_mode"] else "off"),
-            ("autonomy", "on" if snap["autonomy_enabled"] else "off"),
-            ("mode", snap.get("mode_display", "supervised")),
-            ("posture", snap.get("posture", "silent")),
-            ("halt", "HALTED — resume: polyrob owner resume"
-                     if snap.get("halted") else "off (live kill-switch: polyrob owner halt)")]
-    rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
-    lines = [candy.kv_lines(rows), ""]
-
-    lines.append(candy.section(f"cron jobs ({snap['cron_count']})"))
-    if snap["cron_count"]:
-        lines.append(f"{candy.GUTTER}/cron lists the schedule")
-
-    lines.append("")
-    lines.append(candy.section(f"goals (open: {snap['goal_count']})"))
-    if snap["goal_count"]:
-        lines.append(f"{candy.GUTTER}/goals lists them")
-
-    lines.append("")
-    lines.append(f"{candy.GUTTER}enable/disable: /config set AUTONOMY_ENABLED true|false "
-                 "(restart applies)")
-
-    ctx.emit("\n".join(lines), title="autonomy")
-
-
 def _h_verbose(ctx: CommandContext) -> None:
     """Toggle reasoning/expand verbosity on the renderer.
 
@@ -1244,6 +1144,17 @@ def _resolve_feed_dir(ctx: CommandContext, session_id: str) -> Optional[Path]:
 # ---------------------------------------------------------------------------
 # Additional slash command handlers (P1.5 REPL parity)
 # ---------------------------------------------------------------------------
+
+
+def _h_apps(ctx: CommandContext) -> None:
+    """Show the durable app service rows (032) — the same lines every owner seat renders."""
+    try:
+        from core.app_service.owner_ops import list_lines
+        from core.app_service.registry import AppServiceRegistry, default_app_services_db
+        lines = list_lines(AppServiceRegistry(default_app_services_db()), ctx.user_id or "local")
+        ctx.emit("\n".join(lines), title="apps")
+    except Exception as e:
+        ctx.emit(f"Apps: {e}", title="apps")
 
 
 def _h_goals(ctx: CommandContext) -> None:
@@ -1496,7 +1407,7 @@ def _h_telemetry(ctx: CommandContext) -> None:
     """
     import time as _time
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
     except Exception as e:
         ctx.emit(f"(event log unavailable: {e})")
         return
@@ -1704,6 +1615,9 @@ def build_default_registry() -> CommandRegistry:
         usage="[name-or-text]",
     ))
     reg.register(Command("sessions", _h_sessions, "List all known sessions"))
+    # NOTE (030 WS-C C2): /resume lifts the owner pause (mirrors
+    # `polyrob owner resume` + telegram /resume) — it is NO LONGER an alias of
+    # /replay. Session replay stays on its canonical /replay name.
     reg.register(
         Command(
             "replay",
@@ -1711,7 +1625,6 @@ def build_default_registry() -> CommandRegistry:
             "Replay a session's feed (visual history) — NOT a re-attach; continue a "
             "session with `polyrob run --resume <id>`",
             usage="<session-id>",
-            aliases=("resume",),
         )
     )
     reg.register(Command("history", _h_history, "Show this conversation's turns"))
@@ -1755,6 +1668,7 @@ def build_default_registry() -> CommandRegistry:
         help="show autonomy loops + scheduled cron jobs / open goals",
     ))
     reg.register(Command("goals", _h_goals, "Show goals board summary"))
+    reg.register(Command("apps", _h_apps, "Show deployed apps (032)"))
     reg.register(Command("subagents", _h_subagents, "Show delegation capability info"))
     reg.register(Command("todos", _h_todos, "Show workspace todos from todo.md"))
     reg.register(Command("logs", _h_logs, "Show recent log entries for this session"))
@@ -1799,6 +1713,72 @@ def build_default_registry() -> CommandRegistry:
         "pending", _h_pending,
         "Review the agent's pending self-evolution proposals (show/approve/reject)",
         usage="[show|approve|reject <kind> <id>]",
+    ))
+
+    # Owner control plane (030 WS-C C2 / finding G1): the owner pause and the
+    # money/admin verbs every OTHER owner seat already had. Thin renderers over
+    # the SAME core primitives `polyrob owner …` and telegram's owner admin
+    # call — see cli/ui/commands/h_owner.py.
+    from cli.ui.commands.h_owner import (
+        h_allow,
+        h_allowlist,
+        h_asks,
+        h_deny,
+        h_fulfill,
+        h_halt,
+        h_invoices,
+        h_pause,
+        h_settle,
+    )
+    from cli.ui.commands.h_owner import h_resume as _h_resume_autonomy
+    reg.register(Command(
+        "pause", h_pause,
+        "Pause autonomous work now (all, or scopes: trading streams planner cron social "
+        "oversight pings; `for 6h` makes it temporary)",
+        usage="[scope…] [for <N>m|h|d]",
+    ))
+    reg.register(Command(
+        "halt", h_halt,
+        "Alias of /pause — pause everything now",
+    ))
+    reg.register(Command(
+        "resume", _h_resume_autonomy,
+        "Lift the pause (all, or scopes)",
+        usage="[scope…]",
+    ))
+    reg.register(Command(
+        "asks", h_asks,
+        "List the agent's open asks (what it needs from you to unblock work)",
+        usage="[list]",
+    ))
+    reg.register(Command(
+        "fulfill", h_fulfill,
+        "Mark an ask fulfilled (unblocks its goals)",
+        usage="<id>",
+    ))
+    reg.register(Command(
+        "allow", h_allow,
+        "Allow the agent to send outbound messages to a target",
+        usage="<surface> <target>",
+    ))
+    reg.register(Command(
+        "deny", h_deny,
+        "Revoke outbound-send permission for a target",
+        usage="<surface> <target>",
+    ))
+    reg.register(Command(
+        "allowlist", h_allowlist,
+        "Show who the agent is allowed to message (outbound allowlist)",
+    ))
+    reg.register(Command(
+        "invoices", h_invoices,
+        "List agent invoices (x402 receivables)",
+        usage="[pending|completed|expired]",
+    ))
+    reg.register(Command(
+        "settle", h_settle,
+        "Attest an invoice as paid (pending -> completed)",
+        usage="<id> [tx-hash]",
     ))
 
     from cli.ui.commands.h_config import ConfigCtx, cmd_config

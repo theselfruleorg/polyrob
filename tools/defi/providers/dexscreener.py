@@ -29,18 +29,38 @@ def _f(value: Any) -> Optional[float]:
         return None
 
 
-def _checksum(addr: str) -> Optional[str]:
-    """Checksum a provider-supplied address, or None if it is malformed.
+def _our_chain(dexscreener_id: str) -> Optional[str]:
+    """Our chain name for a DexScreener chainId, or None if we do not carry it.
 
-    A provider returning a bad checksum is misbehaving, so the candidate is
-    dropped rather than trusted — but never silently, so a schema change or a
-    hostile response is diagnosable.
+    The reverse of the registry's ``dexscreener_id``. Needed because address
+    rules are per FAMILY and the payload only names the indexer's own id.
     """
-    from core.wallet.tokens import normalize_address
+    from core.wallet import chains
+    for row in chains.all_rows():
+        if row.dexscreener_id == dexscreener_id:
+            return row.name
+    return None
+
+
+def _canonical(addr: str, dexscreener_id: str) -> Optional[str]:
+    """Canonicalise a provider-supplied address for ITS chain, or None.
+
+    Family-dispatched. This was EIP-55 for everything, which was correct while
+    every row was EVM — but the moment a Solana row existed it would have
+    dropped every Solana candidate silently, while the search still reported
+    "searched: solana". A provider returning a bad address is misbehaving, so
+    the candidate is dropped rather than trusted — never silently, so a schema
+    change or a hostile response stays diagnosable.
+    """
+    chain = _our_chain(dexscreener_id)
+    if chain is None:
+        return None
+    from core.wallet.addresses import normalize_for_chain
     try:
-        return normalize_address(addr)
+        return normalize_for_chain(chain, addr)
     except ValueError as exc:
-        logger.debug("dexscreener: dropping malformed address %r (%s)", addr, exc)
+        logger.debug("dexscreener: dropping malformed address %r on %s (%s)",
+                     addr, dexscreener_id, exc)
         return None
 
 
@@ -85,7 +105,7 @@ def parse_search(payload: Optional[Dict[str, Any]],
             continue
         if allowed is not None and chain not in allowed:
             continue
-        addr = _checksum(raw_addr)
+        addr = _canonical(raw_addr, chain)
         if addr is None:
             continue
         liq = _f((pair.get("liquidity") or {}).get("usd")) or 0.0

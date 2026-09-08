@@ -12,6 +12,7 @@ sleep-then-check. Verified functionally (not just statically) against the live
 service: an already-past RESTART_TS is found within one 2s poll; a RESTART_TS with no
 matching new log line correctly times out at ~30s (not hung, not instant-fail).
 """
+import re
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,11 @@ def test_deploy_prod_polls_instead_of_fixed_sleep():
     code_lines = [l for l in text.splitlines() if not l.strip().startswith("#")]
     assert not any(l.strip() == "sleep 12" for l in code_lines), \
         "the old fixed-sleep verify window must be gone"
-    assert "for _ in $(seq 1 15)" in text
+    # The CONTRACT is "poll", not a specific window: c2f91eaf widened the poll
+    # from 15 to 30 iterations (60s) and this assertion pinned the old count,
+    # so a deliberate widening read as a regression. Assert the shape.
+    assert re.search(r"for _ in \$\(seq 1 \d+\)", text), \
+        "the verify step must poll in a loop"
     assert 'VERIFY_OK=1' in text and 'VERIFY_OK=0' in text
 
 
@@ -43,7 +48,8 @@ def test_deploy_from_local_polls_instead_of_fixed_sleep():
     text = _read("scripts/deploy_from_local.sh")
     # The restart line no longer bundles a fixed sleep before the is-active check.
     assert "sleep 12; systemctl is-active" not in text
-    assert 'for i in \\$(seq 1 15)' in text
+    assert re.search(r"for i in \\\$\(seq 1 \d+\)", text), \
+        "the remote verify step must poll in a loop"
     assert "RESTART_TS" in text
 
 

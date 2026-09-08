@@ -256,7 +256,7 @@ async def _invoke_judge(task_agent: Any, session_id: Optional[str], goal: Any,
             _t0 = _time.time()
             raw = await asyncio.wait_for(llm.ainvoke(msgs), timeout=timeout)
             try:
-                from agents.task.agent.core.aux_metering import meter_aux_llm
+                from modules.llm.aux_metering import meter_aux_llm
                 await meter_aux_llm(
                     usage_tracker=getattr(orchestrator, "usage_tracker", None),
                     user_id=getattr(goal, "user_id", None),

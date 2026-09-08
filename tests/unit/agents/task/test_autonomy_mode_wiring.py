@@ -16,10 +16,10 @@ CASES = [
     # (import path, callable, env var)
     ("agents.task.constants", "message_autonomous_allowlisted", "MESSAGE_AUTONOMOUS_ALLOWLISTED"),
     ("tools.twitter_tool", "twitter_write_enabled", "TWITTER_ENABLED"),
-    ("agents.task.surface_config", "SurfaceConfig.email_surface_enabled", "EMAIL_SURFACE_ENABLED"),
-    ("agents.task.surface_config", "SurfaceConfig.group_chat_enabled", "GROUP_CHAT_ENABLED"),
-    ("agents.task.surface_config", "SurfaceConfig.correspondent_access_enabled", "CORRESPONDENT_ACCESS_ENABLED"),
-    ("agents.task.surface_config", "SurfaceConfig.correspondent_reply_enabled", "CORRESPONDENT_REPLY_ENABLED"),
+    ("core.surfaces.config", "SurfaceConfig.email_surface_enabled", "EMAIL_SURFACE_ENABLED"),
+    ("core.surfaces.config", "SurfaceConfig.group_chat_enabled", "GROUP_CHAT_ENABLED"),
+    ("core.surfaces.config", "SurfaceConfig.correspondent_access_enabled", "CORRESPONDENT_ACCESS_ENABLED"),
+    ("core.surfaces.config", "SurfaceConfig.correspondent_reply_enabled", "CORRESPONDENT_REPLY_ENABLED"),
     ("tools.x402", "x402_invoicing_enabled", "X402_INVOICE_ENABLED"),
 ]
 
@@ -55,7 +55,7 @@ def test_explicit_env_off_wins_over_mode(monkeypatch, path, name, env):
 
 
 def test_require_approval_inverts_under_autonomous(monkeypatch):
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     monkeypatch.delenv("CORRESPONDENT_REQUIRE_APPROVAL", raising=False)
     monkeypatch.delenv("AUTONOMY_MODE", raising=False)
     assert SurfaceConfig.correspondent_require_approval() is True   # supervised: ON

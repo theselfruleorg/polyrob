@@ -123,7 +123,7 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
         autonomy_handles = None
 
     # --- Resolve which surfaces are enabled ---
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     tg_enabled = SurfaceConfig.telegram_surface_enabled()
     wa_enabled = SurfaceConfig.whatsapp_surface_enabled()

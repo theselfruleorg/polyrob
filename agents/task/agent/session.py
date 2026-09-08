@@ -496,6 +496,24 @@ class SessionManager:
             self.logger.info(f"Session {session_id}: {from_status} → {to_status}")
             return True
 
+    def update_session_request(self, session_id: str, request: Dict[str, Any]) -> bool:
+        """Replace the persisted ``request`` block (task/max_steps/...) of a
+        session — 031: used to narrow a FINISHED session's task before a
+        correspondent reply recreates it. Persists the metadata file."""
+        with self._lock:
+            session_id = pm().clean_session_id(session_id)
+            info = self._sessions.get(session_id)
+            if info is None:
+                self.logger.warning(f"Cannot update request for non-existent session {session_id}")
+                return False
+            info['request'] = dict(request or {})
+            info['updated_at'] = datetime.now().isoformat()
+            try:
+                self._save_metadata(session_id, info.get('user_id'))
+            except Exception as e:
+                self.logger.warning(f"update_session_request: metadata save failed: {e}")
+            return True
+
     def get_session_info(self, session_id: str) -> Dict:
         """Get session information."""
         with self._lock:

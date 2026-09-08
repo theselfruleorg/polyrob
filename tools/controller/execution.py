@@ -41,7 +41,7 @@ class ExecutionMixin:
 		log. The governance surface was logged but never telemetered (audit
 		2026-07-04). Fail-open — telemetry must never break tool execution."""
 		try:
-			from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+			from core.event_log import get_event_log, event_log_enabled
 			if not event_log_enabled():
 				return
 			uid = getattr(execution_context, "user_id", None) or ""
@@ -130,6 +130,13 @@ class ExecutionMixin:
 			except Exception as e:
 				self.logger.warning(f"Browser context setup failed: {e}")
 
+		# 033 T0.1: bind the batch's tenant so a context-less emitter downstream
+		# (PolicyGate -> wallet_spend, the effect recorder) can still attribute its
+		# row. An explicit user_id ALWAYS wins; this is only the fallback.
+		from core.exec_identity import reset_exec_identity, set_exec_identity
+		_ident_token = set_exec_identity(
+			getattr(execution_context, 'user_id', '') or '',
+			getattr(execution_context, 'session_id', '') or '')
 		try:
 			action_count = len(actions)
 			self.logger.info(f"Executing {action_count} actions")
@@ -361,6 +368,8 @@ class ExecutionMixin:
 					include_in_memory=True
 				))
 			return results
+		finally:
+			reset_exec_identity(_ident_token)
 
 	async def _observe_error_result(self, action_type, action_params, result, execution_context):
 		"""Run the transform + post tool-call hooks on an error/timeout result, mirroring

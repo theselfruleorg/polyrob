@@ -13,7 +13,6 @@ from starlette.responses import Response
 
 from api.models import ErrorResponse, RateLimitInfo
 from core.rate_limit import FixedWindowCounter, TokenBucket
-from core.permissions import Permissions
 from utils.bounded_collections import BoundedDict
 
 
@@ -190,14 +189,12 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         self,
         app,
         secret_key: Optional[str] = None,
-        permissions_manager: Optional[Permissions] = None
     ):
         """Initialize authentication middleware.
 
         Args:
             app: The ASGI application
             secret_key: Secret key for token validation (REQUIRED)
-            permissions_manager: Optional permissions manager
 
         Raises:
             ValueError: If secret_key is not provided
@@ -212,7 +209,6 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
             )
         self.secret_key = secret_key
 
-        self.permissions = permissions_manager
         self.logger = logger
 
         # Cache for validated tokens

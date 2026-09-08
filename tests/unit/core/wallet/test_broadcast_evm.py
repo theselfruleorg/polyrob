@@ -71,11 +71,22 @@ def test_rail_builds_for_ethereum_with_its_own_pinned_id():
     assert r.chain_id == 1
 
 
-def test_rail_refuses_a_data_only_chain_at_construction():
-    """Robinhood is readable, but no swap route or price feed is verified
-    there — a rail that cannot build an honest transaction refuses early."""
-    with pytest.raises(ValueError, match="robinhood"):
-        rail.EvmRail(chain="robinhood", signer=_signer())
+def test_rail_refuses_a_data_only_chain_at_construction(monkeypatch):
+    """A chain whose row is not money-verified gets no rail at all.
+
+    Proved against a STRIPPED row rather than a named chain: every EVM row is
+    money-enabled since 029 §4 armed Arbitrum, Polygon and Robinhood, so a test
+    that names "the read-only one" rots the moment that list changes. The
+    property is what matters — the rail asks the registry and refuses by name.
+    """
+    import dataclasses
+    from core.wallet import chains
+    bare = dataclasses.replace(chains.get("base"), name="dataonly",
+                               money_enabled=False)
+    monkeypatch.setattr(chains, "get",
+                        lambda n: bare if n == "dataonly" else None)
+    with pytest.raises(ValueError, match="read-only"):
+        rail.EvmRail(chain="dataonly", signer=_signer())
 
 
 def test_the_rail_reads_the_endpoint_for_ITS_chain_not_base(monkeypatch):
@@ -199,8 +210,12 @@ def test_size_gas_without_a_measurement_keeps_the_default(monkeypatch):
 
 
 def test_size_gas_caps_the_margin_at_the_max_gas_limit(monkeypatch):
+    """The x1.5 margin is clamped by the ceiling, never allowed past it.
+    Expressed against MAX_GAS_LIMIT rather than a literal so the intent survives
+    the ceiling moving (500k -> 2M in 2026-08-25 for aggregator routes)."""
     r, tx = _built_tx(monkeypatch)
-    assert r.size_gas(tx, 400_000)["gas"] == rail.MAX_GAS_LIMIT
+    just_under = rail.MAX_GAS_LIMIT - 1
+    assert r.size_gas(tx, just_under)["gas"] == rail.MAX_GAS_LIMIT
 
 
 def test_size_gas_refuses_a_tx_the_cap_cannot_hold(monkeypatch):
@@ -260,10 +275,50 @@ def test_receipt_timeout_is_pending_not_success(monkeypatch):
     assert rec.tx_hash.startswith("0x")
 
 
-def test_a_read_only_chain_is_refused_at_construction():
-    """Arbitrum is a KNOWN chain (venue balances are read there) but nothing
-    about its money path is verified, so no rail may exist for it. Was
-    "unknown chain" when the rail was base-only; the refusal survives the
-    multi-chain rewrite, only its reason got more precise."""
+def test_a_read_only_chain_is_refused_at_construction(monkeypatch):
+    """A chain whose row is not money-verified gets no rail at all.
+
+    Proved against a STRIPPED row rather than a named chain: every EVM row is
+    money-enabled since 029 §4 armed Arbitrum, Polygon and Robinhood, so a test
+    that names "the read-only one" rots the moment that list changes. The
+    property is what matters — the rail asks the registry and refuses by name.
+    """
+    import dataclasses
+    from core.wallet import chains
+    bare = dataclasses.replace(chains.get("base"), name="dataonly",
+                               money_enabled=False)
+    monkeypatch.setattr(chains, "get",
+                        lambda n: bare if n == "dataonly" else None)
     with pytest.raises(ValueError, match="read-only"):
-        rail.EvmRail(chain="arbitrum", signer=_signer())
+        rail.EvmRail(chain="dataonly", signer=_signer())
+
+
+def test_a_realistic_aggregator_route_can_be_sized():
+    """1.11M gas measured live through a LI.FI Diamond multi-hop."""
+    r = rail.EvmRail(chain="base", signer=_signer())
+    tx = {"maxFeePerGas": 6_000_000, "gas": rail.DEFAULT_GAS_LIMIT}
+    sized = r.size_gas(tx, 1_110_000)
+    assert sized["gas"] >= 1_110_000, "must cover what the simulation actually used"
+
+
+def test_the_gas_ceiling_still_refuses_an_absurd_simulation():
+    """Still an anomaly brake: a simulation past the ceiling refuses outright
+    rather than broadcasting something that out-of-gas reverts and burns the fee."""
+    r = rail.EvmRail(chain="base", signer=_signer())
+    with pytest.raises(rail.GasCeilingExceeded):
+        r.size_gas({"maxFeePerGas": 6_000_000}, rail.MAX_GAS_LIMIT + 1)
+
+
+def test_the_fee_ceiling_is_the_real_economic_bound_not_the_gas_ceiling():
+    """A gas limit the chain's fee ceiling cannot pay for is still refused —
+    which is why raising MAX_GAS_LIMIT does not widen what a trade can cost."""
+    r = rail.EvmRail(chain="base", signer=_signer())
+    with pytest.raises(rail.GasCeilingExceeded, match="ceiling"):
+        # 1.5M gas at 100 gwei = 0.15 ETH, far above Base's 0.002 ETH ceiling.
+        r.size_gas({"maxFeePerGas": 100_000_000_000}, 1_000_000)
+
+
+def test_an_ordinary_v3_swap_is_unaffected():
+    r = rail.EvmRail(chain="base", signer=_signer())
+    sized = r.size_gas({"maxFeePerGas": 6_000_000}, 160_000)
+    assert sized["gas"] == 240_000, "x1.5 margin, exactly as before"

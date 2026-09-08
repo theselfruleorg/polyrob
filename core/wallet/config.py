@@ -37,24 +37,89 @@ class WalletConfig:
     operational_venue: str = "treasury"
 
 
-def _opt_float(env: Mapping[str, str], key: str) -> Optional[float]:
-    # Delegates to the SSOT value parser — which also rejects inf/nan, so a
-    # WALLET_*_CAP_USD=inf can't become a ceiling that never trips.
-    return _parse_opt_float(env.get(key))
+#: Rolling-24h aggregate spend bound. FINITE by default (H3): the per-tx ceiling
+#: is a catastrophe stop, not a budget, and it cannot stop a within-ceiling loop.
+DEFAULT_DAILY_CAP_USD = 100.0
+#: Per-transaction catastrophe stop. Was 1000.0; lowered because $1000 in one
+#: transaction is not "catastrophe-only" on this treasury.
+DEFAULT_MAX_PER_TX_USD = 250.0
+
+#: Explicit "no aggregate bound" sentinels. Absence used to mean this; now the
+#: operator has to write it, so the decision is visible in the env file.
+#: NOTE "0" is deliberately NOT a sentinel (controller ruling R5): it reads as
+#: "no spend permitted" at least as naturally as "no cap", and a money flag must
+#: never guess. WALLET_DAILY_CAP_USD=0 is a literal $0 cap that refuses all spend.
+_CAP_DISABLED = frozenset({"none", "off", "unlimited", "disabled"})
+
+
+def _cap_float(env: Mapping[str, str], key: str, default: float) -> Optional[float]:
+    """Money cap parse: unset/blank -> *default*; an explicit disable sentinel ->
+    None (no cap); anything else must be a finite, non-negative number or raise
+    naming *key* and the offending value.
+
+    H3-sub (audit 2026-08-22): the old `_opt_float` returned None on garbage, so a
+    typo'd `WALLET_DAILY_CAP_USD=1O0` silently meant NO CAP while the owner
+    believed one was active. The per-tx ceiling already raised loudly; this is
+    parity for the aggregate cap. Minor 4 (fix round 1, 2026-08-22 review): a
+    negative cap is never meaningful (there is no such thing as "spend less
+    than nothing") — refuse it the same way, rather than silently accepting a
+    ceiling that can never be reached.
+    """
+    raw = env.get(key)
+    if raw is None or not str(raw).strip():
+        return default
+    if str(raw).strip().lower() in _CAP_DISABLED:
+        return None
+    val = _parse_opt_float(raw)
+    if val is None:
+        raise ValueError(f"{key} is not a finite number: {raw!r}")
+    if val < 0:
+        raise ValueError(f"{key} must not be negative: {raw!r}")
+    return val
 
 
 def _req_float(env: Mapping[str, str], key: str, default: float) -> float:
     """Loud float parse for money ceilings: unset/blank -> *default*; set but
-    non-numeric OR non-finite -> ValueError naming the key. The CLI wallet
-    view's misconfig branch (M12) RELIES on this raise to tell the owner which
-    env key is broken — a silent fallback here would turn a typo'd cap into
-    the $1000 default without anyone noticing."""
+    non-numeric, non-finite, OR negative -> ValueError naming the key. The CLI
+    wallet view's misconfig branch (M12) RELIES on this raise to tell the
+    owner which env key is broken — a silent fallback here would turn a
+    typo'd cap into the default without anyone noticing. Minor 4 (fix round
+    1, 2026-08-22 review): a negative ceiling is never meaningful."""
     raw = env.get(key)
     if raw is None or not str(raw).strip():
         return default
     val = _parse_opt_float(raw)
     if val is None:
         raise ValueError(f"{key} is not a finite number: {raw!r}")
+    if val < 0:
+        raise ValueError(f"{key} must not be negative: {raw!r}")
+    return val
+
+
+def _venue_cap_float(env: Mapping[str, str], key: str) -> Optional[float]:
+    """Per-venue cap parse (``WALLET_VENUE_DAILY_CAP_<VENUE>_USD``): unset/
+    blank -> None (no venue-specific cap — there is no built-in per-venue
+    default, absence already means "global daily cap only"); an explicit
+    disable sentinel -> also None, same effect, so an operator can say so
+    explicitly for clarity; anything else must be a finite, non-negative
+    number or raise naming *key* and the offending value.
+
+    Minor 2 (fix round 1, 2026-08-22 review): this was the LAST silent-cap-
+    drop in the file — the old `_opt_float` made
+    `WALLET_VENUE_DAILY_CAP_HYPERLIQUID_USD=1O0` silently drop that venue's
+    cap entirely (parsed to None, indistinguishable from "no cap set"), one
+    function away from the H3 fix applied to the daily/per-tx caps above.
+    """
+    raw = env.get(key)
+    if raw is None or not str(raw).strip():
+        return None
+    if str(raw).strip().lower() in _CAP_DISABLED:
+        return None
+    val = _parse_opt_float(raw)
+    if val is None:
+        raise ValueError(f"{key} is not a finite number: {raw!r}")
+    if val < 0:
+        raise ValueError(f"{key} must not be negative: {raw!r}")
     return val
 
 
@@ -65,7 +130,7 @@ def _load_per_venue_caps(env: Mapping[str, str]) -> Dict[str, float]:
     for key in env:
         if key.startswith(prefix) and key.endswith(suffix):
             venue = key[len(prefix):-len(suffix)].lower()
-            val = _opt_float(env, key)
+            val = _venue_cap_float(env, key)
             if venue and val is not None:
                 caps[venue] = val
     return caps
@@ -76,13 +141,27 @@ def effective_daily_cap_usd(user_id: Optional[str], home_dir,
     """Owner's rolling-24h wallet spend cap: pref (min-merged, spec
     ``budget.wallet_daily_usd``) over ``WALLET_DAILY_CAP_USD``.
 
-    ``WALLET_DAILY_CAP_USD`` unset means "no cap" (legacy) — that is NOT a
-    ceiling of 0, so it is passed as ``env_value=None`` (not folded through a
-    default) so a pref ALONE can still set a cap when the operator set none.
-    No pref file present => byte-identical to ``load_wallet_config(env).daily_cap_usd``
-    (owner-UX P1 T4). Wired into ``load_wallet_config`` -> ``PolicyGate`` (G-13)."""
+    H3 (2026-08-22): ``WALLET_DAILY_CAP_USD`` now has a FINITE default
+    (``DEFAULT_DAILY_CAP_USD``), so the env leg passed to the min-merge is the
+    *resolved* value (default when unset, an explicit sentinel's ``None`` when
+    the operator genuinely disabled it, or the parsed number) — never a bare
+    ``None`` standing in for "unset". Passing the resolved default here (not
+    ``None``) is what stops a pref ALONE from raising the effective cap above
+    the default: with ``env_value=100.0`` and a wider pref of ``500.0``, the
+    "min" merge below still resolves 100.0, not 500.0. A pref can still SET a
+    cap where the operator explicitly disabled one (``env_value=None`` when the
+    sentinel is used) — that is still only ever a tightening, from unlimited.
+    No pref file present => byte-identical to
+    ``load_wallet_config(env).daily_cap_usd`` (owner-UX P1 T4). Wired into
+    ``load_wallet_config`` -> ``PolicyGate`` (G-13)."""
     from core import prefs
-    env_value = _opt_float(os.environ if env is None else env, "WALLET_DAILY_CAP_USD")
+    env_value = _cap_float(os.environ if env is None else env,
+                           "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
+    # `default=None` (not DEFAULT_DAILY_CAP_USD) is deliberate: this fallback
+    # only fires when env_value IS None, which — now that unset resolves
+    # through the default above — happens ONLY when the operator wrote an
+    # explicit disable sentinel. Respect that: with no pref file either, the
+    # cap stays genuinely disabled, not silently reinstated at the default.
     return prefs.resolve("budget.wallet_daily_usd", user_id, home_dir,
                          env_value=env_value, default=None)
 
@@ -93,14 +172,14 @@ def effective_max_per_tx_usd(user_id: Optional[str], home_dir,
     ``budget.wallet_per_tx_usd``) over ``AGENT_WALLET_MAX_PER_TX_USD``.
 
     Unlike :func:`effective_daily_cap_usd`, the env leg here is ALWAYS a
-    concrete value (the $1000 catastrophic-loss safety default when unset —
-    not a "no cap" sentinel), so this is a pure min-merge: a pref can only
-    lower it further, never widen it via a None-passthrough. No pref file
-    present => byte-identical to ``load_wallet_config(env).max_per_tx_usd``
-    (owner-UX G-13)."""
+    concrete value (the $250 catastrophic-loss safety default when unset —
+    not a "no cap" sentinel; H3 2026-08-22, was $1000), so this is a pure
+    min-merge: a pref can only lower it further, never widen it via a
+    None-passthrough. No pref file present => byte-identical to
+    ``load_wallet_config(env).max_per_tx_usd`` (owner-UX G-13)."""
     from core import prefs
     env_value = _req_float(os.environ if env is None else env,
-                           "AGENT_WALLET_MAX_PER_TX_USD", 1000.0)
+                           "AGENT_WALLET_MAX_PER_TX_USD", DEFAULT_MAX_PER_TX_USD)
     return prefs.resolve("budget.wallet_per_tx_usd", user_id, home_dir,
                          env_value=env_value, default=env_value)
 
@@ -146,10 +225,16 @@ def load_wallet_config(env: Optional[Mapping[str, str]] = None, *,
     env = os.environ if env is None else env
     network = env.get("AGENT_WALLET_NETWORK", "testnet").strip().lower()
     # Safety default: a catastrophic per-tx ceiling, NOT a budget. Was
-    # $1,000,000 (a typo could drain funds); raise it explicitly if needed.
-    max_per_tx_usd = _req_float(env, "AGENT_WALLET_MAX_PER_TX_USD", 1000.0)
-    # Rolling 24h spend cap; unset = disabled = legacy behavior (per-tx ceiling only).
-    daily_cap_usd = _opt_float(env, "WALLET_DAILY_CAP_USD")
+    # $1,000,000, then $1000 (H3, 2026-08-22: $1000 in one transaction is not
+    # "catastrophe-only" on this treasury); raise it explicitly if needed.
+    max_per_tx_usd = _req_float(env, "AGENT_WALLET_MAX_PER_TX_USD", DEFAULT_MAX_PER_TX_USD)
+    # H3 (2026-08-22): rolling 24h spend cap now has a FINITE default — the
+    # per-tx ceiling is a catastrophe stop, not a budget, and cannot alone stop
+    # a within-ceiling loop draining the treasury one ticket at a time (x402's
+    # idempotency key is URL-keyed, so a loop mints a fresh key every
+    # iteration). WALLET_DAILY_CAP_USD=none/off/unlimited/disabled restores the
+    # old unbounded behaviour explicitly; a set-but-unparseable value raises.
+    daily_cap_usd = _cap_float(env, "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
     resolved_user = user_id if user_id is not None else _fail_open_owner_user_id()
     resolved_home = home_dir if home_dir is not None else _fail_open_home_dir()
     try:

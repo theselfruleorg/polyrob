@@ -46,17 +46,24 @@ def resolve_job_provider(payload: Optional[dict]) -> tuple:
     alive, else the first live credentialed provider — or ``(None, True)`` when
     nothing can, which is the only case where skipping a paid tick is honest.
     """
-    from core.runtime_config import resolve_live_provider
+    from core.runtime_config import operator_provider_pin, resolve_live_provider
     from core.credit_sentinel import credit_sentinel_active
     pinned = (payload or {}).get("provider")
-    live = resolve_live_provider(pinned)
+    # An UNPINNED job (payload={}) must prefer the operator's serving pin
+    # (CHAT_PROVIDER > DEFAULT_PROVIDER), exactly as goal dispatch does. Without
+    # it the resolver falls to canonical order — on prod that was credit-dead
+    # OpenRouter, so every status/exit-monitor tick 402'd first, fell back
+    # in-session, and re-tripped the credit sentinel every 6h (2026-08-24..28:
+    # 1,323 402 lines, five false credit alerts to the owner).
+    preferred = pinned or operator_provider_pin()
+    live = resolve_live_provider(preferred)
     if live is not None:
         return (live, False)
     # Nothing resolved live. Skip a PAID tick only when the sentinel is genuinely
     # tripped — an unknown credential picture is not evidence of credit death.
-    if credit_sentinel_active(pinned):
+    if credit_sentinel_active(preferred):
         return (None, True)
-    return (pinned, False)
+    return (preferred, False)
 
 
 def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
@@ -64,7 +71,7 @@ def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     lifecycle queryable in the uniform autonomy/governance stream, not just the
     episodes table (telemetry audit 2026-07-04)."""
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if event_log_enabled():
             get_event_log().record(
                 "cron_run", user_id=getattr(job, "user_id", ""),
@@ -135,6 +142,12 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
         # BEFORE the wake/change gates. Fail-open (a compose/deliver error is a
         # $0 no-op, not a job failure) so a persistent hiccup can't spin.
         if payload.get("digest"):
+            # 031: a full owner pause holds the digest too (it is the owner's own
+            # $0 report, so only the `all` scope holds it — a `cron` pause keeps it).
+            from core.autonomy_control import allows as _allows
+            if not _allows("digest").allowed:
+                _cron_ev(job, "skipped", "paused_digest")
+                return True
             try:
                 from cron.digest import digest_enabled_for, run_digest
                 # owner-UX P1 T4: user_id + data_dir are already in scope right
@@ -149,17 +162,14 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             except Exception:
                 logger.warning("cron job %s: digest tick failed", job.id, exc_info=True)
             return True
-        # G-35 owner kill-switch: AutonomyConfig.autonomy_halted() (AUTONOMY_HALT env
-        # or a halt-file, togglable without a restart) is honored by goal dispatch
-        # (dispatcher.py) but was never referenced here — a paid cron tick kept
-        # firing straight through a halt. Checked FIRST, before any of the paid-work
-        # gates below. The digest branch above stays exempt: it is $0 by
-        # construction and is the owner's OWN report (an owner who halted autonomy
-        # still wants their digest, not silence about why nothing else ran).
-        from core.config_policy import AutonomyConfig
-        if AutonomyConfig.autonomy_halted():
-            logger.warning("cron job %s: AUTONOMY_HALT active — $0 skip, agent not invoked", job.id)
-            _cron_ev(job, "skipped", "halted")
+        # 031 owner pause: ONE predicate (the legacy halt file/env are facets of
+        # it). Checked FIRST, before any of the paid-work gates below — a paid
+        # cron tick used to fire straight through a halt (G-35).
+        from core.autonomy_control import allows as _allows
+        _dec = _allows("cron_run")
+        if not _dec.allowed:
+            logger.warning("cron job %s: %s — $0 skip, agent not invoked", job.id, _dec.reason)
+            _cron_ev(job, "skipped", "paused")
             return True
         # Task 14 (Phase 3 R5): a watchtower cron job carrying
         # payload.subscription_id $0-skips once its subscription lapses.
@@ -215,18 +225,22 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 _cron_ev(job, "skipped", "credit_sentinel")
                 return True
             if _live and _live != _pinned:
-                # A stored pin is a preference, not a death pact. Prod's digest job
-                # froze provider="zai-coding" into its payload on 2026-07-19; when
-                # that account hit its weekly cap the job stopped for 37 hours even
-                # though a second credentialed provider was configured throughout.
-                logger.info("cron job %s: pinned provider %s is unavailable — routing to %s",
-                            job.id, _pinned or "(none)", _live)
                 payload = dict(payload or {})
                 payload["provider"] = _live
-                # The model belongs to the provider that was pinned; drop it so the
-                # run fills a model that the NEW provider actually serves.
-                payload.pop("model", None)
-                _cron_ev(job, "provider_rerouted", _live)
+                if _pinned:
+                    # A stored pin is a preference, not a death pact. Prod's digest
+                    # job froze provider="zai-coding" into its payload on 2026-07-19;
+                    # when that account hit its weekly cap the job stopped for 37
+                    # hours even though a second credentialed provider was
+                    # configured throughout.
+                    logger.info("cron job %s: pinned provider %s is unavailable — routing to %s",
+                                job.id, _pinned, _live)
+                    # The model belongs to the provider that was pinned; drop it so
+                    # the run fills a model that the NEW provider actually serves.
+                    payload.pop("model", None)
+                    _cron_ev(job, "provider_rerouted", _live)
+                # Unpinned: `_live` is simply the operator pin (or its live
+                # stand-in) — not a reroute, so no event and no log line.
         except Exception:
             logger.debug("cron job %s: provider liveness check skipped", job.id, exc_info=True)
         ok = False

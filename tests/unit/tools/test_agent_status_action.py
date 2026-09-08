@@ -236,11 +236,15 @@ async def test_agent_status_everything_down_still_answers(monkeypatch):
     action = c.registry.registry.actions["agent_status"]
     result = await action.function(action.param_model(), execution_context=None)
     text = result.extracted_content
-    assert "steps:" not in text
-    assert "tools:" not in text
-    assert "wallet:" not in text
-    assert "net:" not in text  # ledger
+    # 2026-08-28 status SSOT: dark organs are REPORTED, never hidden.
+    assert "steps: unavailable" in text
+    assert "tools: unavailable" in text
+    assert "wallet: unavailable" in text
+    assert "net:" not in text  # the ledger statements themselves never render
     assert "config:" in text
+    # 031: the pause line leads every seat (the agent's own view included), THEN health
+    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "autonomy: unavailable"))
+    assert text.splitlines()[1].startswith("Health:")
     assert result.error is None
 
 
@@ -366,14 +370,20 @@ async def test_agent_status_total_blackout_composition(monkeypatch, tmp_path):
     action = c.registry.registry.actions["agent_status"]
     result = await action.function(action.param_model(), execution_context=None)
     text = result.extracted_content
-    assert "steps:" not in text
-    assert "tools:" not in text
-    assert "wallet:" not in text
-    assert "net:" not in text  # ledger
+    # 2026-08-28 status SSOT: soft means REPORTED, not hidden — every dark
+    # organ renders as `<section>: unavailable (<reason>)`, never vanishes.
+    assert "steps: unavailable" in text
+    assert "tools: unavailable" in text
+    assert "wallet: unavailable" in text
+    assert "ledger: unavailable" in text
+    assert "net:" not in text  # the ledger statements themselves never render
     assert "config: unavailable" in text
     # config unavailable => the posture/autonomy_loops lines never got built either.
-    assert "posture:" not in text
     assert "autonomy_loops:" not in text
+    # and the shared health block leads the report on every path
+    # 031: the pause line leads every seat (the agent's own view included), THEN health
+    assert text.startswith(("▶ RUNNING", "⏸ PAUSED", "autonomy: unavailable"))
+    assert text.splitlines()[1].startswith("Health:")
     assert result.error is None
 
 

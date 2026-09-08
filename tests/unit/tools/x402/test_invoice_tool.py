@@ -116,6 +116,37 @@ def test_accounting_action(monkeypatch):
     assert "income" in res.extracted_content and "net" in res.extracted_content
     assert "Runtime cost" in res.extracted_content   # both statements render
     assert seen["include_balances"] is True          # display surface requests balances
+    # §5.2: the agent's own money view states the receive rail, so "we need an
+    # x402 endpoint" can never come back as an agent goal.
+    assert "receive rail:" in res.extracted_content
+
+
+def test_accounting_receive_rail_footer_is_fail_open(monkeypatch):
+    """A broken rail summary must never break the ledger view."""
+    async def fake_build(user_id, **kw):
+        return {"user_id": "rob", "window_days": 7, "llm_api_cost_usd": 0.0,
+                "credits_spent": 0.0, "llm_calls": 0, "wallet_spend_usd": 0.0,
+                "wallet_payments": 0, "settled_payments": 0,
+                "pending_invoices_usd": 0.0, "pending_invoices": 0,
+                "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
+                             "pending_count": 0, "balance_usd": None, "net_usd": 0.0,
+                             "available": True},
+                "runtime": {"spend_window_usd": 0.0, "spend_total_usd": 0.0,
+                            "calls_window": 0, "calls_total": 0,
+                            "provider_balance_usd": None, "available": True}}
+
+    import modules.credits.unified_ledger as ul
+    import modules.x402.x402_integration as xi
+
+    def boom():
+        raise RuntimeError("summary exploded")
+
+    monkeypatch.setattr(ul, "build_ledger", fake_build)
+    monkeypatch.setattr(xi, "receive_rail_summary", boom)
+    res = asyncio.run(X402InvoiceTool().accounting(
+        AccountingParams(days=7), execution_context=_Ctx()))
+    assert res.error is None
+    assert "Runtime cost" in res.extracted_content
 
 
 def test_invoices_action_empty(monkeypatch):
@@ -161,7 +192,7 @@ def test_invoice_card_flag_off_result_unchanged(monkeypatch, tmp_path):
         execution_context=_CtxWithWorkspace(tmp_path)))
     assert res.error is None
     assert "invoice card:" not in res.extracted_content
-    # byte-identical to the pre-Task-6 result shape
+    # exact no-card result shape (tail updated by W1.4, 2026-08-21)
     assert res.extracted_content == (
         "Payment request created.\n"
         "  request_id: inv_card1\n"
@@ -169,7 +200,9 @@ def test_invoice_card_flag_off_result_unchanged(monkeypatch, tmp_path):
         "  pay to: 0xT\n"
         "  purpose: widget\n"
         "  expires: epoch 123\n"
-        "Share these instructions with the payer (e.g. via the message tool). "
+        "Deliver these instructions to the payer with the message tool — "
+        "e.g. message(surface=<surface>, target=<payer address>, "
+        "text=<the instructions above>). "
         "You will be woken in this session when it settles."
     )
 
@@ -193,6 +226,47 @@ def test_invoice_card_flag_on_renders_and_appends_path(monkeypatch, tmp_path):
     assert card_path.is_file()
     assert card_path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
     assert str(tmp_path) in str(card_path)
+
+
+# W1.4 (2026-08-21): the result teaches the concrete delivery step — the
+# message-tool call — instead of the vague "share these instructions", so the
+# agent reliably closes the invoice->payer gap through the ONE gated outbound
+# choke point (seeding/approval/taint all live on the message tool).
+
+def test_result_teaches_concrete_message_delivery_no_card(monkeypatch, tmp_path):
+    monkeypatch.delenv("INVOICE_CARD_ENABLED", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.delenv("ROB_LOCAL", raising=False)
+
+    async def fake_create(**kw):
+        return _fake_create_kwargs(**kw)
+
+    import modules.x402.invoicing as inv
+    monkeypatch.setattr(inv, "create_payment_request", fake_create)
+    res = asyncio.run(X402InvoiceTool().x402_request(
+        InvoiceParams(amount_usd=5.0, purpose="widget"),
+        execution_context=_CtxWithWorkspace(tmp_path)))
+    assert res.error is None
+    assert "message(surface=" in res.extracted_content
+    assert "media_paths" not in res.extracted_content
+
+
+def test_result_with_card_teaches_media_paths_attach(monkeypatch, tmp_path):
+    monkeypatch.setenv("INVOICE_CARD_ENABLED", "true")
+
+    async def fake_create(**kw):
+        return _fake_create_kwargs(**kw)
+
+    import modules.x402.invoicing as inv
+    monkeypatch.setattr(inv, "create_payment_request", fake_create)
+    res = asyncio.run(X402InvoiceTool().x402_request(
+        InvoiceParams(amount_usd=5.0, purpose="widget"),
+        execution_context=_CtxWithWorkspace(tmp_path)))
+    assert res.error is None
+    card_line = [l for l in res.extracted_content.splitlines()
+                 if l.startswith("invoice card:")][0]
+    card_path = card_line.split("invoice card:", 1)[1].strip()
+    assert f'media_paths=["{card_path}"]' in res.extracted_content
 
 
 def test_invoice_card_render_failure_is_fail_open(monkeypatch, tmp_path):

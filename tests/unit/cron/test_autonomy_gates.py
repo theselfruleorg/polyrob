@@ -45,7 +45,7 @@ class _Agent:
 
 def _events(monkeypatch, tmp_path):
     """Route _cron_ev at a real (tmp) event log so we can assert on outcome."""
-    import agents.task.telemetry.event_log as el
+    import core.event_log as el
     monkeypatch.setattr(el, "_INSTANCES", {})
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)
@@ -68,7 +68,7 @@ async def test_halted_skips_without_invoking_agent(monkeypatch, tmp_path):
     assert agent.run_calls == 0
     rows = log.query(kind="cron_run")
     outcomes = [(r["attrs"]["outcome"], r["attrs"].get("reason")) for r in rows]
-    assert ("skipped", "halted") in outcomes
+    assert ("skipped", "paused") in outcomes  # 031: the halt env is a facet of the pause record
 
 
 @pytest.mark.asyncio
@@ -84,14 +84,27 @@ async def test_not_halted_runs_normally(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_halted_digest_job_stays_exempt(monkeypatch):
-    """The digest branch returns before the halt check — an owner who halted
-    autonomy still gets their own $0 status report, per the documented
-    exemption in cron/runner.py."""
+async def test_digest_under_full_pause_is_held_but_a_cron_scope_keeps_it(monkeypatch, tmp_path):
+    """031: a FULL pause (the legacy AUTONOMY_HALT env is its `all` facet) holds
+    the $0 digest too — /status carries the pause line instead. A pause scoped to
+    `cron` keeps the owner's own report flowing."""
     monkeypatch.setenv("AUTONOMY_HALT", "true")
+    log = _events(monkeypatch, tmp_path)
     agent = _Agent()
     runner = make_agent_runner(agent)
     with patch("cron.digest.digest_enabled_for", return_value=False):
         ok = await runner(_job(payload={"digest": True}))
     assert ok is True
     assert agent.create_calls == 0  # digest never invokes the agent anyway
+    rows = log.query(kind="cron_run")
+    assert ("skipped", "paused_digest") in [(r["attrs"]["outcome"], r["attrs"].get("reason")) for r in rows]
+
+    monkeypatch.delenv("AUTONOMY_HALT", raising=False)
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    from core import autonomy_control as ac
+    ac.pause(str(tmp_path), scopes=("cron",), via="test")
+    with patch("cron.digest.digest_enabled_for", return_value=False):
+        ok = await runner(_job(payload={"digest": True}))
+    assert ok is True
+    rows = log.query(kind="cron_run")
+    assert ("skipped", "digest_disabled") in [(r["attrs"]["outcome"], r["attrs"].get("reason")) for r in rows]

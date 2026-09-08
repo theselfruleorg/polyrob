@@ -15,7 +15,7 @@ class _ResultClient:
         self._price = price_usd
         self.fetch_called = False
 
-    async def quote(self, url):
+    async def quote(self, url, **kwargs):
         return self._price
 
     async def fetch_with_payment(self, **kwargs):
@@ -155,7 +155,7 @@ class _SpyClient:
         self.quote_called = False
         self.fetch_called = False
 
-    async def quote(self, url):
+    async def quote(self, url, **kwargs):
         self.quote_called = True
         return 0.1
 
@@ -332,3 +332,73 @@ async def test_paid_fetch_still_reports_the_payment_header():
     assert "paid $0.2500" in content and "0xfake" in content
     assert "no payment" not in content.lower()
     assert "SECRET-DATA" in content
+
+
+@pytest.mark.asyncio
+async def test_fetch_refuses_a_forged_turn_and_never_calls_the_client():
+    """H1a: the gate must run BEFORE any network/signing work, and the refusal
+    must be an error result the agent cannot mistake for a payment."""
+    import types
+    client = _ResultClient(X402Result(body="b", paid=True, amount_usd=0.01,
+                                      tx_hash="0xabc", pay_to="0xdef",
+                                      status_code=200))
+    tool = _tool(client)
+    ctx = types.SimpleNamespace(is_sub_agent=False, role="orchestrator",
+                                metadata={"turn_kind": "self_wake"},
+                                session_id="s", user_id="u")
+    res = await tool.x402_fetch(
+        FetchParams(url="http://paid", max_amount_usd=1.0), execution_context=ctx)
+    assert res.error and "forged" in res.error.lower()
+    assert client.fetch_called is False
+
+
+def _mainnet_wallet():
+    """WalletConfig is a frozen dataclass, so network is set at construction."""
+    cfg = WalletConfig(enabled=True, backend="local_eoa", master_seed="s" * 40,
+                       network="mainnet", max_per_tx_usd=10.0,
+                       x402_client_enabled=True, x402_facilitator_url="http://f")
+    return AgentWallet(cfg)
+
+
+# --- wallet_status must show SPENDABLE Solana funds, not just gas -----------
+# The Solana line reported the address and its SOL balance (gas) but never its
+# USDC, so the agent's spendable Solana funds were invisible in the very verb
+# it uses to answer "what can I actually spend". Same blind spot as the ledger
+# treasury balance and portfolio's identity lookup (2026-08-28).
+
+@pytest.mark.asyncio
+async def test_wallet_status_reports_solana_usdc_not_only_sol_gas(monkeypatch):
+    import core.wallet.solana_onchain as sol_mod
+    from tools.x402.service import EmptyWalletParams
+
+    w = _mainnet_wallet()
+    monkeypatch.setattr(type(w), "solana_address",
+                        property(lambda self: "Brs111"), raising=False)
+    monkeypatch.setattr(sol_mod, "native_balance", lambda a: 0.0)
+    monkeypatch.setattr(sol_mod, "token_balances", lambda a: {
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": 2_500_000})
+
+    tool = X402PayTool(wallet=w, client=FakeX402Client(
+        price_usd=None, pay_to=None, paid_body="X"))
+    out = (await tool.x402_wallet_status(EmptyWalletParams())).extracted_content
+    sol_line = next(l for l in out.splitlines() if "Solana address" in l)
+    assert "2.50" in sol_line and "USDC" in sol_line
+
+
+@pytest.mark.asyncio
+async def test_a_failed_solana_usdc_read_is_unavailable_never_zero(monkeypatch):
+    """H14b: a read that failed must not render as an honest-looking $0.00."""
+    import core.wallet.solana_onchain as sol_mod
+    from tools.x402.service import EmptyWalletParams
+
+    w = _mainnet_wallet()
+    monkeypatch.setattr(type(w), "solana_address",
+                        property(lambda self: "Brs111"), raising=False)
+    monkeypatch.setattr(sol_mod, "native_balance", lambda a: 0.0)
+    monkeypatch.setattr(sol_mod, "token_balances", lambda a: None)
+
+    tool = X402PayTool(wallet=w, client=FakeX402Client(
+        price_usd=None, pay_to=None, paid_body="X"))
+    out = (await tool.x402_wallet_status(EmptyWalletParams())).extracted_content
+    sol_line = next(l for l in out.splitlines() if "Solana address" in l)
+    assert "unavailable" in sol_line and "0.00 USDC" not in sol_line

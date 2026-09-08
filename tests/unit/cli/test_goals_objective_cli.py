@@ -85,3 +85,74 @@ def test_objective_add_duplicate_and_force(board):
     assert r.exit_code == 1 and "force" in r.output.lower()
     r = CliRunner().invoke(goals, ["objective", "add", "Grow the substack audience", "--force"])
     assert r.exit_code == 0, r.output
+
+
+def test_objective_add_accepts_criteria_budget_and_stream_id(board):
+    r = CliRunner().invoke(goals, [
+        "objective", "add", "Ship weekly video",
+        "-b", "One video a week.",
+        "--success-criteria", "4 published urls in 4 weeks",
+        "--goal-budget", "8",
+        "--stream-id", "video-weekly",
+    ])
+    assert r.exit_code == 0, r.output
+    o = board.objectives(user_id="rob")[0]
+    assert o.payload["success_criteria"] == "4 published urls in 4 weeks"
+    assert o.payload["goal_budget"] == 8
+    assert o.payload["stream_id"] == "video-weekly"
+
+
+def test_objective_show_reports_criteria_and_budget_use(board):
+    o = board.create_objective(user_id="rob", title="Ship weekly video",
+                               payload={"success_criteria": "4 urls", "goal_budget": 8})
+    board.create(user_id="rob", title="child", parent_id=o.id, force=True)
+    r = CliRunner().invoke(goals, ["objective", "show", o.id])
+    assert r.exit_code == 0, r.output
+    assert "4 urls" in r.output
+    assert "1/8" in r.output
+
+
+def test_objective_show_refuses_unknown_id(board):
+    r = CliRunner().invoke(goals, ["objective", "show", "nonexistent-id"])
+    assert r.exit_code != 0
+    assert "no such objective" in r.output
+
+
+def test_objective_show_refuses_cross_tenant_read(board):
+    o = board.create_objective(user_id="someone-else", title="Someone else's stream",
+                               force=True)
+    r = CliRunner().invoke(goals, ["objective", "show", o.id])
+    assert r.exit_code != 0
+    assert "no such objective" in r.output
+
+
+def test_objective_show_labels_the_budget_honestly(board):
+    """`children_of` keeps `done` children, so the count is a LIFETIME tally and
+    calling it "live" told the operator the wrong thing about what is running."""
+    o = board.create_objective(user_id="rob", title="Ship weekly video",
+                               payload={"goal_budget": 8})
+    finished = board.create(user_id="rob", title="a finished child",
+                            parent_id=o.id, force=True)
+    board.claim(finished.id, "w", ttl_seconds=60)
+    board.record_success(finished.id, result="ok")
+    board.create(user_id="rob", title="a running child", parent_id=o.id, force=True)
+
+    r = CliRunner().invoke(goals, ["objective", "show", o.id])
+    assert r.exit_code == 0, r.output
+    assert "2/8 spent" in r.output
+    assert "1 in flight" in r.output
+
+
+def test_objective_show_says_a_stream_objective_is_uncapped(board):
+    """A stream objective is exempt from the lifetime budget, so printing
+    "12/12 spent" against a manifest number nothing enforces would be a lie."""
+    o = board.create_objective(user_id="rob", title="Trade the treasury",
+                               payload={"goal_budget": 2, "stream_id": "treasury-trading"})
+    board.create(user_id="rob", title="leg one", parent_id=o.id, force=True)
+    board.create(user_id="rob", title="leg two words differ", parent_id=o.id, force=True)
+    board.create(user_id="rob", title="leg three entirely other", parent_id=o.id, force=True)
+
+    r = CliRunner().invoke(goals, ["objective", "show", o.id])
+    assert r.exit_code == 0, r.output
+    assert "uncapped" in r.output
+    assert "3 goal(s) in flight" in r.output

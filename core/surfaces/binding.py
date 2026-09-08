@@ -32,7 +32,7 @@ def bind_chat_surface(
     Returns True when the orchestrator was bound (router+key set), False when the
     feature is off / unavailable / no key was supplied.
     """
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     if not SurfaceConfig.singular_chat_enabled():
         return False
@@ -59,6 +59,46 @@ def bind_chat_surface(
             except Exception as e:  # fail-open: a bind error must not break session create
                 logger.debug("bind_chat_surface registry.bind failed: %s", e)
     return True
+
+
+def surface_profile(orchestrator: Any) -> Optional[dict]:
+    """What the agent needs to know about the surface it is speaking into.
+
+    ``SurfaceCapabilities`` has always known the message cap, the media
+    capability and the markdown flavor; none of it ever reached the model, so
+    the agent wrote the same reply for a 4096-byte phone chat, a 100 KB email
+    and a terminal (chat-first review 2026-08-22, G6).
+
+    Returns None when nothing is bound (goal/cron/`polyrob run`/raw API) — the
+    surface-agnostic case, where the prompt stays byte-identical to today.
+    Per-session stable, so injecting it does not disturb prompt caching.
+    """
+    key = getattr(orchestrator, "_chat_session_key", None)
+    container = getattr(orchestrator, "container", None)
+    if not key or container is None:
+        return None
+    try:
+        registry = container.get_service("session_chat_registry")
+        row = registry.resolve(key) if registry is not None else None
+        if not row:
+            return None
+        surface_id = row.get("surface_id")
+        surface_registry = container.get_service("surface_registry")
+        surface = surface_registry.get(surface_id) if surface_registry else None
+        if surface is None:
+            return None
+        caps = surface.capabilities
+        return {
+            "surface_id": str(surface_id or ""),
+            "max_message_bytes": int(getattr(caps, "max_message_bytes", 0) or 0),
+            "media_out": bool(getattr(caps, "media_out", False)),
+            "markdown_flavor": str(getattr(caps, "markdown_flavor", "none")),
+            "supports_interactive_ask": bool(
+                getattr(caps, "supports_interactive_ask", False)),
+        }
+    except Exception as e:  # fail-open: unknown -> no surface block
+        logger.debug("surface_profile failed: %s", e)
+        return None
 
 
 def surface_ask_capability(orchestrator: Any) -> Optional[bool]:

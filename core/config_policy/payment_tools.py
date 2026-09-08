@@ -30,8 +30,16 @@ PAYMENT_APPROVAL_TOOLS = (
     # implemented — loosening to D3 is an explicit owner decision, not a
     # default.
     "defi_trade_swap",
+    "defi_trade_solana_swap",
     "defi_trade_approve_token",
     "defi_trade_revoke_approval",
+    # H1a (audit 2026-08-22): the x402 auto-pay verb shipped on NO approval lane
+    # at all — the only money verb with neither owner approval nor a forged-turn
+    # refusal. SPEND-side (deliberately absent from PAYMENT_RECEIVE_APPROVAL_TOOLS),
+    # so it keeps owner_queue pre-approval in every mode; a micro-payment inside
+    # X402_AUTONOMOUS_MAX_USD is waved through by spend_lane._x402_exemption, not
+    # by mode.
+    "x402_pay_x402_fetch",
 )
 
 # 013 T7 review (Important finding fix): PAYMENT_APPROVAL_TOOLS is NOT one uniform

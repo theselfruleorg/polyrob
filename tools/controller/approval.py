@@ -39,6 +39,28 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_APPROVAL_TIMEOUT_SEC = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
 
+#: 026 refreeze contract: APPROVAL_TIMEOUT_SEC is an import-frozen flag whose
+#: env-file value must still land via load_env's once-per-process refreeze.
+_FROZEN_APPROVAL_TIMEOUT_SEC = DEFAULT_APPROVAL_TIMEOUT_SEC
+
+
+def approval_wait_timeout_sec(provider_name: Optional[str]) -> float:
+    """Per-provider wait budget (030 WS-E2, finding L10).
+
+    A durable ``owner_queue`` wait is a REMOTE round-trip (Telegram tap, webview
+    click) — it gets the transport-realistic default the payment lane already
+    uses (``payment_approval_timeout_sec()``, 300s). Every in-process provider
+    keeps :data:`DEFAULT_APPROVAL_TIMEOUT_SEC` (30s). An explicit
+    ``APPROVAL_TIMEOUT_SEC`` env value still wins for BOTH — no new flag.
+    """
+    if (provider_name or "").lower() == "owner_queue":
+        try:
+            from core.config_policy import payment_approval_timeout_sec
+            return payment_approval_timeout_sec()
+        except Exception:
+            return max(_FROZEN_APPROVAL_TIMEOUT_SEC, 300.0)
+    return _FROZEN_APPROVAL_TIMEOUT_SEC
+
 
 # WS-7: the approval-gating flags are FROZEN at import — snapshotted once so a
 # prompt-injected mid-process env mutation can never widen/narrow the gated set or
@@ -180,9 +202,14 @@ def _refreeze_approval_flags_for_tests() -> None:
     """Re-snapshot from the current env. Callers: tests, and — when this module
     was imported before env-file layering — ``core.bootstrap.load_env``'s
     once-per-process refreeze (026 P1.1), which fires before any agent exists."""
-    global _FROZEN_APPROVAL_REQUIRED_TOOLS, _FROZEN_APPROVAL_PROVIDER
+    global _FROZEN_APPROVAL_REQUIRED_TOOLS, _FROZEN_APPROVAL_PROVIDER, \
+        _FROZEN_APPROVAL_TIMEOUT_SEC
     _FROZEN_APPROVAL_REQUIRED_TOOLS = _snapshot_required_tools()
     _FROZEN_APPROVAL_PROVIDER = (os.getenv("APPROVAL_PROVIDER", "auto") or "auto").strip() or "auto"
+    try:
+        _FROZEN_APPROVAL_TIMEOUT_SEC = float(os.getenv("APPROVAL_TIMEOUT_SEC", "30"))
+    except (TypeError, ValueError):
+        _FROZEN_APPROVAL_TIMEOUT_SEC = 30.0
 
 # The RECOMMENDED set of mutating coding / self-evolution ops to gate behind approval.
 # ⚠️ NOT auto-applied. `Controller.__init__` reads `APPROVAL_REQUIRED_TOOLS` (default
@@ -460,7 +487,9 @@ def make_approval_hook(
                 decision = "timeout"
                 logger.error(f"approval.timeout action={action_name} after {timeout}s")
                 return (f"approval denied (timeout) for '{action_name}'; owner can approve "
-                        "via /pending or loosen via the approvals.require pref")
+                        "via /pending — a decision recorded after this timeout still "
+                        "applies to the next identical attempt (one-shot grant), or "
+                        "loosen via the approvals.require pref")
             except Exception as e:
                 logger.error(
                     f"approval.error action={action_name} exc={type(e).__name__}: {e}"

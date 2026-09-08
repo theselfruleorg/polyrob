@@ -36,27 +36,22 @@ import time
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-from migrations.version_manager import DatabaseVersionManager, latest_migration_version
+from migrations.version_manager import (
+    DatabaseVersionManager,
+    latest_migration_version,
+    migration_version_from_filename,
+    shipped_migrations,
+)
 
 logger = logging.getLogger("migrations.boot")
 
 _VERSIONS_DIR = Path(__file__).resolve().parent / "versions"
 
 
-def _version_from_filename(path: Path) -> Optional[str]:
-    parts = path.stem.split("_", 3)
-    if len(parts) >= 3 and parts[0].startswith("v"):
-        return f"{parts[0][1:]}.{parts[1]}.{parts[2]}"
-    return None
-
-
-def _shipped_migrations(versions_dir: Path) -> List[Tuple[str, Path]]:
-    out: List[Tuple[str, Path]] = []
-    for p in sorted(versions_dir.glob("v*.py")):
-        v = _version_from_filename(p)
-        if v:
-            out.append((v, p))
-    return out
+# S6 (2026-08-29): the filename parser + shipped-migration listing are the
+# version_manager's (ONE parser for boot, CLI runner and latest_migration_version).
+_version_from_filename = migration_version_from_filename
+_shipped_migrations = shipped_migrations
 
 
 def _load_module(path: Path):

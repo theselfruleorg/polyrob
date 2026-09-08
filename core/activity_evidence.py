@@ -44,6 +44,26 @@ def ledger_rollup(user_id: str, days: int, *,
         return {}
 
 
+def ledger_rollup_strict(user_id: str, days: int, *,
+                         include_balances: bool = False) -> Dict[str, Any]:
+    """``ledger_rollup`` that RAISES instead of failing open to ``{}``.
+
+    The status snapshot (core/status_snapshot.py) needs the failure REASON to
+    render ``money: unavailable (<reason>)`` — a swallowed error is exactly the
+    silent-zero class it exists to kill. Same bridge, same seam."""
+    from core.async_bridge import run_coroutine_sync
+    from modules.credits.unified_ledger import build_ledger
+    return run_coroutine_sync(build_ledger(
+        user_id, days=max(1, int(days)), include_balances=include_balances)) or {}
+
+
+def ledger_note(ledger: Dict[str, Any]) -> Optional[str]:
+    """Core-tier seam over ``unified_ledger.ledger_availability_note`` (keeps the
+    modules edge on this already-allowlisted file)."""
+    from modules.credits.unified_ledger import ledger_availability_note
+    return ledger_availability_note(ledger)
+
+
 def recent_episodes(user_id: str, since_ts: Optional[float],
                     limit: int = 20) -> List[Dict[str, Any]]:
     """Newest-first episode rows for the tenant, normalized to plain dicts with

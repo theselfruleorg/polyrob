@@ -115,7 +115,7 @@ from agents.task.agent.core.metering_failure_log import metering_failure_limiter
 
 # G-26 reachability fix (Task 5c): STABLE per-completion idempotency key for
 # usage_tracker.record_llm_usage's request_id dedup.
-from agents.task.agent.core.aux_metering import extract_stable_request_id
+from modules.llm.aux_metering import extract_stable_request_id
 
 
 
@@ -126,6 +126,40 @@ class NextActionInternalMixin:
 	LLMRunnerMixin so llm_runner.py drops under 700L (P9). Agent composes it;
 	get_next_action calls it via MRO. Imports above are llm_runner's full set,
 	replicated so every name the method references resolves (post-MAX_MCP defense)."""
+
+
+	def _describe_rejected_tool_calls(self, normalized_tool_calls) -> str:
+		"""One honest line per rejected call: unknown action vs. failed validation."""
+		errors = {}
+		try:
+			errors = dict(getattr(self.controller.registry, "_last_validation_errors", {}) or {})
+		except Exception:
+			errors = {}
+		known = set()
+		try:
+			known = set(self.controller.list_actions())
+		except Exception:
+			known = set()
+		parts = []
+		for tc in normalized_tool_calls or []:
+			name = tc.get("name", "unknown")
+			reason = errors.get(tc.get("id")) or ""
+			if name in known:
+				parts.append(f"'{name}' exists but its arguments failed validation"
+				             + (f": {reason[:300]}" if reason else ""))
+			else:
+				parts.append(f"'{name}' is not a registered action")
+		return "; ".join(parts) or "no tool call could be converted"
+
+	def _push_rejected_tool_calls_feedback(self, detail: str) -> None:
+		"""Let the model self-correct next step instead of repeating the call blind."""
+		try:
+			self.message_manager.push_ephemeral_message(HumanMessage(content=(
+				"⚠️ Your tool call was rejected before execution and did NOT run:\n"
+				f"{detail}\n\n"
+				"Fix the arguments (or pick an action that exists) and call again.")))
+		except Exception:
+			self.logger.debug("rejected-tool-call feedback not pushed", exc_info=True)
 
 	async def _stream_plain_fallback(self, current_messages, timeout_seconds) -> AIMessage:
 		"""Stream a plain (non-structured) LLM fallback call, accumulating content and
@@ -375,6 +409,176 @@ class NextActionInternalMixin:
 			# Clear the counter
 			self._expected_image_count = 0
 
+	async def _stream_with_tools(self, current_messages, tools, timeout_seconds) -> Tuple[AIMessage, int]:
+		"""Stream the native-tools LLM call, accumulating content / tool calls / usage into one
+		AIMessage. Returns ``(response, chunk_count)``. Extracted verbatim from
+		``_get_next_action_internal`` (S7, 2026-08-29) — the third inline ``stream_with_timeout``
+		copy; ``_stream_plain_fallback`` is the structured-fallback twin."""
+		chunk_count = 0
+		self.logger.debug("Using streaming mode for LLM call")
+		self.logger.info(f"[DEBUG_TOOLS] Calling llm.astream with tools={len(tools) if tools else 0}")
+		full_content = ""
+		collected_tool_calls = []
+
+		usage_metadata = None  # Collect usage metadata from final chunk
+		# Fix pass 2 (money-correctness): astream() only ever yields ONE chunk
+		# (the full ainvoke() result wrapped as a 1-item async iterator -- see
+		# LLMClientAdapter.astream), already carrying the per-call
+		# `_polyrob_provider_response_id` stamped by adapters.py._agenerate.
+		# Propagate it onto the rebuilt `response` below so streaming-mode
+		# calls get the same stable, per-call billing dedup key as the
+		# non-streaming path instead of falling back to the shared,
+		# concurrency-racy `<client>.last_response` read.
+		stamped_provider_response_id = None
+		async def stream_with_timeout():
+			nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata, stamped_provider_response_id
+			async for chunk in self.llm.astream(current_messages, tools=tools):
+				# Extract content
+				if hasattr(chunk, 'content') and chunk.content:
+					# Handle both string and list content in streaming
+					chunk_text = chunk.content if isinstance(chunk.content, str) else "".join(str(b.text if hasattr(b, "text") else b) for b in chunk.content if b)
+					full_content += chunk_text
+					await self.hitl_manager.stream_output(chunk_text)
+					chunk_count += 1
+
+				# Collect tool calls
+				if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+					collected_tool_calls.extend(chunk.tool_calls)
+
+				chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
+				if chunk_stamped_id:
+					stamped_provider_response_id = chunk_stamped_id
+
+			# Collect usage metadata (usually in final chunk)
+			if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+				usage_metadata = chunk.usage_metadata
+
+
+		await asyncio.wait_for(stream_with_timeout(), timeout=timeout_seconds)
+
+		# Build complete response
+		response = AIMessage(content=full_content, usage_metadata=usage_metadata)
+		if collected_tool_calls:
+			response.tool_calls = collected_tool_calls
+		if stamped_provider_response_id:
+			response._polyrob_provider_response_id = stamped_provider_response_id
+		return response, chunk_count
+
+	@staticmethod
+	def _extract_response_content(response) -> Optional[str]:
+		"""Pull the text content out of any LLM response shape (AIMessage / dict / str /
+		generations / additional_kwargs), normalizing list content to one string. Pure;
+		extracted verbatim from ``_get_next_action_internal`` (S7, 2026-08-29)."""
+		content = None
+
+		# Try multiple ways to extract content from different response formats
+		if hasattr(response, 'content'):
+			# Standard response format
+			content = response.content
+		elif isinstance(response, dict):
+			# Dictionary response format
+			if 'content' in response:
+				content = response['content']
+			elif 'text' in response:
+				content = response['text']
+			elif 'message' in response and hasattr(response['message'], 'content'):
+				content = response['message'].content
+			elif 'generation_info' in response and 'raw' in response['generation_info']:
+				# Provider-specific raw payload
+				content = str(response['generation_info']['raw'])
+		elif isinstance(response, str):
+			# Direct string response
+			content = response
+		elif hasattr(response, 'text'):
+			# Alternative text attribute
+			content = response.text
+		elif hasattr(response, 'message') and hasattr(response.message, 'content'):
+			# Nested message structure
+			content = response.message.content
+		elif hasattr(response, 'generations') and len(response.generations) > 0:
+			# Generations format
+			gen = response.generations[0]
+			if hasattr(gen, 'message') and hasattr(gen.message, 'content'):
+				content = gen.message.content
+			elif hasattr(gen, 'text'):
+				content = gen.text
+		elif hasattr(response, 'additional_kwargs') and response.additional_kwargs:
+			# Check additional kwargs for content
+			if 'content' in response.additional_kwargs:
+				content = response.additional_kwargs['content']
+			elif 'raw' in response.additional_kwargs:
+				content = str(response.additional_kwargs['raw'])
+
+
+		# Normalize content to string (some providers return list)
+		if content is not None and isinstance(content, list):
+			content_parts = []
+			for block in content:
+				if isinstance(block, str):
+					content_parts.append(block)
+				elif hasattr(block, 'text'):
+					content_parts.append(block.text)
+				elif isinstance(block, dict) and 'text' in block:
+					content_parts.append(block['text'])
+			content = "".join(content_parts)
+		return content
+
+	def _parse_fallback_content(self, content: str):
+		"""Manual JSON extraction + normalization + ``AgentOutput`` validation for the
+		structured-output fallback path. Raises ``LLMResponseError`` on any failure.
+		Extracted verbatim from ``_get_next_action_internal`` (S7, 2026-08-29)."""
+		try:
+			# Direct JSON extraction using centralized utility
+			# REFACTORED (Dec 2025): Removed duplicate preprocessing logic
+			# normalize_action_schema now handles all action field corrections
+			from agents.task.utils_json import (
+				extract_json_from_model_output,
+				normalize_action_schema,
+				preprocess_action_data,
+				apply_action_field_corrections
+			)
+
+			extracted_json = extract_json_from_model_output(content)
+
+			# Handle single-action format (without 'action' wrapper)
+			# This case is NOT handled by normalize_action_schema
+			if extracted_json and isinstance(extracted_json, dict):
+				if len(extracted_json) == 1 and not any(k in extracted_json for k in ['action', 'current_state', 'title', 'decision', 'confidence']):
+					action_name, params = preprocess_action_data(extracted_json)
+					params = apply_action_field_corrections(action_name, params)
+					extracted_json = {'action': [{action_name: params}]}
+
+			# normalize_action_schema handles all action field corrections
+			normalized_json = normalize_action_schema(extracted_json)
+
+			# AgentOutput requires 'action' field - LLM must always provide actions
+			if 'action' not in normalized_json:
+				self.logger.error("Normalized JSON missing 'action' field - LLM response invalid")
+				self.logger.error("The LLM must provide actions in every response. Empty actions are not valid.")
+				raise LLMResponseError("LLM response missing required 'action' field")
+
+			parsed = self.AgentOutput.model_validate(normalized_json)
+			self.logger.info("Manual JSON extraction and validation succeeded")
+		except Exception as extract_error:
+			self.logger.error(f"Manual JSON extraction failed: {extract_error}", exc_info=True)
+			self.logger.error(f"Full content that failed (first 2000 chars, exc_info=True): {content[:2000]}")
+			raise LLMResponseError(f"Could not parse response: {str(extract_error)}")
+		return parsed
+
+	def _safe_default_output(self, *, memory: str, reasoning: str):
+		"""A VALID ``AgentOutput`` for the graceful-degradation paths (P0-5): a real
+		``AgentBrain`` (a bare error dict raised ValidationError and was reclassified as a
+		parse error), no actions."""
+		return self.AgentOutput(
+			current_state=AgentBrain(
+				evaluation_previous_goal="Failed",
+				memory=memory,
+				next_goal="Retry with a valid response.",
+				reasoning=reasoning,
+			),
+			action=[]
+		)
+
 	async def _get_next_action_internal(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Internal implementation of get_next_action."""
 		from agents.task.robust_parse_config import RobustParseConfig
@@ -615,53 +819,7 @@ Then emit your function calls."""
 									# Stream if supported and callbacks registered
 									chunk_count = 0  # Track streaming chunks for telemetry
 									if self._supports_streaming() and self.hitl_manager.has_streaming_callbacks():
-										self.logger.debug("Using streaming mode for LLM call")
-										self.logger.info(f"[DEBUG_TOOLS] Calling llm.astream with tools={len(tools) if tools else 0}")
-										full_content = ""
-										collected_tool_calls = []
-
-										usage_metadata = None  # Collect usage metadata from final chunk
-										# Fix pass 2 (money-correctness): astream() only ever yields ONE chunk
-										# (the full ainvoke() result wrapped as a 1-item async iterator -- see
-										# LLMClientAdapter.astream), already carrying the per-call
-										# `_polyrob_provider_response_id` stamped by adapters.py._agenerate.
-										# Propagate it onto the rebuilt `response` below so streaming-mode
-										# calls get the same stable, per-call billing dedup key as the
-										# non-streaming path instead of falling back to the shared,
-										# concurrency-racy `<client>.last_response` read.
-										stamped_provider_response_id = None
-										async def stream_with_timeout():
-											nonlocal full_content, collected_tool_calls, chunk_count, usage_metadata, stamped_provider_response_id
-											async for chunk in self.llm.astream(current_messages, tools=tools):
-												# Extract content
-												if hasattr(chunk, 'content') and chunk.content:
-													# Handle both string and list content in streaming
-													chunk_text = chunk.content if isinstance(chunk.content, str) else "".join(str(b.text if hasattr(b, "text") else b) for b in chunk.content if b)
-													full_content += chunk_text
-													await self.hitl_manager.stream_output(chunk_text)
-													chunk_count += 1
-
-												# Collect tool calls
-												if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
-													collected_tool_calls.extend(chunk.tool_calls)
-
-												chunk_stamped_id = getattr(chunk, '_polyrob_provider_response_id', None)
-												if chunk_stamped_id:
-													stamped_provider_response_id = chunk_stamped_id
-
-											# Collect usage metadata (usually in final chunk)
-											if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
-												usage_metadata = chunk.usage_metadata
-
-
-										await asyncio.wait_for(stream_with_timeout(), timeout=timeout_seconds)
-
-										# Build complete response
-										response = AIMessage(content=full_content, usage_metadata=usage_metadata)
-										if collected_tool_calls:
-											response.tool_calls = collected_tool_calls
-										if stamped_provider_response_id:
-											response._polyrob_provider_response_id = stamped_provider_response_id
+										response, chunk_count = await self._stream_with_tools(current_messages, tools, timeout_seconds)
 									else:
 										# Regular batch call
 										self.logger.info(f"[DEBUG_TOOLS] Calling llm.ainvoke with tools={len(tools) if tools else 0}")
@@ -858,12 +1016,15 @@ Then emit your function calls."""
 												# Use Controller's high-level API instead of directly accessing registry
 												available = self.controller.list_actions()[:20]
 												self.logger.error(f"  Available actions (first 20): {available}")
-												
-												# This is a CRITICAL error - raise exception instead of continuing
-												raise ValueError(
-													f"Tool call conversion failed: LLM called {[tc.get('name') for tc in normalized_tool_calls]} "
-													f"but these actions don't exist in registry. Check tool loading and action registration."
-												)
+
+												# Say what actually happened. Prod 2026-08-24..28: 24 rejected
+												# `message` calls were logged as "these actions don't exist in
+												# registry" — the action existed, its arguments failed validation.
+												# The model never saw the reason, repeated the same call, and two
+												# empty steps tripped the thinking-loop escalation.
+												detail = self._describe_rejected_tool_calls(normalized_tool_calls)
+												self._push_rejected_tool_calls_feedback(detail)
+												raise ValueError(f"Tool call conversion failed: {detail}")
 											
 										except Exception as conversion_error:
 											self.logger.error(f"Error processing tool_calls: {conversion_error}", exc_info=True)
@@ -1175,96 +1336,10 @@ Then emit your function calls."""
 				if parsed is None:
 					self.logger.info("All structured methods failed - attempting manual JSON parsing")
 					# FIXED: More robust content extraction for different LLM response formats
-					content = None
-					
-					# Try multiple ways to extract content from different response formats
-					if hasattr(response, 'content'):
-						# Standard response format
-						content = response.content
-					elif isinstance(response, dict):
-						# Dictionary response format
-						if 'content' in response:
-							content = response['content']
-						elif 'text' in response:
-							content = response['text']
-						elif 'message' in response and hasattr(response['message'], 'content'):
-							content = response['message'].content
-						elif 'generation_info' in response and 'raw' in response['generation_info']:
-							# Provider-specific raw payload
-							content = str(response['generation_info']['raw'])
-					elif isinstance(response, str):
-						# Direct string response
-						content = response
-					elif hasattr(response, 'text'):
-						# Alternative text attribute
-						content = response.text
-					elif hasattr(response, 'message') and hasattr(response.message, 'content'):
-						# Nested message structure
-						content = response.message.content
-					elif hasattr(response, 'generations') and len(response.generations) > 0:
-						# Generations format
-						gen = response.generations[0]
-						if hasattr(gen, 'message') and hasattr(gen.message, 'content'):
-							content = gen.message.content
-						elif hasattr(gen, 'text'):
-							content = gen.text
-					elif hasattr(response, 'additional_kwargs') and response.additional_kwargs:
-						# Check additional kwargs for content
-						if 'content' in response.additional_kwargs:
-							content = response.additional_kwargs['content']
-						elif 'raw' in response.additional_kwargs:
-							content = str(response.additional_kwargs['raw'])
-
-
-					# Normalize content to string (some providers return list)
-					if content is not None and isinstance(content, list):
-						content_parts = []
-						for block in content:
-							if isinstance(block, str):
-								content_parts.append(block)
-							elif hasattr(block, 'text'):
-								content_parts.append(block.text)
-							elif isinstance(block, dict) and 'text' in block:
-								content_parts.append(block['text'])
-						content = "".join(content_parts)
+					content = self._extract_response_content(response)
 
 					if content is not None and content.strip():
-						try:
-							# Direct JSON extraction using centralized utility
-							# REFACTORED (Dec 2025): Removed duplicate preprocessing logic
-							# normalize_action_schema now handles all action field corrections
-							from agents.task.utils_json import (
-								extract_json_from_model_output,
-								normalize_action_schema,
-								preprocess_action_data,
-								apply_action_field_corrections
-							)
-
-							extracted_json = extract_json_from_model_output(content)
-
-							# Handle single-action format (without 'action' wrapper)
-							# This case is NOT handled by normalize_action_schema
-							if extracted_json and isinstance(extracted_json, dict):
-								if len(extracted_json) == 1 and not any(k in extracted_json for k in ['action', 'current_state', 'title', 'decision', 'confidence']):
-									action_name, params = preprocess_action_data(extracted_json)
-									params = apply_action_field_corrections(action_name, params)
-									extracted_json = {'action': [{action_name: params}]}
-
-							# normalize_action_schema handles all action field corrections
-							normalized_json = normalize_action_schema(extracted_json)
-							
-							# AgentOutput requires 'action' field - LLM must always provide actions
-							if 'action' not in normalized_json:
-								self.logger.error("Normalized JSON missing 'action' field - LLM response invalid")
-								self.logger.error("The LLM must provide actions in every response. Empty actions are not valid.")
-								raise LLMResponseError("LLM response missing required 'action' field")
-
-							parsed = self.AgentOutput.model_validate(normalized_json)
-							self.logger.info("Manual JSON extraction and validation succeeded")
-						except Exception as extract_error:
-							self.logger.error(f"Manual JSON extraction failed: {extract_error}", exc_info=True)
-							self.logger.error(f"Full content that failed (first 2000 chars, exc_info=True): {content[:2000]}")
-							raise LLMResponseError(f"Could not parse response: {str(extract_error)}")
+						parsed = self._parse_fallback_content(content)
 					else:
 						# Log the full response for debugging when no content is found
 						self.logger.error(f"No content available for manual parsing. Response type: {type(response)}, Response: {str(response)[:1000]}", exc_info=True)
@@ -1352,15 +1427,7 @@ Then emit your function calls."""
 					# a bare {"error": ...} dict raises ValidationError, so this "safe
 					# default" actually re-raised and was reclassified as a parse error
 					# (dead graceful-degradation path). Build a VALID brain instead.
-					parsed = self.AgentOutput(
-						current_state=AgentBrain(
-							evaluation_previous_goal="Failed",
-							memory="Previous LLM response could not be parsed after retries.",
-							next_goal="Retry with a valid response.",
-							reasoning="parse_failed: Failed to parse LLM response after retries",
-						),
-						action=[]
-					)
+					parsed = self._safe_default_output(memory="Previous LLM response could not be parsed after retries.", reasoning="parse_failed: Failed to parse LLM response after retries")
 					# Add parse failure telemetry
 					if hasattr(self, 'session_data'):
 						if 'parse_failures' not in self.session_data:
@@ -1376,15 +1443,7 @@ Then emit your function calls."""
 					# FIX 8: Convert to safe default instead of raising
 					self.logger.error(f'Parsed response is not an AgentOutput object, got: {type(parsed)}', exc_info=True)
 					# P0-5: same fix — a valid AgentBrain, not a bare error dict.
-					parsed = self.AgentOutput(
-						current_state=AgentBrain(
-							evaluation_previous_goal="Failed",
-							memory=f"Parsed response had the wrong type ({type(parsed).__name__}); expected AgentOutput.",
-							next_goal="Retry with a valid response.",
-							reasoning="invalid_type: parser returned a non-AgentOutput object",
-						),
-						action=[]
-					)
+					parsed = self._safe_default_output(memory=f"Parsed response had the wrong type ({type(parsed).__name__}); expected AgentOutput.", reasoning="invalid_type: parser returned a non-AgentOutput object")
 
 				# NOTE: LLM telemetry is captured by usage_tracker.record_llm_usage() in the step loop
 				# (see line ~3565). Do NOT add duplicate capture_llm_request() here as it causes

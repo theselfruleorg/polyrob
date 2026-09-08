@@ -10,7 +10,7 @@ default ON, falsey-disable {none, off, false, 0, no, ''}.
 """
 import os
 
-from agents.task.constants import reflection_llm_enabled_default
+from core.config_policy import reflection_llm_enabled_default
 
 
 def _set(monkeypatch, val):

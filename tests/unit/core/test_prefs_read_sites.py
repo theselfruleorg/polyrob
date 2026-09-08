@@ -109,10 +109,39 @@ def test_wallet_daily_cap_min_merge(tmp_path, monkeypatch):
     assert effective_daily_cap_usd("u1", tmp_path) == 5.0
 
 
-def test_wallet_daily_cap_pref_alone_sets_cap_when_env_unset(tmp_path, monkeypatch):
-    """WALLET_DAILY_CAP_USD unset == legacy 'no cap' — a pref ALONE must still
-    be able to set a cap (env_value=None is not treated as a ceiling of 0)."""
+def test_wallet_daily_cap_pref_alone_tightens_the_default_when_env_unset(tmp_path, monkeypatch):
+    """H3 (2026-08-22): WALLET_DAILY_CAP_USD unset used to mean legacy 'no cap'
+    (None); it now means the finite $100 default (core/wallet/config.py::
+    DEFAULT_DAILY_CAP_USD) — the per-tx ceiling alone cannot stop a
+    within-ceiling loop. A pref tighter than the default still applies."""
     monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
+    from core.wallet.config import effective_daily_cap_usd
+    assert effective_daily_cap_usd("u1", tmp_path) == 100.0
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 5.0)
+    assert effective_daily_cap_usd("u1", tmp_path) == 5.0
+
+
+def test_wallet_daily_cap_pref_cannot_widen_above_default(tmp_path, monkeypatch):
+    """H3 threading (controller review): the old code passed `env_value=None`
+    to the pref min-merge whenever WALLET_DAILY_CAP_USD was unset, so a pref
+    ALONE could set the cap — correct back when "unset" meant "no cap" (any
+    finite pref only ever tightened from infinity). Now that unset resolves to
+    a finite $100 default, that same None-passthrough would let a WIDER pref
+    (e.g. $500) win outright and raise the effective cap above the operator's
+    default. The fix threads the RESOLVED default as the env leg so the
+    min-merge still bounds it: a pref can only ever TIGHTEN, never widen."""
+    monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
+    from core.wallet.config import effective_daily_cap_usd
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 500.0)
+    assert effective_daily_cap_usd("u1", tmp_path) == 100.0  # default wins, not 500
+
+
+def test_wallet_daily_cap_explicit_sentinel_still_lets_pref_set_a_cap(tmp_path, monkeypatch):
+    """When the operator EXPLICITLY disables the aggregate cap
+    (WALLET_DAILY_CAP_USD=none), env_value is genuinely None (not the default),
+    so a pref alone can still set a real cap — that is still only ever a
+    tightening, from unlimited down to a finite number."""
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "none")
     from core.wallet.config import effective_daily_cap_usd
     assert effective_daily_cap_usd("u1", tmp_path) is None
     write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 5.0)
@@ -130,13 +159,14 @@ def test_wallet_per_tx_cap_min_merge(tmp_path, monkeypatch):
 
 def test_wallet_per_tx_cap_no_pref_is_legacy_env_default(tmp_path, monkeypatch):
     """Unlike the daily cap, AGENT_WALLET_MAX_PER_TX_USD unset is NOT 'no cap' —
-    it's the $1000 catastrophic-loss safety default, so with no pref file the
-    resolved value must equal that concrete default, never None."""
+    it's the catastrophic-loss safety default (H3, 2026-08-22: $250, was
+    $1000), so with no pref file the resolved value must equal that concrete
+    default, never None."""
     monkeypatch.delenv("AGENT_WALLET_MAX_PER_TX_USD", raising=False)
     from core.wallet.config import effective_max_per_tx_usd
-    assert effective_max_per_tx_usd("u1", tmp_path) == 1000.0
-    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 250.0)
     assert effective_max_per_tx_usd("u1", tmp_path) == 250.0
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 100.0)
+    assert effective_max_per_tx_usd("u1", tmp_path) == 100.0
 
 
 def test_digest_enabled_overridden_by_pref(tmp_path, monkeypatch):

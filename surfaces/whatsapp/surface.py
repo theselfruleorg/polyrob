@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 def _wa_to(session_key: str) -> str:
-    # agent:main:whatsapp:dm:<phone>[:user...] -> <phone>
-    parts = session_key.split(":")
-    return parts[4] if len(parts) > 4 else session_key
+    # agent:main:whatsapp:dm:<phone>[:user...] -> <phone> (SSOT parser, 030 WS-B3)
+    from core.surfaces.session_chat_registry import chat_id_from_session_key
+    return chat_id_from_session_key(session_key)
 
 
 class WhatsAppSurface(Surface):

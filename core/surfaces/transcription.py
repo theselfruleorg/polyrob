@@ -22,7 +22,7 @@ def get_transcriber(container):
     existing = container.get_service("transcriber") if container else None
     if existing is not None:
         return existing
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     from modules.transcription import build_transcriber
     t = build_transcriber(SurfaceConfig.voice_transcription_model())
     try:
@@ -49,7 +49,7 @@ async def _audio_bytes(media: Media) -> Optional[bytes]:
 
 async def transcribe_inbound_media(container, media: List[Media]) -> Optional[str]:
     """Transcribe the first voice/audio Media to text, or None. Fail-open."""
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     if not SurfaceConfig.voice_transcription_enabled():
         return None
     target = next((m for m in (media or []) if getattr(m, "kind", None) in ("voice", "audio")), None)
@@ -70,7 +70,7 @@ async def transcribe_inbound_media(container, media: List[Media]) -> Optional[st
 def log_transcription_readiness(container) -> None:
     """One-line startup signal so a 'voice silently dropped' deploy is visible. WARN when
     voice is enabled but the real engine isn't importable (the #1 root cause)."""
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     if not SurfaceConfig.voice_transcription_enabled():
         logger.info("voice transcription: DISABLED (VOICE_TRANSCRIPTION_ENABLED=false)")
         return

@@ -29,11 +29,11 @@ class _UnpriceableButPayingClient:
     def __init__(self):
         self.fetched = False
 
-    async def quote(self, url):
+    async def quote(self, url, **kwargs):
         return None
 
     async def fetch_with_payment(self, *, url, method, body, signer, network,
-                                 max_amount_usd):
+                                 max_amount_usd, **kwargs):
         self.fetched = True
         return X402Result(body="SECRET-DATA", paid=True, amount_usd=max_amount_usd,
                           tx_hash="0xfake", pay_to="0xR", status_code=200)
@@ -47,11 +47,11 @@ class _CheapQuoteExpensivePayClient:
     def __init__(self):
         self.fetched = False
 
-    async def quote(self, url):
+    async def quote(self, url, **kwargs):
         return 0.01
 
     async def fetch_with_payment(self, *, url, method, body, signer, network,
-                                 max_amount_usd):
+                                 max_amount_usd, **kwargs):
         self.fetched = True
         return X402Result(body="SECRET-DATA", paid=True, amount_usd=max_amount_usd,
                           tx_hash="0xfake", pay_to="0xR", status_code=200)
@@ -114,11 +114,11 @@ class _SlowPayingClient:
         self._delay = delay
         self.calls = 0
 
-    async def quote(self, url):
+    async def quote(self, url, **kwargs):
         return None
 
     async def fetch_with_payment(self, *, url, method, body, signer, network,
-                                 max_amount_usd):
+                                 max_amount_usd, **kwargs):
         self.calls += 1
         my_call = self.calls
         await asyncio.sleep(self._delay)

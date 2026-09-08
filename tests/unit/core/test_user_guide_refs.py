@@ -60,7 +60,7 @@ def test_every_catalog_flag_appears_in_reference():
     """
     text = REFERENCE.read_text()
     missing = []
-    for name, _group, _default in CATALOG:
+    for name, _group, _default, *_ in CATALOG:
         if "<" in name:
             continue
         if name not in text:

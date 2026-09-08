@@ -52,20 +52,29 @@ _POLICY_GATE_CAVEAT = (
 _ENABLED_TRUE = {"1", "true", "yes", "on"}
 
 
-def _is_malformed_number(raw) -> bool:
-    """True iff ``raw`` is a non-empty string that does NOT parse as a float.
-
-    Used to NAME the offending cap env var (M12) when load_wallet_config's bare
-    ``float()`` raises. An unset/empty value is NOT malformed (it just falls back
-    to the default), so only a present-but-garbage value trips this.
+def _is_malformed_number(raw, key: str) -> bool:
+    """True iff ``raw`` is a value ``load_wallet_config``'s own parser for
+    ``key`` would reject. Delegates to the REAL parsers (H3, 2026-08-22:
+    ``_cap_float`` for ``WALLET_DAILY_CAP_USD`` — disable-sentinel-aware, e.g.
+    ``none``/``off`` — vs ``_req_float`` for ``AGENT_WALLET_MAX_PER_TX_USD``,
+    which has no sentinel) so this can never diverge from what actually gets
+    accepted. Used to NAME the offending cap env var (M12) when
+    load_wallet_config's own parse raises. An unset/empty value is NOT
+    malformed (it just falls back to the default), so only a present-but-
+    garbage value trips this.
     """
+    from core.wallet.config import _cap_float, _req_float, DEFAULT_DAILY_CAP_USD, DEFAULT_MAX_PER_TX_USD
     text = (raw or "").strip()
     if not text:
         return False
+    probe_env = {key: raw}
     try:
-        float(text)
+        if key == "WALLET_DAILY_CAP_USD":
+            _cap_float(probe_env, key, DEFAULT_DAILY_CAP_USD)
+        else:
+            _req_float(probe_env, key, DEFAULT_MAX_PER_TX_USD)
         return False
-    except (TypeError, ValueError):
+    except ValueError:
         return True
 
 
@@ -75,7 +84,10 @@ def _parse_positive_usd(raw: str) -> float:
     A cap of 0 is deliberately NOT accepted as "disabled" — that ambiguity
     (0 == disabled vs. 0 == "spend nothing") is exactly the kind of footgun
     this guided command exists to avoid. Disabling a cap is an explicit,
-    separate action: remove the env var.
+    separate VALUE (see `_parse_cap_arg` for the daily-only disable sentinel);
+    it is no longer "remove the env var" (H3, 2026-08-22: WALLET_DAILY_CAP_USD
+    now has a finite default, so an absent env var means the default, not
+    disabled).
     """
     text = (raw or "").strip()
     try:
@@ -87,9 +99,29 @@ def _parse_positive_usd(raw: str) -> float:
     if value <= 0:
         raise click.ClickException(
             f"invalid amount {raw!r}: a cap must be a positive number "
-            "(to disable a cap, remove the env var instead)"
+            "(to disable the daily cap, use `polyrob wallet set-cap daily none`)"
         )
     return value
+
+
+def _parse_cap_arg(kind: str, raw: str) -> str:
+    """Validate a `set-cap` argument for *kind*; returns the exact string to
+    write to the env file.
+
+    `per-tx` (AGENT_WALLET_MAX_PER_TX_USD) has no disable sentinel — must
+    always be a positive finite number. `daily` (WALLET_DAILY_CAP_USD)
+    additionally accepts an explicit disable word (H3, 2026-08-22: the same
+    sentinel set `WALLET_DAILY_CAP_USD`'s own parser accepts —
+    ``core.wallet.config._CAP_DISABLED``) — this is now the ONLY way to
+    disable the aggregate cap, since an absent env var means the finite
+    default, not "no cap".
+    """
+    from core.wallet.config import _CAP_DISABLED
+    text = (raw or "").strip()
+    if kind == "daily" and text.lower() in _CAP_DISABLED:
+        return text.lower()
+    _parse_positive_usd(raw)  # validates; raises click.ClickException on failure
+    return text  # write the raw text verbatim (byte-identical to the old behavior)
 
 
 @click.group("wallet", invoke_without_command=True)
@@ -129,7 +161,7 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         # the config-error branch instead of dumping a bare ValueError.
         enabled = str(os.environ.get("AGENT_WALLET_ENABLED", "")).strip().lower() in _ENABLED_TRUE
         bad_caps = [k for k in ("AGENT_WALLET_MAX_PER_TX_USD", "WALLET_DAILY_CAP_USD")
-                    if _is_malformed_number(os.environ.get(k))]
+                    if _is_malformed_number(os.environ.get(k), k)]
         if not enabled:
             hint = (f" (note: {', '.join(bad_caps)} is not a number — fix that too)"
                     if bad_caps else "")
@@ -176,6 +208,13 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
                 row["native"] = native
             venues.append(row)
         wallet_address = w.address
+        # The SECOND address family off the same seed (2026-08-27): the
+        # operator must be able to see — and fund — the Solana address from
+        # the same view, or it stays invisible until a trade fails.
+        try:
+            solana_address = w.solana_address
+        except Exception:
+            solana_address = None
     except ValueError as e:
         msg = (f"agent wallet MISCONFIGURED: {e} "
                "(fix AGENT_WALLET_MASTER_SEED/AGENT_WALLET_DERIVATION or re-run `polyrob wallet init`)")
@@ -188,7 +227,8 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         "per_venue_daily_cap_usd": cfg.per_venue_daily_cap_usd,
     }
     payload = {"enabled": True, "network": cfg.network, "operational_venue": op,
-               "address": wallet_address, "venues": venues, "caps": caps}
+               "address": wallet_address, "solana_address": solana_address,
+               "venues": venues, "caps": caps}
 
     if as_json:
         click.echo(_json.dumps(payload, indent=2))
@@ -211,6 +251,24 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         elif r.get("note"):
             line += click.style(f"   ({r['note']})", fg="yellow")
         click.echo(line)
+    if solana_address:
+        sol_line = f"  {'solana':11s} {solana_address}  [solana] ←FUND for Solana trades"
+        if not no_balances and cfg.network == "mainnet":
+            try:
+                from core.wallet import solana_onchain
+                sol_bal = solana_onchain.native_balance(solana_address)
+                usdc_raw = None
+                from core.wallet import chains as _chains
+                _sol_row = _chains.get("solana")
+                if _sol_row and _sol_row.usdc:
+                    _tb = solana_onchain.token_balances(solana_address)
+                    usdc_raw = None if _tb is None else _tb.get(_sol_row.usdc, 0)
+                s = f"{sol_bal:.5f}" if sol_bal is not None else "n/a"
+                u = f"{usdc_raw / 1e6:.2f}" if usdc_raw is not None else "n/a"
+                sol_line += f"   USDC={u} SOL={s}"
+            except Exception:
+                pass
+        click.echo(sol_line)
     click.echo("")
     dc = f"${caps['daily_cap_usd']:.2f}" if caps["daily_cap_usd"] is not None else "none"
     click.echo(f"Caps: max ${caps['max_per_tx_usd']:.2f}/tx · daily {dc}"
@@ -232,7 +290,7 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
 @wallet_cmd.command("set-cap")
 @click.argument("kind", type=click.Choice(sorted(_CAP_ENV_KEY)))
 @click.argument("usd")
-@click.option("--yes", is_flag=True, default=False,
+@click.option("--yes", "-y", is_flag=True, default=False,
               help="Skip the confirmation prompt (non-interactive use).")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the global env-file home (test/ops only).")
@@ -243,12 +301,15 @@ def set_cap_cmd(kind: str, usd: str, yes: bool, home_dir_opt: str | None):
     WALLET_DAILY_CAP_USD (daily) or AGENT_WALLET_MAX_PER_TX_USD (per-tx) to
     the GLOBAL env file (~/.polyrob/.env). Money stays env-authoritative: a
     per-user preference may only tighten below this value, never raise it.
+    `set-cap daily none` (or off/unlimited/disabled) explicitly disables the
+    aggregate cap — the ONLY way to do so (H3, 2026-08-22): an absent env var
+    now means the finite $100/24h default, not "no cap".
     """
-    value = _parse_positive_usd(usd)
+    value_to_write = _parse_cap_arg(kind, usd)
     key = _CAP_ENV_KEY[kind]
     home = Path(home_dir_opt) if home_dir_opt else polyrob_home()
     path = home / ".env"
-    line = f"{key}={usd.strip()}"
+    line = f"{key}={value_to_write}"
 
     click.echo(f"About to write to {path}:")
     click.echo(f"  {line}")
@@ -256,10 +317,15 @@ def set_cap_cmd(kind: str, usd: str, yes: bool, home_dir_opt: str | None):
         click.echo("Aborted — no changes written.")
         return
 
-    _upsert_env(path, key, usd.strip(), secure=True)
+    _upsert_env(path, key, value_to_write, secure=True)
 
-    label = "daily cap" if kind == "daily" else "per-transaction cap"
-    click.echo(f"Wrote {key}={value} to {path} ({label}).")
+    from core.wallet.config import _CAP_DISABLED
+    if kind == "daily" and value_to_write in _CAP_DISABLED:
+        click.echo(f"Wrote {key}={value_to_write} to {path} "
+                   "(daily cap DISABLED — unbounded aggregate spend).")
+    else:
+        label = "daily cap" if kind == "daily" else "per-transaction cap"
+        click.echo(f"Wrote {key}={value_to_write} to {path} ({label}).")
     # L10 (2026-07-15): "restart" alone is ambiguous — name WHICH process re-reads
     # WHICH env file. The local `polyrob` CLI/REPL reads this global ~/.polyrob/.env
     # at startup; a systemd service reads its OWN env file (prod: /etc/polyrob/
@@ -356,15 +422,22 @@ def run_wallet_init_flow(*, mnemonic, raw_seed, home, assume_yes, data_dir=None)
     else:
         click.echo("network=mainnet — fund with USDC on Base.")
 
-    # M13 (2026-07-15): surface the REAL spend posture at init — the default per-tx
-    # is a catastrophic-loss ceiling, and with no daily cap the agent can make
-    # unlimited sub-ceiling txs. A new owner never saw this before.
-    max_tx = (os.environ.get("AGENT_WALLET_MAX_PER_TX_USD") or "1000").strip()
-    daily = (os.environ.get("WALLET_DAILY_CAP_USD") or "").strip()
-    if daily:
-        click.echo(f"Spend caps: ${max_tx}/tx ceiling · ${daily}/day budget.")
+    # M13 (2026-07-15): surface the REAL spend posture at init — the per-tx
+    # cap is a catastrophic-loss ceiling, not a budget. H3 (2026-08-22): both
+    # caps now resolve through the SAME parsers load_wallet_config() uses
+    # (never a second, divergent "1000"/blank-means-unlimited display parser),
+    # so a malformed pre-existing env var is reported here too, not silently
+    # shown as if it were the default.
+    from core.wallet.config import _cap_float, _req_float, DEFAULT_DAILY_CAP_USD, DEFAULT_MAX_PER_TX_USD
+    try:
+        max_tx = _req_float(os.environ, "AGENT_WALLET_MAX_PER_TX_USD", DEFAULT_MAX_PER_TX_USD)
+        daily = _cap_float(os.environ, "WALLET_DAILY_CAP_USD", DEFAULT_DAILY_CAP_USD)
+    except ValueError as e:
+        raise click.ClickException(f"wallet caps misconfigured: {e}")
+    if daily is not None:
+        click.echo(f"Spend caps: ${max_tx:.2f}/tx ceiling · ${daily:.2f}/day budget.")
     else:
-        click.echo(f"Spend caps: ${max_tx}/tx (a catastrophic-loss CEILING, not a budget) "
+        click.echo(f"Spend caps: ${max_tx:.2f}/tx (a catastrophic-loss CEILING, not a budget) "
                    "· daily UNLIMITED.")
         click.echo("Set a real daily budget:  polyrob wallet set-cap daily <usd>")
 
@@ -443,7 +516,7 @@ def wallet_export_cmd(venue):
               help="Import an existing BIP-39 mnemonic instead of generating one.")
 @click.option("--from-seed", "raw_seed", default=None,
               help="Import a legacy raw seed (>=32 chars) — keeps a pre-BIP44 install's addresses.")
-@click.option("--yes", is_flag=True, default=False, help="No prompts (accept defaults).")
+@click.option("--yes", "-y", is_flag=True, default=False, help="No prompts (accept defaults).")
 @click.option("--data-dir", "data_dir_opt", default=None, hidden=True,
               help="Override the wallet meta dir (test/ops only).")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,

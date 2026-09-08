@@ -22,7 +22,7 @@ def test_delegate_blocked_derivation_exact():
         "code_execution", "coding", "cronjob", "x402_pay", "x402_invoice",
         "hyperliquid", "polymarket", "git", "github", "process", "tool_manage",
         "mcp", "shell", "self_env", "hf_deploy", "defi_trade", "x_browser",
-        "publish",
+        "publish", "app_service",
     })
 
 
@@ -32,6 +32,7 @@ def test_high_impact_derivation_exact():
         "twitter", "browser", "web_fetch", "git", "github", "mcp", "process",
         "tool_manage", "shell", "self_env", "x402_invoice", "anysite",
         "perplexity", "hf_deploy", "defi_trade", "x_browser", "publish",
+        "app_service",
     })
 
 

@@ -428,36 +428,6 @@ class TelemetryManager:
         except Exception as e:
             self.logger.error(f"Failed to capture agent registration: {e}", exc_info=True)
 
-    def capture_multi_agent_relationship(
-        self,
-        agent_ids: List[str],
-        agent_types: Dict[str, str],
-        execution_sequence: List[str],
-        agent_models: Optional[Dict[str, str]] = None,
-        agent_details: Optional[List[Dict]] = None
-    ) -> None:
-        """Capture multi-agent relationship event.
-
-        Args:
-            agent_ids: List of agent IDs
-            agent_types: Mapping of agent_id to agent_type
-            execution_sequence: Order of execution
-            agent_models: Optional mapping of agent_id to model
-            agent_details: Optional detailed agent information
-        """
-        try:
-            event = MultiAgentRelationshipEvent(
-                agent_ids=agent_ids,
-                agent_types=agent_types,
-                execution_sequence=execution_sequence,
-                agent_models=agent_models or {},
-                agent_details=agent_details or [],
-                session_id=self._session_id
-            )
-            self._service.capture(event, session_id=self._session_id)
-        except Exception as e:
-            self.logger.error(f"Failed to capture multi-agent relationship: {e}", exc_info=True)
-
     def flush_buffers(self) -> None:
         """Flush all buffered telemetry events to disk."""
         try:

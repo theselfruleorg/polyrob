@@ -15,7 +15,7 @@ for code anchors and complete prose.
 - OPENROUTER_PROMPT_CACHE — default: OFF — Adds Anthropic-style `cache_control` breakpoints on the OpenRouter tools block.
 - THINKING_CONFIG_ENABLED — default: OFF — Enables per-provider extended-thinking/reasoning-effort config (real behavior change).
 - THINK_SCRUBBER_ENABLED — default: ON ("1") — Strips leaked `<think>`/`<reasoning>` blocks at the content→AIMessage seam.
-- LLM_TOKEN_STREAMING — default: OFF — 019 P5: TRUE per-token streaming.
+- LLM_TOKEN_STREAMING — default: OFF (**ON under POLYROB_LOCAL**, 030 Q3) — 019 P5: TRUE per-token streaming.
 - STREAM_BRAIN_SCRUB — default: ON ("true") — Scrubs brain-state JSON from the streamed user-facing buffer.
 - TASK_MAX_INPUT_TOKENS — default: unset — Caps input-token budget for the task agent (shared-client clobber guard).
 - COMPLETION_RESERVE_TOKENS — default: 16384 — Ceiling on the output reserve subtracted from the input budget (`0` = legacy full `max_completion_tokens` reserve).
@@ -37,12 +37,15 @@ for code anchors and complete prose.
 - CHAT_PROVIDER — default: unset — Highest-precedence operator pin for the default provider; wins over `DEFAULT_PROVIDER`.
 - CHAT_MODEL — default: unset — Highest-precedence operator pin for the default model; wins over `DEFAULT_MODEL`.
 - POLYROB_<PROVIDER>_MODEL — default: unset — Per-provider default-model override (e.g. `POLYROB_OPENROUTER_MODEL=x-ai/grok-4.3`): wins over the provider's registry/…
-- LLM_PROVIDER_REGISTRY — default: ON — 024 P0 kill-switch: derive the provider lists (profiles, PROVIDER_CONFIG, schema routing, model map, fallback hierarchy…
 - LLM_CUSTOM_PROVIDERS — default: unset (~/.polyrob/providers.yaml) — Path to the user-declared provider file (YAML: `providers:` map of `ProviderSpec` rows — base_url/transport/env_key/mod…
 - LLM_AUTH_STORE_ENABLED — default: ON under POLYROB_LOCAL, else OFF — 024 L1 (default moved by 027 WP4 — a completed `auth add <oauth-seat>` connect was unreadable without this undocumented…
 - POLYROB_AUTH_STORE — default: unset (~/.polyrob/auth.json) — Path override for the credential store (test isolation / operator relocation).
 - LLM_OAUTH_ENABLED — default: OFF — 024 L2 gate: permit `polyrob auth add` to run a provider's OAuth connect flow (device-code, or loopback PKCE under `POL…
 - LLM_CREDENTIAL_BORROW — default: OFF — 024 L3 gate: permit `resolve_credential` to serve consent-tagged borrowed credentials (imported from other CLIs' stores…
+- OPENAI_API_KEY — default: unset (secret, masked) — OpenAI provider API key (also a `BotConfig` field; see the per-provider key note below).
+- GEMINI_API_KEY / GOOGLE_API_KEY — default: unset (secret, masked) — Google Gemini provider API key; `GOOGLE_API_KEY` is an accepted alias (checked second).
+- OPENROUTER_API_KEY — default: unset (secret, masked) — OpenRouter provider API key; its presence also enables the OpenRouter remaining-balance probe in the unified ledger.
+- AUTOV2_LLM_TIMEOUT_OVERRIDE — default: unset — Debug override (seconds) that replaces the computed adaptive per-call LLM timeout (token/tool/vision-scaled, min 120s)…
 
 ## Memory
 
@@ -69,6 +72,12 @@ for code anchors and complete prose.
 - TRAJECTORY_CAPTURE — default: OFF — Opt-in run-end trajectory capture: each finished goal/cron/`polyrob run` session is assembled into a canonical training…
 - MAX_MEMORY_CACHE_SIZE — default: 30 — In-memory history cache size.
 - MEMORY_CLEANUP_INTERVAL — default: 50 — Clean memory every N operations.
+- KB_MAX_FILES — default: 2000 — Max files one `@folder` KB ingestion will index.
+- KB_MAX_BYTES — default: 26214400 (25 MiB) — Max total bytes one KB ingestion will read.
+- KB_CHUNK_TOKENS — default: 800 — Target tokens per KB chunk at ingestion.
+- KB_CHUNK_OVERLAP — default: 100 — Token overlap between adjacent KB chunks.
+- KB_PREFETCH_COLLECTION — default: default — Which KB collection the step-start auto-prefetch (`KB_AUTO_PREFETCH`) searches.
+- KB_API_ENABLED — default: OFF — Mount the KB HTTP endpoints (`api/kb/`) on the server.
 
 ## Skills
 
@@ -102,6 +111,10 @@ for code anchors and complete prose.
 - USER_DELIVERY_RATE_PER_HOUR — default: 10 — §3.2 rail memory: max user-bound sends per tenant per rolling hour (agent sends + cron delivery + framework notices sha…
 - USER_DELIVERY_DAILY_CAP — default: 30 — §3.2 rail memory: max user-bound sends per tenant per rolling 24h.
 - USER_DELIVERY_RESERVED_SLOTS — default: 8 — Slots of `USER_DELIVERY_DAILY_CAP` that `priority="low"` traffic (e.g. goal-start pings) may NOT consume, so goal compl…
+- USER_DELIVERY_LIFECYCLE_DAILY_CAP — default: 10 — Separate, smaller daily ceiling for framework lifecycle pings (`source="self_evolution"`: `▶ goal started`, `✅ Backgrou…
+- USER_DELIVERY_SPILL — default: **ON** — Long-body spill (chat-first review 2026-08-22, G8): an owner-bound body over `USER_DELIVERY_SPILL_CHARS` is written to…
+- USER_DELIVERY_SPILL_CHARS — default: 1200 — Body length above which the rail spills to an attachment.
+- USER_DELIVERY_GIST_CHARS — default: 600 — Character budget for the gist that replaces a spilled body.
 - TELEMETRY_EVENT_LOG_PATH — default: unset — Override the durable telemetry event log's db path (default: `<data_root>/telemetry_events.db`).
 - RUN_EVENTS_ENABLED — default: **ON** — 019 live run-state observability: master gate for the span/wait feed events (`tool_started` / `llm_started` / `awaiting…
 - TELEGRAM_PROGRESS_EDITS — default: **ON** — 019 P2: the Telegram `⚙️ Working…` bubble becomes a live status line (throttled in-place edits ≤1/2.5s: current tool /…
@@ -114,21 +127,30 @@ for code anchors and complete prose.
 - GOAL_MAX_RUN_SECONDS — default: 1800 — Hard wall-clock cap on a single goal run (mirrors cron); a timeout is recorded as a failure and the slot is reclaimed.
 - GOAL_DISPATCH_INTERVAL_SEC — default: 60 — Goal dispatcher tick interval.
 - GOAL_MAX_CONCURRENT — default: 2 — Max concurrent goal runs.
+- GOAL_FAIR_DISPATCH — default: **ON** — Round-robin the ready queue across objectives instead of the global `priority DESC, created_at` order, so one objective…
+- GOAL_PER_OBJECTIVE_CAP — default: 0 (disabled) — OPTIONAL hard ceiling on concurrent goal runs belonging to ONE objective, on top of the round-robin. `0` (default) mean…
 - GOAL_PLANNER_ENABLED — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — Goal-planner feature gate.
 - GOAL_PLANNER_MIN_READY — default: 2 — Min ready goals before planner triggers.
 - GOAL_PLANNER_COOLDOWN_SEC — default: 3600 — Planner cooldown (seconds).
 - GOAL_PLANNER_HISTORY_N — default: 10 — Planner goal history window.
+- GOAL_PLANNER_SCALING — default: **ON** — ONE revert for the whole planner half of stream scaling (`GOAL_FAIR_DISPATCH` reverts the dispatch half). `=false` rest…
+- GOAL_PLANNER_GOALS_PER_RUN — default: 3 — Upper bound on goals ONE planner run may create ("Create 1-N goals" in the planner prompt).
+- GOAL_PLANNER_READY_CEILING — default: 0 (derive) — Ready-goal ceiling the planner is told to respect, and the thinness gate `_maybe_plan` uses. `0` derives it as `max(5,…
+- GOAL_PLANNER_MAX_SOCIAL — default: 1 — How many goals in one planner run may carry the `twitter` tool.
 - GOAL_DAILY_QUOTA — default: 6 — Max goal runs started per trailing 24h; <=0 disables.
 - GOAL_SELF_WAKE_ENABLED — default: OFF — Goal-initiated self-wake re-entry — gates whether the dispatcher *attempts* delivery (`agents/task/goals/dispatcher.py:…
 - GOAL_NOTIFY_ON_DONE — default: ON — §3.4 SAFETY NET (demoted from unconditional push): tell the user when a background goal completes **only when the agent…
 - GOAL_DEDUP_THRESHOLD — default: 0.6 — Goal dedup similarity threshold (0.0–1.0).
-- AUTONOMY_HALT — default: OFF — Owner kill-switch: halt ALL autonomous agent invocation — goal dispatch AND (since G-35) cron ticks, checked FIRST in e…
+- AUTONOMY_HALT — default: OFF — **Legacy facet** of the 031 owner pause record — read, never written.
+- TREASURY_ENTRY_PAUSE — default: OFF — **Legacy facet** of the 031 pause record — the `trading` scope: refuse NEW treasury positions (any chain, any turn orig…
+- STREAM_SEEDING_PAUSE — default: OFF — **Legacy facet** of the 031 pause record — the `streams` scope: refuse NEW stream-manifest reseeds (`data/streams/strea…
 - CURATOR_ENABLED — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — W5: stale/archive unused authored skills (Phase 1, no LLM).
 - CURATOR_INTERVAL_HOURS — default: 168 — Curator tick interval (hours).
 - CURATOR_STALE_DAYS — default: 30 — Days unused before a skill is staled.
 - CURATOR_ARCHIVE_DAYS — default: 90 — Days before stale skill is archived.
 - INSIGHTS_TOOL — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — W7: read-only authored-skill reuse-% `insights` action.
 - AGENT_STATUS_TOOL — default: OFF (**ON under POLYROB_LOCAL**) — I-6: read-only `agent_status` introspection action — steps used/remaining, active tools, context-token usage, wallet +…
+- LIVE_HEALTH_CONTEXT — default: true — 2026-08-28 status SSOT: at the first step of every turn the agent receives a `<live-health>` control note rendered from…
 - VERIFY_BEFORE_DONE — default: OFF (**ON under POLYROB_LOCAL**) — I-3 / H3 (dedup decision D1): when the run's action ledger shows a successful code edit (`str_replace`/`apply_patch`/`c…
 - PROJECT_CONTEXT_AUTOLOAD — default: OFF (**ON under POLYROB_LOCAL**) — C9: auto-load a project file as a frozen `PROJECT_CONTEXT` foundation message.
 - ENV_CONTEXT_BLOCK — default: ON — 014-C1: pin the `<environment>` foundation block (instance, platform, data dir, absolute workspace path + persistence s…
@@ -150,6 +172,8 @@ for code anchors and complete prose.
 - REFLECTION_SESSION_CLOSE_THRESHOLD — default: 5 — Minimum findings a session must accrue for the `REFLECTION_ON_SESSION_CLOSE` trigger to fire (cost gate).
 - CONTINUITY_LLM_SUMMARY — default: OFF (everywhere; NOT a safe-local flag) — Use an aux-model LLM call to summarize the closing episode for the continuity bridge instead of a mechanical summary.
 - EPISODIC_RETENTION_DAYS — default: 90 — Episodic row retention window (days).
+- AUTONOMY_HEARTBEAT_INTERVAL_SEC — default: 300 (min 30) — Interval of the autonomy runtime's heartbeat ticker (liveness stamp + event-log maintenance host).
+- POLYROB_STREAMS_MANIFEST — default: unset (= data/streams/streams.yaml in the install tree) — Path override for the operator-granted streams manifest `scripts/seed_streams.py`/the hourly stream seeder load. `load_…
 
 ## Delegation / sub-agents
 
@@ -179,10 +203,10 @@ for code anchors and complete prose.
 - CODING_LSP_ENABLED — default: OFF (not safe-local) — I-2 / H1 (dedup decision D2): after a successful `str_replace`/`apply_patch`/`create_file`, run an external checker (`p…
 - CODING_SNAPSHOT_ENABLED — default: OFF (not safe-local) — I-4 / H2 (dedup decision D3): shadow-git PER-FILE snapshot/restore.
 - GIT_TOOLS_ENABLED — default: OFF (**ON under POLYROB_LOCAL**) — Register the `git` tool (status/diff/log/branch/checkout/add/commit/pull/push/clone) over the confined workspace.
-- GITHUB_TOOL_ENABLED — default: OFF (not safe-local) — Register the `github` tool (PRs/issues/actions; auth via `GITHUB_TOKEN`/`GH_TOKEN`).
+- GITHUB_TOOL_ENABLED — default: OFF (not safe-local; ON under AGENT_BUILDER_MODE=build|ship) — Register the `github` tool (PRs/issues/actions; auth via `GITHUB_TOKEN`/`GH_TOKEN`).
 - CODE_EXEC_ENABLED — default: OFF — Register `code_execution` tool (NOT a sandbox; never in default tool_ids).
 - CODE_EXEC_BACKEND — default: local_subprocess — Code-exec backend selector.
-- CODE_EXEC_MAX_TIMEOUT_SEC — default: 30 — Hard cap on a code-exec run.
+- CODE_EXEC_MAX_TIMEOUT_SEC — default: 30 (dev mode, unset: follows SHELL_MAX_TIMEOUT_SEC=300) — Hard cap on a code-exec run.
 - CODE_EXEC_MAX_OUTPUT_BYTES — default: 100000 — Code-exec output byte cap.
 - CODE_EXEC_DOCKER_IMAGE — default: python:3.12-slim — Container image for the `docker` code-exec backend (explicit value wins over `CODE_EXEC_DEV_IMAGE` in every mode).
 - CODE_EXEC_DEV_IMAGE — default: nikolaik/python-nodejs:python3.11-nodejs20 — Image for the posture≥1 persistent DEV container when `CODE_EXEC_DOCKER_IMAGE` is unset — python+node so npm/npx toolch…
@@ -190,6 +214,7 @@ for code anchors and complete prose.
 - CODE_EXEC_CONTAINER_MEMORY_MB — default: 1024 — Docker container memory cap (MB); also sets `--memory-swap` equal (no swap headroom).
 - CODE_EXEC_CONTAINER_CPUS — default: 1.0 — Docker container CPU cap (`--cpus`).
 - CODE_EXEC_PIDS_LIMIT — default: 256 — Docker container PID cap (`--pids-limit`).
+- CODE_EXEC_SHM_SIZE_MB — default: 1024 — Docker container `/dev/shm` size (MB, `--shm-size`).
 - CODE_EXEC_DOCKER_USER — default: unset → invoking uid:gid, or 65534:65534 (nobody:nogroup) when the host process itself runs as root — Explicit override for the docker backend's `--user`.
 - CODE_EXEC_DOCKER_PERSISTENT — default: OFF (**ON at AGENT_COMPUTE_POSTURE>=1**) — Opt-in: ONE persistent per-session `docker` container (`docker exec` per call) instead of a fresh ephemeral container p…
 - CODE_EXEC_PUBLISH_PORTS — default: 8000,5000,8080,3000 — Container ports a **dev** (posture≥1) persistent sandbox publishes to host **loopback** (`-p 127.0.0.1::<port>`, docker…
@@ -199,6 +224,28 @@ for code anchors and complete prose.
 - CODE_EXEC_SSH_KEY — default: unset — Identity file (`-i`) for the `ssh` code-exec backend.
 - CODE_EXEC_SSH_SANDBOXED — default: OFF (False) — Operator ATTESTATION that the `CODE_EXEC_SSH_HOST` remote is hardened/disposable, flipping the `ssh` backend's reported…
 - SHELL_TOOLS_ENABLED — default: OFF (**ON at AGENT_COMPUTE_POSTURE>=1**) — Register the persistent `shell` + `process` tools (run inside the session's sandbox container; cwd/env persist; backgro…
+- SHELL_MAX_TIMEOUT_SEC — default: 300 — ONE foreground ceiling for the agent's build commands: `shell_run` clamps its `timeout` to it (120 when the agent omits…
+- APP_SERVICE_ENABLED — default: OFF (ON under effective AGENT_BUILDER_MODE=ship) — 032: register the `app_service` tool (`deploy`/`stop`/`list_apps`/`logs`) and arm the owner-owned supervisor unit.
+- APP_SERVICE_ALLOW_PUBLIC — default: OFF (ON under effective AGENT_BUILDER_MODE=ship) — Render the public nginx stanza for a live app (`https://<slug>.<APP_SERVICE_BASE_DOMAIN>`).
+- APP_SERVICE_BASE_DOMAIN — default: unset — The wildcard base, e.g. `apps.example.com` (one `*.apps.example.com` certificate).
+- APP_SERVICE_MAX_LIVE — default: 3 — Apps per tenant that may hold an address (approved/deploying/live/paused).
+- APP_SERVICE_DAILY_MAX — default: 10 — Deploy requests per tenant per rolling 24 h.
+- APP_SERVICE_MIN_INTERVAL_SEC — default: 120 — Minimum seconds between deploy requests of ONE slug.
+- APP_SERVICE_MEMORY_MB — default: 512 — Per-app container memory ceiling (memory == memory-swap).
+- APP_SERVICE_CPUS — default: 0.5 — Per-app CPU ceiling.
+- APP_SERVICE_PIDS — default: 256 — Per-app pid ceiling.
+- APP_SERVICE_SNAPSHOT_MAX_MB — default: 500 — Cap on the tested-tree snapshot an app runs from (symlinks, `.git`, caches and credential files are never copied).
+- APP_SERVICE_EGRESS_DEFAULT — default: none — Egress when the verb omits it: `none` (deny all but replies) | `allowlist` | `open`.
+- APP_SERVICE_PORT_RANGE — default: 18000-18099 — Loopback host ports the supervisor allocates from (the agent never chooses a port).
+- APP_SERVICE_TICK_SEC — default: 30 — Supervisor reconcile cadence (also the pause-edge latency for live apps).
+- APP_SERVICE_HEALTH_TIMEOUT_SEC — default: 90 — Time to the first healthy `health_path` response before a deploy is `failed`.
+- APP_SERVICE_IMAGE — default: CODE_EXEC_DEV_IMAGE else polyrob-dev:latest — Base image an app container runs in.
+- APP_SERVICE_RETAIN_DAYS — default: 7 — Days a stopped/failed app's snapshot is kept before pruning.
+- APP_SERVICE_CERT_DIR — default: /etc/letsencrypt/live/<APP_SERVICE_BASE_DOMAIN> — Directory holding the wildcard `fullchain.pem`/`privkey.pem` the stanzas reference.
+- APP_SERVICE_NGINX_CONF_DIR — default: /etc/nginx/apps.d — Where the supervisor writes one `<slug>.conf` per live app (included by `scripts/setup_apps_vhost.sh`).
+- APP_SERVICE_SOURCE_ROOT — default: unset — An extra directory (beyond the data home and the supervisor's cwd) an app's source dir may live under; the supervisor r…
+- APP_SERVICES_DB_PATH — default: <data_root>/app_services.db — Override for the app registry DB (tests redirect it per test).
+- AGENT_BUILDER_MODE — default: off — The FIFTH named default bundle (032; the `AUTONOMY_MODE` precedent): `off` = byte-identical; `build` = `PUBLISH_ENABLED…
 - SELF_ENV_ENABLED — default: OFF (**ON at AGENT_COMPUTE_POSTURE>=2**) — Register the `self_env` self-maintenance tool (install_dep/read_source/patch_source/git_pull/restart_service).
 - POLYROB_INSTALL_TREE — default: repo root (2 levels up from tools/self_env/tool.py) — The install-tree root `self_env` read/patch/git_pull operate under (realpath-confined).
 - POLYROB_SUPERVISED — default: OFF — Assert a supervisor (e.g. systemd `Restart=`) will respawn the process, so `self_env_restart_service` may request a res…
@@ -207,7 +254,7 @@ for code anchors and complete prose.
 - HF_DEPLOY_DAILY_MAX — default: 10 — Max deploy attempts per tenant per rolling 24h.
 - HF_DEPLOY_MIN_INTERVAL_SEC — default: 120 — Minimum seconds between deploy attempts of the SAME app.
 - OBJECTIVE_GOAL_BUDGET — default: 25 — Max LIVE (non-cancelled) goals one objective may have attached.
-- PUBLISH_ENABLED — default: OFF (not safe-local) — Register the `publish` tool (publish/publish_list/unpublish — the ship rail: copy workspace files to a stable public UR…
+- PUBLISH_ENABLED — default: OFF (not safe-local; ON under AGENT_BUILDER_MODE=build|ship) — Register the `publish` tool (publish/publish_list/unpublish — the ship rail: copy workspace files to a stable public UR…
 - PUBLISH_ROOT — default: <data_home>/publish — Directory the web server serves publications from.
 - PUBLISH_BASE_URL — default: unset (relative URLs) — Public base URL that serves `PUBLISH_ROOT` (e.g. `https://pub.example.com`).
 - PUBLICATIONS_DB_PATH — default: <data_root>/publications.db — Override the publications DB location (slug → status/url/size).
@@ -218,9 +265,11 @@ for code anchors and complete prose.
 - WAKE_CHANGE_GATE — default: OFF (**ON under AUTONOMY_POSTURE=full**) — Cron wake change-gate: a job with `payload.change_gated` skips the paid model call ($0 tick, `cron_run skipped/no_chang…
 - MESSAGE_TOOL_ENABLED — default: OFF (**ON under POLYROB_LOCAL**) — Agent-callable `message(surface, target, text, action)` send tool.
 - MESSAGE_AUTONOMOUS_ALLOWLISTED — default: OFF (ON under AUTONOMY_MODE=autonomous) — Whether a forged/AUTONOMOUS turn (goal/cron/planner session, sub-agent, self-wake re-entry) may use `message` at all.
+- OWNER_MESSAGE_COOLDOWN_SEC — default: 7200 (2h) — Minimum gap an autonomous/forged turn (goal/cron/planner session, sub-agent, self-wake re-entry) must respect before pr…
 - DELIVERABLES_ATTACH_ENABLED — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — Goal/cron completion pushes attach the run's file deliverables (screened + capped) to the OWNER chat via the delivery r…
 - DELIVERABLES_ATTACH_MAX_MB — default: 10 — Per-file attach cap in MB for the completion AUTO-attach (Telegram bot API hard limit is 50).
 - DELIVERABLES_ATTACH_MAX_FILES — default: 3 — Max files attached to one completion message; the remainder is listed by name+size+path.
+- DELIVERABLES_MAX_LINES — default: 5 — UNCONDITIONAL cap on individually-listed deliverable lines in one owner message; everything past it becomes ONE roll-up…
 - MESSAGE_MEDIA_MAX_MB — default: 45 — Per-file cap for the explicit `message` tool `media_paths` send (owner-directed; Telegram hard limit ~50 MB).
 - WEBVIEW_PUBLIC_URL — default: unset — Public base URL of the owner-auth webview console (e.g. `https://console.example.com`).
 - APPROVAL_REQUIRED_TOOLS — default: '' (no-op) — Comma list of tools requiring approval before execution.
@@ -236,6 +285,9 @@ for code anchors and complete prose.
 - ENABLE_GIF_CREATION — default: OFF — (Legacy/dead) GIF creation.
 - FS_REALPATH_CONFINE — default: ON ("on") — Confine filesystem ops via realpath.
 - BROWSER_ALLOW_PRIVATE_URLS — default: OFF ('false') — Allow browser navigation to private/loopback URLs.
+- GIT_TOOL_TIMEOUT_SEC — default: 120 — Per-command subprocess timeout (seconds) for the `git` tool.
+- GITHUB_TOKEN / GH_TOKEN — default: unset (secret, masked) — GitHub token for the `github` tool when no per-user OAuth token is stored (`GITHUB_TOKEN` wins; the standard gh-CLI/Act…
+- TWITTER_WRITE_MAX_PER_HOUR — default: 15 — Sliding-window cap on `x_browser` posts per hour.
 
 ## API / server / sessions
 
@@ -274,10 +326,16 @@ for code anchors and complete prose.
 - CHAT_MAX_STEPS — default: 8 — Max agent steps for a chat-surface turn.
 - RUN_BUDGET_USD — default: 0 (disabled) — Session-cumulative provider-spend ceiling in USD; when > 0 the run loop halts honestly (`run_budget_exhausted`) before…
 - CHAT_SKIP_CREDIT_CHECK — default: ON (truthy) — Skip the credit check on chat-path turns.
+- API_SECRET / ADMIN_TOKEN — default: unset (secret, masked) — Secret key for the legacy `AuthenticationMiddleware` on the API app (`API_SECRET` wins, `ADMIN_TOKEN` is the fallback n…
+- PRODUCTION — default: OFF ('true' enables) — Marks the deploy as production independent of `ENV`: a missing `JWT_SECRET_KEY` then becomes a fatal startup error inst…
+- MAX_CONCURRENT_UPDATES — default: 50 — Semaphore bound on concurrent session-update operations in the API app.
+- SESSION_LLM_LIMIT — default: 5 (min 1) — Per-session concurrent-LLM-call semaphore in the orchestrator.
+- MAX_QUEUED_MESSAGES — default: 10 — Per-session HITL inbound message queue bound (overflow is refused).
 
 ## Identity / polyrob / local profile
 
 - POLYROB_LOCAL — default: OFF — Single-user terminal profile; flips the `_SAFE_LOCAL_FLAGS` group ON as a default.
+- ROB_LOCAL — default: OFF — Legacy alias for `POLYROB_LOCAL` (either being truthy enables local mode), kept so old docs/env files are not a silent…
 - POLYROB_DATA_DIR — default: unset — Isolation switch (doc 01/06): when set — the headless/server case — the runtime data home (goals.db/cron.db/memory.db +…
 - POLYROB_PROJECT_DIR — default: unset — When set, the agent uses this folder as ONE persistent workspace shared across sessions/goals/cron (Claude-Code style),…
 - POLYROB_LOG_DIR — default: unset — Runtime log directory override.
@@ -287,6 +345,8 @@ for code anchors and complete prose.
 - ALLOWED_TELEGRAM_USER_IDS — default: unset — Comma list of raw Telegram numeric user ids allowed to drive the bot.
 - POLYROB_OWNER_TELEGRAM_ID — default: unset — The owner's raw Telegram numeric id, used for two things: (1) the **inbound owner alias** — an inbound from this id is…
 - POLYROB_OWNER_EMAIL / BOT_OWNER_EMAIL — default: unset — The owner's email address for **out-of-band cron delivery** (`deliver="email"`) on single-owner headless deploys where…
+- OWNER_SURFACE / OWNER_SURFACES — default: unset (= telegram) — 030 WS-B1: the owner-notice fan-out order for `deliver_user_message` (approvals, credit sentinel, goal-blocked, settlem…
+- OWNER_SLACK_ID / OWNER_DISCORD_ID / OWNER_SIGNAL_ID / OWNER_WHATSAPP_ID / OWNER_X_ID — default: unset — The owner's address on that surface for the `OWNER_SURFACE` fan-out (mirrors `POLYROB_OWNER_TELEGRAM_ID`/`POLYROB_OWNER…
 - SINGULAR_CHAT_ENABLED — default: OFF (**ON for polyrob telegram**) — Installs the outbound surface bus so agent replies route to a chat surface.
 - TELEGRAM_SURFACE_ENABLED — default: OFF (**ON for polyrob telegram**) — Telegram surface enable flag.
 - DISCORD_SURFACE_ENABLED — default: OFF (**ON for polyrob discord**) — Discord surface enable flag (Gateway WS bot; DMs + allowlisted guild channels).
@@ -317,6 +377,7 @@ for code anchors and complete prose.
 - EMAIL_SURFACE_ENABLED — default: OFF (**ON for polyrob email**) (ON under AUTONOMY_MODE=autonomous) — Email surface (IMAP poll inbound + SMTP outbound). v1 is correspondent-only; owner-by-email stays OFF.
 - EMAIL_IMAP_POLL_SEC — default: 60 — Seconds between IMAP polls for new mail (no IDLE in v1).
 - EMAIL_AUTONOMY_RUNTIME — default: OFF — Whether `polyrob email` starts the shared autonomy runtime (goal dispatcher + cron ticker + curator + surface GC).
+- API_AUTONOMY_RUNTIME — default: **ON** — Whether the api process (`polyrob serve`) starts the shared autonomy loops.
 - GMAIL_EMAIL / GMAIL_APP_PASSWORD — default: unset — Mail credentials for the `email` tool (SMTP send + IMAP read) — the email surface reuses the same tool/creds.
 - GMAIL_IMAP_SERVER / GMAIL_SMTP_SERVER / GMAIL_SMTP_PORT — default: imap.gmail.com / smtp.gmail.com / 587 — IMAP/SMTP server endpoints for the email tool; point these at any provider.
 - EMAIL_PROVIDER — default: auto — Which transport backs the agent's email: `smtp` | `agentmail`.
@@ -328,6 +389,18 @@ for code anchors and complete prose.
 - WHATSAPP_VERIFY_TOKEN — default: unset — Token echoed back on the GET webhook verify handshake (Meta webhook setup).
 - WHATSAPP_WEBHOOK_SECRET — default: unset — HMAC-SHA256 payload-signature secret (Meta app secret). **Unset ⇒ inbound webhook payloads are rejected** (fail-closed).
 - WHATSAPP_TEMPLATE_NAME — default: task_ready — Approved utility template used to re-open the 24h messaging window for a proactive (agent-initiated) message.
+- SLACK_BOT_TOKEN / SLACK_APP_TOKEN — default: unset (secret, masked) — Slack surface credentials: bot token (`xoxb-`) + Socket-Mode app token (`xapp-`); both required or `polyrob slack` refu…
+- DISCORD_BOT_TOKEN — default: unset (secret, masked) — Discord surface bot token (a `--token` CLI option wins over the env).
+- SIGNAL_DAEMON_URL — default: http://127.0.0.1:8080 — Base URL of the local `signal-cli daemon --http` the Signal surface talks to.
+- SIGNAL_ACCOUNT — default: unset — The Signal account (+E164 number) the surface sends/receives as; required for `polyrob signal`.
+- SIGNAL_SEND_MIN_INTERVAL_SEC — default: 1.0 — Minimum seconds between Signal sends (send throttle).
+- TWITTER_BOT_USER_ID — default: unset — The bot's own X numeric user id for the X DM surface; unset = discovered via `get_me()` at startup (one API call saved…
+- WEBHOOK_PATH — default: /telegram/webhook — URL path for the Telegram webhook mode (explicitly not the old bot's hardcoded `/mvpbot`).
+- DEV_RAIL_SCRIPT — default: unset (= scripts/dev_inject.sh in the install tree) — Path override for the Telegram `/dev` rail's inject script; a non-file value disables the rail.
+- CHAT_INTENT_CLASSIFIER — default: OFF — Enable the chat-surface intent classifier (pre-routing intent detection on inbound chat messages).
+- OUTBOUND_QUEUE_ENABLED — default: OFF — Durable outbound send queue (retry + dead-letter) behind `publish()`'s PRIMARY reply routing (direct-send vs. queued-wi…
+- VOICE_TRANSCRIPTION_REQUIRED — default: OFF — Make a missing faster-whisper engine a startup ERROR instead of a WARN (most deploys degrade gracefully: voice refused…
+- INTERACTIVE_TOOL_IDS — default: unset — Explicit comma-list override of the interactive-owner chat toolset; unset derives it (supervised: the `owner_interactiv…
 - SELF_CONTEXT_WRITABLE — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — Agent can write its evolving SELF identity doc.
 - SELF_CONTEXT_REQUIRE_REVIEW — default: ON (True) — SELF-context writes go to `.pending/` review.
 - OWNER_DOC_WRITABLE — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — Agent can maintain a bounded owner-facts doc (`owner.md`, ≤1600 chars) injected on the SELF/SOUL seam — durable facts/p…
@@ -337,7 +410,12 @@ for code anchors and complete prose.
 - POLYROB_CLI_CONFIG — default: unset — CLI config path override (default `~/.polyrob/cli.json`).
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
+- CLI_WORKSPACE_LOCK_TIMEOUT — default: 30.0 — Seconds the interactive gate waits to acquire the CLI workspace lock before proceeding.
 - CLI_PREFER_ACTION_TEXT — default: ON ('true') — CLI prefers clean action text over raw streamed buffer.
+- CLI_SUPPRESS_DONE_RECAP — default: ON ("true") — Suppress the duplicate `done()` recap bubble after the streamed reply in `polyrob run` (mirrors the REPL); `off` restor…
+- CLI_TODO_DOT_ROB — default: ON ("true") — In a project-root workspace, keep the agent TODO file under `.polyrob/` instead of the project root.
+- CLI_TODO_SESSION_SCOPED — default: ON ("true") — Per-session TODO file under `.polyrob/` (session-scoped) instead of the legacy single shared `<project>/.polyrob/todo.m…
+- CONFIG_ENV — default: unset (→ ENV → development) — Highest-precedence spelling of the environment name that selects `config/.env.<env>` (`CONFIG_ENV` > `ENV` > `developme…
 - POLYROB_INSTANCE_ID / BOT_INSTANCE_ID — default: "polyrob" (DEFAULT_INSTANCE_ID; in profile mode the active profile name) — Instance identity id; `POLYROB_INSTANCE_ID` is canonical, `BOT_INSTANCE_ID` an accepted alias.
 - POLYROB_OWNER_USER_ID / BOT_OWNER_USER_ID — default: unset → **instance id** — Explicit binding of this instance's OWNER principal (an **internal `user_id`** — **not** a raw Telegram id).
 - POLYROB_LOCAL_OWNER — default: unset — Fallback owner id for `webgate.local_owner_id()`, ranked BETWEEN an explicitly-bound owner and the instance-id default…
@@ -360,8 +438,10 @@ for code anchors and complete prose.
 - X402_ENABLED — default: OFF ('false') — Enable x402 pay-per-request *receiving*.
 - X402_CLIENT_ENABLED — default: OFF ('false') — Enable the agent-side x402 *paying* tool.
 - X402_PAYMENT_RECIPIENT — default: '' — Treasury/recipient address for x402 receipts.
+- X402_TREASURY_FROM_WALLET — default: **ON** — W1.1 (self-contained rail): when `X402_PAYMENT_RECIPIENT` is empty and the agent wallet is enabled, the wallet's treasu…
 - X402_INVOICE_ENABLED — default: OFF (ON under AUTONOMY_MODE=autonomous) — Agent money loop: registers the `x402_invoice` tool (`x402_request` create-invoice + `x402_invoices` list + `accounting…
 - X402_INVOICE_MAX_USD — default: 50 — Hard ceiling on a single agent-created payment request (an absurd invoice is a reputation incident).
+- FAIL_ON_INSUFFICIENT_CREDITS — default: ON — Billing enforcement mode of the usage tracker: ON = an LLM call that would overdraw the tenant's credits raises `Insuff…
 - X402_INVOICE_DAILY_MAX — default: 10 — Max invoices one tenant may create per trailing 24h.
 - X402_PUBLIC_RATE_PER_WINDOW — default: 20 — G-20: per-IP call budget for the PUBLIC (anon-allowed, enumerable `inv_<12hex>` id) invoice endpoints — `GET /api/x402/…
 - X402_PUBLIC_RATE_WINDOW_SEC — default: 60 — Window (seconds) for `X402_PUBLIC_RATE_PER_WINDOW`.
@@ -371,10 +451,11 @@ for code anchors and complete prose.
 - INVOICE_CARD_ENABLED — default: OFF (**ON under POLYROB_LOCAL**) — Task 6 (Phase 1): after a successful `x402_request`, also render a branded PNG invoice card (Mindprint avatar, amount,…
 - INVOICE_QR_STYLE — default: address — What the invoice card's QR code encodes (via `modules/x402/artifact.py::build_payment_artifact`): `address` — the bare…
 - X402_SETTLEMENT_WATCH_INTERVAL_SEC — default: 60 — Settlement-watcher tick interval (expire stale invoices; wake the originating session via self-wake when one settles; e…
-- X402_SETTLE_ONCHAIN_DETECT — default: OFF — Task 11 (Phase 2), the "de-Coinbase" move: the settlement watcher ADDITIONALLY scans the treasury address for plain USD…
+- X402_SETTLE_ONCHAIN_DETECT — default: OFF (ON under AUTONOMY_MODE=autonomous) — Task 11 (Phase 2), the "de-Coinbase" move: the settlement watcher ADDITIONALLY scans the treasury address for plain USD…
 - X402_INVOICE_AMOUNT_JITTER — default: **ON** — Amount-collision jitter for on-chain matching: when a colliding equal-amount PENDING invoice already exists for the sam…
 - X402_SETTLEMENT_SCAN_MAX_SPAN — default: 5000 — Max blocks one settlement-watcher tick will scan for on-chain detection, even after a long gap (bounds a single `eth_ge…
 - X402_SETTLEMENT_CONFIRMATIONS — default: 2 — Confirmations buffer for on-chain detection — blocks within this many of the chain head are never scanned yet (a just-m…
+- X402_SETTLEMENT_RPC — default: '' — W1.3: watcher-specific RPC pin for on-chain detection, any chain — beats `DEFI_EVM_RPC_BASE` (which the scan now also h…
 - SUBSCRIPTIONS_ENABLED — default: OFF — Task 14 (Phase 3 R5), the first revenue wedge: watchtower subscriptions — a prepaid-period + renewal-invoice model gati…
 - WATCHTOWER_PRICE_USD — default: 10.00 — Default monthly price (USD) for a watchtower subscription — `create_subscription` falls back to this when no explicit `…
 - SUBSCRIPTION_RENEWAL_LEAD_DAYS — default: 5 — Days before a subscription's `paid_through` the settlement watcher creates the next renewal invoice.
@@ -384,26 +465,36 @@ for code anchors and complete prose.
 - X402_PRICE_USD — default: _derived_ (unset ⇒ economics-based, ~$30) — Single-source x402 per-request price (C2 SSOT) — the middleware charge, `/api/x402/pricing`, the Agent Card, and the 40…
 - X402_MAX_TOKENS_PER_REQUEST — default: 200000 — Token budget one x402 request prepays for. **SSOT for BOTH the derived price AND the runtime hard cap** — `LLMUsageTrac…
 - X402_PRICE_MARKUP — default: 2.0 — Safety multiplier on the derived x402 price (margin over worst-case token cost).
-- DEFI_DATA_ENABLED — default: OFF — Proposal 023 T0+T1 — the read-only `defi_data` tool: `token_resolve` (candidate contract addresses for a ticker), `toke…
-- DEFI_TRADE_ENABLED — default: OFF — Proposal 023 T3 — the `defi_trade` tool's on-chain money verbs (`transfer`). **This one can move real funds.** Every ca…
-- DEFI_MAX_SLIPPAGE_BPS — default: 100 — Default slippage bound for `defi_trade.swap`, in basis points (100 = 1%).
-- DEFI_AUTONOMOUS_MAX_USD — default: 25 — Per-transaction ceiling below which a `defi_trade` verb may execute autonomously; above it `tx_guard` returns `lane=own…
-- DEFI_TIERED_SPEND_LANE — default: OFF — Proposal 023 §5.3 D3 — the explicit owner decision the T4 note reserved. `defi_trade`'s four verbs sit on `PAYMENT_APPR…
-- DEFI_AUTONOMOUS_TURN_TRADING — default: OFF — Proposal 023 — narrows `tx_guard`'s turn-origin bar.
-- DEFI_EVM_RPC_BASE — default: https://mainnet.base.org — Operator-pinnable JSON-RPC endpoint for Base, used by every on-chain read (`core/wallet/onchain.py`, `defi_data`, the x…
 - AGENT_WALLET_ENABLED — default: OFF — Enable the agent's native wallet.
+- AGENT_WALLET_MASTER_SEED — default: unset — **SECRET, masked** — The agent wallet's master seed (hex, ≥32 chars); every wallet key derives from it. `polyrob wallet init` writes it to `…
 - AGENT_WALLET_NETWORK — default: testnet — Wallet network (`testnet`/`mainnet`).
 - AGENT_WALLET_BACKEND — default: local_eoa — Wallet key backend.
-- AGENT_WALLET_MAX_PER_TX_USD — default: 1000 — Per-transaction USD ceiling (catastrophic-loss guard, NOT a budget).
+- AGENT_WALLET_MAX_PER_TX_USD — default: 250 — Per-transaction USD ceiling (catastrophic-loss guard, NOT a budget).
 - AGENT_WALLET_OPERATIONAL_VENUE — default: treasury — Venue key that same-chain spend paths (x402, generic payments) SIGN with, so the funded address (`AgentWallet.address`)…
 - AGENT_WALLET_DERIVATION — default: unset (meta.json wins; absent = legacy) — Recovery-hatch override for the wallet's key-derivation scheme (`legacy` | `bip44`).
-- WALLET_DAILY_CAP_USD — default: unset (disabled) — Rolling 24h spend cap; unset = per-tx ceiling only.
+- WALLET_DAILY_CAP_USD — default: 100 — Rolling 24h spend cap (H3, 2026-08-22: was unset/disabled — the per-tx ceiling alone cannot stop a within-ceiling loop…
 - CREDIT_VALUE_USD — default: 0.01 — USD value of one credit.
 - WELCOME_BONUS — default: 100 — New-user credit grant.
 - EIP8004_ENABLED — default: OFF ('false') — Enable EIP-8004 on-chain agent registration.
 - EIP8004_PAYMENT_FEEDBACK — default: OFF — Task 15 (Phase 4), the ERC-8004 ⇄ x402 compose seam: on settlement of an invoice with an identifiable payer (`correspon…
 - EIP8004_ONCHAIN_ENABLED — default: OFF ('false') — Trust-mode claim only — flips the publicly-served `/eip8004/registration.json` `trustMode` from `local` (honest off-cha…
 - EIP8004_AGENT_PRIVATE_KEY — default: unset — **SECRET, mask in logs/exports** — Signing key for ERC-8004 EIP-712 feedback authorizations (`ReputationManager`).
+- EIP8004_CHAIN_ID — default: 8453 (Base) — Chain id the ERC-8004 registries live on.
+- EIP8004_IDENTITY_REGISTRY / EIP8004_REPUTATION_REGISTRY / EIP8004_VALIDATION_REGISTRY — default: unset — Contract addresses of the three ERC-8004 registries; unset = that registry is unconfigured (local/simulation mode).
+- EIP8004_AGENT_ID — default: 0 (= none) — This agent's on-chain ERC-8004 agent id; `0`/unset = not registered.
+- EIP8004_AGENT_WALLET — default: unset — The wallet address attested in the ERC-8004 registration (an address, not a key).
+- EIP8004_SUPPORTED_TRUST — default: reputation — Comma list of trust models advertised in `/eip8004/registration.json`.
+- IPFS_GATEWAY — default: https://ipfs.io/ipfs/ — IPFS gateway base URL for ERC-8004 metadata resolution.
+- ETHEREUM_RPC_URL / BASE_RPC_URL / POLYGON_RPC_URL / ARBITRUM_RPC_URL — default: unset — Per-chain JSON-RPC endpoints for ERC-8004 contract calls (chain ids 1/8453/137/42161); unset = on-chain 8004 calls for…
+- CDP_API_KEY_ID / CDP_API_KEY_SECRET — default: unset (secret is masked) — Coinbase CDP credentials for the mainnet x402 facilitator (from portal.cdp.coinbase.com); testnet's x402.org facilitato…
+- X402_PAYMENT_ADDRESS — default: unset — Legacy env spelling for the x402 receive address, kept as the LAST fallback after `resolve_treasury_address()` (explici…
+- ADMIN_WALLETS — default: unset — Comma list of wallet addresses granted the admin tier under SIWE/wallet auth (case-insensitive compare).
+- PRICING_MARKUP — default: 1.00 — Multiplier on provider API cost for internal credit billing (`1.20` = +20%).
+- MIN_CREDIT_CHARGE — default: 1 — Minimum credits charged per LLM call (prevents free calls).
+- SESSION_CREATION_COST — default: 1 — Credits charged for creating a session.
+- VISION_CALL_COST — default: 2 — Credits charged per vision call.
+- TOOL_CALL_COST — default: 0.5 — Credits charged per tool call.
+- DEN_SIGNUP_ALLOWANCE — default: 2000 — One-time DEN sign-up credit allowance per token id (keyed per token to prevent transfer abuse).
 - ETH_PRICE_USD_OVERRIDE — default: unset — Fixed ETH/USD price for the deposit monitor — bypasses the live CoinGecko fetch entirely.
 - ETH_PRICE_USD_MAX — default: 50000 — Sanity upper bound on the ETH/USD price (override or live fetch); a price above this raises instead of crediting a wild…
 - DEPOSIT_MONITOR_ENABLED — default: OFF — Enable the deposit-monitoring background loop (requires `SEPOLIA_RPC_URL`/`ETHEREUM_RPC_URL` too).
@@ -413,11 +504,33 @@ for code anchors and complete prose.
 - ENABLE_AUTH — default: OFF — **The real billing gate.** `core/initialization.py::initialize_auth_services()` (called unconditionally from `core/bot.…
 - PAYMENT_MASTER_SEED / MASTER_SEED — default: unset — Master seed for deterministic per-user deposit-address derivation.
 
+## DeFi / on-chain trading
+
+- DEFI_DATA_ENABLED — default: OFF — Proposal 023 T0+T1 — the read-only `defi_data` tool, nine verbs: `token_resolve` (candidate contract addresses for a ti…
+- DEFI_TRADE_ENABLED — default: OFF — Proposal 023 T3+T4 — the `defi_trade` tool's EVM money verbs: `transfer`, `approve_token` (exact-amount only), `revoke_…
+- DEFI_MAX_SLIPPAGE_BPS — default: 100 — Default slippage bound for `defi_trade.swap`, in basis points (100 = 1%).
+- DEFI_ROUTE_DRIFT_MAX_PCT — default: 3.0 — How far a route's implied price may sit from the INDEPENDENT price before `defi_trade.swap` refuses outright. 3% was ca…
+- DEFI_ROUTE_AGGREGATOR — default: (unset = off) — Proposal 029 — names a DEX **aggregator** to consult when local construction finds no pool.
+- DEFI_AUTONOMOUS_MAX_USD — default: 25 — Per-transaction ceiling below which a `defi_trade` verb may execute autonomously; above it `tx_guard` returns `lane=own…
+- DEFI_TIERED_SPEND_LANE — default: OFF — Proposal 023 §5.3 D3 — the explicit owner decision the T4 note reserved. `defi_trade`'s four verbs sit on `PAYMENT_APPR…
+- X402_AUTONOMOUS_MAX_USD — default: 1.0 — Per-payment ceiling below which an `x402_fetch` skips the owner-approval tap and runs act-and-report.
+- DEFI_AUTONOMOUS_TURN_TRADING — default: OFF — Proposal 023 — narrows `tx_guard`'s turn-origin bar.
+- DEFI_MONITOR_EXITS — default: OFF — 2026-08-26 exit untying — lets a forged **main-agent** turn (self-wake / delegation-result: the monitor loop) execute E…
+- DEFI_EVM_RPC_BASE — default: https://mainnet.base.org — Operator-pinnable JSON-RPC endpoint for Base, used by every on-chain read (`core/wallet/onchain.py`, `defi_data`, the x…
+- DEFI_EVM_RPC_<CHAIN> — default: per-chain public endpoint — The same pin for every OTHER chain in `core/wallet/chains.py`: `DEFI_EVM_RPC_ETHEREUM`, `DEFI_EVM_RPC_ARBITRUM`, `DEFI_…
+- ALCHEMY_API_KEY — default: unset (secret, masked) — Alchemy API key: unlocks the Alchemy per-chain RPC fallback for on-chain reads (`rpc_url_for_chain`, when no `DEFI_EVM_…
+- DEFI_SOLANA_RPC — default: https://api.mainnet-beta.solana.com — Operator-pinnable Solana JSON-RPC, used by `defi_data.portfolio` on the `solana` chain (native SOL + SPL enumeration).
+- POSITION_LEDGER_PATH — default: (unset = <POLYROB_PROJECT_DIR>/kb-root-position-ledger.md) — Where the LIVE position ledger lives, so the status surfaces can report how many positions the agent believes it holds.
+- SOLANA_TRADE_ENABLED — default: OFF — Solana Phase 3 — arms `defi_trade.solana_swap`, the first Solana path that can move value. **Default OFF**, so shipping…
+- DEFI_SOLANA_PROGRAM_ALLOWLIST_EXTRA — default: unset (empty) — Extra Solana program ids (comma-separated base58) a `solana_swap` transaction may call at TOP LEVEL, on top of the buil…
+- X402_SOLANA_SETTLE — default: OFF — Solana Phase 4 — arms the watcher's Solana settlement pass, **ANDed with** `X402_SETTLE_ONCHAIN_DETECT`.
+
 ## WebView / Console (deployment posture, owner login, branding)
 
 - POLYROB_POSTURE — default: _derived_ (see below) — Explicit deployment posture override: `local` | `own_ops` | `multitenant` (case-insensitive). **Wins outright** over ev…
 - WEBGATE_MULTITENANT — default: OFF — Back-compat boolean alias that maps onto `POLYROB_POSTURE=multitenant` when the explicit posture var is unset (step 1 o…
 - WEBGATE_HOST / WEBVIEW_HOST — default: _posture-derived_ (127.0.0.1 for local, 0.0.0.0 for own_ops/multitenant) — Explicit bind-host override; also feeds posture derivation (step 2 above) when `POLYROB_POSTURE`/`WEBGATE_MULTITENANT`…
+- WEBVIEW_EMIT_URL — default: unset — 030 D12: explicit override for the telemetry fast-push target (`/api/internal/emit`).
 - WEBGATE_PORT / WEBVIEW_PORT — default: 5050 — Bind port. `WEBGATE_PORT` wins over `WEBVIEW_PORT` when both are set. (`server_launcher.py`'s own code-level default is…
 - POLYROB_OWNER_USERNAME — default: unset — Owner login username for `own_ops`/`multitenant` posture (Posture 1/2 console access).
 - POLYROB_OWNER_PASSWORD_HASH — default: unset — Argon2 hash of the owner password — **never plaintext**. `verify_owner_password` always runs a real argon2 verify (agai…
@@ -428,11 +541,20 @@ for code anchors and complete prose.
 - POLYROB_ORG_URL — default: https://theselfrule.org — Parent-org URL shown in the console footer.
 - POLYROB_TERMS_URL — default: {POLYROB_BRAND_URL}/terms — Terms-of-service link (was a dead `href="#"` placeholder; now renders a real link).
 - POLYROB_PRIVACY_URL — default: {POLYROB_BRAND_URL}/privacy — Privacy-policy link (same fix as above).
+- WEBVIEW_AUTH_ENABLED — default: ON ('true') — Console auth master switch — an explicit `false` disables ALL webview auth checks (deliberate operator opt-out; the dev…
+- WEBVIEW_FEED_DEFAULT_LIMIT — default: 500 — Default number of feed events returned by the console feed endpoints.
+- WEBVIEW_FEED_MAX_LIMIT — default: 2000 — Hard cap on a requested feed-event limit.
+- WEBVIEW_INSTALL_PREFIX — default: /opt/polyrob — Install prefix whose `logs/` dir the standalone webview launcher writes `webview.log` into.
+- WEBVIEW_LOG_LEVEL — default: info — Default `--log-level` for the standalone webview launcher.
+- WEBVIEW_VERSION — default: unset (= the installed package version) — Explicit override of the version string the console displays (for deployments that pin it).
+- WEBVIEW_WS_URL — default: unset ('' = same-origin) — Explicit Socket.IO endpoint URL handed to the console frontend; unset connects same-origin.
 
 ## Misc / runtime knobs
 
 - TWITTER_ENABLED — default: OFF ('false') (ON under AUTONOMY_MODE=autonomous) — Enable the Twitter/X write surface.
 - TWITTER_REQUIRE_APPROVAL — default: ON ('true') — Require approval for Twitter writes.
+- TWITTER_POST_COOLDOWN_ENABLED — default: **ON** — 2026-08-28: durable, cross-session minimum gap between AUTONOMOUS `twitter_post`/`twitter_thread` writes (a repeat goal…
+- TWITTER_POST_COOLDOWN_SEC — default: 3600 — Minimum seconds between two autonomous `twitter_post`/`twitter_thread` writes for the same tenant, enforced by `TWITTER…
 - X_BROWSER_ENABLED — default: OFF — Register the browser-based `x_browser` tool (post to X + self-registration on a saved login).
 - ALLOWED_REASONING_TURNS — default: 1 — Tool-free planning turns allowed before escalation.
 - COMPACTION_COOLDOWN_STEPS — default: 3 — Steps between LLM-compaction firings (85–95% band).
@@ -455,8 +577,30 @@ for code anchors and complete prose.
 - LLM_BASE_TIMEOUT_SECONDS — default: 30 — Base LLM timeout (adjusted up by token count).
 - LLM_REQUEST_TIMEOUT_SECONDS — default: 120 — Standard LLM request timeout.
 - LLM_STREAM_TIMEOUT_SECONDS — default: 300 — Streaming LLM timeout.
-- MAX_CONSECUTIVE_FAILURES — default: 5 — Step-error halt threshold.
 - MAX_PARSE_RETRIES — default: 3 — JSON-from-text parse retries (fallback path).
+- ENABLE_ROBUST_PARSE — default: ON — Master switch for the robust JSON-from-text parse machinery (retries + template hints on the non-native-tools path).
+- ENABLE_JSON_TEMPLATE_RETRY — default: ON — On a parse failure, retry with an explicit JSON-template hint (bounded by `MAX_PARSE_RETRIES`).
+- BASE_RETRY_DELAY — default: 1 — Base delay (seconds) for the parse-retry exponential backoff.
+- MAX_RETRY_DELAY — default: 5 — Cap (seconds) on the parse-retry backoff delay.
+- BACKOFF_MULTIPLIER — default: 1.5 — Multiplier for the parse-retry exponential backoff.
+- ENABLE_CONTEXT_OVERFLOW_GUARD — default: ON — Abort a step whose estimated tokens exceed `CONTEXT_OVERFLOW_THRESHOLD` of the model's context window.
+- SAFETY_MARGIN_PERCENT — default: 0.05 — Fraction of the input-token budget held back as safety margin by the token counter.
+- REQUIRE_SCHEMA_KEYS — default: OFF — Strict JSON-candidate validation: require `current_state`+`action` keys before accepting a parsed candidate.
+- INJECT_FORMAT_HINT_EARLY — default: ON — Inject the JSON format hint proactively on the non-native-tools path (instead of only after a failure).
+- FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS — default: ON — Force a token-count recalibration after an action result over `LARGE_ACTION_THRESHOLD` chars.
+- LARGE_ACTION_THRESHOLD — default: 500 — Result size (chars) that counts as a "large action" for recalibration.
+- STRIP_BASE64_IMAGES — default: true — Strip `data:image/...;base64,` blobs from parsed page content (`false` disables).
+- MAX_USER_GUIDANCE_TOKENS — default: 3000 — Token budget for injected user-guidance messages (head+tail middle-elision past it).
+- MAX_USER_MESSAGES_PER_STEP — default: 3 — Max queued user messages drained into one step.
+- USER_MESSAGE_TRUNCATE_LENGTH — default: 4000 — Per-message char budget for a genuine user message (head+tail elision, never a blunt cut).
+- USER_MESSAGE_KEEP_TAIL — default: 500 — Tail chars kept by the user-message elision.
+- FORGED_MESSAGE_MAX_CHARS — default: 16000 — Ceiling for a forged (self-wake / delegation-result, pre-wrapped) message body — large enough that a bounded payload pa…
+- FORGED_MESSAGE_KEEP_TAIL — default: 3000 — Tail chars kept when a forged message does exceed its ceiling.
+- MAX_EXTRACTED_CONTENT_SIZE — default: 500000 — Threshold (chars) above which a tool result is offloaded to a workspace file with a preview (the LIVE offload path).
+- LARGE_CONTENT_PREVIEW_LENGTH — default: 15000 — Preview chars kept in-context when a result is offloaded to a file.
+- STORE_LARGE_CONTENT_AS_FILES / MAX_EXTRACTED_CONTENT_LENGTH — default: ON / 500000 — Consulted only by the legacy `should_store_content_as_file` helper (test-pinned; no production caller today — the live…
+- MAX_ERROR_LENGTH — default: 2000 — Char cap on a tool ERROR result echoed into history (tail-kept).
+- MAX_SUCCESS_LENGTH — default: 100000 — Char cap on a tool SUCCESS result echoed into history.
 - TASK_MODE — default: BALANCED — Task agent mode preset.
 - TASK_PERSONALITY_BLOCK — default: OFF ('false') — Inject a personality block into the task agent.
 - ANONYMIZED_TELEMETRY — default: ON (True) — Enable anonymized telemetry.
@@ -468,6 +612,7 @@ for code anchors and complete prose.
 - POLYROB_ENV_KEY_BACKFILL — default: OFF — DEPRECATED (deleted next release): legacy local-mode backfill of secret keys from `config/.env.*` into the process env.
 - POLYROB_HOME — default: ~/.polyrob — Override for the polyrob home directory (CLI config, keys, home-migration target).
 - POLYROB_PROFILE — default: unset — Named-profile selection (tier 2; the `-P`/`--profile` flag is tier 1 and overwrites it).
+- POLYROB_PROFILE_SOURCE — default: env — Internal hand-off, set by `activate_profile` for child processes: records WHICH tier (flag/pin/sticky/env) selected the…
 - POLYROB_PROFILES_ROOT — default: polyrob_home()/profiles — Location of the profile registry + parent of the sticky file.
 - POLYROB_ALLOW_CROSS_PROFILE — default: OFF — Opt-in bypass of the cross-profile file guard: with it OFF, the filesystem/coding tools refuse to touch ANOTHER profile…
 - POLYROB_BIN_DIR — default: ~/.local/bin — Where `polyrob profile create/alias` writes per-profile wrapper commands (`<name>` → `polyrob -P <name>`).
@@ -478,6 +623,24 @@ for code anchors and complete prose.
 - POLYROB_PERSONA — default: unset — Persona for the CLI agent's `<identity>`: a known template key renders that template's persona (and seeds its skills);…
 - POLYROB_PLAIN — default: OFF — Force the plain (non-Rich) CLI renderer; mirrors `--plain` (the flag wins).
 - POLYROB_WORKSPACE_LOCK_DIR — default: set by bootstrap — Directory for the CLI workspace lock (interactive-gate/CWD-corruption guard).
+- TASK_MAX_MESSAGES — default: unset (= model-derived) — Explicit override of MessageManager's max-message window; non-numeric values are ignored with a WARN.
+- CONFIDENCE_CHECK_BEFORE_DONE — default: ON — BALANCED-mode preset: run the confidence check before honoring `done()`.
+- TASK_VERIFICATION_REQUIRED — default: ON — BALANCED-mode preset: require task verification before completion.
+- HISTORY_SECRET_SCRUB — default: ON — Pattern-based secret scrub (conservative shapes only) over message history, even with no sensitive-data allowlist regis…
+- SOURCE_PRECEDENCE_PROMPT — default: ON — Inject the source-precedence block (owner > system > tool DATA) into the system prompt.
+- AUTO_AGENT_INIT — default: OFF — Run the task-agent module initializer at import instead of lazily.
+- PROFILE_MEM — default: unset (1 enables) — Dev: register an atexit memory-profile dump for the agent process (tracemalloc-based).
+- BROWSER_USE_LOGGING_LEVEL — default: info — `debug` turns on verbose telemetry-service debug logging.
+- POSTHOG_API_KEY — default: phx_dev_fallback_key (secret, masked) — PostHog project key for anonymized telemetry (rides `ANONYMIZED_TELEMETRY`); the checked-in default is a non-functional…
+- TELEMETRY_BUFFER_SIZE — default: 500 — Telemetry event-buffer size per session before a flush.
+- TELEMETRY_BUFFER_TIMEOUT — default: 60.0 — Seconds before a partial telemetry buffer is flushed.
+- TELEMETRY_EVENTS_MAX_BYTES — default: 10485760 (10 MB) — Rotate a session's `events.jsonl` past this size.
+- TELEMETRY_FEED_MAX_FILES — default: 200 — Max feed files kept per session by feed retention.
+- TELEMETRY_FEED_MAX_AGE_HOURS — default: 168 (7 days) — Max age of kept feed files.
+- TELEMETRY_FEED_RETENTION_EVERY — default: 50 — Run feed retention every N feed writes (min 1).
+- TELEMETRY_EVENT_LOG_ENABLED — default: ON — The durable telemetry event log (`telemetry_events.db`) — additive observability sink, fail-open; `off` disables.
+- TELEMETRY_EVENT_LOG_RETENTION_DAYS — default: 30 (min 1) — Prune event-log rows older than this on the heartbeat ticker.
+- TWITTER_API_KEY / TWITTER_API_SECRET_KEY / TWITTER_ACCESS_TOKEN / TWITTER_ACCESS_TOKEN_SECRET — default: unset (secret, masked) — OAuth 1.0a user-context credentials for the twitter tool, the X DM surface, and `pfp push --twitter`; explicit creds pa…
 
 ## POLYROB_LOCAL profile (`_SAFE_LOCAL_FLAGS` group)
 

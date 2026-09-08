@@ -32,7 +32,7 @@ _EPISODE_PAGE = 20          # provider clamps recall_episodes limit to 20
 _EPISODE_MAX = 2000         # pagination backstop
 
 
-def sanitize_filename(name: Optional[str]) -> str:
+def slug_stem(name: Optional[str]) -> str:
     """A safe, readable kebab-case file stem. Empty/None -> 'untitled'."""
     slug = _SLUG_RE.sub("-", str(name or "").strip()).strip("-")
     return slug or "untitled"
@@ -82,7 +82,7 @@ async def _export_notes(out: Path, provider, user_id: str) -> int:
         except Exception:
             notes = []
         for n in notes:
-            stem = f"{n['id']}-{sanitize_filename(n.get('title'))}"
+            stem = f"{n['id']}-{slug_stem(n.get('title'))}"
             front = _frontmatter({
                 "id": n.get("id"), "title": n.get("title") or "",
                 # Obsidian resolves [[wikilinks]] by FILENAME or aliases — never by
@@ -173,7 +173,7 @@ def _export_skills(out: Path, user_id: str, data_dir: str) -> int:
                 "created_by": u.get("created_by") or "", "source": m.source or "",
                 "load_count": u.get("load_count", 0),
             })
-            _write(out / "skills" / f"{sanitize_filename(m.skill_id)}.md", front + body.rstrip() + "\n")
+            _write(out / "skills" / f"{slug_stem(m.skill_id)}.md", front + body.rstrip() + "\n")
             count += 1
         except Exception:
             continue
@@ -193,7 +193,7 @@ def _export_identity(out: Path, user_id: str, data_dir: str) -> int:
             _write(out / "identity" / "self.md", self_doc.rstrip() + "\n")
             count += 1
     except Exception:
-        pass
+        logger.debug("knowledge_export: identity docs skipped", exc_info=True)
     return count
 
 

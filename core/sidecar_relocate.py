@@ -5,7 +5,7 @@
 moved their canonical home to ``<data_home>/<name>`` with a read-both fallback. This
 sweep retires the fallback for a live install by physically moving each legacy file
 the first time a process resolves the event log (the trigger sits in
-``agents/task/telemetry/event_log.py::get_event_log``'s DEFAULT-resolution branch,
+``core/event_log.py::get_event_log``'s DEFAULT-resolution branch,
 BEFORE the singleton binds — so the mover process starts on the new path and never
 forks history).
 

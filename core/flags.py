@@ -46,6 +46,23 @@ def is_secret_flag(name: str) -> bool:
     return name.upper().endswith(_SECRET_SUFFIXES)
 
 
+def _enum_kind(name: str) -> Optional[str]:
+    """``'enum'`` when *name* has a valid-value table in the enum SSOT
+    (``core.config_policy.flag_enums.FLAG_ENUMS``), else None.
+
+    030 WS-F2 / E9: an enum flag whose values happen to be numeric strings
+    (AGENT_COMPUTE_POSTURE — `0`, a 0-3 ladder) must never depend on the
+    textual default heuristic below to avoid being kinded bool/int — the SSOT
+    is consulted FIRST, deterministically. Lazy import + fail-open so a future
+    import cycle can only degrade to the heuristic, never break the registry.
+    """
+    try:
+        from core.config_policy.flag_enums import flag_enum_values
+    except Exception:
+        return None
+    return "enum" if flag_enum_values(name) is not None else None
+
+
 def _infer_kind(default_doc: str) -> str:
     """Best-effort kind from the documented default's FIRST token ('bool' |
     'int' | 'str') — trailing prose like "`1440` (**720 POLYROB_LOCAL**)" must
@@ -54,7 +71,8 @@ def _infer_kind(default_doc: str) -> str:
     A backtick-quoted bare digit (`` `0` ``, `` `1` ``) is the catalog's NUMERIC
     grammar, never a bool — AGENT_COMPUTE_POSTURE (`0`, a 0-3 ladder) used to
     resolve as kind=bool, so `doctor --flags` printed `True` for posture 2
-    (026 P0.2). Bool defaults are documented as ON/OFF words.
+    (026 P0.2). Bool defaults are documented as ON/OFF words. Enum-shaped
+    flags never reach this heuristic (``_enum_kind`` wins first).
     """
     doc = default_doc.strip().strip("*")
     # e.g. "ON", "OFF", "ON (`\"1\"`)", "**ON**", "`1440` (**720 POLYROB_LOCAL**)"
@@ -72,6 +90,11 @@ def _default_value(kind: str, default_doc: str):
     """Materialize the documented default into a typed value where possible."""
     doc = default_doc.strip().strip("*")
     head = doc.split(" ")[0].strip("`'\"").lower()
+    if kind == "enum":
+        # The bare first token, case preserved ("supervised", "0") — never the
+        # raw backticked doc cell, and never coerced to bool/int.
+        raw = doc.split(" ")[0].strip("`'\"*")
+        return None if raw.lower() in ("unset", "", "—", "-") else raw
     if kind == "bool":
         return head in _TRUEISH_DOC
     if kind == "int":
@@ -89,7 +112,8 @@ class Flag:
     name: str
     group: str
     default_doc: str
-    kind: str  # 'bool' | 'int' | 'str'
+    kind: str  # 'bool' | 'int' | 'str' | 'enum' (valid values in flag_enums SSOT)
+    description: str = ""  # 030 WS-F1: the doc's "What it does" cell (compressed)
 
 
 @dataclass(frozen=True)
@@ -105,8 +129,10 @@ REGISTRY: dict[str, Flag] = {}
 # enumerable; kept for reference/reporting, not resolved.
 PATTERNS: list[Flag] = []
 
-for _name, _group, _default in CATALOG:
-    _flag = Flag(name=_name, group=_group, default_doc=_default, kind=_infer_kind(_default))
+for _name, _group, _default, *_rest in CATALOG:
+    _flag = Flag(name=_name, group=_group, default_doc=_default,
+                 kind=_enum_kind(_name) or _infer_kind(_default),
+                 description=(_rest[0] if _rest else ""))
     if "<" in _name:
         PATTERNS.append(_flag)
     else:

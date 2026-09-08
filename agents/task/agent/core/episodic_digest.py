@@ -51,7 +51,7 @@ async def build_activity_digest(*, user_id: Optional[str], kind: str,
                 + f"\n({len(rows)} runs in last {window_hours}h, ${total:.2f} total). "
                   "Call recent_activity(since=\"8h\") for more/older.")
         try:
-            from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+            from core.security.untrusted_wrap import wrap_untrusted
             body = wrap_untrusted("recent_activity", body)
         except Exception:
             pass
@@ -90,7 +90,7 @@ async def build_mission_continuity(*, user_id: Optional[str], window_hours: int 
                   "Build on this — do NOT repeat work already done; if it's all covered, "
                   "surface the blocker/next step rather than re-deriving 'nothing new'.")
         try:
-            from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+            from core.security.untrusted_wrap import wrap_untrusted
             body = wrap_untrusted("recent_activity", body)
         except Exception:
             pass

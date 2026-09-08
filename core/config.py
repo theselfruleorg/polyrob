@@ -188,8 +188,6 @@ class ServerConfig(AgentConfig):
     # extracted as a separate package, this class moves to polyrob-platform.
 
     # Bot settings - Required fields with aliases
-    admin_ids: List[int] = Field(default_factory=list, alias='ADMIN_IDS')
-    moderator_ids: List[int] = Field(default_factory=list, alias='MODERATOR_IDS')
     support_chat_id: Optional[int] = Field(None, alias='SUPPORT_CHAT_ID')
     feedback_chat_id: Optional[int] = Field(None, alias='FEEDBACK_CHAT_ID')
     auto_knowledge_retention_days: int = Field(default=7, alias='AUTO_KNOWLEDGE_RETENTION_DAYS')
@@ -325,32 +323,6 @@ class ServerConfig(AgentConfig):
     # New fields from the code block
     owner_id: Optional[int] = Field(None, description="Admin user ID")
     whitelisted_chats: List[int] = Field(default_factory=list, description="List of whitelisted chats")
-    roles: Dict[str, Dict[str, bool]] = Field(default_factory=lambda: {
-        'super_admin': {
-            'all_permissions': True
-        },
-        'admin': {
-            'use_bot': True,
-            'manage_users': True,
-            'manage_modes': True,
-            'manage_knowledge': True,
-            'manage_prompts': True
-        },
-        'moderator': {
-            'use_bot': True,
-            'manage_users': False,
-            'manage_modes': True,
-            'manage_knowledge': False,
-            'manage_prompts': False
-        },
-        'user': {
-            'use_bot': True,
-            'manage_users': False,
-            'manage_modes': False,
-            'manage_knowledge': False,
-            'manage_prompts': False
-        }
-    })
 
     # Add model configuration
     model_cache_dir: Optional[str] = Field(
@@ -444,7 +416,6 @@ class ServerConfig(AgentConfig):
         return v
 
     # Private attributes
-    _logger: logging.Logger = PrivateAttr()
     _env_path: Path = PrivateAttr()
     _is_initialized: bool = PrivateAttr(default=False)
 
@@ -586,86 +557,6 @@ class ServerConfig(AgentConfig):
                 Path(self.data_dir, subdir).mkdir(parents=True, exist_ok=True)
         except OSError as e:
             logging.getLogger("core.config").warning("could not create data dirs: %s", e)
-
-    def _setup_logger(self) -> None:
-        """Set up logging configuration."""
-        self._logger = logging.getLogger("config")
-        
-        # Set up console handler
-        console_handler = logging.StreamHandler()
-        console_formatter = logging.Formatter(
-            '[%(asctime)s] %(levelname)s:%(name)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        console_handler.setFormatter(console_formatter)
-        
-        # Set up file handler — anchor to base_dir, never the caller's CWD.
-        log_dir = Path(self.base_dir) / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(
-            log_dir / "config.log",
-            encoding='utf-8'
-        )
-        file_handler.setFormatter(console_formatter)
-        
-        # This logger owns its handlers and never propagates to root, so it
-        # bypasses setup_logging's handler-level SecretScrubbingFilter — attach
-        # the same filter here (validated 2026-07-23: this was an undisclosed
-        # unfiltered surface; it logs presence-only today, but keep it closed).
-        try:
-            from core.security_logging_filter import SecretScrubbingFilter
-            _scrub = SecretScrubbingFilter()
-            console_handler.addFilter(_scrub)
-            file_handler.addFilter(_scrub)
-        except Exception:
-            pass
-
-        # Configure logger
-        self._logger.setLevel(getattr(logging, self.log_level.upper()))
-        if not self._logger.handlers:
-            self._logger.addHandler(console_handler)
-            self._logger.addHandler(file_handler)
-        self._logger.propagate = False
-
-    def _log_config_details(self) -> None:
-        """Log configuration details safely."""
-        self._logger.debug(f"Environment: {self.environment}")
-        self._logger.debug(f"Log Level: {self.log_level}")
-        self._logger.debug(f"DB Path: {self.db_path}")
-        self._logger.debug(f"Cache Size: {self.cache_size}")
-        # Model selection handled by llm_client_registry.DEFAULT_MODELS
-        self._logger.debug(f"OCR Service Enabled: {self.services_ocr_enabled}")
-        
-        # Log existence of sensitive fields without revealing values
-        self._logger.debug(f"Anthropic API Key exists: {bool(self.anthropic_api_key)}")
-        self._logger.debug(f"OpenAI API Key exists: {bool(self.openai_api_key)}")
-        self._logger.debug(f"Alchemy API Key exists: {bool(self.alchemy_api_key)}")
-
-    def load_twitter_config(self) -> None:
-        """Load Twitter configuration from environment."""
-        if all([
-            self.twitter_api_key,
-            self.twitter_api_secret_key,  # Match the field name
-            self.twitter_access_token,
-            self.twitter_access_token_secret,
-            self.twitter_bearer_token
-        ]):
-            self._logger.info("Twitter API credentials configured")
-        else:
-            missing = []
-            if not self.twitter_api_key:
-                missing.append("TWITTER_API_KEY")
-            if not self.twitter_api_secret_key:  # Match the field name
-                missing.append("TWITTER_API_SECRET_KEY")  # Match env var name
-            if not self.twitter_access_token:
-                missing.append("TWITTER_ACCESS_TOKEN")
-            if not self.twitter_access_token_secret:
-                missing.append("TWITTER_ACCESS_TOKEN_SECRET")
-            if not self.twitter_bearer_token:
-                missing.append("TWITTER_BEARER_TOKEN")
-            
-            if missing:
-                self._logger.warning(f"Missing Twitter credentials: {', '.join(missing)}")
 
     @property
     def is_development(self) -> bool:
@@ -876,7 +767,10 @@ class ServerConfig(AgentConfig):
     agent_wallet_enabled: bool = Field(False, alias='AGENT_WALLET_ENABLED')
     agent_wallet_backend: str = Field("local_eoa", alias='AGENT_WALLET_BACKEND')
     agent_wallet_network: str = Field("testnet", alias='AGENT_WALLET_NETWORK')
-    agent_wallet_max_per_tx_usd: float = Field(1000.0, alias='AGENT_WALLET_MAX_PER_TX_USD')
+    # H3 (2026-08-22): was 1000.0. NOTE this field is declarative only — the
+    # real, consumed default lives in core/wallet/config.py::DEFAULT_MAX_PER_TX_USD
+    # (load_wallet_config(), the actual PolicyGate SSOT); keep this in sync.
+    agent_wallet_max_per_tx_usd: float = Field(250.0, alias='AGENT_WALLET_MAX_PER_TX_USD')
     x402_client_enabled: bool = Field(False, alias='X402_CLIENT_ENABLED')
     x402_client_facilitator_url: str = Field("", alias='X402_CLIENT_FACILITATOR_URL')
     # NOTE: AGENT_WALLET_MASTER_SEED is read directly by core/wallet/config.py and is

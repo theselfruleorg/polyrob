@@ -21,9 +21,14 @@ def _async(value):
 class _FakeExchange:
     def __init__(self):
         self.calls = []
+        self.cancel_calls = []
 
     def order(self, **kwargs):
         self.calls.append(kwargs)
+        return {"status": "ok"}
+
+    def cancel(self, coin, order_id):
+        self.cancel_calls.append((coin, order_id))
         return {"status": "ok"}
 
 
@@ -33,6 +38,7 @@ def _tool(monkeypatch, gate, mid=100.0):
     tool.db = None
     creds = types.SimpleNamespace(
         trading_limits=types.SimpleNamespace(require_confirmation_above_usd=1_000_000.0),
+        can_trade=lambda: True,
     )
     monkeypatch.setattr(tool, "ensure_initialized", lambda: _async(None))
     monkeypatch.setattr(tool, "rate_limit", lambda *a, **k: _async(None))
@@ -137,14 +143,18 @@ async def test_cancel_order_refused_for_forged_turn(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cancel_order_refused_while_halted(monkeypatch):
-    """H11: the kill-switch also blocks a mutating verb (cancel_order)."""
+async def test_cancel_order_ALLOWED_while_halted_because_it_reduces_risk(monkeypatch):
+    """M10 (2026-08-22, supersedes the old H11-only expectation here): a cancel is
+    risk-REDUCING, so the owner kill-switch (autonomy_halted) does NOT block it — a
+    halted agent with an open order must still be able to close it. (The live
+    master + per-venue switches still apply — see test_cancel_leverage_live_gate.py
+    for the full M10 verb-level matrix.)"""
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     gate = PolicyGate(max_per_tx_usd=10_000.0)
     tool, ex = _tool(monkeypatch, gate)
     res = await tool.cancel_order(CancelOrderParams(coin="ETH", order_id=123))
-    assert res["success"] is False
-    assert "halt" in res["error"].lower()
+    assert res["success"] is True
+    assert ex.cancel_calls == [("ETH", 123)]
 
 
 @pytest.mark.asyncio

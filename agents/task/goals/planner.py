@@ -8,10 +8,65 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 PLANNER_TOOLS = ["goal", "task"]
 PLANNER_MAX_STEPS = 8
+
+#: Floor for the derived ready-goal ceiling. Below this the planner cannot keep a
+#: board of any size supplied, however few objectives are active.
+PLANNER_READY_FLOOR = 5
+
+#: Cap on the planner cooldown multiplier after consecutive empty runs.
+PLANNER_BACKOFF_MAX_MULT = 4
+
+
+def planner_backoff_multiplier(consecutive_empty_runs: int) -> int:
+    """How many cooldowns to wait before the next planner run.
+
+    Prod 2026-08-29: with two objectives at their lifetime budget and the rest
+    covered, the planner ran every cooldown (hourly) for 24 h, ~55k input tokens a
+    run, and reached the same "REAL BLOCKER" paragraph each time. A run that
+    queues nothing is evidence the next one will too: 1x for the first empty
+    run, then 2x, 4x, capped at :data:`PLANNER_BACKOFF_MAX_MULT`. A run that
+    queues anything resets the streak; a stream refill that lifts the ready count
+    above the thinness gate skips the planner regardless.
+    """
+    n = int(max(0, consecutive_empty_runs))
+    if n < 2:
+        return 1
+    return int(min(PLANNER_BACKOFF_MAX_MULT, 2 ** (n - 1)))
+
+
+def planner_ceilings(active_objectives: int) -> Dict[str, int]:
+    """The planner's numeric limits, derived from how many streams stand.
+
+    These three numbers used to be literals in the prompt prose ("Create 1-3
+    goals", "Never exceed 5 ready goals total", "At most ONE goal may include
+    'twitter'"), tuned when the instance ran 6 objectives. At 16 objectives the
+    same literals starve most streams: five ready goals cannot cover sixteen
+    streams, and a one-post ceiling silences fifteen of them.
+
+    Only the ready ceiling scales; per-run and social stay owner-set, because
+    scaling THEM would raise spend and posting volume rather than coverage. Each
+    is pinnable by env — a pinned value always wins over the derivation.
+
+    ``GOAL_PLANNER_SCALING=false`` reverts the DERIVATION (not the flags): the
+    ceiling falls back to :data:`PLANNER_READY_FLOOR`, which is the value the old
+    prompt literal carried, so the three numbers become 3 / 5 / 1 — byte-identical
+    to the pre-scaling prompt. Pinning ``GOAL_PLANNER_READY_CEILING`` can no
+    longer serve as that revert, because the derived value is a ``max()`` of it.
+    """
+    from agents.task.constants import AutonomyConfig
+    ceiling = AutonomyConfig.goal_planner_ready_ceiling()
+    if ceiling <= 0:
+        ceiling = (max(PLANNER_READY_FLOOR, int(active_objectives))
+                   if AutonomyConfig.goal_planner_scaling() else PLANNER_READY_FLOOR)
+    return {
+        "per_run": max(1, AutonomyConfig.goal_planner_goals_per_run()),
+        "ready_ceiling": ceiling,
+        "social": max(0, AutonomyConfig.goal_planner_max_social()),
+    }
 
 
 def planner_session_tools() -> list:
@@ -102,6 +157,46 @@ def list_deliverables(root: Path, max_files: int = 40) -> List[Dict[str, Any]]:
     return out
 
 
+def _starved_order_with_stats(board, user_id: str,
+                               objectives: List[Any]) -> List[Tuple[Any, int, Optional[float]]]:
+    """One pass over the board: for each objective, its live-child count and
+    last-activity timestamp, sorted hungriest first.
+
+    The "SERVE THESE OBJECTIVES FIRST" prompt block needs the ORDER and the
+    per-objective live-count/last-activity numbers to render, and derives both
+    from this single board read — so a 16-objective prompt build costs one
+    `objective_last_activity` call and one `children_of` call per objective, not
+    two of each.
+
+    LIVE here means IN FLIGHT — `done` children are excluded. `children_of`
+    itself drops only `cancelled`/`dropped`, so counting its result would make a
+    busy, long-running stream look permanently saturated and push it to the
+    BOTTOM of an order whose whole purpose is to find the stream that needs work.
+    (The separate "goal budget: N/M live" line stays `children_of`-shaped: that
+    number must match what `_check_objective_budget` actually enforces, which IS
+    a lifetime tally.)
+
+    Sort key: fewest in-flight children first, then oldest activity, then highest
+    priority. Fail-open on any board error — an unordered list is still a usable
+    prompt, an exception is not.
+    """
+    try:
+        activity = board.objective_last_activity(user_id)
+    except Exception:
+        activity = {}
+
+    def _live(o) -> int:
+        try:
+            return sum(1 for c in board.children_of(user_id, o.id)
+                       if getattr(c, "status", None) != "done")
+        except Exception:
+            return 0
+
+    stats = [(o, _live(o), activity.get(o.id)) for o in objectives]
+    stats.sort(key=lambda t: (t[1], t[2] or 0.0, -int(t[0].priority or 0)))
+    return stats
+
+
 def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
                          *, history_n: int = 10) -> str:
     from agents.task.goals.board import OBJ_ACTIVE
@@ -147,7 +242,7 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
         # is how "x402 Round 9" happened. Past the cap board.create refuses the
         # child outright, so the number here is a warning, not a surprise.
         try:
-            budget = board._objective_budget(o)
+            budget = board.objective_budget(o)
             if budget > 0:
                 live = len(board.children_of(user_id, o.id))
                 base += f"\n    goal budget: {live}/{budget} live"
@@ -164,8 +259,42 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
     sections.append("STANDING OBJECTIVES (active):\n" + "\n".join(
         _obj_line(o) for o in objectives))
 
+    # Code owns which stream is served next. Without this the model picks, and at
+    # a dozen-plus standing objectives it picks the same two or three every run.
+    # Rides GOAL_PLANNER_SCALING so the whole planner half has ONE revert: with it
+    # off the prompt has no starvation block at all, which is the pre-scaling shape.
+    from agents.task.constants import AutonomyConfig as _AC
+    if len(objectives) > 1 and _AC.goal_planner_scaling():
+        _now = time.time()
+        _lines = []
+        for i, (o, live, last) in enumerate(
+                _starved_order_with_stats(board, user_id, objectives), start=1):
+            age = "never" if not last else f"{int((_now - last) // 3600)}h ago"
+            _lines.append(f"{i}. id={o.id} [{o.title}] — {live} live goal(s), "
+                          f"last activity {age}")
+        sections.append(
+            "SERVE THESE OBJECTIVES FIRST (hungriest at the top):\n"
+            + "\n".join(_lines)
+            + "\n\nWork DOWN this list. Do NOT create a goal for an objective lower "
+              "in the list while one above it still has 0 live goals. This order is "
+              "computed from the board, not a suggestion.")
+
     if done:
-        sections.append("RECENTLY DONE (title -> outcome):\n" + "\n".join(
+        # 2026-08-28 forensics: 63 of 94 planner runs in four days ended in
+        # `dedup_rejected` — the board compares a new title against EVERY goal of
+        # the last 7 days including done ones, and the planner kept re-proposing
+        # yesterday's work under a new date/letter suffix. Say so explicitly.
+        try:
+            from agents.task.constants import AutonomyConfig as _DAC
+            _thr = f"{int(round(_DAC.goal_dedup_threshold() * 100))}%"
+        except Exception:
+            _thr = "60%"
+        sections.append(
+            "RECENTLY DONE (title -> outcome) — DEDUP-PROTECTED for 7 days: a new "
+            f"title >= {_thr} similar to any of these is REJECTED by goal_create, and a "
+            "changed date, letter suffix or run number does NOT make it new. Propose "
+            "genuinely different work, or extend the recorded deliverable under a "
+            "distinct title:\n" + "\n".join(
             f"- {g.title} -> {(g.payload or {}).get('outcome') or '[no outcome recorded]'}"
             for g in done))
     if blocked:
@@ -189,6 +318,29 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
             _blocked_line(g) for g in blocked))
     if ready:
         sections.append("ALREADY QUEUED (ready):\n" + "\n".join(f"- {g.title}" for g in ready))
+
+    # The board's OPEN asks are the ONLY live owner-blockers. Prod 2026-08-29: the
+    # planner cited an "entry pause" from an old report file + memory recall as a
+    # REAL BLOCKER for 10 straight runs after the pause had been lifted — nothing
+    # in the prompt said which asks were still open. Stamp the board's truth so a
+    # file or a memory cannot outvote it (same shape as the entry-pause stamp).
+    try:
+        from agents.task.goals.board import ASK_OPEN as _ASK_OPEN
+        open_asks = board.asks(user_id=user_id, status=_ASK_OPEN) or []
+    except Exception:
+        open_asks = None
+    if open_asks is not None:
+        if open_asks:
+            ask_lines = "\n".join(f"- {a.id} {a.title}" for a in open_asks[:20])
+        else:
+            ask_lines = "- none"
+        sections.append(
+            "OPEN ASKS (board ground truth — the ONLY owner decisions still pending):\n"
+            + ask_lines +
+            "\nAny ask, pause or blocker you remember or find in a report file that is "
+            "NOT listed here is RESOLVED. Do not cite it as a blocker, and do not "
+            "re-file it. An objective whose only blocker is listed here is COVERED: "
+            "say \"queue healthy, nothing to add\" for it rather than REAL BLOCKER.")
 
     if waiting:
         sections.append("WAITING ON DEPENDENCIES (will auto-ready when their "
@@ -238,11 +390,27 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
         "category error and is FORBIDDEN. A REAL BLOCKER is exclusively something only "
         "the owner can provide (a credential, a decision, access) that is NOT in the "
         "grantable list above.")
+    # Live entry-pause status: recurring failure mode (3+ instances, 2026-08-29) was
+    # this same "REAL BLOCKER: entry pause" line surviving in a new ask hours after
+    # the owner actually lifted it — the planner was citing an old escalation report
+    # from memory instead of the CURRENT flag. Stamp the live value directly so a
+    # stale recall can't outlive the fix (mirrors the BLOCKED-goal stamping above).
+    try:
+        from agents.task.constants import AutonomyConfig as _EntryPauseCfg
+        _paused = _EntryPauseCfg.entry_paused()
+    except Exception:
+        _paused = None
+    if _paused is not None:
+        ground_truth_lines.append(
+            f"- TREASURY ENTRY-PAUSE right now: {'ACTIVE — no new entries' if _paused else 'NOT active — entries are open'}. "
+            "This is the CURRENT value, not a memory of a past escalation — do not cite "
+            "an old owner-ask doc's pause status if it contradicts this line.")
     sections.append("\n".join(ground_truth_lines))
 
+    _c = planner_ceilings(len(objectives))
     sections.append(
         "INSTRUCTIONS:\n"
-        "- Create 1-3 goals with goal_create; each MUST set objective_id, tools, and "
+        f"- Create 1-{_c['per_run']} goals with goal_create; each MUST set objective_id, tools, and "
         "acceptance (what 'done' must prove: ids/paths/urls). Sequence dependent work "
         "with depends_on=[goal_id,...] instead of writing one mega-goal or "
         "duplicating steps.\n"
@@ -251,12 +419,17 @@ def build_planner_prompt(board, user_id: str, deliverables_root: Optional[Path],
         "valid check types are 'artifact_glob' ({'type':'artifact_glob','pattern':'*.md'}), "
         "'http_ok' ({'type':'http_ok','url':'…'}) and 'file_contains' "
         "({'type':'file_contains','path':'report.md','contains':['A','B'],'mode':'all'}); "
-        "do NOT invent other types — an unknown type fail-closes and can never pass.\n"
+        "do NOT invent other types — an unknown type fail-closes and can never pass. "
+        "file_contains is an EXACT literal-substring match — use it only for known-exact "
+        "strings (an id, a path, a specific number), never to assert a report 'discusses' "
+        "a topic (e.g. contains=['PnL']): a semantically-complete report phrased "
+        "differently will fail the check and force a wasted retry. Put that kind of "
+        "completeness in plain-English acceptance text instead.\n"
         "- Each goal must EXTEND an existing deliverable or state why none applies.\n"
         "- Tools by shape: research -> ['web_fetch','anysite','filesystem','task']; "
         "drafting -> ['filesystem','task','web_fetch']; posting/engagement -> "
-        "['twitter','filesystem','task']. At most ONE goal may include 'twitter'.\n"
-        "- Never exceed 5 ready goals total (a goal waiting on depends_on does NOT "
+        f"['twitter','filesystem','task']. At most {_c['social']} goal may include 'twitter'.\n"
+        f"- Never exceed {_c['ready_ceiling']} ready goals total (a goal waiting on depends_on does NOT "
         "count toward this ceiling — it isn't ready yet). A rejected duplicate means: "
         "extend the matched goal's work instead of retrying a rename.\n"
         "- If progress is blocked on something only the owner can provide (credentials, "

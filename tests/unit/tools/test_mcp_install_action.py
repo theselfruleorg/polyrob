@@ -23,7 +23,7 @@ import types
 import pytest
 
 import agents.task.agent.service  # noqa: F401 — import-cycle guard
-from agents.task.telemetry.event_log import TelemetryEventLog
+from core.event_log import TelemetryEventLog
 from tools.controller.registry.service import Registry
 from tools.controller.service import Controller
 
@@ -32,7 +32,7 @@ from tools.controller.service import Controller
 def log(tmp_path, monkeypatch):
     lg = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
     monkeypatch.setattr(
-        "agents.task.telemetry.event_log.get_event_log", lambda db_path=None: lg
+        "core.event_log.get_event_log", lambda db_path=None: lg
     )
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_ENABLED", raising=False)
     return lg

@@ -4,6 +4,9 @@ import { loadStats } from '/static/js/stats.js?v=5';
 import { loadScreenshot } from '/static/js/screenshot.js?v=5';
 import { eventStore } from '/static/js/event-store.js?v=5';
 import { feedFilter } from '/static/js/event-filter.js?v=5';
+// No ?v= — layout.html loads this URL as-is; the same specifier shares the
+// singleton (a versioned URL would instantiate a SECOND handler).
+import { errorHandler } from '/static/js/error-handler.js';
 
 // Initialize session state from DOM
 sessionState.init();
@@ -162,6 +165,7 @@ async function initializeSocket(io) {
                 emit('stats:refreshRequest');
             } catch (sidebarErr) {
                 logger.warn('[Session] Sidebar refresh error:', sidebarErr.message);
+                errorHandler.notify('Sidebar refresh failed — panel data may be stale');
             }
         } catch (err) {
             logger.error('[Session] Failed to parse initial feed:', err);
@@ -199,11 +203,13 @@ async function initializeSocket(io) {
                     emit('stats:refreshRequest');
                 } catch (sidebarErr) {
                     logger.warn('[Session] Sidebar refresh error:', sidebarErr.message);
+                    errorHandler.notify('Sidebar refresh failed — panel data may be stale');
                 }
             }
         } catch (err) {
             logger.error('[Session] Failed to process chunk:', err);
             chunkBuffer = { chunks: [], expected: 0 };
+            showFeedError('Failed to load feed data. Please try refreshing the page.');
         }
     });
 
@@ -248,8 +254,13 @@ async function initializeSocket(io) {
         updateConnectionStatus('connected');
         connectionBackoff.reset();
 
-        // Re-join the session room
-        socket.emit('join_session', { session_id: sessionId });
+        // Re-join the session room. 030 WS-G2: pass after_seq so the server
+        // skips the full-feed replay — delta sync below fills the gap.
+        const lastSeqForJoin = eventStore.getLastSeq();
+        socket.emit('join_session', {
+            session_id: sessionId,
+            after_seq: lastSeqForJoin > 0 ? lastSeqForJoin : 0,
+        });
 
         // Delta sync: fetch only events we missed during disconnection
         const lastSeq = eventStore.getLastSeq();
@@ -267,6 +278,7 @@ async function initializeSocket(io) {
                 }
             } catch (err) {
                 logger.warn('[Session] Delta sync failed:', err);
+                errorHandler.notify('Reconnected, but syncing missed events failed — refresh to see the full feed');
             }
         }
 
@@ -975,6 +987,7 @@ async function initializeSocket(io) {
             }
         } catch (err) {
             logger.warn('[Banner] inline approval failed:', err);
+            errorHandler.notify('Inline approval failed — opening the pending page instead');
             window.open('/pending', '_blank');
         } finally {
             if (btn) btn.disabled = false;
@@ -1665,6 +1678,7 @@ async function initializeSocket(io) {
             }
         } catch (err) {
             logger.error('[Session] Feed fallback failed:', err);
+            showFeedError('Failed to load feed events. Please try refreshing the page.');
         }
     }, 1500); // 1.5-second grace period after page load for faster recovery
     

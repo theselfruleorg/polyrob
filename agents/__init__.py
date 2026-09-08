@@ -100,9 +100,6 @@ async def initialize_shared_components(container: DependencyContainer) -> None:
             container.register_service('character_manager', character_manager)
             logger.info("✓ Character manager initialized")
 
-        # Mark shared components as initialized
-        container.mark_component_group_initialized('shared_components')
-
     except Exception as e:
         logger.error(f"Shared component initialization failed: {e}")
         raise

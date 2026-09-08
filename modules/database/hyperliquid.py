@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 
 from modules.database.connection import DatabaseConnection
-from tools.mcp.security import MCPEncryption, get_encryption
+from core.security.encryption import MCPEncryption, get_encryption
 from tools.hyperliquid.models import (
     HyperliquidCredentials,
     TradingLimits,

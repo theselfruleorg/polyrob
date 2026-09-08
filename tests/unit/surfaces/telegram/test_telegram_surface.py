@@ -176,7 +176,9 @@ async def test_send_document_media_calls_document_api(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_media_caption_falls_back_to_message_text(tmp_path):
+async def test_media_caption_never_duplicates_the_message_text(tmp_path):
+    """030 L8 (deliberate contract flip): the message text lands as its own
+    bubble; repeating it as the photo caption doubled every media send."""
     bot = _FakeBot()
     s = TelegramSurface(bot)
     img = tmp_path / "card.png"
@@ -186,7 +188,31 @@ async def test_media_caption_falls_back_to_message_text(tmp_path):
         media=[{"kind": "image", "path": str(img), "caption": None}],
     )
     await s.send(msg)
-    assert "fallback caption text" in bot.photos[0]["kwargs"]["caption"]
+    assert bot.photos[0]["kwargs"]["caption"] is None
+
+
+@pytest.mark.asyncio
+async def test_explicit_media_caption_is_kept_and_truncation_is_marked(tmp_path):
+    bot = _FakeBot()
+    s = TelegramSurface(bot)
+    img = tmp_path / "card.png"
+    img.write_bytes(b"fake")
+    msg = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="body",
+        media=[{"kind": "image", "path": str(img), "caption": "invoice #42"}],
+    )
+    await s.send(msg)
+    assert "invoice #42" in bot.photos[0]["kwargs"]["caption"]
+
+    long_caption = "x" * 3000
+    msg2 = OutboundMessage(
+        session_key="agent:main:telegram:dm:5:u", text="body",
+        media=[{"kind": "image", "path": str(img), "caption": long_caption}],
+    )
+    await s.send(msg2)
+    cap = bot.photos[1]["kwargs"]["caption"]
+    assert len(cap) <= 1024
+    assert cap.endswith("…")
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from agents.task.agent.views import ActionResult, AgentBrain
-from agents.task.agent.core.untrusted_wrap import maybe_wrap
+from core.security.untrusted_wrap import maybe_wrap
 from modules.llm.messages import AIMessage, ToolMessage
 
 logger = logging.getLogger(__name__)

@@ -27,10 +27,10 @@ class X402Result:
 
 
 class X402PaymentClient(Protocol):
-    async def quote(self, url: str) -> Optional[float]: ...
+    async def quote(self, url: str, *, pinned_ip: Optional[str] = None) -> Optional[float]: ...
     async def fetch_with_payment(
         self, *, url: str, method: str, body: Optional[str], signer: Signer,
-        network: str, max_amount_usd: float,
+        network: str, max_amount_usd: float, pinned_ip: Optional[str] = None,
     ) -> X402Result: ...
 
 
@@ -42,10 +42,10 @@ class FakeX402Client:
         self._pay_to = pay_to
         self._body = paid_body
 
-    async def quote(self, url: str) -> Optional[float]:
+    async def quote(self, url: str, **kwargs) -> Optional[float]:
         return self._price
 
-    async def fetch_with_payment(self, *, url, method, body, signer, network, max_amount_usd) -> X402Result:
+    async def fetch_with_payment(self, *, url, method, body, signer, network, max_amount_usd, **kwargs) -> X402Result:
         if self._price is None:
             return X402Result(body=self._body, paid=False, amount_usd=0.0, tx_hash=None, pay_to=None, status_code=200)
         return X402Result(body=self._body, paid=True, amount_usd=self._price,

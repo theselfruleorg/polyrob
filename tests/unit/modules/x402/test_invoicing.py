@@ -547,6 +547,150 @@ async def test_terminal_wake_flags_do_not_cross_settled_and_expired(tmp_path):
         await db.close()
 
 
+# --- M3: wake_delivered must be read via json_extract, not a spaced LIKE ----
+# `settled_unnotified_invoices`/`expired_unnotified_invoices`/`claim_wake` used
+# to match the literal `'%"wake_delivered": false%'`. Normal rows are written
+# spaced by `json.dumps`, so the LIKE matched them -- but ANY later `json_set`
+# on the metadata blob (e.g. the boot-time subscription dedup in
+# `modules.database.x402_tables.dedupe_and_create_subscription_pending_unique_index`,
+# which runs `json_set(metadata, '$.subscription_id', NULL)`) re-serializes
+# the WHOLE blob COMPACTLY (`"wake_delivered":false`), and the spaced LIKE
+# silently stopped matching -- dropping that invoice's settlement/expiry wake
+# forever, with no error anywhere.
+
+@pytest.mark.asyncio
+async def test_compacted_metadata_row_still_gets_its_settlement_wake(tmp_path):
+    """M3 repro + fix proof: a row whose metadata has been re-serialized
+    compactly by `json_set` (simulating the subscription dedup) must still be
+    picked up by `settled_unnotified_invoices` and its wake must still be
+    claimable exactly once."""
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_compact", amount_usd=4.0,
+            purpose="p", db=db)
+
+        # Recompact the metadata blob exactly the way the boot-time
+        # subscription dedup does (modules/database/x402_tables.py:310).
+        await db.execute(
+            "UPDATE x402_payment_requests "
+            "SET metadata = json_set(metadata, '$.subscription_id', NULL) "
+            "WHERE id = ?",
+            (inv["request_id"],),
+        )
+        # Prove the recompaction actually happened: the OLD spaced-LIKE
+        # predicate no longer matches this row at all (this is the exact
+        # precondition under which the pre-fix code silently dropped the
+        # wake -- without this assertion the test wouldn't demonstrate the
+        # bug's precondition, only the fix's postcondition).
+        still_spaced = await db.fetch_all(
+            "SELECT id FROM x402_payment_requests "
+            "WHERE id = ? AND metadata LIKE '%\"wake_delivered\": false%'",
+            (inv["request_id"],),
+        )
+        assert still_spaced == [], (
+            "setup did not actually recompact the metadata blob -- this "
+            "test would not be exercising the M3 bug"
+        )
+
+        await invoicing.settle_payment_request(inv["request_id"], db=db)
+
+        pending_wakes = await invoicing.settled_unnotified_invoices(db=db)
+        assert [r["request_id"] for r in pending_wakes] == [inv["request_id"]]
+
+        assert await invoicing.claim_wake(inv["request_id"], db=db) is True
+        assert await invoicing.claim_wake(inv["request_id"], db=db) is False
+        assert await invoicing.settled_unnotified_invoices(db=db) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_compacted_metadata_row_still_gets_its_expiry_wake(tmp_path):
+    """Same M3 fix, expiry side (`expired_unnotified_invoices` /
+    `claim_expiry_wake`, which shares the same flag/predicate)."""
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_compact_exp", amount_usd=2.0,
+            purpose="p", expiry_hours=1.0, db=db)
+        await db.execute(
+            "UPDATE x402_payment_requests "
+            "SET metadata = json_set(metadata, '$.subscription_id', NULL) "
+            "WHERE id = ?",
+            (inv["request_id"],),
+        )
+        await invoicing.expire_stale_requests(db=db, now=inv["expires_at_epoch"] + 10)
+
+        pending = await invoicing.expired_unnotified_invoices(db=db)
+        assert [r["request_id"] for r in pending] == [inv["request_id"]]
+
+        assert await invoicing.claim_expiry_wake(inv["request_id"], db=db) is True
+        assert await invoicing.claim_expiry_wake(inv["request_id"], db=db) is False
+        assert await invoicing.expired_unnotified_invoices(db=db) == []
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_wake_delivered_absent_key_is_not_eligible(tmp_path):
+    """Behaviour-preserving corner case: a row where `wake_delivered` is
+    entirely ABSENT from metadata (e.g. a pre-existing row from before this
+    field existed) must NOT be treated as an outstanding wake.
+    `json_extract(metadata, '$.wake_delivered')` on an absent key returns SQL
+    NULL, and `NULL = 0` is NULL (not true) in SQLite -- so the row is
+    correctly excluded, exactly as the old LIKE also never matched it. This
+    is a deliberate, tested choice, not an accident of the rewrite."""
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_noflag", amount_usd=1.0,
+            purpose="p", db=db)
+        legacy_meta = json.dumps({
+            "kind": "agent_invoice", "session_id": "sess_noflag",
+            "tenant_id": "rob", "purpose": "p",
+            # wake_delivered key deliberately absent
+        })
+        await db.execute(
+            "UPDATE x402_payment_requests SET metadata = ? WHERE id = ?",
+            (legacy_meta, inv["request_id"]))
+
+        await invoicing.settle_payment_request(inv["request_id"], db=db)
+
+        assert await invoicing.settled_unnotified_invoices(db=db) == []
+        assert await invoicing.claim_wake(inv["request_id"], db=db) is False
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_claim_wake_racing_calls_exactly_one_wins(tmp_path):
+    """CAS regression guard: `claim_wake` is a single atomic
+    `UPDATE ... WHERE id = ? AND json_extract(...) = 0` -- correctness comes
+    from that one statement's atomicity, not from interleaving prevention (a
+    sync-sqlite-backed `DatabaseConnection` never truly interleaves two
+    `asyncio.gather`ed calls with no internal suspension point -- see the I1
+    comment in test_onchain_settlement.py). Two concurrent claimers for the
+    SAME row must still resolve to exactly one True and one False."""
+    import asyncio
+
+    db = await _setup_db(tmp_path)
+    try:
+        inv = await invoicing.create_payment_request(
+            user_id="rob", session_id="sess_race", amount_usd=1.0,
+            purpose="p", db=db)
+        await invoicing.settle_payment_request(inv["request_id"], db=db)
+
+        results = await asyncio.gather(
+            invoicing.claim_wake(inv["request_id"], db=db),
+            invoicing.claim_wake(inv["request_id"], db=db),
+        )
+        assert sorted(results) == [False, True]
+        assert await invoicing.settled_unnotified_invoices(db=db) == []
+    finally:
+        await db.close()
+
+
 # --- Task 14 review Finding 2: duplicate-renewal TOCTOU ----------------------
 # At most one PENDING invoice may exist per subscription_id
 # (idx_x402_requests_pending_subscription_unique). create_payment_request must
@@ -704,3 +848,28 @@ def test_tools_x402_delegates_to_shared_invoicing_ssot(monkeypatch):
 
     monkeypatch.setenv("X402_INVOICE_ENABLED", "false")
     assert tools_x402.x402_invoicing_enabled() == invoicing.x402_invoicing_enabled() is False
+
+
+# --------------------------------------------------------------------------
+# W1.5 (2026-08-21): X402_SETTLE_ONCHAIN_DETECT joins the mode-governed
+# capability set — receive-side only (it starts background RPC polling, moves
+# no money), so an effective-autonomous deployment defaults it ON alongside
+# X402_INVOICE_ENABLED. Explicit env always wins.
+# --------------------------------------------------------------------------
+
+def test_onchain_detect_off_supervised_default(monkeypatch):
+    monkeypatch.delenv("AUTONOMY_MODE", raising=False)
+    monkeypatch.delenv("X402_SETTLE_ONCHAIN_DETECT", raising=False)
+    assert invoicing.x402_settle_onchain_detect_enabled() is False
+
+
+def test_onchain_detect_on_under_autonomous_mode(monkeypatch):
+    _enable_full(monkeypatch)
+    monkeypatch.delenv("X402_SETTLE_ONCHAIN_DETECT", raising=False)
+    assert invoicing.x402_settle_onchain_detect_enabled() is True
+
+
+def test_onchain_detect_explicit_false_wins_over_mode(monkeypatch):
+    _enable_full(monkeypatch)
+    monkeypatch.setenv("X402_SETTLE_ONCHAIN_DETECT", "false")
+    assert invoicing.x402_settle_onchain_detect_enabled() is False

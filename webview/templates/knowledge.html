@@ -79,6 +79,11 @@
     async function loadSkills() {
         const data = await getJSON('/api/webgate/knowledge/skills');
         body.innerHTML = '';
+        if (data.error) {
+            // 030 D4: a failed catalog read is NOT an empty catalog.
+            body.innerHTML = '<div class="error-message error-message--block">Skills catalog unavailable: ' + esc(data.error) + '</div>';
+            return;
+        }
         if (data.pending && data.pending.length) {
             body.appendChild(item('<b>' + data.pending.length + ' pending skill draft(s)</b> awaiting review (approve via CLI: <code>/pending</code>)' +
                 data.pending.map(p => '<pre>' + esc(p.skill_id + ': ' + (p.preview || '')) + '</pre>').join('')));

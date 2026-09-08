@@ -504,6 +504,11 @@ class StepMixin:
 		# external memory provider is registered.
 		await self._maybe_prefetch_memory()
 
+		# 2026-08-28 status SSOT (D10): first step of every turn, the agent gets
+		# the SAME health facts the owner's /status renders (<live-health>), so
+		# "how are you doing?" is never answered from stale context. Fail-open.
+		await self._maybe_inject_live_health()
+
 		# Task 5: session-start "recent activity" digest — first step only, chat/
 		# owner sessions only (never goal/cron/sub-agent). Fail-open; inert unless
 		# AutonomyConfig.episodic_digest_inject() is on.
@@ -573,53 +578,7 @@ class StepMixin:
 			action_summary_for_tracking = model_output.current_state.memory[:200] if model_output.current_state.memory else "No memory"
 			self.state.track_action(action_summary_for_tracking)
 
-		# Action repetition detection
-		if model_output and hasattr(model_output, 'action') and model_output.action:
-			# Create a simplified representation of the action for comparison
-			import hashlib
-			# --- UPGRADE: use order-independent semantic hash ----------------
-			action_dump = []
-			for a in model_output.action:
-				# Dump each action with sorted keys so param order does not matter
-				action_dump.append(a.model_dump(mode="json", exclude_unset=True, by_alias=True))
-			action_hash = hashlib.md5(json.dumps(action_dump, sort_keys=True).encode()).hexdigest()
-			# ---------------------------------------------------------------
-
-			# Check for repeated actions with improved detection
-			if self._previous_actions and action_hash == self._previous_actions[-1]:
-				self._action_repetition_counter += 1
-				# Log warnings after 3+ repetitions (more aggressive)
-				if self._action_repetition_counter >= 3:
-					self.logger.warning(f"Same action repeated {self._action_repetition_counter} times")
-
-				# FIX #1: Respect the configured threshold instead of hardcoding 8
-				# The config value is typically 2-3 for faster loop detection
-				max_reps = self._max_allowed_repetitions  # Removed the max(..., 8) override
-				if self._action_repetition_counter >= max_reps:
-					self._trigger_loop_intervention(f"Action repeated {self._action_repetition_counter} times")
-			else:
-				# Different action, reset counter
-				self._action_repetition_counter = 0
-
-			# Update action history (deque automatically maintains max size)
-			self._previous_actions.append(action_hash)
-
-			# FIX #2: Enhanced pattern detection with IMMEDIATE intervention
-			if len(self._previous_actions) >= 4:
-				# Convert deque to list for slice operations
-				prev_actions_list = list(self._previous_actions)
-
-				# Check for A-B-A-B pattern - IMMEDIATE intervention
-				if (prev_actions_list[-1] == prev_actions_list[-3] and
-					prev_actions_list[-2] == prev_actions_list[-4]):
-					self.logger.warning("🔄 Detected alternating action pattern (A-B-A-B) - INTERVENING NOW")
-					self._trigger_loop_intervention("Alternating A-B-A-B pattern detected")
-
-				# Check for A-B-C-A-B-C pattern - IMMEDIATE intervention
-				elif (len(self._previous_actions) >= 6 and
-					  prev_actions_list[-3:] == prev_actions_list[-6:-3]):
-					self.logger.warning("🔄 Detected repeating 3-action pattern (A-B-C-A-B-C) - INTERVENING NOW")
-					self._trigger_loop_intervention("Repeating 3-action pattern detected")
+		self._record_action_for_loop_detection(model_output)
 
 		if self.register_new_step_callback:
 			if callable(self.register_new_step_callback):

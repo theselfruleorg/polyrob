@@ -62,6 +62,30 @@ def _ensure_dead_targets(container, db_path: str):
         return None
 
 
+def _ensure_correspondent_registry(container, db_path: str) -> None:
+    """030 WS-B2 (finding L3): the correspondent registry was registered only by
+    the email seat, so with CORRESPONDENT_ACCESS_ENABLED on a telegram-only
+    deploy every third party resolved DENIED (access.py gets registry=None).
+    Register it centrally, on every seat that installs the surface bus, gated
+    by the same flag the access model reads. Fail-open."""
+    try:
+        from core.surfaces.config import SurfaceConfig
+        if not SurfaceConfig.correspondent_access_enabled():
+            return
+        if container.get_service("correspondent_registry") is not None:
+            return
+        import os as _os
+        from core.surfaces.correspondents import CorrespondentRegistry
+        data_dir = _os.path.dirname(db_path) or "."
+        container.register_service(
+            "correspondent_registry",
+            CorrespondentRegistry(_os.path.join(data_dir, "correspondents.db")),
+        )
+        logger.info("surface bus: correspondent registry installed (central, WS-B2)")
+    except Exception as e:
+        logger.error("correspondent registry install failed: %s", e)
+
+
 def install_surface_bus(container, db_path: str = None) -> bool:
     """Build SessionChatRegistry + MessageRouter and register them on ``container``.
 
@@ -72,7 +96,7 @@ def install_surface_bus(container, db_path: str = None) -> bool:
     outbox, and circuit store follow POLYROB_DATA_DIR isolation instead of a hardcoded
     ``./data`` inside the code tree. Pass an explicit path to override.
     """
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
 
     if not SurfaceConfig.singular_chat_enabled():
         return False
@@ -87,6 +111,7 @@ def install_surface_bus(container, db_path: str = None) -> bool:
     existing = container.get_service("message_router")
     if existing is not None:
         _ensure_conversation_store(container, db_path)
+        _ensure_correspondent_registry(container, db_path)
         dt = _ensure_dead_targets(container, db_path)
         if dt is not None:
             existing.attach_dead_targets(dt)
@@ -105,37 +130,53 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         container.register_service("outbound_allowlist", OutboundAllowlist(db_path))
 
         _ensure_conversation_store(container, db_path)
+        _ensure_correspondent_registry(container, db_path)
 
         dt = _ensure_dead_targets(container, db_path)
         if dt is not None:
             router.attach_dead_targets(dt)
 
-        if SurfaceConfig.outbound_queue_enabled():
-            import os
-            from core.surfaces.outbound_queue import OutboundDeliveryQueue
-            from core.surfaces.outbound_dispatcher import OutboundDispatcher
-            from core.surfaces.circuit import CircuitStore, SurfaceCircuitBreaker
-            q = OutboundDeliveryQueue(os.path.join(os.path.dirname(db_path) or ".", "outbox.db"))
-            q.reclaim_inflight(older_than=__import__("time").time() - 120)  # restart-recovery
-            router.attach_queue(q)
-            circuit_store = CircuitStore(
-                os.path.join(os.path.dirname(db_path) or ".", "surface_state.db")
-            )
-            circuit = SurfaceCircuitBreaker(store=circuit_store)
-            # event_log is deliberately left unwired here: no core-tier handle to
-            # agents.task.telemetry.event_log exists on this path, and adding one
-            # would require a new core/surfaces/bootstrap.py -> agents.task.telemetry
-            # .event_log edge to tests/test_layering_ratchet.py's frozen allowlist,
-            # which may only shrink (never grow). The dispatcher's event_log param
-            # defaults to None and its emit helper is already a no-op in that case
-            # (see OutboundDispatcher._emit_dead_target_event) — dead-target skip/mark
-            # still logs at INFO either way, only the telemetry event is absent.
-            dispatcher = OutboundDispatcher(q, lambda sid: router._surfaces.get(sid),
-                                            circuit=circuit, dead_targets=dt)
-            container.register_service("outbound_queue", q)
-            container.register_service("outbound_dispatcher", dispatcher)
-            container.register_service("surface_circuit_breaker", circuit)
-            logger.info("surface bus: durable outbound queue + dispatcher + circuit breaker constructed")
+        # 2026-08-30: construction is deliberately UNCONDITIONAL now — decoupled
+        # from OUTBOUND_QUEUE_ENABLED, which stays the sole gate for publish()'s
+        # PRIMARY reply-routing decision (direct-send vs. queued-with-retry for a
+        # locally-subscribed surface, e.g. the main telegram conversation) at
+        # message_router.py's `publish()`. Before this, a surface not hosted in
+        # THIS process (e.g. `message(surface="email")` called from the agent
+        # daemon, which only polyrob-email.service subscribes locally) got an
+        # unconditional "no surface X registered — delivery failed", because
+        # send_message()'s cross-process fallback required BOTH self._queue and
+        # the flag — so with the flag off (the prod default) that fallback could
+        # never exist, live-observed 2+ times/day burning retries on a treasury
+        # goal (2026-08-28 21:26Z/22:17Z, re-observed 2026-08-30
+        # 00:16Z/00:22Z). Always building the queue+dispatcher+circuit-breaker
+        # makes that fallback usable regardless of the flag; publish()'s own
+        # `SurfaceConfig.outbound_queue_enabled()` check is untouched, so the
+        # primary reply-routing behavior stays byte-identical to before.
+        import os
+        from core.surfaces.outbound_queue import OutboundDeliveryQueue
+        from core.surfaces.outbound_dispatcher import OutboundDispatcher
+        from core.surfaces.circuit import CircuitStore, SurfaceCircuitBreaker
+        q = OutboundDeliveryQueue(os.path.join(os.path.dirname(db_path) or ".", "outbox.db"))
+        q.reclaim_inflight(older_than=__import__("time").time() - 120)  # restart-recovery
+        router.attach_queue(q)
+        circuit_store = CircuitStore(
+            os.path.join(os.path.dirname(db_path) or ".", "surface_state.db")
+        )
+        circuit = SurfaceCircuitBreaker(store=circuit_store)
+        # event_log is deliberately left unwired here: no core-tier handle to
+        # core.event_log exists on this path, and adding one
+        # would require a new core/surfaces/bootstrap.py -> agents.task.telemetry
+        # .event_log edge to tests/test_layering_ratchet.py's frozen allowlist,
+        # which may only shrink (never grow). The dispatcher's event_log param
+        # defaults to None and its emit helper is already a no-op in that case
+        # (see OutboundDispatcher._emit_dead_target_event) — dead-target skip/mark
+        # still logs at INFO either way, only the telemetry event is absent.
+        dispatcher = OutboundDispatcher(q, lambda sid: router._surfaces.get(sid),
+                                        circuit=circuit, dead_targets=dt)
+        container.register_service("outbound_queue", q)
+        container.register_service("outbound_dispatcher", dispatcher)
+        container.register_service("surface_circuit_breaker", circuit)
+        logger.info("surface bus: durable outbound queue + dispatcher + circuit breaker constructed")
         logger.info("surface bus installed (session_chat_registry + message_router)")
         return True
     except Exception as e:  # fail-open: a bus build error must not break startup

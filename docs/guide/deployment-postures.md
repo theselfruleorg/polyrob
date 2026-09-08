@@ -271,3 +271,31 @@ needs console access is you and you already have a VPN/tailnet set up.
 | `ENVIRONMENT` | `production` | When `production`, the owner-login cookie is marked `secure` (HTTPS-only). |
 
 See [../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
+
+## Durable apps (proposal 032)
+
+The agent can run a built app as its own hardened container behind
+`https://<slug>.<APP_SERVICE_BASE_DOMAIN>`, surviving session end and restarts. The
+agent only writes a registry row; the owner-owned `polyrob-apps.service` does every
+privileged step. Turn it on with ONE setting:
+
+```
+AGENT_BUILDER_MODE=ship            # build = static publish + github only; off = nothing
+APP_SERVICE_BASE_DOMAIN=apps.example.com
+```
+
+`ship` clamps to `build` (with a one-time warning) until the base domain is set and its
+wildcard certificate exists. The serving side is a one-time owner step on the box:
+
+```
+cd ~/rob_dev && APPS_BASE_DOMAIN=apps.example.com bash scripts/setup_apps_vhost.sh
+```
+
+It obtains the `*.apps.example.com` certificate (manual DNS-01 — you add one TXT
+record), creates the per-app nginx include dir, and installs + enables
+`polyrob-apps.service`. The FIRST deploy of each new slug waits for you
+(`polyrob apps approve <slug>` / `/apps approve <slug>` / the console's Apps page); an
+approved address redeploys unattended within `APP_SERVICE_MAX_LIVE` /
+`APP_SERVICE_DAILY_MAX` / `APP_SERVICE_MIN_INTERVAL_SEC`. `/pause apps` or `/halt` stops
+deploys AND live containers until resume. Egress is deny-by-default per app; no host
+secret ever reaches an app container. Full flag table: [../CONFIGURATION.md](../CONFIGURATION.md).

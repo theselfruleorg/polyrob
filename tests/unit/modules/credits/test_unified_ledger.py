@@ -28,7 +28,7 @@ async def _setup_db(tmp_path):
 def _env(monkeypatch, tmp_path):
     monkeypatch.setenv("X402_PAYMENT_RECIPIENT", "0xTREASURY")
     # point the telemetry event log at a scratch DB so the wallet leg is hermetic
-    from agents.task.telemetry import event_log as el
+    from core import event_log as el
     monkeypatch.setattr(el, "_INSTANCES", {}, raising=False)
 
 

@@ -16,7 +16,7 @@ from core.surfaces.session_chat_registry import build_session_key
 from core.surfaces.transcription import voice_present, transcribe_inbound_media
 from core.surfaces.voice_guard import voice_needs_guard, voice_unavailable_message
 from core.surfaces.voice_echo import voice_transcript, voice_echo_message
-from agents.task.surface_config import SurfaceConfig
+from core.surfaces.config import SurfaceConfig
 from core.surfaces.act import InboundResult, act_on_inbound  # actor registered by surfaces.telegram.harness
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,20 @@ class WebhookSurface(ABC):
                                     pass
                     decision = await route_inbound(container, inbound)
                     result = InboundResult(inbound=inbound, decision=decision)
-                    reply = await act_on_inbound(task_agent, result)
+
+                    # 030 L5: thread deliver= through, like every polling harness
+                    # does. Without it, act_on_inbound's failed-run breadcrumb and
+                    # LLM-outage notice paths return at their deliver-is-None
+                    # guard — a webhook surface (WhatsApp) silently swallowed
+                    # exactly the failures those notices were built to surface.
+                    async def _deliver(text: str, _inb=inbound) -> None:
+                        try:
+                            await self._send_immediate(_inb, text)
+                        except Exception:
+                            logger.warning("%s deliver failed", self.surface_id,
+                                           exc_info=True)
+
+                    reply = await act_on_inbound(task_agent, result, deliver=_deliver)
                     if reply:
                         await self._send_immediate(inbound, reply)
             except Exception as e:  # fail-open per message

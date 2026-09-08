@@ -11,6 +11,18 @@ Otherwise the trade tools dry-run: build/validate/route through PolicyGate but n
 submit. All switches default OFF, so the default posture is "never trade real money."
 This is ANDed with — never a replacement for — TradingLimits, PolicyGate, exposure caps
 and the confirmation gate.
+
+A non-order venue MUTATION (cancel, leverage change — ``evaluate_live_mutation``, M10)
+is gated by the same master + per-venue switches but NOT the size cap (a cancel has no
+amount). ``risk_reducing=True`` does NOT mean "this cannot increase risk" — cancelling a
+protective stop plainly can (cancelling a resting stop-loss, or ``cancel_all_orders``
+wiping every protective order at once, both raise exposure). It means "this is a
+position-management action the OWNER may still perform BY HAND while halted", so pulling
+the kill-switch can never strand a position the owner can no longer close. It is an
+OWNER-only carve-out (R16, 2026-08-22): it applies only to a direct/CLI/programmatic call
+(``execution_context is None`` in ``trade_turn_refusal``) — it never relaxes anything for
+an agent-loop turn, including a genuine, non-forged main-agent turn. A leverage change
+(not a position-management action) is blocked while halted like an order, for anyone.
 """
 from __future__ import annotations
 
@@ -37,31 +49,45 @@ class TradeGateDecision:
     reason: str
 
 
-def trade_turn_refusal(execution_context, tool_self) -> str | None:
+def trade_turn_refusal(execution_context, tool_self, *, risk_reducing: bool = False) -> str | None:
     """H11: return a refusal reason if this turn must NOT run a value-moving / mutating
     trade verb — else None. Two independent bars (either one refuses):
 
       1. The owner kill-switch (``AutonomyConfig.autonomy_halted()``) halts ALL agent
          trading, exactly like x402 spend (``x402/service.py``). Applies regardless of
-         turn origin (a direct/CLI call is halted too).
+         turn origin (a direct/CLI call is halted too) — UNLESS BOTH ``risk_reducing=True``
+         AND ``execution_context is None`` (R16, 2026-08-22, narrowing M10): the ONLY
+         rationale for this carve-out is that the OWNER, acting directly (CLI/programmatic
+         call — see bar 2's note on what ``None`` means), must still be able to close a
+         position by hand while halted. Nothing in that rationale extends to an agent-loop
+         turn — an ``execution_context`` being present means this is an agent-loop turn
+         (LLM-driven, whether genuine-owner-initiated or not), and the kill-switch bar
+         applies to it exactly as before, `risk_reducing` or not. A genuine, non-forged
+         main-agent turn (``role="orchestrator"``) gets ZERO relaxation here — only a
+         literal ``None`` context does. Every verb other than the four cancels keeps the
+         default ``risk_reducing=False`` and is fully unaffected by this bar's narrowing.
       2. A forged self-wake / async-delegation-result / leaf / autonomous turn can never
          place/mutate an order — parity with the owner-queue payment approver
          (``approval_queue.py``). The trade methods historically took no
          ``execution_context`` so origin was invisible; a ``None`` context means a
          direct/programmatic/CLI call (not an agent-loop turn), so the forged check is
          skipped there (flag + cap gates still apply) — but the kill-switch above STILL
-         applies.
+         applies (subject to the bar-1 owner-only carve-out). This bar is UNCONDITIONAL —
+         ``risk_reducing`` never weakens it; a forged turn still cannot cancel an order.
 
     Fail CLOSED on every probe error (money-safe): if we cannot prove the turn is
     genuine, or cannot read the kill-switch, we refuse."""
-    # (1) Owner kill-switch — refuse ALL trading while halted (parity with x402_fetch).
-    try:
-        from core.config_policy import AutonomyConfig
-        if AutonomyConfig.autonomy_halted():
-            return ("live trade refused: autonomy is HALTED (owner kill-switch) — "
-                    "the order was not submitted")
-    except Exception as e:
-        return f"live trade refused: kill-switch probe failed ({e}); failing closed"
+    # (1) Owner kill-switch — refuse ALL trading while halted (parity with x402_fetch),
+    # except a risk-reducing mutation made by the OWNER directly (R16: `execution_context
+    # is None` — an agent-loop turn, even a genuine one, is NEVER exempt from this bar).
+    if not (risk_reducing and execution_context is None):
+        try:
+            from core.config_policy import AutonomyConfig
+            if AutonomyConfig.autonomy_halted():
+                return ("live trade refused: autonomy is HALTED (owner kill-switch) — "
+                        "the order was not submitted")
+        except Exception as e:
+            return f"live trade refused: kill-switch probe failed ({e}); failing closed"
     # (2) Forged / autonomous turn origin — only meaningful when a context is present.
     if execution_context is None:
         return None
@@ -109,3 +135,48 @@ def evaluate_live_trade(venue: str, amount_usd: float | None) -> TradeGateDecisi
         return TradeGateDecision(False, f"live trade refused: kill-switch probe failed ({e}) — failing closed")
 
     return TradeGateDecision(True, f"live trading enabled for {venue} (within ${cap:.2f} cap)")
+
+
+def evaluate_live_mutation(venue: str, *, risk_reducing: bool) -> TradeGateDecision:
+    """Whether a non-order venue MUTATION (cancel, leverage change) may go live.
+
+    M10 (audit 2026-08-22): `cancel_*` and `update_leverage` reached the venue
+    whenever credentials allowed it, even with CRYPTO_TRADE_LIVE_ENABLED off —
+    contradicting this module's stated contract.
+
+    Deliberately NOT `evaluate_live_trade`: that one fails CLOSED on an
+    unpriceable amount, and a cancel has no amount, so reusing it would block
+    every cancel and could strand an open position the owner can no longer close.
+
+    `risk_reducing=True` is NOT a claim that the action cannot increase risk —
+    cancelling a protective stop plainly can (R16, 2026-08-22, correcting the
+    original M10 framing). It means "the owner may still perform this by hand
+    while halted." This function has no `execution_context` and cannot itself
+    tell an owner-direct call from an agent-loop one — that narrowing is
+    `trade_turn_refusal`'s job (its bar 1 only lifts for `risk_reducing=True`
+    AND `execution_context is None`). Callers MUST run `trade_turn_refusal`
+    first; this function alone does not restrict `risk_reducing=True` to the
+    owner.
+    """
+    if not _bool_env("CRYPTO_TRADE_LIVE_ENABLED", False):
+        return TradeGateDecision(False, "live trading disabled (CRYPTO_TRADE_LIVE_ENABLED off)")
+    flag = _VENUE_FLAGS.get(venue)
+    if not flag or not _bool_env(flag, False):
+        return TradeGateDecision(False, f"live trading disabled for {venue} ({flag} off)")
+    if risk_reducing:
+        # Deliberately returns here WITHOUT probing the halt switch (Minor 6, R16):
+        # this function only encodes the switches+cap policy, not turn origin, so the
+        # halt decision for a risk-reducing mutation is entirely `trade_turn_refusal`'s
+        # (owner-only) responsibility — probing it again here would be redundant and,
+        # since this function can't see `execution_context`, could not be narrowed to
+        # the owner anyway. A raising halt probe therefore never refuses a cancel HERE;
+        # it is still enforced upstream for every agent-loop turn.
+        return TradeGateDecision(True, f"risk-reducing mutation permitted for {venue}")
+    try:
+        from core.config_policy import AutonomyConfig
+        if AutonomyConfig.autonomy_halted():
+            return TradeGateDecision(
+                False, f"refused: autonomy is HALTED (owner kill-switch) — {venue}")
+    except Exception as e:
+        return TradeGateDecision(False, f"refused: kill-switch probe failed ({e}) — failing closed")
+    return TradeGateDecision(True, f"mutation permitted for {venue}")

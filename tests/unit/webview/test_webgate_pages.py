@@ -166,6 +166,84 @@ def test_cron_endpoint_disabled_flag(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# 030 D4 — silent-empty endpoints report an explicit ``error`` field
+# --------------------------------------------------------------------------- #
+
+def test_memory_endpoint_reports_search_error(monkeypatch):
+    """A raising provider.search yields items:[] PLUS ``error`` (still 200) —
+    a broken recall read must not masquerade as "no memories"."""
+    client, pages = _router_client()
+
+    class BoomProvider:
+        async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None):
+            raise RuntimeError("fts index corrupt")
+
+    monkeypatch.setattr(pages, "_memory_provider", lambda: BoomProvider())
+    r = client.get("/api/webgate/memory")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["items"] == [] and body["count"] == 0
+    assert "fts index corrupt" in body["error"]
+
+
+def test_memory_endpoint_no_error_field_on_success(monkeypatch):
+    """The happy path stays shape-identical — no ``error`` key sneaks in."""
+    client, pages = _router_client()
+
+    class OkProvider:
+        async def search(self, query, *, user_id=None, session_id=None, limit=5, sort=None):
+            return "- alpha"
+
+    monkeypatch.setattr(pages, "_memory_provider", lambda: OkProvider())
+    body = client.get("/api/webgate/memory").json()
+    assert "error" not in body
+
+
+def test_cron_endpoint_reports_read_error(monkeypatch):
+    """A raising cron store yields enabled:True, jobs:[] PLUS ``error``."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_cron_enabled", lambda: True)
+    monkeypatch.setattr(pages, "CronJobStore", _boom("cron.db unreadable"))
+    r = client.get("/api/webgate/cron")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["enabled"] is True and body["jobs"] == []
+    assert "cron.db unreadable" in body["error"]
+
+
+def test_memory_page_shows_backend_error_banner(monkeypatch):
+    """A failed backend CONSTRUCTION renders "memory backend unavailable:
+    <reason>" on the page instead of an indistinguishable empty list."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_memory_provider_status",
+                        lambda: (None, "sqlite-vec missing"))
+    r = client.get("/memory")
+    assert r.status_code == 200
+    assert "memory backend unavailable" in r.text
+    assert "sqlite-vec missing" in r.text
+
+
+def test_memory_page_no_banner_when_backend_ok(monkeypatch):
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (None, None))
+    r = client.get("/memory")
+    assert r.status_code == 200
+    assert "memory backend unavailable" not in r.text
+
+
+def test_autonomy_page_shows_cron_check_error(monkeypatch):
+    """A raising cron-enablement CHECK renders "cron check unavailable" on the
+    page instead of the (false) "Cron disabled" empty state."""
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_cron_enabled_status",
+                        lambda: (False, "ImportError: tools.cronjob_tools"))
+    r = client.get("/autonomy")
+    assert r.status_code == 200
+    assert "cron check unavailable" in r.text
+    assert "tools.cronjob_tools" in r.text
+
+
+# --------------------------------------------------------------------------- #
 # Identity endpoint — reuses core.instance, READ-ONLY (no write path)
 # --------------------------------------------------------------------------- #
 
@@ -273,12 +351,21 @@ def test_pages_render_200_single_user(monkeypatch, path):
 
 
 def test_api_endpoints_mounted_on_server(monkeypatch):
+    """Every webgate endpoint is REACHABLE on the server app.
+
+    This used to introspect ``server._fastapi.routes`` and look for ``.path``.
+    Starlette 1.x restructured the router, so an ``include_router``-mounted path
+    is no longer visible on the top-level route list — the introspection went
+    silently blind while every endpoint still served 200. Asking the app for the
+    route instead tests the property we actually care about (mounted AND
+    routable) and cannot rot against a router-internals change.
+    """
     server = _reload_server(monkeypatch, multitenant=False)
-    paths = {getattr(r, "path", None) for r in server._fastapi.routes}
+    client = TestClient(server._fastapi)
     for p in ("/api/webgate/memory", "/api/webgate/goals", "/api/webgate/cron",
               "/api/webgate/identity", "/api/webgate/doctor",
               "/memory", "/autonomy", "/identity", "/system"):
-        assert p in paths, f"{p} not mounted on _fastapi"
+        assert client.get(p).status_code != 404, f"{p} not mounted on _fastapi"
 
 
 # --------------------------------------------------------------------------- #

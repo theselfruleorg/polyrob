@@ -130,7 +130,7 @@ def _describe_pref(key: str, user_id, home_dir, include_chain: bool) -> SettingI
             if pref is not None:
                 rungs.append(Source(pref, f"pref:{user_id or 'anonymous'}"))
         except Exception:
-            pass
+            logger.debug("config_service: preference rung unreadable for %s", key, exc_info=True)
         if spec.env_flag:
             raw = os.environ.get(spec.env_flag)
             if raw is not None and raw.strip() != "":
@@ -177,7 +177,10 @@ def _describe_flag(key: str, include_chain: bool) -> SettingInfo:
         chain = tuple(rungs)
     return SettingInfo(
         key=key, namespace="flag", kind=flag.kind, group=flag.group,
-        description=f"documented default: {flag.default_doc}",
+        # 030 WS-F1: a real description — the generator used to drop the doc's
+        # "What it does" column, so this restated the default as the description.
+        description=(getattr(flag, "description", "") or
+                     f"documented default: {flag.default_doc}"),
         effective=resolved.value, source=resolved.source,
         applies=_flag_applies(key), sensitivity="flag",
         enforcement="enforced", secret=secret, chain=chain,
@@ -278,9 +281,6 @@ CONSOLE_UNWRITABLE_FLAGS = frozenset({
     "POLYROB_AUTH_STORE",
     "LLM_AUTH_STORE_ENABLED",
     "LLM_CREDENTIAL_BORROW",
-    # the registry kill-switch: flipping it off from a console kills every
-    # user-declared provider — it selects the inference surface like the rest
-    "LLM_PROVIDER_REGISTRY",
 })
 
 

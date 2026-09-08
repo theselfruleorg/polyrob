@@ -56,25 +56,37 @@ _SEL_NAME = "0x06fdde03"
 def _canonical_pins() -> Dict[Tuple[str, str], Dict[str, object]]:
     """USDC/wrapped-native pins for every chain the registry has VERIFIED.
 
-    Only ``money_enabled`` rows contribute, because that flag is exactly the
-    statement "every address in this row was checked on-chain (eth_getCode plus
-    symbol/decimals) before it was pinned". A chain whose addresses are carried
-    for balance reads only (arbitrum, polygon) contributes nothing here — it
-    would claim a verification nobody performed, and ``verified=True`` is the
-    one thing this table is the source of.
+    A row contributes when its ADDRESSES were checked on-chain — ``eth_getCode``
+    plus symbol/decimals, or the non-EVM equivalent. ``money_enabled`` implies
+    that (arming a chain required checking it first); ``assets_verified`` states
+    it for a row that is verified WITHOUT moving value through the EVM rail.
+    Solana is exactly that case: its money goes through ``solana_swap``, so it
+    is not ``money_enabled``, yet its USDC mint is the same constant
+    ``solana_x402.py`` pins the live settlement rail against.
+
+    A chain whose addresses are carried for balance reads only contributes
+    nothing here — it would claim a verification nobody performed, and
+    ``verified=True`` is the one thing this table is the source of.
     """
     from core.wallet import chains
     pins: Dict[Tuple[str, str], Dict[str, object]] = {}
     for row in chains.all_rows():
-        if not row.money_enabled:
+        if not (row.money_enabled or row.assets_verified):
             continue
         if row.usdc:
             pins[(row.name, row.usdc)] = {
                 "symbol": "USDC", "name": "USD Coin", "decimals": 6}
         if row.wrapped_native:
+            # The NAME is derived, never hardcoded: Polygon's wrapped native is
+            # WPOL, and labelling it "Wrapped Ether" would put a false identity
+            # on the canonical list — the one table whose entire value is that
+            # `verified=True` means somebody checked.
+            # Decimals come from the ROW, never a hardcoded 18: wSOL is 9, and
+            # an 18 here would size a wSOL amount a billion times wrong.
             pins[(row.name, row.wrapped_native)] = {
                 "symbol": f"W{row.native_symbol}",
-                "name": "Wrapped Ether", "decimals": 18}
+                "name": f"Wrapped {row.native_symbol}",
+                "decimals": row.native_decimals}
     return pins
 
 
@@ -136,7 +148,8 @@ def normalize_address(addr: str) -> str:
         raise ValueError(
             f"EIP-55 checksum failed for {addr!r} — refusing rather than "
             "normalizing (a failed checksum usually means a typo or a swapped "
-            "address)")
+            "address). If you are sure of the address, pass it ALL-LOWERCASE: a "
+            "lowercase address carries no checksum and is accepted as-is.")
     return checksummed
 
 

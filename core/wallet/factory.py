@@ -18,11 +18,18 @@ def _emit_spend_to_event_log(entry: dict) -> None:
     cross-session (telemetry audit 2026-07-04). LAZY import keeps the core/wallet
     tier free of a top-level agents-tier dependency; fail-open throughout."""
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if not event_log_enabled():
             return
+        # 033 T0.1: PolicyGate is a shared singleton with no execution context, so
+        # every wallet_spend row shipped tenantless and the unified ledger matched
+        # none of them. Fall back to the ambient identity multi_act binds.
+        from core.exec_identity import current_exec_identity
+        _uid, _sid = current_exec_identity()
         get_event_log().record(
             "wallet_spend",
+            user_id=_uid,
+            session_id=_sid,
             source="wallet",
             venue=entry.get("venue"),
             action=entry.get("action"),

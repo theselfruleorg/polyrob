@@ -157,10 +157,12 @@ def test_completer_prefix_filters():
     assert "status" not in out
 
 
-def test_completer_resume_session_ids():
+def test_completer_replay_session_ids():
+    # 030 WS-C C2: /resume is the kill-switch resume now — session-id
+    # completion lives on the canonical /replay name.
     reg = build_default_registry()
     completer = SlashCompleter(reg, sessions_provider=lambda: ["abc123", "abd999", "zzz"])
-    out = _completions(completer, "/resume ab")
+    out = _completions(completer, "/replay ab")
     assert set(out) == {"abc123", "abd999"}
 
 
@@ -511,12 +513,15 @@ async def test_compact_emits_progress_notice():
     assert "compacting" in buf.getvalue().lower()
 
 
-def test_replay_command_registered_with_resume_alias():
+def test_replay_command_registered_and_resume_is_kill_switch():
+    # 030 WS-C C2: /resume moved from a /replay back-compat alias to the owner
+    # kill-switch resume (one vocabulary with `polyrob owner resume` + telegram
+    # /resume). /replay keeps the feed replay under its canonical name.
     reg = default_registry()
     names = {c.name for c in reg.commands()}
     assert "replay" in names
     resolved = reg.lookup("resume")
-    assert resolved is not None and resolved.name == "replay"  # /resume is a back-compat alias
+    assert resolved is not None and resolved.name == "resume"
 
 
 @pytest.mark.asyncio
@@ -893,7 +898,7 @@ async def test_usage_empty_breakdown_falls_back():
 
 
 @pytest.mark.asyncio
-async def test_resume_replays_feed_dir(tmp_path, monkeypatch):
+async def test_replay_replays_feed_dir(tmp_path, monkeypatch):
     # Build a small feed dir mirroring the real captured shape.
     feed = tmp_path / ".polyrob" / "sessions" / "local" / "mysession" / "feed"
     feed.mkdir(parents=True)
@@ -930,7 +935,7 @@ async def test_resume_replays_feed_dir(tmp_path, monkeypatch):
 
     reg = default_registry()
     ctx = CommandContext(renderer=_Recorder(), user_id="local")
-    await reg.dispatch("/resume mysession", ctx)
+    await reg.dispatch("/replay mysession", ctx)
 
     # session_start, step, session_completion → 3 normalized events replayed
     from cli.ui.events import SessionDone, SessionStart, Step
@@ -942,11 +947,11 @@ async def test_resume_replays_feed_dir(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_missing_session(tmp_path, monkeypatch):
+async def test_replay_missing_session(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     reg = default_registry()
     ctx, buf = _plain_ctx(user_id="local")
-    await reg.dispatch("/resume does-not-exist", ctx)
+    await reg.dispatch("/replay does-not-exist", ctx)
     out = buf.getvalue()
     # pm() may create an empty feed dir as a side effect, so "empty" is also a
     # valid not-found signal; either way nothing was replayed.
@@ -955,10 +960,10 @@ async def test_resume_missing_session(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_resume_no_arg():
+async def test_replay_no_arg():
     reg = default_registry()
     ctx, buf = _plain_ctx()
-    await reg.dispatch("/resume", ctx)
+    await reg.dispatch("/replay", ctx)
     assert "Usage" in buf.getvalue()
 
 

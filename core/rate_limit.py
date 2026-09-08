@@ -8,9 +8,9 @@ delegating to) one of the three shapes below:
   shim). Used by: MCP tool execution, user MCP server admin, the public x402
   invoice endpoints, the webview connection/event throttles, and
   ``utils/rate_limit_manager.py``.
-- ``TokenBucket`` — burst + steady refill, per key (moved here from
-  ``core/surfaces/rate_bucket.py``, which re-exports). Used by: the outbound
-  surface dispatcher and the api middleware's burst gate.
+- ``TokenBucket`` — burst + steady refill, per key (moved here from the retired
+  ``core/surfaces/rate_bucket.py`` shim). Used by: the outbound surface
+  dispatcher and the api middleware's burst gate.
 - ``FixedWindowCounter`` — N events per fixed window that starts at a key's first
   touch and resets ``window_seconds`` later. Extracted from the api middleware's
   legacy minute/hour counters.

@@ -181,9 +181,69 @@ def test_a_chains_usdc_is_never_canonical_on_another_chain():
 
 
 def test_unverified_chains_carry_no_pins():
-    """Arbitrum/Polygon USDC addresses exist in the registry for balance reads,
-    but were never verified on-chain here, so they must not claim the
-    'canonical/verified' status that only an operator check confers."""
+    """A chain whose ADDRESSES were never checked must not claim the
+    'canonical/verified' status that only an operator check confers. Arbitrum
+    and Polygon held this role until 029 §4 verified and armed them; Robinhood
+    still does.
+
+    The gate is `money_enabled or assets_verified`, not `money_enabled` alone.
+    Solana is verified WITHOUT being money_enabled: its value moves through
+    `solana_swap`, never the EVM rail, but its USDC mint is the same constant
+    solana_x402.py pins the live settlement rail against. Gating on
+    `money_enabled` alone left that mint decimals-unknown, and `portfolio`
+    filed the treasury's own USDC under 'NOT necessarily holdings you bought'
+    (live prod, 2026-08-28)."""
     from core.wallet.tokens import canonical_token
-    assert canonical_token("arbitrum",
-                           "0xaf88d065e77c8cC2239327C5EDb3A432268e5831") is None
+    from core.wallet import chains
+    checked = 0
+    for row in chains.all_rows():
+        if row.money_enabled or row.assets_verified or not row.usdc:
+            continue
+        checked += 1
+        assert canonical_token(row.name, row.usdc) is None, row.name
+
+
+def test_the_pin_gate_skips_an_unverified_row():
+    """Asserted against a synthetic row, not the registry: every row shipped
+    today is verified, so the loop above is vacuous right now and would keep
+    passing if the gate were deleted. This is the test that actually holds the
+    gate shut for the next chain someone adds."""
+    from core.wallet import chains
+    from core.wallet.tokens import _canonical_pins
+    unverified = chains.ChainRow(
+        name="testchain", native_symbol="TST",
+        usdc="0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        wrapped_native="0x4200000000000000000000000000000000000006",
+        money_enabled=False, assets_verified=False)
+    real = dict(chains._ROWS)
+    chains._ROWS["testchain"] = unverified
+    try:
+        pins = _canonical_pins()
+    finally:
+        chains._ROWS.clear()
+        chains._ROWS.update(real)
+    assert not any(c == "testchain" for c, _ in pins)
+
+
+def test_assets_verified_never_implies_money_enabled():
+    """The two flags are independent on purpose. `assets_verified` says the
+    token addresses were checked; it must never be read as 'value may move
+    through the EVM rail here' — Solana is verified and NOT money_enabled."""
+    from core.wallet import chains
+    row = chains.get("solana")
+    assert row.assets_verified is True
+    assert row.money_enabled is False
+    assert "solana" not in chains.money_chains()
+    assert "solana" not in chains.swap_chains()
+
+
+def test_a_verified_chain_does_carry_its_pins():
+    """Whatever quote asset it has. Robinhood has no routable stablecoin, so
+    its pin is the wrapped native instead of USDC."""
+    from core.wallet.tokens import canonical_token
+    from core.wallet import chains
+    for row in chains.evm_rows():
+        if not row.money_enabled:
+            continue
+        pinned = row.usdc or row.wrapped_native
+        assert canonical_token(row.name, pinned), row.name

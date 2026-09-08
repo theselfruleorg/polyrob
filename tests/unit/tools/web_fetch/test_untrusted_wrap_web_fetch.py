@@ -1,4 +1,4 @@
-from agents.task.agent.core.untrusted_wrap import is_untrusted_tool
+from core.security.untrusted_wrap import is_untrusted_tool
 
 
 def test_fetch_url_action_is_untrusted():

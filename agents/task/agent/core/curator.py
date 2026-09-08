@@ -124,7 +124,7 @@ class SkillCurator:
         """T4-06: curator lifecycle transitions are self-modifications too —
         record them on the durable event log. Fail-open."""
         try:
-            from agents.task.telemetry.self_events import emit_self_modification
+            from core.self_events import emit_self_modification
             emit_self_modification(kind="skill", action=action, item_id=skill_id,
                                    user_id=user_id or "", created_by="curator",
                                    source="curator")
@@ -250,7 +250,7 @@ class SkillCurator:
     def _note_ev(action: str, note_id, user_id: str, reason: str) -> None:
         """Note lifecycle transitions are self-modifications too. Fail-open."""
         try:
-            from agents.task.telemetry.self_events import emit_self_modification
+            from core.self_events import emit_self_modification
             emit_self_modification(kind="note", action=action, item_id=str(note_id),
                                    user_id=user_id or "", created_by="curator",
                                    source="curator", reason=reason)
@@ -292,6 +292,9 @@ class CuratorTicker:
         """One curator tick: should_run gate + cross-process TickLock + run_once.
         (P4 finalization: the loop scaffolding is now IntervalTicker's — this is
         the curator-specific body it invokes, matching CronTicker/GoalTicker.)"""
+        from core.autonomy_control import allows
+        if not allows("curator").allowed:
+            return  # 031 owner pause
         if not self.curator.should_run():
             return
         if self.lock_path:

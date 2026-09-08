@@ -53,8 +53,14 @@ class MessageTargetAction(BaseModel):
 	Only owner + owner-allowlisted targets are permitted (default-deny)."""
 	model_config = ConfigDict(extra='forbid')
 
-	surface: str = Field(description="Surface id, e.g. 'telegram', 'email', 'whatsapp'")
-	target: str = Field(description="Recipient/chat id on that surface (chat id, @user, or email address)")
+	surface: Optional[str] = Field(
+		default=None,
+		description=("Surface id, e.g. 'telegram', 'email', 'whatsapp'. Omit to use the "
+		             "owner's primary surface."))
+	target: Optional[str] = Field(
+		default=None,
+		description=("Recipient/chat id on that surface (chat id, @user, or email address). "
+		             "Omit, or pass 'owner', to message the owner."))
 	text: str = Field(description="Message body to send")
 	action: str = Field(default="send", description="send | reply | edit | delete | react")
 	reply_to: Optional[str] = Field(default=None, description="Message id to reply to")

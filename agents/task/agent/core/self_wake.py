@@ -266,7 +266,7 @@ def format_self_wake(text: str, *, source: str = "self_wake") -> str:
     # would strip the closing </untrusted_tool_result> and leave the tag open.
     text = _elide_wake_payload(text)
     try:
-        from agents.task.agent.core.untrusted_wrap import wrap_untrusted
+        from core.security.untrusted_wrap import wrap_untrusted
         wrapped = wrap_untrusted(source, text)
     except Exception:
         wrapped = text  # fail-open: framing is defense-in-depth, not a hard dependency

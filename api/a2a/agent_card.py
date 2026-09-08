@@ -25,6 +25,14 @@ def _x402_price_usd() -> float:
     return get_x402_price_usd()
 
 
+def _resolve_payment_address() -> str:
+    """Single treasury source (W2.2): the same resolver invoices/challenges
+    use (env wins, agent wallet fills an empty env — W1.1), with the legacy
+    `X402_PAYMENT_ADDRESS` env spelling kept as a last fallback."""
+    from modules.x402.x402_integration import resolve_treasury_address
+    return resolve_treasury_address() or os.environ.get("X402_PAYMENT_ADDRESS", "")
+
+
 class AgentSkill(BaseModel):
     """A specific capability the agent can perform."""
     id: str = Field(..., description="Unique skill identifier")
@@ -258,7 +266,9 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
                 "per_request_usd": _x402_price_usd(),
                 "supported_chains": ["base", "ethereum"],
                 "supported_assets": ["usdc", "usdt", "eth"],
-                "payment_address": os.environ.get("X402_PAYMENT_RECIPIENT", os.environ.get("X402_PAYMENT_ADDRESS", "")),
+                # W2.2 (2026-08-21): same resolver invoices use (env wins,
+                # wallet fills in) — the card and invoices can never disagree.
+                "payment_address": _resolve_payment_address(),
                 "facilitator": os.environ.get("X402_FACILITATOR_URL", "") or "Direct signature verification"
             }
         },

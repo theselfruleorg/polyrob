@@ -28,36 +28,15 @@ ALLOWLISTED_CORE_TO_AGENTS_EDGES = frozenset({
     ('core/autonomy_runtime.py', 'agents.task.agent.core.curator'),
     ('core/autonomy_runtime.py', 'agents.task.goals.board'),
     ('core/autonomy_runtime.py', 'agents.task.goals.dispatcher'),
-    ('core/autonomy_runtime.py', 'agents.task.surface_config'),
     ('core/bootstrap.py', 'agents.task.path'),
     ('core/bootstrap.py', 'agents.task_agent_lite'),
-    ('core/credit_sentinel.py', 'agents.task.telemetry.event_log'),
     ('core/initialization.py', 'agents'),
     ('core/initialization.py', 'agents.task.agent.session'),
     ('core/interactive_gate.py', 'agents.task.utils'),
     ('core/knowledge_export.py', 'agents.task.agent.skill_manager'),
     ('core/knowledge_export.py', 'agents.task.goals.board'),
-    ('core/recap.py', 'agents.task.telemetry.event_log'),
     ('core/self_evolution.py', 'agents.task.agent.skill_manager'),
-    ('core/self_evolution.py', 'agents.task.telemetry.event_log'),
-    ('core/self_evolution.py', 'agents.task.telemetry.self_events'),
-    ('core/surfaces/binding.py', 'agents.task.surface_config'),
-    ('core/surfaces/bootstrap.py', 'agents.task.surface_config'),
-    ('core/surfaces/correspondents.py', 'agents.task.surface_config'),
-    ('core/surfaces/dispatcher.py', 'agents.task.surface_config'),
-    ('core/surfaces/inbound_webhook.py', 'agents.task.surface_config'),
-    ('core/surfaces/message_router.py', 'agents.task.surface_config'),
-    ('core/surfaces/outbound_mirror.py', 'agents.task.surface_config'),
-    ('core/surfaces/outbound_policy.py', 'agents.task.telemetry.event_log'),
-    ('core/surfaces/owner_admin.py', 'agents.task.surface_config'),
-    ('core/surfaces/proactive.py', 'agents.task.surface_config'),
-    ('core/surfaces/seed.py', 'agents.task.surface_config'),
-    ('core/surfaces/seed.py', 'agents.task.telemetry.event_log'),
-    ('core/surfaces/transcription.py', 'agents.task.surface_config'),
     ('core/surfaces/user_delivery.py', 'agents.task.goals.autonomy_marker'),
-    ('core/surfaces/user_delivery.py', 'agents.task.telemetry.event_log'),
-    ('core/tickers.py', 'agents.task.telemetry.event_log'),
-    ('core/wallet/factory.py', 'agents.task.telemetry.event_log'),
 })
 
 
@@ -133,6 +112,10 @@ REPO_ROOT = CORE_DIR.parent
 
 TIER_OF_PACKAGE = {
     "core": 0,
+    # S1 (2026-08-28): utils is ranked WITH core (tier 0) — core/__init__ imports
+    # utils.rate_limit_manager, so utils can sit no higher. Its upward edges are
+    # governed by the allowlist below like every other tier-0 module.
+    "utils": 0,
     "modules": 1,
     "agents": 2,
     "tools": 3,
@@ -197,7 +180,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/bootstrap.py', 'tools.mcp.config'),
     ('core/config.py', 'modules.llm.profiles'),
     ('core/config.py', 'tools.mcp.config'),
-    ('core/container.py', 'tools.filesystem'),
     ('core/initialization.py', 'modules'),
     ('core/initialization.py', 'modules.auth.api_key_manager'),
     ('core/initialization.py', 'modules.auth.identity_mapper'),
@@ -219,7 +201,6 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/initialization.py', 'tools.mcp.user_mcp_service'),
     ('core/instance.py', 'modules.memory.task.threat_scan'),
     ('core/knowledge_export.py', 'modules.skills.skill_usage'),
-    ('core/permissions.py', 'modules.memory.memory_manager'),
     ('core/prefs.py', 'modules.memory.task.threat_scan'),
     ('core/recap.py', 'modules.credits.unified_ledger'),
     ('core/recap.py', 'modules.skills.skill_usage'),
@@ -230,20 +211,17 @@ ALLOWLISTED_UPWARD_EDGES = frozenset({
     ('core/surfaces/message_router.py', 'modules.llm.brain_scrubber'),
     ('core/surfaces/transcription.py', 'modules.transcription'),
     ('modules/auth/identity_mapper.py', 'tools.alchemy.alchemy_tool'),
-    ('modules/credits/unified_ledger.py', 'agents.task.telemetry.event_log'),
     ('modules/database/hyperliquid.py', 'tools.hyperliquid.models'),
-    ('modules/database/hyperliquid.py', 'tools.mcp.security'),
-    ('modules/database/polymarket.py', 'tools.mcp.security'),
     ('modules/database/polymarket.py', 'tools.polymarket.models'),
-    ('modules/database/user_mcp_servers.py', 'tools.mcp.security'),
     ('modules/memory/episodic.py', 'agents.task.runtime'),
-    ('modules/memory/task/reflection_service.py', 'agents.task.agent.core.aux_metering'),
-    ('modules/memory/task/task_context_manager.py', 'agents.task.constants'),
     # 2026-08-09: invoicing.py + subscriptions.py's byte-identical _emit copies
     # were consolidated into _db.py — TWO event_log edges became ONE (net shrink).
-    ('modules/x402/_db.py', 'agents.task.telemetry.event_log'),
-    ('modules/x402/settlement_watcher.py', 'agents.task.goals.board'),
-    ('modules/x402/settlement_watcher.py', 'agents.task.surface_config'),
+    # S6 (2026-08-29): the subscription-renewal ask store seam moved with _goal_board
+    # into the notify mixin — same edge, new file (not a new upward dependency).
+    ('modules/x402/settlement_notify.py', 'agents.task.goals.board'),
+    # S1 (2026-08-28): utils ranked at tier 0. gif_utils resolves session output
+    # dirs through the path manager (agents.task.path.pm) — three lazy imports.
+    ('utils/gif_utils.py', 'agents.task.path'),
     ('tools/cronjob_tools.py', 'cron.jobs'),
     ('tools/cronjob_tools.py', 'cron.schedule'),
     ('tools/cronjob_tools.py', 'cron.service'),

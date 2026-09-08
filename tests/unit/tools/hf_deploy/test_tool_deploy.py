@@ -181,7 +181,7 @@ def test_token_never_in_results_or_logs(
 def test_deploy_emits_audit_and_url_telemetry(
         tmp_path, owner_ctx, deploy_env, green_orch, monkeypatch):
     audits, events = [], []
-    import agents.task.telemetry.self_events as se
+    import core.self_events as se
     monkeypatch.setattr(se, "emit_self_modification",
                         lambda **kw: audits.append(kw))
     import tools.hf_deploy.tool as tool_mod

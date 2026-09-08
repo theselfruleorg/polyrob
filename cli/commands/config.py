@@ -491,6 +491,192 @@ def path_cmd():
                 "to ~/.polyrob/.env")
 
 
+# --- read verbs over the ONE config control plane (030 WS-F3 / 026 C4) -------
+# `polyrob config` had write verbs (set/unset) and file views (show/path) but
+# none of the REPL's read verbs — get/list/search/explain existed only inside
+# a live chat session (cli/ui/commands/h_config.py). These are the CLI-seat
+# parity verbs: read-only, no LLM-key preflight (the group callback only loads
+# the env ladder), all over core.config_service so the masking/provenance
+# semantics are the service's, never a re-derivation.
+
+def _resolved_tenant(user_id: Optional[str]) -> str:
+    from core.identity import resolve_identity
+    return user_id or resolve_identity()
+
+
+def _info_payload(info, *, include_chain: bool = False) -> dict:
+    """JSON-safe dict for one ``core.config_service.SettingInfo`` (display-safe
+    values only — the service masks secrets before they reach here)."""
+    payload = {
+        "key": info.key,
+        "namespace": info.namespace,
+        "kind": info.kind,
+        "group": info.group,
+        "description": info.description,
+        "value": info.effective,
+        "source": info.source,
+        "applies": info.applies,
+        "sensitivity": info.sensitivity,
+        "enforcement": info.enforcement,
+        "secret": info.secret,
+    }
+    if include_chain:
+        payload["chain"] = [{"value": s.value, "origin": s.origin}
+                            for s in info.chain]
+    return payload
+
+
+def _echo_json(obj) -> None:
+    import json
+    click.echo(json.dumps(obj, indent=2, default=str))
+
+
+def _unknown_key_error(key: str) -> "click.ClickException":
+    hint = _closest_match(key)
+    suffix = f" (did you mean {hint}?)" if hint else ""
+    return click.ClickException(f"unknown key: {key}{suffix}")
+
+
+def _is_changed(info) -> bool:
+    """True when the effective value comes from somewhere other than a default
+    (env var, env file, or a written preference)."""
+    src = str(info.source or "")
+    return not (src == "default" or src.startswith("default(")
+                or src.startswith("built-in"))
+
+
+@config.command("get")
+@click.argument("key")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id for preference keys (default: resolved identity)")
+@click.option("--home", "home_dir_opt", default=None, hidden=True,
+              help="Override the preferences data home (test/ops only)")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Machine-readable output")
+def get_cmd(key, user_id, home_dir_opt, as_json):
+    """Effective value + source + description for one key (secrets masked)."""
+    from core import config_service
+    tenant = _resolved_tenant(user_id)
+    home_dir = home_dir_opt or _default_home_dir()
+    try:
+        info = config_service.describe(key, user_id=tenant, home_dir=home_dir)
+    except KeyError:
+        raise _unknown_key_error(key)
+    if as_json:
+        _echo_json(_info_payload(info))
+        return
+    click.echo(f"{info.key} = {info.effective}   ({info.source})")
+    click.echo(f"namespace: {info.namespace} | kind: {info.kind} | "
+               f"applies: {info.applies}")
+    if info.enforcement == "advisory":
+        click.echo("enforcement: advisory — steers the agent's prompt only")
+    if info.description:
+        click.echo(info.description)
+
+
+@config.command("list")
+@click.option("--group", "group_filter", default=None,
+              help="Only settings in this group (pref group or flag group)")
+@click.option("--changed", is_flag=True, default=False,
+              help="Only settings whose value differs from the default")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id for preference keys (default: resolved identity)")
+@click.option("--home", "home_dir_opt", default=None, hidden=True,
+              help="Override the preferences data home (test/ops only)")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Machine-readable output")
+def list_cmd(group_filter, changed, user_id, home_dir_opt, as_json):
+    """Compact listing of every setting (prefs first, then env flags)."""
+    from core import config_service
+    tenant = _resolved_tenant(user_id)
+    home_dir = home_dir_opt or _default_home_dir()
+    infos = []
+    for key in config_service.known_keys():
+        try:
+            info = config_service.describe(key, user_id=tenant, home_dir=home_dir)
+        except Exception:
+            continue
+        if group_filter and info.group != group_filter:
+            continue
+        if changed and not _is_changed(info):
+            continue
+        infos.append(info)
+    if as_json:
+        _echo_json([_info_payload(i) for i in infos])
+        return
+    if not infos:
+        click.echo("no matching settings")
+        return
+    current_ns = None
+    for info in infos:
+        if info.namespace != current_ns:
+            current_ns = info.namespace
+            label = "preferences" if current_ns == "pref" else "env flags"
+            click.echo(click.style(f"[{label}]", bold=True))
+        click.echo(f"  {info.key} = {info.effective}   "
+                   f"({info.source}, group: {info.group})")
+
+
+@config.command("search")
+@click.argument("text", nargs=-1, required=True)
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id for preference keys (default: resolved identity)")
+@click.option("--home", "home_dir_opt", default=None, hidden=True,
+              help="Override the preferences data home (test/ops only)")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Machine-readable output")
+def search_cmd(text, user_id, home_dir_opt, as_json):
+    """Fuzzy name+description search across prefs and the ~490 env flags."""
+    from core import config_service
+    tenant = _resolved_tenant(user_id)
+    home_dir = home_dir_opt or _default_home_dir()
+    query = " ".join(text)
+    hits = config_service.search(query, user_id=tenant, home_dir=home_dir,
+                                 limit=25)
+    if as_json:
+        _echo_json([_info_payload(i) for i in hits])
+        return
+    if not hits:
+        click.echo(f"no settings matching {query!r}")
+        return
+    for info in hits:
+        click.echo(f"{info.key} = {info.effective}   "
+                   f"({info.source}, applies: {info.applies})")
+
+
+@config.command("explain")
+@click.argument("key")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id for preference keys (default: resolved identity)")
+@click.option("--home", "home_dir_opt", default=None, hidden=True,
+              help="Override the preferences data home (test/ops only)")
+@click.option("--json", "as_json", is_flag=True, default=False,
+              help="Machine-readable output")
+def explain_cmd(key, user_id, home_dir_opt, as_json):
+    """Full provenance chain for one key (`git config --show-origin` style)."""
+    from core import config_service
+    tenant = _resolved_tenant(user_id)
+    home_dir = home_dir_opt or _default_home_dir()
+    try:
+        info = config_service.explain(key, user_id=tenant, home_dir=home_dir)
+    except KeyError:
+        raise _unknown_key_error(key)
+    if as_json:
+        _echo_json(_info_payload(info, include_chain=True))
+        return
+    click.echo(f"{info.key} = {info.effective}   ({info.source})")
+    click.echo(f"namespace: {info.namespace} | kind: {info.kind} | "
+               f"applies: {info.applies}")
+    if info.enforcement == "advisory":
+        click.echo("enforcement: advisory — steers the agent's prompt only")
+    if info.description:
+        click.echo(info.description)
+    if info.chain:
+        click.echo(click.style("provenance (highest wins):", bold=True))
+        for rung in info.chain:
+            click.echo(f"  {rung.origin}: {rung.value}")
+
+
 @config.command("check")
 @click.option("--user", "user_id", default=None,
               help="Also validate this tenant's preferences.toml")

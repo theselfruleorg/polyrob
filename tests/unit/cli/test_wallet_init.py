@@ -205,15 +205,33 @@ def test_cli_init_from_mnemonic_empty_refuses_non_tty(tmp_path, monkeypatch):
     assert "tty" in result.output.lower() or "non-interactively" in result.output.lower()
 
 
-def test_cli_init_shows_caps_and_setcap_hint(tmp_path, monkeypatch):
-    """M13: init surfaces the real spend posture (ceiling + unlimited daily) and
-    the set-cap hint, so a new owner isn't silently left at $1000/tx-unlimited."""
+def test_cli_init_shows_the_default_daily_budget(tmp_path, monkeypatch):
+    """H3 (2026-08-22): WALLET_DAILY_CAP_USD unset used to mean UNLIMITED; init
+    now surfaces the finite $100/24h default as a real budget line, so a new
+    owner isn't silently left at $250/tx-unlimited (that posture requires an
+    explicit opt-out now — see the sibling test below)."""
     pytest.importorskip("eth_account")
     monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
     monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
     runner = CliRunner()
     result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),
                                         "--data-dir", str(tmp_path / "w")])
+    assert result.exit_code == 0, result.output
+    assert "$250.00/tx ceiling" in result.output
+    assert "$100.00/day budget" in result.output
+    assert "UNLIMITED" not in result.output
+
+
+def test_cli_init_shows_caps_and_setcap_hint_when_explicitly_disabled(tmp_path, monkeypatch):
+    """M13: init surfaces the real spend posture (ceiling + unlimited daily) and
+    the set-cap hint when the operator has EXPLICITLY disabled the daily cap
+    (H3, 2026-08-22: unset alone no longer means unlimited)."""
+    pytest.importorskip("eth_account")
+    monkeypatch.setattr("core.bootstrap.load_env", lambda *a, **k: None)
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "none")
+    runner = CliRunner()
+    result = runner.invoke(wallet_cmd, ["init", "--yes", "--home", str(tmp_path),
+                                        "--data-dir", str(tmp_path / "w2")])
     assert result.exit_code == 0, result.output
     assert "CEILING" in result.output
     assert "UNLIMITED" in result.output

@@ -85,3 +85,53 @@ class TestParamModelDefaultsArePinned:
             ApproveParams, RevokeParams, SwapParams, TransferParams)
         for model in (SwapParams, TransferParams, ApproveParams, RevokeParams):
             assert model.model_fields["dry_run"].default is True, model.__name__
+
+
+def test_x402_fetch_below_ceiling_is_exempt(monkeypatch):
+    """A micro-payment inside the x402 autonomous ceiling runs act-and-report;
+    blocking every $0.001 fetch on an owner tap would make x402 unusable."""
+    monkeypatch.setenv("X402_AUTONOMOUS_MAX_USD", "1.0")
+    from core.config_policy.spend_lane import spend_exemption
+    reason = spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": 0.05})
+    assert reason and "0.05" in reason
+
+
+def test_x402_fetch_above_ceiling_keeps_the_owner_tap(monkeypatch):
+    monkeypatch.setenv("X402_AUTONOMOUS_MAX_USD", "1.0")
+    from core.config_policy.spend_lane import spend_exemption
+    assert spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": 5.0}) is None
+
+
+def test_x402_fetch_with_no_declared_amount_keeps_the_tap():
+    from core.config_policy.spend_lane import spend_exemption
+    assert spend_exemption("x402_pay_x402_fetch", {}) is None
+    assert spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": "cheap"}) is None
+    assert spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": True}) is None
+    assert spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": -1}) is None
+
+
+def test_x402_exemption_needs_no_tiered_lane_flag(monkeypatch):
+    """DEFI_TIERED_SPEND_LANE gates the on-chain lane only. x402 has its own,
+    much smaller ceiling and is off-by-cap, not off-by-flag — otherwise the
+    default posture is 'every micro-payment blocks', which is not shippable."""
+    monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+    monkeypatch.setenv("X402_AUTONOMOUS_MAX_USD", "1.0")
+    from core.config_policy.spend_lane import spend_exemption
+    assert spend_exemption("x402_pay_x402_fetch", {"max_amount_usd": 0.5}) is not None
+
+
+def test_defi_verbs_are_unchanged_by_the_rename(monkeypatch):
+    """The DeFi behaviour must be byte-identical — only the function name widened."""
+    from core.config_policy.spend_lane import spend_exemption, defi_spend_exemption
+    assert defi_spend_exemption is spend_exemption  # the alias must BE the function
+    assert defi_spend_exemption("defi_trade_swap", {"dry_run": True})
+    monkeypatch.delenv("DEFI_TIERED_SPEND_LANE", raising=False)
+    assert defi_spend_exemption(
+        "defi_trade_swap", {"dry_run": False, "max_spend_usd": 1.0}) is None
+
+
+def test_x402_fetch_is_on_the_spend_lane_not_the_receive_lane():
+    from core.config_policy import (
+        PAYMENT_APPROVAL_TOOLS, PAYMENT_RECEIVE_APPROVAL_TOOLS)
+    assert "x402_pay_x402_fetch" in PAYMENT_APPROVAL_TOOLS
+    assert "x402_pay_x402_fetch" not in PAYMENT_RECEIVE_APPROVAL_TOOLS

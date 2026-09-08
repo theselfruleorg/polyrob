@@ -109,7 +109,15 @@ vector memory), and common misconfigurations.
 polyrob doctor           # human-readable report
 polyrob doctor --json    # machine-readable ({"report": [lines]})
 polyrob doctor --flags   # every env flag with resolved value + source
+polyrob doctor --flags --group memory   # only groups whose name matches (case-insensitive)
+polyrob doctor --flags --search x402    # only flags whose NAME matches (case-insensitive)
+polyrob doctor --changed                # only flags set away from their default,
+                                        # plus frozen/INERT ones (implies --flags)
 ```
+
+`--group`, `--search`, and `--changed` combine (AND), each implies `--flags`,
+and they filter `--json` output too. An empty match prints `no flags match ...`
+and exits 0.
 
 ---
 
@@ -143,8 +151,15 @@ polyrob config show           # print the merged config, secrets redacted
 polyrob config set KEY VALUE  # set a config value (--global writes ~/.polyrob/.env)
 polyrob config set KEY        # omit VALUE to be prompted (hidden for secrets —
                               # keeps credentials out of shell history)
+polyrob config get KEY        # effective value + source + description (secrets masked)
+polyrob config list           # every setting, prefs then flags (--group G, --changed)
+polyrob config search TEXT    # fuzzy name+description search
+polyrob config explain KEY    # full provenance chain (like git config --show-origin)
 polyrob config path           # show config file locations
 ```
+
+The read verbs (`get`/`list`/`search`/`explain`) mirror the REPL `/config`
+subcommands and take `--json` for machine-readable output.
 
 See [configuration.md](configuration.md) for the full environment-flag reference.
 
@@ -299,6 +314,7 @@ polyrob kb remove --source ./docs/old.md      # remove one source, or --collecti
 
 | Command | Description |
 |---------|-------------|
+| `polyrob autonomy` | The autonomy mode dial: `status` (effective-posture card, all axes), `on`/`off` (intent verbs — write `AUTONOMY_ENABLED` [+ `--mode supervised\|autonomous`] through the one config write path; restart applies), `pause [scope…] [--for 6h]` / `resume [scope…]` (the live owner pause — ONE durable record every loop, timer and script reads; scopes `trading streams planner cron social oversight pings`, default everything; `halt` = `pause` alias; see the owner-controls guide) |
 | `polyrob goals` | Manage the durable goals board: `create`, `list`, `show`, `cancel`, `pause`/`resume`, `retry`, `objective` (standing objectives), … |
 | `polyrob cron` | Schedule/inspect/cancel durable cron jobs: `schedule <task> <spec>`, `list`, `show`, `cancel` (specs: `30m`, `every monday 09:00`, 5-field cron, ISO one-shot) |
 | `polyrob subagents` | Inspect agent delegation / subagent activity: `list`, `show`, `info` |
@@ -337,7 +353,9 @@ Inside the interactive REPL, commands are prefixed with `/`. Type `/help` to lis
 | `/toolset [name]` | List named toolsets, or set the default toolset for new sessions (persists `session.toolset`; applies next session — no live tool re-registration) |
 | `/persona [name-or-text]` | List personas, or set the default persona for new sessions (persists `session.persona`; a known template key or literal text, threat-scanned; applies next session) |
 | `/sessions` | List all known sessions |
-| `/replay <session-id>` (`/resume`) | Replay a session's feed (visual history) — not a re-attach; continue a session with `polyrob run --resume <id>` |
+| `/replay <session-id>` | Replay a session's feed (visual history) — not a re-attach; continue a session with `polyrob run --resume <id>` |
+| `/pause [scope…] [for 6h]` | Pause autonomous work now (everything, or `trading streams planner cron social oversight pings`; `for 90m/6h/2d` makes it temporary). Live, no restart — the same record every loop reads. `/halt` = `/pause` with no scopes |
+| `/resume [scope…]` | Lift the pause (everything, or the given scopes). A plain "stop" / "resume" typed in prose does the same |
 | `/history` | Show this conversation's turns |
 | `/clear` | Clear history (keep the system prompt) |
 | `/compact` (`/compress`) | Compact history via the LLM (async) |

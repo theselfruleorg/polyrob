@@ -41,12 +41,20 @@ paths = [
     # OAuth error-body scrub test: contains gitleaks' own documentation example
     # token (gho_16C7e42…) precisely to assert it gets REDACTED
     '''tests/unit/core/llm_auth/test_oauth_flows\.py''',
+    # 0.13.0 (proposal 032): the app-service registry refuses credential-SHAPED
+    # env values, so the parametrised battery is one synthetic sample per shape
+    # (openssh header, 64-char hex, opaque 48-char token, unsigned JWT) — the
+    # test asserts each one is REJECTED
+    '''tests/unit/core/app_service/test_app_registry\.py''',
 ]
 regexes = [
     # public on-chain token contract addresses (public by definition, not secrets)
     '''0xb0d79432bb6d163d3832157cff61a918d38aab81''',
     # mainnet USDC token contract (defi guard tests)
     '''0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48''',
+    # Base USDC token contract — used by the solana_swap test that asserts an EVM
+    # address is REFUSED on Solana
+    '''0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
     # a Python identifier, not a credential: the shared ERC-20 ABI fragment

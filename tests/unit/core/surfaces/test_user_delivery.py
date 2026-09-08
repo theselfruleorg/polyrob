@@ -193,9 +193,11 @@ def test_recipient_override_wins():
 # §3.1 — autonomous send_message routes to the session's own principal
 # ---------------------------------------------------------------------------
 
-def _orch(container, user_id="u1"):
+def _orch(container, user_id="u1", message_router=None, chat_session_key=None):
     from types import SimpleNamespace
-    return SimpleNamespace(container=container, user_id=user_id)
+    return SimpleNamespace(container=container, user_id=user_id,
+                            _message_router=message_router,
+                            _chat_session_key=chat_session_key)
 
 
 def test_autonomous_send_routes_to_own_principal(monkeypatch):
@@ -213,16 +215,37 @@ def test_autonomous_send_routes_to_own_principal(monkeypatch):
     _SESSIONS.clear()
 
 
-def test_interactive_send_is_not_routed():
+def test_interactive_send_with_live_mirror_is_not_routed():
+    """A daemon-resident chat session with a bound router already gets its
+    reply delivered by the mirror — routing here too would double-send."""
+    from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+    from agents.task.goals.autonomy_marker import _SESSIONS
+    _SESSIONS.clear()
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    orch = _orch(c, message_router=object(), chat_session_key="chat:1:1")
+    out = asyncio.run(maybe_deliver_autonomous_send(
+        orch, "sess-chat", "hello", event_log=ev))
+    assert out is None
+    assert not sink.sent
+
+
+def test_interactive_send_with_no_live_mirror_routes_via_fallback():
+    """2026-08-28 live incident: `polyrob run --resume` rebuilds the
+    orchestrator without `_message_router`/`_chat_session_key`, and the
+    in-process `is_autonomous` marker never survives the new process either
+    — so a resumed chat session's reply had NO delivery path and was
+    silently dropped despite send_message reporting success. It must now
+    route through the same durable rail an autonomous session uses."""
     from core.surfaces.user_delivery import maybe_deliver_autonomous_send
     from agents.task.goals.autonomy_marker import _SESSIONS
     _SESSIONS.clear()
     sink, ev = _Sink(), _EvLog()
     c = _Container({"telegram_sink": sink})
     out = asyncio.run(maybe_deliver_autonomous_send(
-        _orch(c), "sess-chat", "hello", event_log=ev))
-    assert out is None
-    assert not sink.sent
+        _orch(c, user_id="12345"), "sess-resumed-chat", "hello", event_log=ev))
+    assert out == "sent"
+    assert sink.sent == [("12345", "hello")]
 
 
 def test_flag_off_disables_routing(monkeypatch):
@@ -414,3 +437,43 @@ def test_normal_priority_default_is_unchanged_by_the_reserve(monkeypatch):
     for i in range(3):
         assert _deliver(c, "1", f"normal {i}", event_log=ev) == "sent"
     assert _deliver(c, "1", "normal 4", event_log=ev) == "capped"
+
+
+def test_lifecycle_pings_have_their_own_smaller_bucket(monkeypatch):
+    """2026-08-28 forensics: goal start/done pings (source=self_evolution) filled
+    the shared 30/day cap and the agent's own reports were capped — on 08-27 the
+    owner got 3 of 171 attempted agent messages. Lifecycle traffic now stops at
+    USER_DELIVERY_LIFECYCLE_DAILY_CAP while the agent keeps the rest of the cap."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "10")
+    monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "0")
+    monkeypatch.setenv("USER_DELIVERY_LIFECYCLE_DAILY_CAP", "2")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    assert _deliver(c, "1", "▶ goal started: a", event_log=ev, source="self_evolution") == "sent"
+    assert _deliver(c, "1", "✅ Background goal 'a' completed.", event_log=ev,
+                    source="self_evolution") == "sent"
+    # third lifecycle ping of the day: capped by the bucket, durably recorded
+    assert _deliver(c, "1", "▶ goal started: b", event_log=ev, source="self_evolution") == "capped"
+    notices = [e for e in ev.events if e["kind"] == "owner_notice"]
+    assert notices and "bucket=lifecycle" in notices[-1]["attrs"]["text"]
+    # ...while the agent's own voice still has the shared cap
+    for i in range(8):
+        assert _deliver(c, "1", f"Treasury run {i} complete", event_log=ev,
+                        source="agent_send") == "sent"
+    assert _deliver(c, "1", "Treasury run 9 complete", event_log=ev,
+                    source="agent_send") == "capped"
+
+
+def test_lifecycle_bucket_zero_disables_it(monkeypatch):
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
+    monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "5")
+    monkeypatch.setenv("USER_DELIVERY_RESERVED_SLOTS", "0")
+    monkeypatch.setenv("USER_DELIVERY_LIFECYCLE_DAILY_CAP", "0")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    for i in range(5):
+        assert _deliver(c, "1", f"▶ goal started: {i}", event_log=ev,
+                        source="self_evolution") == "sent"
+    assert _deliver(c, "1", "▶ goal started: 6", event_log=ev,
+                    source="self_evolution") == "capped"

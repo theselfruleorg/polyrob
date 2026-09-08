@@ -596,3 +596,132 @@ async def test_c1_no_policy_threaded_is_backward_compatible(fake_transport):
         signer=LocalEoaSigner(KEY), network="testnet", max_amount_usd=1.00,
     )
     assert res.paid is True
+
+
+# --- Task 4 review, Important 1 (2026-08-22): the DNS pin reaching the SDK's --
+# --- own paying leg had zero test coverage — `grep pinned_ip tests/` found ----
+# --- nothing, and PinnedAsyncTransport was only exercised in isolation in -----
+# --- test_net_guard.py. If real_client.py's `PinnedAsyncTransport(_host, ------
+# --- pinned_ip) if (pinned_ip and _host) else _httpx.AsyncHTTPTransport()` ----
+# --- were reverted to always-unpinned, every one of the (then-166) x402 tests -
+# --- would still pass. These two tests close that gap by recording, at the ---
+# --- INNERMOST httpx.AsyncHTTPTransport layer (below x402AsyncTransport AND --
+# --- PinnedAsyncTransport), the connect host every request actually reached --
+# --- plus the Host header + SNI extension it carried. -------------------------
+
+@pytest.mark.asyncio
+async def test_pinned_ip_reaches_the_sdk_paying_leg(monkeypatch):
+    """Pins the property that matters: the request the INNERMOST transport
+    receives has host == the pinned IP, while the Host header and
+    extensions["sni_hostname"] are still the ORIGINAL hostname (TLS/virtual
+    hosting must survive the rewrite). Proven end-to-end through the real
+    x402 SDK's payment-creation/retry flow (FakeServer), not by inspecting
+    the transport chain in isolation — so it fails if pinned_ip ever stops
+    being threaded from fetch_with_payment into the transport the SDK
+    actually issues its paying request through."""
+    server = FakeServer(challenge_amount="50000", settle_amount="50000")
+    seen = {}
+
+    async def patched(self, request):
+        seen["host"] = request.url.host
+        seen["host_header"] = request.headers.get("Host")
+        seen["sni"] = request.extensions.get("sni_hostname")
+        resp = server.handler(request)
+        await resp.aread()
+        return resp
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
+
+    client = RealX402Client()
+    res = await client.fetch_with_payment(
+        url="http://fake/paid", method="GET", body=None,
+        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
+        pinned_ip="93.184.216.34",
+    )
+    assert res.paid is True
+    assert seen["host"] == "93.184.216.34", (
+        "the paying request never reached the pinned IP at the innermost "
+        "transport — DNS pinning is not reaching the SDK's paying leg")
+    assert seen["host_header"] == "fake", "Host header must preserve the original hostname"
+    assert seen["sni"] == "fake", "TLS SNI must preserve the original hostname"
+
+
+@pytest.mark.asyncio
+async def test_no_pinned_ip_falls_back_to_a_plain_unpinned_transport(monkeypatch):
+    """Negative case: pinned_ip=None (no cleared IP — e.g. the loopback
+    exception path that pins to "127.0.0.1" is the only caller that always
+    has one; a caller that genuinely has none must not rewrite anything) must
+    leave the ORIGINAL hostname reaching the innermost transport untouched,
+    proving the fallback branch (`_httpx.AsyncHTTPTransport()`, no pinning
+    transport at all) is what actually runs."""
+    server = FakeServer(challenge_amount="50000", settle_amount="50000")
+    seen = {}
+
+    async def patched(self, request):
+        seen["host"] = request.url.host
+        resp = server.handler(request)
+        await resp.aread()
+        return resp
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
+
+    client = RealX402Client()
+    res = await client.fetch_with_payment(
+        url="http://fake/paid", method="GET", body=None,
+        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.10,
+    )
+    assert res.paid is True
+    assert seen["host"] == "fake"
+
+
+# --- Task 4 review, Important 2 + Minor 3 (2026-08-22): the byte cap must ----
+# --- TRUNCATE an oversized response, never RAISE — raising before `paid` is --
+# --- computed would unwind past X402Result construction and lose a REAL -----
+# --- settled payment's record in the spend cap + idempotency replay-guard. --
+
+@pytest.mark.asyncio
+async def test_oversized_response_is_truncated_not_discarded(monkeypatch):
+    """Drives a response body larger than MAX_X402_BODY_BYTES through a REAL
+    settled payment and asserts the function returns normally (no raise): the
+    truncation marker is present and names the real size + the cap, the body
+    handed back is bounded, and `paid`/`amount_usd` are computed exactly as
+    they would be for a same-sized-under-the-cap response — proving a settled
+    payment is never silently lost to an oversized body."""
+    from tools.x402.net_guard import MAX_X402_BODY_BYTES
+
+    big_body = "X" * (MAX_X402_BODY_BYTES + 500)
+
+    def handler(request: "httpx.Request") -> "httpx.Response":
+        paid_header = (
+            request.headers.get("payment-signature") or request.headers.get("x-payment")
+        )
+        if not paid_header:
+            pr = _requirements("50000", NETWORK, ASSET, {"name": "USDC", "version": "2"})
+            enc = _encode_challenge(pr)
+            return httpx.Response(402, headers={"PAYMENT-REQUIRED": enc},
+                                  json={"error": "payment required"})
+        sr = SettleResponse(success=True, payer="0xPAYER", transaction="0xTXHASH",
+                            network=NETWORK, amount="50000")
+        return httpx.Response(200, headers={"PAYMENT-RESPONSE": encode_payment_response_header(sr)},
+                              text=big_body)
+
+    async def patched(self, request):
+        resp = handler(request)
+        await resp.aread()
+        return resp
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", patched)
+
+    client = RealX402Client()
+    res = await client.fetch_with_payment(
+        url="http://fake/paid", method="GET", body=None,
+        signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=1.00,
+    )
+    assert res.paid is True, (
+        "a settled payment must still be recorded as paid even when the "
+        "response body exceeds the byte cap")
+    assert res.amount_usd == pytest.approx(0.05)
+    assert res.body.startswith("[TRUNCATED:"), "an oversized body must carry a loud, unmissable marker"
+    assert "DID settle" in res.body, "the marker must say the payment settled, not imply nothing happened"
+    assert f"capped at {MAX_X402_BODY_BYTES}" in res.body
+    assert len(res.body) < MAX_X402_BODY_BYTES + 500, "the returned body must actually be bounded"

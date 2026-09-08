@@ -52,8 +52,6 @@ def test_agent_config_has_no_server_fields():
         'enable_auth',
         'enable_credit_system',
         'master_seed',
-        'admin_ids',
-        'moderator_ids',
         'treasury_address',
         'ethereum_rpc_url',
         'eip8004_enabled',
@@ -93,7 +91,6 @@ def test_bot_config_keeps_server_fields():
         'jwt_secret_key',
         'x402_enabled',
         'enable_auth',
-        'admin_ids',
         'master_seed',
     ]:
         assert hasattr(bc, field), f"BotConfig lost server field {field}"
@@ -155,38 +152,4 @@ def test_api_app_uses_build_server_bot():
     assert 'await build_server_bot()' in src
 
 
-# --- Cut C: permissions import-clean ---------------------------------------
 
-
-def test_core_permissions_does_not_eagerly_import_modules_memory():
-    """core/permissions.py must keep the MemoryManager import behind TYPE_CHECKING.
-
-    Source-text check is more robust than a runtime import test because the
-    transitive import graph is large.
-    """
-    with open('core/permissions.py') as f:
-        src = f.read()
-
-    # Find the line that imports MemoryManager
-    import re
-    matches = [
-        (i, line)
-        for i, line in enumerate(src.split('\n'))
-        if 'from modules.memory.memory_manager' in line
-    ]
-    assert matches, "MemoryManager import line not found (expected at least one)"
-    # All MemoryManager imports must live inside the TYPE_CHECKING block
-    # (which is the first block after the module imports). Verify by scanning
-    # whether 'if TYPE_CHECKING' appears before each match.
-    pre_typecheck_imports = []
-    typecheck_seen = False
-    for line in src.split('\n'):
-        if 'if TYPE_CHECKING' in line:
-            typecheck_seen = True
-            continue
-        if 'from modules.memory.memory_manager' in line and not typecheck_seen:
-            pre_typecheck_imports.append(line)
-    assert not pre_typecheck_imports, (
-        "MemoryManager must only be imported inside TYPE_CHECKING; "
-        f"found eager imports: {pre_typecheck_imports}"
-    )

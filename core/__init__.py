@@ -16,7 +16,6 @@ logger = get_component_logger(__name__)
 from .base_component import BaseComponent
 from .config import BotConfig
 from .container import DependencyContainer
-from .permissions import Permissions
 from utils.rate_limit_manager import RateLimitManager
 
 
@@ -125,15 +124,6 @@ CORE_COMPONENTS = {
             'optional': []
         }
     },
-    'permissions': {
-        'class': Permissions,
-        'description': 'Permissions management',
-        'required': True,
-        'dependencies': {
-            'required': ['config'],  # Only needs config
-            'optional': []  # No optional dependencies
-        }
-    }
 }
 
 # Export core components
@@ -145,7 +135,6 @@ __all__ = [
     'DependencyContainer',
     
     # Core managers 
-    'Permissions',
     'RateLimitManager',
     
     # Initialization

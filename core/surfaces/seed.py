@@ -14,7 +14,7 @@ seeding is heavily gated:
 - UNTRUSTED-provenance seeds are ALWAYS pending (the registry enforces this) — no
   self-granted trust from injected content.
 
-Returns the resulting state: "disabled" | "refused" | "pending" | "active".
+Returns the resulting state: "disabled" | "refused" | "refused_self" | "pending" | "active".
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 def _event_log():
     """Best-effort telemetry event log (None when disabled/unavailable)."""
     try:
-        from agents.task.telemetry.event_log import event_log_enabled, get_event_log
+        from core.event_log import event_log_enabled, get_event_log
         if event_log_enabled():
             return get_event_log()
     except Exception:
@@ -43,7 +43,7 @@ def effective_max_new_per_day(user_id, home_dir) -> int:
     env directly). ``env=0`` is a REAL ceiling ("no new correspondents"), not a
     disabled sentinel (``min_value=0`` in the spec), so it is always fed to the
     min-merge. Fail-open to the env value."""
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     env_cap = SurfaceConfig.correspondent_max_new_per_day()
     try:
         from core import prefs
@@ -52,6 +52,44 @@ def effective_max_new_per_day(user_id, home_dir) -> int:
         return int(out) if out is not None else env_cap
     except Exception:
         return env_cap
+
+
+def is_self_address(address: str) -> bool:
+    """The agent's OWN address can never be a correspondent: its outbound copy
+    routes back in as DATA and re-enters the sending session (prod 2026-08-28..
+    09-02: five re-runs of a finished treasury goal off the agent's own sent
+    mail). Compares case-insensitively against the resolved agent email, the
+    explicit ``POLYROB_AGENT_EMAIL`` override and the legacy ``GMAIL_EMAIL``.
+
+    Sub-addressing (RFC 5233 ``local+tag@domain``) is folded on BOTH sides, so a
+    tagged copy of the agent's own address — one mailbox on agentmail, gmail,
+    fastmail and outlook alike — is still recognised as self. Without that fold a
+    tagged bounce is bound as a correspondent and re-enters its own sending
+    session, the exact loop this refusal exists to stop. Dots are deliberately NOT
+    normalised: that is a gmail-only equivalence, and treating it as universal
+    would fold two genuinely distinct mailboxes elsewhere."""
+    import os
+
+    def _fold(value: str) -> str:
+        """``local+tag@domain`` → ``local@domain``; anything unparseable → ''."""
+        v = (value or "").strip().lower()
+        local, sep, domain = v.rpartition("@")
+        if not sep or not local or not domain:
+            return ""
+        return f"{local.split('+', 1)[0]}@{domain}"
+
+    a = _fold(address)
+    if not a:
+        return False
+    own = set()
+    try:
+        from core.instance import resolve_agent_email
+        own.add(resolve_agent_email() or "")
+    except Exception:
+        logger.debug("is_self_address: agent email resolution failed", exc_info=True)
+    own.add(os.getenv("POLYROB_AGENT_EMAIL") or "")
+    own.add(os.getenv("GMAIL_EMAIL") or "")
+    return a in {folded for o in own if (folded := _fold(o))}
 
 
 def maybe_seed_correspondent(
@@ -65,9 +103,12 @@ def maybe_seed_correspondent(
     provenance: str = "owner",
     now: Optional[float] = None,
 ) -> str:
-    from agents.task.surface_config import SurfaceConfig
+    from core.surfaces.config import SurfaceConfig
     if not SurfaceConfig.correspondent_access_enabled():
         return "disabled"
+    if surface == "email" and is_self_address(address):
+        logger.warning("correspondent auto-seed refused: %s is the agent's own address", address)
+        return "refused_self"
     registry = container.get_service("correspondent_registry") if container else None
     if registry is None:
         return "disabled"

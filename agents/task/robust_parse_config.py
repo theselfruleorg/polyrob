@@ -35,14 +35,9 @@ class RobustParseConfig:
 
     # Feature flags
     ENABLE_ROBUST_PARSE: bool = _bool_env("ENABLE_ROBUST_PARSE", True)
-    USE_LEGACY_DEEPSEEK: bool = _bool_env("USE_LEGACY_DEEPSEEK", False)
+    # (Dead reads deleted 2026-08-27, 030 WS-F2: USE_LEGACY_DEEPSEEK and
+    # PAGE_CONTENT_TRUNCATE_LENGTH had no consumer anywhere in the tree.)
 
-    # Content truncation settings - MINIMAL FIX (Nov 4, 2025): DISABLED
-    # Note: Image token estimation is now handled by modules.llm.token_counter._count_multimodal_tokens
-    # BEFORE: PAGE_CONTENT_TRUNCATE_LENGTH = 8000 (caused loops)
-    # AFTER: 10M (effectively disabled) - let 1M context window handle it
-    PAGE_CONTENT_TRUNCATE_LENGTH: int = int(os.getenv("PAGE_CONTENT_TRUNCATE_LENGTH", "10000000"))  # DISABLED - no truncation
-    
     # CONTINUOUS CHAT: User guidance configuration
     # P0-1: the old 500-char per-message cut mangled pasted owner instructions AND
     # destroyed forged-turn (self-wake / delegation-result) payloads — those are
@@ -92,62 +87,43 @@ class RobustParseConfig:
     ENABLE_CONTEXT_OVERFLOW_GUARD: bool = _bool_env("ENABLE_CONTEXT_OVERFLOW_GUARD", True)
     CONTEXT_OVERFLOW_THRESHOLD: float = float(os.getenv("CONTEXT_OVERFLOW_THRESHOLD", "0.90"))  # 90% of context window - maximize usage
     SAFETY_MARGIN_PERCENT: float = float(os.getenv("SAFETY_MARGIN_PERCENT", "0.05"))  # 5% safety margin - minimal to maximize context
-    
-    # NEW: Memory management optimization
-    ENABLE_MEMORY_OPTIMIZATION: bool = _bool_env("ENABLE_MEMORY_OPTIMIZATION", True)
-    MAX_MEMORY_CACHE_SIZE: int = int(os.getenv("MAX_MEMORY_CACHE_SIZE", "50"))  # Maximum cached messages
-    MEMORY_CLEANUP_INTERVAL: int = int(os.getenv("MEMORY_CLEANUP_INTERVAL", "100"))  # Cleanup every N operations
-    
-    # NEW: Enhanced error handling configuration
-    ENABLE_ENHANCED_ERROR_RECOVERY: bool = _bool_env("ENABLE_ENHANCED_ERROR_RECOVERY", True)
-    MAX_CONSECUTIVE_FAILURES: int = int(os.getenv("MAX_CONSECUTIVE_FAILURES", "5"))  # More lenient failure limit
-    ERROR_RECOVERY_DELAY: float = float(os.getenv("ERROR_RECOVERY_DELAY", "2.0"))  # Delay before retry after error
-    
-    # JSON extraction - FIXED: Enhanced JSON extraction settings
-    JSON_EXTRACT_LOG_LENGTH: int = int(os.getenv("JSON_EXTRACT_LOG_LENGTH", "1000"))
-    PREFER_FIRST_JSON_MATCH: bool = _bool_env("PREFER_FIRST_JSON_MATCH", True)
+
+    # (Dead reads deleted 2026-08-27, 030 WS-F2 — no consumer anywhere in the
+    # tree: ENABLE_MEMORY_OPTIMIZATION, ENABLE_ENHANCED_ERROR_RECOVERY,
+    # ERROR_RECOVERY_DELAY, JSON_EXTRACT_LOG_LENGTH, PREFER_FIRST_JSON_MATCH,
+    # ENABLE_STRUCTURED_OUTPUT_FALLBACK, TOKEN_BUFFER_SIZE,
+    # MAX_FORMAT_HINT_TOKENS, ISOLATE_EVALUATOR_MESSAGES,
+    # EVALUATOR_MESSAGE_PREFIX, LARGE_CONTENT_FILE_PREFIX,
+    # ENABLE_TELEMETRY_DEDUPLICATION; the MAX_MEMORY_CACHE_SIZE /
+    # MEMORY_CLEANUP_INTERVAL / MAX_CONSECUTIVE_FAILURES duplicates — the live
+    # MAX_MEMORY_CACHE_SIZE/MEMORY_CLEANUP_INTERVAL reads are in
+    # agents/task/constants.py.)
+
     STRIP_CODE_FENCES: bool = True  # FIXED: Always strip code fences
     STRIP_THINK_TAGS: bool = True  # FIXED: Always strip think tags
-    
+
     # NEW: JSON validation requirements
     REQUIRE_SCHEMA_KEYS: bool = _bool_env("REQUIRE_SCHEMA_KEYS", False)  # Disabled by default for flexibility
     REQUIRED_KEYS: list = ["current_state", "action"]  # Keys that must be present when validation enabled
 
-    # Function calling configuration
-    ENABLE_STRUCTURED_OUTPUT_FALLBACK: bool = _bool_env("ENABLE_STRUCTURED_OUTPUT_FALLBACK", True)  # NEW
-
-    TOKEN_BUFFER_SIZE: int = int(os.getenv("TOKEN_BUFFER_SIZE", "800"))  # FIXED: Increased buffer
-    
     # NEW: Format hint management
     INJECT_FORMAT_HINT_EARLY: bool = _bool_env("INJECT_FORMAT_HINT_EARLY", True)
-    MAX_FORMAT_HINT_TOKENS: int = int(os.getenv("MAX_FORMAT_HINT_TOKENS", "200"))  # NEW: Cap hint size
-    
+
     # NEW: Recalibration settings
     FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS: bool = _bool_env("FORCE_RECALIBRATE_AFTER_LARGE_ACTIONS", True)
     LARGE_ACTION_THRESHOLD: int = int(os.getenv("LARGE_ACTION_THRESHOLD", "500"))  # Chars that trigger recalibration
-    
-    # Evaluation/Planner isolation
-    ISOLATE_EVALUATOR_MESSAGES: bool = _bool_env("ISOLATE_EVALUATOR_MESSAGES", True)
-    EVALUATOR_MESSAGE_PREFIX: str = os.getenv("EVALUATOR_MESSAGE_PREFIX", "EVAL::")
-    
+
     # File offloading - ENABLED for non-browser large content (Nov 6, 2025)
-    # Browser tools now return accessibility snapshots (30-80K chars), won't trigger this
-    # Useful for filesystem reads, MCP responses, and other tools returning large datasets
+    # NOTE (030 WS-F2): the LIVE offload path is result_offload.py, keyed on
+    # MAX_EXTRACTED_CONTENT_SIZE + LARGE_CONTENT_PREVIEW_LENGTH. The pair below
+    # only feeds should_store_content_as_file (pinned by
+    # tests/test_accessibility_snapshot.py; no production caller today).
     STORE_LARGE_CONTENT_AS_FILES: bool = _bool_env("STORE_LARGE_CONTENT_AS_FILES", True)
-    LARGE_CONTENT_FILE_PREFIX: str = os.getenv("LARGE_CONTENT_FILE_PREFIX", "large_content_")
-    
-    # NEW: Base64 image stripping (A2 — three modes: true | false | anchor)
-    #   STRIP_BASE64_IMAGES drives the blunt parse-time strip (back-compat bool).
-    #   STRIP_BASE64_ANCHOR_MODE selects the anchor-preserving path (parse-strip OFF;
-    #   strip_historical_media keeps the latest image-bearing turn). Default 'true'.
+
+    # NEW: Base64 image stripping — blunt parse-time strip; "false" disables,
+    # anything else strips. (The unconsumed "anchor" mode attr was removed.)
     _B64_STRIP = resolve_base64_strip_mode(os.getenv("STRIP_BASE64_IMAGES", "true"))
     STRIP_BASE64_IMAGES: bool = _B64_STRIP["strip_at_parse"]
-    STRIP_BASE64_ANCHOR_MODE: bool = _B64_STRIP["anchor"]
-    
-    # NEW: Telemetry deduplication
-    ENABLE_TELEMETRY_DEDUPLICATION: bool = _bool_env("ENABLE_TELEMETRY_DEDUPLICATION", True)
-
-
 
     @classmethod
     def get_exponential_backoff_delay(cls, consecutive_failures: int) -> float:

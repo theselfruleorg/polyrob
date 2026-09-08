@@ -12,6 +12,7 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 _API = "https://discord.com/api/v10"
+_DISCORD_MAX_CONTENT = 2000
 
 
 class DiscordClient:
@@ -47,6 +48,31 @@ class DiscordClient:
                                          "fail_if_not_exists": False}
         return await self._request("POST", f"/channels/{channel_id}/messages",
                                    json=body)
+
+    async def send_file(self, channel_id: str, path: str,
+                        filename: Optional[str] = None,
+                        content: Optional[str] = None) -> dict:
+        """Upload one file as a message attachment (multipart, 030 D6)."""
+        import json as _json
+        import aiohttp
+        session = await self._http()
+        form = aiohttp.FormData()
+        payload: dict = {"attachments": [{"id": 0,
+                                          "filename": filename or "file"}]}
+        if content:
+            payload["content"] = str(content)[:_DISCORD_MAX_CONTENT]
+        form.add_field("payload_json", _json.dumps(payload),
+                       content_type="application/json")
+        with open(path, "rb") as fh:
+            form.add_field("files[0]", fh.read(), filename=filename or "file",
+                           content_type="application/octet-stream")
+        async with session.post(f"{_API}/channels/{channel_id}/messages",
+                                data=form) as resp:
+            payload = await resp.json(content_type=None)
+            if resp.status >= 400:
+                raise RuntimeError(
+                    f"discord file upload -> {resp.status}: {payload}")
+            return payload
 
     async def edit_message(self, channel_id: str, message_id: str,
                            text: str) -> dict:

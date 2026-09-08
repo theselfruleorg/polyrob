@@ -1,38 +1,9 @@
-"""Utility functions and helpers."""
+"""Utility helpers (tier 0, ranked with ``core``).
 
-from .time_utils import time_execution_sync, time_execution_async
-from .gif_utils import (
-    create_history_gif,
-    get_conversation_screenshots,
-    create_gif_with_retry,
-    create_text_only_gif
-)
+Import the module you need directly (``from utils.time_utils import
+time_execution_async``); this package deliberately re-exports nothing — the old
+package-level re-exports had no importer and only made ``import utils.x`` pull in
+every sibling (GIF/PIL included).
+"""
 
-# Import RateLimitManager directly to avoid circular dependency issues
-# Users should import it as: from utils.rate_limit_manager import RateLimitManager
-# Not included here to prevent circular imports with core modules
-from .user_utils import (
-    extract_user_data,
-    validate_email,
-    validate_wallet_address,
-    generate_user_id,
-    is_valid_hash_id,
-    get_id_type,
-    format_user_display_name
-)
-
-__all__ = [
-    'time_execution_sync',
-    'time_execution_async',
-    'create_history_gif',
-    'get_conversation_screenshots',
-    'create_gif_with_retry',
-    'create_text_only_gif',
-    'extract_user_data',
-    'validate_email',
-    'validate_wallet_address',
-    'generate_user_id',
-    'is_valid_hash_id',
-    'get_id_type',
-    'format_user_display_name'
-]
+__all__: list = []

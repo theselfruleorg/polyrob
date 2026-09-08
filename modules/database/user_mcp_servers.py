@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 
 from modules.database.connection import DatabaseConnection
-from tools.mcp.security import MCPEncryption, get_encryption
+from core.security.encryption import MCPEncryption, get_encryption
 
 logger = logging.getLogger(__name__)
 

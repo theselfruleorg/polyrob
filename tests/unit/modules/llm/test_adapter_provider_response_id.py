@@ -2,7 +2,7 @@
 be stamped onto the PER-CALL AIMessage object at the point `_agenerate`
 captures the raw provider response -- for BOTH the native tool-calling path
 and the plain (no-tools) path -- so `extract_stable_request_id`
-(agents/task/agent/core/aux_metering.py) can read a stable, per-call billing
+(modules/llm/aux_metering.py) can read a stable, per-call billing
 dedup key without racing a concurrent call that shares the same underlying
 LLM client object (parallel sub-agent delegation shares `parent_agent.llm`
 verbatim -- see SubAgentManager.run_subtask).

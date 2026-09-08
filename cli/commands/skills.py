@@ -18,7 +18,8 @@ def skills():
 
 
 @skills.command("list")
-def skills_list():
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def skills_list(as_json: bool):
     """List registered skill IDs."""
     try:
         mgr = get_skill_manager()
@@ -28,6 +29,10 @@ def skills_list():
     if hasattr(mgr, "_ensure_rules_loaded"):
         mgr._ensure_rules_loaded()
     skill_ids = sorted(getattr(mgr, "skill_rules", {}).keys())
+    if as_json:
+        import json
+        click.echo(json.dumps(skill_ids, indent=2))
+        return
     if not skill_ids:
         click.echo("No skills registered.")
         return

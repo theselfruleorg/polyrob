@@ -208,16 +208,25 @@ function updateSessionInfo() {
                 _inflightRequests.session = null;
                 
                 logger.warn('[Sidebar] Failed to fetch session status:', err);
-                // Set a fallback status on error
+                // Inline degraded state (poll path — no toast): distinguishable
+                // from a genuine "Unknown" status the server reported.
                 const statusEl = document.getElementById('session-status');
                 if (statusEl) {
-                    statusEl.textContent = 'Unknown';
+                    statusEl.textContent = 'Unavailable';
+                    statusEl.className = 'status-failed';
+                    statusEl.title = 'Failed to fetch session status — retrying automatically';
                 }
             });
     } catch (e) {
         // Clear in-flight request
         _inflightRequests.session = null;
         logger.warn('[Sidebar] Error in updateSessionInfo:', e);
+        const statusEl = document.getElementById('session-status');
+        if (statusEl) {
+            statusEl.textContent = 'Unavailable';
+            statusEl.className = 'status-failed';
+            statusEl.title = 'Failed to fetch session status — retrying automatically';
+        }
     }
 }
 
@@ -754,10 +763,21 @@ async function loadSkills() {
         // Clear in-flight request on error
         _inflightRequests.skills = null;
         
-        // Skills endpoint may not exist yet, just show empty state
-        logger.debug('[Sidebar] Skills API not available:', error.message);
-        if (!skillsContainer.innerHTML.includes('No skills loaded')) {
-            skillsContainer.innerHTML = '<div class="empty-state compact">No skills loaded</div>';
+        // 404 = the skills endpoint isn't present in this deployment — that is
+        // a genuine empty state. Anything else is a real failure and must not
+        // masquerade as "No skills loaded" (030 D4). Poll path — inline note,
+        // no toast; the next 15s refresh retries automatically.
+        const endpointAbsent = /\b404\b/.test((error && error.message) || '');
+        if (endpointAbsent) {
+            logger.debug('[Sidebar] Skills API not available:', error.message);
+            if (!skillsContainer.innerHTML.includes('No skills loaded')) {
+                skillsContainer.innerHTML = '<div class="empty-state compact">No skills loaded</div>';
+            }
+        } else {
+            logger.error('[Sidebar] Error loading skills:', error);
+            if (!skillsContainer.innerHTML.includes('error-message')) {
+                skillsContainer.innerHTML = '<div class="error-message">Skills unavailable — retrying</div>';
+            }
         }
     }
 }

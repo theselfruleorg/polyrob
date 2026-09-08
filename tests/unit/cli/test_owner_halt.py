@@ -27,8 +27,9 @@ def test_owner_halt_and_resume_toggle_the_file(tmp_path, monkeypatch):
 
     r = runner.invoke(owner, ["halt"])
     assert r.exit_code == 0, r.output
-    assert (tmp_path / "AUTONOMY_HALT").exists()
+    from core.autonomy_control import PAUSE_FILENAME
+    assert (tmp_path / PAUSE_FILENAME).exists()  # 031: the one record
 
     r = runner.invoke(owner, ["resume"])
     assert r.exit_code == 0, r.output
-    assert not (tmp_path / "AUTONOMY_HALT").exists()
+    assert not (tmp_path / PAUSE_FILENAME).exists()

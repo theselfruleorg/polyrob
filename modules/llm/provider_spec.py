@@ -13,10 +13,10 @@ User-declared providers load from ``~/.polyrob/providers.yaml`` (path override:
 this module must stay light at import (entry-point weight test) and must never
 pull agents.*/aiogram/provider SDKs (layering test on ``modules.llm.profiles``).
 
-Kill-switch: ``LLM_PROVIDER_REGISTRY`` (default ON). OFF = the legacy literal
-lists are used at every seam and ``providers.yaml`` is ignored — byte-identical
-to the pre-024 tree (pinned by tests/unit/modules/llm/
-test_provider_registry_characterization.py in both modes).
+The ``LLM_PROVIDER_REGISTRY`` kill-switch (and the duplicate legacy literal tables
+behind it) was removed 2026-08-29, two releases after it shipped in 0.10.0; every seam
+derives from ``get_specs()`` and falls back to ``BUILTIN_SPECS`` (this module's own
+data) on a registry fault, never to a second hand-maintained copy.
 
 Security invariants (proposal 024 §4.0.3, §7.1):
 - user YAML may NEVER name a ``client_class_name`` — it can only select an
@@ -147,6 +147,14 @@ class ProviderSpec:
     signup_url: Optional[str] = None
     tos_note: Optional[str] = None           # surfaced at connect time (§7.4)
     prompt_in_init: bool = True              # ask for this key in `polyrob init`
+    # How prompt caching is achieved on this provider (UP-08 / S4 2026-08-29):
+    # "in_client" (the client marks the stable prefix itself), "automatic"
+    # (server-side, no request change), "explicit" (Gemini cachedContents),
+    # "breakpoints" (cache_control markers), "none". None => derive: an
+    # OpenRouter route is model-dependent (cache_hints.openrouter_cache_strategy);
+    # an ANTHROPIC_MESSAGES transport inherits the Anthropic client's in-client
+    # breakpoints; anything else "none". Consumed by cache_hints.provider_cache_strategy.
+    cache_strategy: Optional[str] = None
 
     def headers(self) -> Dict[str, str]:
         return dict(self.extra_headers)
@@ -192,20 +200,11 @@ class ProviderSpec:
         return self.base_url
 
 
-def provider_registry_enabled(env=None) -> bool:
-    """Kill-switch for the declarative registry (default ON; remove after one release)."""
-    if env is not None:  # test path — value-based parse
-        from core.env import parse_bool
-        return parse_bool(env.get("LLM_PROVIDER_REGISTRY"), True)
-    from core.env import bool_env
-    return bool_env("LLM_PROVIDER_REGISTRY", True)
-
-
 # ---------------------------------------------------------------------------
 # Built-in specs — canonical order IS the "first provider with a key" order
 # (mirrors the legacy modules/llm/profiles.py PROFILES table; fallback_rank
 # mirrors the legacy LLMManager.FALLBACK_HIERARCHY order; model_prefixes mirror
-# the legacy api/openai_compat/model_map._PREFIX_TO_PROVIDER table).
+# the pre-024 api/openai_compat/model_map prefix table).
 # ---------------------------------------------------------------------------
 BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
     ProviderSpec(
@@ -221,12 +220,14 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         supports_native_tools=True, supports_vision=True,
         signup_url="https://console.anthropic.com/", client_class_name="AnthropicClient",
         fallback_eligible=True, fallback_rank=1, model_prefixes=("claude",), builtin=True,
+        cache_strategy="in_client",
     ),
     ProviderSpec(
         name="openai", display_name="OpenAI", env_key="OPENAI_API_KEY",
         transport=Transport.CHAT_COMPLETIONS,
         supports_native_tools=True, supports_vision=True,
         signup_url="https://platform.openai.com/", client_class_name="OpenAIClient",
+        cache_strategy="in_client",
         fallback_eligible=True, fallback_rank=0, model_prefixes=("gpt", "o1", "o3"),
         builtin=True,
     ),
@@ -240,6 +241,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         supports_native_tools=True, supports_vision=True,
         signup_url="https://aistudio.google.com/", client_class_name="GeminiClient",
         fallback_eligible=True, fallback_rank=3, model_prefixes=("gemini",), builtin=True,
+        cache_strategy="explicit",  # implicit is free + needs no code; explicit is opt-in
     ),
     ProviderSpec(
         name="nvidia", display_name="NVIDIA NIM", env_key="NVIDIA_API_KEY",
@@ -248,6 +250,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         supports_native_tools=True, supports_vision=False,
         signup_url="https://build.nvidia.com/", client_class_name="NvidiaClient",
         model_prefixes=("kimi",), builtin=True,
+        cache_strategy="automatic",  # NIM KV reuse is operator-side
     ),
     ProviderSpec(
         name="deepseek", display_name="DeepSeek", env_key="DEEPSEEK_API_KEY",
@@ -256,6 +259,7 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         signup_url="https://platform.deepseek.com/", client_class_name="DeepSeekClient",
         # Direct client disabled (tool-calling broken) — reach DeepSeek via OpenRouter.
         initializable=False, model_prefixes=("deepseek",), builtin=True,
+        cache_strategy="automatic",  # disk cache, server-side
     ),
 
     # -----------------------------------------------------------------------
@@ -802,8 +806,10 @@ _USER_SETTABLE_FIELDS = frozenset({
     "base_url_env", "extra_headers", "bearer_auth", "supports_native_tools",
     "supports_vision", "default_model", "models", "model_prefixes",
     "fallback_eligible", "initializable", "subscription", "signup_url", "tos_note",
-    "prompt_in_init", "oauth",
+    "prompt_in_init", "oauth", "cache_strategy",
 })
+
+_CACHE_STRATEGIES = ("in_client", "automatic", "explicit", "breakpoints", "none")
 
 _GENERIC_CLIENT_FOR_TRANSPORT = {
     Transport.CHAT_COMPLETIONS: "OpenAICompatClient",
@@ -1036,6 +1042,10 @@ def _parse_user_row(name: str, row: dict, base: Optional[ProviderSpec]) -> Optio
                 kwargs[key] = tuple((str(k), str(v)) for k, v in value.items())
             elif key == "oauth":
                 kwargs[key] = _parse_oauth_block(name, value)
+            elif key == "cache_strategy":
+                if value is not None and str(value) not in _CACHE_STRATEGIES:
+                    raise ValueError(f"must be one of {_CACHE_STRATEGIES}")
+                kwargs[key] = None if value is None else str(value)
             elif key in ("supports_native_tools", "supports_vision", "bearer_auth",
                          "fallback_eligible", "initializable", "subscription",
                          "prompt_in_init"):
@@ -1176,15 +1186,9 @@ def _mark_uninitializable_without_a_client(spec: ProviderSpec) -> ProviderSpec:
 def get_specs() -> Tuple[ProviderSpec, ...]:
     """All provider specs, canonical order: built-ins (legacy PROFILES order,
     user overrides applied in place), then new user-declared providers.
-
-    With ``LLM_PROVIDER_REGISTRY`` off, returns the built-ins only (the seams
-    also fall back to their legacy literals — see the kill-switch contract).
     """
     global _SPECS_CACHE
     if _SPECS_CACHE is not None:
-        return _SPECS_CACHE
-    if not provider_registry_enabled():
-        _SPECS_CACHE = BUILTIN_SPECS
         return _SPECS_CACHE
     user = _load_user_specs()
     overrides = {s.name: s for s in user if any(b.name == s.name for b in BUILTIN_SPECS)}

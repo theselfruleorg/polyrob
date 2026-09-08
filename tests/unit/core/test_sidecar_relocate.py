@@ -76,7 +76,7 @@ def test_event_log_default_resolution_triggers_relocation(_home, monkeypatch):
     legacy = Path(resolve_session_data_root()) / "telemetry_events.db"
     _make_sqlite(legacy, "pre-move")
     monkeypatch.delenv("TELEMETRY_EVENT_LOG_PATH", raising=False)
-    import agents.task.telemetry.event_log as ev
+    import core.event_log as ev
     log = ev.get_event_log()
     try:
         assert Path(log.db_path).resolve() == (_home / "telemetry_events.db").resolve()

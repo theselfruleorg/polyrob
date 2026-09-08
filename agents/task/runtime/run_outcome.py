@@ -340,7 +340,7 @@ async def build_run_outcome(task_agent: Any, session_id: Optional[str],
             "run_outcome: done() completed but no agent text recoverable from the "
             "action ledger (session %s) — extractor degraded", session_id)
         try:
-            from agents.task.telemetry.event_log import get_event_log
+            from core.event_log import get_event_log
             get_event_log().record(
                 "run_outcome_degraded",
                 user_id=str(getattr(orch, "user_id", "") or ""),

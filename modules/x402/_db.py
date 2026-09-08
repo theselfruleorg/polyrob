@@ -21,7 +21,7 @@ def emit(kind: str, *, source: str, user_id: str, session_id: str = "",
     """First-class money telemetry (fail-open). attrs passed as an explicit dict —
     the record() reserved-kwarg collision landmine."""
     try:
-        from agents.task.telemetry.event_log import get_event_log, event_log_enabled
+        from core.event_log import get_event_log, event_log_enabled
         if event_log_enabled():
             get_event_log().record(
                 kind, user_id=user_id or "", session_id=session_id,

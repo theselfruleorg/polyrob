@@ -222,3 +222,47 @@ def test_perform_load_tool_container_load_failure_is_error():
     c = FlakyController(services={"web_fetch"})
     res = asyncio.run(perform_load_tool(c, "web_fetch"))
     assert res.error
+
+
+# --------------------------------------------------------------------------
+# the money remedy must be REACHABLE (proposal 029 R5/R6)
+#
+# The old text told the agent to "request it on the goal payload". A goal the
+# agent creates itself can NEVER carry a money tool - goal_create filters the
+# whole money-spend set out by design, so an injected goal cannot launder itself
+# into a trade. So the remedy named an action that structurally cannot succeed,
+# and prod duly shows the agent trying it and then filing "defi_trade not
+# granted" as an owner ask ~50 times in two weeks. A refusal that names an
+# impossible remedy is worse than one that names none.
+# --------------------------------------------------------------------------
+
+def test_the_money_remedy_does_not_point_at_a_self_created_goal_payload():
+    status = resolve_tool_status("defi_trade", container=FakeContainer(set()),
+                                 loaded_ids=set())
+    assert status.status == "gated" and status.reason == "money"
+    text = status.remedy.lower()
+    assert "request it on the goal payload" not in text, (
+        "goal_create filters money tools out - this remedy cannot succeed")
+
+
+def test_the_money_remedy_says_who_can_actually_grant_it():
+    text = resolve_tool_status("defi_trade", container=FakeContainer(set()),
+                               loaded_ids=set()).remedy.lower()
+    assert "owner" in text or "operator" in text
+
+
+def test_the_money_remedy_says_a_self_created_goal_can_never_carry_it():
+    """The fact that ends the retry loop, stated rather than implied."""
+    text = resolve_tool_status("defi_trade", container=FakeContainer(set()),
+                               loaded_ids=set()).remedy.lower()
+    assert "never" in text
+    assert "goal_create" in text or "goal you create" in text
+
+
+def test_the_money_remedy_still_applies_to_every_money_tool():
+    from core.tool_capabilities import ids_with
+    for tool_id in sorted(ids_with("money")):
+        status = resolve_tool_status(tool_id, container=FakeContainer(set()),
+                                     loaded_ids=set())
+        assert status.reason == "money", tool_id
+        assert status.remedy, tool_id

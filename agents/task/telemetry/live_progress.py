@@ -116,8 +116,10 @@ class TurnProgressTracker:
                 if isinstance(step, int):
                     self._step = max(self._step, step)
             elif kind == "awaiting_approval":
-                self._wait = ("⏸ Waiting for your approval — reply /pending "
-                              "(or `polyrob owner pending`)")
+                # 030 C7: this bubble renders with parse_mode=None — backticks
+                # showed literally, and the CLI hint was the wrong seat.
+                self._wait = ("⏸ Waiting for your approval — open /pending to "
+                              "decide")
                 self._wait_kind = "approval"
                 self._start_reminder()
             elif kind == "approval_resolved":

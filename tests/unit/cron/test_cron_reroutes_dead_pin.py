@@ -58,3 +58,45 @@ def test_everything_dead_still_skips_the_paid_tick(monkeypatch):
 
     assert skipped is True
     assert provider is None
+
+
+# --- 2026-08-28 log forensics: an UNPINNED job (payload={}) went to the
+# canonical-first provider, not the operator's DEFAULT_PROVIDER. On prod that
+# was credit-dead OpenRouter: every status/exit-monitor tick 402'd first, fell
+# back in-session, and (after 08-27) re-tripped the credit sentinel every 6h —
+# 1,323 402 lines and five false credit alerts to the owner in four days. ----
+
+def test_unpinned_job_prefers_the_operator_pin_over_canonical_order(monkeypatch):
+    import core.runtime_config as rc
+    monkeypatch.setattr(rc, "usable_providers_with_credentials",
+                        lambda env=None: ["openrouter", "zai-coding"], raising=False)
+    monkeypatch.setattr(rc, "_sentinel_active", lambda provider=None: False, raising=False)
+    monkeypatch.delenv("CHAT_PROVIDER", raising=False)
+    monkeypatch.setenv("DEFAULT_PROVIDER", "zai-coding")
+
+    from cron.runner import resolve_job_provider
+    assert resolve_job_provider({}) == ("zai-coding", False)
+    assert resolve_job_provider(None) == ("zai-coding", False)
+
+
+def test_a_stored_pin_still_beats_the_operator_pin(monkeypatch):
+    import core.runtime_config as rc
+    monkeypatch.setattr(rc, "usable_providers_with_credentials",
+                        lambda env=None: ["openrouter", "zai-coding"], raising=False)
+    monkeypatch.setattr(rc, "_sentinel_active", lambda provider=None: False, raising=False)
+    monkeypatch.setenv("DEFAULT_PROVIDER", "zai-coding")
+
+    from cron.runner import resolve_job_provider
+    assert resolve_job_provider({"provider": "openrouter"}) == ("openrouter", False)
+
+
+def test_unpinned_job_with_a_dead_operator_pin_reroutes(monkeypatch):
+    import core.runtime_config as rc
+    monkeypatch.setattr(rc, "usable_providers_with_credentials",
+                        lambda env=None: ["openrouter", "zai-coding"], raising=False)
+    monkeypatch.setattr(rc, "_sentinel_active",
+                        lambda provider=None: provider == "zai-coding", raising=False)
+    monkeypatch.setenv("DEFAULT_PROVIDER", "zai-coding")
+
+    from cron.runner import resolve_job_provider
+    assert resolve_job_provider({}) == ("openrouter", False)

@@ -315,6 +315,17 @@ def init_cmd(
             # (which it always is here — Owner pairing above just defaulted
             # one), falling back to an env note only if it somehow isn't.
             click.echo("\n=== Section 6/6: Autonomy & guardrails ===")
+            # 030 WS-F7 (C8): name the capability axes ONCE, before the prompts —
+            # a new operator used to meet a 4-axis cascade with no introduction.
+            click.echo(
+                "POLYROB has four capability axes (see `polyrob autonomy status` "
+                "any time):\n"
+                "  • POLYROB_LOCAL          — interactive local tools (coding/git/KB)\n"
+                "  • AUTONOMY_ENABLED       — self-directed loops master switch\n"
+                "  • AUTONOMY_MODE          — supervised vs autonomous capability "
+                "defaults (needs a bound owner)\n"
+                "  • AGENT_COMPUTE_POSTURE  — host access ladder 0-3 (frozen at "
+                "start; never changed here)")
             # 0.9.0: two honest prompts. Interactive local tools (coding/git/KB/RAG)
             # are the safe, useful default; the self-directed autonomy loops
             # (goals/self-wake/self-editing) are a separate, off-by-default opt-in.
@@ -326,6 +337,12 @@ def init_cmd(
                 "Enable autonomy (agent works on its own between your messages — "
                 "goals, self-wake, self-editing)?", default=False):
                 guardrail_updates["AUTONOMY_ENABLED"] = "true"
+                # The mode axis only matters once autonomy is on; supervised is
+                # the safe default and autonomous clamps without an owner bound.
+                if click.confirm(
+                    "Run in AUTONOMOUS mode (capability defaults widen; requires "
+                    "the owner pairing above)?", default=False):
+                    guardrail_updates["AUTONOMY_MODE"] = "autonomous"
 
             if click.confirm(
                 "Apply recommended approval preset (git push, PRs, installs "
@@ -481,6 +498,17 @@ def init_cmd(
         click.echo("⚠ No usable LLM API key set — add one with "
                    "`polyrob config set OPENROUTER_API_KEY <key> --global` "
                    "(for DeepSeek models use OPENROUTER_API_KEY + model deepseek/deepseek-chat)")
+    # 030 WS-F7 (C8): the scripted install path (`--no-prompt`, the README's
+    # recommendation) used to end with SILENCE about the capability axes — the
+    # user was never told the axes exist or where they landed. Print the same
+    # effective-posture card every seat renders. Fail-open.
+    try:
+        from core.config_policy.posture_card import render_posture_card
+        click.echo("\nEffective posture (all axes; `polyrob autonomy status` re-shows this):")
+        for line in render_posture_card(prefix="  "):
+            click.echo(line)
+    except Exception:
+        pass
     click.echo("\nNext steps (all optional):")
     click.echo("  • agent wallet:   polyrob wallet init")
     click.echo("  • avatar:         polyrob pfp generate   (or /pfp in the chat)")

@@ -68,6 +68,7 @@ def test_gate_sets_reference_real_tool_ids():
         "shell", "process", "self_env", "hf_deploy", "github", "coding",
         "code_execution", "git", "goal", "cronjob", "knowledge",
         "x402_pay", "x402_invoice", "defi_trade", "publish", "x_browser",
+        "app_service",
     }
     named = set(DELEGATE_BLOCKED_TOOLS) | set(MONEY_TOOLS) | set(HIGH_IMPACT_TOOL_IDS)
     unknown = named - registry_vocab - _ASPIRATIONAL_IDS

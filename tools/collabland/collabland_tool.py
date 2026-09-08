@@ -175,7 +175,7 @@ class CollabLandTool(BaseTool):
         
         # Log headers for debugging (mask sensitive data)
         self.logger.debug(f"Setting up HTTP session with headers:")
-        self.logger.debug(f"  - X-API-Key: {self._api_key[:10]}*** (full length: {len(self._api_key)})")
+        self.logger.debug(f"  - X-API-Key: {self._api_key[:5]}*** (full length: {len(self._api_key)})")
         self.logger.debug(f"  - Content-Type: application/json")
         self.logger.debug(f"  - Accept: application/json")
         
@@ -230,9 +230,8 @@ class CollabLandTool(BaseTool):
             # Log the full request details for debugging
             self.logger.info(f"CollabLand API request: POST {self.base_url}/access-control/check-roles")
             self.logger.info(f"Request payload: {payload}")
-            self.logger.debug(f"Request headers: X-API-Key: {self._api_key[:10]}*** (full: {len(self._api_key)} chars)")
-            self.logger.debug(f"Full API key for debugging: {self._api_key}")  # Temporary debug - remove in production
-            
+            self.logger.debug(f"Request headers: X-API-Key: {self._api_key[:5]}*** (full: {len(self._api_key)} chars)")
+
             # Make API call to CollabLand
             url = f"{self.base_url}/access-control/check-roles"
             self.logger.info(f"Sending CollabLand API request to {url} for wallet {address[:6]}...{address[-4:]}")

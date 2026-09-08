@@ -152,8 +152,9 @@ def _read_latch(path: str) -> dict:
     provider. Reading it as GLOBAL (not as "no entries") matters on upgrade —
     the alternative silently un-pauses a genuinely credit-dead provider.
     """
-    def _entry(ts: float, release_ts: Optional[float] = None) -> dict:
-        return {"ts": ts, "release_ts": release_ts}
+    def _entry(ts: float, release_ts: Optional[float] = None,
+               reason: str = "") -> dict:
+        return {"ts": ts, "release_ts": release_ts, "reason": reason}
 
     try:
         with open(path) as f:
@@ -169,7 +170,8 @@ def _read_latch(path: str) -> dict:
                 release = (entry or {}).get("release_ts")
                 out[str(name)] = _entry(
                     float((entry or {}).get("ts") or 0.0),
-                    float(release) if release else None)
+                    float(release) if release else None,
+                    str((entry or {}).get("reason") or ""))
             except Exception:
                 continue
         return out
@@ -230,6 +232,27 @@ def credit_sentinel_active(provider: Optional[str] = None) -> bool:
         return False  # fail-open: a broken latch never blocks autonomy
 
 
+def credit_sentinel_status() -> dict:
+    """The latch as the status surfaces read it (2026-08-28 status SSOT).
+
+    ``{provider: {"ts", "release_ts", "reason"}}`` for every entry that is still
+    FRESH (an expired entry is auto-released exactly as ``credit_sentinel_active``
+    does), ``{}`` when clear or disabled. Raises — a caller renders the error as
+    ``unavailable (<reason>)``, never as "clear": a latch we cannot read is not a
+    latch we know to be open.
+    """
+    if not credit_sentinel_enabled():
+        return {}
+    path = _sentinel_path()
+    if not os.path.exists(path):
+        return {}
+    entries = _read_latch(path)
+    window = _release_hours() * 3600
+    now = time.time()
+    return {name: dict(e) for name, e in entries.items()
+            if not _entry_expired(e, now, window)}
+
+
 def _write_latch(path: str, entries: dict, reason: str = "") -> None:
     """Persist ``{provider: entry}``; entries may be the ``_read_latch`` dict
     shape or bare ``float`` timestamps. Never raises."""
@@ -278,12 +301,13 @@ async def trip_credit_sentinel(reason: str, *, provider: Optional[str] = None,
                         "reason": str(reason)[:500]}
         _write_latch(path, entries, reason=reason)
         try:
-            from agents.task.telemetry.event_log import get_event_log
+            from core.event_log import get_event_log
             get_event_log().record("credit_sentinel", user_id=str(user_id or ""),
                                    source="credit_sentinel",
                                    attrs={"reason": str(reason)[:500]})
         except Exception:
-            pass
+            # The latch file is already written; only the telemetry breadcrumb failed.
+            logger.warning("credit_sentinel event not recorded", exc_info=True)
         try:
             import core.surfaces.user_delivery as _ud
             # 020 #1: stamp the trip time into the text so a RE-trip within the

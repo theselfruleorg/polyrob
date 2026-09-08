@@ -191,6 +191,28 @@ def is_protected_config_path(path: Path) -> bool:
         if "identity" in parts_lower:
             return True
 
+    # The declarative stream manifest (`data/streams/streams.yaml`, read by
+    # `agents/task/goals/streams.py`) is the ONE place an autonomous goal may be
+    # granted a money verb such as `defi_trade` — `allowed_self_goal_tools()`
+    # never contains one, so the manifest is the whole difference between an
+    # operator grant and a self-grant. That holds only while the file is
+    # operator-authored and git-tracked, so it must be unreachable from every
+    # agent-writable file surface; without this rule `self_env patch_source`
+    # (AGENT_COMPUTE_POSTURE>=2) would permit writing it. Segment-scoped like the
+    # identity rule above: only a `streams.yaml` that actually sits in a
+    # `streams/` directory, not any file that happens to share the name.
+    if basename == "streams.yaml":
+        if "streams" in [part.lower() for part in path.parts]:
+            return True
+
+    # 031: the owner pause record + its legacy facet files are the owner's stop
+    # switch. The agent changes them ONLY through the gated `autonomy_control`
+    # action; an agent-writable file surface must never reach them (a compromised
+    # or prompt-injected turn could otherwise lift its own pause).
+    if basename in ("autonomy_pause.json", "autonomy_halt", "treasury_entry_pause",
+                    "stream_seeding_pause"):
+        return True
+
     # Proposal 024 §7.1: the LLM credential store and provider registry under a
     # polyrob config home (~/.polyrob / ~/.rob) are write-protected like system
     # config — an agent-writable providers.yaml would redirect the agent's own

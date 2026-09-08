@@ -12,7 +12,7 @@ def test_parse_window_seconds():
 
 
 def test_telemetry_command_emits_counts(tmp_path, monkeypatch):
-    import agents.task.telemetry.event_log as el
+    import core.event_log as el
     monkeypatch.setattr(el, "_INSTANCES", {})
     log = el.TelemetryEventLog(str(tmp_path / "te.db"))
     monkeypatch.setattr(el, "get_event_log", lambda *a, **k: log)

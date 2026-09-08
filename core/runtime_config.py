@@ -24,7 +24,7 @@ from modules.llm.profiles import (
     PROFILES,
     canonicalize_provider,
     initializable_providers_with_keys,
-    providers_with_keys,  # noqa: F401  (env_keys_present / callers may still use it)
+    providers_with_keys,  # noqa: F401  (re-exported for callers)
     usable_providers_with_credentials,
 )
 
@@ -155,12 +155,6 @@ def resolve_session_runtime(provider=None, model=None, env=None):
         return resolved_provider, (model or resolved_model)
     except Exception:
         return provider or "openai", model
-
-
-def env_keys_present(env=None) -> set:
-    """Set of provider API-key env-var NAMES present in *env* (for available_keys)."""
-    env = _os.environ if env is None else env
-    return {p.env_key for p in PROFILES.values() if env.get(p.env_key)}
 
 
 def get_data_root() -> str:

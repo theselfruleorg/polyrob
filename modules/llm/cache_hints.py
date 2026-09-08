@@ -75,23 +75,21 @@ def provider_cache_strategy(provider: str, model: Optional[str] = None) -> str:
     - "none"       -> no caching available
     """
     p = (provider or "").lower()
-    if p in ("anthropic", "openai"):
-        return "in_client"
-    if p in ("deepseek", "nvidia"):
-        return "automatic"     # disk/KV cache; NIM reuse is operator-side
     if p == "openrouter":
-        return openrouter_cache_strategy(model)
-    if p == "gemini":
-        return "explicit"      # implicit is free + needs no code; explicit is opt-in
-    # P8b (context-usage audit 2026-08-15): a spec-served provider riding the
-    # ANTHROPIC_MESSAGES transport (e.g. zai-coding) INHERITS AnthropicClient's
-    # in-client cache_control breakpoints — stamping "none" was false and hid
-    # that the stable prefix is already marked cacheable on those routes.
+        return openrouter_cache_strategy(model)   # model-dependent routing
+    # S4 (2026-08-29): the per-provider answer is a ProviderSpec field
+    # (``cache_strategy``) — one table, no second literal here.
     try:
         from modules.llm.provider_spec import get_spec, Transport
         spec = get_spec(p)
-        if spec is not None and spec.transport is Transport.ANTHROPIC_MESSAGES:
-            return "in_client"
+        if spec is not None:
+            if spec.cache_strategy:
+                return spec.cache_strategy
+            # P8b (context-usage audit 2026-08-15): a spec-served provider riding
+            # the ANTHROPIC_MESSAGES transport (e.g. zai-coding) INHERITS
+            # AnthropicClient's in-client cache_control breakpoints.
+            if spec.transport is Transport.ANTHROPIC_MESSAGES:
+                return "in_client"
     except Exception:
         pass
     return "none"

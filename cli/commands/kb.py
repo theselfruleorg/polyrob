@@ -119,9 +119,10 @@ def kb():
 
 
 # ---------------------------------------------------------------------------
-# kb export — convergence door for the knowledge vault (027 WP6: `kb` and
-# `knowledge` were two top-level nouns for one concept; the vault export is now
-# reachable from both, same flags, one implementation in knowledge.py).
+# kb export — the canonical vault-export verb (027 WP6 / 030 D10: `kb` and
+# `knowledge` were two top-level nouns for one concept; `knowledge` is now a
+# hidden deprecated alias and this is the front door — one implementation,
+# `run_export` in knowledge.py).
 # ---------------------------------------------------------------------------
 
 @kb.command("export")
@@ -131,11 +132,10 @@ def kb():
               help="Only episodes newer than this (8h / 2d / ISO date).")
 @click.option("--user", "user", default="local", show_default=True,
               help="Tenant to export.")
-@click.pass_context
-def kb_export(ctx, out_dir: str, since, user: str):
+def kb_export(out_dir: str, since, user: str):
     """Write notes/episodes/skills/identity/goals as a markdown vault."""
-    from cli.commands.knowledge import export as knowledge_export
-    ctx.invoke(knowledge_export, out_dir=out_dir, since=since, user=user)
+    from cli.commands.knowledge import run_export
+    run_export(out_dir, since, user)
 
 
 # ---------------------------------------------------------------------------
@@ -212,15 +212,18 @@ async def _kb_add(path: str, collection: str, recursive: bool, globs) -> None:
 
 @kb.command("list")
 @click.option("--collection", default=None, help="Filter by collection (omit for all).")
-def kb_list(collection) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def kb_list(collection, as_json: bool) -> None:
     """List ingested sources in the knowledge base."""
     _bootstrap()
     if not _require_kb_enabled():
         return
-    asyncio.run(_kb_list(collection))
+    asyncio.run(_kb_list(collection, as_json))
 
 
-async def _kb_list(collection) -> None:
+async def _kb_list(collection, as_json: bool = False) -> None:
+    import json
+
     from modules.memory.registry import kb_list_sources
 
     await _ensure_memory_backend()
@@ -229,6 +232,10 @@ async def _kb_list(collection) -> None:
     except Exception as e:
         click.echo(click.style(f"[kb] error: {e}", fg="red"))
         raise SystemExit(1)
+
+    if as_json:
+        click.echo(json.dumps(sources, indent=2, default=str))
+        return
 
     if not sources:
         click.echo(click.style("No sources in KB.", dim=True))
@@ -278,15 +285,19 @@ async def _kb_remove(collection: str, source) -> None:
 @click.argument("query")
 @click.option("--collection", default="default", show_default=True, help="KB collection to search.")
 @click.option("--limit", default=8, show_default=True, type=int, help="Max results.")
-def kb_search(query: str, collection: str, limit: int) -> None:
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def kb_search(query: str, collection: str, limit: int, as_json: bool) -> None:
     """Search the knowledge base for relevant content."""
     _bootstrap()
     if not _require_kb_enabled():
         return
-    asyncio.run(_kb_search(query, collection, limit))
+    asyncio.run(_kb_search(query, collection, limit, as_json))
 
 
-async def _kb_search(query: str, collection: str, limit: int) -> None:
+async def _kb_search(query: str, collection: str, limit: int,
+                     as_json: bool = False) -> None:
+    import json
+
     from modules.memory.registry import kb_search as _registry_search
 
     await _ensure_memory_backend()
@@ -297,6 +308,12 @@ async def _kb_search(query: str, collection: str, limit: int) -> None:
     except Exception as e:
         click.echo(click.style(f"[kb] error: {e}", fg="red"))
         raise SystemExit(1)
+
+    if as_json:
+        click.echo(json.dumps(
+            {"query": query, "collection": collection, "result": result},
+            indent=2, default=str))
+        return
 
     if not result:
         click.echo(click.style("No results found.", dim=True))

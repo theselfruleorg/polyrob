@@ -92,6 +92,35 @@ class SlackClient:
                                    json={"users": str(user_id)})
         return str((payload.get("channel") or {}).get("id") or "")
 
+    async def upload_file(self, channel: str, path: str,
+                          title: Optional[str] = None) -> dict:
+        """Upload one file via the modern external-upload flow (030 D6):
+        files.getUploadURLExternal → PUT bytes → files.completeUploadExternal.
+        (files.upload is deprecated and off for new apps since 2025.)"""
+        import os
+        session = await self._http()
+        size = os.path.getsize(path)
+        name = os.path.basename(path)
+        # Step 1: get the upload URL (form-encoded — this method rejects JSON).
+        async with session.post(
+                f"{_API}/files.getUploadURLExternal",
+                data={"filename": name, "length": str(size)},
+                headers={"Authorization": f"Bearer {self._bot_token}"}) as resp:
+            got = await resp.json(content_type=None)
+        self._check_ok("files.getUploadURLExternal", got)
+        upload_url, file_id = got["upload_url"], got["file_id"]
+        # Step 2: send the bytes.
+        with open(path, "rb") as fh:
+            async with session.post(upload_url, data=fh.read()) as resp:
+                if resp.status >= 400:
+                    raise RuntimeError(
+                        f"slack upload POST -> {resp.status}")
+        # Step 3: complete + share into the channel.
+        return await self._call(
+            "files.completeUploadExternal", token=self._bot_token,
+            json={"files": [{"id": file_id, "title": title or name}],
+                  "channel_id": await self._resolve_channel(channel)})
+
     async def auth_test(self) -> dict:
         return await self._call("auth.test", token=self._bot_token)
 

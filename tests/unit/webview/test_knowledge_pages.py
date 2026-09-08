@@ -126,7 +126,7 @@ def test_no_provider_degrades_to_empty(monkeypatch):
 
 def test_changes_endpoint_queries_event_log(seam, monkeypatch):
     client, knowledge, _ = seam
-    import agents.task.telemetry.event_log as ev_mod
+    import core.event_log as ev_mod
 
     class _Log:
         def query(self, *, since_ts=None, kind=None, user_id=None, limit=500):
@@ -151,3 +151,43 @@ def test_skills_endpoint_failopen(monkeypatch):
     r = client.get("/api/webgate/knowledge/skills")
     assert r.status_code == 200
     assert "catalog" in r.json()
+
+
+def test_skills_endpoint_reports_error_field(monkeypatch):
+    """030 D4: a RAISING skill-manager yields the same JSON shape PLUS an
+    ``error`` field, still HTTP 200 (the page renders a distinct error state)
+    — a broken catalog read must not masquerade as count:0 "no skills"."""
+    client, knowledge = _client()
+    monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
+    monkeypatch.setattr(knowledge, "_data_dir", lambda: "/nonexistent")
+    import agents.task.agent.skill_manager as sm_mod
+
+    def _raise():
+        raise RuntimeError("skills dir unreadable")
+
+    monkeypatch.setattr(sm_mod, "get_skill_manager", _raise)
+    r = client.get("/api/webgate/knowledge/skills")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["catalog"] == [] and body["count"] == 0
+    assert "skills dir unreadable" in body["error"]
+
+
+def test_skills_endpoint_no_error_field_on_success(monkeypatch):
+    """The happy path stays shape-identical — no ``error`` key sneaks in."""
+    client, knowledge = _client()
+    monkeypatch.setattr(knowledge, "_effective_user_id", lambda request: "owner-1")
+    monkeypatch.setattr(knowledge, "_data_dir", lambda: "/nonexistent")
+    import agents.task.agent.skill_manager as sm_mod
+
+    class _SM:
+        def get_catalog_skills(self, *, user_id=None, max_skills=200):
+            return []
+
+        def list_pending_skills(self, user_id):
+            return []
+
+    monkeypatch.setattr(sm_mod, "get_skill_manager", lambda: _SM())
+    body = client.get("/api/webgate/knowledge/skills").json()
+    assert "error" not in body
+    assert body["catalog"] == []

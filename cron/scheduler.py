@@ -99,6 +99,9 @@ class TickLock:
 class TickResult:
     ran: List[str] = field(default_factory=list)
     failed: List[str] = field(default_factory=list)
+    #: FIX 3: cut off by the duration cap while an owner approval ask THIS run
+    #: opened was still open — not the job's failure (see ``_run_one``).
+    deferred: List[str] = field(default_factory=list)
     skipped_locked: bool = False
     skipped_busy: bool = False
 
@@ -108,6 +111,14 @@ class CronScheduler:
         self.store = store
         self.runner = runner
         self.lock_path = lock_path
+        #: 031: the run in progress (so an owner pause can cancel it) + the flag
+        #: that tells _run_due the cancellation was a pause, not a failure.
+        self._current: Optional[asyncio.Task] = None
+        self._current_job: Optional[CronJob] = None
+        self._pause_cancelled = False
+        #: FIX 3: set by _run_one when a cap timeout is attributable to an OPEN
+        #: owner-approval ask this run raised; tells _run_due not to blame the job.
+        self._approval_deferred = False
 
     async def tick(self, now: Optional[datetime] = None) -> TickResult:
         from core.interactive_gate import is_interactive_busy
@@ -169,24 +180,114 @@ class CronScheduler:
             if not self.store.claim_for_run(job.id):
                 continue
             success = await self._run_one(job)
+            if self._pause_cancelled and not success:
+                # 031: the owner paused mid-run. Not a failure: the job goes back
+                # to 'scheduled' with next_run_at untouched (still due; a paused
+                # tick $0-skips it and then reschedules it) and the tick stops
+                # here — nothing else starts. A run that completed before the
+                # cancel landed (success=True) is recorded normally.
+                self.store.set_status(job.id, "scheduled")
+                self._pause_cancelled = False
+                break
+            self._pause_cancelled = False
+            if self._approval_deferred and not success:
+                # FIX 3: the cap cut the run off while an owner approval THIS run
+                # raised was still open. The owner's window (300s) is longer than
+                # the cap (180s), so blaming the job records a failure whose real
+                # cause is an unanswered prompt. Record the run, do not blame it,
+                # and leave the job redeemable — /approve leaves a one-shot grant
+                # the next attempt consumes. The tick CONTINUES (unlike a pause):
+                # one job waiting on the owner says nothing about the next.
+                self._approval_deferred = False
+                self._record(job, now, False, deferred=True)
+                result.deferred.append(job.id)
+                continue
+            self._approval_deferred = False
             self._record(job, now, success)
             (result.ran if success else result.failed).append(job.id)
         return result
 
     async def _run_one(self, job: CronJob) -> bool:
+        self._pause_cancelled = False
+        self._approval_deferred = False
+        self._current_job = job
+        started = time.time()
+        self._current = asyncio.create_task(self.runner(job))
         try:
             return bool(await asyncio.wait_for(
-                self.runner(job), timeout=max(job.max_duration_seconds, 0.001),
+                self._current, timeout=max(job.max_duration_seconds, 0.001),
             ))
         except asyncio.TimeoutError:
+            # A timeout is a real failure even if a pause cancel raced in: the job
+            # DID exhaust its budget, so record it as failed rather than "held".
+            self._pause_cancelled = False
+            # ...UNLESS the budget went on an owner decision this run is still
+            # waiting for (FIX 3). Narrow on purpose: only an ask THIS run opened
+            # and that is still OPEN (see cron/approval_defer.py), so the next
+            # attempt — which re-polls the same, now pre-existing ask — fails
+            # honestly instead of retrying forever.
+            ask_id = self._deferring_owner_ask(job, started)
+            if ask_id:
+                self._approval_deferred = True
+                logger.info(
+                    "cron job %s hit its %ss cap waiting on owner approval (ask %s) "
+                    "— deferred, not failed", job.id, job.max_duration_seconds, ask_id)
+                return False
             logger.warning("cron job %s timed out after %ss", job.id, job.max_duration_seconds)
             return False
+        except asyncio.CancelledError:
+            if self._pause_cancelled:
+                logger.warning("cron job %s cancelled by owner pause", job.id)
+                return False
+            raise
         except Exception as e:  # runner blew up — never crash the tick
             logger.error("cron job %s raised: %s", job.id, e, exc_info=True)
             return False
+        finally:
+            self._current = None
+            self._current_job = None
 
-    def _record(self, job: CronJob, now: datetime, success: bool) -> None:
+    def cancel_inflight(self) -> bool:
+        """031: cancel the run in progress when the owner pause covers its KIND
+        (a digest under a `cron`-scoped pause keeps running). Returns True iff a
+        run was cancelled; ``_run_due`` then puts the job back to 'scheduled' —
+        a pause is not a failure."""
+        t = self._current
+        if t is None or t.done():
+            return False
+        from core.autonomy_control import allows
+        job = self._current_job
+        kind = "digest" if (job is not None and (job.payload or {}).get("digest")) else "cron_run"
+        if allows(kind).allowed:
+            return False
+        self._pause_cancelled = True
+        t.cancel()
+        return True
+
+    def _deferring_owner_ask(self, job: CronJob, started: float) -> Optional[str]:
+        """FIX 3: the OPEN owner-approval ask this run raised, or None. Fail-open
+        (any error answers None = record the timeout as a failure, as before)."""
+        try:
+            from cron.approval_defer import open_owner_ask_since
+            return open_owner_ask_since(
+                job.user_id, started, cron_db_path=getattr(self.store, "db_path", None))
+        except Exception:
+            logger.debug("owner-ask probe failed for job %s", job.id, exc_info=True)
+            return None
+
+    def _record(self, job: CronJob, now: datetime, success: bool,
+                *, deferred: bool = False) -> None:
         if job.one_shot:
+            if deferred:
+                # FIX 3: a one-shot cut off on an unanswered owner prompt must not
+                # be marked terminal-'failed' — that throws the work away seconds
+                # before the owner answers. Keep it due (next_run_at untouched) so
+                # the next tick redeems the decision.
+                self.store.update_after_run(
+                    job.id, last_run_at=now, next_run_at=job.next_run_at,
+                    status="scheduled",
+                )
+                return
             self.store.update_after_run(
                 job.id, last_run_at=now, next_run_at=None,
                 status="done" if success else "failed",
