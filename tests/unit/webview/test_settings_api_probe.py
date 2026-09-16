@@ -1,31 +1,18 @@
-"""030 D-3 pin — the deployed webview serves /settings without the :9000 API.
+"""The webview process must NOT mount the API-service MCP/skills routers.
 
-settings.js fetches /api/mcp/settings and /api/skills/*, which only the API
-service mounts (api/app.py) — the webview process never builds the container
-services they need (user_mcp_service / mcp), so mounting those routers here
-would 503, not work. The chosen honest-cheap fix is CLIENT-side: settings.js
-probes the API surface once and renders an explicit "needs the API service"
-state instead of console errors + fake-empty lists. This test pins that
-wiring so a refactor can't silently regress the page back to 404 spam.
+043 §9 phase 4 deleted the legacy `/settings` page and its `settings.js` (the
+MCP-servers + skills panel moved to the new Agent destination). The 030 D-3 page
+pins (settings.js probes the API and renders an honest "needs the API service"
+state; settings.html loads settings.js) went with the deleted surface.
+
+What survives is the server-boundary DECISION those pins protected: the webview
+process still does not import/mount the MCP/skills routers, because their
+container deps don't exist here and mounting them would 503. That invariant is
+independent of any one page, so it stays pinned.
 """
 from pathlib import Path
 
 _WEBVIEW = Path(__file__).resolve().parents[3] / "webview"
-
-
-def test_settings_js_probes_api_and_renders_honest_state():
-    js = (_WEBVIEW / "static" / "js" / "settings.js").read_text(encoding="utf-8")
-    assert "probeApiService" in js
-    assert "renderApiUnavailable" in js
-    # the probe result actually gates rendering (called from init)
-    assert "apiServiceAvailable = await probeApiService()" in js
-    # the honest state names the real dependency, not a generic error
-    assert "API service" in js
-
-
-def test_settings_template_loads_settings_js():
-    html = (_WEBVIEW / "templates" / "settings.html").read_text(encoding="utf-8")
-    assert "/static/js/settings.js" in html
 
 
 def test_webview_server_does_not_mount_api_service_routers():

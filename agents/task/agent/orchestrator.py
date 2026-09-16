@@ -323,6 +323,15 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         self._pending_messages = []  # List of (text, kind, metadata) tuples
         # SECURITY FIX: Lock to prevent race condition between submit_user_message and create_agent
         self._pending_messages_lock = asyncio.Lock()
+        # 044 T14: already-framed room <group-context> blocks queued BEFORE the
+        # agent exists. `create_session` returns before `create_agent` runs, so a
+        # room's COLD start has nowhere to push an ephemeral yet — and the block
+        # must not ride the session's `request` instead, because a task string
+        # lives for the whole session and the context block is API-only (044
+        # §4.4). Flushed in create_agent as one-shot EPHEMERAL messages, never
+        # into history and never as a user turn. Same buffer discipline (and the
+        # same lock) as _pending_messages above.
+        self._pending_room_context = []  # List[str] (framed block text)
         
         # NOTE: Message routing only - agents own their queues via HITLManager
 
@@ -438,6 +447,45 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
         # This prevents context leaks if agent is removed before cleanup
         self._browser_contexts = set()  # Set of context IDs (agent_id)
 
+    async def _load_persisted_user_mcp_servers(self, mcp_service) -> int:
+        """Load the servers this tenant SAVED, returning how many came up.
+
+        Called on every session start that has both a tenant and an MCP tool.
+        It used to be gated on the session asking for a ``"user:<name>"`` server,
+        a format no caller in the tree produces — so the durable row was written
+        and never read.
+
+        Unconditional is safe because ``MCPTool.load_user_servers`` already
+        carries the bounds: tenant-scoped rows, a once-per-tenant cache, an
+        overall timeout, and per-server fail-open. With nothing saved it is a
+        single empty query. Fail-open here too — a broken MCP store must degrade
+        the session's tool rig, never stop the session from starting.
+        """
+        if not self.user_id or not hasattr(mcp_service, 'load_user_servers'):
+            return 0
+        try:
+            # C6: pass this session's tenant explicitly (don't rely on the shared
+            # self._current_user_id, which a concurrent session mutates).
+            load_result = await mcp_service.load_user_servers(user_id=self.user_id)
+        except Exception as e:
+            self.logger.warning(f"Could not load saved MCP servers: {e}")
+            return 0
+        # Handle both old (int) and new (UserServersLoadResult) return types
+        if hasattr(load_result, 'loaded_count'):
+            user_count = load_result.loaded_count
+            if load_result.failed_count > 0:
+                self.logger.warning(
+                    f"Failed to load {load_result.failed_count} user MCP servers: "
+                    f"{[f['name'] for f in load_result.failed_servers]}"
+                )
+            if load_result.timed_out:
+                self.logger.warning("User MCP server loading timed out")
+        else:
+            user_count = load_result or 0  # Old int return type
+        if user_count:
+            self.logger.info(f"Loaded {user_count} saved MCP servers")
+        return user_count
+
     async def initialize(self,
                         tool_ids=None,
                         tools_config=None,
@@ -469,19 +517,36 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
             if existing_tools:
                 self.logger.info(f"Controller already has {len(existing_tools)} tools loaded: {existing_tools}")
 
+            # 044 I13: a PUBLIC (room) session's toolset is a BOUND, never a
+            # floor. The widening below is right for a private session and wrong
+            # for a public one: `BASE_DEFAULT_TOOLS` carries `filesystem` (read
+            # AND write on the session workspace, which for a room IS the owner
+            # tenant's), and `filesystem` holds no capability bits — so neither
+            # `room_tool_ids()`'s money/exec filter nor the room gate would catch
+            # it. The empty case is worse still: a deliberate `GROUP_TURN_TOOLS=""`
+            # lockdown is falsy, so the room would have been handed the FULL
+            # server default set. A room gets exactly what it was given.
+            from core.surfaces.room_policy import is_public_session
+            _public = is_public_session(self)
             # Determine which tools to load
             if not tool_ids and not existing_tools:
-                # No tools specified and none loaded - use comprehensive default
-                # Note: twitter removed from defaults - use the anysite tool for social media
-                from agents.task.tool_defaults import server_default_tools
-                tool_ids = server_default_tools()
-                self.logger.info(f"No tool_ids specified, loading comprehensive defaults: {tool_ids}")
+                if _public:
+                    self.logger.warning(
+                        "room session %s asked for an EMPTY toolset — it can only "
+                        "chat (never widened to the server defaults)", self.session_id)
+                else:
+                    # No tools specified and none loaded - use comprehensive default
+                    # Note: twitter removed from defaults - use the anysite tool for social media
+                    from agents.task.tool_defaults import server_default_tools
+                    tool_ids = server_default_tools()
+                    self.logger.info(f"No tool_ids specified, loading comprehensive defaults: {tool_ids}")
             elif tool_ids:
                 # Tools specified - ensure defaults are included
                 tools_to_load = list(tool_ids)  # Copy to avoid modifying caller's list
-                for default in DEFAULT_TOOLS:
-                    if default not in tools_to_load and default not in existing_tools:
-                        tools_to_load.append(default)
+                if not _public:
+                    for default in DEFAULT_TOOLS:
+                        if default not in tools_to_load and default not in existing_tools:
+                            tools_to_load.append(default)
                 tool_ids = tools_to_load
 
             # Parse MCP server specifications from tool_ids AND tools_config
@@ -529,6 +594,11 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
                     parsed_tool_ids.append(tool_id)
 
             tool_ids = parsed_tool_ids
+            # 044 I13: the toolset this session RESOLVED to load, recorded so the
+            # room-safety invariant is observable. `controller.list_tools()`
+            # reports what the container could actually SERVE (a deployment
+            # fact); the bound being asserted is what was ASKED for.
+            self._requested_tool_ids = list(tool_ids or [])
 
             if mcp_servers_requested:
                 self.logger.info(f"MCP servers requested: {mcp_servers_requested}")
@@ -614,25 +684,11 @@ class SessionOrchestrator(WorkspaceMixin, FeedMixin, BrowserPoolMixin, HITLIngre
                             except Exception as e:
                                 self.logger.warning(f"Could not get user MCP service: {e}")
 
-                        # Load user servers if any user: servers were requested
-                        user_servers_requested = [s for s in (requested_servers or []) if s.startswith("user:")]
-                        if user_servers_requested and hasattr(mcp_service, 'load_user_servers'):
-                            # C6: pass this session's tenant explicitly (don't rely on the
-                            # shared self._current_user_id, which a concurrent session mutates).
-                            load_result = await mcp_service.load_user_servers(user_id=self.user_id)
-                            # Handle both old (int) and new (UserServersLoadResult) return types
-                            if hasattr(load_result, 'loaded_count'):
-                                user_count = load_result.loaded_count
-                                if load_result.failed_count > 0:
-                                    self.logger.warning(
-                                        f"Failed to load {load_result.failed_count} user MCP servers: "
-                                        f"{[f['name'] for f in load_result.failed_servers]}"
-                                    )
-                                if load_result.timed_out:
-                                    self.logger.warning("User MCP server loading timed out")
-                            else:
-                                user_count = load_result  # Old int return type
-                            self.logger.info(f"Loaded {user_count} user MCP servers")
+                        # Load this tenant's SAVED servers. Unconditional: the
+                        # old trigger required a "user:<name>" entry in the
+                        # session's requested-server list, which nothing in the
+                        # codebase ever writes — so a persisted row was never read.
+                        await self._load_persisted_user_mcp_servers(mcp_service)
 
                         if requested_servers:
                             self.logger.info(

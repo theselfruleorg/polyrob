@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 import agents.task.constants as c
-from core.instance import DEFAULT_INSTANCE_ID
+from core.identity import LocalIdentity
 from tools.self_env.tool import (
     SelfEnvTool, InstallDepParams, ReadSourceParams, PatchSourceParams,
     RestartParams, GitPullParams,
@@ -51,7 +51,13 @@ def _tool(install_root, events=None):
 
 
 def _owner_ctx(**kw):
-    d = dict(role="orchestrator", is_sub_agent=False, user_id=DEFAULT_INSTANCE_ID,
+    # The owner tenant. ⚠️ This was DEFAULT_INSTANCE_ID until 2026-09-15, when the
+    # owner principal's unbound fallback stopped being the instance id — an owner
+    # context built from the instance id is now a STRANGER to
+    # `compute_posture_allows`, so every posture-2 verb below would refuse. The
+    # autouse `_clean` fixture deletes POLYROB_OWNER_USER_ID, so the unbound
+    # answer (`local`) is the right stand-in here.
+    d = dict(role="orchestrator", is_sub_agent=False, user_id=LocalIdentity.USER_ID,
              session_id="s1", metadata={"turn_kind": None})
     d.update(kw)
     return ActionExecutionContext(**d)
@@ -95,15 +101,20 @@ async def test_read_source_within_tree(monkeypatch, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_patch_source_edits_within_tree(monkeypatch, tmp_path):
+async def test_patch_source_records_proposal_without_editing_live_tree(monkeypatch, tmp_path):
     _posture(monkeypatch, "2")
     (tmp_path / "mod.py").write_text("VALUE = 1\n")
     t = _tool(tmp_path)
+    class _Store:
+        def propose_source_patch(self, **kwargs):
+            return {"proposal_id": "a" * 32, "base_sha256": "b" * 64,
+                    "candidate_sha256": "c" * 64}
+    t._proposal_store = lambda: _Store()
     res = await t.self_env_patch_source(
         PatchSourceParams(path="mod.py", old_string="VALUE = 1", new_string="VALUE = 2"),
         execution_context=_owner_ctx())
-    assert not res.error
-    assert (tmp_path / "mod.py").read_text() == "VALUE = 2\n"
+    assert not res.error and "proposal" in res.extracted_content.lower()
+    assert (tmp_path / "mod.py").read_text() == "VALUE = 1\n"
 
 
 @pytest.mark.asyncio
@@ -220,62 +231,40 @@ async def test_install_dep_rejects_pip_flag_injection(monkeypatch, tmp_path, pkg
 
 
 @pytest.mark.asyncio
-async def test_install_dep_runs_pip_with_sys_executable(monkeypatch, tmp_path):
+async def test_install_dep_records_exact_pin_without_running_pip(monkeypatch, tmp_path):
     _posture(monkeypatch, "2")
-    calls = []
-
-    async def _fake_run(argv):
-        calls.append(argv)
-        return 0, "Successfully installed flask-3.0.0", ""
-
     t = _tool(tmp_path)
-    t._run_subprocess = _fake_run
+    records = []
+
+    class _Store:
+        def propose_dependency(self, **kwargs):
+            records.append(kwargs)
+            return {"proposal_id": "a" * 32}
+    t._proposal_store = lambda: _Store()
     res = await t.self_env_install_dep(InstallDepParams(package="flask==3.0.0"),
                                        execution_context=_owner_ctx())
-    assert not res.error
-    import sys
-    assert calls and calls[0][0] == sys.executable
-    assert "pip" in calls[0] and "install" in calls[0] and "flask==3.0.0" in calls[0]
+    assert not res.error and records == [{"package": "flask==3.0.0", "user_id": LocalIdentity.USER_ID,
+                                          "session_id": "s1"}]
 
 
 # --- git_pull --------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_git_pull_is_ff_only(monkeypatch, tmp_path):
+async def test_git_pull_requires_trusted_updater(monkeypatch, tmp_path):
     _posture(monkeypatch, "2")
-    calls = []
-
-    async def _fake_run(argv):
-        calls.append(argv)
-        return 0, "Already up to date.", ""
-
     t = _tool(tmp_path)
-    t._run_subprocess = _fake_run
     res = await t.self_env_git_pull(GitPullParams(), execution_context=_owner_ctx())
-    assert not res.error
-    flat = " ".join(calls[0])
-    assert "pull" in flat and "--ff-only" in flat
+    assert res.error and "trusted" in res.error.lower()
 
 
 # --- restart_service -------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_restart_service_refuses_when_unsupervised(monkeypatch, tmp_path):
+async def test_restart_service_requires_trusted_supervisor(monkeypatch, tmp_path):
     _posture(monkeypatch, "2")
     t = _tool(tmp_path)
     res = await t.self_env_restart_service(RestartParams(), execution_context=_owner_ctx())
-    assert res.error and "supervis" in res.error.lower()
-
-
-@pytest.mark.asyncio
-async def test_restart_service_schedules_when_supervised(monkeypatch, tmp_path):
-    _posture(monkeypatch, "2")
-    monkeypatch.setenv("POLYROB_SUPERVISED", "1")
-    scheduled = []
-    t = _tool(tmp_path)
-    t._schedule_restart = lambda: scheduled.append(True)
-    res = await t.self_env_restart_service(RestartParams(), execution_context=_owner_ctx())
-    assert not res.error and scheduled == [True]
+    assert res.error and "trusted supervisor" in res.error.lower()
 
 
 # --- audit events ----------------------------------------------------------------
@@ -287,14 +276,18 @@ async def test_every_verb_emits_self_modification_event(monkeypatch, tmp_path):
     events = []
     t = _tool(tmp_path, events=events)
 
-    async def _fake_run(argv):
-        return 0, "ok", ""
-    t._run_subprocess = _fake_run
+    class _Store:
+        def propose_source_patch(self, **kwargs):
+            return {"proposal_id": "a" * 32, "base_sha256": "b" * 64,
+                    "candidate_sha256": "c" * 64}
+        def propose_dependency(self, **kwargs):
+            return {"proposal_id": "d" * 32}
+    t._proposal_store = lambda: _Store()
 
     await t.self_env_patch_source(
         PatchSourceParams(path="mod.py", old_string="A = 1", new_string="A = 2"),
         execution_context=_owner_ctx())
-    await t.self_env_install_dep(InstallDepParams(package="flask"), execution_context=_owner_ctx())
+    await t.self_env_install_dep(InstallDepParams(package="flask==1.0.0"), execution_context=_owner_ctx())
     assert any(e.get("action") == "patch_source" for e in events)
     assert any(e.get("action") == "install_dep" for e in events)
 

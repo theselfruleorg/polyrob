@@ -17,6 +17,7 @@ tree — see SkillManager._user_dirs_root().
 import json
 import re
 import logging
+import hashlib
 from pathlib import Path
 from typing import List, Dict, Optional, Set, Any, Tuple
 from dataclasses import dataclass, field
@@ -332,6 +333,27 @@ class SkillManager(SkillWriterMixin):
         for sid in orphans:
             self.skill_rules.pop(sid, None)
     
+    @staticmethod
+    def _money_tool_gate_ok(triggers: dict, session_tool_ids) -> bool:
+        """False when a money playbook's session holds none of its declared tools.
+
+        Reads ``core.tool_capabilities`` rather than a hardcoded list, so a new
+        money tool is covered the day it is classified. Fail-OPEN: if the
+        capability table cannot be read, surface the skill as before — losing a
+        playbook is worse than showing one too often.
+        """
+        declared = list((triggers or {}).get("tool_ids") or [])
+        if not declared:
+            return True
+        try:
+            from core.tool_capabilities import ids_with
+            money = ids_with("money")
+        except Exception:
+            return True
+        if not any(t in money for t in declared):
+            return True
+        return bool(set(declared) & set(session_tool_ids or []))
+
     def get_skills_for_session(
         self,
         tool_ids: Optional[List[str]] = None,
@@ -377,6 +399,24 @@ class SkillManager(SkillWriterMixin):
                 continue
 
             triggers = rules.get("triggers", {})
+
+            # A playbook for MOVING FUNDS is not surfaced to a session that
+            # cannot move funds. Measured on prod 2026-09-12: with `defi_trade`
+            # absent from the toolset, "buy a token" still pinned 517 lines of
+            # execution doctrine — a sizing ladder, screens and exit rules for a
+            # rail the agent structurally could not reach. Reading an execution
+            # playbook you cannot execute is the setup for telling the owner a
+            # shipped capability does not exist.
+            #
+            # Deliberately narrow: only a skill DECLARING a money tool is gated,
+            # and ANY of its declared tools satisfies the gate — so a read-only
+            # `defi_data` session still gets the screens. It stays in the trigger
+            # path (rather than `auto_activate: false`) so a GRANTED run gets the
+            # doctrine PINNED; as a catalog-only entry the agent would have to
+            # know to `load_skill` it first, and the instruction to do so lives
+            # inside the body it has not read.
+            if not self._money_tool_gate_ok(triggers, tool_ids):
+                continue
 
             # Collect matches by type
             tool_matches = []
@@ -585,7 +625,8 @@ class SkillManager(SkillWriterMixin):
             if ext_id in existing_ids:
                 continue
             ext_desc = ds.meta.get("description", "")
-            if self._external_content_suspicious(ext_id, ext_desc, ds.body):
+            if self._external_content_suspicious(ext_id, ext_desc, ds.body,
+                                                 user_id=user_id):
                 continue
             catalog.append(MatchedSkill(
                 skill_id=ext_id,
@@ -602,11 +643,15 @@ class SkillManager(SkillWriterMixin):
         return catalog[:max_skills]
 
     @staticmethod
-    def _external_content_suspicious(skill_id: str, description: str, body: str) -> bool:
+    def _external_content_suspicious(skill_id: str, description: str, body: str,
+                                     *, user_id: Optional[str] = None) -> bool:
         """True if an external skill's description/body trips the injection scan (P1-7).
 
         Fail-OPEN when the scanner can't be imported (parity with the rest of the
         codebase); fail-CLOSED (treat as suspicious) when the scanner itself raises.
+
+        ``user_id`` is the TENANT the threat report is filed under (045 I5) — a
+        hit written with no tenant is readable by no owner seat at all.
         """
         try:
             from modules.memory.task.threat_scan import is_suspicious
@@ -619,6 +664,9 @@ class SkillManager(SkillWriterMixin):
                     "external skill %r excluded from catalog: content tripped the "
                     "injection scan", skill_id,
                 )
+                from core.security.threat_report import report_threat
+                report_threat("skill", source="skill_manager", detail=skill_id,
+                              user_id=user_id or "")
                 return True
             return False
         except Exception:
@@ -691,10 +739,10 @@ class SkillManager(SkillWriterMixin):
             pass
         if user_id:
             try:
-                user_dir = self._user_dirs_root() / f"user_{user_id}" / skill_id
-                if user_dir.exists():
-                    return user_dir
-            except OSError:
+                user_dir = self._user_root(user_id) / skill_id
+                self._read_skill_text(user_dir / "SKILL.md")
+                return user_dir
+            except (OSError, ValueError):
                 pass
         try:
             ext = self._load_external_skills().get(skill_id)
@@ -713,13 +761,14 @@ class SkillManager(SkillWriterMixin):
         Returns:
             Tuple of (rules dict, user skills directory Path)
         """
-        user_dir = self._user_dirs_root() / f"user_{user_id}"
+        if self._require_user(user_id) is None:
+            return {}, None
+        user_dir = self._user_root(user_id)
         rules_file = user_dir / "rules.json"
         
         if rules_file.exists():
             try:
-                with open(rules_file) as f:
-                    rules = json.load(f)
+                rules = json.loads(self._read_skill_text(rules_file, max_bytes=1_048_576))
                 logger.debug(f"Loaded {len(rules)} user skill rules for {user_id}")
                 return rules, user_dir
             except Exception as e:
@@ -776,19 +825,60 @@ class SkillManager(SkillWriterMixin):
         Returns:
             Skill content as string (frontmatter stripped), or empty string if not found
         """
+        if (not skill_id or "/" in skill_id or "\\" in skill_id or ".." in skill_id
+                or skill_id != skill_id.strip()):
+            return ""
+        if user_id is not None and self._require_user(user_id) is None:
+            return ""
         # Create cache key that includes user context
         cache_key = f"{user_id}:{skill_id}" if user_id else skill_id
 
-        # Check cache first
-        if cache_key in self.skill_cache:
+        # Versioned user skills are hash-verified below before every load. Do
+        # not serve an old process-local cache after another worker atomically
+        # changes SKILL.md/rules.json; legacy skills retain the original cache
+        # behaviour until their next write backfills a revision.
+        expected_content_hash = None
+        if user_id:
+            try:
+                # Do not use _load_user_rules here: that compatibility helper
+                # deliberately turns a malformed rules file into {}. For a
+                # versioned instruction source, treating broken metadata as
+                # "no hash" would silently disable the integrity check.
+                rules_file = self._user_root(user_id) / "rules.json"
+                if rules_file.exists():
+                    user_rules = json.loads(self._read_skill_text(rules_file, max_bytes=1_048_576))
+                    if not isinstance(user_rules, dict):
+                        raise ValueError("user rules must be an object")
+                else:
+                    user_rules = {}
+                rule = user_rules.get(skill_id, {})
+                if isinstance(rule, dict):
+                    expected_content_hash = rule.get("content_sha256")
+                if expected_content_hash is not None and (
+                        not isinstance(expected_content_hash, str)
+                        or not re.fullmatch(r"[0-9a-f]{64}", expected_content_hash)):
+                    logger.warning("refusing malformed revision metadata for user skill %s", skill_id)
+                    return ""
+            except Exception:
+                # A versioned skill must not load when its verification metadata
+                # cannot be read. Legacy user skills preserve the old fail-open
+                # rules behaviour because they contain no revision field.
+                logger.warning("refusing user skill %s: could not read revision metadata", skill_id)
+                return ""
+        if cache_key in self.skill_cache and expected_content_hash is None:
             return self.skill_cache[cache_key]
 
         # Check user skills first if user_id provided
         if user_id:
-            user_skill_file = self._user_dirs_root() / f"user_{user_id}" / skill_id / "SKILL.md"
+            user_skill_file = self._user_root(user_id) / skill_id / "SKILL.md"
             if user_skill_file.exists():
                 try:
-                    raw = user_skill_file.read_text(encoding='utf-8')
+                    raw = self._read_skill_text(user_skill_file)
+                    if expected_content_hash is not None:
+                        actual = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                        if actual != expected_content_hash:
+                            logger.warning("refusing mismatched user skill body for '%s'", skill_id)
+                            return ""
                     meta, body = parse_frontmatter(raw)
                     self.skill_meta_cache[cache_key] = meta
                     self.skill_cache[cache_key] = body

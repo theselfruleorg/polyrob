@@ -60,6 +60,14 @@ TOOL_CAPABILITIES: Dict[str, FrozenSet[str]] = {
     # Browser-based X posting + self-registration. delegate_blocked (account
     # creation + posting is never a leaf child's job) beyond the browser row.
     "x_browser": frozenset({"high_impact", "delegate_blocked"}),
+    # 042: token launchpads. MONEY (it signs a spend), high_impact, and
+    # delegate_blocked -- a delegated leaf that can launch a token and seed it
+    # with the treasury has escaped every bound its parent was operating under.
+    "launchpad": frozenset({"money", "high_impact", "delegate_blocked"}),
+    # 042: the injected dapp wallet. MONEY because `dapp_connect` authorizes
+    # spending -- the transaction itself happens inside a browser callback the
+    # Controller never sees, so the CONNECT is the gated act.
+    "dapp_browser": frozenset({"money", "high_impact", "delegate_blocked"}),
     "anysite": frozenset({"high_impact"}),        # outbound structured-data egress
     "perplexity": frozenset({"high_impact"}),     # outbound search egress
     # -- autonomous work ------------------------------------------------------
@@ -124,6 +132,8 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "perplexity": ("network.read",),
     "twitter": ("network.read", "network.write", "social.post"),
     "x_browser": ("network.write", "social.post"),
+    "launchpad": ("network.write", "wallet.spend"),
+    "dapp_browser": ("network.write", "wallet.spend"),
     "email": ("network.write", "email.send"),
     "collabland": ("network.read",),
     "alchemy": ("network.read",),
@@ -134,6 +144,41 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     # Read-only split tools: market data only, no wallet/signing.
     "polymarket_data": ("network.read",),
     "hyperliquid_data": ("network.read",),
+    # -- F44/A9 (2026-09-14): the 19 ids that were classified in
+    # TOOL_CAPABILITIES but had no TOOL_PERMISSIONS row, so they were invisible
+    # to `high_risk_tool_ids()`/`medium_risk_tool_ids()` and to the future
+    # Capabilities tab. Tiered by capability set: `money`/`exec` -> at least one
+    # external-write permission (lands `high_risk_tool_ids()`, since `exec` means
+    # "executes code/commands" -- an unbounded capability that can just as
+    # easily reach the network as read a file); `high_impact`-only -> no
+    # external-write permission (lands `medium_risk_tool_ids()`); the two
+    # empty-capability reads (`knowledge`, `defi_data`) fall through to the
+    # dataclass default `"low"`. Mechanism unchanged — only rows added.
+    # money/exec -> high (an external-write permission is present on each row):
+    "code_execution": ("process.spawn", "fs.read", "fs.write", "network.write"),
+    "coding": ("fs.read", "fs.write", "process.spawn", "network.write"),
+    "shell": ("process.spawn", "fs.read", "fs.write", "network.write"),
+    "process": ("process.spawn", "network.write"),
+    "self_env": ("fs.read", "fs.write", "process.spawn", "network.write"),
+    "x402_pay": ("network.write", "wallet.spend"),
+    # Receivables (invoicing), not agent-initiated spend -- no wallet.spend.
+    "x402_invoice": ("network.write", "memory.read", "memory.write"),
+    "defi_trade": ("network.write", "wallet.spend"),
+    # high_impact-only -> medium (no external-write permission on these rows;
+    # `network.read` mirrors the existing browser_manager/mcp/anysite/perplexity
+    # precedent of tagging outward reach without the definitive write token):
+    "goal": ("memory.read", "memory.write"),
+    "cronjob": ("memory.read", "memory.write"),
+    "git": ("fs.read", "fs.write"),
+    "github": ("network.read",),
+    "hf_deploy": ("network.read", "fs.read"),
+    "publish": ("network.read", "fs.read"),
+    "app_service": ("network.read",),
+    "tool_manage": ("mcp.call",),
+    "web_fetch": ("network.read",),
+    # empty capability set -> low (no high_impact, no external-write permission):
+    "knowledge": ("fs.read", "memory.read", "memory.write"),
+    "defi_data": ("network.read",),
 }
 
 # Descriptor/display id -> capability-table id (the one naming dual).

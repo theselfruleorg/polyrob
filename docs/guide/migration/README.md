@@ -1,35 +1,26 @@
-# Migration Guides
+# Migrating to POLYROB
 
-This directory contains guides for migrating to POLYROB from other agent frameworks.
+Coming from another agent framework. Each guide maps that project's concepts onto
+POLYROB's and names what does and does not carry over.
 
-## Available Guides
+| From | Guide |
+|---|---|
+| Hermes Agent | [from-hermes.md](from-hermes.md) |
+| OpenClaw | [from-openclaw.md](from-openclaw.md) |
 
-| From Framework | Guide | Key Differences |
-|----------------|-------|------------------|
-| [Hermes Agent](from-hermes.md) | [View Guide](from-hermes.md) | Multi-provider, durable goals, multi-tenant |
-| [OpenClaw](from-openclaw.md) | [View Guide](from-openclaw.md) | Python vs Node.js, security model |
+Still deciding? [comparison.md](../../comparison.md) is the feature-by-feature
+comparison.
 
-## Quick Comparison
+**Moving between POLYROB versions is a different job** — see
+[upgrading.md](../upgrading.md).
 
-See the main [comparison document](../../comparison.md) for a detailed feature-by-feature comparison of POLYROB vs other frameworks.
+## Before you switch
 
-## Migration Checklist
+1. Install and run `polyrob doctor` — it names anything missing before you commit.
+2. Write down what you actually rely on today: skills, scheduled jobs, connected
+   channels, credentials.
+3. Migrate one non-critical task first and compare the output.
+4. Keep the old agent running until POLYROB has answered for a week.
 
-Before migrating from any framework:
-
-1. **Identify critical components** — Skills, workflows, memories
-2. **Document current setup** — Configuration, integrations
-3. **Test POLYROB** — Run `polyrob doctor` after install
-4. **Migrate gradually** — Start with non-critical tasks
-5. **Validate results** — Compare outputs before fully switching
-
-## Getting Help
-
-- **Documentation:** [README.md](../../../README.md)
-- **Configuration:** [../../CONFIGURATION.md](../../CONFIGURATION.md)
-- **Issues:** [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions)
-
-## Still Deciding?
-
-See the [feature comparison](../../comparison.md) for a detailed breakdown of when to choose POLYROB vs other frameworks.
+Help: [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues) ·
+[Discussions](https://github.com/theselfruleorg/polyrob/discussions)

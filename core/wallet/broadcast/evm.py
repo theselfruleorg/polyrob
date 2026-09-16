@@ -54,7 +54,22 @@ DEFAULT_GAS_LIMIT = 120_000
 #: measured 0.006 gwei is ~0.000012 ETH against a 0.002 ETH fee ceiling, so the
 #: fee check still binds first by two orders of magnitude. This stays an anomaly
 #: brake against a pathological simulation.
-MAX_GAS_LIMIT = 2_000_000
+#:
+#: Raised 2M -> 8M on 2026-09-13 (042), after the FIRST live launchpad dry run
+#: was refused right here. Measured on prod: a Pons V2 launch deploys the token
+#: AND its bonding curve in ONE transaction and costs **3,468,850 gas**, which
+#: at the x1.5 sizing margin needs 5.2M. At 2M the whole launchpad was reachable
+#: but not executable — every quote clean, every launch refused. That is the
+#: same failure the 500k -> 2M raise fixed for aggregator routes, one
+#: transaction shape further along.
+#:
+#: The fee ceiling still binds first by an order of magnitude wherever this
+#: matters: 8M gas at Robinhood's measured 0.024 gwei is 0.00019 ETH against a
+#: 0.002 ETH ceiling, and Base is cheaper still. On Ethereum L1 the fee ceiling
+#: refuses an 8M-gas transaction outright (~0.16 ETH at 20 gwei against a 0.01
+#: ETH ceiling) — which is correct: a deployment that expensive should be an
+#: explicit owner decision, not something an anomaly brake waves through.
+MAX_GAS_LIMIT = 8_000_000
 _ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 
 
@@ -163,7 +178,30 @@ class EvmRail:
         return self._finish_tx(to_addr=normalize_address(to), data=data,
                                value=int(value))
 
-    def _finish_tx(self, *, to_addr: str, data: str, value: int) -> dict:
+    def build_deploy(self, *, init_code: str, value: int = 0) -> dict:
+        """A CREATE transaction: no destination, the init code IS the payload.
+
+        The only transaction shape with no ``to`` (042). It builds ONLY — the
+        authority comes from ``deploy_guard.authorize_deploy``, which simulates
+        it, reads the runtime bytecode the constructor actually returns, and
+        refuses if the constructor moves anything the caller did not declare.
+
+        The nonce read here is what makes the destination address PREDICTABLE
+        (``keccak(rlp([sender, nonce]))[12:]``), so the guard can state the
+        address before broadcast rather than discovering it from a receipt.
+        """
+        if not isinstance(init_code, str) or not init_code.startswith("0x"):
+            raise BroadcastError("init code must be a 0x-prefixed hex string")
+        try:
+            body = bytes.fromhex(init_code[2:])
+        except ValueError as exc:
+            raise BroadcastError(f"init code is not valid hex: {exc}")
+        if not body:
+            raise BroadcastError("init code is empty — there is nothing to deploy")
+        tx = self._finish_tx(to_addr=None, data=init_code, value=int(value))
+        return tx
+
+    def _finish_tx(self, *, to_addr, data: str, value: int) -> dict:
         nonce = _hex_to_int(self._rpc("eth_getTransactionCount",
                                       [self._signer.address, "pending"]))
         if nonce is None:
@@ -224,10 +262,20 @@ class EvmRail:
             raise BroadcastError(
                 f"transaction chainId {tx.get('chainId')} != rail chain "
                 f"{self.chain_id} — refusing")
+        from eth_utils import keccak
+        from core.wallet import submission_journal
+        reference = submission_journal.reserve_signing(self.chain, self._signer.address, tx.get('nonce'))
         raw = self._signer.sign_transaction(tx)
-        tx_hash = self._rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
-        if not tx_hash:
-            raise BroadcastError("node accepted no transaction hash")
+        tx_hash = '0x' + keccak(bytes(raw)).hex()
+        submission_journal.bind_signed_hash(reference, tx_hash)
+        try:
+            returned = self._rpc("eth_sendRawTransaction", ["0x" + raw.hex()])
+            if not isinstance(returned, str) or returned.lower() != tx_hash:
+                logger.warning('wallet submission outcome unknown; reconcile local hash %s', tx_hash)
+        except Exception:
+            # The node may have accepted the bytes. Preserve their stable hash
+            # so callers poll/book a pending send rather than report NOT SENT.
+            logger.warning('wallet broadcast response lost; reconcile local hash %s', tx_hash)
         return tx_hash
 
     def await_receipt(self, tx_hash: str, *, timeout: float = 120.0,
@@ -237,19 +285,21 @@ class EvmRail:
         Never optimistic: no receipt within the budget is PENDING (an open
         question carrying the hash), and status 0 is FAILED.
         """
+        from core.wallet.broadcast.receipt_validation import receipt_fields
         deadline = time.monotonic() + timeout
         while True:
             try:
                 rec = self._rpc("eth_getTransactionReceipt", [tx_hash])
             except Exception:
                 rec = None
-            if rec:
-                status = _hex_to_int(rec.get("status"))
+            fields = receipt_fields(rec, tx_hash)
+            if fields is not None:
+                status, block, gas = fields
                 return Receipt(
                     tx_hash=tx_hash,
                     status="success" if status == 1 else "failed",
-                    block_number=_hex_to_int(rec.get("blockNumber")),
-                    gas_used=_hex_to_int(rec.get("gasUsed")))
+                    block_number=block,
+                    gas_used=gas)
             if time.monotonic() >= deadline:
                 logger.warning("broadcast: no receipt for %s within %ss — PENDING",
                                tx_hash, timeout)

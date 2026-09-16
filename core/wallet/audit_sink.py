@@ -7,14 +7,17 @@ and reloads prior entries on construction, so a fresh ``PolicyGate(audit_sink=..
 sees the full history. Default behavior is unchanged: PolicyGate uses a plain list
 unless a sink is injected (only the factory does, when the wallet is enabled).
 
-Fail-open: a file I/O error never blocks an action (the in-memory copy is always
-authoritative for the live process); persistence is best-effort.
+I/O failures latch an unhealthy state. PolicyGate refuses further spends until
+the durable ledger is repaired and reloaded; telemetry must not reset money caps.
 """
 from __future__ import annotations
 
 import json
+import asyncio
+from contextlib import asynccontextmanager, contextmanager
 import logging
 import os
+import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -32,8 +35,8 @@ class JsonlAuditSink(list):
     guard on the next restart (both are rebuilt entirely from this sink). This is
     the defense-in-depth backstop; the tool-facing deny surface that blocks the
     write in the first place is a separate change. The mark never regresses, so
-    the evidence survives further restarts. Fail-open throughout — the sidecar is
-    best-effort and never blocks a spend.
+    the evidence survives further restarts. Damage or I/O failure marks the sink unhealthy; PolicyGate blocks
+    subsequent spending until storage is repaired and reloaded.
     """
 
     def __init__(self, path: str):
@@ -41,6 +44,9 @@ class JsonlAuditSink(list):
         self._path = path
         self._hwm_path = path + ".hwm"
         self._hwm = 0
+        self.healthy = True
+        self._reservation_fd = None
+        self._reservation_owner = None
         #: Bytes of the JSONL already folded into the in-memory list. Advanced by
         #: both `_load` and `append`, so `refresh()` reads only what ANOTHER writer
         #: added and can never double-count this process's own entries.
@@ -48,7 +54,53 @@ class JsonlAuditSink(list):
         parent = os.path.dirname(path)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        self._load()
+        with self._write_lock():
+            self._load()
+
+    @asynccontextmanager
+    async def reserve(self):
+        """Hold the shared file lock over check, network spend and record.
+
+        Nonblocking flock attempts keep the event loop responsive, including
+        cancellation while another process is spending. Unsupported platforms
+        refuse instead of silently weakening the cap.
+        """
+        import fcntl
+        fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            while True:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    await asyncio.sleep(0.05)
+            self._reservation_fd = fd
+            self._reservation_owner = asyncio.current_task()
+            yield
+        finally:
+            if self._reservation_fd == fd:
+                self._reservation_fd = None
+                self._reservation_owner = None
+            os.close(fd)
+
+    @contextmanager
+    def _write_lock(self):
+        if self._reservation_fd is not None:
+            try:
+                owner = asyncio.current_task()
+            except RuntimeError:  # A synchronous call on a different thread.
+                owner = None
+            if owner is not self._reservation_owner:
+                raise RuntimeError('wallet audit reservation belongs to another task')
+            yield
+            return
+        import fcntl
+        fd = os.open(self._path + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            os.close(fd)
 
     def refresh(self) -> int:
         """Fold in entries appended by another process; return how many.
@@ -59,13 +111,21 @@ class JsonlAuditSink(list):
         snapshot taken at its own start and never saw the other's later spends.
         Both could clear a nearly-exhausted daily cap. Reading forward from the
         byte offset makes the durable file, not one process's memory, the shared
-        view. Fail-open: an I/O or parse error leaves the in-memory list intact.
+        view. An I/O or parse error retains the list for diagnostics but marks
+        the sink unhealthy so it cannot authorize new spending.
         """
         try:
             size = os.path.getsize(self._path)
+        except FileNotFoundError:
+            if self._offset or self._hwm:
+                self.healthy = False
+            return 0
         except OSError:
+            self.healthy = False
             return 0
         if size <= self._offset:
+            if size < self._offset:
+                self.healthy = False
             # Truncation (size < offset) is the tamper case the high-water mark
             # already reports loudly; don't silently re-read from 0 here.
             return 0
@@ -75,7 +135,8 @@ class JsonlAuditSink(list):
                 fh.seek(self._offset)
                 for line in fh:
                     if not line.endswith("\n"):
-                        break            # a partial line: another writer mid-append
+                        self.healthy = False
+                        break  # incomplete durable record: spending must wait for repair
                     self._offset += len(line.encode("utf-8"))
                     line = line.strip()
                     if not line:
@@ -84,8 +145,10 @@ class JsonlAuditSink(list):
                         list.append(self, json.loads(line))  # base append: no re-write
                         added += 1
                     except json.JSONDecodeError:
+                        self.healthy = False
                         continue
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
+            self.healthy = False
             logger.warning("wallet audit sink refresh failed (%s): %s", self._path, e)
             return added
         if added:
@@ -95,40 +158,68 @@ class JsonlAuditSink(list):
     def _read_hwm(self) -> Optional[int]:
         try:
             with open(self._hwm_path, "r", encoding="utf-8") as fh:
-                return int((fh.read() or "0").strip())
-        except (OSError, ValueError):
+                count = int(fh.read().strip())
+            if count < 0:
+                raise ValueError("negative high-water mark")
+            return count
+        except FileNotFoundError:
+            return None  # legacy ledgers predate the sidecar
+        except (OSError, ValueError, UnicodeError):
+            self.healthy = False
             return None
 
     def _write_hwm(self) -> None:
+        temporary = None
         try:
-            with open(self._hwm_path, "w", encoding="utf-8") as fh:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=os.path.dirname(self._hwm_path) or ".",
+                prefix=".audit-hwm-", delete=False,
+            ) as fh:
+                temporary = fh.name
                 fh.write(str(self._hwm))
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(temporary, self._hwm_path)
+            directory = os.open(os.path.dirname(self._hwm_path) or ".", os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
         except OSError as e:
+            self.healthy = False
             logger.warning("wallet audit high-water write failed (%s): %s", self._hwm_path, e)
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
 
     def _load(self) -> None:
         if os.path.exists(self._path):
             try:
                 with open(self._path, "r", encoding="utf-8") as fh:
                     for line in fh:
+                        if not line.endswith("\n"):
+                            self.healthy = False
                         line = line.strip()
                         if not line:
                             continue
                         try:
                             list.append(self, json.loads(line))  # base append: no re-write
                         except json.JSONDecodeError:
+                            self.healthy = False
                             continue  # skip a corrupt line, keep the rest
                 try:
                     self._offset = os.path.getsize(self._path)
                 except OSError:
                     self._offset = 0
-            except OSError as e:
+            except (OSError, UnicodeError) as e:
+                self.healthy = False
                 logger.warning("wallet audit sink load failed (%s): %s", self._path, e)
         # Tamper check: a persisted high-water mark greater than what we recovered
         # means the JSONL lost entries since the last write (truncation / tamper).
         loaded = len(self)
         persisted = self._read_hwm()
         if persisted is not None and loaded < persisted:
+            self.healthy = False
             logger.error(
                 "wallet audit sink %s reloaded %d entries but %d were previously "
                 "recorded — the audit log appears TRUNCATED/TAMPERED. The rolling-24h "
@@ -140,14 +231,24 @@ class JsonlAuditSink(list):
         self._hwm = max(persisted or 0, loaded)
 
     def append(self, entry: dict) -> None:  # type: ignore[override]
+        with self._write_lock():
+            # Refresh before our own write so advancing the byte offset cannot
+            # skip a different process's spend.
+            self.refresh()
+            self._append_locked(entry)
+
+    def _append_locked(self, entry: dict) -> None:
         list.append(self, entry)
         try:
             with open(self._path, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(entry) + "\n")
+                fh.flush()
+                os.fsync(fh.fileno())
             # Consume our own write so `refresh()` never re-reads it as another
             # process's entry (which would double-count it against the cap).
             self._offset = os.path.getsize(self._path)
-        except OSError as e:
+        except (OSError, UnicodeError) as e:
+            self.healthy = False
             logger.warning("wallet audit sink write failed (%s): %s", self._path, e)
         self._hwm = max(self._hwm, len(self))
         self._write_hwm()
@@ -175,8 +276,8 @@ def _wallet_data_dir(data_dir: Optional[str] = None, *, for_meta: bool = False) 
     meta/audit root and flip ``resolve_scheme`` to legacy). And ``for_meta=True``
     (the derivation meta read) FAILS CLOSED when the data-home resolution raises
     instead of silently using ``./data/wallet`` — a wrong meta path silently flips
-    a funded bip44 wallet to legacy (different address). The audit path stays
-    fail-open (a lost audit resets caps, but never blocks a live spend).
+    a funded bip44 wallet to legacy (different address). The audit path also fails
+    closed: a fallback would silently reset spend accounting.
     """
     if data_dir is not None:
         return os.path.join(data_dir, "wallet")
@@ -192,16 +293,11 @@ def _wallet_data_dir(data_dir: Optional[str] = None, *, for_meta: bool = False) 
         from core.runtime_paths import resolve_data_home  # lazy: core-tier only
         return str(resolve_data_home() / "wallet")
     except Exception as e:
-        if for_meta:
-            # Money-critical: never resolve a derivation-meta path to a CWD-relative
-            # fallback — set POLYROB_DATA_DIR rather than risk a silent scheme flip.
-            raise RuntimeError(
-                f"wallet data-home resolution failed ({e}) and POLYROB_DATA_DIR is "
-                f"unset — refusing a CWD-relative wallet meta path (would risk a silent "
-                f"derivation-scheme flip / wrong funded address); set POLYROB_DATA_DIR"
-            ) from e
-        logger.error("wallet data-dir resolution failed, using legacy ./data: %s", e)
-        return os.path.join("data", "wallet")
+        raise RuntimeError(
+            "wallet data-home resolution failed and POLYROB_DATA_DIR is unset — "
+            "refusing a fallback wallet path; set POLYROB_DATA_DIR"
+        ) from e
+
 
 
 def default_audit_sink(data_dir: Optional[str] = None) -> List[dict]:

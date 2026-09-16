@@ -20,12 +20,21 @@ def self_install_enabled() -> bool:
     return bool_env("MCP_SELF_INSTALL_ENABLED", False)
 
 
-def screen_config(cfg: Dict[str, Any]) -> Optional[str]:
+def screen_config(cfg: Dict[str, Any], *, server_id: str = "",
+                  user_id: str = "", session_id: str = "") -> Optional[str]:
     """Return a rejection reason if ``cfg`` looks injected/exfiltrating, else None.
 
     Serialises the whole config and runs the shared instruction-override scanner over it
     (catch a prompt-injection smuggled through a description/arg), plus conservative
     structural checks (no remote-script-piped-to-shell stdio command).
+
+    ``server_id`` is an optional identifier (the catalog server id) used ONLY as the
+    ``detail`` on a threat-report hit — never the scanned content itself, which may
+    carry the attacker's own payload (e.g. ``cfg["description"]``).
+
+    ``user_id``/``session_id`` are the TENANT and session the hit is filed under
+    (045 I5). Without them the row lands with ``user_id=""`` and no owner seat
+    can read it back — a write-only threat report.
     """
     try:
         blob = json.dumps(cfg, default=str)
@@ -33,6 +42,9 @@ def screen_config(cfg: Dict[str, Any]) -> Optional[str]:
         return "config is not JSON-serialisable"
     from modules.memory.task.threat_scan import is_suspicious, has_invisible_unicode
     if is_suspicious(blob):
+        from core.security.threat_report import report_threat
+        report_threat("server", source="mcp_self_install", detail=server_id,
+                      user_id=user_id, session_id=session_id)
         return "config rejected: contains instruction-override / prompt-injection text"
     if has_invisible_unicode(blob):
         return "config rejected: contains invisible/bidi control characters"
@@ -77,7 +89,10 @@ async def perform_mcp_install(
         return False, f"no catalog entry for '{server_id}'."
 
     cfg_dict = _entry_to_config_dict(entry)
-    reason = screen_config(cfg_dict)
+    reason = screen_config(
+        cfg_dict, server_id=server_id,
+        user_id=str(getattr(context, "user_id", "") or ""),
+        session_id=str(getattr(context, "session_id", "") or ""))
     if reason:
         return False, reason
 

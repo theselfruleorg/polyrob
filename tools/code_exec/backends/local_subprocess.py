@@ -16,6 +16,7 @@ import signal
 import sys
 import tempfile
 import time
+import threading
 
 from tools.code_exec.backend import ExecutionBackend
 from tools.code_exec.env_policy import SAFE_ALLOWLIST, SECRET_PAT, build_child_env
@@ -64,7 +65,7 @@ class LocalSubprocessBackend(ExecutionBackend):
     @staticmethod
     def _kill_group(proc) -> None:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(proc.pid, signal.SIGKILL)
         except Exception:
             try:
                 proc.kill()
@@ -98,6 +99,7 @@ class LocalSubprocessBackend(ExecutionBackend):
             os.makedirs(workdir, exist_ok=True)
         start = time.monotonic()
         timed_out = False
+        stop = threading.Event()
         exit_code = 1
         stdout = stderr = b""
         stdin_bytes = (request.stdin or "").encode() if request.stdin else None
@@ -122,21 +124,23 @@ class LocalSubprocessBackend(ExecutionBackend):
                 )
             except Exception as e:
                 detail = f"{type(e).__name__}: {e}".rstrip(": ").strip()
-                return b"", f"execution error: {detail}".encode(), 1, False
-            try:
-                out, err = proc.communicate(input=stdin_bytes, timeout=timeout)
-                return out, err, proc.returncode, False
-            except subprocess.TimeoutExpired:
-                self._kill_group(proc)
-                try:
-                    out, err = proc.communicate(timeout=5)
-                except Exception:
-                    out, err = b"", b""
-                return out, err, proc.returncode, True
+                return b"", f"execution error: {detail}".encode(), 1, False, False
+            from tools.code_exec.backends.bounded_capture import capture
+            out, err, timed_out, truncated = capture(
+                proc, data=stdin_bytes, timeout=timeout, limit=self.max_output,
+                stop=stop, kill=self._kill_group,
+            )
+            return out, err, proc.returncode, timed_out, truncated
 
         try:
             loop = asyncio.get_event_loop()
-            stdout, stderr, exit_code, timed_out = await loop.run_in_executor(None, _run_sync)
+            future = loop.run_in_executor(None, _run_sync)
+            try:
+                stdout, stderr, exit_code, timed_out, truncated = await asyncio.shield(future)
+            except asyncio.CancelledError:
+                stop.set()
+                await asyncio.shield(future)
+                raise
         finally:
             if created_tmp:
                 shutil.rmtree(workdir, ignore_errors=True)
@@ -148,7 +152,7 @@ class LocalSubprocessBackend(ExecutionBackend):
             stderr=err,
             exit_code=exit_code,
             timed_out=timed_out,
-            truncated=t1 or t2,
+            truncated=truncated or t1 or t2,
             duration_sec=time.monotonic() - start,
             backend=self.name,
         )

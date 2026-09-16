@@ -1,21 +1,19 @@
 # Self-Hosting
 
-Run polyrob on your own server using Docker Compose. This is the recommended path for a persistent, always-on deployment.
+Run polyrob on your own server, either in Docker or as systemd services. This page
+covers the persistent, always-on shape; for installing it on your own machine with
+pip or pipx, start at [getting-started.md](getting-started.md).
 
-> For the **web console** (`polyrob dashboard`) specifically — which posture to run it in,
-> owner login, and the honest multi-tenant ceiling — see
+> For the **web console** specifically — which posture to run it in, owner login,
+> and the multi-tenant ceiling — see
 > [deployment-postures.md](deployment-postures.md).
 
 ---
 
-## Prerequisites
+## Quick start (Docker)
 
-- Docker ≥ 24 and Docker Compose V2
-- At least one LLM provider API key (see [configuration.md](configuration.md))
-
----
-
-## Quick start
+You need Docker ≥ 24 with Compose V2, and at least one LLM provider API key
+(see [configuration.md](configuration.md)).
 
 ### 1. Clone the repository
 
@@ -106,34 +104,73 @@ This is automatic — no flag. What is **not** durable across a restart today: a
 session that was mid-LLM-call resumes from its last persisted step, not from the
 exact in-flight token position.
 
-### Running with more than one worker
+The default is one Uvicorn worker (`UVICORN_WORKERS=1`) and that is the supported
+shape; running more has two preconditions and a real ceiling, both described in
+[deployment-postures.md](deployment-postures.md#the-honest-multi-tenant-ceiling).
 
-The default is a single Uvicorn worker (`UVICORN_WORKERS=1`), which is safe
-because the live orchestrator object cannot cross processes. To run `workers>1`
-you need **both**:
+---
 
-1. `SESSION_REGISTRY_BACKEND=sqlite` — mirrors session→owner-worker metadata
-   cross-process, so a worker that does not own a session returns an honest
-   **409 + `owner_pid` + `Retry-After`** instead of a false 404.
-2. **Sticky load-balancer routing** — route each session to the worker that owns
-   it (e.g. hash the session id at the proxy).
+## Running it as services
 
-Without sticky routing, a request can land on a worker that does not hold the
-live session and gets a 409. True cross-worker method forwarding is out of scope;
-for most deployments, one worker plus vertical scaling is simpler than sticky
-multi-worker. See [deployment-postures.md](deployment-postures.md) for the full
-recipe and rationale.
+Docker is one way; systemd is the other, and it is what a multi-surface deployment
+usually wants, because each surface is its own long-running process. Create one
+unit per process you need:
+
+| Process | Command | What it is |
+|---|---|---|
+| Agent (headless) | `polyrob telegram` | The agent itself, long-polling a chat surface. This is the process that runs the autonomy loops. |
+| Email surface | `polyrob email` | IMAP poll in, SMTP out. Its own process. |
+| API server | `python main.py` (or `polyrob serve`) | REST, A2A and the OpenAI-compatible `/v1` surface. Only needed if you want programmatic access. |
+| Console | `python -m uvicorn webview.server:app --host 127.0.0.1 --port 5050 --proxy-headers` | The web console, behind your reverse proxy. See [deployment-postures.md](deployment-postures.md). |
+| App supervisor | `polyrob apps supervise` | Only if the agent deploys durable apps. It holds the docker and nginx privilege the agent never has. |
+
+Give every unit the same `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`)
+and the same `POLYROB_DATA_DIR`, so they agree about the owner, the data home and
+the flags. The console is the one exception: it may take an extra file of its own
+for posture and read-only settings.
+
+`polyrob doctor` on the box reports the health of whatever is running — providers,
+memory, autonomy state, active pauses — and is the first thing to run when a unit
+misbehaves.
+
+### One daemon per profile
+
+If you run several bots, let the CLI write the unit for you:
+
+```bash
+polyrob profile create scout --service     # emits polyrob-scout.service
+```
+
+The emitted unit sets `POLYROB_PROFILE` and `POLYROB_PROFILES_ROOT` explicitly,
+which is what keeps a spawned daemon out of the default home. Each profile needs
+its own surface credentials — two daemons long-polling one Telegram token fight
+each other. See [profiles.md](profiles.md#daemons).
 
 ---
 
 ## Updating
+
+In Docker:
 
 ```bash
 git pull
 docker compose up --build
 ```
 
-The `--build` flag forces a rebuild of the image with the latest code.
+Everywhere else, the updater is built in:
+
+```bash
+polyrob update --check            # is there a newer release, and what would change
+polyrob update --apply            # snapshot, install, migrate, verify, roll back on failure
+polyrob update --list-snapshots
+polyrob update --rollback         # restore the latest snapshot (data — not the code)
+```
+
+`--check` and `--rollback` work on any install. `--apply` performs the update
+itself only for a git checkout or an editable install; for a pip, pipx or
+system-managed install it prints the exact manual command instead. What the
+snapshot covers, and why `--rollback` restores data but not code:
+[upgrading.md](upgrading.md#the-safety-net).
 
 ---
 
@@ -143,14 +180,16 @@ For multi-user / production deployments, review these defaults:
 
 | Variable | Recommended server value | Notes |
 |----------|-------------------------|-------|
-| `POLYROB_LOCAL` | *(unset)* | Leave unset; this keeps the local-profile interactive tools **and** the autonomy loops OFF by default |
-| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed autonomy loops (self-wake / goals / curator / self-editing). Leave off on a multi-tenant server; enable a specific loop by its own flag if you need it |
+| `POLYROB_LOCAL` | *(unset)* | The single-user profile. Leave unset on a server: it is what turns on the interactive tool group (coding, git, knowledge base, project context), and it is also a precondition for the autonomy group |
+| `AUTONOMY_ENABLED` | *(unset / `false`)* | Master switch for the self-directed loops (self-wake, goals, curator, writable skills). They need **both** this and `POLYROB_LOCAL`, so a plain server has them off either way |
+| `POLYROB_OWNER_USER_ID` | *(set it)* | The owner tenant every surface, the console and `polyrob owner` resolve. Set the same value everywhere |
 | `MEMORY_REQUIRE_USER_ID` | `true` (default) | Prevents cross-tenant memory bleed |
-| `CODE_EXEC_ENABLED` | `false` (default) | Local subprocess exec is not sandboxed — keep off until a hard-sandbox backend is added |
-| `CRON_ENABLED` | `false` (default) | Enable if you want scheduled tasks |
+| `CODE_EXEC_ENABLED` | `false` (default) | The local subprocess backend is not a sandbox. If you need code execution on a server, use `CODE_EXEC_BACKEND=docker` |
+| `CRON_ENABLED` | `false` (default) | Scheduled runs. Off unless you set it, or set `AUTONOMY_POSTURE=full` |
 | `SUB_AGENTS_ENABLED` | `true` (default) | Disable to prevent agent delegation |
 
-See [../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
+See [configuration.md](configuration.md) for how these fit together and
+[../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
 
 ---
 

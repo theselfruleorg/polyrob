@@ -20,11 +20,12 @@ logger = logging.getLogger(__name__)
 def require_sandbox_or_none(backend_name: str) -> Optional[str]:
     """None if ``backend_name`` may execute here; else a refusal reason.
 
-    Local mode always allows. On a server the backend must advertise
+    Local mode allows host execution only without wallet custody. On a server the backend must advertise
     ``capabilities["sandbox"] is True``.
     """
     from core.config_policy import local_mode_enabled
-    if local_mode_enabled():
+    from core.security.host_execution import wallet_custody_enabled
+    if local_mode_enabled() and not wallet_custody_enabled():
         return None
     from tools.code_exec import default_registry
     try:
@@ -47,12 +48,13 @@ def require_sandbox_or_none(backend_name: str) -> Optional[str]:
 def code_exec_execution_blocked_reason() -> Optional[str]:
     """None if code execution may run now; else a refusal reason.
 
-    Local mode: always None. Server: refuse when CODE_EXEC_ENABLED is off, otherwise
+    Local mode: require isolation when wallet custody is enabled. Server: refuse when CODE_EXEC_ENABLED is off, otherwise
     require a sandbox-capable backend.
     """
     from core.config_policy import local_mode_enabled
     if local_mode_enabled():
-        return None
+        from tools.code_exec import get_backend_name
+        return require_sandbox_or_none(get_backend_name())
     from tools.code_exec import code_exec_enabled, get_backend_name
     if not code_exec_enabled():
         return "code execution is disabled on this server (CODE_EXEC_ENABLED is off)."

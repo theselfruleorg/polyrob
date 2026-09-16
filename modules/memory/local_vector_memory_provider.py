@@ -451,6 +451,34 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
 
     # ---- KB (knowledge-base) vector overrides (Task 5) ----------------------
 
+    async def kb_replace_source(self, *, user_id, collection: str, source_path: str,
+                                source_hash: str, chunks: list[str],
+                                mime: str = "text/plain", created_at: str = None) -> bool:
+        snapshot = tuple(chunks)
+        ok = await super().kb_replace_source(
+            user_id=user_id, collection=collection, source_path=source_path,
+            source_hash=source_hash, chunks=snapshot, mime=mime, created_at=created_at,
+        )
+        if not ok or not self._vec_ok:
+            return ok
+        # Vector indexing is a derived, best-effort cache. Recall below requires
+        # matching current FTS content, including when cleanup/reindexing fails
+        # or two replacements race each other's embedding workers.
+        try:
+            if not await self._run_blocking(self._ensure_vec_schema):
+                return ok
+            norm = self._norm_user(user_id)
+            await self._run_blocking(self._kb_vec_remove, norm, collection, source_path)
+            for idx, text in enumerate(snapshot):
+                text = text.strip()
+                embedding = await self._embed(text)
+                await self._run_blocking(
+                    self._kb_vec_write, norm, collection, source_path, str(idx), text, embedding,
+                )
+        except Exception as e:
+            logger.debug("local-vector: source vector indexing skipped: %s", e)
+        return ok
+
     async def kb_ingest_chunk(self, *, user_id, collection: str, source_path: str,
                               source_hash: str, chunk_idx: int, content: str,
                               mime: str = "text/plain", created_at: str = None) -> bool:
@@ -464,7 +492,7 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
             source_hash=source_hash, chunk_idx=chunk_idx, content=content,
             mime=mime, created_at=created_at,
         )
-        if not self._vec_ok or self._anon_blocked(user_id):
+        if not fts_ok or not self._vec_ok or self._anon_blocked(user_id):
             return fts_ok
         content_stripped = (content or "").strip()
         if not content_stripped:
@@ -526,6 +554,10 @@ class LocalVectorMemoryProvider(SqliteMemoryProvider):
                 "FROM kb_vec v "
                 "JOIN kb_meta m ON m.rowid = v.rowid "
                 "WHERE v.user_id = ? AND m.collection = ? "
+                "AND EXISTS (SELECT 1 FROM kb_chunks c "
+                "WHERE c.user_id = m.user_id AND c.collection = m.collection "
+                "AND c.source_path = m.source_path AND c.chunk_idx = m.chunk_idx "
+                "AND c.content = m.content) "
                 "AND v.embedding MATCH ? AND k = ? "
                 "ORDER BY v.distance",
                 (norm_user, collection, sqlite_vec.serialize_float32(emb), overfetch),

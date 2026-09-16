@@ -21,11 +21,19 @@ avoid a risky migration on now-default-ON prod DBs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Mapping, Optional
+
+# The single-user local tenant + the anon-bucket predicate, for
+# ``resolve_owner_user_id``. ``core.identity`` imports nothing from this module at
+# module level (its ``resolve_identity`` reaches back lazily), so this is not a cycle.
+from core.identity import LocalIdentity, is_anonymous
+
+logger = logging.getLogger(__name__)
 
 #: The framework name. ``polyrob`` is the *framework*; a named bot like ``rob``
 #: is one *instance* of it (see module docstring). Surfaced in the CLI banner /
@@ -272,39 +280,119 @@ def resolve_owner_principal(
 ) -> Optional[str]:
     """Resolve this instance's OWNER principal (an internal user_id).
 
+    ⚠️ ``default_to_instance`` is a HISTORICAL name. Since 2026-09-15 the default
+    fallback is the single-user local tenant, NOT the instance id — the instance
+    id is :func:`resolve_instance_id` and nothing else. The parameter keeps its
+    name because 30+ call sites pass it; read it as "fall back to the owner
+    tenant".
+
     Precedence:
     1. ``POLYROB_OWNER_USER_ID`` / ``BOT_OWNER_USER_ID`` — explicit binding (a distinct
        human owner uid).
     2. the FIRST entry of ``SURFACE_SUPER_ADMIN_USER_IDS`` — the role ladder's top.
-    3. **the instance id** (:func:`resolve_instance_id`, defaults to ``"polyrob"``) — the
-       auto-derived single-user default so the owner's chat/CLI shares autonomy's own
-       tenant (goals/memory/SELF) WITHOUT retyping the instance's name in env.
+    3. :func:`resolve_owner_user_id` — the ONE owner-tenant resolver
+       (``POLYROB_LOCAL_OWNER``, else ``local``).
 
-    With the default ``default_to_instance=True``, (3) always resolves, so this never
-    returns None in practice. That is deliberate: a single-instance deploy IS owned by
-    its operator, and the only sessions whose ``user_id`` equals the instance id are the
-    owner (via the gated surface alias), autonomous/goal runs, and the local operator —
-    all trusted. A random surface sender is hashed to a ``u_…`` id and can never equal
-    the instance id, so defaulting the principal never elevates a stranger. Mirrors
-    ``webview/webgate.py::local_owner_id``, which already falls back to the instance id.
+    (3) exists so the PRINCIPAL axis and the TENANT axis give the SAME answer in
+    every environment. They are not two facts: every owner gate compares one to
+    the other (``is_owner(execution_context.user_id, owner_principal=…)``), so
+    while they disagreed, an unbound install denied owner-tier capability to its
+    own owner — a REPL- or console-created goal lost its deliverable's
+    attachments, and the owner's Telegram DM ran under a third tenant. Tier 3
+    answered the instance id until 2026-09-15; that was the split.
 
-    Pass ``default_to_instance=False`` for the STRICT resolution (None when only the
-    instance default would apply): callers that must distinguish an *explicitly-bound*
-    owner from the auto-derived default — diagnostics (``owner_access_summary``) and
-    layered fallbacks (``local_owner_id``, which ranks ``POLYROB_LOCAL_OWNER`` between an
-    explicit owner and the instance id).
+    A value :func:`core.identity.is_anonymous` rejects is not a binding at any
+    tier — it falls through, here and in :func:`resolve_owner_user_id`, so the
+    two axes cannot disagree on a sentinel either.
+
+    Defaulting the principal still never elevates a stranger: the only sessions
+    carrying ``local`` are the local operator, autonomous/goal runs, and the
+    owner via the gated surface alias. A network sender is hashed to a ``u_…``
+    id (``_LOCAL_OPERATOR_TENANT``'s comment says why that is unreachable), and
+    the alias fires only for the single configured owner Telegram id.
+
+    Pass ``default_to_instance=False`` for the STRICT resolution (None when
+    nothing is explicitly bound): callers that must distinguish an
+    *explicitly-bound* owner from the default — diagnostics
+    (``owner_access_summary``, ``webgate.owner_is_bound``) and layered fallbacks
+    (:func:`resolve_owner_user_id`, which ranks ``POLYROB_LOCAL_OWNER`` between
+    an explicit owner and the local tenant).
     """
     src = os.environ if env is None else env
     for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
         val = (src.get(key) or "").strip()
-        if val:
+        if val and not is_anonymous(val):
             return val
     raw = (src.get("SURFACE_SUPER_ADMIN_USER_IDS") or "").strip()
     if raw:
         first = raw.split(",")[0].strip()
-        if first:
+        if first and not is_anonymous(first):
             return first
-    return resolve_instance_id(env) if default_to_instance else None
+    # Terminates: the strict form below never calls back into this fallback.
+    return resolve_owner_user_id(env) if default_to_instance else None
+
+
+def resolve_owner_user_id(env: Optional[Mapping[str, str]] = None) -> str:
+    """Resolve the effective owner ``user_id`` (the owner TENANT) for this instance.
+
+    This is the ONE resolver. Every owner-attribution call site reads it — the
+    console's own ledger read (``webview/webgate.py::local_owner_id``), the
+    ``polyrob owner …`` verbs (``core/admin_data_home.py::admin_owner_principal``),
+    the REPL/CLI identity (``core/identity.py::resolve_identity``) and x402
+    machine-income tenant stamping (``modules/x402/middleware.py``) — because a
+    value written under one resolution is invisible to a reader using another.
+
+    ⚠️ "Owner-attribution" means a site that NAMES A BUCKET rows are written to
+    or read from. :func:`resolve_owner_principal` is the right call for the other
+    two shapes: an IDENTITY comparison ("is this sender the owner?", e.g.
+    ``core/surfaces/access.py``) and a STRICT diagnostic
+    (``default_to_instance=False`` — "is an owner bound at all?", e.g.
+    ``webview/webgate.py::owner_is_bound``). Those are safe ONLY because the two
+    axes now give the same answer in every environment — the principal's tier-3
+    fallback IS this function. While they diverged, an identity comparison
+    silently denied the owner on an unbound install. Keep them equal: a change to
+    either fallback must move both, and both are pinned by
+    ``tests/unit/core/test_owner_tenant_one_resolver.py``.
+
+    Precedence:
+    1. an explicitly-bound owner — :func:`resolve_owner_principal` with
+       ``default_to_instance=False`` (``POLYROB_OWNER_USER_ID`` /
+       ``BOT_OWNER_USER_ID`` / the first ``SURFACE_SUPER_ADMIN_USER_IDS`` entry).
+    2. ``POLYROB_LOCAL_OWNER`` — the single-user local-console owner override.
+       Ranked BELOW an explicit bound owner but ABOVE the unbound default —
+       unlike :func:`resolve_owner_principal`, which does not consult it at all.
+    3. ``local`` (:attr:`core.identity.LocalIdentity.USER_ID`) — the single-user
+       local tenant.
+
+    A value that :func:`core.identity.is_anonymous` rejects (blank, ``_anonymous_``,
+    ``system``, ``x402_user``, …) is treated as UNBOUND at every tier and falls
+    through. The guard lives HERE, in the one resolver, so no seat can write rows
+    to a bucket the codebase says is not an isolatable tenant — it used to sit in
+    ``resolve_identity`` alone, which made a sentinel binding re-create the
+    four-way divergence this resolver exists to end.
+
+    ⚠️ (3) was the INSTANCE id (``"polyrob"``) until 2026-09-15, and that is the
+    defect this resolver now closes: four resolvers answered this question and
+    they only agreed on a BOUND install. ``local`` is the tenant every REPL
+    session, goal, memory row and identity doc has been written under since the
+    CLI existed; ``polyrob`` is the id of the INSTANCE (it names the identity-doc
+    tier and the avatar — see :func:`resolve_instance_id`, untouched), not a
+    tenant anyone wrote to except the console and the x402 stamp. An install that
+    wants the old bucket binds it: ``POLYROB_OWNER_USER_ID=polyrob``.
+
+    Unlike :func:`resolve_owner_principal`, this never returns ``None`` — (3)
+    always resolves, so a caller gets a usable tenant id every time.
+    """
+    src = os.environ if env is None else env
+    # STRICT: never the default tier, or this would recurse (the principal's own
+    # tier 3 is this function).
+    bound = resolve_owner_principal(env, default_to_instance=False)
+    if bound:
+        return bound
+    local_owner = (src.get("POLYROB_LOCAL_OWNER") or "").strip()
+    if local_owner and not is_anonymous(local_owner):
+        return local_owner
+    return LocalIdentity.USER_ID
 
 
 # Surfaces whose sender ids are platform-AUTHENTICATED and therefore safe to alias
@@ -446,6 +534,38 @@ def console_display_name(env: Optional[Mapping[str, str]] = None) -> str:
     return override or "POLYROB Console"
 
 
+#: What EVERY owner seat prints when no owner principal is bound. ONE string, so
+#: ``polyrob doctor``, the REPL status line and ``/self`` cannot disagree about
+#: whether this install is paired — they did, for one commit, when the unbound
+#: principal stopped being the instance id and two of the three kept testing for it.
+UNPAIRED_OWNER_LABEL = "(unpaired — set POLYROB_OWNER_USER_ID or run `polyrob init`)"
+
+
+def owner_label(env: Optional[Mapping[str, str]] = None) -> str:
+    """The owner line an operator seat prints. DISPLAY ONLY — never a gate.
+
+    ⚠️ Reads the STRICT resolution, for the same reason
+    :func:`owner_awareness_line` does: the default tier now answers the owner
+    TENANT (``local``), so ``resolve_owner_principal() or "<unbound>"`` can no
+    longer detect an unbound install — it renders a bare ``local``, which reads
+    exactly like an explicitly-bound owner of that name. An operator seat may be
+    incomplete; it may not be confident and wrong.
+
+    A bound owner that EQUALS the instance id is named with a note, so the reader
+    does not take it for a second, distinct human owner.
+    """
+    bound = resolve_owner_principal(env, default_to_instance=False)
+    if not bound:
+        return UNPAIRED_OWNER_LABEL
+    if bound == resolve_instance_id(env):
+        # ⚠️ NOT "auto-derived" any more: reaching this branch now requires an
+        # EXPLICIT binding that happens to equal the instance id (prod binds
+        # owner `rob` on instance `rob`). Saying "auto-derived" here would be the
+        # confident-and-wrong shape this helper exists to remove.
+        return f"{bound} (this instance's own tenant)"
+    return bound
+
+
 def owner_awareness_line(
     env: Optional[Mapping[str, str]] = None, *, include_correspondent_frame: bool = True
 ) -> str:
@@ -462,13 +582,20 @@ def owner_awareness_line(
     """
     # The DATA-not-instructions framing is the primary soft defense and must be present
     # WHENEVER the correspondent model is on (Fusion MED) — not only when an owner
-    # principal is bound. Name the owner ONLY when it is a DISTINCT principal: with the
-    # auto-derived default (owner principal == instance id) the clause would read "act
-    # on behalf of OWNER <yourself>", which is meaningless self-reference, so suppress it.
-    op = resolve_owner_principal(env)
+    # principal is bound. Name the owner ONLY when it is a DISTINCT principal: a clause
+    # reading "act on behalf of OWNER <yourself>" is meaningless self-reference.
+    #
+    # ⚠️ "Distinct" is tested against the STRICT resolution, not against the default
+    # tier. It used to be `op != resolve_instance_id(env)`, which worked only while the
+    # default tier WAS the instance id: when that became the owner tenant (2026-09-15)
+    # the same expression started emitting "You act on behalf of OWNER local." on every
+    # unbound install — the self-reference this suppression exists to avoid. An
+    # explicitly-bound owner that equals the instance id is still the agent itself
+    # (prod binds POLYROB_OWNER_USER_ID=rob on instance rob), so that stays suppressed.
+    bound = resolve_owner_principal(env, default_to_instance=False)
     owner_clause = (
-        f"You act on behalf of OWNER {op}. "
-        if op and op != resolve_instance_id(env)
+        f"You act on behalf of OWNER {bound}. "
+        if bound and bound != resolve_instance_id(env)
         else ""
     )
     if not include_correspondent_frame:
@@ -520,6 +647,16 @@ def is_owner_local_safe(
     local bypass is honored ONLY for the single-user local operator tenant
     (:data:`_LOCAL_OPERATOR_TENANT`). Owner-by-principal (a bound owner / the telegram
     owner alias / the console owner) is unaffected — it always wins.
+
+    ⚠️ ``local_enabled`` is INERT on an UNBOUND install. Since 2026-09-15 the owner
+    principal of an unbound install IS :data:`_LOCAL_OPERATOR_TENANT`, so ``local``
+    matches on the principal branch above and never reaches the bypass. The flag
+    therefore protects nothing there; what still bounds that install is that only
+    the local operator, an autonomous run and the owner-via-alias ever CARRY
+    ``local`` (a network sender is hashed to ``u_…``). The flag regains its meaning
+    the moment an owner is bound, when ``local`` is no longer the principal. Do not
+    "fix" this by re-splitting the axes — that divergence denied the owner its own
+    capability (043 residue R1).
     """
     uid = (str(user_id).strip() if user_id is not None else "")
     if not uid:
@@ -540,7 +677,22 @@ def _read_doc(path: Path) -> str:
     if not text:
         return ""
     if len(text) > SELF_CONTEXT_PER_DOC_MAX_CHARS:
-        text = text[:SELF_CONTEXT_PER_DOC_MAX_CHARS] + "\n…[truncated]"
+        # 035 P2-12: writes ERROR over the cap, but a LOAD used to truncate with
+        # only a TRAILING marker — so the tail of a hand-edited or migrated doc
+        # (a rule at the BOTTOM of the file) disappeared and nothing said so. Keep
+        # the content (dropping the doc entirely is worse), and make the loss
+        # impossible to miss: a banner at the TOP, where the reader and the model
+        # actually look, plus an operator-visible warning.
+        logger.warning(
+            "self-context doc %s is %d/%d chars — TRUNCATED at load; the tail "
+            "(including any rule at the end of the file) is NOT in context. "
+            "Shorten or split the doc.",
+            path, len(text), SELF_CONTEXT_PER_DOC_MAX_CHARS)
+        kept = text[:SELF_CONTEXT_PER_DOC_MAX_CHARS]
+        text = (f"[⚠ TRUNCATED: this document is {len(text)} chars, over the "
+                f"{SELF_CONTEXT_PER_DOC_MAX_CHARS}-char cap. The END of it is "
+                f"MISSING from your context — do not assume you have read every "
+                f"rule in it.]\n" + kept + "\n…[truncated]")
     return text
 
 
@@ -606,6 +758,70 @@ def load_pfp_meta(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) 
         return None
 
 
+# --- ERC-8004 identity record (046) ------------------------------------------
+# What this instance ACTUALLY registered on-chain, written only after a
+# confirmed receipt. It is the evidence that lets the served registration file
+# say `trustMode: onchain` with `attestation: verified` instead of repeating an
+# operator's unbacked claim.
+_ERC8004_RECORD = "erc8004.json"
+
+
+def erc8004_record_path(home_dir: Path | str,
+                        instance_id: str = DEFAULT_INSTANCE_ID) -> Path:
+    """``<home>/identity/{instance_id}/erc8004.json``."""
+    safe_instance = instance_id if is_safe_tenant_id(instance_id) else DEFAULT_INSTANCE_ID
+    return Path(home_dir) / _SELF_CONTEXT_SUBDIR / safe_instance / _ERC8004_RECORD
+
+
+def load_erc8004_record(home_dir: Path | str,
+                        instance_id: str = DEFAULT_INSTANCE_ID) -> Optional[dict]:
+    """The on-chain registration record, or None. Never raises.
+
+    ⚠️ A corrupt or incomplete record reads as None. An unreadable file is not
+    evidence of a registration, and claiming one on the strength of a broken
+    file is the worst of the three outcomes.
+    """
+    p = erc8004_record_path(home_dir, instance_id)
+    try:
+        if not p.is_file():
+            return None
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        logger.debug("erc8004 record unreadable at %s", p, exc_info=True)
+        return None
+    if not isinstance(rec, dict):
+        return None
+    # Both are required for the record to MEAN anything: an id with no
+    # transaction is an assertion, and there is already a field for those.
+    if not rec.get("agent_id") or not rec.get("tx_hash"):
+        return None
+    return rec
+
+
+def save_erc8004_record(home_dir: Path | str,
+                        instance_id: str = DEFAULT_INSTANCE_ID, *,
+                        chain: str, chain_id: int, registry: str,
+                        agent_id: int, tx_hash: Optional[str]) -> dict:
+    """Record a CONFIRMED registration. Raises without a transaction hash."""
+    if not tx_hash:
+        raise ValueError(
+            "an ERC-8004 record without a transaction hash is an assertion, not "
+            "evidence — it may only be written from a confirmed receipt")
+    if not agent_id:
+        raise ValueError("an ERC-8004 record needs the minted agentId")
+    from datetime import datetime, timezone
+    rec = {
+        "chain": chain, "chain_id": int(chain_id), "registry": registry,
+        "agent_id": int(agent_id), "tx_hash": tx_hash,
+        "registered_at": datetime.now(timezone.utc).replace(
+            microsecond=0).isoformat(),
+    }
+    p = erc8004_record_path(home_dir, instance_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rec, indent=2), encoding="utf-8")
+    return rec
+
+
 def voice_signature(home_dir: Path | str, instance_id: str = DEFAULT_INSTANCE_ID) -> Optional[dict]:
     """The persisted, engine-agnostic voice signature ``{pitch, rate, timbre}`` or ``None``.
 
@@ -629,6 +845,9 @@ __all__ = [
     "console_display_name",
     "resolve_instance_id",
     "resolve_owner_principal",
+    "resolve_owner_user_id",
+    "owner_label",
+    "UNPAIRED_OWNER_LABEL",
     "resolve_owner_telegram_id",
     "resolve_owner_email",
     "resolve_agent_email",
@@ -645,4 +864,7 @@ __all__ = [
     "pfp_path",
     "load_pfp_meta",
     "voice_signature",
+    "erc8004_record_path",
+    "load_erc8004_record",
+    "save_erc8004_record",
 ]

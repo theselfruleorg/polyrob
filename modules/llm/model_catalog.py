@@ -694,6 +694,56 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
     # https://openrouter.ai/provider/z-ai
     # ----------------------------------------
 
+    # GLM-5.3 - newest Z.AI flagship (1M ctx, 128K max output). Native tools +
+    # reasoning + structured outputs, TEXT-ONLY (verified live 2026-09-15: given a
+    # base64 image on the z.ai Anthropic endpoint it narrated a URL it could not
+    # fetch rather than reading the pixels — so vision here would be a hallucination
+    # licence, not a capability). Specs/pricing from the live OpenRouter models API.
+    register(ModelConfig(
+        name="z-ai/glm-5.3",
+        provider=ModelProvider.OPENROUTER,
+        context_window=1310720,  # 1.31M tokens (OpenRouter API is authoritative)
+        max_completion_tokens=131072,  # z.ai rejects max_tokens>131072 (live probe)
+        pricing=ModelPricing(input_price=1.40, cached_input_price=0.26, output_price=4.40),
+        capabilities=ModelCapabilities(
+            supports_vision=False,  # text->text
+            supports_function_calling=True,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_json_mode=True,
+            supports_thinking=True,
+            thinking_budget_tokens=32000,
+        ),
+        knowledge_cutoff="2026-06",
+        aliases=["glm-5.3", "glm5.3"]
+    ))
+
+    # GLM-5.3-Flash - the cheap tier of the 5.3 generation and POLYROB's aux model
+    # on a z.ai seat (AUX_MODEL_MAP). 320B MoE / 18B active, ~18x cheaper per token
+    # than GLM-5.3 on the metered market, same 1M ctx.
+    # ⚠️ Unlike every other GLM row here it IS multimodal (text/image/video in) —
+    # live-verified 2026-09-15 on api.z.ai/api/anthropic, where it read an 8x8 PNG
+    # correctly while GLM-5.3 could not. It is the only vision-capable model a
+    # GLM-Coding-Plan deployment has.
+    register(ModelConfig(
+        name="z-ai/glm-5.3-flash",
+        provider=ModelProvider.OPENROUTER,
+        context_window=1310720,  # 1.31M tokens
+        max_completion_tokens=131072,  # z.ai rejects max_tokens>131072 (live probe)
+        pricing=ModelPricing(input_price=0.075, cached_input_price=0.015, output_price=0.25),
+        capabilities=ModelCapabilities(
+            supports_vision=True,  # image + video input (z.ai VLM row)
+            supports_function_calling=True,
+            supports_tools=True,
+            supports_streaming=True,
+            supports_json_mode=True,
+            supports_thinking=True,
+            thinking_budget_tokens=32000,
+        ),
+        knowledge_cutoff="2026-06",
+        aliases=["glm-5.3-flash", "glm5.3-flash"]
+    ))
+
     # GLM-5.2 - current Z.AI flagship on OpenRouter (default for `--provider
     # openrouter`). 1M context, native tools + reasoning + structured outputs,
     # text-only. OpenAI-compatible via OpenRouter (no client change needed).
@@ -1359,6 +1409,28 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["deepseek-v4-flash", "deepseek-flash"]
     ))
 
+    # DeepSeek V4.1 Flash — the cheap 1M-context workhorse, and it SEES: OpenRouter
+    # reports modality text+image->text, unlike every other DeepSeek row here.
+    # ⚠️ Time-of-day pricing. The figures below are DeepSeek's off-peak rate, which is
+    # also what `pricing.prompt` reports. On weekdays 01:00-04:00 and 06:00-10:00 UTC the
+    # rate DOUBLES to 0.30/1.20 (cache read 0.006). Cost telemetry computed from this row
+    # is therefore a FLOOR during those windows, not an exact charge — re-check against
+    # `GET https://openrouter.ai/api/v1/models` before quoting a spend figure from it.
+    # Verified live 2026-09-16.
+    register(ModelConfig(
+        name="deepseek/deepseek-v4.1-flash",
+        provider=ModelProvider.OPENROUTER,
+        context_window=1048576,
+        max_completion_tokens=384000,
+        pricing=ModelPricing(input_price=0.15, cached_input_price=0.003, output_price=0.60),
+        capabilities=ModelCapabilities(
+            supports_vision=True, supports_function_calling=True,
+            supports_tools=True, supports_streaming=True,
+            supports_json_mode=True, supports_thinking=True,
+        ),
+        aliases=["deepseek-v4.1-flash", "or-deepseek-v4.1-flash", "deepseek-4.1-flash"]
+    ))
+
     # Llama 3.3 70B Instruct — reliable open workhorse, native tools.
     register(ModelConfig(
         name="meta-llama/llama-3.3-70b-instruct",
@@ -1473,33 +1545,5 @@ def register_builtin_models(register: Callable[[ModelConfig], None]) -> None:
         aliases=["qwen3-vl-8b", "qwen-vl-8b"]
     ))
 
-    # Llama 4 Scout — extreme long-context (10M), multimodal, native tools.
-    register(ModelConfig(
-        name="meta-llama/llama-4-scout",
-        provider=ModelProvider.OPENROUTER,
-        context_window=10000000,
-        max_completion_tokens=16384,
-        pricing=ModelPricing(input_price=0.1, output_price=0.3),
-        capabilities=ModelCapabilities(
-            supports_vision=True, supports_function_calling=True,
-            supports_tools=True, supports_streaming=True, supports_json_mode=True,
-        ),
-        knowledge_cutoff="2024-08",
-        aliases=["llama-4-scout", "llama4-scout"]
-    ))
-
-    # MiniMax M3 — long-context (1M) agentic, multimodal, reasoning, cache read priced.
-    register(ModelConfig(
-        name="minimax/minimax-m3",
-        provider=ModelProvider.OPENROUTER,
-        context_window=1048576,
-        max_completion_tokens=512000,
-        pricing=ModelPricing(input_price=0.3, cached_input_price=0.06, output_price=1.2),
-        capabilities=ModelCapabilities(
-            supports_vision=True, supports_function_calling=True,
-            supports_tools=True, supports_streaming=True,
-            supports_json_mode=True, supports_thinking=True,
-        ),
-        knowledge_cutoff="2025-11",
-        aliases=["minimax-m3", "minimax3"]
-    ))
+    from modules.llm.model_catalog_recent import register_recent_models
+    register_recent_models(register)

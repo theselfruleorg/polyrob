@@ -122,12 +122,21 @@ def main():
     
     # Run the Uvicorn server
     try:
+        # W9 (043): two console checks authorise by CLIENT ADDRESS —
+        # POST /api/internal/emit is localhost-only, and the `local` posture
+        # treats every request as the owner. Behind nginx every request arrives
+        # from 127.0.0.1, so without proxy_headers uvicorn reports the PROXY as
+        # the client and those checks answer "localhost" for the whole internet.
+        # forwarded_allow_ips pins WHOSE X-Forwarded-For is believed: the local
+        # proxy's, never a header a remote client sets itself.
         uvicorn.run(
             app, 
             host=args.host, 
             port=args.port, 
             log_level=args.log_level.lower(),
-            access_log=True
+            access_log=True,
+            proxy_headers=True,
+            forwarded_allow_ips="127.0.0.1",
         )
     except Exception as e:
         logger.error(f"Failed to start server: {e}", exc_info=True)

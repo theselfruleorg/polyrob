@@ -8,23 +8,6 @@
     'use strict';
 
     /**
-     * Get authentication token from cookie or localStorage
-     * @returns {string|null} Auth token or null if not found
-     */
-    function getAuthToken() {
-        // Try cookie first
-        const cookies = document.cookie.split(';');
-        for (let cookie of cookies) {
-            const [name, value] = cookie.trim().split('=');
-            if (name === 'auth_token') {
-                return value;
-            }
-        }
-        // Fallback to localStorage
-        return localStorage.getItem('auth_token');
-    }
-
-    /**
      * Make an authenticated API call
      * @param {string} endpoint - API endpoint (without /api prefix)
      * @param {Object} options - Fetch options
@@ -32,18 +15,15 @@
      * @throws {Error} If request fails
      */
     async function apiCall(endpoint, options = {}) {
-        const token = getAuthToken();
         const headers = {
             'Content-Type': 'application/json',
             ...options.headers
         };
-        if (token) {
-            headers['Authorization'] = `Bearer ${token}`;
-        }
 
         const response = await fetch(`/api${endpoint}`, {
             ...options,
-            headers
+            headers,
+            credentials: 'include'
         });
 
         if (!response.ok) {
@@ -195,7 +175,6 @@
 
     // Export to global AdminUtils namespace
     window.AdminUtils = {
-        getAuthToken,
         apiCall,
         formatNumber,
         formatCurrency,

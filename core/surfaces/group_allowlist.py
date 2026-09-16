@@ -1,8 +1,9 @@
 """Group-chat ingress allowlist. Default-DENY: a (surface, chat_id) must have an
 ACTIVE row for the agent to accept messages from that group/channel at all
-(design 2026-07-11 §B1). Instance-level (one bot presence per chat, not
-per-tenant) — owner-managed via ``polyrob owner``. WAL+jitter via
-``core/sqlite_util`` — mirrors ``core/surfaces/outbound_allowlist.py``.
+Instance-level (one bot presence
+per chat, not per-tenant) — owner-managed via ``polyrob owner groups`` (see
+``docs/guide/groups.md``). WAL+jitter via ``core/sqlite_util`` — mirrors
+``core/surfaces/outbound_allowlist.py``.
 """
 from __future__ import annotations
 
@@ -46,6 +47,24 @@ class GroupAllowlist:
         rc = execute_retry(
             self.db_path,
             "UPDATE group_allowlist SET status='revoked'"
+            " WHERE surface=? AND chat_id=? AND status='active'",
+            (surface, str(chat_id)),
+        )
+        return bool(rc)
+
+    def mark_left(self, surface: str, chat_id: str) -> bool:
+        """044 T21: the bot is no longer IN this room (kicked, or the chat is
+        gone). Distinct from ``revoke``: the owner did not withdraw permission,
+        the room withdrew the bot — and ``/groups list`` should say which.
+
+        ``left`` is not ``active``, so ``is_allowed`` goes False and both ingress
+        and outbound stop. Re-``allow`` restores the room after a rejoin.
+        Returns True iff an ACTIVE row was moved (idempotent; a revoked or
+        unknown room is left alone — never resurrected as ``left``).
+        """
+        rc = execute_retry(
+            self.db_path,
+            "UPDATE group_allowlist SET status='left'"
             " WHERE surface=? AND chat_id=? AND status='active'",
             (surface, str(chat_id)),
         )

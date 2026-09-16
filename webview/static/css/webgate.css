@@ -241,7 +241,7 @@
     padding: var(--spacing-sm) var(--spacing-md);
     border: var(--border-width) solid var(--color-accent-yellow);
     border-left-width: var(--border-width-accent);
-    background: rgba(226, 192, 112, 0.08);
+    background: var(--color-accent-yellow-wash-08);
     color: var(--color-text-primary);
     font-size: var(--font-size-sm);
     line-height: var(--line-height-normal);
@@ -359,8 +359,8 @@
 }
 
 .webgate-halt-badge.halted {
-    color: var(--color-accent-red, #d83c3e);
-    border-color: var(--color-accent-red, #d83c3e);
+    color: var(--color-accent-red, var(--color-accent-red));
+    border-color: var(--color-accent-red, var(--color-accent-red));
 }
 
 .webgate-halt-badge.running {
@@ -370,8 +370,8 @@
 
 /* Error variant of the note callout (halt-not-effective etc.). */
 .webgate-note--error {
-    border-color: var(--color-accent-red, #d83c3e);
-    background: rgba(216, 60, 62, 0.08);
+    border-color: var(--color-accent-red, var(--color-accent-red));
+    background: var(--color-accent-red-wash-08);
 }
 
 /* Per-row action strip (goal verbs, cron cancel, invoice settle, config). */
@@ -401,7 +401,7 @@
 }
 
 .webgate-action-msg.err {
-    color: var(--color-accent-red, #d83c3e);
+    color: var(--color-accent-red, var(--color-accent-red));
 }
 
 /* Short id tag next to a row title (goals, invoices). */
@@ -448,8 +448,8 @@
 }
 
 .webgate-cfg-badge.cli-only {
-    color: var(--color-accent-red, #d83c3e);
-    border-color: var(--color-accent-red, #d83c3e);
+    color: var(--color-accent-red, var(--color-accent-red));
+    border-color: var(--color-accent-red, var(--color-accent-red));
 }
 
 .webgate-cfg-value {
@@ -561,7 +561,7 @@
 .webgate-table td {
     text-align: left;
     padding: 6px 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    border-bottom: 1px solid var(--color-text-primary-wash-08);
     vertical-align: top;
 }
 .webgate-pre {
@@ -571,4 +571,83 @@
 }
 .apps-btn {
     margin-right: 6px;
+}
+
+/* 043 W11/N11 — the console-wide state strip: pause first, then posture.
+   Rendered by layout.html from _page_context on EVERY page (only /autonomy used
+   to show a pause at all). Muted by default so a RUNNING line is a quiet fact;
+   the paused variant is the loud one, set by the text itself carrying "PAUSED". */
+.webgate-pause-headline,
+.webgate-readonly-banner {
+    padding: var(--spacing-xs, 6px) var(--spacing-md, 16px);
+    font-size: var(--font-size-sm, 13px);
+    font-family: var(--font-mono, monospace);
+    border-bottom: 1px solid var(--color-border, var(--color-bg-elevated));
+    background: var(--color-bg-elevated, var(--color-bg-elevated));
+    color: var(--color-text-secondary, var(--color-text-secondary));
+}
+
+.webgate-readonly-banner {
+    color: var(--color-accent-yellow, var(--color-accent-yellow));
+}
+
+/* =============================================================================
+   PUBLIC + LOGIN PAGES (status.html, owner_login.html) — the two layout.html
+   pages a stranger can reach. They carried classes no sheet defined (2026-09-16
+   audit §D). Same tokens, same terminal idiom, nothing owner-specific.
+   ============================================================================= */
+.status-page h1,
+.login-page h1 {
+    color: var(--color-accent-green);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: var(--font-size-xl);
+    margin-bottom: var(--spacing-lg);
+}
+.dim {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+.login-page form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    background: var(--color-bg-terminal);
+    border: var(--border-width) solid var(--color-border);
+    border-left: var(--border-width-accent) solid var(--color-accent-blue);
+}
+.login-page label {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-xs);
+    color: var(--color-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+.login-page input[type="text"],
+.login-page input[type="password"] {
+    height: var(--input-height);
+    padding: 0 var(--spacing-md);
+    font-size: var(--font-size-sm);
+}
+.login-page button[type="submit"] {
+    align-self: flex-start;
+    height: var(--button-height);
+    padding: 0 var(--spacing-lg);
+    background: transparent;
+    border: var(--border-width) solid var(--color-accent-blue);
+    color: var(--color-accent-blue);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+}
+.login-page button[type="submit"]:hover {
+    background: var(--color-accent-blue-wash-08);
+}
+.login-page .error-message {
+    color: var(--color-accent-red);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--spacing-md);
 }

@@ -125,7 +125,11 @@ class WebhookSurface(ABC):
 
                     reply = await act_on_inbound(task_agent, result, deliver=_deliver)
                     if reply:
-                        await self._send_immediate(inbound, reply)
+                        # 046 T2: a handler may return a `CommandReply` that
+                        # names its destination. A surface with no room model
+                        # still renders the TEXT rather than a dataclass repr.
+                        from core.surfaces.command_reply import reply_text
+                        await self._send_immediate(inbound, reply_text(reply))
             except Exception as e:  # fail-open per message
                 logger.error("%s webhook: process failed: %s", self.surface_id, e, exc_info=True)
         return {"ok": True}

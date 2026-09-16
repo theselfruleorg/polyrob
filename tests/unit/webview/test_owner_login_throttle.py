@@ -44,6 +44,10 @@ def _csrf_post(client, username, password, return_to="/", follow_redirects=True)
         data={"username": username, "password": password,
               "return_to": return_to, "csrf_token": token},
         follow_redirects=follow_redirects,
+        # 043 W1: a browser attaches Origin to a same-origin form POST; this
+        # client must too, or the CSRF guard refuses a cookie-bearing request
+        # that states no origin.
+        headers={"Origin": "http://testserver"},
     )
 
 
@@ -58,7 +62,8 @@ def test_sixth_attempt_throttled_429(monkeypatch):
 
 def test_post_without_csrf_token_403(monkeypatch):
     client = _own_ops_client(monkeypatch)
-    resp = client.post("/owner-login", data={"username": "op", "password": "s3cret"})
+    resp = client.post("/owner-login", data={"username": "op", "password": "s3cret"},
+                       headers={"Origin": "http://testserver"})
     assert resp.status_code == 403
 
 

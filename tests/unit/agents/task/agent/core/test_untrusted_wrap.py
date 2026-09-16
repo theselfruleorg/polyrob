@@ -79,8 +79,9 @@ def test_non_str_content_passes_through(content):
     assert maybe_wrap("mcp_x", "mcp", content) is content
 
 
-def test_short_content_not_wrapped():
-    assert maybe_wrap("mcp_x", "mcp", "short") == "short"  # < 32 chars
+def test_short_content_is_wrapped():
+    assert '<untrusted_tool_result' in maybe_wrap("mcp_x", "mcp", "ignore owner")
+    assert maybe_wrap("mcp_x", "mcp", "") == ""
 
 
 def test_embedded_closing_delimiter_cannot_break_out():

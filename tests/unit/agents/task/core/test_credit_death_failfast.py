@@ -129,3 +129,153 @@ def test_insufficient_credits_error_is_importable_where_the_arms_reference_it():
     from agents.task.agent.core import next_action_internal
 
     assert next_action_internal.InsufficientCreditsError is InsufficientCreditsError
+
+
+# ---------------------------------------------------------------------------
+# A12 fix round (2026-09-14, 043 §4.6): "a retry attempt is not an error
+# until the last one fails" -- behavioural coverage of the retry loop's log
+# LEVELS (the earlier tests in this file pin the fail-fast CONTROL FLOW;
+# this one pins that every per-attempt log in that same chain is WARNING and
+# the loop's own final-exhaustion log is the single console-visible ERROR).
+# ---------------------------------------------------------------------------
+
+import asyncio
+import logging
+from types import SimpleNamespace as _SimpleNamespace
+from unittest.mock import AsyncMock as _AsyncMock
+
+
+class _FakeLLM:
+    """Deliberately has NO ``with_structured_output`` -- exactly like the real
+    ``OpenAIAdapter``, which doesn't implement it either (see A12's report:
+    this is what actually drives ``_get_next_action_internal`` through the
+    tool-calling -> structured-output -> plain-fallback cascade in prod).
+    Accessing the missing attribute raises ``AttributeError`` naturally,
+    forcing the plain ``ainvoke`` fallback path every time."""
+
+    def __init__(self, side_effect):
+        self.ainvoke = _AsyncMock(side_effect=side_effect)
+
+
+class _FakeMessageManager:
+    """Minimal stand-in covering exactly the MessageManager surface
+    ``_get_next_action_internal`` touches on the no-native-tools /
+    no-streaming path (native tools and streaming are both switched off on
+    the fake agent below, so their MessageManager call sites are never hit)."""
+
+    def get_estimated_context_usage(self):
+        return 0.1
+
+    def get_messages(self):
+        return []
+
+    def check_token_safety(self, *args, **kwargs):
+        return {"safe": True, "usage_percent": 0.0, "current_tokens": 0, "max_limit": 1000}
+
+    def get_messages_for_llm(self):
+        return []
+
+    def get_token_count(self):
+        return 0
+
+    def calculate_llm_timeout(self, tool_count=0, use_vision=False):
+        return 30
+
+    def get_llm_parameters(self):
+        return {}
+
+    def push_ephemeral_message(self, message):
+        pass
+
+
+def _make_retry_agent(side_effect):
+    """A bare ``Agent`` (``object.__new__`` -- no ``__init__``, matching the
+    established pattern in ``test_fallback_exclusion_dedup.py``) with only
+    the attributes the no-native-tools / no-streaming path of
+    ``_get_next_action_internal`` reads. Real class -> real mixin methods
+    (``_supports_streaming``, ``_get_llm_parameters``, ``_classify_llm_error``)
+    for free; only DATA is faked."""
+    from agents.task.agent.service import Agent
+
+    a = object.__new__(Agent)
+    a.logger = logging.getLogger("test-a12-retry-log-levels")
+    a.controller = None  # short-circuits native-tool-calling entirely
+    a.tool_call_tracker = None
+    a.message_manager = _FakeMessageManager()
+    a.model_name = "gpt-5"
+    a.chat_model_library = "OpenAIAdapter"
+    a.use_native_tools = False
+    a.use_vision = False
+    a.provider_name = "fake-test-provider"  # not in STREAMING_PROVIDER_NAMES
+    a.state = _SimpleNamespace(n_steps=1)
+    a.llm = _FakeLLM(side_effect)
+    a.max_actions_per_step = 5  # only read for the early JSON format hint
+    return a
+
+
+def test_two_attempt_failure_is_per_attempt_warning_and_one_final_error(caplog):
+    """Drives ``_get_next_action_internal`` through exactly two outer retry
+    attempts (attempt 1: a retryable rate-limit; attempt 2: a non-retryable
+    auth failure, so the loop stops there) and asserts on LEVELS only:
+
+    - every per-attempt log ("LLM request attempt N failed...", plus every
+      per-attempt log deeper in the cascade -- the tool-calling attempt, the
+      structured-output attempt, both plain-fallback legs) is WARNING;
+    - exactly ONE record is ERROR: the loop's own final-exhaustion line,
+      which names the provider and the error class (043 §4.6's requirement),
+      not just a bare attempt count.
+    """
+    from modules.llm.usage_extract import resolve_serving_provider
+
+    # Two `ainvoke` calls per outer attempt (the structured-output handler's
+    # own plain-fallback leg, then the outer handler's "final fallback" leg,
+    # both of which run before the OUTER retry loop ever sees a failure) x
+    # two outer attempts.
+    side_effect = [
+        Exception("rate limit exceeded"),
+        Exception("rate limit exceeded"),
+        Exception("401 unauthorized"),
+        Exception("401 unauthorized"),
+    ]
+    agent = _make_retry_agent(side_effect)
+    provider = resolve_serving_provider(agent.llm, agent.model_name)
+
+    caplog.set_level(logging.WARNING, logger="test-a12-retry-log-levels")
+    with pytest.raises(Exception, match="401 unauthorized"):
+        asyncio.run(agent._get_next_action_internal([]))
+
+    records = [r for r in caplog.records if r.name == "test-a12-retry-log-levels"]
+    errors = [r for r in records if r.levelno == logging.ERROR]
+    warns = [r for r in records if r.levelno == logging.WARNING]
+
+    assert len(errors) == 1, (
+        f"expected exactly one ERROR record, got: "
+        f"{[(r.levelname, r.getMessage()) for r in records]}"
+    )
+    final = errors[0].getMessage()
+    assert "LLM call failed after 2 attempts" in final
+    assert f"provider={provider}" in final, "must name the provider (043 §4.6)"
+    assert "Exception" in final, "must name the error class (043 §4.6)"
+
+    # The per-outer-attempt log ("attempt N failed") fires once per outer
+    # attempt (N=2) and must never be ERROR.
+    attempt_records = [r for r in warns if "LLM request attempt" in r.getMessage()]
+    assert len(attempt_records) == 2
+    assert all(r.levelno == logging.WARNING for r in attempt_records)
+
+    # The structured-output cascade's own per-attempt log ("Structured
+    # output failed: ...", fired once per agent lifetime -- pre-existing
+    # `_structured_output_warned` throttling, untouched by this fix round)
+    # is present and WARNING, never ERROR.
+    struct_records = [r for r in records if "Structured output failed" in r.getMessage()]
+    assert struct_records, (
+        f"expected the structured-output cascade's own warning, got: "
+        f"{[(r.levelname, r.getMessage()) for r in records]}"
+    )
+    assert all(r.levelno == logging.WARNING for r in struct_records)
+
+    # Every record but the one final exhaustion line is WARNING -- the whole
+    # point of this fix round ("a retry attempt is not an error until the
+    # last one fails").
+    assert len(warns) == len(records) - 1
+    assert records[-1] is errors[0]

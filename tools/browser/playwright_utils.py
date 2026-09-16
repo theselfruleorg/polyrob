@@ -6,6 +6,8 @@ import logging
 from pathlib import Path
 from typing import Tuple, Optional
 
+from tools.browser.child_env import build_browser_env
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,7 +24,11 @@ def check_playwright_browsers() -> bool:
             capture_output=True,
             text=True,
             timeout=5,
-            check=False
+            check=False,
+            # S2 (2026-09-14): an implicit inherit handed the Playwright CLI the
+            # whole agent environment (wallet seed + every API key). It needs
+            # PATH/HOME/PLAYWRIGHT_* and nothing else.
+            env=build_browser_env(),
         )
         
         # If dry-run succeeds, browsers are likely installed
@@ -92,7 +98,8 @@ def install_playwright_browsers(with_deps: bool = False) -> Tuple[bool, Optional
             capture_output=True,
             text=True,
             check=False,
-            timeout=120  # 2 minute timeout for installation
+            timeout=120,  # 2 minute timeout for installation
+            env=build_browser_env(),  # S2: scrubbed, never the agent's own environment
         )
         
         if result.returncode == 0:

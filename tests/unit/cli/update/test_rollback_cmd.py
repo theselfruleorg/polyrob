@@ -31,6 +31,8 @@ def _count(path: Path) -> int:
 def _wire_ctx(monkeypatch, data_home: Path):
     uctx = UpdateContext(data_home=data_home, snapshots_root=data_home / "snapshots")
     monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
+    # These tests exercise snapshot/DB guards; process census has its own suite.
+    monkeypatch.setattr("cli.update.process_guard.server_process_alive", lambda **kw: False)
     return uctx
 
 

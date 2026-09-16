@@ -60,11 +60,19 @@ def test_surface_block_is_stable_across_builds():
 def test_communication_contract_does_not_ask_for_a_wall_of_paths():
     """The old contract said 'report completion WITH the concrete evidence (file
     paths, ids, urls)', which reads as 'enumerate the paths' — and that is what
-    the agent did."""
-    contract = SystemPrompt("actions", tool_ids=[],
-                            autonomous=True)._get_communication_contract_content()
-    assert "attach or link the detail" in contract
-    assert "not a report" in contract
+    the agent did.
+
+    C2 moved the shape half of this rule out of <communication-contract> and into
+    <message-shape>, which EVERY session gets rather than only autonomous ones —
+    strictly broader, so the assertion now reads the whole prompt. The contract
+    keeps the autonomy-specific half and points at the shared rules.
+    """
+    prompt = SystemPrompt("actions", tool_ids=[], autonomous=True)
+    text = prompt.get_system_message().content
+    assert "not an address" in text
+    assert "attaches it, or links it" in text
+    contract = prompt._get_communication_contract_content()
+    assert "message-shape rules above apply here too" in contract
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +97,43 @@ def test_surface_profile_reads_capabilities_from_the_bound_surface():
     assert surface_profile(orch) == {
         "surface_id": "telegram", "max_message_bytes": 4096, "media_out": True,
         "markdown_flavor": "html", "supports_interactive_ask": False,
+        # 044 T15: a key with no chat_type segment reads as a DM — the legacy,
+        # surface-agnostic case, never as a room.
+        "chat_id": "", "chat_type": "dm", "chat_name": "",
+        # 044 T17: a DM has no per-room policy, so no standing instructions.
+        "chat_instructions": "",
+        # 046: and no paid room actions — that note is rendered for ROOMS only.
+        "chat_paid_actions": "",
     }
+
+
+def test_surface_profile_reads_the_chat_type_off_the_routing_key():
+    """044 T15: the key's 4th segment IS the chat_type
+    (session_chat_registry.build_session_key), so the profile cannot disagree
+    with the key the turn was routed on."""
+    from core.surfaces.binding import surface_profile
+
+    caps = SimpleNamespace(max_message_bytes=4096, media_out=True,
+                           markdown_flavor="html", supports_interactive_ask=False)
+
+    class _Container:
+        def get_service(self, name):
+            if name == "session_chat_registry":
+                return SimpleNamespace(
+                    resolve=lambda k: {"surface_id": "telegram", "chat_id": "-100"})
+            if name == "surface_registry":
+                return SimpleNamespace(get=lambda sid: SimpleNamespace(capabilities=caps))
+            return None
+
+    for key, expected in (("agent:main:telegram:supergroup:-100", "supergroup"),
+                          ("agent:main:telegram:channel:-100", "channel"),
+                          ("agent:main:telegram:dm:-100:u1", "dm")):
+        p = surface_profile(SimpleNamespace(_chat_session_key=key,
+                                            container=_Container()))
+        assert p["chat_type"] == expected
+        # 044 T17: a room with no `chat.name` written falls back to its id.
+        assert p["chat_id"] == "-100" and p["chat_name"] == "-100"
+        assert p["chat_instructions"] == ""
 
 
 def test_surface_profile_is_none_without_a_binding():

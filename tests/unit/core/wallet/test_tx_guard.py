@@ -13,6 +13,11 @@ USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 TO = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
 SPENDER = "0x1111111111111111111111111111111111111111"
 HOLDER = "0x2222222222222222222222222222222222222222"
+#: Base's pinned Uniswap V3 SwapRouter02. The approve fixtures below use it
+#: because a real approve leg approves the ROUTER — and since S3 (2026-09-14)
+#: the exit-bounded exemption requires exactly that: a grant to an address the
+#: chain does not pin as a route spender is not an exit, whatever it is worth.
+ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481"
 
 
 def _intent(**kw):
@@ -171,10 +176,15 @@ def test_undeclared_allowance_grant_refuses():
 
 
 def test_declared_allowance_grant_within_bound_is_permitted():
+    """The grant is priced into the transaction's value even though this is not
+    an allowance op (S4, 2026-09-14), so the declared ceiling has to cover the
+    outflow AND the claim the call leaves behind."""
     d = _authorize(
-        intent=_intent(expected_allowance_grants=((USDC, SPENDER, 5_000_000),)),
-        deltas=_clean_deltas(allowance_deltas={(USDC, SPENDER): 5_000_000}))
-    assert d.allowed is True
+        intent=_intent(expected_allowance_grants=((USDC, SPENDER, 500_000),),
+                       max_spend_usd=1.0),
+        deltas=_clean_deltas(allowance_deltas={(USDC, SPENDER): 500_000}))
+    assert d.allowed is True, d.reason
+    assert d.amount_usd == pytest.approx(0.75)   # $0.25 out + a $0.50 claim
 
 
 def test_declared_allowance_grant_exceeded_refuses():
@@ -333,9 +343,9 @@ def test_zero_measured_outflow_is_a_measurement_failure_not_a_free_transfer():
 # --------------------------------------------------------------------------
 
 def _approve_intent(grant=1_000_000, **kw):
-    base = dict(chain="base", token=USDC, to=SPENDER, amount_raw=0,
+    base = dict(chain="base", token=USDC, to=ROUTER, amount_raw=0,
                 max_spend_usd=2.0, is_allowance_op=True,
-                expected_allowance_grants=((USDC, SPENDER, grant),),
+                expected_allowance_grants=((USDC, ROUTER, grant),),
                 idempotency_key="ka1")
     base.update(kw)
     return tx_guard.TxIntent(**base)
@@ -343,7 +353,7 @@ def _approve_intent(grant=1_000_000, **kw):
 
 def _approve_deltas(grant=1_000_000, moved=0):
     return Deltas(ok=True, native_delta=0, token_deltas={USDC: moved},
-                  allowance_deltas={(USDC, SPENDER): grant})
+                  allowance_deltas={(USDC, ROUTER): grant})
 
 
 def test_a_real_approve_shape_is_authorized():
@@ -396,17 +406,20 @@ def test_exit_grant_exceeding_held_balance_still_refuses():
     assert "price" in d.reason.lower()
 
 
-def test_exit_exemption_without_a_fallback_price_values_at_zero():
-    """2026-08-26 exit untying: an exit-bounded grant NO source can price is
-    allowed at $0 instead of refusing — the old refusal left fired stop rules
-    (BPAD, BaseUnc at −54%) with no autonomous exit path at all. The swap that
-    follows is valued exactly (measured quote inflow) and capped; the grant is
-    still simulation-asserted to the declared spender and amount."""
+def test_exit_exemption_without_a_fallback_price_charges_the_ceiling():
+    """2026-08-26 exit untying valued an exit-bounded grant NO source can price
+    at $0 rather than refusing, so fired stop rules (BPAD, BaseUnc at −54%)
+    stayed executable. S3 (2026-09-14) keeps it executable and stops it reading
+    as FREE: the charge is the autonomous ceiling plus a cent, so the owner is
+    ASKED and the claim is finally charged to the caps."""
     d = _authorize(
-        intent=_approve_intent(grant=1_000_000, held_balance_raw=1_000_000),
-        deltas=_approve_deltas(grant=1_000_000), price=None, fallback_price=None)
-    assert d.allowed is True, d.reason
-    assert d.amount_usd == 0.0
+        intent=_approve_intent(grant=1_000_000, held_balance_raw=1_000_000,
+                               max_spend_usd=1_000.0),
+        deltas=_approve_deltas(grant=1_000_000), price=None, fallback_price=None,
+        gate=PolicyGate(max_per_tx_usd=1_000.0, daily_cap_usd=1_000.0))
+    assert d.allowed is False
+    assert d.lane == "owner_queue"
+    assert d.amount_usd is not None and d.amount_usd > 0.0
 
 
 def test_exit_exemption_is_inert_without_held_balance_declared():
@@ -469,7 +482,7 @@ def test_a_real_revoke_shape_is_authorized_without_any_price():
     the cleanup the allowance-hygiene design wants to stay easy."""
     intent = _approve_intent(expected_allowance_grants=(), max_spend_usd=0.01)
     deltas = Deltas(ok=True, native_delta=0, token_deltas={USDC: 0},
-                    allowance_deltas={(USDC, SPENDER): -1_000_000})
+                    allowance_deltas={(USDC, ROUTER): -1_000_000})
     d = _authorize(intent=intent, deltas=deltas, price=None)
     assert d.allowed is True, d.reason
     assert d.amount_usd == 0.0
@@ -558,15 +571,17 @@ def test_an_unpriceable_grant_with_no_held_balance_says_the_exemption_needs_one(
     assert "held balance" in d.reason.lower()
 
 
-def test_an_unpriceable_exit_bounded_grant_is_allowed_at_zero():
-    """2026-08-26 exit untying: eligible for the exemption and priceless by
-    every source — that used to dead-end on 'have the owner approve it by
-    hand', which on prod meant fired stop rules could never execute. Now $0,
-    loudly, and only for grants within the held balance."""
-    d = _authorize(intent=_approve_intent(held_balance_raw=10_000_000),
-                   deltas=_approve_deltas(), price=None, fallback_price=None)
-    assert d.allowed is True, d.reason
-    assert d.amount_usd == 0.0
+def test_an_unpriceable_exit_bounded_grant_is_charged_the_ceiling():
+    """Eligible for the exemption and priceless by every source. It used to
+    dead-end on 'have the owner approve it by hand'; 2026-08-26 made it $0;
+    S3 makes it the autonomous ceiling — closable, but never free."""
+    d = _authorize(intent=_approve_intent(held_balance_raw=10_000_000,
+                                          max_spend_usd=1_000.0),
+                   deltas=_approve_deltas(), price=None, fallback_price=None,
+                   gate=PolicyGate(max_per_tx_usd=1_000.0, daily_cap_usd=1_000.0))
+    assert d.allowed is False
+    assert d.lane == "owner_queue"
+    assert d.amount_usd is not None and d.amount_usd > 0.0
 
 
 def test_the_unpriceable_refusal_still_refuses_without_a_held_balance():

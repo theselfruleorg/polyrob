@@ -30,7 +30,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user="gleb"):
+def _cmd(command, text, user="alice"):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -41,13 +41,13 @@ def _cmd(command, text, user="gleb"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     from core.instance import DEFAULT_INSTANCE_ID
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
 
 
-def _seed_pending_self(home, uid="gleb"):
+def _seed_pending_self(home, uid="alice"):
     from core.self_context_writer import PROVENANCE_AGENT, SelfContextWriter
     SelfContextWriter(home).propose(  # default instance id, matching load_self_doc
         "Learned: escalate blockers to the owner proactively.",
@@ -86,15 +86,15 @@ async def test_pending_refused_for_non_owner(env):
 async def test_approve_promotes_self_context(env):
     from core.instance import load_self_doc
     _seed_pending_self(env)
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve gleb"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve alice"))
     assert "promoted" in out.lower()
-    assert "escalate blockers" in load_self_doc(env, user_id="gleb")
+    assert "escalate blockers" in load_self_doc(env, user_id="alice")
 
 
 @pytest.mark.asyncio
 async def test_reject_archives_self_context(env):
     _seed_pending_self(env)
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/reject", "/reject gleb"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/reject", "/reject alice"))
     assert "rejected" in out.lower()
     out2 = await act_on_inbound(_Agent(str(env)), _cmd("/pending", "/pending"))
     assert "no pending" in out2.lower()
@@ -111,7 +111,7 @@ async def test_asks_and_fulfill_roundtrip(env):
     from agents.task.goals.board import ASK_FULFILLED, GoalBoard
     import os
     board = GoalBoard(os.path.join(str(env), "goals.db"))
-    a = board.create_ask(user_id="gleb", what="Grant Twitter write access",
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access",
                          why="X objective needs twitter_post")
     agent = _Agent(str(env))
     out = await act_on_inbound(agent, _cmd("/asks", "/asks"))
@@ -127,7 +127,7 @@ async def test_fulfill_refused_for_non_owner(env):
     from agents.task.goals.board import ASK_OPEN, GoalBoard
     import os
     board = GoalBoard(os.path.join(str(env), "goals.db"))
-    a = board.create_ask(user_id="gleb", what="Grant Twitter write access")
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access")
     out = await act_on_inbound(_Agent(str(env)),
                                _cmd("/fulfill", f"/fulfill {a.id}", user="u_stranger"))
     assert "owner" in out.lower()
@@ -143,7 +143,7 @@ async def test_help_mentions_owner_verbs(env):
 # --- Task 9 / G-2: tool-approval asks ride the SAME /pending /approve /reject verbs,
 # namespaced tap-<id> so they never collide with a self-evolution proposal id. ---------
 
-def _seed_tool_approval(home, uid="gleb", tool_name="x402_request"):
+def _seed_tool_approval(home, uid="alice", tool_name="x402_request"):
     from agents.task.goals.board import GoalBoard
     import os
     board = GoalBoard(os.path.join(str(home), "goals.db"))
@@ -196,7 +196,7 @@ async def test_approve_still_dispatches_self_evolution_when_no_tap_prefix(env):
     a bare (non tap-) id still routes to core.self_evolution."""
     _seed_pending_self(env)
     _seed_tool_approval(env)  # a tool_approval ask also open at the same time
-    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve gleb"))
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/approve", "/approve alice"))
     assert "promoted" in out.lower()
 
 

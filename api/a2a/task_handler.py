@@ -306,7 +306,8 @@ class A2ATaskHandler:
             session_info = await agent.create_session(
                 user_id=user_id,
                 request=session_request,
-                session_id=task_id
+                session_id=task_id,
+                creator="api",  # 043 A17: the A2A protocol endpoint
             )
         except SessionOwnershipError:
             # C4: client-supplied taskId belongs to another tenant. Stay

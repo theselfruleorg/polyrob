@@ -119,6 +119,22 @@ def test_rate_limit_per_hour(monkeypatch):
     assert len(sink.sent) == 2
 
 
+def test_rate_limited_records_text(monkeypatch):
+    """A7 / A40: the 11th message in an hour used to vanish entirely — the
+    `user_delivery` row recorded no text at all. It must now carry the body
+    (mirroring the `capped`/`fallback` shapes), even though — unlike those —
+    it is not durably re-shown via `/missed` (no owner_notice row)."""
+    monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "1")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    assert _deliver(c, "1", "msg one", event_log=ev) == "sent"
+    assert _deliver(c, "1", "msg two, over the limit", event_log=ev) == "rate_limited"
+    rl = [e for e in ev.events
+          if e["kind"] == "user_delivery" and e["attrs"].get("outcome") == "rate_limited"]
+    assert len(rl) == 1
+    assert rl[0]["attrs"].get("text") == "msg two, over the limit"
+
+
 def test_daily_cap(monkeypatch):
     monkeypatch.setenv("USER_DELIVERY_RATE_PER_HOUR", "100")
     monkeypatch.setenv("USER_DELIVERY_DAILY_CAP", "3")
@@ -453,10 +469,16 @@ def test_lifecycle_pings_have_their_own_smaller_bucket(monkeypatch):
     assert _deliver(c, "1", "▶ goal started: a", event_log=ev, source="self_evolution") == "sent"
     assert _deliver(c, "1", "✅ Background goal 'a' completed.", event_log=ev,
                     source="self_evolution") == "sent"
-    # third lifecycle ping of the day: capped by the bucket, durably recorded
+    # third lifecycle ping of the day: capped by the bucket, durably recorded.
+    # `self_evolution` is push_owner_message's DEFAULT source and carries real
+    # content too, so it keeps its notice; only `source="lifecycle"` is excluded
+    # from `/missed` (2026-09-15, C3 — see test_user_delivery_budget.py).
     assert _deliver(c, "1", "▶ goal started: b", event_log=ev, source="self_evolution") == "capped"
     notices = [e for e in ev.events if e["kind"] == "owner_notice"]
     assert notices and "bucket=lifecycle" in notices[-1]["attrs"]["text"]
+    capped = [e for e in ev.events if e["kind"] == "user_delivery"
+              and e["attrs"].get("outcome") == "capped"]
+    assert capped and capped[-1]["attrs"]["text"] == "▶ goal started: b"
     # ...while the agent's own voice still has the shared cap
     for i in range(8):
         assert _deliver(c, "1", f"Treasury run {i} complete", event_log=ev,
@@ -477,3 +499,46 @@ def test_lifecycle_bucket_zero_disables_it(monkeypatch):
                         source="self_evolution") == "sent"
     assert _deliver(c, "1", "▶ goal started: 6", event_log=ev,
                     source="self_evolution") == "capped"
+
+
+# ---------------------------------------------------------------------------
+# 044 T20 fix round 2 (Obs 1): a PUBLIC room reply never mirrors to the owner DM
+# ---------------------------------------------------------------------------
+
+def test_a_room_session_never_mirrors_to_the_owner_dm():
+    """A room SERVICE run is AUTONOMOUS and has a live mirror, so it fell
+    through the `has_live_mirror and not is_autonomous` carve-out: every public
+    answer was ALSO pushed into the owner's private chat, spending his daily
+    delivery budget on a message he had already read in the room."""
+    from agents.task.goals.autonomy_marker import _SESSIONS, mark_autonomous
+    from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+    _SESSIONS.clear()
+    mark_autonomous("sess-room")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    orch = _orch(c, user_id="12345", message_router=object(),
+                 chat_session_key="agent:main:telegram:supergroup:-1001")
+    orch._public_session = True
+    out = asyncio.run(maybe_deliver_autonomous_send(
+        orch, "sess-room", "yes, live since Tuesday", event_log=ev))
+    assert out is None
+    assert not sink.sent
+    _SESSIONS.clear()
+
+
+def test_a_private_autonomous_send_still_reaches_the_owner():
+    """Polarity guard: the carve-out this narrows exists for a goal/cron run with
+    no surface of its own, and that must keep working."""
+    from agents.task.goals.autonomy_marker import _SESSIONS, mark_autonomous
+    from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+    _SESSIONS.clear()
+    mark_autonomous("sess-goal")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    orch = _orch(c, user_id="12345")
+    orch._public_session = False
+    out = asyncio.run(maybe_deliver_autonomous_send(
+        orch, "sess-goal", "the build is green", event_log=ev))
+    assert out == "sent"
+    assert sink.sent == [("12345", "the build is green")]
+    _SESSIONS.clear()

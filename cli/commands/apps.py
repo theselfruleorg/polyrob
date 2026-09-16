@@ -30,8 +30,10 @@ def _registry():
 
 
 def _tenant(user):
-    from core.instance import resolve_owner_principal
-    return user or str(resolve_owner_principal() or "local")
+    """The ONE owner-tenant resolver, so `polyrob apps …`, the console's `/apps`
+    and the agent's own rows name one bucket."""
+    from core.instance import resolve_owner_user_id
+    return user or resolve_owner_user_id()
 
 
 async def default_sys_runner(argv, *, input=None, timeout=None):

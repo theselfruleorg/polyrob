@@ -8,7 +8,6 @@
 """
 import importlib
 import json
-from pathlib import Path
 
 import pytest
 
@@ -56,12 +55,6 @@ async def test_internal_emit_targets_joinable_room(monkeypatch):
     )
 
 
-def test_feed_tab_button_present():
-    session_html = Path(__file__).resolve().parents[3] / "webview" / "templates" / "session.html"
-    text = session_html.read_text()
-    assert 'data-tab="feed"' in text, "the rich Feed renderer must be reachable via a tab button"
-
-
 def test_dead_code_removed(monkeypatch):
     server = _reload_server(monkeypatch)
     assert not hasattr(server, "compute_feed_checksum")
@@ -77,7 +70,8 @@ def test_single_startup_hook(monkeypatch):
 
 
 def test_repair_endpoint_runs_real_repair(monkeypatch, tmp_path):
-    """/api/repair/{id} must invoke repair_session_telemetry, not fake success."""
+    """/api/repair/{id} must invoke repair_session_telemetry, not fake success.
+    A POST since 043 W2 — it rewrites the session's telemetry files."""
     from fastapi.testclient import TestClient
     server = _reload_server(monkeypatch)
     session_dir = tmp_path / "sess-r"
@@ -85,7 +79,7 @@ def test_repair_endpoint_runs_real_repair(monkeypatch, tmp_path):
     monkeypatch.setattr(type(server.pm()), "get_feed_dir",
                         lambda self, sid, user_id=None: session_dir / "feed")
     client = TestClient(server._fastapi)
-    resp = client.get("/api/repair/sess-r")
+    resp = client.post("/api/repair/sess-r")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -97,5 +91,5 @@ def test_repair_endpoint_refused_in_read_only(monkeypatch, tmp_path):
     monkeypatch.setenv("WEBVIEW_READ_ONLY", "true")
     server = _reload_server(monkeypatch)
     client = TestClient(server._fastapi)
-    resp = client.get("/api/repair/sess-r")
+    resp = client.post("/api/repair/sess-r")
     assert resp.status_code == 403

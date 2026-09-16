@@ -59,10 +59,11 @@ async def test_owner_turn_pauses_and_quotes_verified_state(home):
     assert st.via == "agent" and st.reason == "owner said" and st.scopes == ("trading",)
     res = await fn(model(action="status"), _ctx())
     assert res.extracted_content.startswith("⏸ PAUSED (trading)")  # the shared headline
-    assert "autonomy_control(resume)" in res.extracted_content   # the agent's own verb, not /resume
+    # 034 §11.2: the resume hint is the OWNER's seat — the agent has no resume verb.
+    assert "/resume (owner only)" in res.extracted_content
     res = await fn(model(action="resume"), _ctx())
-    assert res.extracted_content.startswith("▶ Autonomy RESUMED")
-    assert not read_state(str(home)).paused
+    assert res.extracted_content.startswith("Refused: I cannot resume autonomy")
+    assert read_state(str(home)).paused, "the agent must not have lifted the pause"
 
 
 @pytest.mark.asyncio
@@ -123,3 +124,71 @@ def test_registered_on_the_real_controller_and_excluded_for_leaves():
     assert "autonomy_control" in _HIGH_IMPACT_NAMES
     src = pathlib.Path("tools/controller/service.py").read_text(encoding="utf-8")
     assert "register_autonomy_control_action(self)" in src
+
+
+# --- 034 §11.2: the agent may never resume autonomy it did not pause ----------
+#
+# On 2026-09-09 the owner typed `/halt`. Twenty-two hours later he replied
+# "a b and c approve" to a question about THREE BRIDGE EXECUTION PATHS, and the
+# agent called autonomy_control(resume, scopes=['all']) with the reason
+# "dispatcher must run for the granted goal to execute". The stream seeder fired
+# four minutes later and a goal the owner had cancelled the previous day spent
+# $0.60 on-chain 23 minutes after that.
+#
+# The gate was on WHO (owner principal, genuine turn) and never on WHAT. A stop
+# the owner placed with an explicit command could be lifted by the model's
+# reading of an ambiguous approval. Only an owner SEAT lifts a pause now.
+
+
+async def _call(home, action, scopes=("all",)):
+    from tools.controller.autonomy_control_action import (AutonomyControlAction,
+                                                          register_autonomy_control_action)
+    c = _Controller(str(home))
+    register_autonomy_control_action(c)
+    fn, _model, _desc = c.registry.actions["autonomy_control"]
+    return await fn(AutonomyControlAction(action=action, scopes=list(scopes)), _ctx())
+
+
+@pytest.mark.asyncio
+async def test_the_agent_cannot_resume_a_pause(home):
+    from core import autonomy_control as ac
+    ac.pause(str(home), scopes=("all",), via="owner")
+    assert ac.read_state(str(home)).paused is True
+
+    res = await _call(home, "resume")
+
+    assert ac.read_state(str(home)).paused is True, "the agent lifted the owner's pause"
+    text = (res.extracted_content or "") + (res.error or "")
+    assert "/resume" in text, "the refusal must name the seat that CAN resume"
+
+
+@pytest.mark.asyncio
+async def test_a_scoped_resume_is_refused_too(home):
+    """`scopes=['trading']` is the same defect wearing a smaller hat."""
+    from core import autonomy_control as ac
+    ac.pause(str(home), scopes=("trading",), via="owner")
+    await _call(home, "resume", scopes=("trading",))
+    assert ac.read_state(str(home)).paused is True
+
+
+@pytest.mark.asyncio
+async def test_the_agent_can_still_pause_and_read_status(home):
+    """Only resume is removed. Stopping itself, and reporting the state, stay."""
+    from core import autonomy_control as ac
+    res = await _call(home, "pause", scopes=("trading",))
+    assert ac.read_state(str(home)).paused is True
+    assert (res.extracted_content or "").strip()
+    status = await _call(home, "status")
+    assert (status.extracted_content or "").strip()
+
+
+def test_the_tool_description_no_longer_teaches_resume(home):
+    from tools.controller.autonomy_control_action import register_autonomy_control_action
+    c = _Controller(str(home))
+    register_autonomy_control_action(c)
+    _fn, _model, desc = c.registry.actions["autonomy_control"]
+    low = desc.lower()
+    assert "pause or resume your own" not in low, \
+        "the description must not offer resume as one of this action's verbs"
+    assert "cannot lift a pause" in low and "/resume" in low, \
+        "it must say who CAN resume, so the agent can relay that instead of trying"

@@ -329,8 +329,16 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         env_key="ZAI_API_KEY",
         transport=Transport.ANTHROPIC_MESSAGES, base_url="https://api.z.ai/api/anthropic",
         bearer_auth=True,   # z.ai authenticates Bearer, not x-api-key
+        # supports_vision is the PROVIDER-wide floor, and it stays False because
+        # this seat's flagship (glm-5.3) is text-only. Per-model truth lives in the
+        # model registry, which `_check_vision_support` consults FIRST — so a
+        # session pinned to glm-5.3-flash (the one multimodal model on this plan,
+        # live-verified 2026-09-15) still gets vision.
         supports_native_tools=True, supports_vision=False,
-        default_model="glm-5", models=("glm-5", "glm-5.2"),
+        # Newest first. glm-5/glm-5.2 stay listed: a pinned older model must keep
+        # resolving, and `polyrob doctor` renders this tuple as what the seat serves.
+        default_model="glm-5.3",
+        models=("glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5"),
         fallback_eligible=False, builtin=True, subscription=True,
         # Opt-in plan, not part of the six-provider onboarding path — `polyrob
         # init` names it instead of adding a prompt nobody without the plan
@@ -390,8 +398,15 @@ BUILTIN_SPECS: Tuple[ProviderSpec, ...] = (
         transport=Transport.CHAT_COMPLETIONS,
         base_url="https://api.z.ai/api/paas/v4", base_url_env="GLM_BASE_URL",
         supports_native_tools=True, supports_vision=False,
+        # The default stays glm-5.2 deliberately: this row is METERED, and moving it
+        # to the pricier 5.3 would raise every existing user's bill without them
+        # asking. The two 5.3 ids are listed because the endpoint serves them (live
+        # /api/paas/v4/models, 2026-09-15) and because AUX_MODEL_MAP routes this
+        # provider's aux work to glm-5.3-flash — a map row naming a model absent from
+        # the seat's own tuple is exactly the drift this file exists to prevent.
         default_model="glm-5.2",
-        models=("glm-5.2", "glm-5.1", "glm-5", "glm-4.7-flash", "glm-4.6v"),
+        models=("glm-5.3", "glm-5.3-flash", "glm-5.2", "glm-5.1", "glm-5",
+                "glm-4.7-flash", "glm-4.6v"),
         fallback_eligible=False, builtin=True, prompt_in_init=False,
         signup_url="https://z.ai/",
         # Deliberately does NOT alias ZAI_API_KEY: that is the `zai-coding`

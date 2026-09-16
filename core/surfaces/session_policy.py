@@ -1,6 +1,8 @@
 """P0.1: session-boundary policy (pure) — a stable session-reset policy.
 
-A chat keyed by a stable `session_key` (`agent:main:{surface}:{type}:{chat}:{user}`)
+A chat keyed by a stable `session_key` (`agent:main:{surface}:{type}:{chat}[:{user}]`
+— the `:{user}` segment is appended for a DM only; a room key carries no user segment,
+see `core/surfaces/session_chat_registry.py::build_session_key`)
 continues the SAME underlying session_id until a boundary fires; then the next message
 starts a fresh session. Boundaries:
   - idle:  `now - row.updated_at > idle_minutes` (last-activity based; updated_at is

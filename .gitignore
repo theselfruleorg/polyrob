@@ -265,3 +265,7 @@ config/.env.production
 
 # M19 (2026-07-15): retired legacy SaaS env backups must never be committable
 config/.env.production.*
+
+# Portal docs are staged at deploy time by scripts/sync_portal_docs.sh — a build
+# artifact, regenerated every deploy. The source of truth is docs/.
+web/portal/docs/

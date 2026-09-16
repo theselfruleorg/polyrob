@@ -37,13 +37,28 @@ _SECRET_SUFFIXES = (
     "_SEED", "_HASH",
 )
 
+# S10 (2026-09-14): a managed-RPC endpoint IS a credential — the API key is IN
+# the URL (`https://base-mainnet.g.alchemy.com/v2/<key>`), so the suffix rule
+# above never matched it and `GET /api/webgate/config` plus the agent's own
+# `preferences explain` returned live keys intact. Matched as a NAME SUBSTRING
+# because the shape is `*_RPC` (X402_SETTLEMENT_RPC, DEFI_SOLANA_RPC),
+# `*_RPC_URL` (BASE_RPC_URL) and `*_RPC_<CHAIN>` (DEFI_EVM_RPC_BASE) alike.
+# A flag can still be reported as SET vs unset — only the value is hidden — so
+# "is my chain pinned?" stays answerable from `doctor --flags`.
+# The exact set this currently covers is pinned by
+# tests/unit/core/test_flags.py::test_rpc_flags_are_secret, so a future non-URL
+# `_RPC` flag has to be looked at rather than silently masked.
+_SECRET_NAME_PARTS = ("_RPC",)
+
 _TRUEISH_DOC = ("on", "true", "yes", "1")
 _FALSEISH_DOC = ("off", "false", "no", "0")
 
 
 def is_secret_flag(name: str) -> bool:
     """Whether a flag's value must be masked in any report output."""
-    return name.upper().endswith(_SECRET_SUFFIXES)
+    upper = name.upper()
+    return (upper.endswith(_SECRET_SUFFIXES)
+            or any(part in upper for part in _SECRET_NAME_PARTS))
 
 
 def _enum_kind(name: str) -> Optional[str]:

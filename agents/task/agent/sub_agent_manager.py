@@ -584,6 +584,26 @@ class SubAgentManager:
                 virtual_session_id=virtual_session_id
             )
 
+        # WORKERS_ENABLED (043 §6): the ONLY gated store lookup on the delegation
+        # path. When on, a non-default `profile_id` must resolve to an APPROVED
+        # tenant worker; an unknown or pending (quarantined) worker is refused so
+        # it can never be dispatched. OFF (default) → refusal is None → this whole
+        # block is inert and delegation stays byte-identical to the pre-043 path.
+        from agents.task.agent.profile_store import worker_dispatch_refusal
+        _worker_refusal = worker_dispatch_refusal(
+            profile_id, getattr(self.orchestrator, 'user_id', None))
+        if _worker_refusal:
+            self.logger.info(f"🚫 delegation refused: {_worker_refusal}")
+            return SubAgentResult(
+                agent_id=sub_agent_id,
+                task=task,
+                output=_worker_refusal,
+                success=False,
+                duration_seconds=time.time() - start_time,
+                error=_worker_refusal,
+                virtual_session_id=virtual_session_id,
+            )
+
         self.logger.info(f"🚀 Spawning sub-agent {sub_agent_id} (isolated session: {virtual_session_id[:20]}...)")
         self.logger.info(f"   Task: {task[:100]}...")
 

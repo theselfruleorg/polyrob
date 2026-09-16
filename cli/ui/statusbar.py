@@ -101,6 +101,13 @@ def _activity_segment(state: SessionState) -> str:
     return ""
 
 
+def cost_text(state: SessionState) -> str:
+    if state.unpriced_calls:
+        return (f"${state.cost_estimate_total:.4f} + unknown"
+                if state.cost_estimate_total else "cost unknown")
+    return f"${state.cost_estimate_total:.4f}"
+
+
 def _segments(state: SessionState, spinner: str = "") -> List[str]:
     """The ordered list of status segments (joined by ' · ')."""
     segs: List[str] = []
@@ -127,7 +134,7 @@ def _segments(state: SessionState, spinner: str = "") -> List[str]:
     if state.ctx_percent:
         segs.append(f"ctx {state.ctx_percent:.0f}%")
 
-    segs.append(f"${state.cost_estimate_total:.4f}")
+    segs.append(cost_text(state))
 
     # Tail: while a turn runs, ONE Claude-style ``✱ cooking… Xs`` affordance (work
     # clock folded in); when idle, the plain status word (ready/error/stopped) — no
@@ -160,8 +167,14 @@ def autonomy_line(state: SessionState, *, include_model: bool = True) -> str:
     if not snap:
         return ""
     auto: List[str] = []
-    goals = int(snap.get("goals", 0) or 0)
-    cron = int(snap.get("cron", 0) or 0)
+    goals = snap.get("goals")
+    cron = snap.get("cron")
+    if goals is None:
+        auto.append("goals unknown")
+    if cron is None:
+        auto.append("cron unknown")
+    if snap.get("review") is None:
+        auto.append("review unknown")
     if goals:
         auto.append(f"goals {goals}")
     if cron:
@@ -213,7 +226,8 @@ def _ctx_class(pct: float) -> str:
 
 
 def status_formatted(
-    state: SessionState, spinner: str = "", *, include_model: bool = True
+    state: SessionState, spinner: str = "", *, include_model: bool = True,
+    width: int | None = None,
 ) -> "FormattedText":
     """Build a prompt_toolkit ``FormattedText`` status toolbar.
 
@@ -262,7 +276,7 @@ def status_formatted(
         fragments.append((_ctx_class(state.ctx_percent), f"ctx {state.ctx_percent:.0f}%"))
         fragments.append(("", sep))
 
-    fragments.append(("class:toolbar.cost", f"${state.cost_estimate_total:.4f}"))
+    fragments.append(("class:toolbar.cost", cost_text(state)))
     fragments.append(("", sep))
 
     if _is_active(state):
@@ -273,4 +287,11 @@ def status_formatted(
         status_word = f"{spinner}{state.status}".strip()
         fragments.append((_status_class(state.status), status_word))
 
+    if width is not None:
+        from prompt_toolkit.utils import get_cwidth
+        from cli.ui.line_layout import fit_fragments
+        if sum(get_cwidth(text) for _, text in fragments) > width:
+            # Keep ready/error/stopped/the live clock visible on narrow terminals.
+            fragments = [fragments[-1], ("", sep)] + fragments[:-2]
+        fragments = fit_fragments(fragments, width)
     return FormattedText(fragments)

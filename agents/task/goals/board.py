@@ -1597,6 +1597,38 @@ class GoalBoard:
 
     # --- asks (§7.2b) ---------------------------------------------------------
 
+    def add_ask_blocked_goals(self, ask_id: str, goal_ids) -> list:
+        """Merge *goal_ids* into an EXISTING ask's ``blocks_goal_ids``.
+
+        The fuzzy-dedup branch of :meth:`create_ask` has always done this inline;
+        a caller that runs its OWN exact-match dedup (``owner_queue`` keys on a
+        request hash and reuses the open ask) had no way to, so a re-asked
+        approval kept whatever goal list it was first created with — usually
+        none. The owner then approved an ask that re-armed nothing (039).
+
+        Returns the merged list. Never raises: failing to widen the list must not
+        stop an approval being requested.
+        """
+        wanted = [g for g in (goal_ids or []) if g]
+        if not wanted:
+            return []
+        try:
+            row = self.get(ask_id)
+            if row is None:
+                return []
+            payload = dict(row.payload or {})
+            merged = sorted(set(payload.get("blocks_goal_ids") or []) | set(wanted))
+            if merged == sorted(payload.get("blocks_goal_ids") or []):
+                return merged
+            payload["blocks_goal_ids"] = merged
+            execute_retry(self.db_path, "UPDATE goals SET payload=? WHERE id=?",
+                          (json.dumps(payload), ask_id))
+            return merged
+        except Exception:
+            logger.warning("could not widen blocks_goal_ids on ask %s", ask_id,
+                           exc_info=True)
+            return []
+
     def create_ask(self, *, user_id: str, what: str, why: str = "",
                    blocks_goal_ids: Optional[List[str]] = None,
                    objective_id: Optional[str] = None,

@@ -383,6 +383,10 @@ class X402Tables:
                 )
             ''')
 
+            # 046 Phase 0: the asset columns. Shared with migration v1.9.0, so a
+            # FRESH install and an UPGRADED one can never disagree about them.
+            await add_payment_asset_columns(self.db, logger)
+
             await self.db.execute('''
                 CREATE INDEX IF NOT EXISTS idx_x402_requests_nonce
                 ON x402_payment_requests(nonce)
@@ -535,3 +539,48 @@ class X402Tables:
         except Exception as e:
             self.logger.error(f"Error creating x402 tables: {e}")
             raise
+
+
+#: 046 Phase 0. ``amount_raw`` is TEXT on purpose: an 18-decimal token amount
+#: exceeds SQLite's signed 64-bit INTEGER range, and an INTEGER column would
+#: overflow silently on a large-supply token.
+_PAYMENT_ASSET_COLUMNS = (
+    ("asset_id", "TEXT"),
+    ("asset_address", "TEXT"),
+    ("asset_decimals", "INTEGER"),
+    ("amount_raw", "TEXT"),
+)
+
+
+async def add_payment_asset_columns(db, log) -> None:
+    """Add the 046 asset columns to `x402_payment_requests`, idempotently.
+
+    Shared by `X402Tables.create_tables()` (fresh install) and migration v1.9.0
+    (existing install), so the two can never disagree. Tolerant of a DB that has
+    no `x402_payment_requests` yet — `PRAGMA table_info` on a missing table
+    returns empty, not an error, the same idiom the tx-hash index helper already
+    uses. Degrades loudly, never crashes boot.
+
+    A legacy row keeps NULL in all four. Every reader treats a NULL ``asset_id``
+    as ``usdc-base``, so no backfill is needed and no historical row changes
+    meaning.
+    """
+    try:
+        table_cols = await db.fetch_all("PRAGMA table_info(x402_payment_requests)")
+    except Exception:
+        table_cols = None
+    if not table_cols:
+        log.info("  x402_payment_requests not present yet — skipping the 046 "
+                 "asset columns (self-heals once the table exists)")
+        return
+    existing = {c["name"] for c in table_cols}
+    for name, sql_type in _PAYMENT_ASSET_COLUMNS:
+        if name in existing:
+            continue
+        try:
+            await db.execute(
+                f"ALTER TABLE x402_payment_requests ADD COLUMN {name} {sql_type}")
+            log.info("  x402_payment_requests: added column %s %s", name, sql_type)
+        except Exception as e:
+            log.error("  x402_payment_requests: could not add %s (%s) — the 046 "
+                      "asset rail will refuse rather than guess", name, e)

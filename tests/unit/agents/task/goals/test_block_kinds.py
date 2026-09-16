@@ -102,6 +102,13 @@ def clocked_board(tmp_path):
     return GoalBoard(str(tmp_path / "goals.db"), clock=clock), clock
 
 
+async def _wait_for_runs(dispatcher, timeout=3.0):
+    """Wait for fire-and-forget goal runs without assuming runner speed."""
+    tasks = tuple(dispatcher._inflight)
+    if tasks:
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout)
+
+
 def _block_with_kind(board, *, max_retries=1, block_kind=None):
     """Trip the breaker on a fresh goal (-> blocked, unstamped), then
     optionally stamp a block_kind directly (mirrors what the real producers
@@ -188,7 +195,7 @@ async def test_refusal_path_provider_death_stamps_provider_outage(board, monkeyp
     d = GoalDispatcher(board, agent)
     n = await d.dispatch_once()
     assert n == 1
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") == "provider_outage"
@@ -205,7 +212,7 @@ async def test_refusal_path_ordinary_refusal_stamps_needs_input(board, monkeypat
     agent = _RefusalAgent("session not found or unauthorized")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") == "needs_input"
@@ -220,7 +227,7 @@ async def test_exception_path_provider_death_stamps_provider_outage(board, monke
     d = GoalDispatcher(board, agent)
     n = await d.dispatch_once()
     assert n == 1
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") == "provider_outage"
@@ -234,7 +241,7 @@ async def test_exception_path_ordinary_exception_stamps_needs_input(board, monke
     agent = _ExceptionAgent("boom, unrelated to providers")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     got = board.get(g.id)
     assert got.status == STATUS_BLOCKED
     assert got.payload.get("block_kind") == "needs_input"

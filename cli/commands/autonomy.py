@@ -191,8 +191,8 @@ def off_cmd(mode, is_global):
 @click.argument("scopes", nargs=-1)
 @click.option("--for", "duration", default=None, help="Auto-resume after e.g. 90m, 6h, 2d")
 def pause_cmd(scopes, duration):
-    """Pause autonomous work NOW (no restart): everything, or SCOPES (trading
-    streams planner cron social oversight pings).
+    """Pause autonomous work NOW (no restart): everything, or a WORD —
+    trading, background, messages, deploying (or a raw scope).
 
     Writes the ONE 031 pause record (<data>/AUTONOMY_PAUSE.json) every loop,
     timer and on-box script reads. The output is the VERIFIED (read-back) state.
@@ -222,7 +222,7 @@ def halt_cmd():
 @autonomy.command("resume")
 @click.argument("scopes", nargs=-1)
 def resume_cmd(scopes):
-    """Lift the pause (everything, or SCOPES)."""
+    """Lift the pause (everything, or a WORD/scope)."""
     from core.surfaces.owner_admin import render_resume_result, resume_autonomy_scopes
     from core.surfaces.owner_intent import parse_pause_args
     try:

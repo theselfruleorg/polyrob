@@ -32,6 +32,16 @@ class UniV3RouteProvider:
               amount_in_raw: int, *, holder: str,
               slippage_bps: int) -> Optional[RouteQuote]:
         from tools.defi.providers import univ3
+        from tools.defi.providers.routes import is_native
+        if is_native(token_in) or is_native(token_out):
+            # Uniswap V3 pools hold the WRAPPED asset; `exactInputSingle` takes
+            # token ADDRESSES and pulls them by allowance. Routing native here
+            # would mean adding a wrap leg to a locally-built call, which is a
+            # different transaction shape with its own assertions. Returning
+            # None hands the pair to the aggregator, which does support it —
+            # and `best_route` reads None as "this provider has no path", never
+            # as "unbuyable".
+            return None
         q = univ3.best_quote(chain, token_in, token_out, amount_in_raw)
         if q is None:
             return None

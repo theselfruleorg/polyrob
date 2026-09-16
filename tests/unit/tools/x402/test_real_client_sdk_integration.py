@@ -725,3 +725,48 @@ async def test_oversized_response_is_truncated_not_discarded(monkeypatch):
     assert "DID settle" in res.body, "the marker must say the payment settled, not imply nothing happened"
     assert f"capped at {MAX_X402_BODY_BYTES}" in res.body
     assert len(res.body) < MAX_X402_BODY_BYTES + 500, "the returned body must actually be bounded"
+
+
+@pytest.mark.asyncio
+async def test_journal_persisted_before_signed_payment_and_retained_on_response_loss(fake_transport, monkeypatch):
+    from core.wallet import submission_journal as journal
+    original = fake_transport.handler
+    signed_requests = []
+    def lose_reply(request):
+        if request.headers.get('payment-signature') or request.headers.get('x-payment'):
+            assert journal.unresolved()[0]['chain'] == 'x402'
+            signed_requests.append(True)
+            raise TimeoutError('merchant accepted authorization; response lost')
+        return original(request)
+    monkeypatch.setattr(fake_transport, 'handler', lose_reply)
+    client = RealX402Client()
+    with pytest.raises(Exception):
+        await client.fetch_with_payment(url='http://fake/paid', method='POST', body=None,
+                                       signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
+    assert len(signed_requests) == 1
+    assert journal.unresolved()
+    with pytest.raises(Exception):
+        await client.fetch_with_payment(url='http://fake/paid', method='POST', body=None,
+                                       signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
+    assert len(signed_requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_journal_prevents_signed_payment(fake_transport, monkeypatch):
+    from core.wallet import submission_journal as journal
+    def fail(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(journal, 'prepare_attempt', fail)
+    original = fake_transport.handler
+    signed_requests = []
+    def refuse_signed(request):
+        if request.headers.get('payment-signature') or request.headers.get('x-payment'):
+            signed_requests.append(True)
+        return original(request)
+    monkeypatch.setattr(fake_transport, 'handler', refuse_signed)
+    with pytest.raises(Exception):
+        await RealX402Client().fetch_with_payment(
+            url='http://fake/paid', method='POST', body=None,
+            signer=LocalEoaSigner(KEY), network=NETWORK, max_amount_usd=0.1)
+
+    assert signed_requests == []

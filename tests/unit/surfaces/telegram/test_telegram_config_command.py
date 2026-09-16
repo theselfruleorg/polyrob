@@ -37,7 +37,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user="gleb"):
+def _cmd(command, text, user="alice"):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -47,7 +47,7 @@ def _cmd(command, text, user="gleb"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
@@ -69,7 +69,7 @@ async def test_dispatcher_routes_config_as_command():
             return None
 
     msg = InboundMessage(text="/config",
-                         identity=Identity(user_id="gleb",
+                         identity=Identity(user_id="alice",
                                           source=SessionSource("telegram", "555", "dm")))
     decision = await route_inbound(_FakeContainer(), msg)
     assert decision.kind == RouteKind.COMMAND
@@ -85,7 +85,7 @@ async def test_dispatcher_routes_config_set_as_command():
             return None
 
     msg = InboundMessage(text="/config set style.verbosity terse",
-                         identity=Identity(user_id="gleb",
+                         identity=Identity(user_id="alice",
                                           source=SessionSource("telegram", "555", "dm")))
     decision = await route_inbound(_FakeContainer(), msg)
     assert decision.kind == RouteKind.COMMAND
@@ -118,7 +118,7 @@ async def test_config_list_matches_prefs_reply_verbatim(env):
 
     # /config is the control plane: it keeps the FULL schema listing, which is
     # `_prefs_reply(full=True)` — still one loop, not a second one (G15).
-    expected = _prefs_reply("gleb", str(env), resolve_instance_id(), full=True)
+    expected = _prefs_reply("alice", str(env), resolve_instance_id(), full=True)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/config", "/config"))
     assert out == expected
 
@@ -126,7 +126,7 @@ async def test_config_list_matches_prefs_reply_verbatim(env):
 @pytest.mark.asyncio
 async def test_config_written_pref_shows_pref_source(env):
     from core.prefs import write_preference
-    ok, err = write_preference(str(env), "gleb", "style.verbosity", "terse", instance_id="rob")
+    ok, err = write_preference(str(env), "alice", "style.verbosity", "terse", instance_id="rob")
     assert ok, err
     out = await act_on_inbound(_Agent(str(env)), _cmd("/config", "/config"))
     assert "style.verbosity = terse (pref)" in out
@@ -141,7 +141,7 @@ async def test_config_set_safe_key_writes_immediately(env):
         _Agent(str(env)), _cmd("/config", "/config set style.verbosity terse"))
     assert "style.verbosity" in out
     assert "terse" in out
-    assert load_preferences(str(env), "gleb", instance_id="rob").get("style.verbosity") == "terse"
+    assert load_preferences(str(env), "alice", instance_id="rob").get("style.verbosity") == "terse"
 
 
 @pytest.mark.asyncio
@@ -163,7 +163,7 @@ async def test_config_set_guarded_key_does_not_write(env):
     assert "guarded" in out.lower()
     assert "pending" in out.lower()
     # never written directly from a bare Telegram message
-    assert load_preferences(str(env), "gleb", instance_id="rob").get("outbound.policy") is None
+    assert load_preferences(str(env), "alice", instance_id="rob").get("outbound.policy") is None
 
 
 @pytest.mark.asyncio
@@ -171,7 +171,7 @@ async def test_config_set_guarded_key_queues_proposal(env):
     from core.prefs import list_pending_pref_changes
     await act_on_inbound(
         _Agent(str(env)), _cmd("/config", "/config set outbound.policy open"))
-    items = list_pending_pref_changes("gleb", str(env), instance_id="rob")
+    items = list_pending_pref_changes("alice", str(env), instance_id="rob")
     assert any(it["id"] == "outbound.policy" for it in items)
 
 

@@ -61,3 +61,29 @@ def test_catalog_also_in_get_messages_foundation():
     mm.set_tool_catalog_message("<tool-catalog>CATALOG_SENTINEL</tool-catalog>")
     msgs = mm.get_messages()
     assert any("CATALOG_SENTINEL" in _text(m) for m in msgs)
+
+
+def test_live_refresh_replaces_catalog_after_tool_load():
+    from types import SimpleNamespace
+    from agents.task.agent.core.runtime_catalog import refresh_tool_catalog
+    mm = _mm()
+    mm.set_tool_catalog_message("<tool-catalog>fixture: loadable</tool-catalog>")
+    controller = SimpleNamespace(render_tool_catalog=lambda **kw: "<tool-catalog>fixture: loaded</tool-catalog>")
+    refresh_tool_catalog(SimpleNamespace(message_manager=mm, controller=controller, _role="root"))
+    catalogs = [m for m in mm.get_messages() if "available-tools" in _text(m)]
+    assert len(catalogs) == 1 and "fixture: loaded" in _text(catalogs[0])
+    pinned = mm._tool_catalog_message
+    refresh_tool_catalog(SimpleNamespace(message_manager=mm, controller=controller))
+    assert mm._tool_catalog_message is pinned  # unchanged snapshot is not re-tokenized
+
+
+def test_refresh_failure_does_not_leave_a_stale_capability_claim():
+    from types import SimpleNamespace
+    from agents.task.agent.core.runtime_catalog import refresh_tool_catalog
+    mm = _mm()
+    mm.set_tool_catalog_message("<tool-catalog>fixture: loaded</tool-catalog>")
+    controller = MagicMock()
+    controller.render_tool_catalog.side_effect = RuntimeError("registry unavailable")
+    refresh_tool_catalog(SimpleNamespace(message_manager=mm, controller=controller))
+    assert "snapshot unavailable" in mm._tool_catalog_message.content
+    assert "fixture: loaded" not in mm._tool_catalog_message.content

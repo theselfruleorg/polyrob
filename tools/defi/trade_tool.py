@@ -159,6 +159,31 @@ def _wsol_mint() -> str:
 _WSOL_MINT = _wsol_mint()
 
 
+_NFT_OFF = ("the NFT verbs are not enabled on this instance "
+            "(set NFT_TOOLS_ENABLED=true). The guard still refuses any "
+            "undeclared non-fungible movement regardless of this flag.")
+
+
+def _nft_tools_enabled() -> bool:
+    """⚠️ Gates the VERBS only. The tx_guard refusals for an undeclared NFT
+    outflow and for any ApprovalForAll grant are NOT behind this flag — a
+    security refusal behind a default-off switch is not a refusal."""
+    from core.env import bool_env
+    return bool_env("NFT_TOOLS_ENABLED", False)
+
+
+_ERC8004_OFF = ("ERC-8004 identity verbs are not enabled on this instance "
+                "(set EIP8004_REGISTER_ENABLED=true). The guard's registration "
+                "rules apply regardless of this flag.")
+
+
+def _erc8004_register_enabled() -> bool:
+    """⚠️ Gates the VERBS only. tx_guard's registration receipt assertion and
+    its pinned-destination rule are NOT behind this flag."""
+    from core.env import bool_env
+    return bool_env("EIP8004_REGISTER_ENABLED", False)
+
+
 def _solana_trade_enabled() -> bool:
     """Default OFF. Shipping the Solana rail must change nothing until an
     operator arms it, exactly like DEFI_TRADE_ENABLED for the EVM verbs."""
@@ -193,11 +218,107 @@ class RevokeParams(BaseModel):
     dry_run: bool = Field(True, description="TRUE simulates only. Set false to sign.")
 
 
+class NftTransferParams(BaseModel):
+    chain: str = Field(description=_chain_field_description("nft_transfer"))
+    contract: str = Field(description="The NFT collection contract address.")
+    token_id: int = Field(ge=0, description="The token id to send.")
+    to: str = Field(description="Recipient address. This is irreversible.")
+    standard: str = Field(
+        default="erc721",
+        description="erc721 (unique token) or erc1155 (semi-fungible). Say which "
+                    "— guessing would encode a call the contract may misread.")
+    amount: int = Field(default=1, ge=1,
+                        description="Quantity, erc1155 only. An erc721 is unique, "
+                                    "so its amount must be 1.")
+    max_spend_usd: float = Field(
+        default=25.0, gt=0,
+        description="Ceiling for the transaction FEE. ⚠️ It does NOT bound the "
+                    "value of what you are sending — an NFT has no reliable "
+                    "price, which is why this verb always needs owner approval.")
+    dry_run: bool = True
+
+
+class RegisterAgentParams(BaseModel):
+    chain: str = Field(default="base",
+                       description="Chain whose ERC-8004 Identity Registry to "
+                                   "register on. Pinned; unsupported chains refuse.")
+    max_spend_usd: float = Field(default=25.0, gt=0,
+                                 description="Ceiling for the transaction FEE. "
+                                             "A registration sends nothing else.")
+    dry_run: bool = True
+
+
+class SetAgentUriParams(BaseModel):
+    chain: str = Field(default="base")
+    agent_id: int = Field(..., ge=0, description="Your existing agentId (tokenId).")
+    max_spend_usd: float = Field(default=10.0, gt=0)
+    dry_run: bool = True
+
+
+class NftRevokeParams(BaseModel):
+    chain: str = Field(description=_chain_field_description("nft_revoke_approval"))
+    contract: str = Field(description="The NFT collection contract address.")
+    operator: str = Field(
+        description="The operator whose blanket approval over this collection "
+                    "is retired. This can only REDUCE risk.")
+    max_spend_usd: float = Field(default=5.0, gt=0)
+    dry_run: bool = True
+
+
+class WrapParams(BaseModel):
+    chain: str = Field("base", description=_chain_field_description("wrap native on"))
+    amount: float = Field(..., gt=0, description=(
+        "Human amount of NATIVE to wrap (e.g. 0.0012 ETH -> 0.0012 WETH)."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD you authorize to leave the wallet, asserted against the "
+        "SIMULATED native outflow."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) simulates and returns the guard's verdict without "
+        "broadcasting. Set false to actually wrap."))
+
+
+class UnwrapParams(BaseModel):
+    chain: str = Field("base", description=_chain_field_description("unwrap on"))
+    amount: float = Field(..., gt=0, description=(
+        "Human amount of WRAPPED native to turn back into gas "
+        "(e.g. 0.0012 WETH -> 0.0012 ETH)."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD you authorize to leave the wallet, asserted against the "
+        "SIMULATED wrapped-native outflow."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) simulates and returns the guard's verdict without "
+        "broadcasting. Set false to actually unwrap."))
+
+
+def _unwrap_min_native_wei(amount_raw: int, tx: dict) -> int:
+    """The native this unwrap must be measured to return.
+
+    ``withdraw`` is 1:1 by construction, so the honest minimum is the full
+    amount — LESS the worst-case fee of this very transaction, because the
+    simulation may or may not charge gas against the balance it reads and a
+    refusal on that difference would be a false one.
+
+    Computed from the built tx rather than a fixed dust constant: 10**12 wei is
+    generous on Robinhood Chain and nowhere near a mainnet fee, so a constant
+    would be too loose on one chain and a false refusal on another. Floored at 1
+    — a minimum of zero asserts nothing.
+    """
+    try:
+        worst_fee = int(tx.get("gas") or 0) * int(tx.get("maxFeePerGas") or 0)
+    except (TypeError, ValueError):
+        worst_fee = 0
+    return max(1, int(amount_raw) - worst_fee)
+
+
 class SwapParams(BaseModel):
     chain: str = Field("base", description=_chain_field_description("swap on"))
     token_in: str = Field(..., description=(
-        "CONTRACT ADDRESS of the token you are selling (0x…). A ticker is not "
-        "accepted — resolve it with defi_data.token_resolve first."))
+        "CONTRACT ADDRESS of the token you are selling (0x…), or the literal "
+        "'native' to spend the chain's gas asset (ETH/SOL/etc) directly. A "
+        "ticker is not accepted — resolve it with defi_data.token_resolve first. "
+        "PREFER 'native' when the wallet holds the gas asset: it needs NO "
+        "allowance (so no approve_token, no extra transaction, no extra gas) "
+        "and on Robinhood it is the cheapest entry there is."))
     token_out: str = Field(..., description="CONTRACT ADDRESS of the token you are buying (0x…)")
     amount_in: float = Field(..., gt=0, description="Human amount of token_in to sell")
     max_spend_usd: float = Field(..., gt=0, description=(
@@ -224,6 +345,174 @@ class SolanaSwapParams(BaseModel):
         "looser route is refused, not rewritten."))
     dry_run: bool = Field(True, description=(
         "TRUE (default) simulates and asserts without broadcasting."))
+
+
+class DeployTokenParams(BaseModel):
+    chain: str = Field("base", description=_chain_field_description("deploy on"))
+    name: str = Field(..., description="Token name, e.g. 'Rob Coin'. Max 64 characters.")
+    symbol: str = Field(..., description="Ticker, e.g. 'ROB'. Max 16 characters.")
+    supply: float = Field(..., gt=0, description=(
+        "TOTAL supply in WHOLE units, minted in full to the agent wallet. There "
+        "is no mint function, so this is the supply forever."))
+    decimals: int = Field(18, ge=0, le=18, description=(
+        "Decimal places. 18 is the ERC-20 norm and what every DEX assumes."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD this deployment may cost. A token deploy sends nothing, so "
+        "this bounds the GAS FEE — on an L2 that is cents."))
+    salt: str = Field("", description=(
+        "Optional 32-byte hex salt. Set it (or `vanity`) to deploy through the "
+        "canonical CREATE2 factory, which gives the token the SAME ADDRESS ON "
+        "EVERY CHAIN for the same bytes. Leave empty for an ordinary "
+        "nonce-based deploy."))
+    vanity: str = Field("", description=(
+        "Optional HEX prefix to mine the address for, e.g. 'b0b' or 'dead' "
+        "(0-9a-f only, max 8 characters — each character is 16x the work). "
+        "Implies the CREATE2 path."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) simulates, asserts the produced bytecode against the "
+        "pinned template and reports the address it WOULD land at, without "
+        "broadcasting. Set false to actually deploy."))
+
+
+class DeployContractParams(BaseModel):
+    chain: str = Field("base", description=_chain_field_description("deploy on"))
+    bytecode: str = Field(..., description=(
+        "COMPILED creation bytecode (init code), 0x-prefixed hex. NOT Solidity "
+        "source — nothing here compiles. To mint an ordinary fixed-supply token, "
+        "use deploy_token instead: it needs no bytecode and its runtime is "
+        "asserted against an audited template."))
+    constructor_args: str = Field("", description=(
+        "ABI-encoded constructor arguments, appended to the bytecode. Leave "
+        "empty when the constructor takes none."))
+    value: float = Field(0.0, ge=0, description=(
+        "NATIVE value to endow the constructor with. Usually 0."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD this deployment may cost — endowment plus worst-case fee."))
+    salt: str = Field("", description=(
+        "Optional 32-byte hex salt. Set it (or `vanity`) to deploy through the "
+        "canonical CREATE2 factory, which gives the token the SAME ADDRESS ON "
+        "EVERY CHAIN for the same bytes. Leave empty for an ordinary "
+        "nonce-based deploy."))
+    vanity: str = Field("", description=(
+        "Optional HEX prefix to mine the address for, e.g. 'b0b' or 'dead' "
+        "(0-9a-f only, max 8 characters — each character is 16x the work). "
+        "Implies the CREATE2 path."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) simulates and reports without broadcasting."))
+
+
+class SolanaDeployTokenParams(BaseModel):
+    name: str = Field("", description=(
+        "Token name, e.g. 'Rob Coin'. Written ON-CHAIN via Token-2022 metadata, "
+        "so every explorer and wallet shows it. Defaults to the symbol."))
+    symbol: str = Field(..., description=(
+        "Ticker, e.g. 'ROB'. Written ON-CHAIN alongside the name."))
+    uri: str = Field("", description=(
+        "Optional https:// or ipfs:// URI of a JSON metadata file "
+        "({name, symbol, description, image}). This is where a LOGO comes "
+        "from — without it the token shows with no picture anywhere. Host it "
+        "yourself; any public HTTPS URL works."))
+    supply: float = Field(..., gt=0, description=(
+        "TOTAL supply in WHOLE units, minted in full to the agent's Solana "
+        "token account. The mint authority is revoked in the same transaction, "
+        "so this is the supply forever."))
+    decimals: int = Field(9, ge=0, le=9, description=(
+        "Decimal places. 9 is Solana's convention (SOL itself). supply x "
+        "10**decimals must fit in a u64."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD this may cost. A mint creation sends nothing — the cost "
+        "is ~0.0035 SOL of rent for the mint and the token account, plus fees."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) builds, simulates and asserts the whole supply arrives, "
+        "without broadcasting."))
+
+
+class LpAddParams(BaseModel):
+    chain: str = "robinhood"
+    protocol: str = Field("v3", description="v3 today; v4 requires the Permit2 rail.")
+    token_a: str = Field(..., description="Contract address or 'native'.")
+    token_b: str = Field(..., description="Contract address or 'native'.")
+    amount_a: float = Field(..., ge=0, allow_inf_nan=False)
+    amount_b: float = Field(..., ge=0, allow_inf_nan=False)
+    fee: int = Field(3000, description="Millionths: 100, 500, 3000 or 10000. 3000 = 0.3%.")
+    range: str = Field("full", description="full, low,high prices in token_b/token_a, or ticks:low,high in sorted token order.")
+    initial_price: Optional[float] = Field(None, gt=0, allow_inf_nan=False)
+    token_id: Optional[int] = Field(None, ge=0)
+    slippage_bps: int = Field(100, ge=0, le=5000)
+    fragment: bool = False
+    max_spend_usd: float = Field(..., gt=0, allow_inf_nan=False)
+    dry_run: bool = True
+
+
+class LpCollectParams(BaseModel):
+    chain: str = "robinhood"
+    protocol: str = "v3"
+    token_id: int = Field(..., ge=0)
+    max_spend_usd: float = Field(5.0, gt=0, allow_inf_nan=False, description="Maximum gas fee in USD.")
+    dry_run: bool = True
+
+
+class LpRemoveParams(LpCollectParams):
+    liquidity_pct: int = Field(100, ge=1, le=100)
+    slippage_bps: int = Field(100, ge=0, le=5000)
+    burn: bool = False
+
+
+class CallParams(BaseModel):
+    chain: str = Field("base", description=_chain_field_description("call on"))
+    to: str = Field(..., description="CONTRACT ADDRESS being called (0x…)")
+    calldata: str = Field(..., description=(
+        "ABI-encoded calldata, 0x-prefixed: the 4-byte selector followed by the "
+        "encoded arguments. Build it yourself or take it from a protocol's own "
+        "transaction-preparation endpoint."))
+    value: float = Field(0.0, ge=0, description=(
+        "NATIVE value to send with the call. Declare it — an undeclared native "
+        "movement is refused."))
+    spend_token: Optional[str] = Field(None, description=(
+        "CONTRACT ADDRESS of the token this call SPENDS, or null when it spends "
+        "native (or nothing). The simulated outflow is asserted against "
+        "spend_max_raw."))
+    spend_max_raw: int = Field(0, ge=0, description=(
+        "The most RAW units of spend_token the call may move out. 0 with a "
+        "spend_token declared means 'this call must not move that token'."))
+    receive_token: Optional[str] = Field(None, description=(
+        "CONTRACT ADDRESS of the token this call must RETURN, when it returns "
+        "one. Required if receive_min_raw is set."))
+    receive_min_raw: int = Field(0, ge=0, description=(
+        "The MINIMUM raw units of receive_token the simulation must measure "
+        "coming back. This is the assertion that makes arbitrary calldata safe "
+        "to sign: a call that spends and returns nothing is REFUSED. Leave 0 "
+        "only for a call that genuinely receives nothing."))
+    allow_spender: Optional[str] = Field(None, description=(
+        "Address this call is EXPECTED to grant an allowance to, if any. An "
+        "undeclared allowance grant is always refused."))
+    allow_max_raw: int = Field(0, ge=0, description=(
+        "The most raw units allow_spender may be granted."))
+    max_spend_usd: float = Field(..., gt=0, description=(
+        "The most USD you authorize to leave the wallet on this call."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) simulates and asserts without broadcasting."))
+
+
+class BridgeParams(BaseModel):
+    from_chain: str = Field(..., description=(
+        "Origin chain NAME: 'solana', or a registry name (base, robinhood, …)."))
+    to_chain: str = Field(..., description="Destination chain NAME.")
+    amount: float = Field(..., gt=0, description=(
+        "Human amount of the origin chain's NATIVE asset to bridge "
+        "(SOL on solana, ETH on an EVM chain)."))
+    token_in: str = Field("native", description=(
+        "ORIGIN asset. Only 'native' is supported — an ERC-20 origin needs an "
+        "allowance leg whose spender is a third party's address."))
+    token_out: str = Field("native", description=(
+        "DESTINATION asset: 'native' (default), or a token PINNED in the chain "
+        "registry for the destination chain — 'weth' or 'usdc' where that chain "
+        "has one. An arbitrary address is refused: every pinned address was "
+        "verified on-chain, a supplied one was not. On Robinhood, native ETH is "
+        "both gas AND the asset that routes straight into a position, so 'native' "
+        "is usually the better answer than 'weth'."))
+    dry_run: bool = Field(True, description=(
+        "TRUE (default) quotes, asserts and simulates without broadcasting."))
 
 
 class DefiTradeTool(BaseTool):
@@ -293,21 +582,330 @@ class DefiTradeTool(BaseTool):
         return info.price_usd if info.confidence == "high" else None
 
     def _fallback_price(self, chain, addr):
-        """Best-effort price, NOT confidence-gated (028, 2026-08-22).
+        """Best-effort price for the guard's exit exemption (028, 2026-08-22).
 
-        Only ever consulted by the guard's exit exemption, which already
-        bounds the grant to the wallet's held balance — the worst case for a
-        wrong fallback price is a mispriced (not an unbounded) exit."""
+        Deliberately WEAKER than `_price`: it accepts a "low" confidence, which
+        is the whole point — a position that has LOST the high-confidence bar
+        still has to be closable, and the exemption already bounds the grant to
+        the wallet's held balance.
+
+        Weaker is not unconditional (M7, 2026-09-14). It used to return
+        DexScreener's number verbatim, so a price implied by a pool with no
+        measured depth — the shape anyone with a little capital can seed — was
+        a valuation. It now reads the same two trust fields `_price` does:
+        there must BE a price (`confidence` is not "unknown") and there must be
+        measured liquidity behind it. An unread liquidity datum is an unread
+        measurement, not zero risk."""
         if self._fallback_price_fn:
             return self._fallback_price_fn(chain, addr)
         from tools.defi.providers import dexscreener
-        return dexscreener.token(chain, addr).price_usd
+        info = dexscreener.token(chain, addr)
+        if info.confidence == "unknown" or not info.price_usd:
+            return None
+        if not info.liquidity_usd or info.liquidity_usd <= 0:
+            return None
+        return info.price_usd
 
     def _held_balance_raw(self, chain, holder, token):
         if self._balance_fn:
             return self._balance_fn(chain, holder, token)
         from core.wallet.onchain import token_balances
         return token_balances(holder, chain, [token]).get(token)
+
+    #: `deposit()` on the canonical WETH9 interface. Wrapping is not a trade:
+    #: there is no route, no venue, no slippage and no counterparty. The contract
+    #: mints exactly what it receives, so the only way to lose money here is to
+    #: send native to the WRONG contract — which is why `to` is the chain
+    #: registry's pinned `wrapped_native` and can never be supplied by a caller.
+    _WETH_DEPOSIT_SELECTOR = "0xd0e30db0"
+    #: `withdraw(uint256)` — the exact inverse of deposit.
+    _WETH_WITHDRAW_SELECTOR = "0x2e1a7d4d"
+
+    @BaseTool.action(
+        "Wrap native gas currency into its ERC-20 form (ETH -> WETH) on this "
+        "chain, 1:1. Use this when a venue needs an ERC-20 and the wallet holds "
+        "only native. The destination is the chain registry's pinned wrapped "
+        "native, never a supplied address. dry_run defaults to TRUE.",
+        param_model=WrapParams)
+    async def wrap(self, params: WrapParams, execution_context=None):
+        """Native -> wrapped native, asserted by MEASUREMENT like every other verb.
+
+        Why this verb exists (live, 2026-09-13). The treasury held 0.0512 native
+        ETH on Robinhood Chain and needed WETH to trade. There was no way to turn
+        one into the other: `swap` demands a contract address for `token_in` and
+        has no native sentinel, and `providers/routes/lifi.py` REFUSES any quote
+        carrying native value ("an unasserted native outflow riding along with
+        the trade"). So the agent concluded it had to IMPORT WETH, set an
+        allowance for WETH it did not hold, and spent twelve hours failing to
+        bridge $3 across three routes — to acquire an asset that was already
+        sitting in the same wallet in a different form.
+
+        ⚠️ The lifi refusal's premise is now stale — `tx_guard` learned to declare
+        and assert a native send in 039 B1 (`token=None`) — but relaxing it means
+        asserting a native OUTFLOW and a token INFLOW in one trade, which is its
+        own change. This verb does the deterministic half: one call, one pinned
+        destination, 1:1, nothing to route.
+        """
+        from core.wallet import tx_guard
+        from core.wallet.broadcast.evm import EvmRail
+        from core.wallet import chains as _chains
+
+        chain_err = _unsupported_chain(params.chain)
+        if chain_err:
+            return self._ar(error=chain_err)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+
+        row = _chains.get(params.chain)
+        wrapped = getattr(row, "wrapped_native", None) if row else None
+        if not wrapped or not str(wrapped).startswith("0x"):
+            # A chain with no pinned wrapped native (or a base58 one, i.e. Solana)
+            # has nothing to wrap TO. Refusing beats inventing an address.
+            return self._ar(error=(
+                f"{params.chain} pins no EVM wrapped-native address, so there is "
+                f"nothing to wrap into. This verb is EVM-only."))
+
+        signer = wallet.operational_signer()
+        gate = wallet.policy
+        amount_raw = int(round(params.amount * (10 ** 18)))
+        if amount_raw <= 0:
+            return self._ar(error=f"amount must be positive, got {params.amount}")
+        idem = (f"defi_wrap:{params.chain}:{amount_raw}:{uuid.uuid4().hex[:8]}")
+
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        try:
+            tx = rail.build_call(to=str(wrapped),
+                                 data=self._WETH_DEPOSIT_SELECTOR,
+                                 value=amount_raw)
+        except Exception as exc:
+            return self._ar(error=f"could not build the wrap transaction: {exc}")
+
+        # `token=None` DECLARES a native send (039 B1): the guard simulates it,
+        # asserts the MEASURED native outflow against amount_raw, and prices that
+        # outflow itself rather than trusting any caller's figure.
+        intent = tx_guard.TxIntent(
+            chain=params.chain, token=None, to=str(wrapped),
+            amount_raw=amount_raw, max_spend_usd=params.max_spend_usd,
+            expected_allowance_grants=(), idempotency_key=idem)
+
+        authorize = self._guard_fn or tx_guard.authorize
+        native_symbol = getattr(row, "native_symbol", "ETH")
+
+        async with gate.reserve():
+            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+
+            decision = authorize(intent, tx, holder=signer.address, gate=gate,
+                                 execution_context=execution_context, tool_self=self,
+                                 price_fn=self._price,
+                                 forged_fn=_is_forged_or_autonomous_turn)
+
+            header = (f"wrap {params.amount:g} {native_symbol} -> wrapped "
+                      f"({wrapped}) on {params.chain}\n"
+                      f"  simulated value: "
+                      f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
+                      f"  guard: {decision.reason}\n"
+                      f"  lane:  {decision.lane}\n")
+
+            if not decision.allowed:
+                return self._ar(content=header + "  RESULT: NOT SENT — nothing was broadcast.")
+
+            if decision.sim_gas_used:
+                try:
+                    tx = rail.size_gas(tx, decision.sim_gas_used)
+                except Exception as exc:
+                    return self._ar(error=(
+                        f"refused at gas sizing: {exc} — nothing was broadcast"))
+                header += (f"  gas:   limit {tx.get('gas')} "
+                           f"(simulation used {decision.sim_gas_used})\n")
+
+            if params.dry_run:
+                return self._ar(content=header + (
+                    "  RESULT: DRY RUN — the guard would allow this, but nothing "
+                    "was broadcast. Re-run with dry_run=false to wrap."))
+
+            # Measure BEFORE. The claim this verb makes at the end is "the WETH
+            # arrived", and an unread baseline cannot support it. Unlike the
+            # bridge, an unreadable balance is NOT fatal here: the transaction is
+            # atomic and its receipt is already proof it executed, so a failed
+            # read costs the measured delta, not the guarantee.
+            before = self._held_balance_raw(params.chain, signer.address, str(wrapped))
+
+            try:
+                tx_hash = rail.sign_and_send(tx)
+            except Exception as exc:
+                return self._ar(error=f"broadcast failed: {exc} — nothing was wrapped")
+
+            from core.wallet import tx_notify
+            _used, _limit = tx_notify.caps_from_gate(gate)
+            _label = f"{params.amount:g} {native_symbol}"
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="wrap", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
+                cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
+
+            receipt = rail.await_receipt(tx_hash)
+            gate.record(venue="defi", action="wrap",
+                        amount_usd=decision.amount_usd or 0.0,
+                        counterparty=str(wrapped), idempotency_key=idem,
+                        result_ref=tx_hash, chain=params.chain)
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="wrap", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash,
+                state={"success": tx_notify.STATE_CONFIRMED,
+                       "pending": tx_notify.STATE_IN_FLIGHT}.get(
+                    receipt.status, tx_notify.STATE_REVERTED),
+                detail=f"wrapped on {params.chain}", ledger_recorded=True), settled=True)
+
+        if receipt.succeeded:
+            after = self._held_balance_raw(params.chain, signer.address, str(wrapped))
+            if before is None or after is None:
+                measured = ("  measured: balance unreadable — the receipt confirms "
+                            "the wrap executed, but the delta could not be shown\n")
+            else:
+                measured = (f"  measured: +{(after - before) / 10 ** 18:.18f}".rstrip("0")
+                            + f" wrapped {native_symbol}\n")
+            return self._ar(content=header + measured + (
+                f"  RESULT: WRAPPED AND CONFIRMED\n"
+                f"  tx: {tx_hash}\n  block: {receipt.block_number}"))
+        if receipt.status == "pending":
+            return self._ar(content=header + (
+                f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It may "
+                f"still land — do NOT retry blindly.\n  tx: {tx_hash}"))
+        return self._ar(content=header + (
+            f"  RESULT: REVERTED ON-CHAIN — the fee was spent, nothing was "
+            f"wrapped.\n  tx: {tx_hash}"))
+
+    @BaseTool.action(
+        "Unwrap wrapped native back into gas currency (WETH -> ETH) on this "
+        "chain, 1:1. The inverse of wrap, and the reason it exists: without it "
+        "a wallet that wrapped its gas to trade cannot pay for a transaction. "
+        "The destination is the chain registry's pinned wrapped native, never a "
+        "supplied address. dry_run defaults to TRUE.",
+        param_model=UnwrapParams)
+    async def unwrap(self, params: UnwrapParams, execution_context=None):
+        """Wrapped native -> native, asserted by MEASUREMENT on BOTH sides.
+
+        The guard shape already existed: a TOKEN outflow with a declared minimum
+        NATIVE inflow, which 042 added for a sell into a native-quoted venue.
+        Nothing new is asserted here — the wrapped-native burn is bounded by the
+        declared amount, and the native receipt must clear
+        :func:`_unwrap_min_native_wei`.
+        """
+        from core.wallet import abi, tx_guard
+        from core.wallet.broadcast.evm import EvmRail
+        from core.wallet import chains as _chains
+
+        chain_err = _unsupported_chain(params.chain)
+        if chain_err:
+            return self._ar(error=chain_err)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+
+        row = _chains.get(params.chain)
+        wrapped = getattr(row, "wrapped_native", None) if row else None
+        if not wrapped or not str(wrapped).startswith("0x"):
+            return self._ar(error=(
+                f"{params.chain} pins no EVM wrapped-native address, so there is "
+                f"nothing to unwrap. This verb is EVM-only."))
+
+        signer = wallet.operational_signer()
+        gate = wallet.policy
+        amount_raw = int(round(params.amount * (10 ** 18)))
+        if amount_raw <= 0:
+            return self._ar(error=f"amount must be positive, got {params.amount}")
+        idem = f"defi_unwrap:{params.chain}:{amount_raw}:{uuid.uuid4().hex[:8]}"
+
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        data = abi.encode_call("withdraw", [{"name": "wad", "type": "uint256"}],
+                               [amount_raw])
+        try:
+            tx = rail.build_call(to=str(wrapped), data=data, value=0)
+        except Exception as exc:
+            return self._ar(error=f"could not build the unwrap transaction: {exc}")
+
+        held = self._held_balance_raw(params.chain, signer.address, str(wrapped))
+        intent = tx_guard.TxIntent(
+            chain=params.chain, token=str(wrapped), to=str(wrapped),
+            amount_raw=amount_raw, max_spend_usd=params.max_spend_usd,
+            expected_allowance_grants=(), idempotency_key=idem,
+            held_balance_raw=held,
+            min_native_inflow_wei=_unwrap_min_native_wei(amount_raw, tx))
+
+        authorize = self._guard_fn or tx_guard.authorize
+        native_symbol = getattr(row, "native_symbol", "ETH")
+
+        async with gate.reserve():
+            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+
+            decision = authorize(intent, tx, holder=signer.address, gate=gate,
+                                 execution_context=execution_context, tool_self=self,
+                                 price_fn=self._price,
+                                 fallback_price_fn=self._fallback_price,
+                                 forged_fn=_is_forged_or_autonomous_turn)
+
+            header = (f"unwrap {params.amount:g} wrapped {native_symbol} -> "
+                      f"{native_symbol} ({wrapped}) on {params.chain}\n"
+                      f"  simulated value: "
+                      f"{'unknown' if decision.amount_usd is None else f'${decision.amount_usd:.4f}'}\n"
+                      f"  guard: {decision.reason}\n"
+                      f"  lane:  {decision.lane}\n")
+
+            if not decision.allowed:
+                return self._ar(content=header + "  RESULT: NOT SENT — nothing was broadcast.")
+
+            if decision.sim_gas_used:
+                try:
+                    tx = rail.size_gas(tx, decision.sim_gas_used)
+                except Exception as exc:
+                    return self._ar(error=(
+                        f"refused at gas sizing: {exc} — nothing was broadcast"))
+                header += (f"  gas:   limit {tx.get('gas')} "
+                           f"(simulation used {decision.sim_gas_used})\n")
+
+            if params.dry_run:
+                return self._ar(content=header + (
+                    "  RESULT: DRY RUN — the guard would allow this, but nothing "
+                    "was broadcast. Re-run with dry_run=false to unwrap."))
+
+            try:
+                tx_hash = rail.sign_and_send(tx)
+            except Exception as exc:
+                return self._ar(error=f"broadcast failed: {exc} — nothing was unwrapped")
+
+            from core.wallet import tx_notify
+            _used, _limit = tx_notify.caps_from_gate(gate)
+            _label = f"{params.amount:g} wrapped {native_symbol}"
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="unwrap", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
+                cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
+
+            receipt = rail.await_receipt(tx_hash)
+            gate.record(venue="defi", action="unwrap",
+                        amount_usd=decision.amount_usd or 0.0,
+                        counterparty=str(wrapped), idempotency_key=idem,
+                        result_ref=tx_hash, chain=params.chain)
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="unwrap", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash,
+                state={"success": tx_notify.STATE_CONFIRMED,
+                       "pending": tx_notify.STATE_IN_FLIGHT}.get(
+                    receipt.status, tx_notify.STATE_REVERTED),
+                detail=f"unwrapped on {params.chain}", ledger_recorded=True), settled=True)
+
+        if receipt.succeeded:
+            return self._ar(content=header + (
+                f"  RESULT: UNWRAPPED AND CONFIRMED\n"
+                f"  tx: {tx_hash}\n  block: {receipt.block_number}"))
+        if receipt.status == "pending":
+            return self._ar(content=header + (
+                f"  RESULT: BROADCAST BUT NOT CONFIRMED within the timeout. It may "
+                f"still land — do NOT retry blindly.\n  tx: {tx_hash}"))
+        return self._ar(content=header + (
+            f"  RESULT: REVERTED ON-CHAIN — the fee was spent, nothing was "
+            f"unwrapped.\n  tx: {tx_hash}"))
 
     @BaseTool.action(
         "Send tokens from the agent wallet to an address. Simulated and asserted "
@@ -398,10 +996,26 @@ class DefiTradeTool(BaseTool):
             except Exception as exc:
                 return self._ar(error=f"broadcast failed: {exc} — funds were NOT sent")
 
+            from core.wallet import tx_notify
+            _used, _limit = tx_notify.caps_from_gate(gate)
+            _label = f"{params.amount:g} {ident.symbol or token[:8]}"
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="transfer", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash, lane=decision.lane,
+                cap_used_usd=_used, cap_limit_usd=_limit), settled=False)
+
             receipt = rail.await_receipt(tx_hash)
             gate.record(venue="defi", action="transfer",
                         amount_usd=decision.amount_usd or 0.0,
-                        counterparty=to, idempotency_key=idem, result_ref=tx_hash)
+                        counterparty=to, idempotency_key=idem, result_ref=tx_hash,
+                        chain=params.chain)
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="transfer", route=params.chain, chain=params.chain, amount_in=_label,
+                usd=decision.amount_usd, tx_ref=tx_hash,
+                state={"success": tx_notify.STATE_CONFIRMED,
+                       "pending": tx_notify.STATE_IN_FLIGHT}.get(
+                    receipt.status, tx_notify.STATE_REVERTED),
+                detail=f"to {to}", ledger_recorded=True), settled=True)
 
         if receipt.succeeded:
             return self._ar(content=header + (
@@ -417,9 +1031,29 @@ class DefiTradeTool(BaseTool):
 
     # -- T4: allowance hygiene -------------------------------------------
 
+    def _notify_tx(self, execution_context, notice, *, settled: bool) -> None:
+        """One owner notice about one transaction (039 Unit A). Fail-open.
+
+        Deliberately fire-and-forget: the owner should not wait on a Telegram
+        round trip to learn a transaction confirmed, and nothing may sit between
+        a broadcast and its ledger record.
+        """
+        try:
+            from core.wallet import tx_notify
+            tx_notify.notify_soon(
+                getattr(self, "container", None),
+                getattr(execution_context, "user_id", None), notice,
+                settled=settled,
+                session_id=getattr(execution_context, "session_id", None))
+        except Exception:
+            logger.debug("defi: owner notice skipped (fail-open)", exc_info=True)
+
     def _run_guarded(self, *, intent, tx, rail, gate, signer, execution_context,
                      header: str, dry_run: bool, venue_action: str, idem: str,
-                     counterparty: str):
+                     counterparty: str, amount_in_label: Optional[str] = None,
+                     amount_out_label: Optional[str] = None,
+                     asset: Optional[str] = None,
+                     position_ctx: Optional[dict] = None):
         """authorize -> broadcast -> confirm -> record, under one reservation.
 
         Extracted so approve/revoke/swap share EXACTLY the transfer path's
@@ -462,6 +1096,15 @@ class DefiTradeTool(BaseTool):
             tx_hash = rail.sign_and_send(tx)
         except Exception as exc:
             return self._ar(error=f"broadcast failed: {exc} — nothing was sent")
+        from core.wallet import tx_notify
+        _used, _limit = tx_notify.caps_from_gate(gate)
+        _route_label = intent.chain
+        self._notify_tx(execution_context, tx_notify.TxNotice(
+            verb=venue_action, route=_route_label, chain=_route_label, amount_in=amount_in_label,
+            amount_out=amount_out_label, usd=decision.amount_usd, tx_ref=tx_hash,
+            lane=decision.lane, cap_used_usd=_used, cap_limit_usd=_limit),
+            settled=False)
+
         receipt = rail.await_receipt(tx_hash)
         # 2026-08-26 exit untying: an approve/revoke is a PRECONDITION, not a
         # spend — value leaves on the swap, which records the real number. The
@@ -472,10 +1115,58 @@ class DefiTradeTool(BaseTool):
         # against the grant's value, so an over-headroom approve never confirms.
         recorded_usd = (0.0 if venue_action in ("approve", "revoke")
                         else (decision.amount_usd or 0.0))
+        # 043 A35: turn a real swap into open-position deltas so the Money Book
+        # has a cost basis. REACH, not policy — built from data already in hand,
+        # fail-open, never gates the record below. Only `swap` passes a
+        # position_ctx; approve/revoke/transfer/wrap pass nothing.
+        _positions = None
+        if position_ctx:
+            try:
+                from core import open_positions as _op
+                _positions = _op.classify_swap(cost_usd=recorded_usd,
+                                               **position_ctx)
+            except Exception:
+                _positions = None
         gate.record(venue="defi", action=venue_action,
                     amount_usd=recorded_usd,
                     counterparty=counterparty, idempotency_key=idem,
-                    result_ref=tx_hash)
+                    result_ref=tx_hash, chain=intent.chain, asset=asset,
+                    positions=_positions)
+        # 046: a CONFIRMED registration is the only thing that may write the
+        # identity record, which is in turn the only thing that earns
+        # `trustMode: onchain` + `attestation: verified` in the served file.
+        # A pending or reverted receipt writes nothing -- the whole point of the
+        # record is that it is evidence.
+        if (getattr(intent, "is_registration", False)
+                and receipt.status == "success" and decision.agent_id):
+            try:
+                from core.instance import resolve_instance_id, save_erc8004_record
+                from core.runtime_paths import resolve_data_home
+                from core.wallet import erc8004 as _e8
+                _row = _e8.registry_for(intent.chain)
+                save_erc8004_record(
+                    resolve_data_home(), resolve_instance_id(),
+                    chain=intent.chain,
+                    chain_id=(_row.chain_id if _row else 0),
+                    registry=intent.expected_registry,
+                    agent_id=decision.agent_id, tx_hash=tx_hash)
+            except Exception:
+                # Fail-open: the transaction DID land. Losing the local record
+                # means the file keeps saying `local`, which is understated --
+                # never overstated, which is the direction that matters.
+                self.logger.warning("erc8004: registered on-chain but could not "
+                                    "write the identity record", exc_info=True)
+        _state = {"success": tx_notify.STATE_CONFIRMED,
+                  "pending": tx_notify.STATE_IN_FLIGHT}.get(
+            receipt.status, tx_notify.STATE_REVERTED)
+        self._notify_tx(execution_context, tx_notify.TxNotice(
+            verb=venue_action, route=_route_label, chain=_route_label, amount_out=amount_out_label,
+            usd=decision.amount_usd, tx_ref=tx_hash, state=_state,
+            detail=(f"block {receipt.block_number}" if receipt.succeeded
+                    else ("no receipt within the timeout — it may still land"
+                          if receipt.status == "pending" else "receipt status 0")),
+            ledger_recorded=True), settled=True)
+
         if receipt.succeeded:
             return self._ar(content=header + (
                 f"  RESULT: CONFIRMED\n  tx: {tx_hash}\n  block: {receipt.block_number}"))
@@ -537,6 +1228,23 @@ class DefiTradeTool(BaseTool):
                     f"refused: this approval puts ${approval_usd:,.2f} at risk but "
                     f"you declared max_spend_usd=${params.max_spend_usd:,.2f}. "
                     f"Approve only what the trade needs."))
+        elif spender.lower() not in tx_guard.pinned_route_spenders(params.chain):
+            # S3 (2026-09-14): the bound above sat INSIDE `if unit_price:`, so a
+            # token no source can price — a just-launched coin has no pair —
+            # carried no bound at all here, and the guard's exit exemption then
+            # valued it at $0.00. An unvalued grant must not read as free.
+            #
+            # The one grant on an unpriceable token that still makes sense is
+            # the SELL LEG, and the sell leg approves the chain's pinned router.
+            # Anything else is refused here with a remedy rather than at the
+            # guard with a message about a check the caller never heard of.
+            return self._ar(error=(
+                f"refused: no trustworthy price for {token}, so nothing can bound "
+                f"what this allowance puts at risk — and {spender} is not a swap "
+                f"router this chain pins, so the grant is not the sell leg of an "
+                f"exit either. If you are closing a position, approve the router "
+                f"the swap route names. Otherwise have the owner approve this by "
+                f"hand. Use revoke_approval to clear a standing claim."))
 
         signer = wallet.operational_signer()
         gate = wallet.policy
@@ -621,6 +1329,212 @@ class DefiTradeTool(BaseTool):
                 counterparty=spender)
 
     @BaseTool.action(
+        "Send ONE non-fungible token (NFT) you hold to an address. ⚠️ This is "
+        "irreversible and always needs owner approval: a collectible has no "
+        "reliable price, so no USD cap can bound what you are giving away. "
+        "dry_run defaults to TRUE.",
+        param_model=NftTransferParams)
+    async def nft_transfer(self, params: NftTransferParams, execution_context=None):
+        from core.wallet.broadcast.evm import EvmRail
+        from tools.defi import nft_verbs
+
+        if not _nft_tools_enabled():
+            return self._ar(error=_NFT_OFF)
+        chain_err = _unsupported_chain(params.chain)
+        if chain_err:
+            return self._ar(error=chain_err)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        signer = wallet.operational_signer()
+        try:
+            data = nft_verbs.encode_nft_transfer(
+                standard=params.standard, frm=signer.address, to=params.to,
+                token_id=params.token_id, amount=params.amount)
+            intent = nft_verbs.build_transfer_intent(
+                chain=params.chain, contract=params.contract,
+                standard=params.standard, token_id=params.token_id,
+                amount=params.amount, max_spend_usd=params.max_spend_usd,
+                idempotency_key=(f"nft_xfer:{params.chain}:{params.contract}:"
+                                 f"{params.token_id}:{uuid.uuid4().hex[:8]}"))
+        except ValueError as exc:
+            return self._ar(error=str(exc))
+
+        gate = wallet.policy
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        try:
+            tx = rail.build_call(to=intent.to, data=data, value=0)
+        except Exception as exc:
+            return self._ar(error=f"could not build the transaction: {exc}")
+        header = (f"send {params.standard} {params.contract} #{params.token_id}"
+                  f" -> {params.to}\n")
+        async with gate.reserve():
+            return self._run_guarded(
+                intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
+                execution_context=execution_context, header=header,
+                dry_run=params.dry_run, venue_action="nft_transfer",
+                idem=intent.idempotency_key, counterparty=params.to,
+                asset=f"{params.standard}:{params.contract}:{params.token_id}")
+
+    @BaseTool.action(
+        "Retire an operator's blanket approval over one NFT collection "
+        "(setApprovalForAll -> false). This can only REDUCE risk: it grants "
+        "nothing and moves nothing. dry_run defaults to TRUE.",
+        param_model=NftRevokeParams)
+    async def nft_revoke_approval(self, params: NftRevokeParams,
+                                  execution_context=None):
+        from core.wallet.broadcast.evm import EvmRail
+        from tools.defi import nft_verbs
+
+        if not _nft_tools_enabled():
+            return self._ar(error=_NFT_OFF)
+        chain_err = _unsupported_chain(params.chain)
+        if chain_err:
+            return self._ar(error=chain_err)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        signer = wallet.operational_signer()
+        try:
+            data = nft_verbs.encode_revoke_operator(operator=params.operator)
+            intent = nft_verbs.build_revoke_intent(
+                chain=params.chain, contract=params.contract,
+                operator=params.operator, max_spend_usd=params.max_spend_usd,
+                idempotency_key=(f"nft_revoke:{params.chain}:{params.contract}:"
+                                 f"{params.operator}:{uuid.uuid4().hex[:8]}"))
+        except ValueError as exc:
+            return self._ar(error=str(exc))
+
+        gate = wallet.policy
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        try:
+            tx = rail.build_call(to=intent.to, data=data, value=0)
+        except Exception as exc:
+            return self._ar(error=f"could not build the transaction: {exc}")
+        header = f"revoke operator {params.operator} on {params.contract}\n"
+        async with gate.reserve():
+            return self._run_guarded(
+                intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
+                execution_context=execution_context, header=header,
+                dry_run=params.dry_run, venue_action="nft_revoke_approval",
+                idem=intent.idempotency_key, counterparty=params.operator)
+
+    @BaseTool.action(
+        "Register YOUR OWN identity on the ERC-8004 Identity Registry. This "
+        "mints you an agent token (agentId) owned by your wallet, and publishes "
+        "your registration file — name, description, avatar, the services you "
+        "actually offer. Needs no hosting: the file rides inside the "
+        "transaction as a data: URI. ⚠️ Permanent and public, and calling it "
+        "twice splits your identity. dry_run defaults to TRUE.",
+        param_model=RegisterAgentParams)
+    async def register_agent(self, params: RegisterAgentParams, execution_context=None):
+        from core.wallet.broadcast.evm import EvmRail
+        from tools.defi import agent_registration as ar
+
+        if not _erc8004_register_enabled():
+            return self._ar(error=_ERC8004_OFF)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        signer = wallet.operational_signer()
+
+        # ⚠️ Read the CHAIN, not a local flag: a fresh data dir would lose the
+        # flag and re-register, minting a second token. A FAILED read raises
+        # rather than reading as "not registered".
+        try:
+            from core.wallet.onchain import _rpc, rpc_url_for_chain
+            existing = ar.read_agent_id(
+                lambda m, a, t=8.0: _rpc(rpc_url_for_chain(params.chain), m, a, t),
+                chain=params.chain, holder=signer.address)
+        except Exception as exc:
+            return self._ar(error=(
+                f"could not check whether this wallet is already registered "
+                f"({exc}). Refusing rather than risking a SECOND identity."))
+        already = ar.check_not_already_registered(existing_agent_id=existing,
+                                                  chain=params.chain)
+        if already:
+            return self._ar(error=already)
+
+        try:
+            from modules.eip8004.registration import build_registration_file
+            base_url = os.environ.get("A2A_BASE_URL")
+            doc = build_registration_file(base_url or "http://localhost:9000")
+            agent_uri = ar.build_agent_uri(doc.model_dump(exclude_none=True),
+                                           base_url=base_url)
+            data = ar.encode_register(agent_uri)
+            intent = ar.build_registration_intent(
+                chain=params.chain, max_spend_usd=params.max_spend_usd,
+                idempotency_key=f"erc8004:{params.chain}:{uuid.uuid4().hex[:8]}")
+        except ValueError as exc:
+            return self._ar(error=str(exc))
+
+        gate = wallet.policy
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        try:
+            tx = rail.build_call(to=intent.to, data=data, value=0)
+        except Exception as exc:
+            return self._ar(error=f"could not build the transaction: {exc}")
+        kind = "data: URI (no hosting)" if agent_uri.startswith("data:") else agent_uri
+        header = (f"register on ERC-8004 ({params.chain}) at {intent.to}\n"
+                  f"agentURI: {kind}\n")
+        async with gate.reserve():
+            return self._run_guarded(
+                intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
+                execution_context=execution_context, header=header,
+                dry_run=params.dry_run, venue_action="register_agent",
+                idem=intent.idempotency_key, counterparty=intent.to)
+
+    @BaseTool.action(
+        "Update your published ERC-8004 registration file (setAgentURI). Use "
+        "this when your endpoints, description or avatar change — it does NOT "
+        "mint a new identity. dry_run defaults to TRUE.",
+        param_model=SetAgentUriParams)
+    async def set_agent_uri(self, params: SetAgentUriParams, execution_context=None):
+        from core.wallet import erc8004, tx_guard
+        from core.wallet.broadcast.evm import EvmRail
+        from tools.defi import agent_registration as ar
+
+        if not _erc8004_register_enabled():
+            return self._ar(error=_ERC8004_OFF)
+        wallet = self._get_wallet()
+        if wallet is None:
+            return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        signer = wallet.operational_signer()
+        try:
+            registry = erc8004.resolve_identity_registry(params.chain)
+            from modules.eip8004.registration import build_registration_file
+            base_url = os.environ.get("A2A_BASE_URL")
+            doc = build_registration_file(base_url or "http://localhost:9000")
+            agent_uri = ar.build_agent_uri(doc.model_dump(exclude_none=True),
+                                           base_url=base_url)
+            data = ar.encode_set_agent_uri(params.agent_id, agent_uri)
+        except ValueError as exc:
+            return self._ar(error=str(exc))
+
+        # An update MINTS NOTHING, and `expects_mint=False` makes that an
+        # ASSERTION rather than an absence: rule 6f then refuses a transaction
+        # that claims to change the file while actually minting, which would
+        # leave two agentIds and no authoritative identity.
+        intent = tx_guard.TxIntent(
+            chain=params.chain, token=None, to=registry, amount_raw=0,
+            max_spend_usd=params.max_spend_usd,
+            is_registration=True, expected_registry=registry, expects_mint=False,
+            idempotency_key=f"erc8004uri:{params.chain}:{uuid.uuid4().hex[:8]}")
+        gate = wallet.policy
+        rail = (self._rail_factory or EvmRail)(chain=params.chain, signer=signer)
+        try:
+            tx = rail.build_call(to=registry, data=data, value=0)
+        except Exception as exc:
+            return self._ar(error=f"could not build the transaction: {exc}")
+        async with gate.reserve():
+            return self._run_guarded(
+                intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
+                execution_context=execution_context,
+                header=f"update ERC-8004 registration for agentId {params.agent_id}\n",
+                dry_run=params.dry_run, venue_action="set_agent_uri",
+                idem=intent.idempotency_key, counterparty=registry)
+
+    @BaseTool.action(
         "Swap one token for another. Finds a route (Uniswap V3 first, then a "
         "DEX aggregator if the operator enabled one — which reaches Aerodrome "
         "and V2-fork pools that V3 cannot), bounds slippage, cross-checks the "
@@ -643,21 +1557,41 @@ class DefiTradeTool(BaseTool):
         wallet = self._get_wallet()
         if wallet is None:
             return self._ar(error="agent wallet not enabled (AGENT_WALLET_ENABLED)")
+        from core.wallet import chains as _chains_mod
+        from tools.defi.providers import routes as _routes
         try:
-            token_in = normalize_address(params.token_in)
+            # NATIVE-in is the sentinel word, never an address, so it must not
+            # be run through the address normalizer.
+            native_in = _routes.is_native(params.token_in)
+            token_in = (_routes.NATIVE if native_in
+                        else normalize_address(params.token_in))
             token_out = normalize_address(params.token_out)
         except ValueError as exc:
             return self._ar(error=str(exc))
         if token_in == token_out:
             return self._ar(error="token_in and token_out are the same token")
 
-        id_in = get_token_identity(params.chain, token_in)
         id_out = get_token_identity(params.chain, token_out)
-        if id_in.decimals is None or id_out.decimals is None:
+        if native_in:
+            # The native asset has no contract to ask, and every EVM chain this
+            # rail supports denominates it in 18 decimals (the ChainRow records
+            # the SYMBOL for display; there is no non-18 native among them).
+            id_in = None
+            in_decimals = 18
+            in_label = getattr(_chains_mod.get(params.chain), "native_symbol", "native")
+        else:
+            id_in = get_token_identity(params.chain, token_in)
+            if id_in.decimals is None:
+                return self._ar(error=(
+                    "one side does not report decimals — refusing to size a swap "
+                    "against a token whose denomination is unknown"))
+            in_decimals = id_in.decimals
+            in_label = id_in.symbol or token_in
+        if id_out.decimals is None:
             return self._ar(error=(
                 "one side does not report decimals — refusing to size a swap "
                 "against a token whose denomination is unknown"))
-        amount_in_raw = int(round(params.amount_in * (10 ** id_in.decimals)))
+        amount_in_raw = int(round(params.amount_in * (10 ** in_decimals)))
 
         signer = wallet.operational_signer()
         gate = wallet.policy
@@ -669,7 +1603,13 @@ class DefiTradeTool(BaseTool):
         # exemption, same refusal as before 028 (fail closed, not open).
         # Read BEFORE routing (2026-08-26) so a full exit can clamp below.
         try:
-            held_balance_raw = self._held_balance_raw(params.chain, signer.address, token_in)
+            # Native has no ERC-20 balance to read. None = "unknown", which is
+            # the fail-CLOSED value here: it withholds the 028 price-bar
+            # exemption and the full-exit clamp rather than granting either on a
+            # number that was never measured.
+            held_balance_raw = (
+                None if native_in
+                else self._held_balance_raw(params.chain, signer.address, token_in))
         except Exception:
             held_balance_raw = None
 
@@ -690,7 +1630,7 @@ class DefiTradeTool(BaseTool):
                                        slippage_bps=slippage)
         if route is None:
             return self._ar(error=(
-                f"cannot route {id_in.symbol or token_in} -> "
+                f"cannot route {in_label} -> "
                 f"{id_out.symbol or token_out}: {route_why}"))
 
         # Freshness window (§1.3): quoted_at is enforced, not decorative. An
@@ -715,15 +1655,23 @@ class DefiTradeTool(BaseTool):
         # An allowance is required before the spender can pull token_in. Refuse
         # with the exact remedy rather than broadcasting a call that reverts and
         # burns gas.
-        from tools.defi.providers import univ3
-        allowance = univ3.read_allowance(params.chain, token_in, signer.address,
-                                         spender)
-        if allowance is not None and allowance < amount_in_raw:
-            return self._ar(error=(
-                f"insufficient allowance: the spender may pull {allowance} but this "
-                f"swap needs {amount_in_raw}. Call approve_token(token="
-                f"{token_in}, spender={spender}, amount={params.amount_in}) "
-                f"first, then swap, then revoke_approval."))
+        #
+        # ⚠️ NOT for a native-in swap. Native value is PUSHED with the call, not
+        # pulled by a spender, so there is no allowance to hold and nothing to
+        # read — `read_allowance` would be asking an ERC-20 question about an
+        # asset that has no contract. This is the registry's "needs no allowance
+        # at all", and skipping the grant also removes a money verb, its gas and
+        # its approval tap from every entry.
+        if not native_in:
+            from tools.defi.providers import univ3
+            allowance = univ3.read_allowance(params.chain, token_in, signer.address,
+                                             spender)
+            if allowance is not None and allowance < amount_in_raw:
+                return self._ar(error=(
+                    f"insufficient allowance: the spender may pull {allowance} but this "
+                    f"swap needs {amount_in_raw}. Call approve_token(token="
+                    f"{token_in}, spender={spender}, amount={params.amount_in}) "
+                    f"first, then swap, then revoke_approval."))
 
         idem = (f"defi_swap:{params.chain}:{token_in}:{token_out}:"
                 f"{amount_in_raw}:{uuid.uuid4().hex[:8]}")
@@ -742,8 +1690,17 @@ class DefiTradeTool(BaseTool):
         # `inflow_token` (2026-08-26) lets the guard value an unpriceable exit
         # at the MEASURED receipt and recognize exit-shaped intents for the
         # DEFI_MONITOR_EXITS lane.
+        # `token=None` DECLARES a native send (039 B1): the guard measures the
+        # NATIVE delta and asserts it against amount_raw with the same symmetric
+        # dust tolerance the ERC-20 branch uses. It is not "no token declared" —
+        # declaring an address here instead would send the guard hunting for an
+        # ERC-20 outflow that does not exist, and its `intent.token` branch
+        # additionally REFUSES an unexpected native change, so the trade would be
+        # refused by the guard meant to bound it. `inflow_token` is unchanged, so
+        # the token actually bought is still measured and asserted either way.
         intent = tx_guard.TxIntent(
-            chain=params.chain, token=token_in, to=spender,
+            chain=params.chain, token=(None if native_in else token_in),
+            to=spender,
             amount_raw=amount_in_raw, max_spend_usd=params.max_spend_usd,
             expected_allowance_grants=(), watch_spenders=(spender,),
             idempotency_key=idem, held_balance_raw=held_balance_raw,
@@ -765,7 +1722,7 @@ class DefiTradeTool(BaseTool):
                 f"manipulated pool extracts value this way. Nothing was "
                 f"broadcast."))
         header = (
-            f"swap {params.amount_in} {id_in.symbol or token_in} -> "
+            f"swap {params.amount_in} {in_label} -> "
             f"{id_out.symbol or token_out}\n"
             f"  route: {route.venue}\n"
             f"  quoted out: {out_human:.8f}  (min after {slippage}bps slippage: "
@@ -777,7 +1734,22 @@ class DefiTradeTool(BaseTool):
                 intent=intent, tx=tx, rail=rail, gate=gate, signer=signer,
                 execution_context=execution_context, header=header,
                 dry_run=params.dry_run, venue_action="swap", idem=idem,
-                counterparty=spender)
+                counterparty=spender,
+                amount_in_label=f"{params.amount_in:g} {in_label[:8]}",
+                amount_out_label=f"≥{min_human:.8f} {id_out.symbol or token_out[:8]}",
+                # 043 A35: the trade's book effect. The classifier (in core)
+                # decides which side is a tracked position vs working capital;
+                # cost basis is filled from the recorded USD inside _run_guarded.
+                position_ctx={
+                    "chain": params.chain,
+                    "token_in": token_in,
+                    "token_out": token_out,
+                    "in_native": native_in,
+                    "in_symbol": in_label,
+                    "out_symbol": id_out.symbol or token_out,
+                    "in_qty": params.amount_in,
+                    "out_qty": out_human,
+                })
 
     @BaseTool.action(
         "Swap one SPL token for another on SOLANA via the Jupiter aggregator. "
@@ -918,42 +1890,91 @@ class DefiTradeTool(BaseTool):
                 "delta set cannot be told apart from an unobserved one. "
                 "Nothing was broadcast."))
 
-        # Rent is classified, not licensed (Solana research mismatch #5).
-        if not is_plausible_rent(deltas.native_delta):
-            return self._ar(error=(
-                f"refused: the transaction moves {deltas.native_delta} lamports "
-                f"of SOL, far more than account rent and fees explain. Nothing "
-                f"was broadcast."))
+        # Selling SOL: the native move IS the swap, so it is measured, not
+        # feared. The wallet holds NATIVE SOL and Jupiter wraps it inside this
+        # very transaction, closing the temporary wSOL account again — so the
+        # outflow lands in `native_delta` and the wSOL token account nets to
+        # nothing, often never appearing in `token_deltas` at all. Read
+        # literally, the two guards below then refuse a legitimate sell twice
+        # over: the rent classifier sees ~0.93 SOL as a drain, and the
+        # unobserved-mint rule sees no wSOL observation (live, prod
+        # 2026-09-08). `_solana_held_raw` already folds native SOL into the
+        # wSOL balance for exactly this reason; the outflow side folds the
+        # same way. A partially-wrapped wallet spends from BOTH, so both are
+        # summed. This is an OBSERVATION, never a licence — the folded outflow
+        # still faces the declared-amount bound below, identically.
+        selling_sol = token_in == _WSOL_MINT
+        if selling_sol:
+            outflow_raw = -(deltas.native_delta
+                            + deltas.token_deltas.get(_WSOL_MINT, 0))
+            if outflow_raw <= 0:
+                return self._ar(error=(
+                    f"refused: you declared a sale of SOL, but the simulation "
+                    f"shows no SOL leaving — native delta "
+                    f"{deltas.native_delta} lamports, wSOL delta "
+                    f"{deltas.token_deltas.get(_WSOL_MINT, 0)}. An outflow of "
+                    f"nothing is not a swap, and it cannot be told apart from "
+                    f"an unobserved one. Nothing was broadcast."))
+        else:
+            # Rent is classified, not licensed (Solana research mismatch #5).
+            # Armed for every non-SOL sell: an unexplained native outflow
+            # beside a token swap is the drain this exists to catch.
+            if not is_plausible_rent(deltas.native_delta):
+                return self._ar(error=(
+                    f"refused: the transaction moves {deltas.native_delta} "
+                    f"lamports of SOL, far more than account rent and fees "
+                    f"explain. Nothing was broadcast."))
 
-        # An UNOBSERVED declared mint fails CLOSED. `token_deltas` being
-        # non-empty only says SOMETHING moved; if the declared outflow mint is
-        # not in it, the outflow assertion below simply does not run, and a
-        # check that did not run must never read as a check that passed. That
-        # was live: a Token-2022 mint's associated account was derived under
-        # the classic SPL Token program, so the simulation observed no state
-        # for it and `in_delta` came back None — silently skipping the one
-        # assertion that bounds how much may leave.
-        if token_in not in deltas.token_deltas:
-            return self._ar(error=(
-                f"refused: the simulation could not observe token {token_in} — "
-                f"it moved {list(deltas.token_deltas)} but says nothing about "
-                f"the token you declared as leaving. The outflow assertion "
-                f"cannot run against an unobserved account, and a check that "
-                f"did not run is not a check that passed. Nothing was "
-                f"broadcast."))
+            # An UNOBSERVED declared mint fails CLOSED. `token_deltas` being
+            # non-empty only says SOMETHING moved; if the declared outflow mint
+            # is not in it, the outflow assertion below simply does not run,
+            # and a check that did not run must never read as a check that
+            # passed. That was live: a Token-2022 mint's associated account was
+            # derived under the classic SPL Token program, so the simulation
+            # observed no state for it and `in_delta` came back None — silently
+            # skipping the one assertion that bounds how much may leave.
+            if token_in not in deltas.token_deltas:
+                return self._ar(error=(
+                    f"refused: the simulation could not observe token "
+                    f"{token_in} — it moved {list(deltas.token_deltas)} but "
+                    f"says nothing about the token you declared as leaving. "
+                    f"The outflow assertion cannot run against an unobserved "
+                    f"account, and a check that did not run is not a check "
+                    f"that passed. Nothing was broadcast."))
+            in_delta = deltas.token_deltas.get(token_in)
+            outflow_raw = -in_delta if (in_delta is not None
+                                        and in_delta < 0) else 0
 
         # Delta assertion, sell side (tx_guard step 6 mirror): the measured
         # outflow of token_in may not exceed the declared amount (0.1% + 1 raw
-        # tolerance for routing dust).
-        in_delta = deltas.token_deltas.get(token_in)
-        if in_delta is not None and in_delta < 0:
-            outflow_raw = -in_delta
+        # tolerance for routing dust). Applies to the folded SOL outflow too —
+        # folding changes what is OBSERVED, never what is PERMITTED.
+        #
+        # ⚠️ SOL-input only: the fee is the SAME ASSET as the principal. The
+        # non-SOL branch reads its outflow from `token_deltas` (which never
+        # carries a fee) and classifies native movement separately through
+        # `is_plausible_rent`. A native sell cannot separate them by asset, so
+        # the folded outflow is ALWAYS amount_in + fee + rent — measured at
+        # 3,670,479 lamports on prod. Against a 0.1% tolerance that needs a
+        # ~3,670 SOL swap to clear, so this refused 100% of SOL-input swaps at
+        # every size the treasury could trade (live: goal e9c585d9, 2026-09-09,
+        # "unsatisfiable at any size" — an accurate report of a real defect).
+        # So classify the excess the same way the other branch classifies
+        # native movement. Still a CLASSIFICATION, never a licence: the excess
+        # is capped at MAX_PLAUSIBLE_RENT_LAMPORTS (0.01 SOL), a gross
+        # overspend refuses exactly as before, and the USD ceiling below
+        # (max_spend_usd / DEFI_AUTONOMOUS_MAX_USD / PolicyGate) is untouched.
+        if outflow_raw > 0:
             if outflow_raw > amount_in_raw + max(1, amount_in_raw // 1000):
-                return self._ar(error=(
-                    f"refused: the simulation shows {outflow_raw} raw of "
-                    f"{token_in} leaving, but only {amount_in_raw} was declared "
-                    f"— the transaction does more than the declared swap. "
-                    f"Nothing was broadcast."))
+                excess = outflow_raw - amount_in_raw
+                if not (selling_sol and is_plausible_rent(-excess)):
+                    unit = ("lamports of SOL" if selling_sol
+                            else f"raw of {token_in}")
+                    return self._ar(error=(
+                        f"refused: the simulation shows {outflow_raw} {unit} "
+                        f"leaving, but only {amount_in_raw} was declared "
+                        f"— the transaction does more than the declared swap. "
+                        f"Nothing was broadcast."))
 
         out_delta_raw = deltas.token_deltas.get(token_out)
         if monitor_exit and not (out_delta_raw and out_delta_raw > 0):
@@ -1006,11 +2027,13 @@ class DefiTradeTool(BaseTool):
                     f"  RESULT: NOT SENT — nothing was broadcast."))
             # tx_guard step 9 mirror: the autonomous ceiling and the
             # daily-cap-required bar for unattended origins.
-            if amount_usd > tx_guard.autonomous_max_usd():
+            _ceiling = tx_guard.autonomous_max_usd(
+                *tx_guard.ceiling_scope(execution_context))
+            if amount_usd > _ceiling:
                 return self._ar(content=header + (
                     f"  guard: owner approval required: ${amount_usd:.2f} is "
                     f"above the autonomous ceiling "
-                    f"${tx_guard.autonomous_max_usd():.2f}\n"
+                    f"${_ceiling:.2f}\n"
                     f"  lane:  owner_queue\n"
                     f"  RESULT: NOT SENT — nothing was broadcast."))
             if autonomous_origin and not getattr(gate, "has_daily_cap", False):
@@ -1046,7 +2069,14 @@ class DefiTradeTool(BaseTool):
                 return self._ar(error=f"broadcast failed: {exc}")
             gate.record(venue="defi", action="solana_swap",
                         amount_usd=amount_usd, counterparty=token_out,
-                        idempotency_key=idem, result_ref=signature)
+                        idempotency_key=idem, result_ref=signature,
+                        chain="solana")
+            from core.wallet import tx_notify
+            _used, _limit = tx_notify.caps_from_gate(gate)
+            self._notify_tx(execution_context, tx_notify.TxNotice(
+                verb="solana_swap", route="solana", chain="solana", usd=amount_usd,
+                tx_ref=signature, cap_used_usd=_used, cap_limit_usd=_limit),
+                settled=False)
         # Confirmation (the EVM `await_receipt` mirror). Deliberately OUTSIDE
         # the reservation: polling can take a minute, the spend is already
         # recorded, and holding the cap reservation that long would block every
@@ -1065,6 +2095,12 @@ class DefiTradeTool(BaseTool):
         except Exception as exc:
             confirmed, detail = False, f"status read failed: {exc}"
         outcome = confirmation_outcome(confirmed, detail)
+        self._notify_tx(execution_context, tx_notify.TxNotice(
+            verb="solana_swap", route="solana", chain="solana", usd=amount_usd, tx_ref=signature,
+            state={"confirmed": tx_notify.STATE_CONFIRMED,
+                   "reverted": tx_notify.STATE_REVERTED}.get(
+                outcome, tx_notify.STATE_IN_FLIGHT),
+            detail=detail, ledger_recorded=True), settled=True)
         if outcome == "confirmed":
             return self._ar(content=header + (
                 f"\n  RESULT: CONFIRMED ({detail})\n  sig: {signature}"))
@@ -1078,6 +2114,103 @@ class DefiTradeTool(BaseTool):
             f"blindly; check the signature first.\n  sig: {signature}\n"
             f"  detail: {detail}"))
 
+    @BaseTool.action(
+        "Bridge the NATIVE asset of one chain to another (Solana -> EVM, or "
+        "EVM -> EVM) through Relay. CAPS, NOT TAPS: under DEFI_AUTONOMOUS_MAX_USD "
+        "it runs and reports; above it the owner queue decides. A delegated "
+        "sub-agent never bridges. Two-phase: the send is asserted before "
+        "broadcast, and the ARRIVAL is PROVEN by measuring the destination "
+        "balance — a provider saying 'success' over an unmoved balance is not "
+        "believed. Not-arrived-by-deadline is in_flight, never failure: a "
+        "re-sent bridge pays twice. dry_run defaults to TRUE.",
+        param_model=BridgeParams)
+    async def bridge(self, params: BridgeParams, execution_context=None):
+        """Thin delegator — the policy and the executor live in
+        ``tools/defi/bridge_verb.py`` (decomposition note: new behaviour gets
+        its own module rather than growing this 1.4k-line file)."""
+        from tools.defi.bridge_verb import perform_bridge
+        return await perform_bridge(self, params, execution_context)
+
+    @BaseTool.action(
+        "Deploy a NEW fixed-supply ERC-20 token from the agent wallet. Takes no "
+        "bytecode: it deploys one audited template whose runtime the guard "
+        "asserts BYTE FOR BYTE before signing, so the token provably has no mint "
+        "function, no owner, no pause and no transfer fee. The whole supply is "
+        "minted to the wallet. Deploying a token does NOT make it tradable — use "
+        "the launchpad for that. dry_run defaults to TRUE.",
+        param_model=DeployTokenParams)
+    async def deploy_token(self, params: DeployTokenParams, execution_context=None):
+        """Thin delegator — the verb lives in ``tools/defi/deploy_verb.py``."""
+        from tools.defi.deploy_verb import perform_deploy_token
+        return await perform_deploy_token(self, params, execution_context)
+
+    @BaseTool.action(
+        "Deploy CALLER-SUPPLIED compiled bytecode as a new contract. For an "
+        "ordinary token use deploy_token instead — this verb has no template to "
+        "compare against, so it can only guarantee that the constructor moves no "
+        "token and grants no allowance, never what the contract does later. "
+        "Takes COMPILED init code, never Solidity source. dry_run defaults to TRUE.",
+        param_model=DeployContractParams)
+    async def deploy_contract(self, params: DeployContractParams, execution_context=None):
+        """Thin delegator — the verb lives in ``tools/defi/deploy_verb.py``."""
+        from tools.defi.deploy_verb import perform_deploy_contract
+        return await perform_deploy_contract(self, params, execution_context)
+
+    @BaseTool.action(
+        "Deploy a NEW fixed-supply SPL token on SOLANA, with its name and "
+        "symbol written ON-CHAIN (Token-2022 metadata — no Metaplex account "
+        "needed). Everything that could later change is closed in the SAME "
+        "transaction: the whole supply is minted to the agent, the mint "
+        "authority is revoked, no freeze authority is ever created, and the "
+        "metadata update authority is revoked so the name cannot be swapped. "
+        "The mint is then READ BACK and all of that is proven, not assumed. "
+        "Pass a `uri` to a JSON file for a logo. For an EVM chain use "
+        "deploy_token. dry_run defaults to TRUE.",
+        param_model=SolanaDeployTokenParams)
+    async def solana_deploy_token(self, params: SolanaDeployTokenParams,
+                                  execution_context=None):
+        """Thin delegator — the verb lives in ``tools/defi/spl_deploy_verb.py``."""
+        from tools.defi.spl_deploy_verb import perform_solana_deploy_token
+        return await perform_solana_deploy_token(self, params, execution_context)
+
+    @BaseTool.action(
+        "Provide Uniswap v3 liquidity, creating the pool when initial_price is supplied, "
+        "or increase your token_id. Needs exact token approvals first. Both legs are "
+        "bounded by the guard. A Pons graduated v4 pool pays LP fee 0; v3 is a separate "
+        "market. dry_run defaults true.", param_model=LpAddParams)
+    async def lp_add(self, params: LpAddParams, execution_context=None):
+        from tools.defi.lp_verbs import perform_lp_add
+        return await perform_lp_add(self, params, execution_context)
+
+    @BaseTool.action(
+        "Withdraw a percentage of your v3 position and collect both tokens; optionally "
+        "burn the empty NFT at 100%. Both receipts are asserted. dry_run defaults true.",
+        param_model=LpRemoveParams)
+    async def lp_remove(self, params: LpRemoveParams, execution_context=None):
+        from tools.defi.lp_verbs import perform_lp_remove
+        return await perform_lp_remove(self, params, execution_context)
+
+    @BaseTool.action(
+        "Collect fees from your v3 liquidity position without reducing liquidity. "
+        "Both token receipts are asserted; caps charge gas. dry_run defaults true.",
+        param_model=LpCollectParams)
+    async def lp_collect(self, params: LpCollectParams, execution_context=None):
+        from tools.defi.lp_verbs import perform_lp_collect
+        return await perform_lp_collect(self, params, execution_context)
+
+    @BaseTool.action(
+        "Call ANY contract with your own ABI-encoded calldata — the verb for a "
+        "protocol nobody integrated ahead of time (an Aave supply, an NFT mint, "
+        "a staking deposit). You declare BOTH directions: at most this much "
+        "leaves, AT LEAST this much must come back, and the simulation decides "
+        "whether that held. A call that spends and returns nothing is REFUSED. "
+        "dry_run defaults to TRUE.",
+        param_model=CallParams)
+    async def call(self, params: CallParams, execution_context=None):
+        """Thin delegator — the verb lives in ``tools/defi/call_verb.py``."""
+        from tools.defi.call_verb import perform_call
+        return await perform_call(self, params, execution_context)
+
     def _solana_turn_gate(self, execution_context, *, exit_shaped_fn):
         """tx_guard steps 1-2, mirrored for the SVM path (which has no EVM
         transaction to route through ``tx_guard.authorize``).
@@ -1085,6 +2218,10 @@ class DefiTradeTool(BaseTool):
         Returns ``(refusal | None, autonomous_origin, monitor_exit)``. Fails
         CLOSED on every probe error, exactly like the EVM guard.
         """
+        from core.wallet.authority import turn_refusal
+        principal_error = turn_refusal(execution_context)
+        if principal_error:
+            return (principal_error, False, False)
         from core.wallet import tx_guard
         try:
             if tx_guard._halted():
@@ -1247,7 +2384,7 @@ class DefiTradeTool(BaseTool):
         from tools.defi.providers import jupiter
         return jupiter.build_swap(quote.raw, holder)
 
-    def _solana_simulate(self, *, raw_tx, owner, mints=()):
+    def _solana_simulate(self, *, raw_tx, owner, mints=(), extra_allowed=frozenset()):
         """Vet the bytes, then simulate them against everything we own.
 
         ⚠️ The addresses MUST be the token accounts, not the owner. SPL
@@ -1270,7 +2407,8 @@ class DefiTradeTool(BaseTool):
         from core.wallet.solana_rail import SolanaRail
         rail = SolanaRail(signer=None)
         return solana_tx_inspect.simulate(
-            raw_tx, owner=owner, mints=mints, rpc=rail._rpc)
+            raw_tx, owner=owner, mints=mints, rpc=rail._rpc,
+            extra_allowed=extra_allowed)
 
     def _solana_confirm(self, signature):
         """``(ok, detail)`` for a broadcast signature — the EVM `await_receipt`
@@ -1307,13 +2445,27 @@ class DefiTradeTool(BaseTool):
         thin or manipulated, and that is now a refusal, not a narration.
         """
         try:
-            price_in = self._price(chain, route.token_in)
+            from tools.defi.providers.routes import is_native
+            if is_native(route.token_in):
+                # The native asset has no contract to price, so it is priced
+                # through the chain's pinned wrapped native — the SAME
+                # substitution `tx_guard` makes to value a native outflow, kept
+                # identical on purpose so the route check and the cap check
+                # cannot disagree about what the gas asset is worth.
+                from core.wallet import chains as _c
+                _row = _c.get(chain)
+                _wrapped = getattr(_row, "wrapped_native", None) if _row else None
+                price_in = self._price(chain, _wrapped) if _wrapped else None
+                in_decimals = 18
+            else:
+                price_in = self._price(chain, route.token_in)
+                in_decimals = id_in.decimals
             price_out = self._price(chain, route.token_out)
             if not price_in or not price_out:
                 return ("UNAVAILABLE",
                         "route check: UNAVAILABLE — no independent price for one "
                         "side; the route is unverified")
-            amount_in_human = route.amount_in_raw / (10 ** id_in.decimals)
+            amount_in_human = route.amount_in_raw / (10 ** in_decimals)
             amount_out_human = route.amount_out_raw / (10 ** id_out.decimals)
             if amount_out_human <= 0:
                 return ("UNAVAILABLE", "route check: UNAVAILABLE — zero output")

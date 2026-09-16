@@ -5,6 +5,8 @@ Serves AutoV2 HTTP API endpoints.
 
 import os
 import sys
+from core.security.session_tokens import decode_session_token
+
 import logging
 import asyncio
 from typing import Optional, Dict, Any, TYPE_CHECKING
@@ -390,7 +392,11 @@ async def fallback_auth_middleware(request: Request, call_next):
                 import jwt
                 jwt_secret = os.environ.get("JWT_SECRET_KEY")
                 if jwt_secret:
-                    decoded = jwt.decode(provided_token, jwt_secret, algorithms=["HS256"])
+                    decoded = decode_session_token(provided_token, jwt_secret)
+                    # 043 W5: refuse a token whose jti /logout revoked.
+                    from core.token_denylist import jti_is_revoked
+                    if jti_is_revoked(decoded):
+                        raise jwt.InvalidTokenError("token revoked via /logout")
                     from api.auth_state import set_auth_state
                     set_auth_state(
                         request.state,
@@ -902,6 +908,8 @@ def create_app() -> FastAPI:
             "message": "Authentication test endpoint"
         }
 
+    from api.request_limits import RequestBodyLimitMiddleware
+    app.add_middleware(RequestBodyLimitMiddleware)
     return app
 
 # Factory function for uvicorn

@@ -67,65 +67,7 @@
     </div>
 </div>
 
-<script>
-    document.addEventListener('DOMContentLoaded', function() {
-        // Handle refresh all sessions button
-        document.getElementById('refresh-all-sessions').addEventListener('click', function() {
-            this.disabled = true;
-            this.innerHTML = '<span class="action-prefix">></span> Refreshing...';
-            
-            fetch('/api/refresh')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.status === 'ok') {
-                        this.innerHTML = '<span class="action-prefix">></span> Success! Sessions Refreshed';
-                        // Redirect to home after 1 second
-                        setTimeout(() => {
-                            window.location.href = '/';
-                        }, 1000);
-                    } else {
-                        this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
-                        this.disabled = false;
-                    }
-                })
-                .catch(error => {
-                    console.error('Error refreshing sessions:', error);
-                    this.innerHTML = '<span class="action-prefix">></span> Error Refreshing';
-                    this.disabled = false;
-                });
-        });
-        
-        // Handle repair session button if it exists
-        const repairBtn = document.getElementById('repair-session');
-        if (repairBtn) {
-            repairBtn.addEventListener('click', function() {
-                const sessionId = this.getAttribute('data-session-id');
-                this.disabled = true;
-                this.innerHTML = '<span class="action-prefix">></span> Repairing...';
-                
-                fetch(`/api/repair/${sessionId}`)
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.status === 'ok') {
-                            this.innerHTML = '<span class="action-prefix">></span> Success! Redirecting...';
-                            // Redirect to the session page
-                            setTimeout(() => {
-                                window.location.href = `/session/${sessionId}`;
-                            }, 1000);
-                        } else {
-                            this.innerHTML = '<span class="action-prefix">></span> Error: ' + data.message;
-                            this.disabled = false;
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error repairing session:', error);
-                        this.innerHTML = '<span class="action-prefix">></span> Error Repairing';
-                        this.disabled = false;
-                    });
-            });
-        }
-    });
-</script>
+<script src="/static/js/error-page.js"></script>
 {% endblock %}
 
 {% block head %}

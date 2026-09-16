@@ -20,6 +20,7 @@ the store stays a compact digest substrate, not a full mail archive.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -32,8 +33,30 @@ _BODY_CAP = 2000        # chars kept per message body
 _PRUNE_KEEP = 200       # newest messages kept per conversation
 
 
+#: A chat link wrapper the agent sometimes types instead of the handle.
+_LINK_PREFIX_RE = re.compile(r"^(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/",
+                             re.IGNORECASE)
+
+
 def _norm_addr(address: str) -> str:
-    return (address or "").strip().lower()
+    """The ONE key for a counterparty address, on read and on write.
+
+    2026-09-15 prod review, C8: lowercasing alone left one channel stored as
+    THREE conversations — ``thepublicden``, ``@thepublicden`` and
+    ``t.me/thepublicden`` — so "have we spoken" and the owner-resend cooldown
+    (which reads this store by address) each saw a third of the history. A
+    leading ``@`` and a t.me/ wrapper are spellings of one address, not
+    different addresses.
+
+    Safe across surfaces: an email never starts with ``@``, and a numeric chat
+    id is untouched. Normalizing HERE rather than at the call sites is what
+    makes reads and writes agree, including for rows written before this.
+    """
+    a = (address or "").strip()
+    a = _LINK_PREFIX_RE.sub("", a)
+    if a.startswith("@"):
+        a = a[1:]
+    return a.lower()
 
 
 def _iso(ts: float) -> str:
@@ -87,8 +110,57 @@ class ConversationStore:
                 "ON conversation_messages(conversation_id, ts)"
             )
             conn.commit()
+            self._merge_legacy_spellings(conn)
         finally:
             conn.close()
+
+    #: Bumped when an on-open migration lands, so it runs once per file.
+    _SCHEMA_VERSION = 1
+
+    @staticmethod
+    def _merge_legacy_spellings(conn) -> None:
+        """Collapse rows written before :func:`_norm_addr` normalized spellings.
+
+        2026-09-15 round-2 review. The normalizer stops NEW splits, but a live
+        install already holds ``thepublicden``, ``@thepublicden`` and
+        ``t.me/thepublicden`` as three conversations with three histories — and
+        the owner-resend cooldown reads this store BY ADDRESS, so it sees a
+        third of what was said. A fix that only helps fresh installs leaves the
+        box it was written for exactly as broken.
+
+        Messages are MOVED, never dropped: the oldest row for a normalized
+        address wins and its duplicates' messages are re-pointed onto it. Runs
+        once per file (``PRAGMA user_version``) and is idempotent either way.
+        Fail-open — a migration fault must not make the store unusable.
+        """
+        try:
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= \
+                    ConversationStore._SCHEMA_VERSION:
+                return
+            rows = conn.execute(
+                "SELECT id, user_id, surface, address FROM conversations "
+                "ORDER BY id").fetchall()
+            keep: dict = {}
+            for cid, uid, surface, address in rows:
+                key = (uid, surface, _norm_addr(address))
+                if key not in keep:
+                    keep[key] = cid
+                    if address != key[2]:
+                        conn.execute("UPDATE conversations SET address=? WHERE id=?",
+                                     (key[2], cid))
+                    continue
+                conn.execute(
+                    "UPDATE conversation_messages SET conversation_id=? "
+                    "WHERE conversation_id=?", (keep[key], cid))
+                conn.execute("DELETE FROM conversations WHERE id=?", (cid,))
+            conn.execute(f"PRAGMA user_version = {ConversationStore._SCHEMA_VERSION}")
+            conn.commit()
+        except Exception:
+            logger.warning("conversation address merge skipped", exc_info=True)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     # --- write ---------------------------------------------------------------
     def _get_or_create(self, user_id: str, surface: str, address: str,
@@ -209,6 +281,30 @@ class ConversationStore:
             "WHERE conversation_id=? AND direction='out' AND ts >= ?",
             (conv["id"], ts - since_secs), fetch="one")
         return int(row["n"]) if row is not None else 0
+
+    def outbound_bodies_since(self, user_id: str, surface: str, address: str,
+                              since_secs: float, *,
+                              now: Optional[float] = None,
+                              limit: int = 50) -> List[str]:
+        """The BODIES of outbound messages to this address within the window.
+
+        The twin of :meth:`outbound_count_since`, which answers only "how many".
+        A count cannot tell a repeat from a materially new report, and the owner
+        resend cooldown was built on the count alone — so on prod a genuinely
+        new blocker was refused because something unrelated had gone out inside
+        the window (2026-09-15 review, C5). Newest first, bounded.
+        """
+        ts = time.time() if now is None else now
+        conv = self.get(user_id, surface, address)
+        if conv is None:
+            return []
+        rows = execute_retry(
+            self.db_path,
+            "SELECT body FROM conversation_messages "
+            "WHERE conversation_id=? AND direction='out' AND ts >= ? "
+            "ORDER BY ts DESC LIMIT ?",
+            (conv["id"], ts - since_secs, max(1, int(limit))), fetch="all") or []
+        return [str(r["body"] or "") for r in rows]
 
     def outbound_count_surface_since(self, user_id: str, surface: str,
                                      since_secs: float, *,

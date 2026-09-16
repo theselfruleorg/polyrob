@@ -23,10 +23,32 @@ def build_blocker_escalation(goal: Any) -> str:
     reason = (getattr(goal, "last_failure_error", None) or "repeated failures").strip()
     fails = getattr(goal, "consecutive_failures", None)
     tail = f" after {fails} attempts" if fails else ""
+    goal_id = (getattr(goal, "id", None) or "")[:8]
+
+    # `reason` is the agent's OWN `last_failure_error` prose, forwarded verbatim
+    # to the owner's phone. On 2026-09-08 that carried "re-activate the standing
+    # Treasury goal ... e.g. `goal_update`/requeue on your side" -- a verb that
+    # exists on no surface, for a grant that was never missing. The owner, who
+    # does not use the CLI, went looking for it.
+    #
+    # We do NOT delete the agent's diagnosis: it is often right about the WHAT
+    # and wrong only about the remedy, and hiding it would cost more than it
+    # saves. We label the invented actions and name real ones instead.
+    correction = ""
+    try:
+        from core.owner_remedy import correction_line
+
+        shown = f" {goal_id}" if goal_id else " <id>"
+        correction = correction_line(
+            reason, real_options=f"/goal show{shown} · /goals · /asks")
+    except Exception:            # never let a cosmetic check break an escalation
+        logger.debug("remedy check failed; sending escalation unchecked",
+                     exc_info=True)
+
     return (
         f"🚧 I'm blocked and stopped retrying{tail}.\n"
         f"Goal: {title}\n"
-        f"Why: {reason}\n"
+        f"Why: {reason}{correction}\n"
         f"What do you want me to do — drop it, give me what it needs, or should I "
         f"try a different approach?"
     )

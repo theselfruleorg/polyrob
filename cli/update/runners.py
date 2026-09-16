@@ -22,6 +22,31 @@ from cli.update.engine import UpdateRunners
 RunFn = Callable[[List[str], Optional[Path]], None]
 CaptureFn = Callable[[List[str], Optional[Path]], str]
 
+#: Post-install asset check — run in the UPDATED interpreter, so it resolves the
+#: files exactly the way the runtime will (off the installed `modules.pfp` /
+#: `webview` packages, never off the source tree the updater happens to sit in).
+#:
+#: These four are load-bearing, not decoration: `mindprint.js` IS the avatar
+#: engine, `rob.png` is the last-resort face, and the two DejaVu faces are what
+#: keep an invoice card from rendering in PIL's default bitmap font. Pinned
+#: alongside `tests/test_shipped_assets_ratchet.py`, which enforces the same
+#: files at the declaration level.
+#: ⚠️ `sys.exit(...) if missing else None`, NOT `raise ... if missing else None`
+#: — the latter parses as `raise (X if missing else None)` and raises None,
+#: which is a TypeError on the HEALTHY path. Found by executing the probe;
+#: the string-matching unit test was perfectly happy with it.
+_ASSET_PROBE = (
+    "import pathlib, sys, modules.pfp as p; "
+    "r = pathlib.Path(p.__file__).resolve().parents[2]; "
+    "missing = [str(x) for x in ("
+    "r / 'avatar' / 'mindprint.js', r / 'avatar' / 'renders' / 'rob.png', "
+    "r / 'assets' / 'fonts' / 'dejavu' / 'DejaVuSans.ttf', "
+    "r / 'assets' / 'fonts' / 'dejavu' / 'DejaVuSans-Bold.ttf') "
+    "if not x.is_file()]; "
+    "sys.exit('runtime assets missing after install: ' + ', '.join(missing)) "
+    "if missing else None"
+)
+
 
 def _checked_run(cmd: List[str], cwd: Optional[Path]) -> None:
     """Run ``cmd``; raise ``CalledProcessError`` (with captured output) on non-zero."""
@@ -85,6 +110,14 @@ def build_runners(
     def verify() -> None:
         # New code must at least import cleanly (the release smoke check).
         _run([py, "-c", "import core, cli.polyrob"], repo)
+        # …and the runtime ASSETS must have landed with it. An import-only check
+        # passes happily on an install that lost a package-data glob: the agent
+        # then has no face (the avatar engine and the committed reference PNG
+        # are gone) and every invoice card silently degrades to PIL's default
+        # font. Raising here is what makes engine.apply_update roll back —
+        # `avatar/` and `assets/` shipped in NO deploy script at all until
+        # 2026-09-15, which is the class this closes.
+        _run([py, "-c", _ASSET_PROBE], repo)
 
     def rollback_code() -> None:
         _run(["git", "reset", "--hard", old_sha], repo)

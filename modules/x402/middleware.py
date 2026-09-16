@@ -25,6 +25,16 @@ from .x402_integration import (
     get_x402_config,
     get_x402_price_usd,
 )
+# 043 A20: attribute machine income (A2A / /v1 billed routes) to the bound
+# OWNER tenant, not just the payer's own derived usr_<hex> id — otherwise the
+# unified ledger's tenant predicate never matches it (see x402_integration.py
+# record_x402_payment docstring). resolve_owner_user_id (not the bare
+# resolve_owner_principal) — it ALSO consults POLYROB_LOCAL_OWNER, the same
+# precedence webview/webgate.py::local_owner_id reads the console ledger
+# with; a bare resolve_owner_principal() would stamp the instance id on a
+# deploy that sets POLYROB_LOCAL_OWNER without POLYROB_OWNER_USER_ID, and the
+# console's tenant-scoped read would then miss every row.
+from core.instance import resolve_owner_user_id
 # M1: the SAME normalization the invoicing replay guard applies at every
 # store/compare site — this middleware writes transaction_hash into the SAME
 # x402_payment_requests column via record_x402_payment, so a facilitator's
@@ -49,6 +59,46 @@ def to_atomic_amount(amount_usd: float, decimals: int) -> int:
     return int(round(amount_usd * (10 ** decimals)))
 
 
+def resolve_charge_asset(network: str, asset_id: Optional[str] = None):
+    """The `PaymentAsset` this HTTP charge is denominated in.
+
+    ⚠️ Raises rather than falling back to 6 decimals. The old silent default
+    sized an 18-decimal charge a trillion times too small — a fallback that
+    looks like a working price is worse than a refusal that names the problem.
+    """
+    from core.payments.assets import resolve, vocabulary
+    from modules.x402.invoicing import resolve_invoice_asset
+    if asset_id:
+        row = resolve(asset_id)
+        if row is None:
+            raise ValueError(f"unknown charge asset {asset_id!r} "
+                             f"(known: {vocabulary()})")
+        return row
+    try:
+        return resolve_invoice_asset(network, None)
+    except ValueError as e:
+        raise ValueError(f"no payable asset for network {network!r}: {e}") from e
+
+
+def _charge_asset_fields(network: str):
+    """``(decimals, address, eip712_name, eip712_version)`` for the challenge.
+
+    The facilitator rail needs the EIP-712 domain, which only `fastapi_x402`
+    knows, so that library stays the source for a network it knows. The asset
+    registry is the fallback for decimals and the address — and when NEITHER
+    can answer, this raises rather than inventing a 6.
+    """
+    try:
+        from fastapi_x402.networks import get_default_asset_config
+        cfg = get_default_asset_config(network)
+        return (cfg.decimals, cfg.address, cfg.eip712_name, cfg.eip712_version)
+    except Exception:
+        logger.debug("fastapi_x402 asset config unavailable for %r — falling "
+                     "back to the payment-asset registry", network)
+    asset = resolve_charge_asset(network)
+    return (asset.decimals, asset.address, None, None)
+
+
 def build_x402_challenge(request_path: str, cost_usd: Optional[float] = None) -> dict:
     """Build the standard x402 402-challenge body (the 'accepts' array).
 
@@ -62,22 +112,8 @@ def build_x402_challenge(request_path: str, cost_usd: Optional[float] = None) ->
     config = get_x402_config()
     network = config["network"]
 
-    decimals = 6  # USDC/USDT default
-    asset_address = None
-    eip712_name = None
-    eip712_version = None
-    try:
-        from fastapi_x402.networks import get_default_asset_config
-        asset_config = get_default_asset_config(network)
-        decimals = asset_config.decimals
-        asset_address = asset_config.address
-        eip712_name = asset_config.eip712_name
-        eip712_version = asset_config.eip712_version
-    except Exception:
-        logger.debug(
-            "fastapi_x402 asset config unavailable; using USDC-default decimals "
-            "for the 402 challenge body"
-        )
+    decimals, asset_address, eip712_name, eip712_version = _charge_asset_fields(
+        network)
 
     amount_atomic = to_atomic_amount(price_usd, decimals)
 
@@ -430,6 +466,7 @@ class X402PaymentMiddleware(BaseHTTPMiddleware):
                 recipient=config["pay_to"],
                 transaction_hash=_norm_tx(settle_response.transaction),
                 amount_atomic=str(amount_atomic),
+                tenant_id=resolve_owner_user_id(),
             )
 
             self.logger.info(

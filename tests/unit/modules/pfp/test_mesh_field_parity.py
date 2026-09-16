@@ -13,7 +13,7 @@ import pytest
 from modules.pfp.mesh import Mesh, clamp
 
 ENGINE = Path(__file__).resolve().parents[4] / "avatar" / "mindprint.js"
-SEEDS = ["Rob Ottmachin", "polyrob", "Nyx Orbital", "Kilo Prime"]
+SEEDS = ["POLYROB", "Ada Nine", "Nyx Orbital", "Kilo Prime"]
 
 # Capture v01 per drawn cell from the real still render (dens pinned for a small grid).
 _HARNESS = r"""

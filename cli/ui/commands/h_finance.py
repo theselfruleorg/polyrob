@@ -37,6 +37,130 @@ def _days_from_arg(arg: str) -> int:
         return 7
 
 
+# A39/A6 (043): the single wording for "this block's numbers could not be
+# read" — used for BOTH the treasury and the runtime block, so the two never
+# drift into two different honesty stories for the same failure shape.
+_UNAVAILABLE_REASON = "not readable — metering is off or the store is missing"
+
+
+def _cap_headroom_value(ledger: dict) -> str:
+    """The 'today's cap' row value: real headroom when the wallet PolicyGate
+    was readable, else an honest dash + reason (A39) — never a fabricated
+    number. ``ledger["caps"]`` comes straight from
+    ``unified_ledger.build_ledger`` (the same PolicyGate read the webview
+    Finance page uses)."""
+    caps = ledger.get("caps") or {}
+    cap = caps.get("daily_cap_usd")
+    used = caps.get("daily_used_usd")
+    left = caps.get("daily_left_usd")
+    if cap is None or used is None or left is None:
+        return "—   cap headroom unavailable (wallet not readable)"
+    return f"{_money(used)} of {_money(cap)} ({_money(left)} left)"
+
+
+def render_finance_text(ledger: dict, *, days: int, user_id: str) -> str:
+    """Pure renderer over an ALREADY-BUILT ledger dict (extracted from
+    ``render_finance`` in A39/A6, 043, so the honesty-per-block logic is
+    testable without the async ``build_ledger`` round trip).
+
+    H14b/A39: a block (``treasury``/``runtime``) whose ``available`` flag is
+    ``False`` renders every one of its rows as ``—`` plus one reason line —
+    the ledger has ALREADY marked that leg unreadable; re-computing real
+    numbers from its (fabricated-zero) fields would re-launder a "we
+    couldn't read it" into an honest-looking $0.00 balance sheet. When both
+    blocks ARE available, rendering is unchanged from before this
+    extraction — same rows, same spacing.
+    """
+    header = f"finance — last {int(ledger.get('window_days') or days)} days (tenant {user_id})"
+
+    # H14b: an absent DB-backed money layer ("no data yet") must NOT be rendered
+    # as an honest-looking $0.00. When both money tables are missing, show the
+    # honest empty-state; a partial degrade is annotated below the numbers.
+    note = ledger_availability_note(ledger)
+    costs_ok = bool(ledger.get("costs_available", True))
+    inbound_ok = bool(ledger.get("inbound_available", True))
+    if not costs_ok and not inbound_ok:
+        return "\n".join([
+            header,
+            "",
+            f"{candy.GUTTER}no data yet — the agent hasn't recorded any money "
+            "activity, or metering is off / not yet initialized.",
+            f"{candy.GUTTER}({note})" if note else "",
+        ]).rstrip()
+
+    # Two statements, never summed: treasury is the agent's own USDC
+    # (income/spend/pending/net); runtime is the owner's LLM/API bill (no net —
+    # there's nothing to net an expense against). Reading the legacy merged
+    # `earned_usd`/`total_spend_usd`/`net_usd` here would report the owner's
+    # API bill as part of the agent's own P&L.
+    t = ledger.get("treasury") or {}
+    r = ledger.get("runtime") or {}
+    t_available = t.get("available", True) is not False
+    r_available = r.get("available", True) is not False
+
+    if t_available:
+        income = float(t.get("income_usd") or 0.0)
+        t_spend = float(t.get("spend_usd") or 0.0)
+        pending = float(t.get("pending_usd") or 0.0)
+        net = float(t.get("net_usd") or 0.0)
+        t_bal = t.get("balance_usd")
+        treasury_rows = [
+            ("income", f"{_money(income)}   ({int(ledger.get('settled_payments') or 0)} settled)"),
+            ("spend", _money(t_spend)),
+            ("pending", f"{_money(pending)}   ({int(t.get('pending_count') or 0)} open invoices)"),
+            ("net", _money(net)),
+        ]
+        if t_bal is not None:
+            treasury_rows.append(("balance", _money(t_bal)))
+        treasury_reason = None
+    else:
+        # A39: the ledger already flagged this leg unreadable — every row a
+        # dash, not the fabricated $0.00 the raw fields would otherwise carry.
+        treasury_rows = [("income", "—"), ("spend", "—"), ("pending", "—"), ("net", "—")]
+        treasury_reason = _UNAVAILABLE_REASON
+    # The wallet daily-cap headroom is its OWN read (PolicyGate, not the
+    # treasury income/spend legs) — it renders regardless of treasury.available.
+    # Fix round 1: rendered through its OWN candy.kv_lines call (its own
+    # alignment scope), never appended into treasury_rows — kv_lines pads
+    # every label to the longest key in ONE call, so folding "today's cap"
+    # (12 chars) into the same call as "income"/"spend"/"pending"/"net"/
+    # "balance" (<=7 chars) shifted every pre-existing row's value column by
+    # 4 spaces, breaking byte-identical rendering when available is True.
+    cap_line = candy.kv_lines([("today's cap", _cap_headroom_value(ledger))])
+
+    if r_available:
+        r_window = float(r.get("spend_window_usd") or 0.0)
+        r_total = float(r.get("spend_total_usd") or 0.0)
+        r_bal = r.get("provider_balance_usd")
+        runtime_rows = [
+            ("spend", f"{_money(r_window)}   ({int(r.get('calls_window') or 0)} calls)"),
+            ("total", f"{_money(r_total)}   ({int(r.get('calls_total') or 0)} calls)"),
+        ]
+        if r_bal is not None:
+            runtime_rows.append(("balance", _money(r_bal)))
+        runtime_reason = None
+    else:
+        runtime_rows = [("spend", "—"), ("total", "—")]
+        runtime_reason = _UNAVAILABLE_REASON
+
+    lines = [header, "", f"{candy.GUTTER}Treasury (agent's own money)"]
+    if treasury_reason:
+        lines.append(f"{candy.GUTTER}{treasury_reason}")
+    lines.append(candy.kv_lines(treasury_rows))
+    lines.append(cap_line)
+    lines += ["", f"{candy.GUTTER}Runtime cost (owner-funded compute)"]
+    if runtime_reason:
+        lines.append(f"{candy.GUTTER}{runtime_reason}")
+    lines.append(candy.kv_lines(runtime_rows))
+    if note:
+        lines.append(f"{candy.GUTTER}⚠ {note}")
+    lines += [
+        "",
+        "(invoices: polyrob owner invoices · settle: polyrob owner settle <id>)",
+    ]
+    return "\n".join(lines)
+
+
 def render_finance(*, user_id: str, days: int = 7, db_path: str = None,
                    standalone: bool = False) -> str:
     """Pure renderer: one plain-text balance sheet over ``build_ledger``.
@@ -87,67 +211,7 @@ def render_finance(*, user_id: str, days: int = 7, db_path: str = None,
     except Exception as e:
         return f"{candy.GUTTER}finance unavailable ({e})"
 
-    header = f"finance — last {int(ledger.get('window_days') or days)} days (tenant {user_id})"
-
-    # H14b: an absent DB-backed money layer ("no data yet") must NOT be rendered
-    # as an honest-looking $0.00. When both money tables are missing, show the
-    # honest empty-state; a partial degrade is annotated below the numbers.
-    note = ledger_availability_note(ledger)
-    costs_ok = bool(ledger.get("costs_available", True))
-    inbound_ok = bool(ledger.get("inbound_available", True))
-    if not costs_ok and not inbound_ok:
-        return "\n".join([
-            header,
-            "",
-            f"{candy.GUTTER}no data yet — the agent hasn't recorded any money "
-            "activity, or metering is off / not yet initialized.",
-            f"{candy.GUTTER}({note})" if note else "",
-        ]).rstrip()
-
-    # Two statements, never summed: treasury is the agent's own USDC
-    # (income/spend/pending/net); runtime is the owner's LLM/API bill (no net —
-    # there's nothing to net an expense against). Reading the legacy merged
-    # `earned_usd`/`total_spend_usd`/`net_usd` here would report the owner's
-    # API bill as part of the agent's own P&L.
-    t = ledger.get("treasury") or {}
-    r = ledger.get("runtime") or {}
-    income = float(t.get("income_usd") or 0.0)
-    t_spend = float(t.get("spend_usd") or 0.0)
-    pending = float(t.get("pending_usd") or 0.0)
-    net = float(t.get("net_usd") or 0.0)
-    r_window = float(r.get("spend_window_usd") or 0.0)
-    r_total = float(r.get("spend_total_usd") or 0.0)
-    r_bal = r.get("provider_balance_usd")
-    t_bal = t.get("balance_usd")
-
-    treasury_rows = [
-        ("income", f"{_money(income)}   ({int(ledger.get('settled_payments') or 0)} settled)"),
-        ("spend", _money(t_spend)),
-        ("pending", f"{_money(pending)}   ({int(t.get('pending_count') or 0)} open invoices)"),
-        ("net", _money(net)),
-    ]
-    if t_bal is not None:
-        treasury_rows.append(("balance", _money(t_bal)))
-    runtime_rows = [
-        ("spend", f"{_money(r_window)}   ({int(r.get('calls_window') or 0)} calls)"),
-        ("total", f"{_money(r_total)}   ({int(r.get('calls_total') or 0)} calls)"),
-    ]
-    if r_bal is not None:
-        runtime_rows.append(("balance", _money(r_bal)))
-    lines = [
-        header, "",
-        f"{candy.GUTTER}Treasury (agent's own money)",
-        candy.kv_lines(treasury_rows), "",
-        f"{candy.GUTTER}Runtime cost (owner-funded compute)",
-        candy.kv_lines(runtime_rows),
-    ]
-    if note:
-        lines.append(f"{candy.GUTTER}⚠ {note}")
-    lines += [
-        "",
-        "(invoices: polyrob owner invoices · settle: polyrob owner settle <id>)",
-    ]
-    return "\n".join(lines)
+    return render_finance_text(ledger, days=days, user_id=user_id)
 
 
 def h_finance(ctx) -> None:

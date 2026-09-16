@@ -56,6 +56,41 @@ def _plain_body(em: Message) -> str:
         return ""
 
 
+def _attachments(em: Message) -> list:
+    """Every attached part as ``{filename, mime, data}`` (2026-09-13 media rail).
+
+    ``_plain_body`` above returns at the FIRST ``text/plain`` part and everything
+    else was discarded — an owner emailing a PDF got an answer written as if the
+    mail were empty. Only parts with an explicit attachment disposition or a
+    filename are taken, so the body and its ``text/html`` twin never show up here.
+    """
+    out: list = []
+    try:
+        if not em.is_multipart():
+            return out
+        for part in em.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            disposition = (part.get_content_disposition() or "").lower()
+            filename = part.get_filename()
+            if disposition != "attachment" and not filename:
+                continue
+            try:
+                payload = part.get_payload(decode=True)
+            except Exception:
+                payload = None
+            if not payload:
+                continue
+            out.append({
+                "filename": _decode(filename) if filename else None,
+                "mime": part.get_content_type(),
+                "data": payload,
+            })
+    except Exception as e:  # a malformed MIME tree must never lose the whole mail
+        logger.debug("email attachment extraction failed: %s", e)
+    return out
+
+
 def normalize_email_message(em: Message) -> dict:
     """Map a parsed email to the normalized dict ``process_email`` consumes. Pure."""
     return {
@@ -65,7 +100,14 @@ def normalize_email_message(em: Message) -> dict:
         "body": _plain_body(em),
         "in_reply_to": (em.get("In-Reply-To") or "").strip(),
         "references": (em.get("References") or "").strip(),
+        "attachments": _attachments(em),
     }
+
+
+async def _media_bytes(media):
+    """``fetch_bytes`` for the shared inbound-media rail: email attachments arrive
+    complete, so there is nothing to download."""
+    return getattr(media, "data", None)
 
 
 class EmailHarness:
@@ -139,7 +181,13 @@ class EmailHarness:
                     user_directory=self.user_directory,
                 )
                 if result is not None:
-                    await act_on_inbound(self.task_agent, result)
+                    # Bytes are already on the Media (IMAP hands us the whole
+                    # message), so the fetcher is a straight read. The shared rail
+                    # only absorbs on an OWNER-tier turn; a CORRESPONDENT's
+                    # attachment is named in the text and never written to a
+                    # workspace (a From: header is forgeable).
+                    await act_on_inbound(self.task_agent, result,
+                                         fetch_media=_media_bytes)
                     routed += 1
             except Exception as e:
                 logger.debug("email message routing failed: %s", e)

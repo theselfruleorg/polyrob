@@ -28,3 +28,22 @@ def _isolate_defi_data_home(tmp_path, monkeypatch):
                 "ALCHEMY_RPC_URL_BASE", "ALCHEMY_RPC_URL_ROBINHOOD"):
         monkeypatch.delenv(var, raising=False)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_indexer_network(monkeypatch):
+    """Unit tests never reach a public indexer.
+
+    `token_resolve` now asks TWO indexes, so a test that stubs only `search_fn`
+    used to fall through to a live GeckoTerminal call — one such test started
+    returning 15 real USDC rows for a case written as "the index found nothing".
+    Blocking the network entry points makes that impossible: a test that wants
+    the second index injects `search2_fn`, and one that does not gets a named
+    "did not answer", never someone else's live data.
+    """
+    def _blocked(*a, **kw):
+        raise RuntimeError("unit tests must not reach the network")
+
+    for module in ("tools.defi.providers.geckoterminal", "tools.defi.providers.dexscreener"):
+        monkeypatch.setattr(f"{module}._get", _blocked, raising=False)
+    yield

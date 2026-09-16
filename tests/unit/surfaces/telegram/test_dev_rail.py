@@ -34,7 +34,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(text, user="gleb"):
+def _cmd(text, user="alice"):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -45,7 +45,7 @@ def _cmd(text, user="gleb"):
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     from core.instance import DEFAULT_INSTANCE_ID
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path

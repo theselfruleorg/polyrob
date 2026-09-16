@@ -94,6 +94,7 @@ def _tool(wallet=None, *, deltas=None, **kw):
 
 @pytest.fixture(autouse=True)
 def _armed(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
     monkeypatch.setenv("SOLANA_TRADE_ENABLED", "true")
     monkeypatch.delenv("DEFI_AUTONOMOUS_TURN_TRADING", raising=False)
     monkeypatch.delenv("DEFI_MONITOR_EXITS", raising=False)
@@ -185,7 +186,7 @@ async def test_forged_turn_refuses(monkeypatch):
     monkeypatch.setattr(
         "tools.controller.action_registration._is_forged_or_autonomous_turn",
         lambda ctx, tool: True)
-    ctx = types.SimpleNamespace(is_sub_agent=True, role="leaf")
+    ctx = types.SimpleNamespace(user_id="owner", is_sub_agent=True, role="leaf")
     tool = _tool()
     res = await tool.solana_swap(_params(), execution_context=ctx)
     assert res.error and "forged" in res.error.lower()
@@ -200,7 +201,7 @@ async def test_autonomous_goal_turn_allowed_when_armed(monkeypatch):
     monkeypatch.setattr(
         "tools.controller.action_registration._is_autonomous_goal_turn",
         lambda ctx, tool: True)
-    ctx = types.SimpleNamespace(is_sub_agent=False, role="orchestrator")
+    ctx = types.SimpleNamespace(user_id="owner", is_sub_agent=False, role="orchestrator")
     tool = _tool()
     res = await tool.solana_swap(_params(dry_run=True), execution_context=ctx)
     assert res.error is None
@@ -215,7 +216,7 @@ async def test_autonomous_origin_demands_a_daily_cap(monkeypatch):
     monkeypatch.setattr(
         "tools.controller.action_registration._is_autonomous_goal_turn",
         lambda ctx, tool: True)
-    ctx = types.SimpleNamespace(is_sub_agent=False, role="orchestrator")
+    ctx = types.SimpleNamespace(user_id="owner", is_sub_agent=False, role="orchestrator")
     wallet = _Wallet()
     wallet.policy.has_daily_cap = False
     tool = _tool(wallet)
@@ -227,7 +228,7 @@ async def test_autonomous_origin_demands_a_daily_cap(monkeypatch):
 # -- the monitor-exit lane --------------------------------------------------
 
 def _monitor_ctx():
-    return types.SimpleNamespace(is_sub_agent=False, role="orchestrator")
+    return types.SimpleNamespace(user_id="owner", is_sub_agent=False, role="orchestrator")
 
 
 def _forged(monkeypatch):

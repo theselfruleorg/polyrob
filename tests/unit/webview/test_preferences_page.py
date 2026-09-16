@@ -294,19 +294,9 @@ def test_patch_respects_tenant_identity_failure(monkeypatch, tmp_path):
     assert r.status_code == 403
 
 
-# --------------------------------------------------------------------------- #
-# Page route
-# --------------------------------------------------------------------------- #
-
-def test_preferences_page_renders_200(monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
-    monkeypatch.setenv("ENV", "development")
-    import webview.server as server
-    server = importlib.reload(server)
-    client = TestClient(server._fastapi)
-    r = client.get("/preferences")
-    assert r.status_code == 200
-    assert "Preferences" in r.text
+# 043 §9 phase 4: the legacy /preferences PAGE is deleted (its panel moved to the
+# new Agent destination's Settings tab). The GET/PATCH /api/webgate/preferences
+# endpoints above stay — they are what the new tab reads and writes.
 
 
 @pytest.fixture(autouse=True)

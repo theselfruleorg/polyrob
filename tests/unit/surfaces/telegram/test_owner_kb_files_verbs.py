@@ -33,7 +33,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user="gleb", session_id=None):
+def _cmd(command, text, user="alice", session_id=None):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -44,7 +44,7 @@ def _cmd(command, text, user="gleb", session_id=None):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
@@ -76,7 +76,7 @@ async def test_kb_returns_search_results(env, monkeypatch):
 
     async def _fake_search(query, *, user_id=None, collection="default", limit=8):
         assert query == "x402 services"
-        assert user_id == "gleb"
+        assert user_id == "alice"
         return "1. x402-recon.md — Quicknode, Vybe, Venice"
 
     monkeypatch.setattr(reg, "kb_search", _fake_search)
@@ -110,7 +110,7 @@ async def test_files_lists_recent_artifacts(env, monkeypatch):
     import modules.memory.registry as reg
 
     async def _fake_episodes(**kw):
-        assert kw.get("user_id") == "gleb"
+        assert kw.get("user_id") == "alice"
         return [
             {"session_id": "s-new", "ts": 200, "artifacts": [
                 {"path": "x402-recon.md", "bytes": 3661, "mtime": 200},

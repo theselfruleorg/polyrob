@@ -43,7 +43,24 @@ class DomService:
 		except Exception as e:
 			logger.error(f"Error loading JavaScript code: {str(e)}")
 			# Provide a minimal fallback in case the resource is not found
+			# A18/A14(S) note: this fallback is a full script (function
+			# declaration + call), NOT a bare function-literal expression like
+			# buildDomTree.js itself. Playwright's Python client never sets
+			# isFunction, so page.evaluate() runs the string via an INDIRECT
+			# eval (global scope, no enclosing function) and only auto-invokes
+			# the completion value when it is itself a function. The old bare
+			# "buildDomTree(arguments[0]);" statement referenced `arguments`
+			# with no enclosing function to provide it — verified live against
+			# the bundled Playwright driver's UtilityScript.evaluate, this
+			# THREW "ReferenceError: arguments is not defined" whenever the
+			# fallback fired, not merely a discarded return value. Wrapping in
+			# an unnamed function expression and returning
+			# buildDomTree(arguments[0]) makes the whole snippet evaluate to a
+			# callable whose call gives that inner reference a real
+			# `arguments` and returns the built tree, exactly like the real
+			# file.
 			self.js_code = """
+			(function() {
 			// Minimal fallback JavaScript function if resource is not found
 			function buildDomTree(args) {
 				console.error("Using minimal fallback DOM tree builder");
@@ -64,7 +81,8 @@ class DomService:
 				};
 			}
 			
-			buildDomTree(arguments[0]);
+			return buildDomTree(arguments[0]);
+			})
 			"""
 			logger.warning("Using fallback JavaScript code for DOM tree generation")
 

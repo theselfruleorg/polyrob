@@ -186,6 +186,29 @@ def data_dir_or_home(value: Optional[str]) -> str:
     return str(resolve_data_home())
 
 
+def prefs_home_dir() -> str:
+    """Home for the IDENTITY axis: ``preferences.toml``, SOUL/SELF docs, chat
+    overlays — everything under ``identity/{instance}/user_{uid}/``.
+
+    Always the resolved data home, never a container's ``config.data_dir``.
+
+    2026-09-15 prod review, C10: ``BotConfig.data_dir`` defaults to the relative
+    string ``"data"`` and ``_ensure_directories`` anchors a relative default to
+    ``POLYROB_DATA_DIR`` — so on prod ``config.data_dir`` is
+    ``/var/lib/polyrob/data`` while the data home is ``/var/lib/polyrob``. Every
+    preference WRITER (console ``/config``, ``polyrob config set``, the REPL, the
+    agent's ``prefs`` action) resolves the data home; the delivery rail's readers
+    derived theirs from ``config.data_dir``. ``delivery.daily_cap``,
+    ``delivery.rate_per_hour`` and quiet hours were therefore written to one tree
+    and read from another, so the owner's own remedy for "too many messages
+    suppressed" changed nothing.
+
+    Deliberately takes no argument: an identity path has ONE answer per process,
+    and letting a caller pass a home is how the two axes drifted apart.
+    """
+    return str(resolve_data_home())
+
+
 def goals_db_path(data_dir: Optional[str] = None) -> str:
     """Absolute path to the goal-board DB (``goals.db``).
 

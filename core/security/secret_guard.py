@@ -25,6 +25,7 @@ from typing import Iterable
 # components (see _matches_path_glob below).
 SECRET_NAME_GLOBS: tuple[str, ...] = (
     ".env*",
+    "*.env",
     "*.pem",
     "*.key",
     "id_rsa",
@@ -39,12 +40,21 @@ SECRET_NAME_GLOBS: tuple[str, ...] = (
     ".pypirc",
     ".pgpass",
     "bot.db",
+    # M1 (2026-09-14): concrete credential files POLYROB itself writes. None of
+    # them matched a glob above — `.mcp_encryption_key` ends in `_key`, not
+    # `.key`, and the three JSON stores have ordinary names. They were caught
+    # only by the `data/` DIRECTORY rule, so a copy anywhere else was readable.
+    ".mcp_encryption_key*",   # the Fernet master key — decrypts the three below
+    ".mcp_oauth_tokens.*",    # live OAuth access/refresh tokens (+ .tmp writes)
+    ".x_session.*",           # the X login (cookies + localStorage) (+ .tmp)
+    "agent_mail.json",        # the agent's provisioned inbox id + address
     # polyrob-specific relative-path patterns
     "config/.env.*",
     ".polyrob/.env",
     ".rob/.env",  # legacy home (still holds live secrets via transition fallback)
     # H3 (2026-07-15): the append-only wallet spend audit + its .hwm sidecar.
     "wallet/audit.jsonl*",
+    "wallet/submissions.sqlite*",
     # M2/sibling-gap fix (2026-07-16): `is_secret_path` is the SEPARATE guard
     # consumed by KB ingest / context-references / project-context (unlike
     # `is_credential_file`, which is the filesystem/coding write-refusal
@@ -92,6 +102,25 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     ".pypirc",
     ".pgpass",
     ".htpasswd",
+    # M1 (2026-09-14, wallet-security evaluation): the credential files POLYROB
+    # writes for itself. `is_credential_file` is the guard the filesystem/coding
+    # tools consult, and it missed every one of them — under POLYROB_LOCAL the
+    # workspace IS the project cwd, so `data/.mcp_encryption_key` (the Fernet
+    # key that decrypts the MCP credential store, the X login and the OAuth
+    # tokens) was an ordinary readable/writable file to the agent.
+    #
+    # These are EXACT names, not the `*secret*`/`*credential*` substrings
+    # `SECRET_NAME_GLOBS` carries. Unioning the two lists (or adding those
+    # substrings here) was considered and declined: this list is applied to
+    # arbitrary project files in local mode, so `*secret*` would refuse a
+    # Python `secrets.py` and the `data/` directory rule would refuse a legit
+    # project data dir — over-denying an editable source file is a different
+    # failure, not a smaller one.
+    "bot.db",                 # sessions, users, API keys, billing rows
+    ".mcp_encryption_key*",   # the Fernet master key — decrypts the three below
+    ".mcp_oauth_tokens.*",    # live OAuth access/refresh tokens (+ .tmp writes)
+    ".x_session.*",           # the X login (cookies + localStorage) (+ .tmp)
+    "agent_mail.json",        # the agent's provisioned inbox id + address
     # polyrob-specific relative-path patterns
     "config/.env.*",
     ".polyrob/.env",
@@ -104,10 +133,18 @@ CREDENTIAL_NAME_GLOBS: tuple[str, ...] = (
     # the write-once derivation guard (silent address flip). Matched anywhere the
     # `wallet/` dir appears (data-home is CWD-relative in local mode).
     "wallet/meta.json",
+    "wallet/submissions.sqlite*",
     # Minor #6 (2026-07-16): trailing `*` also catches the `.hwm` (high-water-mark)
     # sidecar `wallet/audit.jsonl.hwm` written alongside the audit log itself —
     # same money-policy-state rationale as the exact-match audit file.
     "wallet/audit.jsonl*",
+    # S1 (2026-09-14): the wallet's PUBLIC half — `wallet/public_identity.json` —
+    # holds no secret but is credential-EQUIVALENT (same rationale as
+    # providers.yaml): the seedless console/email units render every "pay to"
+    # / positions address from it, so an agent rewrite would point them at an
+    # attacker's address until the agent restarts. Trailing `*` catches the
+    # atomic-write temp file too.
+    "wallet/public_identity.json*",
     # M2 (2026-07-15): `cli/update/snapshot.py` backs up config files and dirs
     # under `<data_home>/snapshots/<ts>_<ver>/{config,dirs}/` with a NUMERIC
     # INDEX PREFIX on the copy name (`config/00_.env.production`,
@@ -458,7 +495,7 @@ _EXTRACTABLE_EXTENSIONS: frozenset[str] = frozenset({
 })
 
 
-def is_binary_file(path: Path) -> bool:
+def is_binary_file(path: Path, *, sample: bytes | None = None) -> bool:
     """Return *True* if *path* is a binary file that cannot be decoded as text.
 
     Detection order:
@@ -481,7 +518,11 @@ def is_binary_file(path: Path) -> bool:
 
     # Null-byte sniff
     try:
-        data = path.read_bytes()[:4096]
+        if sample is None:
+            with path.open('rb') as stream:
+                data = stream.read(4096)
+        else:
+            data = sample[:4096]
     except OSError:
         return False  # can't read → let the caller handle it
 

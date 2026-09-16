@@ -4,7 +4,7 @@ Two quiet lines printed once per process at session start on BOTH surfaces
 (REPL + one-shot ``polyrob run``).  The banner is context, not content — it must
 never compete visually with the first message of the conversation:
 
-    ● polyrob v0.13.0 · gemini-2.5-flash (gemini)
+    ● polyrob v1.0.0 · gemini-2.5-flash (gemini)
       session 7a95c9a2 · tools filesystem, task · /help for commands
 
 Design constraints (mirrors ``blocks.py``):
@@ -61,10 +61,6 @@ def _tools_str(tool_ids: Sequence[str]) -> str:
     return ", ".join(str(t) for t in tool_ids) if tool_ids else "—"
 
 
-def _keys_str(providers_with_keys: Sequence[str]) -> str:
-    return ", ".join(providers_with_keys) if providers_with_keys else "none"
-
-
 def _session_info_str(
     *,
     framework: str = "",
@@ -72,6 +68,7 @@ def _session_info_str(
     user_id: str = "",
     memory_backend: str = "",
     autonomy_on: Optional[bool] = None,
+    character: str = "",
 ) -> str:
     """Build the OPT-IN third banner line, or "" when no session info is supplied.
 
@@ -96,6 +93,10 @@ def _session_info_str(
         parts.append(f"memory {memory_backend}")
     if autonomy_on is not None:
         parts.append(f"autonomy {'on' if autonomy_on else 'off'}")
+    # F13: name the persona when the operator chose one. The neutral packaged
+    # default carries no information, so callers pass "" for it.
+    if character:
+        parts.append(f"persona {character}")
     return f" {ICONS.bullet} ".join(parts)
 
 
@@ -113,11 +114,12 @@ def banner_panel(
     user_id: str = "",
     memory_backend: str = "",
     autonomy_on: Optional[bool] = None,
+    character: str = "",
 ) -> Text:
     """Build the Rich first-run banner: two quiet lines (+ optional third).
 
     The banner must never compete with the first message — one identity line
-    (``● polyrob v0.13.0 · model (provider)``) and one dim context line (session,
+    (``● polyrob v1.0.0 · model (provider)``) and one dim context line (session,
     tools, optional ``/help`` hint).  When session-info kwargs (``framework`` /
     ``instance_id`` / …) are supplied, an OPT-IN dim third line surfaces the
     polyrob-framework / instance distinction + user / memory / autonomy.
@@ -134,7 +136,7 @@ def banner_panel(
     body.append(second, style=style("meta"))
     info = _session_info_str(
         framework=framework, instance_id=instance_id, user_id=user_id,
-        memory_backend=memory_backend, autonomy_on=autonomy_on,
+        memory_backend=memory_backend, autonomy_on=autonomy_on, character=character,
     )
     if info:
         body.append(f"\n  {info}", style=style("meta"))
@@ -155,6 +157,7 @@ def banner_plain(
     user_id: str = "",
     memory_backend: str = "",
     autonomy_on: Optional[bool] = None,
+    character: str = "",
 ) -> str:
     """Build the deterministic plain-text first-run banner (no ANSI, 2 or 3 lines)."""
     second = f"session {_short_session(session_id)} · tools {_tools_str(tool_ids)}"
@@ -163,7 +166,7 @@ def banner_plain(
     out = f"polyrob v{version} · {model} ({provider})\n{second}"
     info = _session_info_str(
         framework=framework, instance_id=instance_id, user_id=user_id,
-        memory_backend=memory_backend, autonomy_on=autonomy_on,
+        memory_backend=memory_backend, autonomy_on=autonomy_on, character=character,
     )
     if info:
         out += f"\n{info}"
@@ -186,6 +189,7 @@ def print_banner(
     user_id: str = "",
     memory_backend: str = "",
     autonomy_on: Optional[bool] = None,
+    character: str = "",
 ) -> None:
     """Print the first-run banner once, via *renderer*.
 
@@ -214,6 +218,7 @@ def print_banner(
                 user_id=user_id,
                 memory_backend=memory_backend,
                 autonomy_on=autonomy_on,
+                character=character,
             )
         )
         return
@@ -231,6 +236,7 @@ def print_banner(
         user_id=user_id,
         memory_backend=memory_backend,
         autonomy_on=autonomy_on,
+        character=character,
     )
     # PlainRenderer.print_block writes the block verbatim (no title).
     renderer.print_block(text)

@@ -184,6 +184,9 @@ class StepExecutionMixin:
 		# is_sub_agent=False). getattr default is None: an orchestrator that never
 		# drained a forged message is genuine.
 		turn_kind = getattr(self.orchestrator, '_forged_turn_kind', None)
+		from core.surfaces.room_policy import is_public_session
+		if turn_kind is None and is_public_session(self.orchestrator):
+			turn_kind = "group"
 		execution_context = ActionExecutionContext(
 			browser_context=browser_context,  # Use local variable from step
 			# Agent identification for sub-agent isolation

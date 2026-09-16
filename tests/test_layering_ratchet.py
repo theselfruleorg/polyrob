@@ -36,6 +36,10 @@ ALLOWLISTED_CORE_TO_AGENTS_EDGES = frozenset({
     ('core/knowledge_export.py', 'agents.task.agent.skill_manager'),
     ('core/knowledge_export.py', 'agents.task.goals.board'),
     ('core/self_evolution.py', 'agents.task.agent.skill_manager'),
+    # 044 T5: the room gate resolves high-impact-call policy from the SAME
+    # correspondent-gate classification the taint gate uses (one policy, not
+    # two), inside a function only — see core/surfaces/room_policy.py.
+    ('core/surfaces/room_policy.py', 'agents.task.agent.core.correspondent_gate'),
     ('core/surfaces/user_delivery.py', 'agents.task.goals.autonomy_marker'),
 })
 

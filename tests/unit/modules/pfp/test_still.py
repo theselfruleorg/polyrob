@@ -8,7 +8,7 @@ from PIL import Image
 from modules.pfp.still import render_still_mesh
 from modules.pfp.mesh import Mesh
 
-BASE = {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "",
+BASE = {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "",
         "size": 192, "override": {}}
 
 

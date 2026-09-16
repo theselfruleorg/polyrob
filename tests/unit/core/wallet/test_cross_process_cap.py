@@ -95,7 +95,7 @@ class TestCrossProcessDailyCap:
         assert gate.check(venue="uniswap", amount_usd=10.0,
                           idempotency_key="c").allowed is True
 
-    def test_an_unreadable_ledger_never_blocks_the_gate(self, tmp_path, monkeypatch):
+    def test_an_unreadable_ledger_blocks_the_gate(self, tmp_path, monkeypatch):
         ledger = tmp_path / "audit.jsonl"
         gate = _gate(ledger)
 
@@ -103,10 +103,9 @@ class TestCrossProcessDailyCap:
             raise OSError("disk gone")
 
         monkeypatch.setattr(gate._audit, "refresh", boom)
-        # Fail-open on the REFRESH: the in-memory view still decides (the sink's
-        # own tamper warning is the durable-loss signal).
+        # A stale in-memory view cannot prove the shared cap still has room.
         assert gate.check(venue="uniswap", amount_usd=1.0,
-                          idempotency_key="z").allowed is True
+                          idempotency_key="z").allowed is False
 
 
 class TestSinkRefresh:

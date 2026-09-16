@@ -14,7 +14,7 @@ import pytest
 from modules.pfp.mesh import Mesh
 
 ENGINE = Path(__file__).resolve().parents[4] / "avatar" / "mindprint.js"
-SEEDS = ["Rob Ottmachin", "Ada Nine", "polyrob", "Kilo Prime", "Nyx Orbital", "Pixel"]
+SEEDS = ["POLYROB", "Ada Nine", "Vesper Kade", "Kilo Prime", "Nyx Orbital", "Pixel"]
 
 _NUMERIC = [
     "headExp", "headRx", "headRy", "eyeSep", "eyeY", "eyeR", "eyeBright",

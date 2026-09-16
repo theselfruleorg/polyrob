@@ -51,10 +51,18 @@ def allowed_self_goal_tools() -> frozenset:
     (AUTONOMY_MODE=autonomous on a single-owner instance) this expands to the full
     AUTONOMOUS_MODE_TOOLS grant; money-spend/host tools are in NEITHER set."""
     try:
-        from agents.task.constants import AUTONOMOUS_MODE_TOOLS
+        from agents.task.constants import autonomous_mode_tools
         from core.config_policy import full_autonomy_enabled
         if full_autonomy_enabled():
-            return frozenset(_SELF_GOAL_ALLOWED_TOOLS | set(AUTONOMOUS_MODE_TOOLS))
+            # Folds in the defi rail when DEFI_AGENT_AUTONOMY is armed. ⚠️ That
+            # DOES mean a goal the agent writes itself can carry `defi_trade`
+            # once armed — deliberate, on the owner's 2026-09-12 directive. What
+            # bounds an injected goal is the CAP and the per-verb simulation, not
+            # the toolset: the per-tx ceiling, the rolling daily cap, the
+            # kill-switch, the 031 pause and the owner queue above
+            # DEFI_AUTONOMOUS_MAX_USD all still apply. Unarmed, this is the
+            # historical set exactly.
+            return frozenset(_SELF_GOAL_ALLOWED_TOOLS | set(autonomous_mode_tools()))
     except Exception:
         pass
     return _SELF_GOAL_ALLOWED_TOOLS
@@ -201,9 +209,12 @@ class GoalCreateAction(BaseModel):
                      "when present). ONLY these types exist — do NOT invent others: "
                      "[{'type':'artifact_glob','pattern':'*.md'}, "
                      "{'type':'http_ok','url':'https://…'}, "
+                     "{'type':'artifact','name':'report.md','contains':['A']}, "
                      "{'type':'file_contains','path':'report.md','contains':['A','B'],"
                      "'mode':'all'}]. Prefer setting one when the outcome is mechanically "
-                     "checkable. file_contains is an EXACT literal-substring match — use it "
+                     "checkable. At most 10 checks; malformed checks are rejected, never dropped. "
+                     "Paths are run-workspace-relative; HTTP probes require public endpoints. "
+                     "file_contains is a case-insensitive literal-substring match — use it "
                      "only for known-exact strings (an id, a file path, a specific number). "
                      "Do NOT use it to assert a report 'discusses'/'covers' a topic (e.g. "
                      "contains=['PnL'] to check the report mentions profit/loss) — a "
@@ -383,13 +394,13 @@ class GoalTool(BaseTool):
             parent_id = obj.id
         if params.acceptance:
             payload["acceptance"] = params.acceptance
-        if params.acceptance_checks:
-            # §4.4: optional sharpener — keep only well-formed {'type': str, ...}
-            # dicts; malformed entries are dropped (never a create gate).
-            typed = [c for c in params.acceptance_checks
-                     if isinstance(c, dict) and str(c.get("type") or "").strip()]
-            if typed:
-                payload["acceptance_checks"] = typed[:10]
+        if params.acceptance_checks is not None:
+            from agents.task.runtime.acceptance_checks import validate_checks
+            try:
+                payload["acceptance_checks"] = validate_checks(params.acceptance_checks)
+            except (ValueError, TypeError) as exc:
+                return ActionResult(error=f"Cannot create goal: invalid acceptance checks: {exc}",
+                                    include_in_memory=True)
         try:
             goal = board.create(
                 user_id=user_id, title=params.title, body=params.body, priority=params.priority,

@@ -438,3 +438,21 @@ def test_build_reply_allowed_rounds_budget(monkeypatch, tmp_path):
     assert allowed("email", "john@acme.com") is True
     store.record_outbound("t1", "email", "john@acme.com", "r2")
     assert allowed("email", "john@acme.com") is False, "rounds budget exhausted"
+
+
+def test_x402_pay_x402_fetch_is_still_high_impact_after_pay_prefix_narrowing():
+    # F4 (043 A44 / A9, 2026-09-14): the bare "pay" substring in
+    # _HIGH_IMPACT_PREFIXES was narrowed to "x402_pay_" (parity with the "trade"
+    # substring the module's own comment already warns against). The real
+    # auto-paying verb must still be caught by the narrower prefix.
+    assert is_high_impact("x402_pay_x402_fetch")
+    assert is_high_impact_call("x402_pay_x402_fetch", "x402_pay")
+
+
+def test_bare_pay_substring_no_longer_false_positives():
+    # A hypothetical read verb that merely CONTAINS "pay" (e.g. a payment-history
+    # lookup) must NOT be flagged high-impact by substring alone — that was the
+    # false positive the "pay" -> "x402_pay_" narrowing fixes.
+    assert not is_high_impact("get_payment_history")
+    assert not is_high_impact("payroll_report")
+    assert not is_high_impact("display_payload")

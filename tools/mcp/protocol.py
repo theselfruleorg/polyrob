@@ -413,6 +413,13 @@ class MCPStdioTransport(MCPTransport):
             # process environment handed it AGENT_WALLET_MASTER_SEED and every
             # API key. Allowlist-only inheritance; explicitly configured values
             # (mcp_config.json, ${VAR}-resolved) still pass.
+            from core.security.host_execution import host_execution_refusal
+            refusal = host_execution_refusal()
+            if refusal:
+                raise MCPConnectionError(
+                    "MCP stdio is unavailable in a custody process; use a separately "
+                    "isolated HTTP MCP service. " + refusal
+                )
             from tools.mcp.child_env import build_mcp_child_env
             full_env = build_mcp_child_env(self.env)
 

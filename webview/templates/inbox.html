@@ -1,0 +1,120 @@
+{#
+  The Inbox — the one genuinely new screen (043 C5, §1.3).
+
+  Derived from docs/design/040/web/inbox-items.html, inbox-empty.html and
+  inbox-partial.html. ONE template, three states: which one renders is decided
+  by the composed body (webview/pages_new.py::_inbox_context over
+  core.surfaces.inbox), never by a second copy of the rule.
+
+  An item is a durable record, for this tenant, blocked on an owner decision,
+  that Rob cannot resolve alone. So:
+
+    * `items`        the decisions. The badge counts these.
+    * `not_blocking` listed, never counted — a late invoice closes itself.
+    * an `unreadable` item is an ENTRY with its own dashed rule. A source that
+      refused is never a silent omission and never a zero, which is why the
+      empty state below is guarded on `inbox_uncertain` as well as on emptiness:
+      "nothing needs you" is only sayable when every source answered.
+
+  Every word comes from webview/copy/en.py. Every value is a context variable.
+#}
+{% extends "shell.html" %}
+{% block body %}
+    <div class="page">
+      <div class="page-head">
+        <h1 class="page-title">{{ t('inbox.title') }}</h1>
+        <p class="page-sub">{{ t('inbox.snapshot') }} <a href="/inbox">{{ t('inbox.refresh') }}</a></p>
+        <span class="pill {{ pill_class }}"><span class="dot"></span>{{ pill_words }}</span>
+{%- if items %}
+        <p class="page-sub">{{ t('inbox.sub') }}</p>
+{%- endif %}
+      </div>
+
+{%- if partial_body %}
+      <div class="banner is-warn">
+        <span aria-hidden="true">&#9888;</span>
+        <span><b>{{ t('inbox.partial.lead') }}</b> {{ partial_body }}
+{%- if partial_reason %} {{ partial_reason }}{% endif %}</span>
+      </div>
+{%- endif %}
+
+{%- if items %}
+      <div class="ledger">
+{%- for item in items %}
+        <div class="entry {% if item.unreadable %}is-unknown{% else %}is-needs-you{% endif %}">
+          <h2 class="entry-title">{{ item.title }}</h2>
+{%- if item.unreadable %}
+          <p class="entry-body">{{ t('inbox.unreadable.body') }}</p>
+{%- elif item.body %}
+          <p class="entry-body">{{ item.body }}</p>
+{%- endif %}
+{%- if item.meta %}
+          <p class="entry-meta">{{ item.meta }}</p>
+{%- endif %}
+{%- if item.rendered_actions and not read_only %}
+          <div class="entry-actions">
+{%- for action in item.rendered_actions %}
+{%- if action.verb %}
+            <button class="btn {% if action.primary %}btn-primary{% endif %}"
+                    data-kind="{{ item.kind }}" data-id="{{ item.id }}"
+                    data-verb="{{ action.verb }}">{{ action.label }}</button>
+{%- endif %}
+{%- endfor %}
+          </div>
+{%- endif %}
+        </div>
+{%- endfor %}
+      </div>
+{%- else %}
+      <div class="state">
+        <div class="state-glyph" aria-hidden="true">{{ page_glyph }}</div>
+{%- if inbox_uncertain %}
+        <p class="state-body">{{ t('inbox.unreadable.body') }}</p>
+{%- else %}
+        <h2 class="state-title">{{ t('inbox.empty.title') }}</h2>
+        <p class="state-body">{{ t('inbox.empty.body') }}</p>
+        <p class="state-body">{{ t('inbox.empty.checked') }}</p>
+        <div class="state-actions">
+          <a class="btn" href="/work">{{ t('inbox.empty.see_work') }}</a>
+        </div>
+{%- endif %}
+      </div>
+{%- endif %}
+
+{%- if not_blocking %}
+      <div class="section">
+        <div class="section-head">
+          <h2 class="section-title">{{ t('inbox.not_blocking.title') }}</h2>
+          <span class="section-aside">{{ t('inbox.not_blocking.aside') }}</span>
+        </div>
+        <div class="ledger">
+{%- for item in not_blocking %}
+          <div class="entry">
+            <h2 class="entry-title">{{ item.title }}</h2>
+{%- if item.body %}
+            <p class="entry-body">{{ item.body }}</p>
+{%- endif %}
+            <p class="entry-meta">{{ t('inbox.not_stuck') }}</p>
+          </div>
+{%- endfor %}
+        </div>
+      </div>
+{%- endif %}
+
+{%- if read_only and items %}
+      {# Once for the page, not once per card — the same shape the composer
+         uses. A line under every button is the per-control restatement the
+         frame's banner replaced. #}
+      <p class="composer-note">{{ t('inbox.read_only.decide') }}</p>
+{%- endif %}
+
+      <p class="sources">{{ sources_note }} {{ t('inbox.sources.cites')|safe }}</p>
+    </div>
+{%- if not read_only %}
+    {# The buttons above carry only data; this is what makes them decide. No
+       inline script on any 043 template, so the one sentence the script may
+       need that the server never rendered rides on a data attribute. #}
+    <div id="inbox-copy" hidden data-unreachable="{{ t('inbox.unreachable') }}"></div>
+    <script src="/static/app/inbox.js" type="module"></script>
+{%- endif %}
+{% endblock %}

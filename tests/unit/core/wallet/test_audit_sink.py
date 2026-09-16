@@ -87,8 +87,8 @@ def test_relative_data_dir_is_resolved(monkeypatch, tmp_path):
 def test_meta_read_fails_closed_when_data_home_unresolvable(monkeypatch):
     """L3: with POLYROB_DATA_DIR unset AND resolve_data_home() raising, a META read
     must NOT silently fall back to a CWD-relative ./data/wallet — that risks a silent
-    derivation-scheme flip (wrong funded address). Fail closed for meta; the audit
-    path stays fail-open (losing audit resets caps, never blocks a live spend)."""
+    derivation-scheme flip (wrong funded address). Both meta and audit must fail
+    closed so neither identity nor spend accounting can switch data homes."""
     monkeypatch.delenv("POLYROB_DATA_DIR", raising=False)
     import core.runtime_paths as rp
 
@@ -100,5 +100,6 @@ def test_meta_read_fails_closed_when_data_home_unresolvable(monkeypatch):
     with pytest.raises(Exception):
         _wallet_data_dir(for_meta=True)
 
-    # audit (non-meta) still fails open to the legacy ./data path
-    assert _wallet_data_dir(for_meta=False).endswith(os.path.join("data", "wallet"))
+    # Audit must use the same durable home rather than reset caps elsewhere.
+    with pytest.raises(RuntimeError):
+        _wallet_data_dir(for_meta=False)

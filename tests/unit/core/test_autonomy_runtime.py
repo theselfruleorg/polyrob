@@ -317,7 +317,89 @@ async def test_start_autonomy_orphan_reap_never_added_to_recurring_entries(monke
     # The AGE-based sweep is still forbidden as a recurring entry — `sandbox_reap`
     # above is the ownership-keyed one, which cannot kill an idle live session.
     assert "orphan_reap" not in names and "docker_reap" not in names
+    await handles.stop()
 
+
+# --------------------------------------------------------------------------
+# 043 A8/A42: sandbox_reap gains a flag + a pause kind, and start_autonomy
+# records what it actually started.
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_sandbox_reap_disabled_by_flag(monkeypatch):
+    """SANDBOX_REAP_ENABLED=false must stop the loop from starting even when
+    everything that would otherwise let it run (docker persistent + the CLI)
+    is present — `sandbox_reap` was the only always-on loop with no flag."""
+    monkeypatch.setenv("SANDBOX_REAP_ENABLED", "false")
+    monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+    _disable_other_loops(monkeypatch)
+
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.01)
+
+    names = [name for name, _task, _stop in handles._entries]
+    assert "sandbox_reap" not in names
+    await handles.stop()
+
+
+@pytest.mark.asyncio
+async def test_sandbox_reap_tick_skips_while_paused(monkeypatch):
+    """The reap tick now consults the 031 pause record (`allows("sandbox_reap")`)
+    before touching anything — a paused deployment must not silently keep
+    sweeping containers."""
+    monkeypatch.setenv("CODE_EXEC_DOCKER_PERSISTENT", "true")
+    monkeypatch.setattr(shutil, "which", lambda name: "/usr/bin/docker")
+    _disable_other_loops(monkeypatch)
+
+    class _Reg:
+        def session_ids(self):
+            return ["s1"]
+
+    task_agent = type("A", (), {"_registry": _Reg()})()
+
+    calls = []
+
+    async def _fake_reap_unowned(*args, **kwargs):
+        calls.append((args, kwargs))
+        return 0
+
+    from tools.code_exec.backends.docker import DockerBackend
+    monkeypatch.setattr(DockerBackend, "reap_unowned", staticmethod(_fake_reap_unowned))
+
+    import core.autonomy_control as autonomy_control
+    from core.autonomy_control import Decision
+    monkeypatch.setattr(autonomy_control, "allows",
+                        lambda kind, *a, **kw: Decision(False, "paused", None))
+
+    handles = ar.start_autonomy(task_agent=task_agent, data_dir="data")
+    await asyncio.sleep(0.05)
+
+    assert calls == []
+    await handles.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_autonomy_records_autonomy_started_event(monkeypatch):
+    """The runtime's own durable record of what it started — the status
+    snapshot's loop-liveness check reads the newest row's `attrs.loops`."""
+    cron, goal = _FakeTicker(), _FakeTicker()
+    monkeypatch.setattr(ar, "_build_cron_ticker", lambda ta, data_dir: cron)
+    monkeypatch.setattr(ar, "_build_goal_ticker", lambda ta, data_dir: goal)
+    monkeypatch.setattr(ar, "_cron_enabled", lambda: True)
+    monkeypatch.setattr(ar, "_goals_enabled", lambda: True)
+    monkeypatch.setattr(ar, "_curator_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_surface_gc_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_quiet_release_enabled", lambda: False)
+    monkeypatch.setattr(ar, "_sandbox_reap_enabled", lambda: False)
+
+    handles = ar.start_autonomy(task_agent=object(), data_dir="data")
+    await asyncio.sleep(0.01)
+
+    from core.event_log import get_event_log
+    rows = get_event_log().query(kind="autonomy_started")  # newest-first
+    assert rows, "no autonomy_started row recorded"
+    assert sorted(rows[0]["attrs"]["loops"]) == ["cron", "goals"]
     await handles.stop()
 
 

@@ -2,29 +2,36 @@
 
 A user whose key expired mid-session had to quit the REPL to even see the
 credential state. Both handlers are read-only renderings of the same oracles
-the CLI commands use (`credential_status`, `doctor_report`); key WRITES stay in
-the shell (`polyrob auth add <provider>`) so a secret never lands in the
-conversation transcript.
+the CLI commands use (`credential_status`, `status_snapshot_lines`); key
+WRITES stay in the shell (`polyrob auth add <provider>`) so a secret never
+lands in the conversation transcript.
 
 No ``from __future__ import annotations`` (consistent with the CLI command
 modules).
 """
 
-import os
-
 from cli.ui.commands.registry import CommandContext
 
 
 def h_doctor(ctx: CommandContext) -> None:
-    """Render the full doctor report in-session."""
-    from cli.commands.doctor import doctor_report
+    """Render the doctor health snapshot in-session.
+
+    043 A13 fix round 1 (Important 3): renders the SAME leading view plain
+    `polyrob doctor` shows by default — `status_snapshot_lines()` +
+    `DOCTOR_FULL_POINTER`, imported straight from `cli.commands.doctor` (not
+    re-implemented) so the CLI and the REPL can never drift into showing two
+    different things for one command name. The full check transcript
+    (`doctor_report`) stays a shell-only `polyrob doctor --full` — this
+    in-session view is a quick look, not the detailed one.
+    """
+    from cli.commands.doctor import DOCTOR_FULL_POINTER, status_snapshot_lines
 
     try:
-        lines = doctor_report(dict(os.environ))
+        lines = status_snapshot_lines()
     except Exception as exc:
         ctx.emit(f"doctor unavailable: {exc}", title="doctor")
         return
-    ctx.emit("\n".join(lines), title="doctor")
+    ctx.emit("\n".join(lines + ["", DOCTOR_FULL_POINTER]), title="doctor")
 
 
 def h_auth(ctx: CommandContext) -> None:

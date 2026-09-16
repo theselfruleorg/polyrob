@@ -40,6 +40,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from modules.llm.openai_client import OpenAIClient
 from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.model_registry import get_model_config
+from modules.llm.retry_log import log_attempt_classified
 
 
 def think_scrubber_enabled() -> bool:
@@ -611,16 +612,11 @@ class LLMClientAdapter(BaseChatModel):
             # Preserves all previous categories including billing→LLMPermanentError.
             provider_name = _client_provider_label(self._client)
             translated = translate_llm_error(e, f"from {provider_name}")
-            if isinstance(translated, LLMPermanentError):
-                self._logger.error(f"Detected PERMANENT error (no fallback): {str(e)[:200]}")
-            elif isinstance(translated, LLMRateLimitError):
-                self._logger.warning(f"Detected rate limit error: {str(e)[:200]}")
-            elif isinstance(translated, LLMAuthenticationError):
-                self._logger.warning(f"Detected authentication error: {str(e)[:200]}")
-            elif isinstance(translated, (LLMContextLengthError, LLMConnectionError)):
-                self._logger.warning(f"Detected {type(translated).__name__}: {str(e)[:200]}")
-            else:
-                self._logger.error(f"Unexpected LLM error (propagating): {type(e).__name__}: {str(e)}")
+            # A12 fix round 5 (2026-09-14, 043 §4.6): per-attempt classify +
+            # WARNING (not ERROR — this always `raise`s onward; the outer
+            # retry loop owns the turn's one final ERROR line). Rendering
+            # extracted to modules/llm/retry_log.py (file-size ratchet).
+            log_attempt_classified(self._logger, e, translated)
             raise translated
     
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None, **kwargs) -> ChatResult:

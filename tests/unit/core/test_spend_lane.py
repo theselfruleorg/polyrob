@@ -81,10 +81,27 @@ class TestParamModelDefaultsArePinned:
     """The absent-dry_run exemption is only sound while the models default True."""
 
     def test_dry_run_defaults_true_on_every_spend_model(self):
-        from tools.defi.trade_tool import (
-            ApproveParams, RevokeParams, SwapParams, TransferParams)
-        for model in (SwapParams, TransferParams, ApproveParams, RevokeParams):
-            assert model.model_fields["dry_run"].default is True, model.__name__
+        """DERIVED, not hand-listed (042).
+
+        The hand-list held four models and was never extended: `WrapParams` and
+        `BridgeParams` shipped outside it, so the exemption they rely on was
+        unpinned for both. Reflecting over the tool means the NEXT verb cannot
+        ship outside it either.
+        """
+        import inspect
+        from tools.defi.trade_tool import DefiTradeTool
+
+        models = {}
+        for name in dir(DefiTradeTool):
+            if name.startswith("_"):
+                continue
+            member = inspect.getattr_static(DefiTradeTool, name)
+            model = getattr(member, "_param_model", None)
+            if model is not None and "dry_run" in getattr(model, "model_fields", {}):
+                models[model.__name__] = model
+        assert len(models) >= 6, f"derivation found too few models: {sorted(models)}"
+        for label, model in sorted(models.items()):
+            assert model.model_fields["dry_run"].default is True, label
 
 
 def test_x402_fetch_below_ceiling_is_exempt(monkeypatch):

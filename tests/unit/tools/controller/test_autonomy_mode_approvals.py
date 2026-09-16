@@ -21,6 +21,7 @@ import tools.controller.approval_queue as approval_queue  # noqa: F401 — pre-i
 # before any test monkeypatches approval._PROVIDERS["owner_queue"] (mirrors
 # tests/unit/tools/controller/test_payment_approval_mode.py).
 from core.prefs import write_preference
+from tools.controller.execution_context import ActionExecutionContext
 from tools.controller.types import ActionResult
 
 
@@ -69,6 +70,11 @@ def _make_controller(tmp_path, user_id="rob", tainted=False):
     )
     container = types.SimpleNamespace(config=types.SimpleNamespace(data_dir=str(tmp_path)))
     return Controller(container=container, orchestrator=orch)
+
+
+def _owner_ctx():
+    return ActionExecutionContext(
+        session_id="s1", user_id="rob", role="orchestrator", is_sub_agent=False)
 
 
 class _SpyProvider(approval.ApprovalProvider):
@@ -573,7 +579,7 @@ async def test_full_autonomy_defaulted_auto_spend_verbs_still_owner_queued(
     c = _make_controller(tmp_path)
     for verb in _TRADE_VERBS:
         _SpyProvider.calls = []
-        reason = await c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, None)
+        reason = await c._run_pre_tool_call_hooks(verb, {"amount_usd": 5}, _owner_ctx())
         assert reason is None, verb  # the spy (owner_queue) approved
         assert (verb, {"amount_usd": 5}) in _SpyProvider.calls, verb
 
@@ -588,7 +594,7 @@ async def test_full_autonomy_defaulted_auto_spend_verb_denied_when_owner_queue_d
 
     c = _make_controller(tmp_path)
     reason = await c._run_pre_tool_call_hooks(
-        "hyperliquid_place_market_order", {"amount_usd": 5}, None)
+        "hyperliquid_place_market_order", {"amount_usd": 5}, _owner_ctx())
     assert reason is not None and "hyperliquid_place_market_order" in reason
 
 
@@ -602,6 +608,7 @@ async def test_full_autonomy_defaulted_auto_receive_verb_still_act_and_report(
     monkeypatch.setitem(approval._PROVIDERS, "owner_queue", _SpyProvider)
 
     c = _make_controller(tmp_path)
-    reason = await c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None)
+    reason = await c._run_pre_tool_call_hooks(
+        "x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx())
     assert reason is None
     assert _SpyProvider.calls == []  # never queued -- act-and-report lane

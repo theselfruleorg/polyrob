@@ -656,7 +656,7 @@ def _reset_skill_usage_singleton():
     ``modules.skills.skill_usage.get_skill_usage_store`` binds the process-global
     ``_STORE`` to the FIRST data_dir it is called with. A test that records skill
     provenance (e.g. ``test_self_evolution.py`` creating authored skills for
-    "gleb") pins the singleton to its tmp dir; every later test asking for a
+    "alice") pins the singleton to its tmp dir; every later test asking for a
     DIFFERENT data home silently reads that stale store — which made the recap
     "nothing to report" test order-dependent (2026-07-12 parity wave sweep).
     Fail-open, post-yield (mirrors the telemetry/event-log isolation above).

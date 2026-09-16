@@ -1,26 +1,31 @@
 # Instances
 
-## Framework vs instance
-
-**polyrob** is the framework — the Python package, the CLI, and the agent runtime.
-
 An **instance** is a named deployment of the framework with its own self-identity.
 A fresh install runs the neutral default instance, `polyrob` — no person's bot
-ships in the package. A specific bot (its character, identity docs, memory) is
-*data* that lives in a data home or a named profile.
+ships in the package.
 
-The recommended way to run multiple named instances on one machine is
-**[profiles](profiles.md)** — `polyrob profile create <name>` gives each bot a
-fully isolated home (config + identity + memory + scheduled work), selected with
-`polyrob -P <name>`. The rest of this page describes the lower-level instance-id
-mechanics that profiles build on.
+To run several bots on one machine, use **[profiles](profiles.md)**: one command
+gives each bot a fully isolated home. This page covers the layer underneath —
+the instance id, and the identity documents that make an instance a particular
+agent rather than the framework default.
+
+Three commands sit under one umbrella, `polyrob identity`:
+
+```bash
+polyrob identity soul      # the operator-authored, frozen identity documents
+polyrob identity persona   # the character (voice)
+polyrob identity avatar    # the generated face
+```
+
+`polyrob soul`, `polyrob persona` and `polyrob pfp` remain invocable at those
+names; they are folded onto one row in `polyrob --help`.
 
 ---
 
 ## Instance identity
 
 Each instance is identified by its **instance ID** (`POLYROB_INSTANCE_ID`, default
-`polyrob`; in profile mode it defaults to the profile's name). Today, the
+`polyrob`; with an active profile it defaults to the profile's name). The
 instance ID determines:
 
 - The name the agent uses for itself (CLI banners, `/session`, `/self`)
@@ -30,28 +35,35 @@ instance ID determines:
   **The operator-authored SOUL docs are NOT nested** — they live flat at
   `<data_home>/identity/identity.md` and `<data_home>/identity/operating.md`
   (a SOUL file placed in the nested per-user directory never loads)
-- The instance's owner principal, when `POLYROB_OWNER_USER_ID` isn't set explicitly
 
-It does **not** currently partition memory, skills, cron/goal state, or the auth
-database — see [Instance isolation](#instance-isolation) below for what actually
-separates two instances.
+**The instance ID is not the owner tenant.** Memory rows, goals, invoices and
+preferences are written under an owner *tenant*, and that is resolved on its own
+axis: `POLYROB_OWNER_USER_ID` (or `BOT_OWNER_USER_ID`), else `POLYROB_LOCAL_OWNER`,
+else the single-user tenant `local` — never the instance id. Naming an instance
+therefore moves nothing a session wrote. If your install predates this and stored
+rows under the instance id as a tenant, bind that value back with
+`POLYROB_OWNER_USER_ID=<instance id>`; see [upgrading.md](upgrading.md).
+
+The instance ID does **not** partition memory, skills, or cron/goal state either
+— see [Instance isolation](#instance-isolation) below for what actually separates
+two instances.
 
 ### Authoring your instance's SOUL
 
 The SOUL is the operator-authored, frozen identity layer — who this instance *is*
 (mission, values, boundaries). The agent can never edit it; it's pinned into every
-session as a foundation message. To author it:
+session as a foundation message. Scaffold it:
 
 ```bash
-# 1. Find your data home (local CLI default: ./.polyrob under your working dir;
-#    server: $POLYROB_DATA_DIR)
-mkdir -p <data_home>/identity
+polyrob identity soul init          # asks for a name and a one-line mission, then opens $EDITOR
+```
 
-# 2. Who the instance is — mission, personality, values
-$EDITOR <data_home>/identity/identity.md
+That writes two files under your data home (local CLI default: `./.polyrob`;
+server: `$POLYROB_DATA_DIR`), which you can also edit by hand:
 
-# 3. (Optional) How it operates — standing constraints, escalation rules, tone
-$EDITOR <data_home>/identity/operating.md
+```bash
+$EDITOR <data_home>/identity/identity.md    # who the instance is — mission, personality, values
+$EDITOR <data_home>/identity/operating.md   # optional: standing constraints, escalation rules, tone
 ```
 
 Both files are plain Markdown, loaded in that order (identity first) and capped at
@@ -63,6 +75,72 @@ The agent's own evolving **SELF** docs (`self.md`, plus `owner.md` owner-facts a
 `contract.md`) are separate: agent-written through a quarantine-and-scan pipeline,
 stored per-user under `identity/{instance_id}/user_{uid}/`. Author the SOUL; let the
 agent earn the SELF.
+
+### Giving your instance a character
+
+Below the SOUL sits the **character** — the voice. It is a JSON file named
+`<slug>.character.json`, and it is selected by `PERSONALITY_DEFAULT_CHARACTER`.
+
+```bash
+polyrob identity persona list                     # templates + characters, active marked
+polyrob identity persona init mybot --from writer # scaffold, select it, open $EDITOR
+polyrob identity persona show                     # exactly what the model receives
+polyrob doctor                                    # which character is live, and its file
+```
+
+`polyrob init` offers this as a step (`--character <slug>` non-interactively),
+so a fresh install never has to assemble it by hand.
+
+The three layers, highest authority first:
+
+| Layer | Where | Selected by | Who writes it |
+|---|---|---|---|
+| SOUL | `<data_home>/identity/identity.md` + `operating.md` | the files existing | operator only |
+| Character | `<characters_dir>/<slug>.character.json` | `PERSONALITY_DEFAULT_CHARACTER` | operator |
+| Persona override | — | `POLYROB_PERSONA`, or the `session.persona` pref (`/persona`) | operator |
+
+Character directories are searched highest-first:
+
+1. `<data_home>/characters/`
+2. `<config_home>/characters/` — a profile ships its characters beside its `.env`
+3. `<install root>/data/characters/` — the curated presets
+   (`analyst`, `coder`, `default`, `ops`, `researcher`, `writer`)
+4. the packaged neutral `polyrob` character
+
+`POLYROB_PERSONA` and `/persona <value>` share ONE resolution order:
+**template key → character slug → literal free-form text.** So `/persona
+researcher` selects the `researcher` character, `/persona coding` selects the
+built-in `coding` template, and anything else is used verbatim as persona text.
+Every one of them applies to the **next** session — the `<identity>` block is
+assembled once, at agent creation.
+
+`polyrob doctor` prints which character is live and the file it resolved to;
+`/persona` lists both namespaces and marks the active row.
+
+#### Which character fields reach the model
+
+The persona block renders a deliberate subset. The other fields parse and store
+fine but are consumed by nothing on this path — an authored value there is a
+silent no-op:
+
+| Field | Rendered into the persona block? |
+|---|---|
+| `name` | yes — `You are <name> — <adjectives>.` |
+| `adjectives` | yes — folded into the name line |
+| `bio` | yes |
+| `lore` | yes — `Background: …` |
+| `topics` | yes — `You focus on: …` |
+| `style.all`, `style.chat`, `style.speaking` | yes — `Style: …` |
+| `knowledge` | **no** — stored only |
+| `messageExamples` | **no** — stored only |
+| `postExamples` | **no** — stored only |
+| `style.writing` | **no** — stored only |
+| `modelProvider`, `clients`, `settings` | no — not persona text |
+
+The SSOT for this split is `RENDERED_FIELDS` / `STORED_ONLY_FIELDS` in
+`agents/personality/persona_render.py`, and a character that populates a
+stored-only field logs a one-time warning naming it. Put the voice you want the
+model to have in `bio`, `lore` and `style`.
 
 ---
 
@@ -135,7 +213,7 @@ distinct `POLYROB_DATA_DIR` per instance instead, plus a distinct port and env f
 
 ```bash
 # Terminal 1 — default instance on port 9000 (default)
-POLYROB_INSTANCE_ID=rob python main.py
+POLYROB_DATA_DIR=/var/lib/polyrob python main.py
 
 # Terminal 2 — second instance on port 9001, its OWN data home
 POLYROB_INSTANCE_ID=aria UVICORN_PORT=9001 POLYROB_DATA_DIR=/var/lib/polyrob-aria python main.py

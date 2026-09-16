@@ -97,14 +97,14 @@ class RichRenderer(Renderer):
         # activity line stays dormant (the pinned ``bottom_toolbar`` is the
         # in-flight indicator) and the streaming box runs buffer-only, printing
         # the finalized answer once as a newline-terminated block.  ``rob run``
-        # (no patch_stdout) keeps ``live_allowed=True`` and the live boxes.
+        # (no patch_stdout) keeps ``live_allowed=True`` for the activity line only.
         self._live_allowed = live_allowed
         # True when a persistent bottom status bar provides the live in-flight
         # indicator (the spinner repaints during the turn). When set, the static
         # ``working…`` turn-start line is suppressed — the box's spinner is the
         # signal, so the transcript stays clean (user msg → tools → answer).
         self.live_status_bar = False
-        # The live streaming response box.  Receives deltas via
+        # The buffered model response. Receives deltas via
         # on_stream_delta and is finalized in on_turn_end.  _box_rendered tracks
         # the double-render guard: when the box rendered the answer this turn,
         # on_turn_end finalizes it instead of printing the answer again.
@@ -167,7 +167,7 @@ class RichRenderer(Renderer):
         if self.verbose:
             self._console.print(
                 f"  [tool] start {event.tool_name}/{event.action_name}",
-                style=style("meta"),
+                style=style("meta"), markup=False, highlight=False,
             )
             return
         if not self._should_show_tool(event.action_name or event.tool_name):
@@ -181,7 +181,7 @@ class RichRenderer(Renderer):
             self._activity.note_activity("thinking")
         if self.verbose:
             model = event.model_name or event.provider or "llm"
-            self._console.print(f"  [llm] start {model}", style=style("meta"))
+            self._console.print(f"  [llm] start {model}", style=style("meta"), markup=False)
 
     def _handle_session_done(self, event: SessionDone) -> None:
         # Dialog layer: a failed session's error explains itself or it's noise.
@@ -253,28 +253,6 @@ class RichRenderer(Renderer):
             self._console.print(blocks.agent_message(message_text))
             self._mark_bubble_rendered(message_text)
 
-    @staticmethod
-    def _event_agent_identity(event: Step) -> str:
-        """Return the best available agent identity string for a step event.
-
-        Preference order (real formatter shape):
-          1. ``data.agent_name``   — always present in live feed
-          2. top-level ``agent_name`` — backwards-compat duplicate
-          3. ``data.agent_id``     — never emitted by current formatter, kept
-                                     for defensive forwards-compat
-          4. top-level ``agent_id``
-
-        Returns "" when none of the above are present.
-        """
-        data = event.raw.get("data", {}) or {}
-        return str(
-            data.get("agent_name")
-            or event.raw.get("agent_name")
-            or data.get("agent_id")
-            or event.raw.get("agent_id")
-            or ""
-        )
-
     # ------------------------------------------------------------------
     # Trace layer (live under /verbose; replayed by render_trace / /steps)
     # ------------------------------------------------------------------
@@ -311,11 +289,16 @@ class RichRenderer(Renderer):
         if isinstance(event, ToolExec):
             from cli.ui.secrets import scrub_then_cap
             status = "ok" if event.success else f"FAIL {event.error or ''}"
-            preview = scrub_then_cap(event.result_preview, limit=160)
-            tail = f" {preview}" if (event.success and preview) else ""
+            # 043 A16: the /verbose (raw) lane shows the typed render payload when
+            # the tool_result carries one; else the scrubbed result preview.
+            if event.success and event.render is not None:
+                tail = " " + scrub_then_cap(blocks.render_payload_str(event.render), limit=160)
+            else:
+                preview = scrub_then_cap(event.result_preview, limit=160)
+                tail = f" {preview}" if (event.success and preview) else ""
             self._console.print(
                 f"  tool {event.tool_name}/{event.action_name} {status}{tail}",
-                style=style("meta"),
+                style=style("meta"), markup=False, highlight=False,
             )
             return
 
@@ -323,14 +306,14 @@ class RichRenderer(Renderer):
             done_flag = " done" if event.is_done else ""
             self._console.print(
                 f"  iter {event.iteration} {event.iteration_status}{done_flag}",
-                style=style("meta"),
+                style=style("meta"), markup=False, highlight=False,
             )
             return
 
         if isinstance(event, LLMCall):
             self._console.print(
                 f"  llm {event.model_name} {event.duration_seconds:.1f}s",
-                style=style("meta"),
+                style=style("meta"), markup=False, highlight=False,
             )
             return
 
@@ -365,24 +348,16 @@ class RichRenderer(Renderer):
     # ------------------------------------------------------------------
 
     def on_stream_delta(self, delta: str) -> None:
-        """Route a streaming delta into the live response box.
+        """Buffer raw model deltas until a user-facing answer is available.
 
-        On the first delta of a turn this opens a Rich ``Live`` "rob" box; each
-        subsequent delta appends + repaints.  1-or-N-chunk safe: a single
-        full-answer chunk and many token chunks produce identical final content.
-        When the console is non-TTY the box degrades to buffer-only and the text
-        is printed once at ``on_turn_end``.
-
-        The activity line MUST be stopped first: only one Rich ``Live`` can run
-        per console, and the box is the turn's feedback from here on.
+        The upstream stream is not an answer-only channel. Painting it directly
+        can expose partial internal state before final answer selection runs.
         """
-        self._stop_activity()
         if self._box is None:
-            # Under the REPL (live_allowed=False) the box runs buffer-only: no
-            # Rich Live, so no cursor contention with prompt_toolkit. The text
-            # still accumulates and is printed once at on_turn_end.
-            box_console = self._console if self._live_allowed else None
-            self._box = ResponseBox(console=box_console)
+            # This callback carries raw model output, including partial brain
+            # JSON. Only typed messages / finalized answers are user-facing.
+            # Keep the activity indicator alive while buffering on BOTH surfaces.
+            self._box = ResponseBox(console=None)
         self._box.append(delta)
         if self._box.received_chunk:
             self._box_rendered = True
@@ -519,6 +494,7 @@ class RichRenderer(Renderer):
                 tools=self.turn_tool_calls(),
                 tokens=self.turn_tokens(),
                 cost=self.turn_cost(),
+                cost_incomplete=self.turn_cost_incomplete(),
                 elapsed_seconds=self.turn_elapsed(),
                 failed=self.turn_failed(),
             )
@@ -534,10 +510,14 @@ class RichRenderer(Renderer):
 
     def _emit_line(self, text: str, *, dim: bool = False) -> None:
         """D2 seam: print one registered-event line into scrollback."""
-        self._console.print(text, style=style("meta") if dim else None)
+        from cli.ui.literal import literal_text
+        self._console.print(literal_text(text), markup=False, highlight=False,
+                            style=style("meta") if dim else None)
 
     def print_block(self, text: str, **kwargs: Any) -> None:
         """Print a generic block (slash-command output, notices, etc.)."""
+        from cli.ui.literal import literal_text
+        text = literal_text(text)
         title = kwargs.get("title")
         block_style = kwargs.get("style")
         if title:
@@ -552,7 +532,7 @@ class RichRenderer(Renderer):
                 )
             )
         else:
-            self._console.print(text, style=block_style or None)
+            self._console.print(text, style=block_style or None, markup=False, highlight=False)
 
     # ------------------------------------------------------------------
     # Accessors used by app.py / the REPL

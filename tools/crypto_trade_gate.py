@@ -90,7 +90,8 @@ def trade_turn_refusal(execution_context, tool_self, *, risk_reducing: bool = Fa
             return f"live trade refused: kill-switch probe failed ({e}); failing closed"
     # (2) Forged / autonomous turn origin — only meaningful when a context is present.
     if execution_context is None:
-        return None
+        from core.wallet.authority import turn_refusal
+        return turn_refusal(None)
     try:
         from tools.controller.action_registration import _is_forged_or_autonomous_turn
         forged = _is_forged_or_autonomous_turn(execution_context, tool_self)
@@ -100,6 +101,11 @@ def trade_turn_refusal(execution_context, tool_self, *, risk_reducing: bool = Fa
         return ("live trade refused: a forged/autonomous turn (self-wake, "
                 "delegation-result, leaf, or autonomous run) cannot place orders — "
                 "the owner must drive trades")
+    from core.wallet.authority import turn_refusal
+    principal_error = turn_refusal(execution_context)
+    if principal_error:
+        return principal_error
+
     return None
 
 

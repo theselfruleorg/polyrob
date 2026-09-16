@@ -1,8 +1,9 @@
 """POLYROB CLI entry point.
 
 Bare ``polyrob`` opens the chat REPL. ``polyrob --help`` lists every command,
-grouped (Start here / Surfaces / Autonomy & work / Money / Inspect & admin —
-027 WP6); first-run path: ``polyrob init`` → ``polyrob doctor`` → ``polyrob``.
+grouped (Start here / Surfaces / Autonomy & work / Money / Owner — 027 WP6,
+regrouped 043 A14); first-run path: ``polyrob init`` → ``polyrob doctor`` →
+``polyrob``.
 
 Startup contract: importing this module must stay CHEAP (stdlib + click + core.version).
 Subcommands are lazy-loaded via ``_LazyGroup`` — each command module is imported only
@@ -39,6 +40,7 @@ _LAZY_SUBCOMMANDS = {
     "profile": "cli.commands.profile:profile",
     "profiles": "cli.commands.profile:profile",  # product vocabulary alias
     "auth": "cli.commands.auth:auth",
+    "keys": "cli.commands.keys:keys",  # 043 A30: the owner's API-key seat
     "doctor": "cli.commands.doctor:doctor",
     "telegram": "cli.commands.telegram:telegram",
     "whatsapp": "cli.commands.whatsapp:whatsapp",
@@ -59,6 +61,8 @@ _LAZY_SUBCOMMANDS = {
     "update": "cli.commands.update:update_cmd",
     "pfp": "cli.commands.pfp:pfp",
     "soul": "cli.commands.soul:soul",
+    "persona": "cli.commands.persona:persona",  # F4: the character-authoring seat
+    "identity": "cli.commands.identity:identity",  # 043 A14: soul/persona/pfp umbrella
     "journey": "cli.commands.journey:journey",
     "finance": "cli.commands.finance:finance",
     "wallet": "cli.commands.wallet:wallet_cmd",
@@ -72,34 +76,42 @@ _LAZY_SUBCOMMANDS = {
     "x-account": "cli.commands.x_account:x_account",
 }
 
-# --- Help-surface layout (027 WP6) ---
+# --- Help-surface layout (027 WP6, regrouped 043 A14) ---
 # canonical name -> alias names. Aliases stay invocable but render on the
 # canonical row ("session (alias: sessions)"), never as duplicate entries.
+# `soul`/`persona`/`pfp` fold onto `identity` (the new umbrella group, A14);
+# `approvals` folds onto `owner` (a display-only alias line for now — `owner
+# approvals` as a real subcommand is phase 3 create work, 043 §4.1); `skill`
+# (the single-skill install pipeline) folds onto `skills`.
 _COMMAND_ALIASES = {
     "session": ("sessions",),
     "model": ("models",),
     "dashboard": ("webgate",),
     "profile": ("profiles",),
+    "identity": ("soul", "persona", "pfp"),
+    "owner": ("approvals",),
+    "skills": ("skill",),
 }
-_ALIAS_NAMES = {alias for aliases in _COMMAND_ALIASES.values() for alias in aliases}
+_RELATED_COMMANDS = {name: _COMMAND_ALIASES.pop(name) for name in ("identity", "owner", "skills")}
+_DISPLAY_FOLDS = {**_COMMAND_ALIASES, **_RELATED_COMMANDS}
+_ALIAS_NAMES = {alias for aliases in _DISPLAY_FOLDS.values() for alias in aliases}
 
 # Grouped --help: a first-run user needs "start here", not 40 flat rows.
 # Anything unlisted lands in a computed "Other" section, so a new command can
 # never silently vanish from --help.
 _HELP_GROUPS = [
     ("Start here",
-     ["run", "chat", "init", "auth", "doctor", "config", "model", "update", "version"]),
+     ["run", "chat", "init", "auth", "keys", "doctor", "config", "model", "update", "version"]),
     ("Surfaces",
      ["gateway", "telegram", "whatsapp", "email", "discord", "slack", "signal",
       "x", "serve", "dashboard"]),
     ("Autonomy & work",
-     ["goals", "cron", "session", "subagents", "skills", "skill", "approvals",
-      "surface", "todos"]),
+     ["goals", "cron", "session", "subagents", "skills", "surface", "todos",
+      "apps", "autonomy", "tools", "kb"]),
     ("Money",
-     ["wallet", "finance"]),
-    ("Inspect & admin",
-     ["tools", "kb", "owner", "profile", "journey", "pfp", "soul",
-      "x-account", "datagen"]),
+     ["wallet", "finance", "journey"]),
+    ("Owner",
+     ["owner", "identity", "profile"]),
 ]
 
 
@@ -167,6 +179,8 @@ class _LazyGroup(click.Group):
                 display = name
                 if name in _COMMAND_ALIASES:
                     display += f" (alias: {', '.join(_COMMAND_ALIASES[name])})"
+                elif name in _RELATED_COMMANDS:
+                    display += f" (related: {', '.join(_RELATED_COMMANDS[name])})"
                 rows.append((display, available[name].get_short_help_str(limit=limit)))
             if rows:
                 with formatter.section(title):
@@ -197,6 +211,10 @@ def cli(ctx, plain, project, model, provider, toolset, profile):
         activate_profile(profile)
     except ProfileError as exc:
         raise click.ClickException(str(exc))
+    ctx.ensure_object(dict)
+    ctx.obj["cli_defaults"] = dict(plain=plain, model=model, provider=provider, toolset=toolset)
+    if plain:
+        ctx.color = False
     if project:
         import os
         from pathlib import Path
@@ -254,7 +272,9 @@ def version():
 @click.option("--toolset", default=None, help="Named toolset for this REPL session")
 def chat_cmd(plain, model, provider, toolset):
     """Open the interactive REPL chat session."""
-    _start_repl(plain=plain, model=model, provider=provider, toolset=toolset)
+    from cli.commands._options import inherit_options
+    values = inherit_options(plain=plain, model=model, provider=provider, toolset=toolset)
+    _start_repl(**values)
 
 
 def main():

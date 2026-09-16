@@ -44,6 +44,7 @@ import signal
 import stat
 import tempfile
 import time
+import threading
 import uuid
 from typing import Awaitable, Callable, List, Optional, Tuple
 
@@ -697,8 +698,21 @@ class DockerBackend(ExecutionBackend):
         host_backstop = timeout + 5
         start = time.monotonic()
 
+        stop = threading.Event()
+
         def _run_sync():
             import subprocess
+            from tools.code_exec.backends.bounded_capture import capture
+
+            def kill(proc):
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, AttributeError):
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+
             try:
                 proc = subprocess.Popen(
                     argv, env=env,
@@ -707,37 +721,36 @@ class DockerBackend(ExecutionBackend):
                     start_new_session=True,
                 )
             except Exception as e:
-                return b"", f"docker launch error: {type(e).__name__}: {e}".encode(), 1, False
+                return b"", f"docker launch error: {type(e).__name__}: {e}".encode(), 1, False, False
+            remove = True
             try:
-                out, err = proc.communicate(input=stdin_bytes, timeout=host_backstop)
-                return out, err, proc.returncode, False
-            except subprocess.TimeoutExpired:
-                # The docker CLI itself hung past the in-container bound. Kill the
-                # client AND force-remove the container on the daemon — killing the
-                # client alone leaves the (unbounded) container running.
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                except Exception:
+                out, err, timed_out, truncated = capture(
+                    proc, data=stdin_bytes, timeout=host_backstop, limit=self.max_output,
+                    stop=stop, kill=kill,
+                )
+                remove = timed_out or truncated or stop.is_set()
+                return out, err, proc.returncode, timed_out, truncated
+            finally:
+                if remove:
+                    # Stopping the CLI does not stop the container on the daemon.
                     try:
-                        proc.kill()
+                        subprocess.run(
+                            ["docker", "rm", "-f", container_name],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=10, env=env,
+                        )
                     except Exception:
-                        pass
-                try:
-                    subprocess.run(
-                        ["docker", "rm", "-f", container_name],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10,
-                    )
-                except Exception:
-                    pass  # reap_orphans() sweeps the label as a last resort
-                try:
-                    out, err = proc.communicate(timeout=5)
-                except Exception:
-                    out, err = b"", b""
-                return out, err, proc.returncode, True
+                        logger.warning("sandbox cleanup failed; orphan reaper must retry")
 
         try:
             loop = asyncio.get_event_loop()
-            stdout, stderr, exit_code, host_timed_out = await loop.run_in_executor(None, _run_sync)
+            future = loop.run_in_executor(None, _run_sync)
+            try:
+                stdout, stderr, exit_code, host_timed_out, truncated = await asyncio.shield(future)
+            except asyncio.CancelledError:
+                stop.set()
+                await asyncio.shield(future)
+                raise
         finally:
             if created_tmp:
                 shutil.rmtree(workdir, ignore_errors=True)
@@ -750,7 +763,7 @@ class DockerBackend(ExecutionBackend):
         err, t2 = self._cap(stderr)
         return ExecutionResult(
             stdout=out, stderr=err, exit_code=exit_code, timed_out=timed_out,
-            truncated=t1 or t2, duration_sec=time.monotonic() - start, backend=self.name,
+            truncated=truncated or t1 or t2, duration_sec=time.monotonic() - start, backend=self.name,
         )
 
     async def _run_persistent(self, request: ExecutionRequest) -> ExecutionResult:

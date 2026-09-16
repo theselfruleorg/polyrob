@@ -29,9 +29,18 @@ def test_doctor_report_warns_no_keys():
 
 
 def test_doctor_command_runs():
-    res = CliRunner().invoke(doctor, [], env={"ANTHROPIC_API_KEY": "sk-x"})
+    # 043 A13: plain `doctor` leads with the status snapshot and hides the
+    # check transcript (incl. "anthropic: present") behind --full.
+    res = CliRunner().invoke(doctor, ["--full"], env={"ANTHROPIC_API_KEY": "sk-x"})
     assert res.exit_code == 0, res.output
     assert "anthropic: present" in res.output
+
+
+def test_doctor_command_plain_leads_with_snapshot_and_hides_transcript():
+    res = CliRunner().invoke(doctor, [], env={"ANTHROPIC_API_KEY": "sk-x"})
+    assert res.exit_code == 0, res.output
+    assert "anthropic: present" not in res.output
+    assert "run `polyrob doctor --full` for every check" in res.output
 
 
 def test_doctor_flags_present_but_malformed_key():
@@ -82,7 +91,7 @@ def test_doctor_command_sees_production_only_key(tmp_path, monkeypatch):
     # fake config/.env.production above), so opt back in explicitly.
     monkeypatch.setenv("POLYROB_ENV_KEY_BACKFILL", "1")
     monkeypatch.chdir(tmp_path)
-    res = CliRunner().invoke(doctor, [])
+    res = CliRunner().invoke(doctor, ["--full"])
     assert res.exit_code == 0, res.output
     assert "openrouter: present" in res.output
 

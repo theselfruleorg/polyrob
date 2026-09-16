@@ -1,0 +1,4 @@
+# Playwright run artifacts. The rig is dev-only; its output is not.
+test-results/
+playwright-report/
+blob-report/

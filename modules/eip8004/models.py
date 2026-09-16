@@ -57,8 +57,13 @@ class EIP8004Config(BaseModel):
 # =============================================================================
 
 class Endpoint(BaseModel):
-    """An endpoint in the registration file.
-    
+    """One entry in the registration file's ``services`` array.
+
+    The class keeps its name (every existing importer uses it) while the FIELD
+    it populates was renamed ``endpoints`` -> ``services`` by the current
+    ERC-8004 draft. Renaming the list must not silently change each entry's
+    shape, which is what `test_a_service_entry_keeps_the_endpoint_shape` pins.
+
     Supports various protocols: A2A, MCP, ENS, DID, agentWallet, etc.
     """
     name: str = Field(..., description="Endpoint type (A2A, MCP, ENS, DID, agentWallet)")
@@ -92,6 +97,11 @@ class RegistrationFile(BaseModel):
     )
     name: str = Field(..., description="Agent name")
     description: str = Field(..., description="Agent description")
+    #: The agent's face. ⚠️ OMITTED (None) rather than guessed when there is
+    #: nowhere public to serve it from — this field was hardcoded to a
+    #: `rob-logo.png` that does not exist anywhere in the tree, so every file
+    #: ever served pointed at a 404. A broken link is worse than no link, and
+    #: `metadata.avatar` below keeps the face reproducible either way.
     image: Optional[str] = Field(None, description="Agent image URL")
     trustMode: str = Field(
         default="local",
@@ -100,8 +110,26 @@ class RegistrationFile(BaseModel):
         "discovery does not over-promise an unverified identity.",
     )
 
-    # Protocol endpoints
-    endpoints: List[Endpoint] = Field(default_factory=list, description="List of protocol endpoints")
+    # Protocol endpoints. ⚠️ Named `services` to match the CURRENT draft; the
+    # file emitted `endpoints` until 2026-09-15, so a consumer reading the spec
+    # found none of the fields it expected.
+    services: List[Endpoint] = Field(default_factory=list,
+                                     description="List of protocol endpoints")
+
+    #: Whether this agent accepts x402 payments. Derived from whether the rail
+    #: is actually armed — advertising a payment method that is switched off is
+    #: the same class of lie as advertising an endpoint that 404s.
+    x402Support: bool = Field(default=False, description="Accepts x402 payments")
+
+    #: Whether this agent is currently serving.
+    active: bool = Field(default=True, description="Agent is active")
+
+    #: Free-form, spec-permitted. Carries `avatar` = the frozen Mindprint
+    #: {generator, seed, variant} so the face is REPRODUCIBLE by anyone holding
+    #: the open engine even when `image` had to be omitted. That is a stronger
+    #: claim than a hosted PNG makes: a URL can rot or be swapped; a seed cannot.
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Additional agent metadata")
     
     # On-chain registrations
     registrations: List[Registration] = Field(default_factory=list, description="On-chain registrations")

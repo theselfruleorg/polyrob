@@ -18,12 +18,14 @@ module mints.
 """
 import hmac
 import os
+import uuid
 from datetime import datetime, timedelta
 
 import jwt as pyjwt
 from argon2 import PasswordHasher
 from fastapi import Response
 
+from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
 from webview import webgate
 
 _hasher = PasswordHasher()
@@ -80,13 +82,18 @@ def issue_owner_session_cookie(response: Response) -> str:
     if not jwt_secret:
         raise RuntimeError("JWT_SECRET_KEY not configured - cannot issue owner session")
 
-    expires_at = datetime.utcnow() + timedelta(days=7)
+    # W5 (043): a short (≤24h) lifetime + a random ``jti`` so ``/logout`` can
+    # revoke this exact token server-side (core/token_denylist.py). Both minters
+    # (here + api/auth_endpoints.py) import OWNER_COOKIE_TTL_SECONDS so they
+    # cannot drift.
+    expires_at = datetime.utcnow() + timedelta(seconds=OWNER_COOKIE_TTL_SECONDS)
     payload = {
         "sub": webgate.local_owner_id(),
         "user_id": webgate.local_owner_id(),
         "tier": "admin",
         "role": "owner",
         "payment_method": None,
+        "jti": uuid.uuid4().hex,
         "iat": datetime.utcnow(),
         "exp": expires_at,
     }
@@ -96,7 +103,7 @@ def issue_owner_session_cookie(response: Response) -> str:
     response.set_cookie(
         key="auth_token",
         value=token,
-        max_age=7 * 24 * 60 * 60,
+        max_age=OWNER_COOKIE_TTL_SECONDS,
         path="/",
         secure=is_production,
         httponly=True,

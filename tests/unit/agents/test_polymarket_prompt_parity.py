@@ -54,3 +54,30 @@ def test_every_dashed_tool_token_is_a_real_action():
         for token in m.group(1).split("/"):
             token = token.strip()
             assert token in _REAL_PM_ACTIONS, f"unknown advertised action: {token}"
+
+
+# --- reachability (census, 2026-09-12) --------------------------------------
+# The tests above proved the section's CONTENT while the section never rendered:
+# they hand-build `mcp_servers={"polymarket": ...}`, which production never
+# produces. Prod's `config/mcp_config.json` has `"servers": {}` AND a
+# `_polymarket_note` saying polymarket is deliberately NOT an MCP server. So the
+# gate tested a condition that is false by design. These pin the gate itself.
+
+def test_the_section_renders_for_a_session_holding_the_polymarket_TOOL():
+    """The real production shape: polymarket is a loaded tool_id, no MCP server."""
+    sp = SystemPrompt(action_description="", tool_ids=["polymarket"], mcp_servers={})
+    assert "Polymarket" in sp._get_polymarket_section()
+
+
+def test_the_section_stays_dark_without_the_rail():
+    sp = SystemPrompt(action_description="", tool_ids=["filesystem"], mcp_servers={})
+    assert sp._get_polymarket_section() == ""
+
+
+def test_the_call_site_gate_is_not_narrower_than_the_section_gate():
+    """The block stayed dark because the CALL SITE re-implemented a narrower
+    condition (`'polymarket' in self.mcp_servers`) than the function it guarded.
+    A caller must not be able to suppress a section the section itself emits."""
+    sp = SystemPrompt(action_description="", tool_ids=["polymarket"], mcp_servers={})
+    assert sp._get_polymarket_section(), "precondition: the section emits"
+    assert "<polymarket>" in sp.get_system_message().content

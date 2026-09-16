@@ -11,9 +11,9 @@ clear voices the engine offers (the same mapping the studio/webview use with
   variant by timbre.
 - Windows PowerShell SAPI — SSML prosody pitch/rate.
 
-No engine → :class:`VoiceUnavailable` with pointers to the web paths (the webview
-/identity page and ``polyrob pfp studio`` both speak in the browser). Never a hard
-dependency; callers treat speech as best-effort.
+No engine → :class:`VoiceUnavailable` with pointers to the web paths (the console
+Agent page ``/agent`` and ``polyrob pfp studio`` both speak in the browser). Never
+a hard dependency; callers treat speech as best-effort.
 """
 from __future__ import annotations
 
@@ -120,5 +120,5 @@ def speak_voice(voice: Optional[Dict[str, Any]], text: str = DEFAULT_TEXT, *,
 
     raise VoiceUnavailable(
         "no native TTS engine found (say / espeak-ng / SAPI). Hear the voice in the "
-        "browser instead: the webview /identity page or `polyrob pfp studio`."
+        "browser instead: the console Agent page (/agent) or `polyrob pfp studio`."
     )

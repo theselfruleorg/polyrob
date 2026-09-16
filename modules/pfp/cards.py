@@ -62,6 +62,38 @@ _AVATAR_SIZE = 96
 _QR_SIZE = 220
 
 
+
+def _amount_block_lines(*, raw: int, decimals: int, symbol: str,
+                        amount_usd: str) -> dict:
+    """The card's amount block, as text. Pure — the renderer only draws it.
+
+    ⚠️ Live 2026-09-15: an 18-decimal PNL amount
+    (``3500.000000000000000004``) overflowed the headline and rendered as
+    ``3500.0000000000000000…``. Settlement matches the raw integer EXACTLY, so
+    a payer who reads a truncated headline and sends a round 3500 gets
+    `payment_unmatched` — tokens arrive, no offer settles, nobody is banned.
+
+    ⚠️ A SHORT headline is only safe with the two things beside it: the ``≈``
+    marker, and an EXACT line that says it must be sent. Without those, a
+    rounded headline is the same invitation the truncation was. Keep all three.
+
+    A dollar-pegged asset keeps the single-line headline it always had —
+    there is no precision to disambiguate.
+    """
+    from decimal import Decimal
+    if not symbol or symbol.upper() == "USDC" or not raw:
+        return {"headline": f"${amount_usd} USDC", "exact": "",
+                "exact_label": "", "usd": ""}
+    value = Decimal(int(raw)) / (Decimal(10) ** int(decimals))
+    exact = format(value.normalize(), "f")
+    whole = int(value)
+    return {
+        "headline": f"≈ {whole:,} {symbol}",
+        "exact_label": "SEND EXACTLY",
+        "exact": f"{exact} {symbol}",
+        "usd": f"≈ ${amount_usd}",
+    }
+
 def _load_font(size: int, *, bold: bool = False):
     """Repo font -> ``ImageFont.load_default()`` fallback. Never raises.
 
@@ -253,9 +285,32 @@ def render_invoice_card(invoice: Dict[str, Any], artifact: Dict[str, Any],
             amount_text = f"{float(invoice.get('amount_usd') or 0.0):.2f}"
         except (TypeError, ValueError):
             amount_text = "0.00"
+    # 046: the card names the ACTUAL token. A ROB invoice rendered as
+    # "$0.50 USDC" tells the payer to send the wrong asset — money they do not
+    # get back. The token amount leads (it is what they must actually send) and
+    # the USD figure follows as the annotation it is.
     amount_font = _load_font(68, bold=True)
-    draw.text((_MARGIN, y), f"${amount_text} USDC", font=amount_font, fill=_GREEN)
-    y += 92
+    try:
+        from modules.x402.artifact import _invoice_asset
+        _addr, _dec, _sym, _raw = _invoice_asset(invoice)
+    except Exception:
+        _sym, _raw, _dec = "USDC", 0, 6
+    block = _amount_block_lines(raw=_raw, decimals=_dec, symbol=_sym,
+                                amount_usd=amount_text)
+    draw.text((_MARGIN, y), block["headline"], font=amount_font, fill=_GREEN)
+    y += 78 if block["exact"] else 92
+    if block["exact"]:
+        draw.text((_MARGIN, y), block["exact_label"], font=_load_font(15, bold=True),
+                  fill=_GREEN)
+        y += 22
+        # ⚠️ The exact figure is rendered at a size that FITS. An 18-decimal
+        # amount ran off the card and the payer saw a round number that the
+        # exact-integer settlement match would never fire on.
+        draw.text((_MARGIN, y), block["exact"], font=_load_font(21, bold=True),
+                  fill=_WHITE)
+        y += 30
+        draw.text((_MARGIN, y), block["usd"], font=_load_font(24), fill=_MUTED)
+        y += 34
 
     # --- purpose -------------------------------------------------
     purpose = str(invoice.get("purpose") or "").strip() or "(no purpose given)"

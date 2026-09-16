@@ -191,15 +191,37 @@ def _emit_config(ctx: Any, enabled: bool, servers: Dict[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def h_mcp(ctx: Any) -> None:
-    """``/mcp`` (or ``/mcp list``) — list configured MCP servers + status.
+#: Subcommands that CHANGE the saved set. They are handled by ``core.mcp_admin``
+#: — the ONE helper set every owner seat renders — so the REPL and Telegram can
+#: never drift into two different answers about which servers exist.
+_WRITE_VERBS = ("add", "remove", "rm", "delete", "test")
 
-    Read-only. Prefers a live ``MCPServerManager``; degrades to the static
-    config when none is reachable.
+
+async def h_mcp(ctx: Any) -> None:
+    """``/mcp [list | add <id> <url> [key] | remove <id> | test <id>]``.
+
+    The bare/`list` form is the read-only status view: it prefers a live
+    ``MCPServerManager`` and degrades to the static config. The write verbs go
+    to the per-tenant store, which is what makes an added server outlive the
+    session — before them the terminal seat could show MCP servers but never
+    give the agent a new one.
     """
     sub = (ctx.args[0].lower() if getattr(ctx, "args", None) else "list")
+
+    if sub in _WRITE_VERBS:
+        from core import mcp_admin
+        ctx.emit(mcp_admin.mcp_reply(getattr(ctx, "user_id", None),
+                                     list(ctx.args),
+                                     container=getattr(ctx, "container", None)),
+                 title="mcp")
+        return
+
     if sub not in ("", "list"):
-        ctx.emit(f"Usage: /mcp [list]  (unknown subcommand '{sub}')", title="mcp")
+        ctx.emit(
+            f"Unknown subcommand '{sub}'.\n"
+            "Usage: /mcp [list | add <id> <https-url> [api-key] | "
+            "remove <id> | test <id>]",
+            title="mcp")
         return
 
     manager = _resolve_manager(ctx)

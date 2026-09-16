@@ -31,6 +31,6 @@ def test_agent_card_payment_address_uses_resolver():
 def test_eip8004_registration_agent_wallet_uses_resolver():
     from modules.eip8004.registration import build_registration_file
     reg = build_registration_file("https://example.test")
-    wallets = [e for e in reg.endpoints if e.name == "agentWallet"]
+    wallets = [e for e in reg.services if e.name == "agentWallet"]
     assert len(wallets) == 1
     assert wallets[0].endpoint.endswith(f":{WALLET_ADDR}")

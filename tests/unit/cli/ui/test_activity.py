@@ -145,16 +145,15 @@ def test_step_event_feeds_activity_counters():
     r.on_turn_end("x")
 
 
-def test_stream_delta_stops_activity_before_box_opens():
-    """One Live per console: the box can only start if the line stopped."""
+def test_stream_delta_keeps_activity_while_buffering():
+    """Raw model chunks are buffered; the activity line remains the only Live."""
     console, _ = _tty_console()
     r, _ = _renderer(console)
     r.on_turn_start("do work")
     assert r._activity is not None and r._activity.is_live
     r.on_stream_delta("chunk")
-    assert r._activity is None
-    # The box took over the Live slot successfully (TTY path).
-    assert r._box is not None and r._box.is_live
+    assert r._activity is not None and r._activity.is_live
+    assert r._box is not None and not r._box.is_live
     r.on_turn_end("chunk")
 
 

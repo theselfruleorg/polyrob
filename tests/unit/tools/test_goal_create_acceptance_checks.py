@@ -35,7 +35,7 @@ def test_goal_create_without_checks_is_accepted(tmp_path):
     assert not res.error, "NO create gate — arbitrary goals stay accepted (§4.4)"
 
 
-def test_goal_create_drops_malformed_checks(tmp_path):
+def test_goal_create_rejects_malformed_checks(tmp_path):
     from agents.task.goals.board import GoalBoard
     from tools.goal_tools import GoalTool, GoalCreateAction
 
@@ -45,10 +45,8 @@ def test_goal_create_drops_malformed_checks(tmp_path):
     tool._user = lambda ec: "u1"
     res = asyncio.run(GoalTool.goal_create(tool, GoalCreateAction(
         title="write it", acceptance_checks=[{"no_type": True}, "not-a-dict"])))
-    assert not res.error
-    goals = board.list(user_id="u1")
-    assert not (goals[0].payload or {}).get("acceptance_checks"), \
-        "malformed checks are dropped, not stored"
+    assert res.error and "invalid acceptance checks" in res.error
+    assert board.list(user_id="u1") == [], "invalid checks must not produce an unchecked goal"
 
 
 def test_seed_goal_check_arg_parses():

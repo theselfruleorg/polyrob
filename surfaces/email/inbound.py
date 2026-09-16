@@ -13,6 +13,7 @@ Normalized message dict shape (produced by the harness):
       "body":        "...",             # plain-text body (quoted history is truncated here)
       "in_reply_to": "<out@rob>",       # In-Reply-To header (the thread anchor)
       "references":  "<root> <out>",    # References header (fallback thread anchor)
+      "attachments": [{"filename": ..., "mime": ..., "data": b"..."}],
     }
 """
 from __future__ import annotations
@@ -26,6 +27,7 @@ from typing import Any, Optional
 from core.surfaces.act import InboundResult  # canonical envelope (R-4) — was a local duplicate
 from core.surfaces.dispatcher import RouteDecision, route_inbound
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
+from core.surfaces.media import Media
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +76,42 @@ def truncate_quoted_history(body: str) -> str:
         return body or ""
 
 
+#: MIME maintypes mapped onto the Media vocabulary. Anything else is a document.
+_MAINTYPE_KINDS = {"image": "image", "video": "video", "audio": "audio"}
+
+
+def _attachment_media(attachments: list) -> list:
+    """Normalized attachment dicts -> ``Media`` (bytes already in hand)."""
+    out: list = []
+    for att in attachments:
+        if not isinstance(att, dict) or not att.get("data"):
+            continue
+        mime = (att.get("mime") or "").lower()
+        kind = _MAINTYPE_KINDS.get(mime.split("/", 1)[0], "document")
+        out.append(Media(kind=kind, mime=mime or None, data=att["data"],
+                         filename=att.get("filename")))
+    return out
+
+
+def _append_attachment_manifest(text: str, media: list) -> str:
+    """Name every attachment on the turn text.
+
+    This runs BEFORE routing, so it is the only description a CORRESPONDENT-tier
+    mail gets: a third party's bytes are never written into a session workspace
+    (a From: header is forgeable, so email is correspondent-or-denied in v1). An
+    owner-tier turn absorbs the bytes afterwards through the shared rail.
+    """
+    names = []
+    for m in media:
+        size_kb = len(m.data or b"") / 1024
+        size = f"{size_kb:.1f}KB" if size_kb < 1024 else f"{size_kb / 1024:.1f}MB"
+        names.append(f"- {m.filename or m.kind} ({m.mime or m.kind}, {size})")
+    listing = "\n".join(names)
+    return (f"{text}\n\n[This email carried {len(media)} attachment(s):\n{listing}]"
+            if text.strip() else
+            f"[This email carried {len(media)} attachment(s) and no message text:\n{listing}]")
+
+
 def dedup_key(msg: dict) -> str:
     """Stable dedup key for a message. Uses Message-ID when present; otherwise a
     surrogate hash of from|subject|body — NEVER the empty string (an empty key would
@@ -110,6 +148,14 @@ def build_inbound_message(msg: dict, user_directory: Any) -> Optional[InboundMes
         )
         return None
     text = truncate_quoted_history(msg.get("body", ""))
+    # 2026-09-13 media rail: attachments were discarded by _plain_body. Bytes are
+    # already in hand here (unlike Telegram, which holds a lazy file_id), so the
+    # Media carries `data` directly. An attachment-only mail would otherwise route
+    # as an EMPTY turn — the same failure the dropped Telegram photo hit — so the
+    # manifest is appended to the text whatever the tier turns out to be.
+    media = _attachment_media(msg.get("attachments") or [])
+    if media:
+        text = _append_attachment_manifest(text, media)
     user_id = user_directory.resolve_internal(addr, "email")
     source = SessionSource(
         surface_id="email",
@@ -124,6 +170,7 @@ def build_inbound_message(msg: dict, user_directory: Any) -> Optional[InboundMes
         idempotency_key=str(message_id) if message_id else None,
         reply_to=(msg.get("in_reply_to") or None),
         raw=msg,
+        media=media,
     )
 
 

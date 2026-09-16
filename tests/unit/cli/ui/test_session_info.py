@@ -117,3 +117,59 @@ def test_session_command_is_fail_open_with_empty_context():
     ctx, buf = _session_ctx(state=None)
     cmd = build_default_registry().lookup("session")
     cmd.handler(ctx)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# /session owner line — the ONE owner label every seat shares (043 residue N2)
+# ---------------------------------------------------------------------------
+
+_OWNER_KEYS = ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
+               "SURFACE_SUPER_ADMIN_USER_IDS", "POLYROB_LOCAL_OWNER")
+
+
+def _unbind(monkeypatch):
+    for key in _OWNER_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_session_owner_line_says_unpaired_when_unbound(monkeypatch):
+    """⚠️ The REPL and `polyrob doctor` are two owner seats on ONE box; they must
+    not disagree about whether an owner is bound.
+
+    This line read `resolve_owner_principal() or "unbound (local owner)"`. When
+    the unbound principal became the owner TENANT, the `or` stopped firing and the
+    line printed a bare `local` — which reads exactly like an owner explicitly
+    bound to that name — while `polyrob doctor` said `(unpaired)` one command
+    away. Both seats now render `core.instance.owner_label`.
+    """
+    from core.instance import UNPAIRED_OWNER_LABEL
+    _unbind(monkeypatch)
+    ctx, buf = _session_ctx(state=SessionState(), session_id="s1", user_id="local")
+    build_default_registry().lookup("session").handler(ctx)
+    out = buf.getvalue()
+    assert UNPAIRED_OWNER_LABEL in out
+    assert "POLYROB_OWNER_USER_ID" in out        # the remedy is named
+    assert "owner: local" not in out             # never a bare tenant name
+
+
+def test_session_owner_line_names_a_bound_owner(monkeypatch):
+    _unbind(monkeypatch)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
+    ctx, buf = _session_ctx(state=SessionState(), session_id="s1", user_id="local")
+    build_default_registry().lookup("session").handler(ctx)
+    out = buf.getvalue()
+    assert "alice" in out
+    assert "unpaired" not in out
+
+
+def test_session_owner_line_marks_an_owner_that_is_the_instance(monkeypatch):
+    """Prod's shape: owner `rob` bound on instance `rob` — named, and marked so it
+    does not read as a second, distinct human owner."""
+    _unbind(monkeypatch)
+    monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
+    ctx, buf = _session_ctx(state=SessionState(), session_id="s1", user_id="local")
+    build_default_registry().lookup("session").handler(ctx)
+    out = buf.getvalue()
+    assert "this instance's own tenant" in out
+    assert "unpaired" not in out

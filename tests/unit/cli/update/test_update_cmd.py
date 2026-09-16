@@ -70,7 +70,7 @@ def test_offline_reports_could_not_check(monkeypatch):
     monkeypatch.setattr(up, "_http_get", boom)
     monkeypatch.setattr("cli.update.versions.installed_version", lambda: "0.4.2")
     res = CliRunner().invoke(update_cmd, ["--check"])
-    assert res.exit_code == EXIT_UP_TO_DATE  # unknown latest => not "available"
+    assert res.exit_code == EXIT_ERROR
     assert "could not check" in res.output.lower()
 
 
@@ -90,7 +90,7 @@ def test_check_not_found_is_informative(monkeypatch):
     monkeypatch.setattr(up, "_http_get", boom)
     monkeypatch.setattr("cli.update.versions.installed_version", lambda: "0.4.2")
     res = CliRunner().invoke(update_cmd, ["--check"])
-    assert res.exit_code == EXIT_UP_TO_DATE
+    assert res.exit_code == EXIT_ERROR
     # Not a bare "could not check" — it names the repo it looked at.
     assert "acme/widget" in res.output
 
@@ -105,6 +105,7 @@ def test_check_json_is_pure_and_carries_error(monkeypatch):
     monkeypatch.setattr("cli.update.versions.installed_version", lambda: "0.4.2")
     res = CliRunner().invoke(update_cmd, ["--check", "--json"])
     data = json.loads(res.output)  # pure JSON, no leaked log lines
+    assert res.exit_code == EXIT_ERROR
     assert data["error"] == "no_releases"
     assert data["source_ref"] == "acme/widget"
 
@@ -147,6 +148,24 @@ def test_apply_unsupported_method_prints_manual(monkeypatch):
     res = CliRunner().invoke(update_cmd, ["--apply", "--yes"])
     assert res.exit_code == EXIT_UP_TO_DATE
     assert "isn't supported for a docker" in res.output
+
+
+def test_apply_fails_when_latest_version_cannot_be_determined(monkeypatch):
+    from pathlib import Path
+    from cli.update.detect import InstallContext
+
+    monkeypatch.setattr(
+        up, "detect_install",
+        lambda *a, **k: InstallContext("pip", Path("/x"), None, "test"),
+    )
+    monkeypatch.setattr(up, "_http_get", lambda *a, **k: '{"releases": {}}')
+    monkeypatch.setattr("cli.update.versions.installed_version", lambda: "1.0.0")
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--json"])
+    assert res.exit_code == EXIT_ERROR
+    data = json.loads(res.output)
+    assert data["applied"] is False
+    assert data["reason"] == "check_failed"
+    assert data["error"] == "no_releases"
 
 
 # ---------------------------------------------------------------------------

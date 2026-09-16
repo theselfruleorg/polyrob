@@ -136,6 +136,7 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
     except ImportError:
         _scanner = None
     from core.surfaces.attachments import (attach_max_files,
+                                           is_injection_reason,
                                            media_entries_from_paths,
                                            screen_attachment_path,
                                            validate_media_paths)
@@ -161,6 +162,12 @@ def build_deliverables(artifacts: list, session_id: str, user_id: Optional[str],
             else:
                 real = validated[0]
                 reason = screen_attachment_path(real, scanner=_scanner)
+                # I4: `"threat scan" in reason` also matched SCAN_ERROR_REASON,
+                # so a scanner that merely RAISED reported an attack.
+                if is_injection_reason(reason):
+                    from core.security.threat_report import report_threat
+                    report_threat("file", source="deliverables", detail=rel,
+                                  session_id=session_id, user_id=user_id or "")
         except Exception as e:
             reason = f"validation error: {e}"
         if rel in unattributed:

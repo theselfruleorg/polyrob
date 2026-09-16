@@ -77,6 +77,25 @@ class AutonomyConfig(GoalFlagsMixin):
     def owner_doc_require_review() -> bool:
         return _bool_env("OWNER_DOC_REQUIRE_REVIEW", True)
 
+    # 035 P1-6 — the polarity flip. With this ON, a rule written on a GENUINE
+    # OWNER TURN applies immediately instead of landing in `.pending/`; a forged
+    # turn (self-wake, delegation result, sub-agent/leaf, autonomous goal run) is
+    # quarantined exactly as before, and `SelfContextWriter._resolve_pending`
+    # enforces that independently of this flag.
+    #
+    # Why: on 2026-09-08/09 the owner told the agent four times to stop posting
+    # to the Telegram den. The agent understood, agreed, and wrote the rule down
+    # correctly — into a review queue the owner was never told about, because a
+    # suppressed notification had been recorded as delivered. 22 of 22 agent
+    # writes in the subsystem's entire life were quarantined and 0 ever took
+    # effect without a separate owner step. Review protects against a FORGED
+    # author, not against the owner; the owner IS the authority.
+    #
+    # Default OFF for one release so the flip is revertible (035 §6).
+    @staticmethod
+    def owner_rules_immediate() -> bool:
+        return _bool_env("OWNER_RULES_IMMEDIATE", False)
+
     # Bounded operating-contract doc (owner-authored operating rules/constraints,
     # owner-UX Phase 2) — injected after owner facts and before the evolving SELF
     # doc on the SELF/SOUL seam. Same quarantine-then-promote model as the owner
@@ -265,6 +284,14 @@ class AutonomyConfig(GoalFlagsMixin):
         stall escalates to the owner (rides GOAL_BLOCKER_ESCALATION)."""
         return _int_env("GOAL_EMPTY_PIPELINE_ESCALATE_AFTER", 2)
 
+    # 044 T20 — how many lines ONE room service run may answer. Bounds a
+    # catch-up run that finds a long backlog: the hourly `GROUP_REPLY_CAP_PER_HOUR`
+    # is the room's overall ceiling, this is the per-RUN share of it, so a single
+    # tick cannot spend the whole room budget in one burst.
+    @staticmethod
+    def goal_group_max_replies_per_run() -> int:
+        return _int_env("GOAL_GROUP_MAX_REPLIES_PER_RUN", 3)
+
     # §7.5 — autonomous continuity bridge. Carry a recent-activity summary INTO a
     # goal/cron tick (opposite scoping to the chat digest) so autonomous runs stop
     # re-deriving "nothing new" every tick. Default OFF (additive context; verify
@@ -326,6 +353,14 @@ class AutonomyConfig(GoalFlagsMixin):
     @staticmethod
     def agent_status_tool() -> bool:
         return _bool_env("AGENT_STATUS_TOOL", _safe_autonomy_default("AGENT_STATUS_TOOL"))
+
+    # 2026-09-15: the agent's own face. Read-only over the frozen Mindprint
+    # identity, plus a copy INTO its own session workspace so the existing
+    # media rail can deliver it. Never mutating — `pfp keep` is permanent.
+    @staticmethod
+    def avatar_tool_enabled() -> bool:
+        return _bool_env("AVATAR_TOOL_ENABLED",
+                         _safe_autonomy_default("AVATAR_TOOL_ENABLED"))
 
     # 2026-08-28 status SSOT — per-turn <live-health> note for the agent (the
     # same health block the owner's /status renders), so "how are you doing?"

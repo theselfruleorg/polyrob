@@ -457,7 +457,9 @@ async def test_ethereum_reaches_the_guard():
     (The RPC-pin precondition is tx_guard's, not the door's — proven against
     the real guard in test_trade_real_guard.py.)"""
     captured = []
-    tool, _ = _tool(quote=_quote(), captured=captured)
+    # ethereum's own USDC needs its own price: since S3 an UNPRICEABLE grant to
+    # a spender the chain does not pin as a route is refused at the verb.
+    tool, _ = _tool(quote=_quote(), captured=captured, price={ETH_USDC: 1.0})
     res = await tool.approve_token(ApproveParams(
         chain="ethereum", token=ETH_USDC, spender=ROUTER, amount=1.0,
         max_spend_usd=1.0))

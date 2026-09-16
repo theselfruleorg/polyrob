@@ -1,4 +1,5 @@
 {
+  "_rendered_fields": "Rendered into the persona block: name, adjectives, bio, lore, topics, style.all/chat/speaking. Stored but NOT rendered: knowledge, messageExamples, postExamples, style.writing — see docs/guide/instances.md.",
   "name": "POLYROB",
   "modelProvider": "anthropic",
   "clients": [

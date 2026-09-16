@@ -92,6 +92,41 @@ def should_send_llm_outage_notice(key: str, now: Optional[float] = None) -> bool
         return False
 
 
+# key -> timestamp of the last raw owner-DM breadcrumb (044 I7). A SEPARATE
+# bucket from the outage notice's, deliberately: a breadcrumb must never consume
+# the window the real outage notice needs. Same key shape (the chat binding
+# session_key) and the same 30-minute window.
+_last_breadcrumb_at: Dict[str, float] = {}
+
+
+def should_send_owner_breadcrumb(key: str, now: Optional[float] = None) -> bool:
+    """044 I7: may this owner-DM error breadcrumb be sent now? (check-and-set)
+
+    Every FAILED room turn sent the owner a raw DM ("Something went wrong…"),
+    uncapped: a room in a crash loop, or one bot mentioning another, turned into
+    one DM per failure with no ceiling. The outage notice next door has had a
+    per-(surface+chat) cooldown since proposal 015 for exactly this reason; this
+    is that mechanism, one bucket over.
+
+    Deliberately NOT gated on ``LLM_OUTAGE_NOTICE``: that flag governs whether a
+    USER is told about an outage, while this governs how often the OWNER is told
+    his room broke. Never raises (fail-open into "don't send" — the safe
+    direction inside an error path).
+    """
+    try:
+        bucket = str(key or "") or "_global"
+        ts = time.time() if now is None else float(now)
+        last = _last_breadcrumb_at.get(bucket)
+        if last is not None and (ts - last) < LLM_OUTAGE_COOLDOWN_SEC:
+            return False
+        _last_breadcrumb_at[bucket] = ts
+        return True
+    except Exception:
+        logger.debug("owner breadcrumb gate failed (fail-open: no send)", exc_info=True)
+        return False
+
+
 def reset_llm_outage_notice_state() -> None:
-    """Test seam: clear the in-process cooldown map."""
+    """Test seam: clear the in-process cooldown maps."""
     _last_notice_at.clear()
+    _last_breadcrumb_at.clear()

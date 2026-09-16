@@ -62,9 +62,22 @@ def render_grant_card(action_name: str, params: Optional[Dict[str, Any]],
             tail = (f" — approving later still applies to the next identical "
                     f"attempt for {grant_ttl_hours:g}h (one-shot grant)")
         lines.append(f"⏳ Waiting up to {wait}s{tail}.")
-    lines.append(f"Approve: /approve {display_id} · Reject: /reject {display_id}")
-    lines.append("(also: /pending, the webview Review page, or "
-                 "polyrob owner promote/reject)")
+    # ⚠️ ONE TOKEN, not verb + argument. Telegram auto-links a `/word` of
+    # [A-Za-z0-9_] and sends the whole token on tap; it does NOT link a trailing
+    # argument. `/approve tap-abc` therefore rendered only `/approve` as
+    # tappable — the half that does nothing — and the owner had to copy the id by
+    # hand off a phone ("the whole command should be highlighted so i could tap
+    # on it", 2026-09-12). The underscore form is a single tap with no typing.
+    # The spaced form stays below for every other seat (CLI, webview, console),
+    # where it is the natural one.
+    one_tap = str(display_id).replace("-", "_")
+    lines.append(f"✅ Approve: /approve_{one_tap}")
+    lines.append(f"🚫 Reject:  /reject_{one_tap}")
+    # BOTH spaced verbs, not just approve: the CLI, webview and console seats use
+    # this line, and a reject path that is only reachable by guessing the shape
+    # is not a reject path.
+    lines.append(f"(or /approve {display_id} · /reject {display_id} · /pending "
+                 f"· the webview Review page · polyrob owner promote/reject)")
     return "\n".join(lines)
 
 

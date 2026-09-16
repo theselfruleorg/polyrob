@@ -74,12 +74,20 @@ _K_CREDIT_SENTINEL, _K_CRON_RUN, _K_GOAL_RUN = "credit_sentinel", "cron_run", "g
 _K_SELF_WAKE, _K_TOOL_TIMEOUT, _K_TOOL_DENIED = "self_wake", "tool_timeout", "tool_denied"
 _K_RUN_DEGRADED, _K_AUTONOMY_TICK = "run_outcome_degraded", "autonomy_tick"
 _K_SOCIAL_WRITE, _K_WALLET_SPEND = "social_write", "wallet_spend"
+_K_AUTONOMY_STARTED = "autonomy_started"
+_K_SURFACE_POLL_ERROR = "surface_poll_error"
 #: 031: outcomes that mean "the starter honoured the pause" (not a violation)
 _PAUSE_HONOURED_OUTCOMES = frozenset({"paused", "skipped", "held", "dropped"})
 _SUPPRESSED_PREFIX = "[suppressed by daily proactive-message cap"
 
+#: ⚠️ The aggregation gate, not just a display order. `_assemble` iterates THIS
+#: tuple, so a section missing from it contributes NO health item and reports no
+#: unavailability — it is present in `sections` and silent everywhere that
+#: matters. A new section belongs here in the same commit that adds it.
 SECTION_ORDER = ("session", "providers", "work", "approvals", "loops",
-                 "delivery", "posture", "apps", "money")
+                 "delivery", "posture", "security", "identity", "apps",
+                 "groups", "room_actions", "creations", "collectibles", "liquidity",
+                 "wallet", "money")
 
 
 @dataclass
@@ -170,6 +178,84 @@ def _rows(db_path: str, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
     return [dict(r) for r in out]
 
 
+def _pid_alive(pid: int) -> bool:
+    """Is *pid* a live process on THIS host? Fail-OPEN — unknown means alive.
+
+    ``os.kill(pid, 0)`` sends no signal; it asks the kernel whether the process
+    exists. ``ProcessLookupError`` is the ONLY answer that means gone:
+    ``PermissionError`` means it exists under another uid (prod runs several
+    units), and anything else is a platform we cannot ask. Both keep the row,
+    because dropping one narrows the set of loops anybody checks, and narrowing
+    on a guess is exactly the silent failure this read exists to prevent.
+    """
+    try:
+        pid = int(pid)
+    except Exception:
+        return True
+    if pid <= 0:
+        # `os.kill(0, 0)` addresses the whole process GROUP, and a negative pid
+        # a group by id. Neither is a process, so neither is probed.
+        return True
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True
+
+
+def _live_started_loops(rows: List[Dict[str, Any]]) -> tuple[Optional[List[str]], int]:
+    """``(loops, unreadable_rows)`` — the loops every LIVE process started (043 T3).
+
+    *rows* are ``autonomy_started`` rows, NEWEST FIRST. One row is one process
+    start, so the newest row is simply the last process to boot — which on a
+    local-mode box is routinely a short-lived `rob` REPL, not the service. Take
+    the newest row PER PID, drop a pid the kernel says is gone, and union what
+    survives. A row with no usable pid is legacy (written before the field
+    existed) and is always kept: it cannot be attributed, and an unattributable
+    row is not evidence that a loop stopped.
+
+    The loops are ``None`` when there is no row at all, which the caller renders
+    as the legacy gate-derived fallback. A row whose ``attrs`` cannot be parsed
+    is COUNTED and returned, never merely skipped: it means some process's loops
+    are not being checked, and that is the exact silent narrowing this read
+    exists to end.
+
+    ⚠️ Residual, accepted: pids are recycled and are meaningless across hosts
+    (an ops read of a COPIED db). Recycling can only keep a stale row, which
+    WIDENS the expected set — at worst an extra loop is reported silent, never
+    a live loop left unchecked. A copied db can narrow; that read is rare and
+    the health block still says what was checked.
+    """
+    newest_per_pid: Dict[Any, List[str]] = {}
+    unreadable = 0
+    for r in rows or []:
+        try:
+            attrs = json.loads(r.get("attrs") or "{}") or {}
+            if not isinstance(attrs, dict):
+                raise ValueError("attrs is not an object")
+        except Exception:
+            # Counted, never merely skipped: a row we cannot read is a process
+            # whose loops nobody is checking, and the caller says so out loud.
+            unreadable += 1
+            continue
+        pid = attrs.get("pid")
+        key = pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else None
+        if key in newest_per_pid:
+            continue                      # rows are newest-first; first wins
+        newest_per_pid[key] = [str(x) for x in (attrs.get("loops") or [])]
+    if not newest_per_pid:
+        return (None, unreadable)
+    out: set = set()
+    for key, loops in newest_per_pid.items():
+        if key is None or _pid_alive(key):
+            out.update(loops)
+    return (sorted(out), unreadable)
+
+
 def _telemetry_db_path(data_dir: str) -> str:
     override = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
     if override:
@@ -184,12 +270,17 @@ def _telemetry_db_path(data_dir: str) -> str:
 def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
     """One bounded read of the durable event log for the window; the other
     sections aggregate over ``data['rows']`` (memory_* kinds excluded — they
-    are the bulk of the log and carry no health signal)."""
+    are the bulk of the log and carry no health signal; 045: inbound_routed
+    and access_denied excluded too — they are the highest-volume perimeter
+    kinds under group load and would crowd out every other kind's rows in
+    this 20000-row window. The security section counts them separately via
+    core.security_digest's own GROUP BY query, not this fetch)."""
     path = _telemetry_db_path(data_dir)
     rows = _rows(
         path,
         "SELECT ts, kind, user_id, source, attrs FROM telemetry_events "
-        "WHERE ts >= ? AND kind NOT IN ('memory_write','memory_recall') "
+        "WHERE ts >= ? AND kind NOT IN "
+        "('memory_write','memory_recall','inbound_routed','access_denied') "
         "AND (user_id = ? OR user_id = '') ORDER BY ts DESC LIMIT 20000",
         (float(since_ts), str(user_id)))
     for r in rows:
@@ -450,7 +541,11 @@ def _approvals_section(user_id: str, data_dir: str, goals_db: str) -> Section:
         sec.health.append(HealthItem(
             key="pending_approvals", severity=SEVERITY_CRIT,
             text=f"{len(items)} decision(s) waiting on you ({', '.join(kinds)})",
-            remedy="/pending · /approve <id> · /reject <id>"))
+            # 2026-09-15: `/approve <id>` made the reader copy an id off a
+            # phone — a chat client links the verb and not its argument. The
+            # tappable token per item lives in `/pending`; the whole queue is
+            # one token of its own.
+            remedy="/pending · /approve_all · /reject_all"))
     return sec
 
 
@@ -541,15 +636,92 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
         sec.data["heartbeats"] = latest
         sec.data["live_actors"]["loops_alive"] = {
             loop: bool(hb.get("alive")) for loop, hb in latest.items()}
-        expected = []
+        gate_expected = []
         try:
             from core.autonomy_runtime import _cron_enabled  # the runtime's own gate
             if _cron_enabled():
-                expected.append("cron")
+                gate_expected.append("cron")
         except Exception as e:
             sec.lines.append(f"cron gate unreadable ({type(e).__name__}) — cron liveness not checked")
         if AutonomyConfig.goals_enabled():
-            expected.append("goals")
+            gate_expected.append("goals")
+        # 043 A8/A42: the runtime records which loops it actually started
+        # (`autonomy_started`) — up to 8 (cron/goals/curator/sandbox_reap/
+        # surface_gc/quiet_release/settlement/bridges), not just the two this
+        # section can gate-derive on its own. Union with the gate-derived pair
+        # (never narrower than the legacy check) and fall back to gate-derived
+        # alone when no such row exists yet (an old prod box that predates this
+        # record, or a process that hasn't started).
+        #
+        # ⚠️ 043 T3: read the recent rows and union the LIVE PROCESSES, never
+        # "whoever wrote last". Each row is one process start, so on a box
+        # where the owner opens a `rob` REPL beside the service — what local
+        # mode is FOR — the REPL's newer row named its own loops and the
+        # service's curator/settlement/bridge checks silently stopped
+        # happening. See `_live_started_loops`.
+        #
+        # ⚠️ Read UNBOUNDED here, NOT via `_tele_rows(tele, ...)` — `tele` is
+        # the 24h-windowed read (`_read_telemetry`, `since_ts=now-window`) and
+        # `autonomy_started` is written exactly ONCE per process start, so
+        # after 24h of uptime (prod's normal state) it falls out of the
+        # window and `expected` would silently decay back to cron/goals with
+        # no signal anything narrowed. A raw newest-row query (mirrors
+        # `_creations_section`) has no such horizon. An unreadable store keeps
+        # today's fallback AND raises a health item — the narrowing must
+        # never be silent.
+        #
+        # ⚠️ The window is ONE ROW PER PROCESS, never the newest N rows and
+        # never a time slice — both of those lose a LIVE process's row:
+        #   * a count window (this was `LIMIT 20`) is evicted by process
+        #     STARTS, so a couple of dozen short `rob` REPL runs push the
+        #     service's own row out and `expected` narrows back to
+        #     gate-derived with no signal — a quieter copy of the very defect
+        #     this read exists to fix;
+        #   * a time floor is worse, and is exactly the horizon the paragraph
+        #     above forbids: one row is written per process start, so a
+        #     service up longer than the window (prod's normal state) falls
+        #     out of it.
+        # Collapsing by pid is the only bound that cannot evict a living
+        # process: a thousand REPL runs contribute a thousand groups, and the
+        # months-old service row is still its own group's newest.
+        #
+        # The GROUP BY collapses ONLY rows that carry a pid. Everything else —
+        # a legacy pid-less row, unparseable text, a JSON array, NULL — is its
+        # own group and reaches Python untouched, so no row `_live_started_loops`
+        # would keep is lost in SQL and the unreadable COUNT stays exact. The
+        # grouping RULE lives in Python (one implementation); this is a cost
+        # pre-filter that agrees with it, not a second copy of it. `LIMIT` is
+        # a backstop on distinct PROCESSES, not on rows.
+        started_loops = None
+        try:
+            db = _telemetry_db_path(data_dir)
+            started_rows = _rows(
+                db, "SELECT MAX(ts) AS ts, attrs FROM telemetry_events "
+                    "WHERE kind=? GROUP BY CASE WHEN json_valid(attrs) "
+                    "AND json_type(attrs)='object' "
+                    "AND json_extract(attrs,'$.pid') IS NOT NULL "
+                    "THEN 'pid:' || json_extract(attrs,'$.pid') "
+                    "ELSE 'row:' || ts END "
+                    "ORDER BY ts DESC LIMIT 500", (_K_AUTONOMY_STARTED,))
+            started_loops, unreadable_rows = _live_started_loops(started_rows)
+            if unreadable_rows:
+                sec.health.append(HealthItem(
+                    key="loops_expected_partial", severity=SEVERITY_WARN,
+                    text=f"{unreadable_rows} autonomy_started row(s) could not be "
+                         f"parsed — whatever loops those processes started are NOT "
+                         f"being checked for liveness",
+                    remedy="inspect telemetry_events.db for corrupt autonomy_started attrs"))
+        except Exception as e:
+            sec.health.append(HealthItem(
+                key="loops_expected_unreadable", severity=SEVERITY_WARN,
+                text=f"could not read the autonomy_started record ({type(e).__name__}) — "
+                     f"loop liveness is narrowed to cron/goals only, not the full set this "
+                     f"process actually started",
+                remedy="check telemetry_events.db exists and is readable"))
+        if started_loops is not None:
+            expected = sorted(set(started_loops) | set(gate_expected))
+        else:
+            expected = gate_expected
         from core.env import int_env
         stale_after = max(900, 2 * int_env("AUTONOMY_HEARTBEAT_INTERVAL_SEC", 300))
         hb_bits = []
@@ -558,7 +730,7 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
             if hb is None:
                 hb_bits.append(f"{loop}: no heartbeat in 24h")
                 sec.health.append(HealthItem(
-                    key=f"loop_heartbeat:{loop}", severity=SEVERITY_WARN,
+                    key=f"loop_silent:{loop}", severity=SEVERITY_WARN,
                     text=f"{loop} loop: no liveness heartbeat recorded in 24h (dead, or "
                          f"this process does not emit heartbeats)",
                     remedy="check the service log; restart if the loop task exited"))
@@ -566,7 +738,7 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
                 hb_bits.append(f"{loop}: last heartbeat {_age(hb['ts'], now)} ago"
                                + ("" if hb.get("alive") else " (task exited)"))
                 sec.health.append(HealthItem(
-                    key=f"loop_heartbeat:{loop}", severity=SEVERITY_WARN,
+                    key=f"loop_silent:{loop}", severity=SEVERITY_WARN,
                     text=f"{loop} loop looks DEAD — last heartbeat {_age(hb['ts'], now)} ago"
                          + ("" if hb.get("alive") else " (task exited)"),
                     remedy="restart the service (`systemctl restart polyrob`)"))
@@ -577,6 +749,83 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
     else:
         sec.lines.append(f"24h run/heartbeat counts unavailable ({tele.reason})")
     return sec
+
+
+#: Poll faults in 24h below this are ordinary long-poll turbulence, not news.
+_POLL_ERROR_WARN_AT = 6
+
+
+def _surface_poll_health(tele: Section) -> List[HealthItem]:
+    """Inbound TRANSPORT faults on the polling surfaces, in the window.
+
+    2026-09-15 prod review, C11: 76 `telegram get_updates failed` in 7 days —
+    34 request timeouts, 28 connection resets, 14 Bad Gateway. The poller
+    recovers each time, and that is precisely why no seat ever said so: "the
+    agent went quiet for a while" had no reading anywhere. Recovery is not the
+    same as health.
+
+    A WARN with a count, not an outage alarm — below ``_POLL_ERROR_WARN_AT``
+    this is ordinary turbulence and says nothing.
+    """
+    if not tele.available:
+        return []
+    rows = _tele_rows(tele, _K_SURFACE_POLL_ERROR)
+    if len(rows) < _POLL_ERROR_WARN_AT:
+        return []
+    by_surface: Dict[str, int] = {}
+    for r in rows:
+        sid = r.get("source") or "?"
+        by_surface[sid] = by_surface.get(sid, 0) + 1
+    where = ", ".join(f"{k}={v}" for k, v in
+                      sorted(by_surface.items(), key=lambda kv: -kv[1]))
+    return [HealthItem(
+        key="surface_poll_errors", severity=SEVERITY_WARN,
+        text=f"{len(rows)} inbound poll failure(s) in 24h ({where}) — the agent "
+             f"was intermittently unreachable",
+        remedy="`polyrob doctor` and the service log; usually upstream turbulence")]
+
+
+def _digest_health(user_id: str, data_dir: str) -> List[HealthItem]:
+    """Is the owner digest ENABLED but has no producer scheduled?
+
+    2026-09-15 prod review, C4. The delivery rail records every suppressed
+    owner message as an ``owner_notice`` on the promise that it is "rolled into
+    the digest". On prod ``OWNER_DIGEST_ENABLED=true`` and the ONE cron job
+    carrying ``payload.digest`` was ``cancelled`` — so 889 suppressed messages
+    had no roll-up channel and `/missed` (last 5) was the whole recovery
+    surface. An enabled flag with no producer reports healthy and runs nothing.
+
+    An unreadable cron store is reported as UNKNOWN, never as scheduled: "I
+    could not look" is a different fact from "it is fine".
+    """
+    from core.runtime_paths import cron_db_path
+    from core.config_policy import AutonomyConfig
+    try:
+        if not AutonomyConfig.owner_digest_enabled():
+            return []
+    except Exception:
+        return []
+    try:
+        jobs = _rows(cron_db_path(data_dir),
+                     "SELECT status, enabled, payload FROM cron_jobs WHERE user_id=?",
+                     (user_id,))
+    except Exception as e:
+        return [HealthItem(
+            key="digest_unknown", severity=SEVERITY_WARN,
+            text=f"owner digest is enabled but the cron store is unreadable "
+                 f"({type(e).__name__}) — cannot tell whether it is scheduled",
+            remedy="`polyrob doctor` for the store path, then `polyrob cron list`")]
+    for row in jobs:
+        if not _payload(row).get("digest"):
+            continue
+        if str(row.get("status") or "") in ("cancelled", "done") or not row.get("enabled"):
+            continue
+        return []
+    return [HealthItem(
+        key="digest_unscheduled", severity=SEVERITY_WARN,
+        text="owner digest is enabled but no digest job is scheduled — suppressed "
+             "messages have no roll-up channel",
+        remedy="`polyrob cron digest 'every day 08:00'`")]
 
 
 def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any,
@@ -607,6 +856,7 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
                      "reserved_slots": _reserved_slots()})
     sec.lines.append(
         f"owner messages 24h: {consumed}/{cap} cap used, {capped} suppressed, "
+        f"{outcomes.get('fallback', 0)} fallback, {outcomes.get('paused', 0)} paused, "
         f"{outcomes.get('deduped', 0)} deduped, {outcomes.get('rate_limited', 0)} rate-limited, "
         f"{outcomes.get('quiet_held', 0)} held (quiet hours)")
     if capped:
@@ -616,6 +866,8 @@ def _delivery_section(user_id: str, data_dir: str, tele: Section, container: Any
             text=f"{capped} owner message(s) suppressed by the daily cap in 24h "
                  f"({consumed}/{cap} used; by source: {top})",
             remedy="/missed to read them; raise the cap with `/config set delivery.daily_cap N`"))
+    sec.health.extend(_digest_health(user_id, data_dir))
+    sec.health.extend(_surface_poll_health(tele))
     timeouts = len(_tele_rows(tele, _K_TOOL_TIMEOUT))
     degraded = len(_tele_rows(tele, _K_RUN_DEGRADED))
     denied = len(_tele_rows(tele, _K_TOOL_DENIED))
@@ -686,10 +938,315 @@ def _apps_section(user_id: str, data_dir: str) -> Section:
     return sec
 
 
+def _room_actions_section(user_id: str, data_dir: str) -> Section:
+    """046: paid room actions — what is awaiting payment, and what is OWED.
+
+    ⚠️ A CREDIT is money we HOLD against a service that was never delivered, so
+    it leads as CRIT. Read-only and existence-guarded: an absent store is "no
+    paid actions", never CREATED by a status read.
+    """
+    sec = Section(name="room_actions")
+    db = os.path.join(data_dir, "room_actions.db")
+    if not os.path.exists(db):
+        sec.lines.append("no paid actions")
+        sec.data.update(pending=0, credits_owed=0, applied=0, credits=[])
+        return sec
+    rows = _rows(db, "SELECT offer_id, surface, chat_id, verb, price_usd, "
+                     "status, reason FROM room_action_offers "
+                     "ORDER BY created_at DESC LIMIT 200")
+    by = {}
+    for r in rows:
+        by[r["status"]] = by.get(r["status"], 0) + 1
+    credits = [r for r in rows if r["status"] == "credited"]
+    sec.data.update(
+        pending=by.get("pending", 0), paid=by.get("paid", 0),
+        applied=by.get("applied", 0), credits_owed=len(credits),
+        credits=[{"offer_id": r["offer_id"], "verb": r["verb"],
+                  "chat_id": r["chat_id"], "price_usd": r["price_usd"],
+                  "reason": r["reason"]} for r in credits[:10]])
+    if not rows:
+        sec.lines.append("no paid actions")
+        return sec
+    sec.lines.append(", ".join(f"{n} {st}" for st, n in sorted(by.items())))
+    # A PAID offer whose effect has not landed is an obligation in flight, not a
+    # failure yet — named, but not escalated.
+    in_flight = by.get("paid", 0)
+    if in_flight:
+        sec.lines.append(f"{in_flight} paid action(s) awaiting the effect")
+    if credits:
+        owed = sum(float(r.get("price_usd") or 0) for r in credits)
+        sec.health.append(HealthItem(
+            key="room_action_credits_owed", severity=SEVERITY_CRIT,
+            text=(f"{len(credits)} paid room action(s) took money and could not "
+                  f"be applied (${owed:.2f}): "
+                  + "; ".join(f"{r['offer_id']} ({str(r.get('reason') or '')[:50]})"
+                              for r in credits[:3])),
+            remedy="/paid offers · polyrob owner paid list"))
+    return sec
+
+
+def _groups_section(user_id: str, data_dir: str) -> Section:
+    """044 T18: rooms this instance is present in — allowlist + mode + traffic.
+
+    Instance-level, not tenant-scoped: ``group_allowlist.db`` has no
+    ``user_id`` column (one bot presence per chat, not per-tenant — a room's
+    overlay lives under the OWNER tenant, read via ``chat_policy.load``).
+    Read-only, existence-guarded: an absent allowlist is "no rooms", never
+    created by this read. ``surfaces.db`` (the room ledger + traffic counters)
+    is guarded the SAME way (044 T18 fix round 1, Important 2) — constructing
+    ``GroupLedger``/``RoomCaps`` runs their DDL, which would create the file on
+    a plain status read; when it is absent every room reports
+    ``ledger_rows=0``/``replies_today=0`` with ``note="surfaces.db absent"``
+    instead.
+    """
+    sec = Section(name="groups")
+    allow_db = os.path.join(data_dir, "group_allowlist.db")
+    if not os.path.exists(allow_db):
+        sec.lines.append("no rooms")
+        sec.data["rooms"] = []
+        return sec
+    from core.surfaces.chat_policy import load_for_chat
+    from core.surfaces.group_allowlist import GroupAllowlist
+    rows = GroupAllowlist(allow_db).list_all()
+    active = [r for r in rows if r.get("status") == "active"]
+    # 044 T21: a room the bot was KICKED from is `left`, not `active`. Named
+    # here, or a room that stopped answering reads as a room that never existed.
+    left = [{"surface": r["surface"], "chat_id": r["chat_id"]}
+            for r in rows if r.get("status") == "left"]
+    sec.data["left_rooms"] = left
+    left_line = (f"{len(left)} room(s) LEFT (bot removed): "
+                 + ", ".join(f"{r['surface']}:{r['chat_id']}" for r in left)) if left else ""
+    if not active:
+        sec.lines.append("no rooms")
+        if left_line:
+            sec.lines.append(left_line)
+        sec.data["rooms"] = []
+        return sec
+    surfaces_db = os.path.join(data_dir, "surfaces.db")
+    ledger = caps = None
+    if os.path.exists(surfaces_db):
+        from core.surfaces.group_ledger import GroupLedger
+        from core.surfaces.room_caps import RoomCaps
+        ledger = GroupLedger(surfaces_db)
+        caps = RoomCaps(surfaces_db)
+    now = time.time()
+    out_rows = []
+    for r in active:
+        surface, chat_id = r["surface"], r["chat_id"]
+        pol = load_for_chat(data_dir, surface, chat_id)
+        if ledger is not None and caps is not None:
+            last = ledger.tail(surface, chat_id, limit=1)
+            replies_today = caps.replies_since(surface, chat_id, now - 86400)
+            ledger_rows = ledger.count(surface, chat_id)
+            last_write = last[0].ts if last else None
+            note = ""
+        else:
+            replies_today = 0
+            ledger_rows = 0
+            last_write = None
+            note = "surfaces.db absent"
+        out_rows.append({
+            "surface": surface, "chat_id": chat_id,
+            "name": pol.name or r.get("note") or chat_id,
+            "mode": pol.mode,
+            "replies_today": replies_today,
+            "ledger_rows": ledger_rows,
+            "last_write": last_write,
+            "note": note,
+        })
+    sec.data["rooms"] = out_rows
+    sec.lines.append(f"{len(out_rows)} room(s)")
+    for row in out_rows:
+        line = (f"{row['surface']}:{row['chat_id']} \"{row['name']}\" mode={row['mode']} "
+                f"replies_today={row['replies_today']} ledger={row['ledger_rows']} "
+                f"last={_hhmm(row['last_write'])}")
+        if row["note"]:
+            line += f" ({row['note']})"
+        sec.lines.append(line)
+    if left_line:
+        sec.lines.append(left_line)
+    return sec
+
+
+def _wallet_section(data_dir: Optional[str]) -> Section:
+    """What the agent is holding, from the cache — NEVER a network read (039 D).
+
+    Deliberately separate from `money`. That section is CASH FLOW: income minus
+    spend, which cannot see a held bag and is not a balance. This one is the bag.
+    Summing or conflating them is how a treasury report describes a position it
+    does not have.
+
+    Cache-only is what keeps `include_balances=False` honest and what lets the
+    per-turn `<live-health>` note carry a wallet line without a turn ever waiting
+    on four JSON-RPC round trips.
+    """
+    from core.env import bool_env
+    from core.wallet import balance_cache
+    if not bool_env("AGENT_WALLET_ENABLED", False):
+        # A deployment with no wallet has nothing to report, and reporting that as
+        # `unavailable` would mark every status PARTIAL forever over a feature
+        # nobody turned on. A status must degrade for real conditions only.
+        return Section(name="wallet", state=STATE_OK,
+                       lines=["wallet: not enabled (AGENT_WALLET_ENABLED)"],
+                       data={"enabled": False})
+    snap = balance_cache.read(data_dir)
+    if snap is None:
+        # The wallet IS on and no snapshot exists, so the reader has not run. That
+        # is a real gap: the agent would answer a balance question from context.
+        return Section(name="wallet", state=STATE_UNAVAILABLE,
+                       reason="no balance snapshot yet")
+    lines = balance_cache.render_lines(snap)
+    totals = balance_cache.total_native_by_symbol(snap)
+    unknown = [c.chain for c in snap.chains if c.native is None]
+    sec = Section(name="wallet",
+                  state=STATE_DEGRADED if (unknown or snap.stale) else STATE_OK,
+                  lines=lines,
+                  data={"address": snap.address, "age_sec": snap.age_sec,
+                        "stale": snap.stale, "totals": totals,
+                        "unknown_chains": unknown})
+    if snap.stale:
+        sec.reason = f"snapshot is {int(snap.age_sec // 60)}m old"
+        sec.health.append(HealthItem(
+            key="wallet_stale",
+            text=f"wallet balances are {int(snap.age_sec // 60)}m old — do not "
+                 f"quote them as current",
+            remedy="the balance reader runs on the autonomy runtime; check it is up"))
+    if unknown:
+        # A chain that could not be read is NOT a chain with nothing on it, and the
+        # difference is the whole point of carrying `None` through.
+        sec.health.append(HealthItem(
+            key="wallet_unreadable",
+            text=f"balance unreadable on {', '.join(unknown)} — treat as UNKNOWN, "
+                 f"never as zero",
+            remedy="check the pinned RPC for those chains"))
+    return sec
+
+
 def _posture_section() -> Section:
     from core.config_policy.posture_card import build_posture_card, render_posture_card
     rows = build_posture_card()
     return Section(name="posture", lines=render_posture_card(rows), data={"rows": rows})
+
+
+def _security_section(user_id: str, data_dir: str, now: float,
+                      window_sec: int) -> Section:
+    """045: the perimeter, the refusals and the threat flags (lanes 1-3).
+
+    Counted by core/security_digest.py — this section only shapes the result and
+    raises health items. An unreadable store propagates out of here so _guarded
+    renders `unavailable(<reason>)`: 'no store' must never look like 'zero
+    denials'.
+    """
+    from core.security_digest import build_security_rollup
+    r = build_security_rollup(user_id, data_dir=data_dir,
+                              since_ts=now - window_sec, window_sec=window_sec)
+    sec = Section(name="security")
+    sec.data.update({
+        "inbound": r.inbound, "denied": r.denied, "refused": r.refused,
+        "flagged": r.flagged, "rate_limited": r.rate_limited,
+        "top_senders": r.top_senders,
+        "top_denial_reasons": r.top_denial_reasons,
+        "top_refusal_reasons": r.top_refusal_reasons,
+    })
+    sec.lines.append(f"{r.inbound} inbound / {r.denied} denied · "
+                     f"{r.refused} refused · {r.flagged} flagged")
+    if r.flagged:
+        sec.health.append(HealthItem(
+            key="injection_flagged", severity=SEVERITY_WARN,
+            text=f"{r.flagged} threat-scan flag(s) in the window",
+            remedy="review injection_flagged rows in telemetry_events"))
+    return sec
+
+
+def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
+    """WHO the agent is: its instance and the frozen Mindprint face + voice.
+
+    The avatar system has been complete since 2026-07-19 and reached no status
+    surface at all, and ``core.instance.voice_signature()`` had zero callers
+    outside ``polyrob pfp say``. On 2026-09-15 prod had no avatar and no seat
+    said so.
+
+    ⚠️ An absent avatar is ``ok``, not ``degraded``, and raises NO health item.
+    Setup is optional; a permanent WARN for an optional step is the noise that
+    teaches an owner to skip the health block.
+
+    ⚠️ Read-only, and it never CREATES the identity directory — a status surface
+    that writes is how an empty store becomes a real one.
+    """
+    from core.instance import load_erc8004_record, load_pfp_meta, pfp_dir
+
+    sec = Section(name="identity")
+    if not data_dir:
+        raise ValueError("no data dir to read the instance identity from")
+    sec.data["instance_id"] = instance_id
+
+    # 046: the ERC-8004 on-chain identity, when one was actually registered.
+    # Reported BEFORE the avatar branches below return, so an instance with no
+    # avatar still shows its on-chain identity and vice versa.
+    record = load_erc8004_record(data_dir, instance_id)
+    sec.data["erc8004"] = record
+    if record:
+        sec.lines.append(
+            f"erc-8004: agentId {record.get('agent_id')} on "
+            f"{record.get('chain')} ({record.get('registry')})")
+    else:
+        # Optional, like the avatar — an absent identity is a FACT the owner
+        # should be able to read, not an empty space, and it raises no health
+        # item because a permanent WARN for an optional step is the noise that
+        # teaches an owner to skip the health block.
+        sec.lines.append("erc-8004: not registered (optional)")
+
+    d = pfp_dir(data_dir, instance_id)
+    png = d / "pfp.png"
+    if not png.is_file():
+        sec.data["avatar"] = "none"
+        sec.lines.append(f"{instance_id} — avatar not set up "
+                         f"(optional: `polyrob pfp generate`, then `keep`)")
+        return sec
+
+    meta = load_pfp_meta(data_dir, instance_id)
+    if not isinstance(meta, dict):
+        # The face exists but its record does not parse. Reporting "kept" would
+        # claim traits we cannot read; reporting "none" would deny a file that
+        # is right there. Both are confident lies, so say the true third thing.
+        sec.data["avatar"] = "unreadable"
+        sec.lines.append(f"{instance_id} — avatar present but its record is "
+                         f"unreadable ({d / 'pfp.json'})")
+        return sec
+
+    kept = bool(meta.get("locked", True))
+    traits = meta.get("traits") if isinstance(meta.get("traits"), dict) else {}
+    voice = meta.get("voice") if isinstance(meta.get("voice"), dict) else {}
+    sec.data.update({
+        "avatar": "kept" if kept else "draft",
+        "seed_hex": meta.get("seed_hex"),
+        "tier": traits.get("tier"),
+        "traits": traits,
+        "voice": voice,
+        "generator": meta.get("generator"),
+        "rendered_by": meta.get("rendered_by"),
+        "path": str(png),
+    })
+
+    head = f"{instance_id} — avatar {'kept' if kept else 'DRAFT (not kept yet)'}"
+    if meta.get("seed_hex"):
+        head += f", seed {meta['seed_hex']}"
+    if traits.get("tier"):
+        head += f", {traits['tier']}"
+    sec.lines.append(head)
+    shown = [f"{k} {traits[k]}" for k in ("head", "eyes", "mouth", "antenna", "aura")
+             if traits.get(k)]
+    if shown:
+        sec.lines.append("face: " + ", ".join(shown))
+    if voice:
+        sec.lines.append(
+            "voice: pitch {p} · rate {r} · timbre {t}".format(
+                p=voice.get("pitch", "?"), r=voice.get("rate", "?"),
+                t=voice.get("timbre", "?")))
+    if not kept:
+        sec.lines.append("re-roll with `polyrob pfp randomize`, accept with "
+                         "`polyrob pfp keep` (permanent)")
+    return sec
 
 
 def _positions_line(data_dir: Optional[str]) -> str:
@@ -770,6 +1327,8 @@ def _assemble(user_id: str, now: float, window_sec: int, sections: Dict[str, Sec
 
 def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
                 session_id: Optional[str], container: Any, window_hours: int):
+    from core.instance import resolve_instance_id
+    from core.status_liquidity import liquidity_section
     from core.runtime_paths import cron_db_path, data_dir_or_home, goals_db_path
     data_dir = data_dir_or_home(data_dir)
     now = time.time()
@@ -787,20 +1346,219 @@ def _build_core(user_id: str, *, data_dir: Optional[str], task_agent: Any,
         "loops": _guarded("loops", _loops_section, uid, cron_db, tele, now, goals_db, data_dir),
         "delivery": _guarded("delivery", _delivery_section, uid, data_dir, tele, container, now),
         "posture": _guarded("posture", _posture_section),
+        # ⚠️ Insertion order IS the render order — `test_every_section_is_always_present`
+        # asserts `tuple(snap.sections) == SECTION_ORDER`. Keep the two in step.
+        "security": _guarded("security", _security_section, uid, data_dir, now, window_sec),
+        "identity": _guarded("identity", _identity_section,
+                             resolve_instance_id(), data_dir),
         "apps": _guarded("apps", _apps_section, uid, data_dir),
+        "groups": _guarded("groups", _groups_section, uid, data_dir),
+        "room_actions": _guarded("room_actions", _room_actions_section, uid,
+                                 data_dir),
+        "creations": _guarded("creations", _creations_section, uid, data_dir),
+        "collectibles": _guarded("collectibles", _collectibles_section, uid, data_dir),
+        "liquidity": _guarded("liquidity", liquidity_section, uid, data_dir),
+        "wallet": _guarded("wallet", _wallet_section, data_dir),
     }
     if not uid:
-        for name in ("work", "approvals", "loops", "delivery", "apps"):
+        for name in ("work", "approvals", "loops", "delivery", "apps",
+                     "creations", "collectibles", "liquidity", "security"):
             sections[name] = Section(name=name, state=STATE_UNAVAILABLE,
                                      reason="no tenant (empty user_id)")
     return uid, now, window_sec, sections
+
+
+
+#: The verbs that CREATE something the owner will later be asked about. Derived
+#: from the spend ledger rather than a second store: every one of them already
+#: calls `gate.record(counterparty=<the address it made>, result_ref=<the tx>)`,
+#: so the record exists and nothing new has to be written to read it back.
+CREATION_VERBS = ("deploy_token", "deploy_contract", "solana_deploy_token",
+                  "launchpad_launch")
+
+
+def _creations_section(user_id: str, data_dir: str) -> Section:
+    """What this agent has CREATED on-chain (042b).
+
+    The gap this closes is the one the 2026-08-25 ledger incident is the famous
+    instance of: the agent did something durable and no surface could show it
+    back. A token it deployed last week existed only in a transaction hash in a
+    chat message.
+
+    Read-only over `telemetry_events`, tenant-scoped, newest first. An absent or
+    unreadable store renders its reason — never an empty list, because "I have
+    created nothing" and "I cannot see what I created" are different facts and
+    only one of them is reassuring.
+    """
+    from core.wallet.chains import explorer_url
+
+    sec = Section(name="creations")
+    db = _telemetry_db_path(data_dir)
+    rows = _rows(
+        db,
+        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
+        "AND user_id=? ORDER BY ts DESC LIMIT 400",
+        (user_id,))
+
+    made = []
+    unreadable = 0
+    for row in rows:
+        try:
+            attrs = json.loads(row.get("attrs") or "{}")
+        except Exception:
+            # NOT silent: a row we cannot parse might be a creation, so it is
+            # counted and surfaced. A status view that quietly drops rows is how
+            # "I have created nothing" comes to mean "I could not tell".
+            unreadable += 1
+            continue
+        action = str(attrs.get("action") or "")
+        if action not in CREATION_VERBS:
+            continue
+        chain = attrs.get("chain")
+        address = attrs.get("counterparty")
+        url = None
+        if chain and address:
+            kind = "token" if action in (
+                "deploy_token", "solana_deploy_token", "launchpad_launch") else "address"
+            url = explorer_url(chain, kind, str(address))
+        made.append({
+            "action": action,
+            "address": address,
+            "chain": chain,
+            "tx": attrs.get("result_ref"),
+            "usd": attrs.get("amount_usd"),
+            "ts": row.get("ts"),
+            "url": url,
+        })
+
+    sec.data["creations"] = made
+    sec.data["unreadable_rows"] = unreadable
+    if unreadable:
+        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — this "
+                         f"list may be incomplete")
+        sec.health.append(HealthItem(
+            key="creations_unreadable", severity=SEVERITY_WARN,
+            text=(f"{unreadable} wallet_spend row(s) did not parse, so what I "
+                  f"have created cannot be listed in full"),
+            remedy="check telemetry_events for malformed attrs"))
+    if not made:
+        sec.lines.append("nothing deployed or launched"
+                         + (" (that could be read)" if unreadable else ""))
+        return sec
+
+    by = {}
+    for item in made:
+        by[item["action"]] = by.get(item["action"], 0) + 1
+    sec.lines.append(", ".join(f"{n} {a}" for a, n in sorted(by.items())))
+    for item in made[:5]:
+        action = item["action"]
+        addr = item.get("address") or "address unknown"
+        chain = item.get("chain")
+        ts_part = f" ({_hhmm(item['ts'])})" if item.get("ts") else ""
+        url = item.get("url")
+        url_part = f" — {url}" if url else ""
+        if chain:
+            sec.lines.append(f"{action}: {addr} on {chain}{ts_part}{url_part}")
+        else:
+            sec.lines.append(f"{action}: {addr}{ts_part}{url_part}")
+    if len(made) > 5:
+        sec.lines.append(f"…and {len(made) - 5} more")
+    return sec
+
+
+#: NFT move verbs, by their `gate.record(action=...)` name. Derived from the
+#: spend ledger for the same reason CREATION_VERBS is: the record already
+#: exists, so nothing new has to be written to read it back.
+NFT_MOVE_VERBS = ("nft_transfer",)
+
+
+def _collectibles_section(user_id: str, data_dir: str,
+                          enumerate_fn=None) -> Section:
+    """Non-fungibles: what the chain says is HELD, and what the guard MOVED.
+
+    ⚠️ These are two different questions and the section never merges them. A
+    `wallet_spend` row exists only for a SPEND, so an AIRDROPPED token has no
+    row at all — telemetry can say what left, never what arrived unasked. Only
+    a chain read answers "held".
+
+    ⚠️ `held is None` means NOT READ (no provider, a failed read, or simply not
+    asked for), and renders as such. `held == []` means a working read returned
+    nothing. Collapsing the two would turn "I could not look" into "you own
+    nothing", which is the exact confident-zero class the status SSOT exists to
+    prevent.
+
+    ⚠️ No network read unless `enumerate_fn` is supplied — status is cheap by
+    default, the same contract `include_balances` carries for the ledger.
+    """
+    sec = Section(name="collectibles")
+
+    # --- held (a chain read, opt-in) ---------------------------------------
+    sec.data["held"] = None
+    if enumerate_fn is not None:
+        try:
+            sec.data["held"] = list(enumerate_fn(user_id=user_id))
+        except Exception as e:
+            sec.lines.append(f"held: could not be read ({type(e).__name__}: "
+                             f"{str(e)[:120]})")
+    else:
+        sec.lines.append("held: not read (a chain read is opt-in here; ask for "
+                         "it explicitly, or run the nft_holdings verb)")
+
+    held = sec.data["held"]
+    if held is not None:
+        if not held:
+            sec.lines.append("held: none — this IS an answer from a working "
+                             "read, not a failed one")
+        else:
+            sec.lines.append(f"held: {len(held)} NFT(s)")
+            for item in held[:5]:
+                name = item.get("name") or "(unnamed)"
+                sec.lines.append(f"  {name} — {item.get('contract')} "
+                                 f"#{item.get('token_id')}")
+            if len(held) > 5:
+                sec.lines.append(f"  …and {len(held) - 5} more")
+
+    # --- moved (derived from the spend ledger) -----------------------------
+    rows = _rows(
+        _telemetry_db_path(data_dir),
+        "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
+        "AND user_id=? ORDER BY ts DESC LIMIT 400",
+        (user_id,))
+    moved = []
+    unreadable = 0
+    for row in rows:
+        try:
+            attrs = json.loads(row.get("attrs") or "{}")
+        except Exception:
+            # NOT silent: an unparseable row might BE a move, so it is counted
+            # and surfaced rather than quietly dropped.
+            unreadable += 1
+            continue
+        if str(attrs.get("action") or "") not in NFT_MOVE_VERBS:
+            continue
+        moved.append({"asset": attrs.get("asset"), "to": attrs.get("counterparty"),
+                      "chain": attrs.get("chain"), "tx": attrs.get("result_ref"),
+                      "ts": row.get("ts")})
+    sec.data["moved"] = moved
+    sec.data["unreadable_rows"] = unreadable
+    if unreadable:
+        sec.lines.append(f"⚠ {unreadable} spend row(s) could not be read — the "
+                         f"move list may be incomplete")
+    if moved:
+        sec.lines.append(f"moved out: {len(moved)}")
+        for item in moved[:5]:
+            sec.lines.append(f"  {item.get('asset') or 'asset unrecorded'} -> "
+                             f"{item.get('to')} ({_hhmm(item.get('ts'))})")
+    else:
+        sec.lines.append("moved out: none recorded")
+    return sec
 
 
 def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
                           task_agent: Any = None, session_id: Optional[str] = None,
                           container: Any = None, include_balances: bool = False,
                           include_money: bool = True, window_hours: int = 24,
-                          ledger: Any = None) -> StatusSnapshot:
+                          ledger: Any = None, liquidity_enumerate_fn=None) -> StatusSnapshot:
     """The ONE builder. Synchronous: doctor / CLI / the per-turn agent note call
     it directly; async surfaces (Telegram, webview, the agent action) run it in
     a worker thread (``asyncio.to_thread``) so the event loop stays free. The
@@ -811,6 +1569,11 @@ def build_status_snapshot(user_id: str, *, data_dir: Optional[str] = None,
     uid, now, window_sec, sections = _build_core(
         user_id, data_dir=data_dir, task_agent=task_agent, session_id=session_id,
         container=container, window_hours=window_hours)
+    if liquidity_enumerate_fn is not None and uid:
+        from core.status_liquidity import liquidity_section
+        from core.runtime_paths import data_dir_or_home
+        sections["liquidity"] = _guarded("liquidity", liquidity_section, uid,
+                                        data_dir_or_home(data_dir), liquidity_enumerate_fn)
     if not include_money:
         sections["money"] = Section(name="money", state=STATE_UNAVAILABLE,
                                     reason="not requested on this path")

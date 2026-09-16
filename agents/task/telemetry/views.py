@@ -666,6 +666,7 @@ class AwaitingApprovalEvent(BaseTelemetryEvent):
 	action_name: str
 	ask_id: Optional[str] = None
 	timeout_sec: Optional[float] = None
+	provider: str = ""
 	step: int = 0
 	agent_id: str = ''
 	name: str = 'awaiting_approval'

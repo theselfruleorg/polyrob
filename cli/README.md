@@ -48,7 +48,7 @@ cli/
 │   ├── model.py          #   set-default <provider> <model> (alias: models)
 │   ├── session.py        #   cancel <id> (alias: sessions)
 │   ├── tools.py skills.py kb.py
-│   ├── serve.py dashboard.py    #   local REST API + single-user web dashboard
+│   ├── serve.py dashboard.py    #   local REST API + POLYROB Console
 │   └── telegram.py email.py owner.py  # chat-surface runners + owner admin
 └── ui/                   # REPL rendering + input
     ├── app.py            #   prompt_toolkit PromptSession + bottom toolbar

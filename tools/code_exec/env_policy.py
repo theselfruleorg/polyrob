@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Dict, Optional
+from typing import Dict, Iterable, Optional
 
 # Only these host env vars are ever passed through to a child. Secrets never are.
 SAFE_ALLOWLIST = {
@@ -27,17 +27,37 @@ SECRET_PAT = re.compile(
 )
 
 
-def build_child_env(extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+def build_child_env(
+    extra: Optional[Dict[str, str]] = None,
+    *,
+    extra_allowlist: Optional[Iterable[str]] = None,
+    allow_prefixes: Optional[Iterable[str]] = None,
+) -> Dict[str, str]:
     """Return a scrubbed child environment.
 
-    1. Inherit ONLY the ``SAFE_ALLOWLIST`` host vars that are actually set.
+    1. Inherit ONLY the ``SAFE_ALLOWLIST`` host vars that are actually set,
+       widened by ``extra_allowlist`` (exact names) and ``allow_prefixes``
+       (name prefixes, e.g. ``PLAYWRIGHT_``).
     2. Overlay ``extra`` (caller-supplied), skipping any secret-NAMED key so a caller
        cannot smuggle a secret in.
     3. Defensively drop anything whose name looks secret even if allowlisted.
 
-    Byte-identical to the original ``LocalSubprocessBackend._build_env``.
+    With both widening arguments omitted this is byte-identical to the original
+    ``LocalSubprocessBackend._build_env``.
+
+    ``extra_allowlist``/``allow_prefixes`` exist because a child that is OUR OWN
+    binary (Chromium, the Playwright CLI, ``git``, the ``anysite`` CLI) genuinely
+    needs host vars a sandboxed *agent-authored* script must never see —
+    ``DISPLAY``, ``XAUTHORITY``, ``PLAYWRIGHT_BROWSERS_PATH``, proxy settings.
+    Widening the INHERIT set is not widening the SECRET set: step 3 still runs
+    over everything, so ``AGENT_WALLET_MASTER_SEED`` and every ``*_API_KEY``
+    are dropped no matter which list named them.
     """
-    env = {k: os.environ[k] for k in SAFE_ALLOWLIST if k in os.environ}
+    names = set(SAFE_ALLOWLIST)
+    names.update(extra_allowlist or ())
+    prefixes = tuple(allow_prefixes or ())
+    env = {k: v for k, v in os.environ.items()
+           if k in names or (prefixes and k.startswith(prefixes))}
     for k, v in (extra or {}).items():
         if SECRET_PAT.search(k):
             continue  # never let a caller smuggle a secret-named var in

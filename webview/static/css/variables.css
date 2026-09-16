@@ -24,7 +24,7 @@
     /* Text */
     --color-text-primary: #c0c0c0;
     --color-text-secondary: #909090;
-    --color-text-muted: #555555;
+    --color-text-muted: #909090;
     --color-text-highlight: #e6e6e6;
 
     /* Accent Colors */
@@ -144,4 +144,139 @@
 
     /* Error colors */
     --error-bg: rgba(212, 118, 118, 0.08);
+}
+
+/* Shared semantic colors and translucent treatments, used by both themes. */
+:root {
+    color-scheme: dark;
+    --color-border-strong: #555555;
+    --color-on-accent: #080808;
+    --color-shadow: #000000;
+    --color-surface-tint: #282d32;
+    --color-accent-blue-wash-05: color-mix(in srgb, var(--color-accent-blue) 5%, transparent);
+    --color-accent-blue-wash-08: color-mix(in srgb, var(--color-accent-blue) 8%, transparent);
+    --color-accent-blue-wash-10: color-mix(in srgb, var(--color-accent-blue) 10%, transparent);
+    --color-accent-blue-wash-12: color-mix(in srgb, var(--color-accent-blue) 12%, transparent);
+    --color-accent-blue-wash-15: color-mix(in srgb, var(--color-accent-blue) 15%, transparent);
+    --color-accent-blue-wash-20: color-mix(in srgb, var(--color-accent-blue) 20%, transparent);
+    --color-accent-blue-wash-25: color-mix(in srgb, var(--color-accent-blue) 25%, transparent);
+    --color-accent-blue-wash-60: color-mix(in srgb, var(--color-accent-blue) 60%, transparent);
+    --color-accent-green-wash-01: color-mix(in srgb, var(--color-accent-green) 1%, transparent);
+    --color-accent-green-wash-03: color-mix(in srgb, var(--color-accent-green) 3%, transparent);
+    --color-accent-green-wash-05: color-mix(in srgb, var(--color-accent-green) 5%, transparent);
+    --color-accent-green-wash-08: color-mix(in srgb, var(--color-accent-green) 8%, transparent);
+    --color-accent-green-wash-10: color-mix(in srgb, var(--color-accent-green) 10%, transparent);
+    --color-accent-green-wash-15: color-mix(in srgb, var(--color-accent-green) 15%, transparent);
+    --color-accent-green-wash-20: color-mix(in srgb, var(--color-accent-green) 20%, transparent);
+    --color-accent-green-wash-25: color-mix(in srgb, var(--color-accent-green) 25%, transparent);
+    --color-accent-green-wash-30: color-mix(in srgb, var(--color-accent-green) 30%, transparent);
+    --color-accent-green-wash-50: color-mix(in srgb, var(--color-accent-green) 50%, transparent);
+    --color-accent-green-wash-60: color-mix(in srgb, var(--color-accent-green) 60%, transparent);
+    --color-accent-green-wash-90: color-mix(in srgb, var(--color-accent-green) 90%, transparent);
+    --color-accent-orange-wash-05: color-mix(in srgb, var(--color-accent-orange) 5%, transparent);
+    --color-accent-purple-wash-05: color-mix(in srgb, var(--color-accent-purple) 5%, transparent);
+    --color-accent-purple-wash-08: color-mix(in srgb, var(--color-accent-purple) 8%, transparent);
+    --color-accent-purple-wash-15: color-mix(in srgb, var(--color-accent-purple) 15%, transparent);
+    --color-accent-purple-wash-20: color-mix(in srgb, var(--color-accent-purple) 20%, transparent);
+    --color-accent-purple-wash-30: color-mix(in srgb, var(--color-accent-purple) 30%, transparent);
+    --color-accent-red-wash-05: color-mix(in srgb, var(--color-accent-red) 5%, transparent);
+    --color-accent-red-wash-08: color-mix(in srgb, var(--color-accent-red) 8%, transparent);
+    --color-accent-red-wash-10: color-mix(in srgb, var(--color-accent-red) 10%, transparent);
+    --color-accent-red-wash-15: color-mix(in srgb, var(--color-accent-red) 15%, transparent);
+    --color-accent-red-wash-20: color-mix(in srgb, var(--color-accent-red) 20%, transparent);
+    --color-accent-red-wash-25: color-mix(in srgb, var(--color-accent-red) 25%, transparent);
+    --color-accent-red-wash-95: color-mix(in srgb, var(--color-accent-red) 95%, transparent);
+    --color-accent-teal-wash-05: color-mix(in srgb, var(--color-accent-teal) 5%, transparent);
+    --color-accent-teal-wash-08: color-mix(in srgb, var(--color-accent-teal) 8%, transparent);
+    --color-accent-teal-wash-10: color-mix(in srgb, var(--color-accent-teal) 10%, transparent);
+    --color-accent-teal-wash-12: color-mix(in srgb, var(--color-accent-teal) 12%, transparent);
+    --color-accent-teal-wash-15: color-mix(in srgb, var(--color-accent-teal) 15%, transparent);
+    --color-accent-teal-wash-30: color-mix(in srgb, var(--color-accent-teal) 30%, transparent);
+    --color-accent-teal-wash-60: color-mix(in srgb, var(--color-accent-teal) 60%, transparent);
+    --color-accent-yellow-wash-08: color-mix(in srgb, var(--color-accent-yellow) 8%, transparent);
+    --color-accent-yellow-wash-10: color-mix(in srgb, var(--color-accent-yellow) 10%, transparent);
+    --color-accent-yellow-wash-15: color-mix(in srgb, var(--color-accent-yellow) 15%, transparent);
+    --color-accent-yellow-wash-20: color-mix(in srgb, var(--color-accent-yellow) 20%, transparent);
+    --color-accent-yellow-wash-30: color-mix(in srgb, var(--color-accent-yellow) 30%, transparent);
+    --color-accent-yellow-wash-50: color-mix(in srgb, var(--color-accent-yellow) 50%, transparent);
+    --color-accent-yellow-wash-90: color-mix(in srgb, var(--color-accent-yellow) 90%, transparent);
+    --color-shadow-wash-01: color-mix(in srgb, var(--color-shadow) 1%, transparent);
+    --color-shadow-wash-05: color-mix(in srgb, var(--color-shadow) 5%, transparent);
+    --color-shadow-wash-10: color-mix(in srgb, var(--color-shadow) 10%, transparent);
+    --color-shadow-wash-15: color-mix(in srgb, var(--color-shadow) 15%, transparent);
+    --color-shadow-wash-20: color-mix(in srgb, var(--color-shadow) 20%, transparent);
+    --color-shadow-wash-30: color-mix(in srgb, var(--color-shadow) 30%, transparent);
+    --color-shadow-wash-40: color-mix(in srgb, var(--color-shadow) 40%, transparent);
+    --color-shadow-wash-50: color-mix(in srgb, var(--color-shadow) 50%, transparent);
+    --color-shadow-wash-60: color-mix(in srgb, var(--color-shadow) 60%, transparent);
+    --color-shadow-wash-70: color-mix(in srgb, var(--color-shadow) 70%, transparent);
+    --color-shadow-wash-72: color-mix(in srgb, var(--color-shadow) 72%, transparent);
+    --color-shadow-wash-80: color-mix(in srgb, var(--color-shadow) 80%, transparent);
+    --color-shadow-wash-90: color-mix(in srgb, var(--color-shadow) 90%, transparent);
+    --color-shadow-wash-95: color-mix(in srgb, var(--color-shadow) 95%, transparent);
+    --color-surface-tint-wash-08: color-mix(in srgb, var(--color-surface-tint) 8%, transparent);
+    --color-surface-tint-wash-10: color-mix(in srgb, var(--color-surface-tint) 10%, transparent);
+    --color-surface-tint-wash-20: color-mix(in srgb, var(--color-surface-tint) 20%, transparent);
+    --color-surface-tint-wash-30: color-mix(in srgb, var(--color-surface-tint) 30%, transparent);
+    --color-surface-tint-wash-40: color-mix(in srgb, var(--color-surface-tint) 40%, transparent);
+    --color-surface-tint-wash-60: color-mix(in srgb, var(--color-surface-tint) 60%, transparent);
+    --color-surface-tint-wash-80: color-mix(in srgb, var(--color-surface-tint) 80%, transparent);
+    --color-surface-tint-wash-98: color-mix(in srgb, var(--color-surface-tint) 98%, transparent);
+    --color-text-primary-wash-02: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
+    --color-text-primary-wash-03: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+    --color-text-primary-wash-04: color-mix(in srgb, var(--color-text-primary) 4%, transparent);
+    --color-text-primary-wash-05: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+    --color-text-primary-wash-08: color-mix(in srgb, var(--color-text-primary) 8%, transparent);
+    --color-text-primary-wash-60: color-mix(in srgb, var(--color-text-primary) 60%, transparent);
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --color-bg-primary: #fafaf8;
+    --color-bg-secondary: #f1f2ef;
+    --color-bg-terminal: #ffffff;
+    --color-bg-elevated: #e9ece8;
+    --color-bg-card: #f3f4f1;
+    --color-bg-card-hover: #e7ebe6;
+    --color-border: #c2c8c0;
+    --color-border-strong: #6a7568;
+    --color-text-primary: #303a32;
+    --color-text-secondary: #536052;
+    --color-text-muted: #536052;
+    --color-text-highlight: #17231a;
+    --color-accent-blue: #075c91;
+    --color-accent-green: #086650;
+    --color-accent-red: #ae2424;
+    --color-accent-yellow: #785600;
+    --color-accent-purple: #7542a5;
+    --color-accent-teal: #006b63;
+    --color-accent-orange: #9d430f;
+    --color-on-accent: #ffffff;
+    --color-surface-tint: #dce3da;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme])[data-theme-preference="auto"] {
+    color-scheme: light;
+    --color-bg-primary: #fafaf8;
+    --color-bg-secondary: #f1f2ef;
+    --color-bg-terminal: #ffffff;
+    --color-bg-elevated: #e9ece8;
+    --color-bg-card: #f3f4f1;
+    --color-bg-card-hover: #e7ebe6;
+    --color-border: #c2c8c0;
+    --color-border-strong: #6a7568;
+    --color-text-primary: #303a32;
+    --color-text-secondary: #536052;
+    --color-text-muted: #536052;
+    --color-text-highlight: #17231a;
+    --color-accent-blue: #075c91;
+    --color-accent-green: #086650;
+    --color-accent-red: #ae2424;
+    --color-accent-yellow: #785600;
+    --color-accent-purple: #7542a5;
+    --color-accent-teal: #006b63;
+    --color-accent-orange: #9d430f;
+    --color-on-accent: #ffffff;
+    --color-surface-tint: #dce3da;
+  }
 }

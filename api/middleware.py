@@ -2,6 +2,8 @@
 
 import time
 import hashlib
+from core.security.session_tokens import decode_session_token
+
 import logging
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timedelta
@@ -166,19 +168,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         return response
 
     def _get_user_identifier(self, request: Request) -> str:
-        """Get user identifier from request."""
-        # Try to get from Authorization header
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header:
-            return hashlib.md5(auth_header.encode()).hexdigest()[:16]
-
-        # Try to get from API key header
-        api_key = request.headers.get("X-API-Key", "")
-        if api_key:
-            return hashlib.md5(api_key.encode()).hexdigest()[:16]
-
-        # Fall back to IP address
-        client_host = request.client.host if request.client else "unknown"
+        """Key on verified identity, never on attacker-chosen credentials."""
+        user_id = getattr(request.state, "user_id", None)
+        if getattr(request.state, "authenticated", False) and user_id:
+            return "user_" + hashlib.sha256(str(user_id).encode()).hexdigest()
+        from api.dependencies import get_trusted_client_ip
+        client_host = get_trusted_client_ip(request) or "unknown"
         return f"ip_{client_host}"
 
 
@@ -279,9 +274,15 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
-            # Check cache first
+            # Check cache first (043 W5: a cached entry must still honor a
+            # /logout revocation that landed after it was cached).
             if token in self.token_cache:
-                return self.token_cache[token]
+                from core.token_denylist import jti_is_revoked
+                cached = self.token_cache[token]
+                if (cached.get("exp", 0) <= time.time()
+                        or jti_is_revoked(cached)):
+                    return None
+                return cached
 
             # Check if it looks like a JWT (three base64 parts)
             if token.count('.') == 2:
@@ -290,14 +291,20 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
                     import os
                     jwt_secret = os.environ.get("JWT_SECRET_KEY", self.secret_key)
 
-                    decoded = jwt.decode(token, jwt_secret, algorithms=["HS256"])
+                    decoded = decode_session_token(token, jwt_secret)
+                    # 043 W5: refuse a token whose jti /logout revoked.
+                    from core.token_denylist import jti_is_revoked
+                    if jti_is_revoked(decoded):
+                        return None
                     user_info = {
                         "user_id": decoded.get("sub", decoded.get("user_id", "unknown")),
                         "authenticated": True,
                         "permissions": ["read", "write"],
                         "role": decoded.get("role", "user"),
                         "tier": decoded.get("tier", "free"),
-                        "admin_wallet": decoded.get("admin_wallet", False)
+                        "admin_wallet": decoded.get("admin_wallet", False),
+                        "jti": decoded.get("jti"),
+                        "exp": decoded["exp"],
                     }
 
                     self.token_cache[token] = user_info

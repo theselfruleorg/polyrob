@@ -139,3 +139,43 @@ def test_broken_orchestrator_fails_open():
             raise RuntimeError("boom")
 
     assert edited_since_last_test(_Boom()) is False
+
+
+def test_missing_test_result_never_verifies_an_edit():
+    from agents.task.runtime.edit_verify import edited_since_last_test
+    assert edited_since_last_test(_FakeOrch([
+        _step("apply_patch"), _Step([_Action("run_tests")], [])]))
+
+
+def test_agent_iteration_order_is_not_global_time():
+    from agents.task.runtime.edit_verify import edited_since_last_test
+    orch = _FakeOrch([_step("apply_patch")])
+    orch.agents["child"] = _Agent([_step("run_tests")], is_sub=True)
+    assert edited_since_last_test(orch)
+    orch.agents = dict(reversed(list(orch.agents.items())))
+    assert edited_since_last_test(orch)
+
+
+def test_cross_agent_verification_requires_test_start_after_edit_finish():
+    from agents.task.runtime.edit_verify import edited_since_last_test
+    edit, test = _step("apply_patch"), _step("run_tests")
+    common = {"clock_id": "same-process", "workspace": "/fixture", "session_id": "s1", "ok": True}
+    edit.result[0].metadata = {"execution_receipt": {**common, "started_ns": 10, "finished_ns": 20}}
+    receipt = {**common, "started_ns": 15, "finished_ns": 30}
+    test.result[0].metadata = {"execution_receipt": receipt}
+    orch = _FakeOrch([edit])
+    orch.agents["child"] = _Agent([test], is_sub=True)
+    assert edited_since_last_test(orch)  # overlapped the write
+    receipt["started_ns"] = 21
+    assert not edited_since_last_test(orch)
+    receipt["workspace"] = "/another-workspace"
+    assert edited_since_last_test(orch)
+
+
+def test_late_evidence_is_retained_with_an_omission_marker():
+    from agents.task.runtime.evidence import build_evidence, MAX_LEDGER_LINES
+    orch = _FakeOrch([_step("grep")] * 100 + [_step("run_tests", content="FINAL_TEST_EVIDENCE")])
+    pack = build_evidence(orch)
+    assert len(pack.ledger) == MAX_LEDGER_LINES
+    assert "FINAL_TEST_EVIDENCE" in pack.ledger[-1]
+    assert any("omitted" in line for line in pack.ledger)

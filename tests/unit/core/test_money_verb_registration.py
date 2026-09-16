@@ -28,12 +28,42 @@ def test_there_are_spend_verbs_to_check():
     assert _spend_verbs(), "the discovery above found nothing — the test is inert"
 
 
-def test_every_spend_verb_is_on_the_tiered_spend_lane():
-    from core.config_policy.spend_lane import DEFI_SPEND_VERBS
-    missing = {v for v in _spend_verbs() if v.startswith('defi_trade_')} - set(DEFI_SPEND_VERBS)
+def test_every_spend_verb_is_classified_for_the_tiered_spend_lane():
+    """Every defi spend verb is either EXEMPTIBLE by the tiered lane or
+    explicitly NEVER exemptible. A verb in neither set was forgotten, and a
+    forgotten verb queues or executes on the wrong lane.
+
+    037 added the second bucket: `bridge` must never become exemptible, because
+    the owner's decision is that it is always owner-approved. Silently adding it
+    to DEFI_SPEND_VERBS to make this test pass would let one env flag overturn
+    that."""
+    from core.config_policy.spend_lane import (ALWAYS_OWNER_APPROVED_VERBS,
+                                               DEFI_SPEND_VERBS)
+    classified = set(DEFI_SPEND_VERBS) | set(ALWAYS_OWNER_APPROVED_VERBS)
+    missing = {v for v in _spend_verbs() if v.startswith('defi_trade_')} - classified
     assert not missing, (
-        f"money verbs absent from the tiered spend lane: {sorted(missing)}. "
-        f"They will queue or execute on the wrong lane.")
+        f"money verbs classified for NEITHER lane: {sorted(missing)}. Add them to "
+        f"DEFI_SPEND_VERBS (exemptible below the autonomous ceiling) or to "
+        f"ALWAYS_OWNER_APPROVED_VERBS (never exemptible), with the reason.")
+
+
+def test_the_two_lane_buckets_do_not_overlap():
+    """A verb cannot be both exemptible and never-exemptible."""
+    from core.config_policy.spend_lane import (ALWAYS_OWNER_APPROVED_VERBS,
+                                               DEFI_SPEND_VERBS)
+    assert not (set(DEFI_SPEND_VERBS) & set(ALWAYS_OWNER_APPROVED_VERBS))
+
+
+def test_the_bridge_is_on_the_capped_lane():
+    """SUPERSEDES the 2026-09-11 always-approve pin. The owner used that shape
+    and rejected it on 2026-09-12: a money rail needing a tap per move is not
+    autonomy. Caps, not taps — the bridge is bounded by the per-tx ceiling, the
+    rolling daily cap and its simulated + asserted deltas, with the owner queue
+    still catching anything over DEFI_AUTONOMOUS_MAX_USD."""
+    from core.config_policy.spend_lane import (ALWAYS_OWNER_APPROVED_VERBS,
+                                               DEFI_SPEND_VERBS)
+    assert "defi_trade_bridge" in DEFI_SPEND_VERBS
+    assert "defi_trade_bridge" not in ALWAYS_OWNER_APPROVED_VERBS
 
 
 def test_every_spend_verb_is_blocked_while_correspondent_tainted():

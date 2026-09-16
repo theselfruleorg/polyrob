@@ -104,6 +104,18 @@ NON_SPEND_MONEY_VERBS = {
     # polymarket_place_limit_order / polymarket_place_market_order are the real
     # SPEND verbs and stay ON the lane (not exempted here).
 
+    # -- launchpad (042) — the two READ verbs. Both are eth_call only: they
+    # build no transaction, hold no signer and reach no rail. The three write
+    # verbs (launch/buy/sell) stay ON the lane. ------------------------------
+    "launchpad_quote": "prices a curve trade with eth_call; signs nothing",
+    "launchpad_status": "reads a token's curve state; signs nothing",
+
+    # -- dapp_browser (042) — the two non-authorizing verbs. `dapp_connect` is
+    # the money verb (it grants the envelope) and stays ON the lane; these two
+    # only report it and take it away. ---------------------------------------
+    "dapp_browser_dapp_status": "reports the session envelope; authorizes nothing",
+    "dapp_browser_dapp_disconnect": "REVOKES the envelope; can only reduce authority",
+
     # NOTE: `hyperliquid_data` / `polymarket_data` (HyperliquidDataTool /
     # PolymarketDataTool) carry NO entries here on purpose. They are separate,
     # non-money tool_ids (`TOOL_CAPABILITIES["hyperliquid_data"] == frozenset()`,
@@ -196,18 +208,35 @@ def test_the_derivation_is_not_vacuous(runtime_names):
     assert "x402_pay_x402_fetch" in verbs
 
 
-def test_every_money_spend_verb_is_on_the_payment_approval_lane(runtime_names):
+def test_every_money_spend_verb_is_on_an_owner_approval_lane(runtime_names):
     """A verb that moves value out must reach the owner, or be explicitly
-    exempted here with a reason."""
-    from core.config_policy import PAYMENT_APPROVAL_TOOLS
+    exempted here with a reason.
+
+    Two lanes are legal (039). Most verbs ride the shared pre-hook
+    (`PAYMENT_APPROVAL_TOOLS`). A verb may instead own its gate inside itself —
+    but only by declaring it in `VERB_OWNED_APPROVAL_GATES`, so the exception is a
+    registry entry someone had to write rather than a verb quietly absent from
+    both lists. Being in BOTH is also a failure: that is two owner taps for one
+    action, which is what the owner hit on 2026-09-12.
+    """
+    from core.config_policy import (PAYMENT_APPROVAL_TOOLS,
+                                    VERB_OWNED_APPROVAL_GATES)
 
     spend = _money_verbs(runtime_names) - set(NON_SPEND_MONEY_VERBS)
-    missing = sorted(spend - set(PAYMENT_APPROVAL_TOOLS))
+    shared, owned = set(PAYMENT_APPROVAL_TOOLS), set(VERB_OWNED_APPROVAL_GATES)
+
+    missing = sorted(spend - shared - owned)
     assert not missing, (
-        f"money-spend verbs {missing} are NOT in PAYMENT_APPROVAL_TOOLS — they can "
-        f"move value with no owner-approval lane. Add them to the tuple in "
-        f"core/config_policy/payment_tools.py, or add them to NON_SPEND_MONEY_VERBS "
-        f"in this file with a written reason."
+        f"money-spend verbs {missing} are on NO owner-approval lane — they can "
+        f"move value with nobody asked. Add them to PAYMENT_APPROVAL_TOOLS or to "
+        f"VERB_OWNED_APPROVAL_GATES in core/config_policy/payment_tools.py, or to "
+        f"NON_SPEND_MONEY_VERBS in this file with a written reason."
+    )
+
+    doubled = sorted(spend & shared & owned)
+    assert not doubled, (
+        f"money-spend verbs {doubled} are on BOTH lanes — the owner is asked "
+        f"twice for one action, from two prompts describing it differently."
     )
 
 

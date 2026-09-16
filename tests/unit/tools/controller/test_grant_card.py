@@ -65,6 +65,12 @@ def test_decide_approved_wakes_the_originating_session():
     wakes = []
 
     class _Agent:
+        def route_session(self, session_id):
+            # 043 W10: model a SAME-process agent that OWNS the session (resident
+            # here) — the only case an in-process self-wake is correct.
+            from agents.task.session_route import LOCAL, SessionRoute
+            return SessionRoute(status=LOCAL, orchestrator=object())
+
         async def deliver_self_wake(self, session_id, user_id, text, metadata=None):
             wakes.append((session_id, user_id, text, metadata))
             return True

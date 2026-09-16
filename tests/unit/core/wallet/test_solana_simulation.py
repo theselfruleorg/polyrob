@@ -46,15 +46,15 @@ def _sim(pre, post, err=None, logs=None):
 # -- the simulation must actually run ---------------------------------------
 
 def test_a_failing_simulation_is_not_ok():
-    d = ss.parse_deltas(_sim([], [], err={"InstructionError": [0, "Custom"]}), owner=ME)
+    d = ss.parse_deltas(_sim([], [], err={"InstructionError": [0, "Custom"]}), owner=ME, owned_pubkeys=[])
     assert d.ok is False
     assert d.reason
 
 
 def test_an_unreadable_simulation_is_not_ok():
     """No post-state means nothing can be asserted. Fail closed."""
-    assert ss.parse_deltas(None, owner=ME).ok is False
-    assert ss.parse_deltas({"value": None}, owner=ME).ok is False
+    assert ss.parse_deltas(None, owner=ME, owned_pubkeys=[]).ok is False
+    assert ss.parse_deltas({"value": None}, owner=ME, owned_pubkeys=[]).ok is False
 
 
 # -- balance deltas ----------------------------------------------------------
@@ -62,13 +62,13 @@ def test_an_unreadable_simulation_is_not_ok():
 def test_a_token_outflow_is_measured():
     pre = [_acct(amount="3000000")]
     post = [_acct(amount="1000000")]
-    d = ss.parse_deltas(_sim(pre, post), owner=ME)
+    d = ss.parse_deltas(_sim(pre, post), owner=ME, owned_pubkeys=[])
     assert d.ok is True
     assert d.token_deltas[USDC] == -2_000_000
 
 
 def test_a_token_inflow_is_measured():
-    d = ss.parse_deltas(_sim([_acct(amount="0")], [_acct(amount="500")]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct(amount="0")], [_acct(amount="500")]), owner=ME, owned_pubkeys=[])
     assert d.token_deltas[USDC] == 500
 
 
@@ -76,50 +76,50 @@ def test_accounts_we_do_not_own_are_ignored():
     """Someone else's balance moving is not our delta."""
     pre = [_acct(owner=OTHER, amount="9")]
     post = [_acct(owner=OTHER, amount="0")]
-    assert ss.parse_deltas(_sim(pre, post), owner=ME).token_deltas == {}
+    assert ss.parse_deltas(_sim(pre, post), owner=ME, owned_pubkeys=[]).token_deltas == {}
 
 
 # -- the SPL threat taxonomy (the part that does NOT port from EVM) ----------
 
 def test_a_new_delegate_on_our_account_is_flagged():
     """SPL's closest thing to a standing allowance. Undeclared = refuse."""
-    d = ss.parse_deltas(_sim([_acct()], [_acct(delegate=OTHER)]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct(delegate=OTHER)]), owner=ME, owned_pubkeys=[])
     assert ("delegate", USDC, OTHER) in d.authority_grants
 
 
 def test_a_changed_account_owner_is_flagged_as_a_drain():
     """SetAuthority handing our token account to someone else. There is no EVM
     equivalent — the account simply stops being ours."""
-    d = ss.parse_deltas(_sim([_acct()], [_acct(owner=OTHER)]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct(owner=OTHER)]), owner=ME, owned_pubkeys=[])
     assert any(k == "owner_changed" for k, *_ in d.authority_grants)
 
 
 def test_a_new_close_authority_is_flagged():
     """CloseAccount drains the balance AND reclaims rent — a drain primitive
     with no EVM analogue."""
-    d = ss.parse_deltas(_sim([_acct()], [_acct(close_authority=OTHER)]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct(close_authority=OTHER)]), owner=ME, owned_pubkeys=[])
     assert any(k == "close_authority" for k, *_ in d.authority_grants)
 
 
 def test_an_account_becoming_frozen_is_flagged():
     """Frozen means unsellable. The Solana shape of a honeypot."""
-    d = ss.parse_deltas(_sim([_acct()], [_acct(state="frozen")]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct(state="frozen")]), owner=ME, owned_pubkeys=[])
     assert any(k == "frozen" for k, *_ in d.authority_grants)
 
 
 def test_a_disappearing_account_is_flagged_as_closed():
-    d = ss.parse_deltas(_sim([_acct()], [None]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [None]), owner=ME, owned_pubkeys=[])
     assert any(k == "closed" for k, *_ in d.authority_grants)
 
 
 def test_an_unchanged_account_grants_nothing():
-    d = ss.parse_deltas(_sim([_acct()], [_acct()]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct()]), owner=ME, owned_pubkeys=[])
     assert d.authority_grants == ()
     assert d.grants_authority() is False
 
 
 def test_grants_authority_is_true_when_anything_was_flagged():
-    d = ss.parse_deltas(_sim([_acct()], [_acct(delegate=OTHER)]), owner=ME)
+    d = ss.parse_deltas(_sim([_acct()], [_acct(delegate=OTHER)]), owner=ME, owned_pubkeys=[])
     assert d.grants_authority() is True
 
 
@@ -153,24 +153,24 @@ def test_rent_for_a_new_token_account_is_classified_not_refused():
 
 def test_an_account_created_by_the_transaction_counts_as_a_full_credit():
     """No pre-entry at all: the balance went from nothing to something."""
-    d = ss.parse_deltas(_sim([None], [_acct(amount="1500000")]), owner=ME)
+    d = ss.parse_deltas(_sim([None], [_acct(amount="1500000")]), owner=ME, owned_pubkeys=[])
     assert d.ok is True
     assert d.token_deltas[USDC] == 1_500_000
 
 
 def test_a_created_account_owned_by_SOMEONE_ELSE_is_not_our_credit():
-    d = ss.parse_deltas(_sim([None], [_acct(owner=OTHER, amount="9")]), owner=ME)
+    d = ss.parse_deltas(_sim([None], [_acct(owner=OTHER, amount="9")]), owner=ME, owned_pubkeys=[])
     assert d.token_deltas == {}
 
 
 def test_a_created_account_is_not_treated_as_an_authority_grant():
     """Creating our own ATA is ordinary, not a drain vector."""
-    d = ss.parse_deltas(_sim([None], [_acct(amount="5")]), owner=ME)
+    d = ss.parse_deltas(_sim([None], [_acct(amount="5")]), owner=ME, owned_pubkeys=[])
     assert d.authority_grants == ()
 
 
 def test_a_shorter_pre_list_than_post_still_parses():
     """The pre-state can simply be shorter — the RPC returns null for accounts
     that did not exist yet."""
-    d = ss.parse_deltas(_sim([], [_acct(amount="7")]), owner=ME)
+    d = ss.parse_deltas(_sim([], [_acct(amount="7")]), owner=ME, owned_pubkeys=[])
     assert d.token_deltas[USDC] == 7

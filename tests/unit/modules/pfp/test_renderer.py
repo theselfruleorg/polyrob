@@ -27,7 +27,7 @@ pytestmark = pytest.mark.skipif(
 
 from modules.pfp.renderer import render_still, RenderResult  # noqa: E402
 
-CFG = {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "",
+CFG = {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "",
        "size": 256, "override": {}}
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
@@ -42,8 +42,8 @@ def test_render_writes_a_png(tmp_path):
 
 def test_render_returns_traits_voice_hex(tmp_path):
     res = render_still(CFG, tmp_path / "p.png", size=128)
-    assert res.seed_hex == "0x1546"
-    assert res.traits["eyes"] == "square"      # matches the pinned baseline
+    assert res.seed_hex == "0x8929"
+    assert res.traits["eyes"] == "three"       # matches the pinned baseline
     assert set(res.voice) == {"pitch", "rate", "timbre"}
 
 

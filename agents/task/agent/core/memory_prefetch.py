@@ -179,6 +179,9 @@ class MemoryPrefetchMixin:
             # side, polluting a focused subtask's context with tenant-wide memory.
             if getattr(self, "_is_sub_agent", False):
                 return
+            from core.surfaces.room_policy import is_public_session
+            if is_public_session(getattr(self, "orchestrator", None)):
+                return  # 044 T4: no tenant recall into a public room
             n_steps = getattr(self.state, "n_steps", 0)
             # SA-06: an autonomous (goal/cron) session defaults to a recurring
             # cadence — recalling once at step 1 (where the brain enrichment is
@@ -234,6 +237,9 @@ class MemoryPrefetchMixin:
                 return
             if getattr(self, "_is_sub_agent", False):
                 return
+            from core.surfaces.room_policy import is_public_session
+            if is_public_session(getattr(self, "orchestrator", None)):
+                return  # 044 T4: no tenant recall into a public room
             from agents.task.goals.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return
@@ -264,6 +270,14 @@ class MemoryPrefetchMixin:
             if getattr(self, "_session_bootstrap_done", False):
                 return
             if getattr(self, "_is_sub_agent", False):
+                return
+            from core.surfaces.room_policy import is_public_session
+            if is_public_session(getattr(self, "orchestrator", None)):
+                # 044 I3: no owner-tenant state into a public room. A room's
+                # SERVICE run is an autonomous goal run bound to the room's own
+                # session, so it passed the `is_autonomous` test below and was
+                # handed the owner's last 24 h of autonomous work — trades,
+                # goals, spend — to answer strangers with.
                 return
             from agents.task.goals.autonomy_marker import is_autonomous
             if not is_autonomous(self.session_id):
@@ -303,6 +317,9 @@ class MemoryPrefetchMixin:
                 return
             if getattr(self, "_is_sub_agent", False):
                 return
+            from core.surfaces.room_policy import is_public_session
+            if is_public_session(getattr(self, "orchestrator", None)):
+                return  # 044 T4: no tenant recall into a public room
             from agents.task.goals.autonomy_marker import is_autonomous
             if is_autonomous(self.session_id):
                 return

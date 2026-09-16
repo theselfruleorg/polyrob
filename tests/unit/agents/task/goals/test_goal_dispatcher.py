@@ -40,6 +40,13 @@ def board(tmp_path):
     return GoalBoard(str(tmp_path / "goals.db"))
 
 
+async def _wait_for_runs(dispatcher, timeout=3.0):
+    """Wait for fire-and-forget goal runs without assuming runner speed."""
+    tasks = tuple(dispatcher._inflight)
+    if tasks:
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=timeout)
+
+
 @pytest.mark.asyncio
 async def test_dispatch_noop_when_disabled(board, monkeypatch):
     monkeypatch.setenv("GOALS_ENABLED", "false")
@@ -64,7 +71,7 @@ async def test_dispatch_runs_and_completes(board, monkeypatch):
     n = await d.dispatch_once()
     assert n == 1
     # let the fire-and-forget _run_goal task finish
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     got = board.get(g.id)
     assert got.status == STATUS_DONE
     assert got.result == "done well"
@@ -106,7 +113,7 @@ async def test_self_wake_marks_episode_surfaced(board, monkeypatch):
     agent = _FakeAgent(final="done well")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     assert marked["session_id"] == "sess-u1"
     assert marked["user_id"] == "u1"
 
@@ -146,7 +153,7 @@ async def test_self_wake_not_marked_when_delivery_fails(board, monkeypatch):
     agent = _NoWakeAgent(final="done well")
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     assert agent.woke  # self-wake WAS attempted
     assert marked["called"] is False  # but NOT marked surfaced
 
@@ -179,7 +186,7 @@ async def test_success_episode_not_flipped_to_failed_by_later_raise(board, monke
         agent = _FakeAgent(final="done well")
         d = GoalDispatcher(board, agent)
         await d.dispatch_once()
-        await asyncio.sleep(0.05)
+        await _wait_for_runs(d)
 
         out = await provider.recall_episodes(user_id="u1", limit=5)
         assert len(out) == 1
@@ -205,7 +212,7 @@ async def test_dispatch_skipped_while_interactive_busy(board, monkeypatch):
     # idle again -> dispatches as before
     n2 = await d.dispatch_once()
     assert n2 == 1
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     assert board.get(g.id).status == STATUS_DONE
 
 
@@ -230,7 +237,7 @@ async def test_dispatch_failure_records_breaker(board, monkeypatch):
     agent = _FakeAgent(fail=True)
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     assert board.get(g.id).status == STATUS_BLOCKED
 
 
@@ -248,7 +255,7 @@ async def test_child_goal_inherits_allowlisted_parent_tools(board, monkeypatch):
     agent = _FakeAgent()
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     child_req = next(r for r in agent.requests if r["goal_id"] == child.id)
     # inherited, order-preserved, allowlist-filtered: money/social dropped
     assert child_req["tools"] == ["filesystem", "browser", "anysite"]
@@ -263,7 +270,7 @@ async def test_root_goal_explicit_tools_unchanged(board, monkeypatch):
     agent = _FakeAgent()
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     assert agent.requests[0]["tools"] == ["filesystem", "browser"]
 
 
@@ -278,7 +285,7 @@ async def test_child_goal_explicit_tools_not_overridden(board, monkeypatch):
     agent = _FakeAgent()
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     # only the child runs as ready (parent also ready); find the child's request
     child_reqs = [r for r in agent.requests if r["tools"] == ["filesystem"]]
     assert child_reqs, agent.requests
@@ -295,7 +302,7 @@ async def test_child_goal_no_inheritable_parent_tools_falls_back(board, monkeypa
     agent = _FakeAgent()
     d = GoalDispatcher(board, agent)
     await d.dispatch_once()
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
     child_reqs = [r for r in agent.requests if r["tools"] == ["filesystem", "task"]]
     assert child_reqs, agent.requests
 
@@ -331,7 +338,7 @@ async def test_inflight_caps_global_concurrency(board, monkeypatch):
     assert len(d._inflight) == 2
 
     release.set()
-    await asyncio.sleep(0.05)  # let the 2 finish + clear _inflight
+    await _wait_for_runs(d)
     n3 = await d.dispatch_once()
     assert n3 == 2  # slots freed → next batch
 
@@ -518,7 +525,7 @@ async def test_dependent_waits_then_dispatches_after_prerequisite_completes(boar
     # --- tick 1: only P is ready; D is waiting and this tick never claims it. ---
     n1 = await d.dispatch_once()
     assert n1 == 1  # exactly P claimed/dispatched this tick, never D
-    await asyncio.sleep(0.05)  # let the fire-and-forget _run_goal finish
+    await _wait_for_runs(d)
 
     assert agent.ran == [("u1", "sess-u1")]  # exactly one run so far: P's
     assert board.get(prereq.id).status == STATUS_DONE
@@ -538,7 +545,7 @@ async def test_dependent_waits_then_dispatches_after_prerequisite_completes(boar
     # --- tick 2: D is now ready and gets claimed/dispatched. ---
     n2 = await d.dispatch_once()
     assert n2 == 1
-    await asyncio.sleep(0.05)
+    await _wait_for_runs(d)
 
     assert agent.ran == [("u1", "sess-u1"), ("u1", "sess-u1")]  # P then D, in order
     got_d = board.get(dependent.id)

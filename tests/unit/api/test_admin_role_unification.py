@@ -23,6 +23,7 @@ Fix:
 import types
 
 import pytest
+import time
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -166,7 +167,7 @@ def test_fallback_middleware_grants_admin_for_owner_role_jwt(monkeypatch):
     )
 
     token = pyjwt.encode(
-        {"sub": "local-owner", "user_id": "local-owner", "tier": "admin", "role": "owner"},
+        {"sub": "local-owner", "user_id": "local-owner", "tier": "admin", "role": "owner", "exp": time.time() + 60, "jti": "owner-session"},
         "test-secret",
         algorithm="HS256",
     )

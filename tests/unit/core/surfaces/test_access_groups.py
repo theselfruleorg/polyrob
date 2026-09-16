@@ -146,3 +146,137 @@ def test_group_flag_explicit_false_wins_over_autonomous_mode(monkeypatch, workdi
     env = {"POLYROB_OWNER_USER_ID": "u_owner", "GROUP_CHAT_ENABLED": "false"}
     assert resolve_access_tier(c, _identity("u_stranger"), env=env) \
         == AccessTier.DENIED
+
+
+# --------------------------------------------------------------------------
+# 044 T16: the tier carries the per-chat ROLE. `blocked` is the only
+# per-member deny; the enum member is GROUP_MEMBER, with GROUP_PARTICIPANT
+# kept as an alias for one release.
+# --------------------------------------------------------------------------
+
+def _roles(workdir):
+    import os
+
+    from core.surfaces.group_roles import GroupRoles
+    return GroupRoles(os.path.join(workdir, "surfaces.db"))
+
+
+def test_group_member_tier_name():
+    assert AccessTier.GROUP_MEMBER.value == "group_member"
+    assert AccessTier.GROUP_PARTICIPANT is AccessTier.GROUP_MEMBER
+
+
+def test_blocked_member_is_denied(workdir):
+    _allow(workdir)
+    _roles(workdir).grant("discord", "chan-1", "u_bad", "blocked", granted_by="rob")
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_bad"), env=env) == AccessTier.DENIED
+
+
+def test_blocked_owner_row_cannot_demote_the_owner(workdir):
+    """The owner principal is resolved BEFORE any row is read, so a room admin
+    cannot block the owner out of his own agent."""
+    _allow(workdir)
+    _roles(workdir).grant("discord", "chan-1", "u_owner", "blocked", granted_by="u_bad")
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_owner"), env=env) == AccessTier.OWNER
+
+
+def test_chat_role_is_stamped_on_the_identity(workdir):
+    _allow(workdir)
+    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+
+    admin = _identity("u_admin")
+    assert resolve_access_tier(c, admin, env=env) == AccessTier.GROUP_MEMBER
+    assert admin.chat_role == "admin"
+
+    plain = _identity("u_stranger")
+    assert resolve_access_tier(c, plain, env=env) == AccessTier.GROUP_MEMBER
+    assert plain.chat_role == "member"
+
+    owner = _identity("u_owner")
+    assert resolve_access_tier(c, owner, env=env) == AccessTier.OWNER
+    assert owner.chat_role == "owner"
+
+
+def test_roles_key_on_the_raw_platform_id(workdir):
+    """`/groups role here 9911` names a TELEGRAM id, so the row must be found
+    by the raw id, not the internal user_id it maps to."""
+    from core.surfaces.envelopes import Identity, SessionSource
+
+    _allow(workdir)
+    _roles(workdir).grant("discord", "chan-1", "9911", "admin", granted_by="rob")
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    ident = Identity(user_id="u_internal",
+                     source=SessionSource(surface_id="discord", chat_id="chan-1",
+                                          chat_type="group"),
+                     raw_user_id="9911")
+    assert resolve_access_tier(c, ident, env=env) == AccessTier.GROUP_MEMBER
+    assert ident.chat_role == "admin"
+
+
+def test_a_role_store_fault_reads_as_member_never_as_admin(workdir, monkeypatch):
+    """Fail-closed toward the LEAST privilege: an unreadable role store makes
+    everyone a member (data), never an admin (a steer)."""
+    _allow(workdir)
+    _roles(workdir).grant("discord", "chan-1", "u_admin", "admin", granted_by="rob")
+
+    import core.surfaces.group_roles as gr
+
+    def _boom(*a, **kw):
+        raise RuntimeError("role store unreadable")
+
+    monkeypatch.setattr(gr.GroupRoles, "role", _boom)
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    ident = _identity("u_admin")
+    assert resolve_access_tier(c, ident, env=env) == AccessTier.GROUP_MEMBER
+    assert ident.chat_role == "member"
+
+
+def test_a_paired_user_is_a_room_MEMBER_not_the_room_owner(workdir):
+    """044 T16 fix round 1. A pairing row says "this person may talk to the
+    agent" — a DM-scoped grant. Reading it as room OWNERSHIP handed any paired
+    user the steer frame, media absorption, the lifecycle verbs and immunity to
+    `blocked` in every allowlisted room. In a room the owner is the bound
+    PRINCIPAL and nobody else."""
+    import os
+
+    from core.pairing import PairingStore
+
+    _allow(workdir)
+    store = PairingStore(os.path.join(workdir, "pairing.db"))
+    store.approve(store.request("u_paired"))
+    assert store.is_paired("u_paired")
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+
+    ident = _identity("u_paired")
+    assert resolve_access_tier(c, ident, env=env) == AccessTier.GROUP_MEMBER
+    assert ident.chat_role == "member"
+
+    # …and a room row can still promote him, which is the supported path.
+    _roles(workdir).grant("discord", "chan-1", "u_paired", "admin", granted_by="u_owner")
+    promoted = _identity("u_paired")
+    assert resolve_access_tier(c, promoted, env=env) == AccessTier.GROUP_MEMBER
+    assert promoted.chat_role == "admin"
+
+
+def test_a_paired_user_is_still_the_owner_in_a_DM(workdir):
+    """The DM branch is unchanged: pairing is exactly the grant it was built to
+    be, and narrowing it there would lock out every paired user."""
+    import os
+
+    from core.pairing import PairingStore
+
+    store = PairingStore(os.path.join(workdir, "pairing.db"))
+    store.approve(store.request("u_paired"))
+    c = _Container(workdir)
+    env = {"GROUP_CHAT_ENABLED": "true", "POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_paired", chat_type="dm"), env=env) \
+        == AccessTier.OWNER

@@ -138,12 +138,14 @@ def _cmd_add(ctx: ApproveCtx, rest: List[str]) -> str:
     ok, err = write_preference(ctx.home_dir, ctx.user_id, "approvals.require", updated)
     if not ok:
         return f"error: {err}"
+    from tools.controller.approval import effective_approval_state
+    gates, provider = effective_approval_state(ctx.user_id, ctx.home_dir)
     return (
         f"Added '{action}' to approvals.require (gate registered)."
         " Note: this action name is not validated against the live tool"
         " registry — that check is skipped from the CLI context; make sure"
         " it's spelled correctly."
-    )
+    ) + _provider_warning(provider, len(gates))
 
 
 # ---------------------------------------------------------------------------

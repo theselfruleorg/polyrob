@@ -22,6 +22,7 @@ import click
 
 from cli.commands.config import _upsert_env
 from core.paths import polyrob_home
+from core.instance import resolve_owner_user_id
 from core.wallet.onchain import VENUE_CHAIN as _VENUE_CHAIN, balances as _balances
 
 # Only these venues hold a same-chain float the agent spends directly. hyperliquid
@@ -480,7 +481,16 @@ def wallet_export_cmd(venue):
         raise click.ClickException("export is interactive-only (needs a TTY; refusing piped output)")
     seed = (os.environ.get("AGENT_WALLET_MASTER_SEED") or "").strip()
     if not seed:
-        raise click.ClickException("no wallet configured — run `polyrob wallet init` first")
+        # 2026-09-14: on a systemd deployment the seed lives in the units' env
+        # files (`/etc/polyrob/wallet.env`, then the legacy `polyrob.env`), which
+        # the operator CLI does not load. Read them here — root-readable only —
+        # so the owner can export without sourcing the files by hand. The file
+        # is opened, never echoed.
+        seed = _seed_from_system_env_files()
+    if not seed:
+        raise click.ClickException(
+            "no wallet configured — run `polyrob wallet init` first (on a server: the seed "
+            "is read from /etc/polyrob/wallet.env or /etc/polyrob/polyrob.env; run as root)")
 
     click.echo("This prints PRIVATE key material. Anyone who sees it controls the funds.")
     typed = click.prompt("Type EXPORT to continue", default="", show_default=False)
@@ -507,8 +517,44 @@ def wallet_export_cmd(venue):
     click.echo("\nper-venue private keys (secp256k1 hex — import as single accounts):")
     for v, key in derived:
         click.echo(f"  {v:11s} 0x{key.hex()}")
+    # Solana (2026-09-14): the SAME seed also derives the agent's Solana account
+    # (SLIP-0010, m/44'/501'/0'/0'), which the EVM keys above cannot reach. Print
+    # it in the form Phantom/Solflare/Backpack import ("private key" = base58 of
+    # the 64-byte keypair) and the byte-array form solana-cli reads.
+    if not venue:
+        try:
+            from core.wallet.solana_signer import derive_solana_keypair
+            kp = derive_solana_keypair(seed, 0)
+            click.echo("\nsolana account 0 (ed25519 — Phantom/Solflare 'import private key'):")
+            click.echo(f"  address     {kp.pubkey()}")
+            click.echo(f"  private key {kp}")
+            click.echo(f"  solana-cli  {list(bytes(kp))}")
+        except Exception as e:  # noqa: BLE001 — solders absent → say so, never hide
+            click.echo(f"\nsolana key: unavailable ({e}) — install `solders` to export it")
     click.echo("\n⚠ Clear your terminal scrollback/shell history after copying "
                "(this output is exactly as sensitive as the funds).")
+
+
+#: The systemd env files the operator export may read (first hit wins).
+_SYSTEM_ENV_FILES = ("/etc/polyrob/wallet.env", "/etc/polyrob/polyrob.env")
+
+
+def _seed_from_system_env_files() -> str:
+    """The seed from the systemd env files, when this process may read them."""
+    from pathlib import Path
+    for p in (Path(x) for x in _SYSTEM_ENV_FILES):
+        try:
+            for raw in p.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if line.startswith("AGENT_WALLET_MASTER_SEED="):
+                    v = line.split("=", 1)[1].strip()
+                    if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+                        v = v[1:-1]
+                    if v:
+                        return v
+        except (FileNotFoundError, PermissionError, OSError):
+            continue
+    return ""
 
 
 @wallet_cmd.command("init")
@@ -557,3 +603,554 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     data_dir = _P(data_dir_opt) if data_dir_opt else None
     run_wallet_init_flow(mnemonic=mnemonic or None, raw_seed=raw_seed or None, home=home,
                          assume_yes=yes, data_dir=data_dir)
+
+
+# ---------------------------------------------------------------------------
+# 037 — cross-chain bridge (owner seat)
+# ---------------------------------------------------------------------------
+
+def _bridge_chain_key(chain_id):
+    """The registry key for a chain id ON A BRIDGE ROW, or ``None``.
+
+    Two resolvers, because a bridge row carries two KINDS of id and only one of
+    them is a chain identifier. ``bridge_guard.chain_name_for_id`` owns the
+    registry ids (and the rule that a falsey id is NOT Solana, whose row carries
+    ``chain_id=0`` because EIP-155 has no analogue). The other is the PROVIDER's
+    own pseudo id for Solana, which is what ``record_pending`` stores as
+    ``origin_chain_id`` for an SVM origin — a `tools`-tier constant that the
+    core tier may not import, so it is resolved HERE, at the seat that renders
+    the row, from the module that owns it rather than from a copy.
+    """
+    from core.wallet.bridge_guard import chain_name_for_id
+    name = chain_name_for_id(chain_id)
+    if name:
+        return name
+    try:
+        from tools.defi.providers.relay_bridge import SOLANA_CHAIN_ID
+        if int(chain_id) == int(SOLANA_CHAIN_ID):
+            return "solana"
+    except Exception:
+        pass
+    return None
+
+
+def _chain_name(chain_id) -> str:
+    """043 D1: a bridge row said "-> chain 4663". A chain id is not a place a
+    person has been; the NAME is, and the id stays beside it so an operator can
+    still match it against the registry."""
+    name = _bridge_chain_key(chain_id)
+    if not name:
+        return f"chain {chain_id}"
+    return f"{name} (chain {chain_id})"
+
+
+def _tx_link(chain_id, tx_ref) -> str:
+    """An explorer link for a transaction that LANDED on *chain_id*, or ``""``.
+
+    ⚠️ ``tx_ref`` on a bridge row is the ORIGIN transaction
+    (``bridge_verb`` settles ``tx_ref=signature`` on the send), so it must be
+    resolved against the ORIGIN chain. Linking it to the destination put a
+    Solana base58 signature inside an EVM explorer URL — a link that looks
+    authoritative and resolves to nothing. Same rule as
+    ``core.wallet.tx_notify``: a link only for the chain the transaction landed
+    on, and no link at all when that chain cannot be named.
+    """
+    if not tx_ref:
+        return ""
+    from core.wallet.chains import explorer_url
+    name = _bridge_chain_key(chain_id)
+    if not name:
+        return ""
+    return explorer_url(name, "tx", str(tx_ref)) or ""
+
+
+@wallet_cmd.command("book")
+@click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
+def wallet_book(user_id):
+    """The ledger against every money chain: one verdict, then what disagrees.
+
+    The SAME reader the console's Money page and the REPL's `/book` use
+    (`tools.defi.book.read_book`), through the SAME renderer
+    (`core.surfaces.inbox_render.render_book`) — so no two seats can describe
+    one book differently. Read-only: nothing signs, nothing broadcasts.
+
+    A chain it could not read is UNVERIFIED, never clean.
+    """
+    import asyncio
+
+    from core.instance import resolve_owner_user_id
+    from core.runtime_paths import resolve_data_home
+    from core.surfaces.inbox_render import render_book
+    from tools.defi.book import read_book
+
+    uid = user_id or resolve_owner_user_id()
+    try:
+        body = asyncio.run(read_book(uid, str(resolve_data_home())))
+    except Exception as exc:
+        raise click.ClickException(
+            f"the book could not be read ({exc}). That is UNKNOWN, not a clean "
+            f"book — do not trade on it.")
+    click.echo(render_book(body))
+
+
+@wallet_cmd.command("bridges")
+@click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
+def wallet_bridges(user_id):
+    """Bridges that have not been proven to arrive.
+
+    An `in_flight` row is an open question about YOUR money, not an error to
+    dismiss: the send landed and the arrival was not measured before the
+    deadline. Never re-send one — a re-sent bridge pays twice.
+    """
+    from core.instance import resolve_owner_user_id
+    from core.wallet import bridge_guard
+
+    uid = user_id or resolve_owner_user_id()
+    try:
+        rows = bridge_guard.open_bridges(uid)
+    except Exception as exc:
+        raise click.ClickException(
+            f"the bridge store could not be read ({exc}). That is UNKNOWN, not "
+            f"'no bridges in flight' — do not treat it as all-clear.")
+    if not rows:
+        click.echo("No bridges awaiting confirmation.")
+        return
+    click.echo(f"{len(rows)} bridge(s) awaiting confirmation:")
+    for r in rows:
+        import datetime as _dt
+        when = _dt.datetime.utcfromtimestamp(float(r["created_at"])).strftime("%Y-%m-%d %H:%MZ")
+        usd = "" if r.get("amount_usd") is None else f" ${float(r['amount_usd']):,.2f}"
+        dest = _chain_name(r.get("dest_chain_id"))
+        click.echo(f"  {r['id']}  [{r['state']}]{usd}  -> {dest}  {when}")
+        click.echo(f"     relay request: {r['request_id']}")
+        # The hash is the ORIGIN send, so the link is the ORIGIN explorer.
+        link = _tx_link(r.get("origin_chain_id"), r.get("tx_ref"))
+        if link:
+            click.echo(f"     {link}")
+        elif r.get("tx_ref"):
+            click.echo(f"     tx {r['tx_ref']}")
+        if r.get("detail"):
+            click.echo(f"     {str(r['detail'])[:300]}")
+
+
+@wallet_cmd.command("bridge")
+@click.argument("from_chain")
+@click.argument("to_chain")
+@click.argument("amount", type=float)
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this is a quote + full "
+                   "assertion pass that sends nothing.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the typed confirmation (for a non-interactive owner run).")
+@click.option("--token-out", default="native", show_default=True,
+              help="Destination asset: 'native', or a token PINNED in the chain "
+                   "registry ('weth'/'usdc' where that chain has one). An "
+                   "arbitrary address is refused.")
+def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
+    """Bridge NATIVE value between chains: polyrob wallet bridge solana robinhood 0.5
+
+    THE OWNER SEAT, and since 2026-09-12 not the only one — a bridge runs on
+    CAPS, NOT TAPS: under DEFI_AUTONOMOUS_MAX_USD the agent may run one itself
+    and report; above it the durable owner queue decides. (The previous wording
+    here, "a bridge never runs on an autonomous turn", described the superseded
+    2026-09-11 policy.)
+
+    It quotes through Relay, asserts the order against what was asked for,
+    simulates the send, then — only with --execute — signs, broadcasts and PROVES
+    THE ARRIVAL by measuring the destination balance.
+    """
+    import asyncio
+    from types import SimpleNamespace
+
+    from tools.defi.bridge_verb import perform_bridge
+    from tools.defi.trade_tool import BridgeParams, DefiTradeTool
+
+    params = BridgeParams(from_chain=from_chain, to_chain=to_chain, amount=amount,
+                          token_out=token_out, dry_run=not execute)
+    tool = DefiTradeTool()
+
+    if execute and not yes:
+        click.echo(click.style(
+            f"About to bridge {amount} native {from_chain} -> {to_chain}. "
+            f"This moves real funds and cannot be undone.", fg="yellow"))
+        click.confirm("Proceed?", abort=True)
+
+    # The CLI IS the owner seat, so there is no forged-turn context to pass.
+    ctx = SimpleNamespace(user_id=resolve_owner_user_id(), role="owner", is_sub_agent=False)
+    result = asyncio.run(perform_bridge(tool, params, ctx))
+    if getattr(result, "error", None):
+        raise click.ClickException(result.error)
+    # ⚠️ ActionResult's field is `extracted_content`, NOT `content`. Reading
+    # `.content` printed "(no output)" over a complete, correct bridge report on
+    # the first prod run — the CLI silently swallowed everything the guard had
+    # to say. The local test stub set `.content`, so it diverged from the real
+    # type and never caught it: a stub that does not match its subject tests the
+    # stub.
+    body = getattr(result, "extracted_content", None)
+    if not body:
+        raise click.ClickException(
+            "the bridge returned neither an error nor a report — that is a bug, "
+            "not an empty result; nothing should be assumed about what happened")
+    click.echo(body)
+
+
+# ---------------------------------------------------------------------------
+# 042 — token creation and the launchpad, on the same owner seat as `bridge`.
+#
+# Deliberately under `wallet` rather than as new top-level commands: the owner's
+# 2026-09-13 interface decision cut the CLI from 45 aliases to 30 and holds
+# there, and these belong to the wallet's authority anyway.
+# ---------------------------------------------------------------------------
+
+def _owner_ctx():
+    """The CLI IS the owner seat, so there is no forged-turn context to pass."""
+    from types import SimpleNamespace
+    return SimpleNamespace(user_id=resolve_owner_user_id(), role="owner", is_sub_agent=False,
+                           metadata={})
+
+
+def _echo_result(result, *, what: str):
+    if getattr(result, "error", None):
+        raise click.ClickException(result.error)
+    # ⚠️ ActionResult's field is `extracted_content`, NOT `content` — reading
+    # `.content` printed "(no output)" over a complete bridge report on its
+    # first prod run.
+    body = getattr(result, "extracted_content", None)
+    if not body:
+        raise click.ClickException(
+            f"the {what} returned neither an error nor a report — that is a bug, "
+            f"not an empty result; nothing should be assumed about what happened")
+    click.echo(body)
+
+
+@wallet_cmd.command("deploy-token")
+@click.argument("symbol")
+@click.argument("supply", type=float)
+@click.argument("name", nargs=-1, required=True)
+@click.option("--chain", default="base", show_default=True)
+@click.option("--decimals", type=int, default=18, show_default=True)
+@click.option("--max-usd", type=float, default=25.0, show_default=True,
+              help="The most this deployment may cost. It sends nothing, so "
+                   "this bounds the GAS FEE.")
+@click.option("--vanity", default="",
+              help="Mine an address starting with these HEX characters (0-9a-f, "
+                   "max 8 — each one is 16x the work). Uses the deterministic "
+                   "CREATE2 factory, so the address is the same on every chain.")
+@click.option("--salt", default="",
+              help="An explicit 32-byte CREATE2 salt. Same effect as --vanity "
+                   "without the search.")
+@click.option("--uri", default="",
+              help="SOLANA only: URI of a JSON metadata file "
+                   "({name,symbol,description,image}). This is where the LOGO "
+                   "comes from; without it the token shows with no picture.")
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this simulates, asserts the "
+                   "produced bytecode against the pinned template, and reports "
+                   "the address it WOULD land at.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the typed confirmation.")
+def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
+                        vanity, salt, uri, execute, yes):
+    """Deploy a fixed-supply token: polyrob wallet deploy-token ROB 1e9 Rob Coin
+
+    On an EVM chain it deploys ONE audited template whose runtime the guard
+    compares byte for byte before signing — no mint function, no owner, no
+    pause, no transfer fee, whole supply to the wallet.
+
+    On `--chain solana` it mints a fixed-supply SPL token and REVOKES the mint
+    authority in the same transaction, then reads the mint back and reports what
+    is actually true of it. The name and symbol are written ON-CHAIN (Token-2022
+    metadata, no Metaplex account); `--uri` points at a JSON file with the logo.
+
+    `--vanity b0b` mines an address starting with those hex characters, through
+    the deterministic factory — which also means the SAME address on every EVM
+    chain for the same bytes.
+
+    This does NOT make the token tradable — use `polyrob wallet launch` for that.
+    """
+    import asyncio
+
+    from tools.defi.deploy_verb import perform_deploy_token
+    from tools.defi.trade_tool import DefiTradeTool, DeployTokenParams
+
+    label = " ".join(name)
+
+    if str(chain).strip().lower() == "solana":
+        from tools.defi.spl_deploy_verb import perform_solana_deploy_token
+        from tools.defi.trade_tool import SolanaDeployTokenParams
+
+        if vanity or salt:
+            raise click.ClickException(
+                "--vanity/--salt are the EVM CREATE2 factory. A Solana mint "
+                "address is a keypair, not a hash of its code — there is "
+                "nothing to mine against here.")
+        if execute and not yes:
+            click.echo(click.style(
+                f"About to mint {supply:g} {symbol} on Solana and revoke the "
+                f"mint authority. This cannot be undone.", fg="yellow"))
+            click.confirm("Proceed?", abort=True)
+        sol_params = SolanaDeployTokenParams(
+            name=label, symbol=symbol, supply=supply, uri=uri,
+            decimals=min(int(decimals), 9), max_spend_usd=max_usd,
+            dry_run=not execute)
+        result = asyncio.run(perform_solana_deploy_token(
+            DefiTradeTool(), sol_params, _owner_ctx()))
+        _echo_result(result, what="deployment")
+        return
+    if execute and not yes:
+        click.echo(click.style(
+            f"About to deploy {symbol} ({label}) with a fixed supply of "
+            f"{supply:g} on {chain}. A deployment cannot be undone and the "
+            f"supply can never change.", fg="yellow"))
+        click.confirm("Proceed?", abort=True)
+
+    params = DeployTokenParams(chain=chain, name=label, symbol=symbol,
+                               supply=supply, decimals=decimals,
+                               max_spend_usd=max_usd, vanity=vanity, salt=salt,
+                               dry_run=not execute)
+    result = asyncio.run(perform_deploy_token(DefiTradeTool(), params,
+                                              _owner_ctx()))
+    _echo_result(result, what="deployment")
+
+
+@wallet_cmd.command("launch")
+@click.argument("symbol")
+@click.argument("name", nargs=-1, required=True)
+@click.option("--buy", type=float, default=0.0, show_default=True,
+              help="Opening buy in the chain's NATIVE asset. 0 launches with no "
+                   "opening position, which also means anyone else takes the "
+                   "first one.")
+@click.option("--creator-tax-bps", type=int, default=100, show_default=True,
+              help="Creator tax on every curve trade, paid to this wallet.")
+@click.option("--logo", default="",
+              help="Logo URI (https:// or ipfs://). A launch with no logo looks "
+                   "abandoned next to the ones that have one.")
+@click.option("--desc", default="", help="Short description shown on the launchpad.")
+@click.option("--x", "twitter", default="", help="X/Twitter URL.")
+@click.option("--site", default="", help="Website URL.")
+@click.option("--max-usd", type=float, default=0.0,
+              help="The most this launch may cost. Default: sized from --buy.")
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this reads the live terms, "
+                   "prices the opening buy and reports.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the typed confirmation.")
+def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
+                  site, max_usd, execute, yes):
+    """Launch a token on the Pons launchpad: polyrob wallet launch ROB Rob Coin
+
+    Deploys the token AND its bonding curve in one transaction on Robinhood
+    Chain. Fixed 1B supply into a curve that graduates to a locked Uniswap pool.
+
+    Every term (fee, supply, graduation threshold) is read LIVE and committed, so
+    terms that move between the quote and the broadcast revert rather than
+    silently applying.
+
+    WARNING: everything on a launchpad is a memecoin. The caps bound what this
+    can spend; they do not make it a good idea.
+    """
+    import asyncio
+
+    from tools.launchpad.tool import LaunchParams, LaunchpadTool
+
+    label = " ".join(name)
+    ceiling = max_usd if max_usd > 0 else max(25.0, (buy + 0.01) * 6000.0)
+    if execute and not yes:
+        click.echo(click.style(
+            f"About to launch {symbol} ({label}) on Pons"
+            + (f" with an opening buy of {buy:g} native." if buy else " with no "
+               "opening buy.")
+            + " This cannot be undone.", fg="yellow"))
+        click.confirm("Proceed?", abort=True)
+
+    if not logo:
+        click.echo(click.style(
+            "note: no --logo. On a launchpad that is how a token looks "
+            "abandoned.", fg="yellow"))
+    params = LaunchParams(name=label, symbol=symbol, buy_amount=buy,
+                          creator_tax_bps=creator_tax_bps, logo=logo,
+                          description=desc, twitter=twitter, website=site,
+                          max_spend_usd=ceiling, dry_run=not execute)
+    result = asyncio.run(LaunchpadTool().launchpad_launch(params, _owner_ctx()))
+    _echo_result(result, what="launch")
+
+
+@wallet_cmd.command("curve")
+@click.argument("token")
+@click.option("--buy", type=float, default=0.0,
+              help="Price buying this much of the quote asset.")
+@click.option("--sell", type=float, default=0.0,
+              help="Price selling this many tokens.")
+def wallet_curve(token, buy, sell):
+    """Read a launchpad token's curve, or price a trade on it.
+
+    polyrob wallet curve 0xabc…            — state and graduation progress
+    polyrob wallet curve 0xabc… --buy 0.1  — what 0.1 native would buy
+    """
+    import asyncio
+
+    from tools.launchpad.tool import LaunchpadTool, QuoteParams, StatusParams
+
+    tool = LaunchpadTool()
+    if buy > 0 or sell > 0:
+        params = QuoteParams(token=token, side="buy" if buy > 0 else "sell",
+                             amount=buy if buy > 0 else sell)
+        result = asyncio.run(tool.launchpad_quote(params, _owner_ctx()))
+    else:
+        result = asyncio.run(
+            tool.launchpad_status(StatusParams(token=token), _owner_ctx()))
+    _echo_result(result, what="curve read")
+
+
+# ---------------------------------------------------------------------------
+# 046: the assets the treasury may be paid in.
+#
+# ⚠️ No new TOP-LEVEL CLI group. 043 cut the top level from 45 names to 30 and
+# pinned it there; `wallet` already owns chain and token identity, so the asset
+# verbs belong here.
+#
+# ⚠️ These are the ONLY writers of an operator asset row. There is deliberately
+# no agent action and no chat verb that creates one — an asset is an operator
+# grant, the line proposal 036 drew for standing work.
+# ---------------------------------------------------------------------------
+
+@wallet_cmd.group("asset")
+def wallet_asset():
+    """Assets the treasury may be paid in (proposal 046). Operator-only."""
+
+
+def _asset_rpc(ctx: click.Context, chain: str):
+    """The RPC callable for *chain* — an injected one (tests) or the pinned one."""
+    injected = (ctx.obj or {}).get("rpc_call") if isinstance(ctx.obj, dict) else None
+    if injected is not None:
+        return injected
+    from core.wallet.onchain import _rpc, rpc_url_for_chain
+    url = rpc_url_for_chain(chain)
+    if not url:
+        raise click.ClickException(
+            f"no RPC pinned for chain {chain!r} — set DEFI_EVM_RPC_"
+            f"{chain.upper().replace('-', '_')} first")
+    return lambda method, params: _rpc(url, method, params)
+
+
+def _require_known_chain(chain: str) -> str:
+    from core.wallet import chains
+    chain = (chain or "").strip().lower()
+    if chains.get(chain) is None:
+        raise click.ClickException(
+            f"unknown chain {chain!r} — core/wallet/chains.py has rows for "
+            f"{', '.join(chains.names())}")
+    return chain
+
+
+def _require_evm_address(address: str) -> str:
+    address = (address or "").strip().lower()
+    ok = address.startswith("0x") and len(address) == 42
+    if ok:
+        try:
+            int(address[2:], 16)
+        except ValueError:
+            ok = False
+    if not ok:
+        raise click.ClickException(f"{address!r} is not an EVM token address")
+    return address
+
+
+@wallet_asset.command("add")
+@click.option("--id", "asset_id", required=True, help="short id, e.g. rob")
+@click.option("--chain", required=True)
+@click.option("--address", required=True)
+@click.option("--decimals", type=int, default=None,
+              help="required unless --verify reads them from the chain")
+@click.option("--symbol", default="")
+@click.option("--min-amount", "min_amount", default="0",
+              help="hard floor in RAW token units for any invoice in this asset")
+@click.option("--liquidity-floor", type=float, default=0.0,
+              help="refuse to price against a pool shallower than this (USD)")
+@click.option("--verify", is_flag=True,
+              help="read decimals()/symbol() on-chain ONCE and freeze them")
+@click.pass_context
+def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
+                     min_amount, liquidity_floor, verify):
+    """Pin an asset the treasury may be paid in.
+
+    ⚠️ ``decimals`` denominates every amount comparison the settlement scan
+    makes, so it is FROZEN here and never re-read. Prefer --verify.
+    """
+    import time
+
+    from core.payments.assets import (AssetStore, PaymentAsset, store_path,
+                                      verify_on_chain)
+
+    chain = _require_known_chain(chain)
+    address = _require_evm_address(address)
+
+    if verify:
+        decimals, symbol = verify_on_chain(chain, address,
+                                           rpc_call=_asset_rpc(ctx, chain))
+        click.echo(f"verified on {chain}: decimals={decimals} symbol={symbol}")
+    if decimals is None:
+        raise click.ClickException(
+            "--decimals is required without --verify (never guess decimals: "
+            "they denominate money)")
+    try:
+        floor = int(min_amount)
+    except ValueError:
+        raise click.ClickException(f"--min-amount {min_amount!r} is not an integer "
+                                   f"(it is RAW token units, not a decimal amount)")
+
+    AssetStore(store_path()).upsert(PaymentAsset(
+        asset_id=asset_id.strip().lower(), chain=chain, address=address,
+        decimals=int(decimals), symbol=symbol or "", rail="onchain_scan",
+        min_amount_raw=floor, liquidity_floor_usd=float(liquidity_floor),
+        verified_at=time.time(), source="operator"))
+    click.echo(f"✅ {asset_id} = {symbol or '?'} on {chain} "
+               f"({decimals} decimals), floor {floor} raw units.")
+
+
+@wallet_asset.command("list")
+def wallet_asset_list():
+    """Every asset the treasury can be paid in, and where each row came from."""
+    from core.payments.assets import all_assets
+
+    for a in all_assets():
+        click.echo(f"{a.asset_id:24} {a.symbol:8} {a.chain:14} "
+                   f"{a.decimals:>2}d  {a.rail:14} {a.source}")
+
+
+@wallet_asset.command("verify")
+@click.argument("asset_id")
+@click.pass_context
+def wallet_asset_verify(ctx, asset_id):
+    """Re-read the contract and REPORT. Never rewrites a frozen row."""
+    from core.payments.assets import resolve, verify_on_chain
+
+    row = resolve(asset_id)
+    if row is None:
+        raise click.ClickException(f"unknown asset {asset_id!r}")
+    if not row.address:
+        raise click.ClickException(f"{asset_id} is a native coin — nothing to read")
+    decimals, symbol = verify_on_chain(row.chain, row.address,
+                                       rpc_call=_asset_rpc(ctx, row.chain))
+    if decimals != row.decimals or symbol != row.symbol:
+        click.echo(
+            f"⚠️ metadata_changed: {asset_id} is pinned at decimals="
+            f"{row.decimals} symbol={row.symbol!r} and now reports decimals="
+            f"{decimals} symbol={symbol!r}. The pin is UNCHANGED — money math "
+            f"reads the frozen value. Investigate before you trust this token.")
+        return
+    click.echo(f"✅ {asset_id} still reports decimals={decimals} symbol={symbol}.")
+
+
+from cli.commands.wallet_lp import lp_cmd
+wallet_cmd.add_command(lp_cmd)
+
+
+@wallet_cmd.command("overview")
+@click.option("--json", "as_json", is_flag=True)
+def wallet_overview(as_json):
+    """Shared wallet identities, cached balances, limits and unresolved sends."""
+    from dataclasses import asdict
+    from core.wallet.view import wallet_view, render_wallet
+    view = wallet_view(resolve_owner_user_id())
+    click.echo(__import__("json").dumps(asdict(view)) if as_json else render_wallet(view))

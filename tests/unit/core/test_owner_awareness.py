@@ -28,5 +28,5 @@ def test_awareness_line_suppresses_owner_clause_when_owner_equals_instance():
 
 def test_awareness_line_names_distinct_owner():
     # A DISTINCT human owner (different from the instance id) IS named.
-    line = owner_awareness_line({"POLYROB_OWNER_USER_ID": "gleb", "POLYROB_INSTANCE_ID": "rob"})
-    assert "gleb" in line.split("Content")[0]
+    line = owner_awareness_line({"POLYROB_OWNER_USER_ID": "alice", "POLYROB_INSTANCE_ID": "rob"})
+    assert "alice" in line.split("Content")[0]

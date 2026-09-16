@@ -26,7 +26,8 @@ def _seed(path, rows=3):
     c.close()
 
 
-def test_idle_db_not_in_use(tmp_path):
+def test_idle_db_not_in_use(tmp_path, monkeypatch):
+    monkeypatch.setattr("cli.update.process_guard.server_process_alive", lambda: False)
     db = tmp_path / "memory.db"
     _seed(db)
     assert dbs_in_use([db]) == []
@@ -121,7 +122,22 @@ def test_active_use_reasons_flags_running_server(monkeypatch):
 # os.replace DBs under a live agent without --force.
 # ---------------------------------------------------------------------------
 
-def test_cmdline_scan_not_empty_on_this_platform():
+@pytest.fixture
+def visible_processes():
+    """Skip only a positively identified OS sandbox restriction, not an empty scan."""
+    import subprocess
+    import sys
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(["/bin/ps", "-axo", "pid=,args="], capture_output=True, text=True)
+        except PermissionError:
+            pytest.skip("OS sandbox denies process enumeration")
+        else:
+            if result.returncode and "permitted" in result.stderr.lower():
+                pytest.skip("OS sandbox denies process enumeration")
+
+
+def test_cmdline_scan_not_empty_on_this_platform(visible_processes):
     """The default scan yields processes on EVERY supported platform (this test
     runs on macOS in dev and Linux in CI — both must produce a non-empty scan)."""
     from cli.update.process_guard import _iter_cmdlines
@@ -143,7 +159,7 @@ def test_ps_output_parsing():
     assert len(parsed) == 2
 
 
-def test_live_scan_detects_spawned_polyrob_lookalike(tmp_path):
+def test_live_scan_detects_spawned_polyrob_lookalike(tmp_path, visible_processes):
     """End-to-end on the real platform scanner: spawn a process whose argv looks
     like the prod agent (`polyrob telegram`) and require the guard to see it."""
     import subprocess
@@ -161,6 +177,11 @@ def test_live_scan_detects_spawned_polyrob_lookalike(tmp_path):
     finally:
         proc.kill()
         proc.wait()
+
+
+def test_unavailable_scan_blocks_restore(monkeypatch):
+    monkeypatch.setattr("cli.update.process_guard._iter_cmdlines", lambda: iter(()))
+    assert any("unavailable" in reason for reason in active_use_reasons([]))
 
 
 def test_update_lock_serializes(tmp_path):

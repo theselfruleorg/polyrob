@@ -72,7 +72,15 @@ class SurfaceConfig:
 
     @staticmethod
     def group_require_mention() -> bool:
-        """W3: in groups, act only when the bot is @mentioned (default ON)."""
+        """W3: in groups, act only when the bot is @mentioned (default ON).
+
+        ⚠️ 044 T17 retired this as a GATE. The routing boundary now asks
+        ``core/surfaces/chat_policy.py::mode_allows_trigger``, and this flag
+        survives for ONE release as an alias resolved inside
+        ``ChatPolicy.defaults()``: ``GROUP_REQUIRE_MENTION=false`` means
+        ``chat.mode=active``. Nothing else reads it — set ``GROUP_DEFAULT_MODE``
+        (or a per-room ``chat.mode``) instead.
+        """
         return _bool_env("GROUP_REQUIRE_MENTION", True)
 
     @staticmethod

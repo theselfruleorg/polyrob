@@ -10,6 +10,7 @@ scan checkpoint past unread blocks.
 (tests/unit/modules/credits/test_balances.py) — these tests pin the code to it.
 """
 import json
+from io import BytesIO
 
 import pytest
 
@@ -18,10 +19,10 @@ import core.wallet.onchain as onchain
 
 class _FakeResp:
     def __init__(self, payload):
-        self._b = json.dumps(payload).encode()
+        self._stream = BytesIO(json.dumps(payload).encode())
 
-    def read(self):
-        return self._b
+    def read(self, size=-1):
+        return self._stream.read(size)
 
     def __enter__(self):
         return self

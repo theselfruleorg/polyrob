@@ -127,6 +127,10 @@ class GitTool(BaseTool):
     async def _run_git(self, args: List[str], execution_context=None, cwd: Optional[str] = None):
         """Run ``git -C <cwd or root> <args>`` in a thread; return (ok, text)."""
         import asyncio
+        from core.security.host_execution import host_execution_refusal
+        refusal = host_execution_refusal()
+        if refusal:
+            return False, refusal
         root = self._resolve_root(execution_context)
         workdir = cwd or root
         argv = ["git", "-C", workdir] + list(args)

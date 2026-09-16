@@ -5,7 +5,7 @@ table. It maps raw platform ids (telegram chat ids, CLI ids, etc.) to a STABLE
 internal ``user_id`` and provides the reverse/email lookups that ``cron/delivery.py``
 calls (sync, by internal user_id).
 
-Ported (reused, not forked) from ../rob_dev_telegram_version:
+Shared with the earlier Telegram adapter:
 - modules/database/user_profiles.py (get_or_create_by_tg_id, generate_user_id, schema)
 - utils/user_id_utils.py (UserIDResolver bidirectional mapping)
 """

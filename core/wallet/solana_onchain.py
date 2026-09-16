@@ -40,12 +40,15 @@ def rpc_url() -> str:
 
 
 def _rpc(method: str, params: list, timeout: float = 8.0):
+    import time
+    from core.wallet.rpc_response import read_response
+    deadline = time.monotonic() + timeout
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
                        "params": params}).encode()
     req = urllib.request.Request(rpc_url(), data=body, headers={
-        "content-type": "application/json", "user-agent": "polyrob-wallet/1.0"})
+        "content-type": "application/json", "user-agent": "polyrob-wallet/1.0", "accept-encoding": "identity"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        payload = json.loads(r.read())
+        payload = read_response(r, deadline=deadline)
     if isinstance(payload, dict) and payload.get("error") is not None:
         raise RuntimeError(f"{method}: {payload['error']}")
     return (payload or {}).get("result")

@@ -330,7 +330,7 @@ def kind_for_path(path: str) -> str:
 
 
 def record_artifact(user_id: Optional[str], path: str, *,
-                    session_id: str = "", kind: Optional[str] = None) -> None:
+                    session_id: str = "", kind: Optional[str] = None) -> Optional[str]:
     """Tool-agnostic write-time record into the ledger. Fail-open by construction.
 
     The ledger is the reliable source the acceptance-check + retry-continuity
@@ -338,12 +338,20 @@ def record_artifact(user_id: Optional[str], path: str, *,
     not only the filesystem tool) must record here — otherwise a real deliverable
     reads as "never produced". Never raises: a bookkeeping failure must not break
     a write the agent already completed.
+
+    Returns the artifact's row id (a short uuid4 hex string, ``Artifact.id``) so
+    a caller can stamp it onto its own result (e.g.
+    ``ActionResult.metadata["artifact_id"]``) for a direct lookup later — or
+    ``None`` on any fail-open path (no user_id, the file doesn't exist yet, or
+    a bookkeeping error).
     """
     try:
         if not user_id:
-            return
-        get_artifact_ledger().record(
+            return None
+        artifact = get_artifact_ledger().record(
             str(user_id), path, session_id=str(session_id or ""),
             kind=kind or kind_for_path(path))
+        return artifact.id if artifact is not None else None
     except Exception:
         logger.debug("artifact record skipped for %s", path, exc_info=True)
+        return None

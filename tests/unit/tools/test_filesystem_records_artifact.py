@@ -79,3 +79,43 @@ async def test_a_failed_write_records_nothing(_pm, monkeypatch):
         await t.write_file(WriteFileAction(file_path="../../escape.md", content="x"))
 
     assert get_artifact_ledger().list_for_session("rob", "s1") == []
+
+
+# --------------------------------------------------------------------------- #
+# 043 A18: record_artifact() now returns the row id; write_file stamps it onto
+# an ActionResult.metadata["artifact_id"] instead of always returning a bare
+# JSON string (which the Controller auto-wraps into a metadata-less
+# ActionResult — tools/controller/execution.py).
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.asyncio
+async def test_write_file_stamps_artifact_id_on_the_result(_pm, monkeypatch):
+    from tools.controller.types import ActionResult
+
+    monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
+    t = _fs_tool()
+
+    res = await t.write_file(WriteFileAction(file_path="report.md", content="# findings\n"))
+
+    row = get_artifact_ledger().list_for_session("rob", "s1")[0]
+    assert isinstance(res, ActionResult)
+    assert res.metadata == {"artifact_id": row.id}
+    # The JSON success payload is preserved verbatim inside extracted_content.
+    import json
+    payload = json.loads(res.extracted_content)
+    assert payload["success"] is True
+    assert payload["filepath"] == "report.md"
+
+
+@pytest.mark.asyncio
+async def test_write_file_without_user_id_returns_a_plain_string(_pm, monkeypatch):
+    # No artifact recorded (no tenant) -> no metadata to stamp -> the
+    # pre-A18 plain-string return is unchanged (auto-wrapped by the
+    # Controller, byte-identical to before this change).
+    monkeypatch.setattr(FileSystem, "ensure_initialized", lambda self: _noop(), raising=False)
+    t = _fs_tool(user_id=None)
+
+    res = await t.write_file(WriteFileAction(file_path="report.md", content="# findings\n"))
+
+    assert isinstance(res, str)
+    assert get_artifact_ledger().list_for_session("rob", "s1") == []

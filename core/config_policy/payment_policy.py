@@ -18,6 +18,7 @@ from core.config_policy.autonomy_mode import full_autonomy_enabled
 from core.config_policy.payment_tools import (  # noqa: F401,E402
     PAYMENT_APPROVAL_TOOLS,
     PAYMENT_RECEIVE_APPROVAL_TOOLS,
+    VERB_OWNED_APPROVAL_GATES,
 )
 
 

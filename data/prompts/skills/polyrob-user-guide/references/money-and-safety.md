@@ -24,7 +24,21 @@ work around one because a task feels urgent.
 - **Delivery rate** — proactive messages to the owner are capped
   (`delivery.rate_per_hour` / `delivery.daily_cap` preferences,
   `USER_DELIVERY_RATE_PER_HOUR` / `USER_DELIVERY_DAILY_CAP` env) with content-
-  hash dedup so you can't spam the same notification repeatedly.
+  hash dedup so you can't spam the same notification repeatedly. Four things
+  are worth knowing when a send comes back suppressed:
+  - **A bounded message is not a lost message.** `capped`, `rate_limited`,
+    `paused`, `fallback` and `cooldown` are all recorded durably and the owner
+    reads them with `/missed`. Say the report exists and where; do NOT keep
+    retrying the same text, and do NOT treat it as a failure of the work.
+  - **`deduped` means the owner already has that exact text.** Nothing is
+    pending. Only a MATERIALLY different message is worth sending.
+  - **The owner-resend cooldown reads CONTENT, not a clock.** It refuses a
+    repeat of text already sent within `OWNER_MESSAGE_COOLDOWN_SEC`; a
+    genuinely new report goes through immediately. If it refuses you, the right
+    move is to say something new, not to wait or to re-send.
+  - **Safety-bearing messages are never capped** — an approval you are blocked
+    on, a blocked goal, a transaction that already moved money, a credit or
+    security notice. You never need to ration those.
 
 ## Approval gates
 

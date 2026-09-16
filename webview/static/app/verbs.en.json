@@ -1,0 +1,296 @@
+{
+  "_generated_by": "scripts/gen_verbs_json.py from core/verbs.py — do not edit by hand",
+  "group_order": [
+    "talk",
+    "needs you",
+    "work",
+    "money",
+    "control",
+    "remember",
+    "look",
+    "set up",
+    "display",
+    "leave"
+  ],
+  "verbs": [
+    {
+      "name": "/start",
+      "group": "talk",
+      "help": "A welcome and a short tour of what I can do",
+      "aliases": []
+    },
+    {
+      "name": "/inbox",
+      "group": "needs you",
+      "help": "Everything waiting on a decision from you, blocking first",
+      "aliases": []
+    },
+    {
+      "name": "/pending",
+      "group": "needs you",
+      "help": "Proposals I have learned, waiting for your approval",
+      "aliases": []
+    },
+    {
+      "name": "/approve",
+      "group": "needs you",
+      "help": "Approve something that is waiting on you",
+      "aliases": []
+    },
+    {
+      "name": "/reject",
+      "group": "needs you",
+      "help": "Discard a pending proposal",
+      "aliases": []
+    },
+    {
+      "name": "/asks",
+      "group": "needs you",
+      "help": "What I need from you to unblock work",
+      "aliases": []
+    },
+    {
+      "name": "/fulfill",
+      "group": "needs you",
+      "help": "Mark an ask fulfilled so its work can continue",
+      "aliases": []
+    },
+    {
+      "name": "/goal",
+      "group": "work",
+      "help": "Steer one goal or a whole stream",
+      "aliases": []
+    },
+    {
+      "name": "/goals",
+      "group": "work",
+      "help": "The goal board summary",
+      "aliases": []
+    },
+    {
+      "name": "/cron",
+      "group": "work",
+      "help": "Durable scheduled runs: list, add, or cancel",
+      "aliases": []
+    },
+    {
+      "name": "/apps",
+      "group": "work",
+      "help": "Deployed apps: approve an address, check health, or kill one",
+      "aliases": []
+    },
+    {
+      "name": "/book",
+      "group": "money",
+      "help": "My ledger against every money chain: one verdict, then what disagrees",
+      "aliases": []
+    },
+    {
+      "name": "/wallet",
+      "group": "money",
+      "help": "Wallet addresses, network, and spend caps",
+      "aliases": []
+    },
+    {
+      "name": "/invoices",
+      "group": "money",
+      "help": "What I have billed and who owes me",
+      "aliases": []
+    },
+    {
+      "name": "/settle",
+      "group": "money",
+      "help": "Mark an invoice paid",
+      "aliases": []
+    },
+    {
+      "name": "/trade",
+      "group": "money",
+      "help": "Start a run that carries the money verb",
+      "aliases": []
+    },
+    {
+      "name": "/bridge",
+      "group": "money",
+      "help": "Move native value from one chain to another",
+      "aliases": []
+    },
+    {
+      "name": "/launch",
+      "group": "money",
+      "help": "Launch a token on the launchpad",
+      "aliases": []
+    },
+    {
+      "name": "/deploy",
+      "group": "money",
+      "help": "Deploy a fixed-supply token",
+      "aliases": []
+    },
+    {
+      "name": "/lp",
+      "group": "money",
+      "help": "Liquidity positions: inspect, quote, add, remove, or collect fees",
+      "aliases": []
+    },
+    {
+      "name": "/paid",
+      "group": "money",
+      "help": "Paid room actions: status, pricing, and offers",
+      "aliases": []
+    },
+    {
+      "name": "/cancel",
+      "group": "control",
+      "help": "Stop the task I am running now",
+      "aliases": []
+    },
+    {
+      "name": "/pause",
+      "group": "control",
+      "help": "Stop autonomous work now, all of it or one scope",
+      "aliases": []
+    },
+    {
+      "name": "/resume",
+      "group": "control",
+      "help": "Lift the pause",
+      "aliases": []
+    },
+    {
+      "name": "/halt",
+      "group": "control",
+      "help": "Stop all autonomous work now",
+      "aliases": []
+    },
+    {
+      "name": "/mode",
+      "group": "control",
+      "help": "The effective autonomy posture and how to change it",
+      "aliases": []
+    },
+    {
+      "name": "/dev",
+      "group": "control",
+      "help": "Message the dev and ops loop directly",
+      "aliases": []
+    },
+    {
+      "name": "/recap",
+      "group": "remember",
+      "help": "What I have done over a recent window",
+      "aliases": []
+    },
+    {
+      "name": "/journey",
+      "group": "remember",
+      "help": "What I have done over a recent window",
+      "aliases": []
+    },
+    {
+      "name": "/kb",
+      "group": "remember",
+      "help": "Search and list my knowledge base",
+      "aliases": []
+    },
+    {
+      "name": "/status",
+      "group": "look",
+      "help": "Health first, then session, goals, loops, and wallet",
+      "aliases": []
+    },
+    {
+      "name": "/files",
+      "group": "look",
+      "help": "Recent files I produced",
+      "aliases": []
+    },
+    {
+      "name": "/allow",
+      "group": "set up",
+      "help": "Allow me to message a target",
+      "aliases": []
+    },
+    {
+      "name": "/deny",
+      "group": "set up",
+      "help": "Revoke a message permission",
+      "aliases": []
+    },
+    {
+      "name": "/allowlist",
+      "group": "set up",
+      "help": "Who I am allowed to message",
+      "aliases": []
+    },
+    {
+      "name": "/groups",
+      "group": "set up",
+      "help": "Room presence admin: allow, deny, mode, roles, and more",
+      "aliases": []
+    },
+    {
+      "name": "/mute",
+      "group": "set up",
+      "help": "Silence a room, or mute a member for a while",
+      "aliases": []
+    },
+    {
+      "name": "/ban",
+      "group": "set up",
+      "help": "Ban a member for a while",
+      "aliases": []
+    },
+    {
+      "name": "/unban",
+      "group": "set up",
+      "help": "Lift a member's ban",
+      "aliases": []
+    },
+    {
+      "name": "/unmute",
+      "group": "set up",
+      "help": "End a member's mute early",
+      "aliases": []
+    },
+    {
+      "name": "/config",
+      "group": "set up",
+      "help": "Read or set preferences",
+      "aliases": []
+    },
+    {
+      "name": "/prefs",
+      "group": "set up",
+      "help": "The preferences you have set",
+      "aliases": []
+    },
+    {
+      "name": "/mcp",
+      "group": "set up",
+      "help": "MCP servers I can use: add, remove, or test",
+      "aliases": []
+    },
+    {
+      "name": "/avatar",
+      "group": "display",
+      "help": "This instance's face, traits, and voice signature",
+      "aliases": []
+    },
+    {
+      "name": "/help",
+      "group": "leave",
+      "help": "This help, or the detail for one verb",
+      "aliases": [
+        "/h",
+        "/?"
+      ]
+    },
+    {
+      "name": "/missed",
+      "group": "leave",
+      "help": "Owner messages the daily cap suppressed",
+      "aliases": []
+    }
+  ]
+}

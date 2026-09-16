@@ -62,9 +62,12 @@ model):
   originating session wrapped as `<correspondent-message>` — never treated as
   an instruction, and capability-gated (money/comms/code-exec/delegation/
   browser tools are blocked while a session is correspondent-tainted).
-- **GROUP_PARTICIPANT** (`GROUP_CHAT_ENABLED`) — in an allow-listed group
-  chat, a non-owner member's @mention routes the same way as a correspondent
-  message — DATA into the bound group session, never a command.
+- **GROUP_MEMBER** (`GROUP_CHAT_ENABLED`) — in an allow-listed group chat, a
+  non-owner member's @mention routes the same way as a correspondent message —
+  DATA into the bound group session, never a command. Each room also carries a
+  per-chat ROLE: `admin` (promoted by the owner — his line STEERS the room
+  session), `member` (the default; his line is data) and `blocked` (the only
+  per-member deny, resolved to DENIED).
 - **DENIED** — unknown/unverified sender, or a non-allow-listed group. Group
   denials are silent (no auth-spam in shared channels).
 

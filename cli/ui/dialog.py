@@ -33,6 +33,7 @@ def summary_segments(
     tools: int = 0,
     tokens: int = 0,
     cost: float = 0.0,
+    cost_incomplete: bool = False,
     elapsed_seconds: float = 0.0,
     failed: bool = False,
 ) -> List[str]:
@@ -51,7 +52,9 @@ def summary_segments(
         parts.append(f"{tools} tool{'s' if tools != 1 else ''}")
     if tokens:
         parts.append(f"{fmt_tokens(tokens)} tok")
-    if cost >= 0.00005:  # below this it renders as $0.0000 — omit
+    if cost_incomplete:
+        parts.append(f"${cost:.4f} + unknown" if cost else "cost unknown")
+    elif cost >= 0.00005:  # below this it renders as $0.0000 — omit
         parts.append(f"${cost:.4f}")
     if elapsed_seconds >= 1.0:
         parts.append(f"{elapsed_seconds:.0f}s")
@@ -82,27 +85,11 @@ SUPPRESS_DONE_RECAP = os.getenv("CLI_SUPPRESS_DONE_RECAP", "true").strip().lower
     "no",
 )
 
-#: A recap leads with bookkeeping narration about the turn just completed.
-_RECAP_LEAD_RE = re.compile(
-    r"^(responded|response|sent|greeted|replied|reported|acknowledged|"
-    r"completed|task complete|done|finished|provided|delivered|no further|"
-    r"i (?:have )?(?:responded|replied|greeted|sent|reported))\b",
-    re.IGNORECASE,
-)
-
-
-def is_redundant_recap(answer: Optional[str], bubble_text: Optional[str]) -> bool:
-    """True when *answer* is a bookkeeping recap of an already-rendered bubble
-    rather than new user-facing content. Conservative — when unsure, returns False
-    (never eat a genuine final answer)."""
-    a = (answer or "").strip()
-    b = (bubble_text or "").strip()
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    # Short meta-narration about the turn that just happened.
-    return len(a) <= 200 and _RECAP_LEAD_RE.match(a) is not None
+#: C6: the recap heuristic moved to ``core/surfaces/recap.py`` so every seat
+#: inherits it — this lived here, in ONE renderer, while Telegram, the webview
+#: console and email had nothing (finding F3). Re-exported so existing import
+#: sites and tests keep working unchanged.
+from core.surfaces.recap import _RECAP_LEAD_RE, is_redundant_recap  # noqa: F401,E402
 
 # ---------------------------------------------------------------------------
 # Plumbing strings — the receipts the send_message tool returns to the agent.

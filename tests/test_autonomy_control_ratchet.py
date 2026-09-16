@@ -57,6 +57,58 @@ def test_no_starter_reads_a_legacy_sentinel_directly():
     assert bad == [], f"legacy sentinel names referenced outside core/autonomy_control.py: {bad}"
 
 
+# --- 043 A8/A42: every declared kind has a caller, or is honestly dormant ---
+
+#: the top-level trees a kind-caller may live in, matching the brief's scope.
+_KIND_SEARCH_DIRS = ("core", "agents", "tools", "cron", "modules", "surfaces",
+                     "cli", "webview")
+#: the file that DECLARES the kinds (KIND_SCOPES / DORMANT_KINDS) — excluded
+#: from the caller search, or every kind would trivially "have a caller"
+#: (its own dict key, sitting next to the `allows(` in the same module).
+_KIND_DECLARATION_FILE = "core/autonomy_control.py"
+#: a direct `allows("<kind>")` / `_allows("<kind>")` call, OR the documented
+#: wrapper `pause_refusal_text("<kind>", ...)` (itself a direct `allows(kind,
+#: data_dir)` call — see its docstring) — OR a `_PAUSE_KIND_BY_SOURCE`-style
+#: dict literal that feeds a variable into a nearby `allows(var)` call (the
+#: literal and the call need only share a file, matching how this test's
+#: sibling greps treat a docstring mention as "the file talks about allows(").
+#: The negative lookbehind deliberately does NOT match a qualified
+#: `autonomy_control.allows(`/`self._allows(` call (mirrors `_CALL` above) —
+#: every real caller in the tree imports the predicate by name.
+_KIND_CALL = re.compile(r"(?<![\w.])(?:_?allows|pause_refusal_text)\(")
+
+
+def test_every_kind_has_a_caller_or_is_dormant():
+    """A `KIND_SCOPES` row with zero callers anywhere in the tree must be named
+    in `DORMANT_KINDS` — the plain-word table must not offer a scope whose
+    kinds are all dormant. Bidirectional: a kind WITH a caller may not sit in
+    DORMANT_KINDS either (a stale dormant entry hides a real gap the day a
+    caller lands and nobody removes the label)."""
+    from core.autonomy_control import DORMANT_KINDS, KIND_SCOPES
+
+    files = []
+    for d in _KIND_SEARCH_DIRS:
+        for py in sorted((REPO / d).rglob("*.py")):
+            rel = py.relative_to(REPO)
+            if "tests" in rel.parts or str(rel) == _KIND_DECLARATION_FILE:
+                continue
+            files.append(py)
+    sources = [py.read_text(encoding="utf-8", errors="replace") for py in files]
+
+    has_caller = set()
+    for kind in KIND_SCOPES:
+        needle_d, needle_s = f'"{kind}"', f"'{kind}'"
+        for src in sources:
+            if (needle_d in src or needle_s in src) and _KIND_CALL.search(src):
+                has_caller.add(kind)
+                break
+
+    no_caller = set(KIND_SCOPES) - has_caller
+    assert no_caller == set(DORMANT_KINDS), (
+        f"kinds with zero callers must equal DORMANT_KINDS exactly — "
+        f"no_caller={sorted(no_caller)} dormant={sorted(DORMANT_KINDS)}")
+
+
 def test_only_autonomy_control_and_owner_admin_probe_legacy_names_in_core():
     """Beyond the starters: in the core tier only the record module (reads the
     facets) and owner_admin (names them for the owner) may mention them."""

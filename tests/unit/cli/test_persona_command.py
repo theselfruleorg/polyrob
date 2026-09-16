@@ -163,9 +163,12 @@ def test_persona_no_arg_shows_guidance(tmp_path):
         _h_persona(ctx)
 
     combined = _combined_output(ctx)
-    # Must show that live switching is not supported and env usage.
-    assert "not supported" in combined.lower() or "new session" in combined.lower()
-    assert "POLYROB_PERSONA" in combined  # the real CLI persona lever
+    # Must show that live switching is not supported, and name BOTH knobs (F2:
+    # the guidance used to name only POLYROB_PERSONA under a table of CHARACTER
+    # names, and never mentioned the flag that actually selects one).
+    assert "next session" in combined.lower() or "not supported" in combined.lower()
+    assert "POLYROB_PERSONA" in combined  # the template lever
+    assert "PERSONALITY_DEFAULT_CHARACTER" in combined  # the character lever
 
 
 # ---------------------------------------------------------------------------

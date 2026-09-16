@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -69,6 +69,10 @@ class ChainRow:
     geckoterminal_id: Optional[str] = None
     goplus_id: Optional[str] = None
     alchemy_slug: Optional[str] = None
+    #: The block explorer's base URL, no trailing slash. `None` means no
+    #: explorer is pinned for this chain, which `explorer_url` must render as a
+    #: refusal (`None`) rather than guessing a host.
+    explorer: Optional[str] = None
     #: The LI.FI Diamond on THIS chain — the one address a third-party route may
     #: be approved to spend from (proposal 029). Pinned per chain for the same
     #: reason the routers are: the address is deterministic across deployments
@@ -135,6 +139,7 @@ _ROWS: Dict[str, ChainRow] = {
         geckoterminal_id="eth",
         goplus_id="1",
         alchemy_slug="eth-mainnet",
+        explorer="https://etherscan.io",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -156,6 +161,7 @@ _ROWS: Dict[str, ChainRow] = {
         geckoterminal_id="base",
         goplus_id="8453",
         alchemy_slug="base-mainnet",
+        explorer="https://basescan.org",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -169,11 +175,22 @@ _ROWS: Dict[str, ChainRow] = {
     # Verified on-chain that day: eth_chainId == 4663, WETH symbol+decimals, the
     # aggregator spender carries code, and a live WETH->CASHCAT quote routes.
     #
-    # ⚠️ THE QUOTE ASSET IS WETH, NOT A STABLECOIN. LI.FI returns "no available
-    # quotes" for every stablecoin leg tried here (USDG, USDe). Trading on this
-    # chain therefore needs a WETH balance ON this chain — the treasury's USDC
-    # lives on Base and bridging is deliberately out of scope, so this row is
-    # armed but unfunded until the owner puts WETH here.
+    # ⚠️ THE QUOTE ASSET IS ETH/WETH, NOT USDC. The chain's stablecoin is USDG
+    # (0x5fc5360d0400a0fd4f2af552add042d716f1d168, Global Dollar) — deliberately
+    # NOT set as this row's `usdc`, because `tokens.py` stamps that field with
+    # the literal identity {"symbol": "USDC", "name": "USD Coin"}, and putting a
+    # false name on a token in the one table whose whole value is that
+    # verified=True means somebody checked is worse than leaving it unpinned.
+    # `_chain_quote_asset` therefore falls through to WETH here, which is the
+    # right answer anyway: the pons-v2 memecoin pools quote in ETH/WETH.
+    #
+    # ⚠️ An earlier version of this comment said LI.FI does not index this chain
+    # and that no stablecoin leg routes. BOTH went stale. Re-verified live
+    # 2026-09-10: LI.FI carries chain 4663 (its key is "out"), and WETH->USDG,
+    # WETH->NVDA, WETH->meme, USDG->meme and native-ETH->meme all quote, each
+    # naming the aggregator spender pinned below. Native ETH in is the cheapest
+    # entry and needs no allowance at all. Funding this chain with ETH therefore
+    # buys gas and buying power in one asset.
     "robinhood": ChainRow(
         name="robinhood",
         chain_id=4663,
@@ -182,20 +199,45 @@ _ROWS: Dict[str, ChainRow] = {
         # Measured 0.024 gwei: a 1.2M-gas aggregator route costs ~0.0000287 ETH,
         # so this is ~70 such routes of headroom as an anomaly brake.
         max_fee_wei_per_tx=2 * 10 ** 15,
-        purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas) and currently one of "
-                 "the busiest memecoin venues by paid attention — minutes-old "
-                 "pools, real depth on the leaders. Cheap gas. No Uniswap V3 "
-                 "router is pinned, so swaps route through the aggregator "
-                 "(pons-v2 and the Uniswap V2/V3/V4 deployments there). "
-                 "⚠️ Pairs quote in WETH and there is NO routable stablecoin, so "
-                 "you need WETH on THIS chain to trade — USDC on another chain "
-                 "does not help you here."),
+        purpose=("Robinhood's L2 (Arbitrum Orbit, ETH gas, gas ~free) and the "
+                 "primary memecoin hunting ground — minutes-old pools on the "
+                 "pons-v2 launchpad, real depth on the leaders. It also hosts "
+                 "TOKENIZED US EQUITIES (NVDA, AAPL, GME, SPY, SPCX) as ERC-20s, "
+                 "and memecoins here pair against WETH *or against a stock "
+                 "token* — so such a position is two bets stacked, the meme "
+                 "against its stock and the stock itself. The stablecoin is "
+                 "USDG, NOT USDC. No Uniswap V3 router is pinned, so everything "
+                 "routes through the aggregator; that is normal here, not a "
+                 "degraded path. Native ETH routes straight into a memecoin "
+                 "with no allowance, so ETH on this chain is gas and buying "
+                 "power at once."),
         # No canonical stablecoin routes on this chain; WETH is the quote asset.
-        wrapped_native="0x0bD7d308F8e1639FAb988DF18a8011f41EacaD73",
+        # ⚠️ CHECKSUM. This was stored mixed-case with a BROKEN EIP-55 checksum,
+        # and `onchain.token_balances` refuses a failed checksum by design (a bad
+        # one usually means a typo or a swapped address). Every WETH balance read
+        # on this chain therefore raised, and `bridge_guard.token_balance_raw`
+        # caught it and returned None -- which the bridge correctly reads as "the
+        # arrival cannot be measured" and refuses. Live 2026-09-13: three
+        # SOL->robinhood WETH bridges refused at the pre-send baseline with
+        # "could not read 0xcAda... on robinhood", while the agent's own
+        # defi_data.portfolio(robinhood) read fine (it reads NATIVE, never this
+        # constant). Verified on-chain before correcting the case: code present,
+        # symbol WETH, decimals 18, supply ~41,195.
+        wrapped_native="0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73",
         dexscreener_id="robinhood",
         geckoterminal_id="robinhood",
         goplus_id="4663",
         alchemy_slug="robinhood-mainnet",
+        # ⚠️ MEASURED 2026-09-15, not assumed. The old value here
+        # (explorer.mainnet.chain.robinhood.com, guessed from the RPC host)
+        # is a redirector: `GET /` answers 301 to
+        # https://robinhoodchain.blockscout.com/. A redirected link still
+        # opens, but every address and hash the owner is shown carries the
+        # extra hop, and a redirector can stop redirecting. The canonical
+        # host answers 200 directly on both paths we render:
+        #   /address/0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73 -> 200
+        #   /token/0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73   -> 200
+        explorer="https://robinhoodchain.blockscout.com",
         # NOT the Diamond every other chain uses — that address carries no code
         # here. Read from a live quote and verified with eth_getCode.
         aggregator_spender="0xB477751B76CF82d00a686A1232f5fCD772414Af3",
@@ -230,6 +272,7 @@ _ROWS: Dict[str, ChainRow] = {
         geckoterminal_id="arbitrum",
         goplus_id="42161",
         alchemy_slug="arb-mainnet",
+        explorer="https://arbiscan.io",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -255,6 +298,7 @@ _ROWS: Dict[str, ChainRow] = {
         geckoterminal_id="polygon_pos",
         goplus_id="137",
         alchemy_slug="polygon-mainnet",
+        explorer="https://polygonscan.com",
         aggregator_spender=_LIFI_DIAMOND,
         money_enabled=True,
     ),
@@ -300,6 +344,7 @@ _ROWS: Dict[str, ChainRow] = {
         dexscreener_id="solana",
         geckoterminal_id="solana",
         goplus_id="solana",
+        explorer="https://solscan.io",
         route_hints=(),
         money_enabled=False,
         assets_verified=True,
@@ -312,6 +357,34 @@ def get(chain: str) -> Optional[ChainRow]:
     if not isinstance(chain, str):
         return None
     return _ROWS.get(chain.strip().lower())
+
+
+#: The Solana path segment for each kind — `solscan.io` names an account (never
+#: "address") and a token the same way it names any other account.
+_SVM_PATH = {"address": "account", "tx": "tx", "token": "token"}
+#: The EVM path segment for each kind, unchanged across every EVM explorer
+#: pinned above (etherscan/basescan/arbiscan/polygonscan all fork the same UI).
+_EVM_PATH = {"address": "address", "tx": "tx", "token": "token"}
+
+
+def explorer_url(chain: str, kind: Literal["address", "tx", "token"], ref: str) -> Optional[str]:
+    """A block-explorer link for *ref*, or `None` — never raises.
+
+    `None` on an unknown chain, a chain with no `explorer` pinned, an unknown
+    `kind`, or an empty `ref`: a helper that renders a broken link is worse
+    than a caller that omits the line entirely.
+    """
+    row = get(chain)
+    if row is None or not row.explorer:
+        return None
+    ref = str(ref or "").strip()
+    if not ref:
+        return None
+    path_map = _SVM_PATH if row.family == "svm" else _EVM_PATH
+    segment = path_map.get(kind)
+    if segment is None:
+        return None
+    return f"{row.explorer}/{segment}/{ref}"
 
 
 def all_rows() -> List[ChainRow]:

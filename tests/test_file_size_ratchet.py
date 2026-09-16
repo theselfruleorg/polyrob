@@ -27,7 +27,11 @@ CEILINGS = {
     # Re-baselined 2026-07-19 (0.8.0 release cut): the 07-18/19 waves (019 et al.)
     # grew all six files past the 2026-07-17 seed without running this ratchet.
     # The extraction debt stands — these may still only SHRINK from here.
-    "webview/server.py": 3824,  # F-2: api_agents/services/task/skills reads → agents/task/telemetry/
+    # Tightened 2026-09-15 (043 W13): the account + admin page surfaces
+    # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
+    # as ONE posture table — they were seven hand-registered routes that
+    # disagreed about what a denial looks like.
+    "webview/server.py": 3712,  # 043 §9: legacy index/session.html renders deleted; F-2 reads → agents/task/telemetry/
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /
@@ -46,7 +50,7 @@ CEILINGS = {
     # Re-baselined 2026-07-25 (0.9.0 release cut): +3 net for the AUTONOMY_ENABLED
     # master state in `/autonomy` + `doctor`. The extraction debt on this file
     # STANDS — it is an extraction candidate, not a designated SSOT.
-    "cli/ui/commands/handlers.py": 1908,
+    "cli/ui/commands/handlers.py": 1790,
     # Split 2026-08-29 (S2, backlog B19): policy.py is now a FACADE over nine
     # submodules (_env, local_profile, autonomy_mode, autonomy_posture,
     # compute_posture, payment_policy, capability_toggles, autonomy_config,
@@ -57,11 +61,17 @@ CEILINGS = {
     # model_registry split (registry 418 / types 239 / catalog 1505 / pricing 57).
     # The catalog is DATA (one ModelConfig per model) and may only grow by one
     # model at a time — raise its row deliberately with the model, never by drift.
-    "modules/llm/model_catalog.py": 1505,
+    # Raised 2026-09-15 with the two models it names (+50): z-ai/glm-5.3 and
+    # z-ai/glm-5.3-flash, the ids the GLM Coding Plan seat actually serves.
+    "modules/llm/model_catalog.py": 1555,
     # S6 (2026-08-29): scan / notify / subscriptions / reputation extracted to settlement_*.py mixins.
     "modules/x402/settlement_watcher.py": 330,
     "modules/llm/gemini_client.py": 1357,
-    "modules/llm/provider_spec.py": 1301,
+    # Raised 2026-09-15 (+16): the glm-5.3 / glm-5.3-flash ids on BOTH z.ai rows,
+    # plus the notes recording why zai-coding's provider-wide supports_vision stays
+    # False while glm-5.3-flash has vision, and why the metered `zai` row keeps its
+    # cheaper default. No new behaviour — two existing data rows.
+    "modules/llm/provider_spec.py": 1317,
     # S5 (2026-08-29): curated-notes / KB / episodes stores extracted to sqlite_*_store.py mixins.
     "modules/memory/sqlite_memory_provider.py": 492,
     "modules/x402/invoicing.py": 1169,

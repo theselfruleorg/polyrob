@@ -7,11 +7,13 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 import jwt
+import uuid
 from datetime import datetime, timedelta
 import logging
 import os
 import re
 from api.auth_constants import is_admin_wallet
+from core.token_denylist import OWNER_COOKIE_TTL_SECONDS
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +184,10 @@ async def verify_signature(request: VerifyRequest):
     # SECURITY FIX: Never log JWT secret, even partially
     # Logging even 20 chars significantly reduces brute-force difficulty
 
-    expires_at = datetime.utcnow() + timedelta(days=7)
+    # W5 (043): short (≤24h) lifetime + a random jti so /logout can revoke this
+    # token server-side. Shares OWNER_COOKIE_TTL_SECONDS with the owner-login
+    # minter (webview/owner_auth.py) so the two cookie lifetimes never drift.
+    expires_at = datetime.utcnow() + timedelta(seconds=OWNER_COOKIE_TTL_SECONDS)
 
     # Include admin_wallet flag in token for session-based admin privileges
     # This allows admin wallets to have privileges without modifying the role in DB
@@ -193,6 +198,7 @@ async def verify_signature(request: VerifyRequest):
         "tier": tier,
         "role": role,
         "admin_wallet": is_admin_by_wallet,  # Session-based admin flag
+        "jti": uuid.uuid4().hex,
         "iat": datetime.utcnow(),
         "exp": expires_at
     }
@@ -226,7 +232,7 @@ async def verify_signature(request: VerifyRequest):
     secure = is_production  # Only require HTTPS in production
     httponly = True
     samesite = "lax"
-    max_age = 7 * 24 * 60 * 60  # 7 days
+    max_age = OWNER_COOKIE_TTL_SECONDS  # W5: ≤24h, agrees with the owner minter
 
     logger.debug(f"🍪 Setting auth cookie: secure={secure}, httponly={httponly}, samesite={samesite}, is_production={is_production}")
 

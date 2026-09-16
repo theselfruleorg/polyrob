@@ -459,7 +459,10 @@ async def test_checkpoint_advances_even_when_a_transfer_errors(tmp_path, monkeyp
         async def boom(*a, **kw):
             raise RuntimeError("simulated failure")
 
-        monkeypatch.setattr(invoicing, "match_pending_invoice_by_amount", boom)
+        # 046: the scan calls the ASSET-KEYED matcher. Patching the pre-046
+        # name here would leave the real matcher running, and this test would
+        # silently stop exercising the raise it exists for.
+        monkeypatch.setattr(invoicing, "match_pending_invoice", boom)
 
         out = await watcher.tick_once()
         assert out["onchain_settled"] == 0

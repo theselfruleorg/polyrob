@@ -30,6 +30,39 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
     except Exception:
         cron_flag = False
 
+    def _gate(fn):
+        """043 A8/A42: evaluate a loop's own gate callable (import + call);
+        unreadable -> None, rendered "?" rather than a false "off"."""
+        try:
+            return bool(fn())
+        except Exception:
+            return None
+
+    def _sandbox_reap_gate():
+        from core.autonomy_runtime import _sandbox_reap_enabled
+        return _sandbox_reap_enabled()
+
+    def _surface_gc_gate():
+        from core.autonomy_runtime import _surface_gc_enabled
+        return _surface_gc_enabled()
+
+    def _quiet_release_gate():
+        from core.autonomy_runtime import _quiet_release_enabled
+        return _quiet_release_enabled()
+
+    def _settlement_gate():
+        from core.autonomy_runtime import _x402_invoicing_enabled
+        return _x402_invoicing_enabled()
+
+    def _bridges_gate():
+        from core.wallet import bridge_watcher
+        return bridge_watcher.enabled()
+
+    # 043 A8/A42: the panel used to omit the planner and the five
+    # autonomy_runtime loops that carry no other on/off surface (sandbox-reap,
+    # surface-gc, quiet-release, settlement, bridges) — all 8 loops
+    # `start_autonomy` can start, plus the planner, are named here so the
+    # owner can see the same liveness set the status snapshot checks.
     flags = [
         ("self-wake", AutonomyConfig.self_wake_enabled()),
         ("goals", AutonomyConfig.goals_enabled()),
@@ -37,6 +70,12 @@ def _autonomy_snapshot(user_id: str, data_dir: str = "data") -> dict:
         ("cron", cron_flag),
         ("cron-run-loop", AutonomyConfig.cron_run_loop()),
         ("background-review", AutonomyConfig.background_review_enabled()),
+        ("planner", _gate(AutonomyConfig.goal_planner_enabled)),
+        ("sandbox-reap", _gate(_sandbox_reap_gate)),
+        ("surface-gc", _gate(_surface_gc_gate)),
+        ("quiet-release", _gate(_quiet_release_gate)),
+        ("settlement", _gate(_settlement_gate)),
+        ("bridges", _gate(_bridges_gate)),
     ]
 
     try:
@@ -78,8 +117,9 @@ def _h_autonomy(ctx: CommandContext) -> None:
             f"/autonomy takes no arguments yet (got: {' '.join(ctx.args)}).\n"
             "It is read-only today — to turn autonomy on/off use:\n"
             "  /config set AUTONOMY_ENABLED true   (restart applies)\n"
-            "For an immediate freeze/unfreeze of all loops use "
-            "/pause [scope…] [for 6h] and /resume (live, no restart).",
+            "For an immediate freeze/unfreeze of all loops use /pause "
+            "[everything|trading|background|messages|deploying] [for 6h] "
+            "and /resume (live, no restart).",
             title="autonomy",
         )
         return
@@ -98,7 +138,8 @@ def _h_autonomy(ctx: CommandContext) -> None:
             ("mode", snap.get("mode_display", "supervised")),
             ("posture", snap.get("posture", "silent")),
             ("pause", pause_headline_from(snap.get("pause") or {}))]
-    rows.extend((name, "on" if val else "off") for name, val in snap["flags"])
+    rows.extend((name, "?" if val is None else ("on" if val else "off"))
+               for name, val in snap["flags"])
     lines = [candy.kv_lines(rows), ""]
 
     # 030 WS-E5: the same effective-posture card every seat renders — including

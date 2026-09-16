@@ -1,4 +1,4 @@
-"""polyrob dashboard — launch the local web dashboard (webgate).
+"""polyrob dashboard — launch the POLYROB Console (webgate).
 
 The webgate is the *self-host owner's* web UI: chat, sessions, memory, autonomy,
 identity, system. By default it runs **single-user, local-first** — bound to
@@ -21,7 +21,7 @@ import webbrowser
 import click
 
 
-@click.command(short_help="Launch the local web dashboard (webgate)")
+@click.command(short_help="Launch the POLYROB Console (webgate)")
 @click.option("--multitenant", is_flag=True,
               help="Enable the multitenant layer (JWT/SIWE auth + admin pages, bind 0.0.0.0). "
                    "Alias for --posture multitenant.")
@@ -31,7 +31,7 @@ import click
 @click.option("--port", type=int, default=None, help="Port to listen on (default 5050)")
 @click.option("--no-browser", is_flag=True, help="Do not open a browser window")
 def dashboard(multitenant, posture, host, port, no_browser):
-    """Run the polyrob webgate (local web dashboard)."""
+    """Run the POLYROB Console."""
     # 027 WP3: fail on a missing [server] extra BEFORE printing the URL and
     # opening a browser tab (it used to crash with a raw traceback after both).
     from cli.commands._errors import require_extra_or_exit

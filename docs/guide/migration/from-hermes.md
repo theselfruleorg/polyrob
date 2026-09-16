@@ -1,433 +1,144 @@
-# Migrating from Hermes Agent to POLYROB
+# Migrating from Hermes Agent
 
-This guide helps you transition from Hermes Agent to POLYROB, highlighting key differences and providing step-by-step migration instructions.
+What maps onto what, what has no equivalent, and the order to do it in.
 
----
-
-## Table of Contents
-
-- [Concept Mapping](#concept-mapping)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Skills Migration](#skills-migration)
-- [Memory Migration](#memory-migration)
-- [CLI Differences](#cli-differences)
-- [Gateway vs Surfaces](#gateway-vs-surfaces)
-- [When to Stay with Hermes](#when-to-stay-with-hermes)
+*Hermes claims in this guide were checked against v0.19.0 (2026-07-20). It is a
+fast-moving project — verify anything load-bearing against its repo.*
 
 ---
 
-## Concept Mapping
+## Concept mapping
 
-| Hermes Concept | POLYROB Equivalent | Notes |
-|----------------|-------------------|-------|
-| **Provider/Model** | `DEFAULT_PROVIDER`, `DEFAULT_MODEL` | Same configuration via env |
-| **Profiles** | Not directly supported | POLYROB uses tenant isolation instead |
-| **Gateway** | `polyrob gateway` / Surfaces (Telegram, WhatsApp, Email, Discord, Slack, Signal, X) | Similar architecture |
-| **Skills** | Skills system (incl. agent-authored via `SKILLS_WRITABLE`) | Similar but different storage |
-| **H-MEM** | Memory backend | POLYROB uses SQLite FTS5 by default |
-| **Cron jobs** | Cron + Goal board | More durable in POLYROB |
-| **Terminal backends** | Compute-posture ladder (`AGENT_COMPUTE_POSTURE`) | Sandboxed code exec → persistent `shell`/`process` in a dev container → self-maintain verbs; Docker-backed. `CODE_EXEC_BACKEND=ssh` runs on a remote host too, but non-sandboxed by default (see `tools/code_exec/SANDBOX_SECURITY.md`); no Modal/Daytona remotes |
-| **Nous Portal** | Not supported | POLYROB is multi-provider by design (OpenRouter gets you one-key access) |
+| Hermes | POLYROB | Notes |
+|---|---|---|
+| Provider / model | `DEFAULT_PROVIDER`, `DEFAULT_MODEL` | Set with `polyrob model set-default`; POLYROB holds keys for several providers at once and fails over between them |
+| Profiles | **Profiles** (`polyrob -P <name>`) | A whole isolated home per identity: env, characters, skills, memory, goals, sessions. See [profiles.md](../profiles.md) |
+| Gateway | `polyrob gateway`, or one process per surface | Same idea: every enabled chat surface in one process |
+| Skills | Skills, plus agent-authored ones under `SKILLS_WRITABLE` | Different frontmatter shape — see below |
+| H-MEM | `MEMORY_BACKEND` | SQLite FTS5 by default, optional local vector recall, tenant-scoped |
+| Cron jobs | Cron **and** the goal board | Both durable; a goal carries acceptance criteria and dependencies, a cron job carries a schedule. See [streams.md](../streams.md) |
+| Terminal backends | `AGENT_COMPUTE_POSTURE` 0–3 | Hardened Docker exec, then a persistent `shell` and `process` manager in a dev container, then gated self-maintenance verbs |
+| Nous Portal | — | No single-subscription portal. One OpenRouter key reaches most models; `providers.yaml` declares any other endpoint |
 
 ---
 
-## Installation
-
-### Hermes
+## 1. Install and configure
 
 ```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-hermes setup
-```
-
-### POLYROB
-
-```bash
-# Install with all features
 pipx install "polyrob[all]"
-
-# Initialize configuration
 polyrob init
-
-# Install browser (if using automation)
-python -m playwright install chromium
+python -m playwright install chromium   # only if you want browser automation
 ```
 
-**Key difference:** POLYROB uses pip/pipx instead of a custom installer, giving you more control over the installation environment.
+`polyrob init` writes `~/.polyrob/.env` and asks for a provider key. Everything
+Hermes kept in `hermes.json` is an environment flag or a preference here:
+[configuration.md](../configuration.md) explains how they resolve, and
+[`docs/CONFIGURATION.md`](../../CONFIGURATION.md) lists every flag. A rough
+translation:
 
----
-
-## Configuration
-
-### Hermes Config Structure
-
-```
-~/.hermes/
-├── hermes.json        # Main configuration
-├── profiles/          # Per-profile settings
-├── skills/            # User skills
-└── workspace/         # Session data
-```
-
-### POLYROB Config Structure
-
-```
-~/.polyrob/
-├── .env               # Environment variables
-├── cli.json           # Legacy (migrated to .env)
-└── sessions/          # Project sessions (per-project)
-
-./.polyrob/
-├── .env               # Project-local overrides
-└── sessions/          # Project sessions
-```
-
-### Configuration Translation
-
-**Hermes (`hermes.json`):**
-```json
-{
-  "agent": {
-    "model": "openrouter:gpt-4o"
-  },
-  "integrations": {
-    "providers": {
-      "openrouter": {
-        "apiKey": "sk-or-..."
-      }
-    }
-  },
-  "memory": {
-    "backend": "fts5"
-  }
-}
-```
-
-**POLYROB (`.env`):**
 ```bash
-# Provider selection
 DEFAULT_PROVIDER=openrouter
 DEFAULT_MODEL=gpt-4o
-
-# API keys
 OPENROUTER_API_KEY=sk-or-...
-
-# Memory backend
 MEMORY_BACKEND=sqlite
-
-# Optional features
-POLYROB_LOCAL=true    # Enable safe autonomy
-SKILLS_WRITABLE=true  # Allow skill creation
-GOALS_ENABLED=true    # Enable goal board
 ```
 
-### Provider Configuration
+Set more than one provider key and POLYROB fails over automatically on a
+billing, quota or rate-limit error.
 
-**Hermes:** Configure via `integrations.providers` in hermes.json
-
-**POLYROB:** Set provider-specific API keys in `.env`:
-
-```bash
-# POLYROB supports multiple providers simultaneously
-OPENAI_API_KEY=sk-...
-ANTHROPIC_API_KEY=sk-ant-...
-GEMINI_API_KEY=...
-DEEPSEEK_API_KEY=...
-OPENROUTER_API_KEY=...
-NVIDIA_API_KEY=...
-```
-
-POLYROB will automatically fail over to another provider if the primary encounters billing or rate-limit errors.
+> **Autonomy is not on by default.** `POLYROB_LOCAL` (set for you by the CLI)
+> turns on the *interactive* tools only. The self-directed loops — goals, the
+> planner, self-wake, writable skills — additionally need `AUTONOMY_ENABLED`.
+> `polyrob autonomy on` sets it; `polyrob autonomy status` shows where you are.
 
 ---
 
-## Skills Migration
+## 2. Bring your skills
 
-### Hermes Skills Location
+Both projects use `SKILL.md` with YAML frontmatter, but the frontmatter differs.
+POLYROB follows the agentskills.io standard, so everything POLYROB-specific is
+namespaced under `metadata` as flat `polyrob-*` string values — the valid key set
+is in [skills.md](../skills.md#the-skillmd-format-quick-reference). Hermes'
+top-level `triggers:` becomes `metadata.polyrob-triggers`, JSON-encoded as one
+string:
 
-```
-~/.hermes/skills/
-├── user/
-│   ├── my-skill/
-│   │   └── SKILL.md
-└── managed/
-    └── ...
-```
-
-### POLYROB Skills Location
-
-POLYROB skills live under **`<data_home>/skills/`** — a writable root that survives a `polyrob update`
-code-swap because it lives outside the installed package tree (`polyrob update` snapshots it before every
-update, alongside `identity/`). `<data_home>` resolves the same way everywhere in POLYROB
-(`core/runtime_paths.py`/`core/bootstrap.py::_resolve_cli_data_home`): the `POLYROB_DATA_DIR` env var if
-you've set one (typical for a headless/server deployment), otherwise **`./.polyrob`** relative to your
-current project directory for the local CLI (`polyrob chat`/`polyrob run`) — there is no single global
-`~/.polyrob/skills/` unless you've pointed `POLYROB_DATA_DIR` at your home directory.
-
-```
-<data_home>/skills/          # e.g. ./.polyrob/skills/ for a local project, by default
-└── user_<uid>/              # Tenant-scoped, writable — copy/author your skills here
-    └── my-skill/
-        └── SKILL.md
-```
-
-The skills bundled with POLYROB itself ship separately, read-only, in the installed package's
-`data/prompts/skills/` — that's not where you copy your own skills.
-
-> Per-repo skill discovery **is** wired up: POLYROB reads `.agents/skills/` and `.claude/skills/`
-> from your project directory automatically (default-on in local mode, gated by
-> `POLYROB_TRUST_PROJECT_SKILLS`), so a repo's skills load with no copying. Only a bare
-> project-local `./skills/` (without the `.agents/` or `.claude/` prefix) is not read.
-
-### Skill Format
-
-Hermes and POLYROB both use Markdown files with YAML frontmatter, but the frontmatter shape differs.
-POLYROB's skills use the **agentskills.io `SKILL.md` standard**: the only valid top-level keys are
-`name`, `description`, `license`, `compatibility`, `metadata`, and `allowed-tools` — an extra top-level
-key is a hard validation error (`polyrob skills validate`). Anything POLYROB-specific (priority,
-auto-activate, trigger keywords, schema version) is namespaced under `metadata` as flat `polyrob-*`
-**string** values instead of living at the top level.
-
-**Hermes SKILL.md:**
-```markdown
----
-name: web-scraper
-description: Scrapes web pages
-triggers:
-  - "scrape"
-version: "1.0.0"
----
-
-# Web Scraper
-
-This skill scrapes web pages...
-```
-
-**POLYROB SKILL.md:**
-
-```markdown
+```yaml
 ---
 name: web-scraper
 description: Scrapes web pages
 license: MIT
 metadata:
-  polyrob-priority: '5'
   polyrob-auto-activate: 'true'
   polyrob-triggers: '{"action_names":[],"keywords":["scrape"],"task_patterns":[],"tool_ids":[]}'
-  polyrob-version: '1'
 ---
-
-# Web Scraper
-
-This skill scrapes web pages...
 ```
 
-There is **no top-level `triggers:`/`version:`/`auto_activate:`** in POLYROB's format — those live under
-`metadata.polyrob-*` (`polyrob-triggers` is Hermes' `triggers:` list, JSON-encoded as one string).
+Copy `~/.hermes/skills/user/*` into your POLYROB skills root, then validate:
 
-### Migration Steps
-
-1. **Copy skill files** into your project's data-home (swap in your own id; if you've set
-   `POLYROB_DATA_DIR`, copy into that root instead of `./.polyrob`):
 ```bash
-mkdir -p ./.polyrob/skills/user_<your-id>
-cp -r ~/.hermes/skills/user/* ./.polyrob/skills/user_<your-id>/
-
-# Or, for a headless/shared deployment with POLYROB_DATA_DIR set:
-mkdir -p "$POLYROB_DATA_DIR/skills/user_<your-id>"
-cp -r ~/.hermes/skills/user/* "$POLYROB_DATA_DIR/skills/user_<your-id>/"
-```
-
-> **Prefer the managed path for skills you didn't author.** For a skill from a repo or URL, use
-> `polyrob skill install <folder | owner/repo | git URL | SKILL.md URL>` instead of a manual copy —
-> it threat-scans every file, quarantines for review (`polyrob skill approve`), and records an audit
-> trail. See the **[Skills guide](../skills.md)** for the full flow and safety model.
-
-2. **Add/fix frontmatter** on each copied skill to the agentskills.io shape above if it doesn't already
-   have `name`/`description`/`license` — `polyrob skills validate <skill-id>` reports what's missing.
-
-3. **Verify compatibility** (outside the chat REPL):
-```bash
-polyrob skills validate
+polyrob skills validate          # names exactly what each skill is missing
 polyrob skills list
 ```
 
-4. **Test each skill** — there's no manual force-load command; start a chat and give it a task that
-   should trigger the skill, and the agent discovers it via the skill catalog and calls `load_skill`
-   itself:
-```bash
-polyrob chat
-> [a task that should trigger web-scraper, e.g. "scrape the pricing page at <url>"]
-```
+For a skill you did **not** author, prefer `polyrob skill install <folder | owner/repo
+| git URL | SKILL.md URL>` over a manual copy: it threat-scans every file, quarantines
+for review, and records an audit trail. The skills root, the per-repo discovery of
+`.agents/skills/` and `.claude/skills/`, and the whole safety model are in
+[skills.md](../skills.md).
+
+There is **no force-load command**. Start a chat and give the agent a task the skill
+should serve; it finds the skill in its catalog and calls `load_skill` itself.
 
 ---
 
-## Memory Migration
+## 3. Bring your identity over
 
-### Hermes H-MEM
-
-Hermes uses FTS5 with optional embeddings:
-
-```json
-{
-  "memory": {
-    "backend": "fts5"  // or "embeddings"
-  }
-}
-```
-
-### POLYROB Memory
-
-POLYROB uses SQLite FTS5 by default, with optional vector search:
+A Hermes profile and a POLYROB profile are the same idea — a separate bot with its
+own everything. Two commands matter:
 
 ```bash
-# Keyword search (default)
-MEMORY_BACKEND=sqlite
-
-# Semantic vector search
-MEMORY_BACKEND=local_vector  # Requires pip install "polyrob[memory-vector]"
+polyrob profile adopt mybot       # you already ran POLYROB in this folder: formalize it
+polyrob profile import bot.tar.gz # you were handed a packaged identity
+polyrob -P mybot                  # run as it
 ```
 
-### Memory Export/Import
+`adopt` lifts the identity documents, characters and identity-shaped env keys out of
+a folder install into a real profile and pins the folder to it. Credentials never
+travel inside an export. Full details, including running one systemd unit per
+profile: [profiles.md](../profiles.md).
 
-**Hermes doesn't provide a built-in export.** You'll need to manually recreate important memories:
-
-```bash
-polyrob chat
-> In Hermes, I had these memories:
-> 1. Project X uses PostgreSQL 14 on AWS RDS
-> 2. API key for Service Y is stored in vault at /production/api-keys/service-y
-> 3. Our deployment process requires approval from @tech-lead
->
-> Please store these in memory.
-```
-
-For systematic migration, consider creating a skill:
-
-**SKILL.md** (POLYROB's agentskills.io shape — see [Skill Format](#skill-format) above):
-```markdown
----
-name: project-context
-description: Project X context and deployment
-license: MIT
-metadata:
-  polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["project x"],"task_patterns":[],"tool_ids":[]}'
----
-
-# Project X Context
-
-## Infrastructure
-- Database: PostgreSQL 14 on AWS RDS
-- Instance: db.project-x.production
-- Backup: Daily snapshots, 30-day retention
-
-## API Keys
-- Service Y: Stored in vault at `/production/api-keys/service-y`
-- Rotation: Monthly, coordinated with DevOps
-
-## Deployment
-- Requires approval from @tech-lead
-- Deploy window: Tuesday-Thursday, 9am-11am PST
-- Rollback procedure: Documented in runbooks/deploy-project-x.md
-```
+Operator-authored identity prose (Hermes' persona text) goes in the SOUL documents
+under your data home — see [instances.md](../instances.md).
 
 ---
 
-## CLI Differences
+## 4. Memory
 
-### Command Comparison
+Hermes has no built-in memory export, so there is nothing to convert. Recreate what
+matters by telling the agent, or — better for anything stable — write it as a skill
+or ingest it into the knowledge base:
 
-| Task | Hermes | POLYROB |
-|------|--------|---------|
-| **Start chat** | `hermes` | `polyrob chat` |
-| **Run one-shot** | `hermes agent --message "..."` | `polyrob run "..."` |
-| **Change model** | `hermes model <provider:model>` | `polyrob model set-default <provider> <model>` |
-| **List skills** | `/skills` in chat | `/skills` in chat |
-| **Load skill** | `/<skill-name>` | none — the agent discovers a skill from the catalog and calls `load_skill` itself when a task matches it |
-| **Compress context** | `/compress` | `/compress` |
-| **New session** | `/new` | `/clear` resets context in the current session; exit and run `polyrob chat` (or `polyrob run "..."`) for a genuinely new session id |
-| **Configuration** | `hermes config` | `polyrob config show` |
-| **Doctor/health** | `hermes doctor` | `polyrob doctor` |
+```bash
+polyrob kb add ./notes
+polyrob kb search "deployment approval"
+```
 
-### Key Differences
-
-1. **Model selection syntax:**
-   - Hermes: `hermes model openrouter:gpt-4o`
-   - POLYROB: `polyrob model set-default` with no arguments opens an interactive picker; or run `polyrob model list` to see what's available, then `polyrob model set-default <provider> <model>`
-
-2. **Gateway vs API server:**
-   - Hermes: `hermes gateway`
-   - POLYROB: `polyrob gateway` runs every enabled surface (Telegram, WhatsApp, Email,
-     Discord, Slack, Signal, X) in one process, or `polyrob serve` for the REST API
-     alone. An enabled surface with missing credentials is warned about and skipped —
-     check the startup output
-
-3. **Terminal backends:**
-   - Hermes supports Docker, SSH, Modal, Daytona
-   - POLYROB ships a compute-posture ladder (`AGENT_COMPUTE_POSTURE` 0–3): hardened
-     Docker code-exec by default, a persistent `shell` + `process` job manager in a
-     per-session dev container at posture ≥1, and gated self-maintenance verbs at ≥2.
-     A remote `ssh` execution backend (`CODE_EXEC_BACKEND=ssh`,
-     `CODE_EXEC_SSH_HOST`/`_USER`/`_PORT`/`_KEY`) is supported with a caveat: it is
-     honestly non-sandboxed by default (agent code runs with the SSH user's full
-     privileges on the remote host) and is refused on a server unless the operator
-     attests the remote is hardened/disposable via `CODE_EXEC_SSH_SANDBOXED=true` —
-     see `tools/code_exec/SANDBOX_SECURITY.md` ("SSH backend"). Modal/Daytona remain
-     unsupported
+POLYROB's own memory is on by default, cross-session and tenant-scoped.
+`MEMORY_BACKEND=local_vector` adds hybrid vector recall (`pip install
+"polyrob[memory-vector]"`); `/memory` in the REPL shows which provider is live.
 
 ---
 
-## Gateway vs Surfaces
+## 5. Channels
 
-### Hermes Gateway
-
-Hermes uses a single gateway process for all messaging platforms:
-
-```bash
-hermes gateway setup    # Configure platforms
-hermes gateway start    # Start gateway
-```
-
-### POLYROB Surfaces
-
-`polyrob gateway` is the closest direct equivalent to `hermes gateway` — it runs every
-enabled surface in one process. POLYROB also lets you run each surface as its own
-process if you'd rather keep them separate:
-
-```bash
-# All enabled surfaces in one process (closest to `hermes gateway start`)
-polyrob gateway
-
-# Or run surfaces individually:
-
-# Telegram (if installed with the [telegram] extra)
-polyrob telegram
-
-# WhatsApp Cloud API (webhook server)
-polyrob whatsapp
-
-# Email — IMAP poll + SMTP, no extra install needed (stdlib imaplib/smtplib)
-polyrob email
-
-# Discord / Slack / Signal / X — each also runs standalone
-polyrob discord
-polyrob slack
-polyrob signal
-polyrob x
-
-# REST API server
-polyrob serve
-
-# Web dashboard
-polyrob dashboard
-```
-
-### Platform Support
+`polyrob gateway` runs every enabled surface in one process — the closest analogue
+to `hermes gateway start`. Each surface also runs standalone (`polyrob telegram`,
+`polyrob email`, and so on); the full list is in [cli.md](../cli.md). An enabled
+surface with missing credentials is warned about and skipped, so read the startup
+output.
 
 | Platform | Hermes | POLYROB |
-|----------|--------|---------|
+|---|---|---|
 | **CLI** | ✅ | ✅ |
 | **Telegram** | ✅ | ✅ |
 | **Email** | ✅ | ✅ |
@@ -439,178 +150,71 @@ polyrob dashboard
 | **iMessage** | ✅ | ❌ |
 | **IRC** | ✅ | ❌ |
 
-**Note:** Discord/Slack/Signal are real thin-client implementations against the real
-endpoints (Discord REST v10 + Gateway WS; Slack Web API + Socket Mode; signal-cli
-JSON-RPC), unit-tested with mocked transports — "validation pending" means they haven't
-been soak-tested against live accounts yet, not that they're stubs. Run them under
-`polyrob gateway` (with their flags enabled) or each as its own process
-(`polyrob discord` etc.).
+"Validation pending" means those surfaces are real clients against the real
+endpoints, unit-tested with mocked transports, but not yet soak-tested against live
+accounts — not that they are stubs.
+
+POLYROB adds something Hermes' channel model does not have: **group rooms**. The
+agent can answer anyone in a room you have allowed, from a read-only room toolset,
+with per-room policy, roles and caps. See [groups.md](../groups.md).
 
 ---
 
-## Features Unique to Each
+## 6. Where POLYROB is behind
 
-### Hermes Has, POLYROB Doesn't
+- **Nous Portal.** No single-subscription model catalog. One OpenRouter key gets you
+  most of the reach.
+- **Modal and Daytona backends.** POLYROB's compute ladder covers hardened Docker
+  and a remote `ssh` backend. ⚠️ The `ssh` backend is **not sandboxed by default** —
+  agent code runs with the SSH user's privileges — and a server refuses it unless you
+  attest the host is disposable with `CODE_EXEC_SSH_SANDBOXED=true`.
+- **iMessage and IRC.**
+- **Companion mobile apps and voice modes.**
 
-- **Nous Portal** — Single subscription for models/tools
-- **Modal/Daytona execution backends** — POLYROB's compute-posture ladder covers
-  local Docker plus a remote `ssh` backend (non-sandboxed by default, see
-  `tools/code_exec/SANDBOX_SECURITY.md`); Modal and Daytona are not supported
-- **iMessage and IRC surfaces** — POLYROB covers Telegram, WhatsApp, Email, Discord,
-  Slack, Signal, and X
-- **Companion mobile apps** — iOS/Android nodes
-- **Voice modes** — Wake words, continuous voice
-
-### POLYROB Has, Hermes Doesn't
-
-- **Economic agency** — built-in agent wallet, x402 payments, and invoicing (Hermes has none)
-- **Proactive self-wake** — the agent re-enters idle sessions on its own when observable state changes (Hermes' autonomy is cron / queue / completion-driven)
-- **Multi-tenant architecture** — `user_id`-scoped, built for team/business use (Hermes authorization is single-operator)
-- **Three-tier access model** — OWNER/CORRESPONDENT/DENIED with origin taint and capability gates
-- **Durable owner-approval queue** — remotely approvable and restart-surviving (Hermes' approvals are in-memory and lost on restart)
-- **A2A protocol** — Google's agent interoperability standard (Hermes exposes ACP to editors, not A2A)
-- **REST API** — Built-in HTTP endpoints for programmatic access
-
-> Both frameworks now have provider failover (POLYROB fails over across providers on
-> billing/rate-limit errors; Hermes pools and rotates credentials) and a durable
-> task/goal board (POLYROB's goal board; Hermes' kanban board with DAG
-> decomposition) — those are no longer POLYROB-only.
+Agent-created skills are **not** on this list any more: POLYROB's learning loop ships
+behind `SKILLS_WRITABLE`. Neither is provider failover or a durable task board — both
+projects have those now.
 
 ---
 
-## Migration Checklist
+## 7. Where POLYROB is ahead
 
-### Before Migration
+Stated once, with detail in [comparison.md](../../comparison.md):
 
-- [ ] Identify critical Hermes skills you want to keep
-- [ ] Note your current provider/model configuration
-- [ ] Document important memory entries
-- [ ] Check which messaging platforms you use
-
-### Migration Steps
-
-1. **Install POLYROB:**
-   ```bash
-   pipx install "polyrob[all]"
-   python -m playwright install chromium
-   ```
-
-2. **Configure providers:**
-   ```bash
-   polyrob init
-   # Edit ~/.polyrob/.env with your API keys
-   ```
-
-3. **Migrate skills:**
-   ```bash
-   mkdir -p ./.polyrob/skills/user_<your-id>
-   cp -r ~/.hermes/skills/user/* ./.polyrob/skills/user_<your-id>/
-   ```
-
-4. **Recreate important memories:**
-   ```bash
-   polyrob chat
-   > Tell me the project contexts I need to know
-   ```
-
-5. **Set up surfaces:**
-   ```bash
-   # For Telegram
-   polyrob telegram
-
-   # For email
-   polyrob email
-   ```
-
-6. **Test with familiar tasks:**
-   ```bash
-   polyrob run "[a task you commonly perform in Hermes]"
-   ```
-
-### After Migration
-
-- [ ] Verify all skills load correctly
-- [ ] Test provider failover (if using multiple providers)
-- [ ] Confirm surfaces work as expected
-- [ ] Update any automation/scripts that used Hermes CLI
+- **Economic agency** — wallet, x402 in and out, invoicing, on-chain trading,
+  bridging, token deployment. Hermes has none. See [payments.md](../payments.md).
+- **Four-tier access with origin taint** — owner, correspondent, group member,
+  denied. Hermes' authorization is binary and single-operator. See
+  [security-model.md](../security-model.md).
+- **Proactive self-wake**, with depth and backoff guards and a no-change gate.
+- **A durable owner-approval queue** you can answer from your phone. Hermes'
+  approvals are in-memory and lost on restart.
+- **A2A and a REST API**, plus an OpenAI-compatible surface. See [api.md](../api.md).
+- **Work that outlives the session** — an app the agent builds, kept alive behind a
+  public URL by an owner-run supervisor.
 
 ---
 
-## Example: Full Migration
+## 8. Do it in this order
 
-```bash
-# 1. Install POLYROB
-pipx install "polyrob[all]"
-python -m playwright install chromium
+1. `pipx install "polyrob[all]"` and `polyrob init`.
+2. Add your provider keys, then `polyrob doctor`.
+3. Copy your skills, `polyrob skills validate`, fix the frontmatter.
+4. Create a profile if you run more than one bot.
+5. Start one surface you use daily and live on it for a week.
+6. Re-create the memories and scheduled jobs that turned out to matter — not the
+   ones you assumed would.
+7. Turn on autonomy last: `polyrob autonomy on`, then watch
+   `polyrob autonomy status`.
 
-# 2. Copy Hermes config notes
-hermes config > ~/hermes-config-notes.txt
-
-# 3. Initialize POLYROB
-polyrob init
-
-# 4. Edit ~/.polyrob/.env with your keys
-nano ~/.polyrob/.env
-
-# 5. Migrate skills
-mkdir -p ./.polyrob/skills/user_<your-id>
-cp -r ~/.hermes/skills/user/* ./.polyrob/skills/user_<your-id>/
-
-# 6. Profiles have no 1:1 equivalent — POLYROB isolates by tenant user_id instead
-
-# 7. Test
-polyrob doctor
-polyrob chat
-
-# 8. Set up surfaces (if used)
-polyrob telegram
-polyrob email
-
-# 9. Create a test goal (the dispatcher that runs it needs GOALS_ENABLED=true, or POLYROB_LOCAL)
-polyrob goals create "Test migration" --body "Summarize my current project context"
-
-# 10. Verify and clean up
-# Once satisfied, you can optionally remove Hermes
-# hermes gateway stop
-```
+Keep Hermes running until step 5 has gone a full week.
 
 ---
 
-## When to Stay with Hermes
+## Help
 
-Consider staying with Hermes if:
-
-- **You need Nous Portal** — Single subscription is important to you
-- **You need iMessage or IRC** — the two surfaces POLYROB doesn't cover
-  (Discord/Slack/Signal/X are covered — see the platform table above)
-- **You need Modal or Daytona execution backends** — POLYROB's compute ladder
-  covers local Docker plus a remote `ssh` backend (non-sandboxed by default —
-  see `tools/code_exec/SANDBOX_SECURITY.md`), but not Modal/Daytona
-- **You want companion apps** — Mobile/desktop apps are essential
-
-(Agent-created skills are no longer a Hermes exclusive — POLYROB's learning loop ships
-behind `SKILLS_WRITABLE`, on by default under `POLYROB_LOCAL`.)
-
-## When to Switch to POLYROB
-
-Consider switching to POLYROB if:
-
-- **You want economic agency** — a built-in wallet, x402 payments, and invoicing (Hermes has none)
-- **You run in production** — Multi-tenant architecture and durability matter
-- **You value security** — Multi-tenant access control, origin taint, and capability gates are important
-- **You want proactive autonomy** — self-wake and a durable, remotely-approvable owner-approval queue
-- **You want A2A interoperability** — Agent-to-agent communication is needed
-- **You need a REST API** — Programmatic access is required
-
----
-
-## Getting Help
-
-- **Documentation:** [README.md](../../../README.md)
-- **Configuration:** [../../CONFIGURATION.md](../../CONFIGURATION.md)
-- **Issues:** [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
-- **Comparison:** [../../comparison.md](../../comparison.md)
-
----
-
-Still deciding? See the [feature comparison](../../comparison.md) for a detailed breakdown of POLYROB vs Hermes and other frameworks.
+- [`docs/CONFIGURATION.md`](../../CONFIGURATION.md) — every flag.
+- [cli.md](../cli.md) — the command reference.
+- [comparison.md](../../comparison.md) — feature-by-feature.
+- [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues) ·
+  [Discussions](https://github.com/theselfruleorg/polyrob/discussions)

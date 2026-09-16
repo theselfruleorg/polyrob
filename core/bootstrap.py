@@ -379,6 +379,10 @@ _CLI_OPTIONAL_REGISTRARS = (
     ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
     ("tools.publish",          "register_publish_tool",      ("publish",)),
     ("tools.app_service",      "register_app_service_tool",  ("app_service",)),
+    # F2 (2026-09-14): read-only token sight (DEFI_DATA_ENABLED) — money/high-impact
+    # DeFi verbs (defi_trade/launchpad/dapp_browser/x_browser) deliberately stay OUT
+    # of this table; only the read-only book belongs on the CLI default rig.
+    ("tools.defi",             "register_defi_data_tool",    ("defi_data",)),
 )
 
 # Static (always-present) descriptors the CLI serves — the lightweight, dependency-free
@@ -840,6 +844,17 @@ async def build_cli_container(
     except Exception:
         logging.getLogger(__name__).warning(
             "CLI database_manager init failed — x402 invoicing/metering degraded",
+            exc_info=True)
+
+    # The per-tenant MCP server store. Without it an MCP server the owner adds
+    # from the REPL lives only until the process exits — the CLI path never
+    # called initialize_auth_services, which is where this used to be buried.
+    try:
+        from core.initialization import initialize_user_mcp_service
+        await initialize_user_mcp_service(container)
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "CLI user_mcp_service init failed — added MCP servers will not persist",
             exc_info=True)
 
     # Register the dependency-free tools a CLI session can load (filesystem, task).

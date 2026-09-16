@@ -9,9 +9,12 @@ import time
 from openai import AsyncOpenAI # type: ignore 
 
 from .llm_client import LLMClient
+from .sdk_caps import sdk_supports  # noqa: F401 — re-exported for callers/tests
 from .token_counter import count_messages_tokens
+from .retry_log import log_attempt
 from core.config import BotConfig
 from core.exceptions import LLMError, LLMConfigError, LLMConnectionError, ServiceError
+
 
 class OpenAIClient(LLMClient):
     """OpenAI LLM client.
@@ -50,10 +53,7 @@ class OpenAIClient(LLMClient):
         self.temperature = openai_config.get('temperature', 0.7)
         self.max_tokens = openai_config.get('max_tokens', model_defaults)
         
-        self.logger.debug(
-            f"OpenAI client initialized: model={self.model_type}, "
-            f"supports_vision={self.supports_vision}"
-        )
+        self.logger.debug(f"OpenAI client initialized: model={self.model_type}, supports_vision={self.supports_vision}")
         
     def _validate_llm_config(self) -> None:
         """Validate LLM config."""
@@ -242,7 +242,7 @@ class OpenAIClient(LLMClient):
             # P-3: stable cache bucket keyed on the (inline) system prompt, if any.
             _system_inline = next((m.get('content') for m in openai_messages if m.get('role') == 'system'), None)
             _cache_key = self._stable_prompt_cache_key(_system_inline)
-            if _cache_key:
+            if _cache_key and sdk_supports('prompt_cache_key'):
                 request_params['prompt_cache_key'] = _cache_key
 
             # Make the actual API call
@@ -266,7 +266,7 @@ class OpenAIClient(LLMClient):
         except Exception as e:
             success = False
             error_message = str(e)
-            self.logger.error(f"OpenAI API error: {e}")
+            log_attempt(self.logger, f"OpenAI API error: {e}")  # A12 round 5: see modules/llm/retry_log.py
             
             # Capture telemetry for failed requests too
             self._extract_usage_and_capture_telemetry(start_time, success, error_message, kwargs.get('metadata'))
@@ -353,7 +353,7 @@ class OpenAIClient(LLMClient):
             return response
             
         except Exception as e:
-            self.logger.error(f"Failed to generate response: {e}")
+            log_attempt(self.logger, f"Failed to generate response: {e}")  # A12 round 5: see modules/llm/retry_log.py
             raise ServiceError(f"Failed to generate response: {e}")
             
     async def cleanup(self) -> None:
@@ -521,7 +521,7 @@ class OpenAIClient(LLMClient):
             return (message.content or "", [], usage_data)
             
         except Exception as e:
-            self.logger.error(f"OpenAI tool-based generation failed: {str(e)}")
+            log_attempt(self.logger, f"OpenAI tool-based generation failed: {str(e)}")  # A12 round 5: see modules/llm/retry_log.py
             raise LLMError(f"OpenAI generation failed: {str(e)}")
 
     def _build_tool_request_params(
@@ -622,7 +622,7 @@ class OpenAIClient(LLMClient):
 
         # P-3: route same-prefix requests to a stable cache bucket.
         cache_key = self._stable_prompt_cache_key(system)
-        if cache_key:
+        if cache_key and sdk_supports('prompt_cache_key'):
             request_params['prompt_cache_key'] = cache_key
 
         # UP-07: per-model reasoning_effort from the registry (gated, default OFF).

@@ -229,45 +229,14 @@ Example: {{"read_file": {{"file_path": "{content_file.name}"}}}}
 						file_reference += f"\nPREVIEW (first {len(preview):,} chars):\n{preview}"
 
 					file_reference += "\n[END LARGE CONTENT REFERENCE]"
-					
-					# FIXED: Store file reference metadata for better tracking
-					# Initialize file_references if None or not a list
-					if not isinstance(getattr(result, 'file_references', None), list):
-						result.file_references = []
 
-					file_ref_metadata = {
-						'type': 'large_content',
-						'path': str(content_file),
-						'original_size': original_content_length,
-						'preview_size': len(file_reference),
-						'content_type': file_extension[1:],  # Remove the dot
-						'created_at': time.time()
-					}
-
-					if hasattr(result, 'metadata') and result.metadata:
-						file_ref_metadata['source_metadata'] = result.metadata
-
-					result.file_references.append(file_ref_metadata)
-					
 					# Replace with enhanced file reference
 					result.extracted_content = file_reference
-					
+
 					# Log with better context
 					self.logger.info(f"Stored large {action_type} content ({original_content_length:,} chars) in {content_file.name}")
-					
+
 				except Exception as e:
 					self.logger.warning(f"Failed to store large content in file: {e}", exc_info=True)
 					# Fallback: keep the full extracted content in-message (the old
 					# truncate_extracted_content call was a verified no-op and was removed).
-
-					# FIXED: Still create file reference metadata for fallback case
-					# Initialize file_references if None or not a list
-					if not isinstance(getattr(result, 'file_references', None), list):
-						result.file_references = []
-
-					result.file_references.append({
-						'type': 'truncated_content',
-						'original_size': len(result.extracted_content) + len(' [TRUNCATED]'),
-						'truncated_size': len(result.extracted_content),
-						'reason': f'File storage failed: {str(e)}'
-					})

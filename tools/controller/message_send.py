@@ -8,6 +8,7 @@ from typing import List, Optional, Tuple
 
 from core.surfaces.attachments import (
     _IMAGE_EXTS,  # re-export (legacy import site)
+    is_injection_reason,
     media_entries_from_paths,
     message_media_max_mb,
     screen_attachment_path,
@@ -17,23 +18,25 @@ from core.surfaces.outbound_target import (
     is_bot_username,
     normalize_surface_target,
     resolve_target_tier,
+    wrong_surface_target_reason,
 )
+from core.surfaces.room_keys import is_room_target
 
 logger = logging.getLogger(__name__)
 
 
 def _pref_home_dir(container) -> Optional[str]:
     """Preferences-store root for `resolve_outbound_policy`/`resolve_outbound_daily_cap`
-    (013 T6) — mirrors `core.surfaces.user_delivery._home_dir_for_container`'s
-    data_dir lookup. `None` when there's no container to resolve from at all,
-    which makes both resolvers skip the pref layer entirely (env/mode-default
-    only) — a container present but config-less still gets the same "data"
-    fallback root every other prefs reader uses."""
+    (013 T6) — the IDENTITY axis, same as `user_delivery._home_dir_for_container`.
+
+    `None` when there's no container at all, which makes both resolvers skip the
+    pref layer entirely (env/mode-default only). With a container it is the data
+    home: `config.data_dir` is `<data_home>/data` on a server, a shadow no
+    preference writer ever writes to (2026-09-15 review, C10)."""
     if container is None:
         return None
-    cfg = getattr(container, "config", None)
-    from core.runtime_paths import data_dir_or_home
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    from core.runtime_paths import prefs_home_dir
+    return prefs_home_dir()
 
 
 def _resolve_session_workspace(session_id: Optional[str], user_id: Optional[str]) -> Optional[str]:
@@ -171,6 +174,14 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # deliberately keeps the RAW target (owner-authored allowlist entries are
     # matched byte-exact); only the actual send uses the normalized form.
     send_target = normalize_surface_target(surface, target)
+    # C8 (2026-09-15): a target of the wrong SHAPE for its surface can never be
+    # delivered. Prod marked `telegram / rob@theselfrule.org` dead after handing
+    # an email address to the Bot API. Refuse with the surface that WOULD work,
+    # before the send is spent and the address is durably marked dead.
+    wrong_shape = wrong_surface_target_reason(surface, send_target)
+    if wrong_shape:
+        return {"success": False, "tier": None, "surface": surface, "target": target,
+                "error": wrong_shape}
     if is_bot_username(surface, send_target):
         return {"success": False, "tier": None, "surface": surface, "target": target,
                 "error": (f"{send_target} is a bot account — Telegram forbids bot→bot "
@@ -183,6 +194,17 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     tier = resolve_target_tier(surface=surface, target=target, user_id=user_id,
                                allowlist=allowlist, owner_targets=owner_targets,
                                policy=policy, domains=domains)
+    # 044 T21: a ROOM is neither the owner nor a third party. It is a chat the
+    # OWNER put the agent in, so the correspondent rail below (seeding, the
+    # per-day new-contact cap) and the open-tier daily cap are the wrong bounds —
+    # its bound is the room's own hourly reply cap, the SAME `RoomCaps` gate
+    # `MessageRouter.publish` applies to a live room reply. Resolved HERE,
+    # immediately after the tier and before the `denied` exit, because a room's
+    # chat id was never on the OUTBOUND allowlist: the ladder calls it `denied`
+    # and the agent could not post into its own room at all.
+    room = tier != "owner" and is_room_target(container, surface, target)
+    if room:
+        tier = "room"
     if tier == "denied":
         return {"success": False, "tier": "denied", "surface": surface, "target": target,
                 "error": ("target not on owner allowlist; ask the owner to run "
@@ -205,8 +227,60 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
         return {"success": False, "tier": tier, "surface": surface, "target": target,
                 "error": "no message_router available (SINGULAR_CHAT_ENABLED off?)"}
 
+    # 044 T21: the room's own hourly cap, the SAME bound the live reply path
+    # applies — so a post cannot dodge it by going through the `message` tool.
+    # Checked BEFORE the send; `record_reply` only fires on a SUCCESSFUL one, so
+    # a failed post never consumes the room's budget for nothing.
+    room_caps = None
+    if room:
+        try:
+            room_caps = container.get_service("room_caps") if container else None
+        except Exception as e:
+            logger.debug("room caps lookup failed: %s", e)
+            room_caps = None
+        if room_caps is not None:
+            ok_room, why = room_caps.may_reply(surface, str(target))
+            if not ok_room:
+                return {"success": False, "tier": "room", "surface": surface,
+                        "target": target, "error": why}
+        # 044 I6: the OTHER two room-delivery rules. `MessageRouter.publish`
+        # applies them to a live room REPLY, but a post through the `message`
+        # tool goes straight to `router.send_message` and bypassed both — so the
+        # one verb an agent can aim at an arbitrary chat was the one that skipped
+        # the public-audience scrub. ONE audience, one set of rules.
+        if (text or "").strip().upper() == "[SILENT]":
+            # The agent's "nothing here needs an answer". In a room that must
+            # cost NO message, or a judgement of silence becomes a public
+            # non-sequitur. EXACT match only, as in publish (044 §4.4).
+            logger.info("room post suppressed: [SILENT] (%s:%s)", surface, target)
+            return {"success": True, "tier": "room", "surface": surface,
+                    "target": target, "suppressed": True,
+                    "note": "[SILENT] — nothing was posted to the room"}
+        from core.secret_scrub import scrub_secret_shapes
+        _safe = scrub_secret_shapes(text or "")
+        if _safe != text:
+            logger.warning("room post: redacted a secret shape before delivery")
+            text = _safe
+
+    # 2026-09-15: the owner reads this on a phone. `core.owner_remedy` has known
+    # since 2026-09-08 which owner actions are real and which are a shell
+    # command, and exactly ONE producer (the goal escalation) consulted it — so
+    # the agent's own `message` tool, its commonest route to the owner, sent
+    # invented verbs and `polyrob …` instructions unchecked. We never delete the
+    # agent's prose (it is usually right about the WHAT and wrong only about the
+    # remedy); we append the correction and let the owner see both. Fail-open.
+    if tier == "owner" and text:
+        try:
+            from core.owner_remedy import correction_line, shell_free_correction
+            fixups = correction_line(text) + shell_free_correction(text)
+            if fixups:
+                logger.info("owner message carried unreachable actions; corrected inline")
+                text = text + fixups
+        except Exception:
+            logger.debug("owner remedy check skipped", exc_info=True)
+
     store = None
-    if tier != "owner" and container is not None:
+    if tier not in ("owner", "room") and container is not None:
         try:
             store = container.get_service("conversation_store")
         except Exception:
@@ -243,7 +317,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # was DENIED at the routing boundary on every surface. Seed BEFORE sending
     # (A5 parity): a cap-refused binding blocks the send; a fault never does.
     seed_state = None
-    if tier != "owner" and container is not None:
+    if tier not in ("owner", "room") and container is not None:
         try:
             from core.surfaces.seed import maybe_seed_correspondent
             seed_state = maybe_seed_correspondent(
@@ -281,6 +355,16 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
             reason = screen_attachment_path(real, max_mb=message_media_max_mb(),
                                             scanner=_scanner)
             if reason:
+                # I4: `"threat scan" in reason` also matched the scan-ERROR
+                # reason, so a crashing scanner reported an attack.
+                # I5: the screened thing is a workspace FILE, not an inbound
+                # turn — `origin="sender"` sent an owner investigating a
+                # hostile chat message that does not exist.
+                if is_injection_reason(reason):
+                    from core.security.threat_report import report_threat
+                    report_threat("file", source="message_send",
+                                  user_id=user_id, session_id=session_id,
+                                  detail=Path(real).name)
                 return {"success": False, "tier": tier, "surface": surface, "target": target,
                         "error": f"media rejected: {Path(real).name}: {reason}"}
         if _surface_media_out(router, surface):
@@ -298,11 +382,20 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     # conversation log (owner targets are not correspondent conversations —
     # this record is for the seed/first-contact/daily-cap machinery above,
     # which owner sends are deliberately exempt from).
-    if ok and tier != "owner" and container is not None:
+    # 044 T21: the room's hourly budget is spent only by a post that LANDED.
+    if ok and room and room_caps is not None:
+        try:
+            room_caps.record_reply(surface, str(target))
+        except Exception as e:
+            logger.debug("room cap record skipped: %s", e)
+    if ok and tier not in ("owner", "room") and container is not None:
         try:
             if store is None:
                 store = container.get_service("conversation_store")
             if store is not None:
+                # C8: the store's own _norm_addr collapses `x` / `@x` / `t.me/x`
+                # into one key on read AND write, so the raw target is correct
+                # here and a reply that arrives under any spelling still resolves.
                 store.record_outbound(user_id or "", surface, str(target), text,
                                       session_id=session_id or "")
         except Exception as e:
@@ -325,6 +418,7 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
                                             session_id=session_id or "")
         except Exception as e:
             logger.debug("owner-send conversation record skipped: %s", e)
+        _record_owner_send_on_the_rail(user_id, session_id, surface, text)
 
     # T6: first-contact report — AFTER a successful send+record. A blocked or
     # failed send never "made contact", so this only fires on `ok`.
@@ -353,6 +447,38 @@ async def perform_message_send(*, router, allowlist, owner_targets, user_id,
     if note:
         result["note"] = note
     return result
+
+
+def _record_owner_send_on_the_rail(user_id, session_id, surface: str,
+                                  text: str) -> None:
+    """Book an owner-tier `message`-tool send into the delivery rail's ledger.
+
+    2026-09-15 prod review, C5: this path never touched
+    ``core.surfaces.user_delivery``, so a `message`-tool send to the owner was
+    invisible to the shared daily cap and hourly rate limit that every OTHER
+    owner-bound producer is measured against. Two rails, one owner, no shared
+    accounting — so the cap protected the owner from the framework's chatter
+    while this path stayed unmetered.
+
+    This RECORDS, it does not gate: the cooldown above plus the outbound policy
+    remain this path's own guard. Recording is what makes the rail's window
+    honest, and what lets a future unification gate here without inventing a
+    second budget. Fail-open and silent — an unrecordable send is still sent.
+    """
+    try:
+        from core.event_kinds import USER_DELIVERY
+        from core.event_log import event_log_enabled, get_event_log
+        from core.surfaces.user_delivery import content_hash
+        if not event_log_enabled():
+            return
+        body = (text or "").strip()
+        get_event_log().record(
+            USER_DELIVERY, user_id=str(user_id or ""),
+            session_id=str(session_id or ""), source="message_tool",
+            attrs={"outcome": "sent", "lane": "normal", "surface": surface,
+                   "content_hash": content_hash(body), "text": body[:500]})
+    except Exception:
+        logger.debug("owner-send rail record skipped", exc_info=True)
 
 
 #: Surface order used when the model omits `surface`: the owner's primary chat

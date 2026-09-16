@@ -1,5 +1,6 @@
-"""Shared env isolation for the x402 unit tests."""
+"""Shared env isolation and DB rig for the x402 unit tests."""
 import pytest
+import pytest_asyncio
 
 
 @pytest.fixture(autouse=True)
@@ -17,3 +18,25 @@ def _no_leaked_alchemy_key(monkeypatch):
     explicitly with monkeypatch.
     """
     monkeypatch.delenv("ALCHEMY_API_KEY", raising=False)
+
+
+@pytest_asyncio.fixture()
+async def x402_db(tmp_path):
+    """A REAL x402 schema on a temp DB (046).
+
+    The all-fakes pattern is why N1 shipped, so every 046 test runs against the
+    same `X402Tables.create_tables()` production takes — which is also what adds
+    the asset columns, so a column missing in prod is a column missing here.
+    """
+    from modules.database.connection import DatabaseConnection
+    from modules.database.user_profiles import UserProfiles
+    from modules.database.x402_tables import X402Tables
+
+    db = DatabaseConnection(tmp_path / "x402.db")
+    await db.connect()
+    await UserProfiles(db).create_table()
+    await X402Tables(db).create_tables()
+    try:
+        yield db
+    finally:
+        await db.close()

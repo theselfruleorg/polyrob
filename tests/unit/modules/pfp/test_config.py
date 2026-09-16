@@ -19,14 +19,14 @@ from modules.pfp.config import (
 
 
 def _cfg(**over):
-    base = {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "",
+    base = {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "",
             "size": 768, "override": {}}
     base.update(over)
     return base
 
 
 def test_load_accepts_valid_config():
-    assert load_frozen_config(_cfg())["seed"] == "Rob Ottmachin"
+    assert load_frozen_config(_cfg())["seed"] == "POLYROB"
 
 
 def test_load_reads_from_file(tmp_path):
@@ -51,13 +51,13 @@ def test_load_rejects_non_dict():
 
 
 def test_render_seed_concatenates_variant():
-    assert render_seed(_cfg(seed="Rob Ottmachin", variant="#k3j9x")) == "Rob Ottmachin#k3j9x"
+    assert render_seed(_cfg(seed="POLYROB", variant="#k3j9x")) == "POLYROB#k3j9x"
 
 
 def test_render_seed_without_variant():
-    assert render_seed(_cfg(seed="Rob Ottmachin", variant="")) == "Rob Ottmachin"
+    assert render_seed(_cfg(seed="POLYROB", variant="")) == "POLYROB"
     cfg = _cfg(); cfg.pop("variant")
-    assert render_seed(cfg) == "Rob Ottmachin"
+    assert render_seed(cfg) == "POLYROB"
 
 
 def test_normalize_override_maps_shape_name_to_index():

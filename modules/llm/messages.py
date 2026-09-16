@@ -60,6 +60,8 @@ class MessageOrigin:
     EPISODIC_DIGEST = "episodic_digest"    # session-start recent-activity digest
                                         # (own recent runs), chat/owner sessions only
     SESSION_BRIDGE = "session_bridge"      # cross-session continuity bridge (Task 6)
+    GROUP_CONTEXT = "group_context"        # 044 T14: the room's recent lines shown to
+                                        # ONE turn (API-only; never stored as user turns)
 
 
 # Origin -> XML-ish envelope tag used to wrap injected (non-user) content so the
@@ -80,6 +82,13 @@ _ORIGIN_ENVELOPE = {
     MessageOrigin.COMPACTION_SUMMARY: "compacted-history",
     MessageOrigin.SELF_WAKE: "self-wake",
     MessageOrigin.RUNTIME_IDENTITY: "runtime-identity",
+    # NOTE: GROUP_CONTEXT is deliberately absent (like ENVIRONMENT /
+    # EPISODIC_DIGEST / SESSION_BRIDGE). 044 T14's content ALREADY arrives framed
+    # twice — `<untrusted_tool_result source="group-context">` around the
+    # rendered `<group-context chat="…" surface="…">` block — so an envelope
+    # would make a THIRD fence, two of them named `group-context`. The model
+    # would then meet `</group-context>` twice and the first close is the INNER
+    # one: exactly the delimiter ambiguity the untrusted wrap exists to prevent.
 }
 
 

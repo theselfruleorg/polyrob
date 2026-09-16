@@ -52,3 +52,86 @@ def test_every_enforced_pref_key_has_a_literal_consumer():
     assert not missing, (
         "enforced pref keys with NO enforcement-site consumer (wire one via the "
         f"effective_* pattern, or mark the spec advisory): {missing}")
+
+
+# ---------------------------------------------------------------------------
+# 044 T17: the same promise for the per-CHAT overlay (`chat.*`).
+#
+# Those rows are NOT in PREF_SCHEMA (they live in a per-chat file, not in
+# preferences.toml), so the ratchet above cannot see them — and a `chat.*` key
+# with no reader would be exactly the write-only trap this module exists to
+# forbid, only in a new namespace. Their enforcement site is an attribute read
+# on a `ChatPolicy`, not `resolve("<key>")`, so the proof is: some production
+# module that knows about chat_policy reads that field OFF A POLICY OBJECT.
+#
+# The match is deliberately anchored to a policy-shaped receiver
+# (`policy.<field>` / `pol.<field>` / `getattr(policy, "<field>")`) rather than
+# a bare `.<field>` or a quoted `"<field>"`: field names like `mode`, `name` and
+# `language` are common words, and a loose match would let an unwired key pass
+# on an unrelated coincidence — which is exactly the silence this forbids.
+# `chat_policy.py` itself stays eligible, because `mode`, `mute_until` and
+# `quiet_hours` are consumed inside `mode_allows_trigger` and nowhere else.
+# ---------------------------------------------------------------------------
+
+_CHAT_POLICY_MODULE = "core/surfaces/chat_policy.py"
+
+#: Local names a ChatPolicy is bound to across the tree.
+_POLICY_RECEIVERS = ("policy", "pol", "_pol", "room", "_room_policy")
+
+
+def _chat_policy_readers() -> list[tuple[Path, str]]:
+    """Production sources that know about the chat overlay — the only places a
+    `chat.*` field can legitimately be consumed."""
+    return [(rel, text) for rel, text in _production_sources()
+            if "chat_policy" in text or str(rel) == _CHAT_POLICY_MODULE]
+
+
+def _field_read_pattern(field: str) -> "re.Pattern":
+    recv = "|".join(re.escape(r) for r in _POLICY_RECEIVERS)
+    f = re.escape(field)
+    return re.compile(
+        rf"(?:{recv})\.{f}\b"                               # policy.<field>
+        rf"|getattr\(\s*(?:{recv})\s*,\s*[\"']{f}[\"']"      # getattr(policy, "<field>")
+    )
+
+
+def test_every_chat_overlay_key_is_actually_read():
+    from core.prefs import CHAT_PREF_SCHEMA
+
+    readers = _chat_policy_readers()
+    assert readers, "no module imports chat_policy — the overlay is dead"
+    missing = {}
+    for key in CHAT_PREF_SCHEMA:
+        field = key.split(".", 1)[1]
+        pat = _field_read_pattern(field)
+        hits = [str(rel) for rel, text in readers if pat.search(text)]
+        if not hits:
+            missing[key] = "no <policy>.<field> read found"
+    assert not missing, (
+        "chat.* keys nothing reads (wire a consumer, or do not ship the row until "
+        f"the task that consumes it does): {missing}")
+
+
+def test_the_chat_ratchet_would_catch_an_unwired_key():
+    """The ratchet's own proof: a field no policy object is read for must FAIL
+    the pattern, or the check above is decoration."""
+    readers = _chat_policy_readers()
+    # 046 wired `member_verbs`: the dispatcher reads it to decide whether a
+    # plain member's slash line is a COMMAND. It is no longer proof of an
+    # unwired key, so it left this list — leaving it here would make the
+    # ratchet assert a lie.
+    for never_wired in ("reply_mode", "tool_deny", "thread_scope"):
+        pat = _field_read_pattern(never_wired)
+        assert not [str(rel) for rel, text in readers if pat.search(text)], never_wired
+
+
+def test_the_chat_overlay_is_not_a_tenant_preference():
+    """A `chat.*` key must never be listed or stored as a tenant preference:
+    `/config`, `polyrob config` and the webview panel all iterate PREF_SCHEMA,
+    and `write_preference` would put the value in `preferences.toml`, where the
+    chat policy never looks."""
+    from core.prefs import CHAT_PREF_SCHEMA, PREF_SCHEMA, write_preference
+
+    assert not (set(CHAT_PREF_SCHEMA) & set(PREF_SCHEMA))
+    ok, err = write_preference("/tmp/does-not-matter", "rob", "chat.mode", "active")
+    assert not ok and "per-room" in err

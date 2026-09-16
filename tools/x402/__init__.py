@@ -9,27 +9,29 @@ def x402_client_enabled() -> bool:
 def register_x402_tool(force: bool = False) -> bool:
     """Register the 'x402_pay' descriptor + class IFF X402_CLIENT_ENABLED (or forced).
 
-    Mirrors tools/code_exec.register_code_exec_tool. Descriptor inserted first
-    (register_tool_class is a silent no-op for unknown names). Never in default tool_ids.
+    Delegates to ``register_optional_tool`` (single shared factory, F1 2026-09-14) so
+    the capability-classification guard in ``tools/descriptors.py`` actually fires for
+    this tool — it was previously inserted via a direct ``TOOL_DESCRIPTORS``/
+    ``register_tool_class`` call that bypassed ``is_classified()``. Descriptor is
+    byte-identical; never in default tool_ids.
     """
-    if not (force or x402_client_enabled()):
-        return False
-    from tools.descriptors import (
-        TOOL_DESCRIPTORS, ToolDescriptor, ToolCategory, register_tool_class,
-    )
+    from tools.descriptors import ToolDescriptor, ToolCategory, register_optional_tool
     from tools.x402.service import X402PayTool
 
-    if "x402_pay" not in TOOL_DESCRIPTORS:
-        TOOL_DESCRIPTORS["x402_pay"] = ToolDescriptor(
+    return register_optional_tool(
+        "x402_pay",
+        X402PayTool,
+        ToolDescriptor(
             name="x402_pay",
             description=("Discover and pay x402 resources: probe/sweep endpoints read-only "
                          "for price + payability (no wallet needed), and pay via the agent wallet"),
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,
-        )
-    register_tool_class("x402_pay", X402PayTool)
-    return True
+        ),
+        x402_client_enabled,
+        force=force,
+    )
 
 
 def x402_invoicing_enabled() -> bool:
@@ -46,23 +48,24 @@ def x402_invoicing_enabled() -> bool:
 
 def register_x402_invoice_tool(force: bool = False) -> bool:
     """Register 'x402_invoice' (x402_request/x402_invoices/accounting) IFF
-    X402_INVOICE_ENABLED (agent money loop). Same shape as register_x402_tool;
-    never in default tool_ids. Distinct flag from X402_CLIENT_ENABLED — invoicing
-    (receivables) needs a treasury address, not an agent wallet."""
-    if not (force or x402_invoicing_enabled()):
-        return False
-    from tools.descriptors import (
-        TOOL_DESCRIPTORS, ToolDescriptor, ToolCategory, register_tool_class,
-    )
+    X402_INVOICE_ENABLED (agent money loop). Same shape as register_x402_tool
+    — routes through ``register_optional_tool`` (F1 2026-09-14) so the
+    capability-classification guard fires. Never in default tool_ids. Distinct
+    flag from X402_CLIENT_ENABLED — invoicing (receivables) needs a treasury
+    address, not an agent wallet."""
+    from tools.descriptors import ToolDescriptor, ToolCategory, register_optional_tool
     from tools.x402.invoice_tool import X402InvoiceTool
 
-    if "x402_invoice" not in TOOL_DESCRIPTORS:
-        TOOL_DESCRIPTORS["x402_invoice"] = ToolDescriptor(
+    return register_optional_tool(
+        "x402_invoice",
+        X402InvoiceTool,
+        ToolDescriptor(
             name="x402_invoice",
             description="Create/track x402 payment requests (invoices) + the unified accounting ledger",
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,
-        )
-    register_tool_class("x402_invoice", X402InvoiceTool)
-    return True
+        ),
+        x402_invoicing_enabled,
+        force=force,
+    )

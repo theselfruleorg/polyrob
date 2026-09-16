@@ -44,13 +44,12 @@ def test_deploy_prod_polls_instead_of_fixed_sleep():
     assert 'VERIFY_OK=1' in text and 'VERIFY_OK=0' in text
 
 
-def test_deploy_from_local_polls_instead_of_fixed_sleep():
+def test_deploy_from_local_delegates_to_primary_in_background():
     text = _read("scripts/deploy_from_local.sh")
-    # The restart line no longer bundles a fixed sleep before the is-active check.
-    assert "sleep 12; systemctl is-active" not in text
-    assert re.search(r"for i in \\\$\(seq 1 \d+\)", text), \
-        "the remote verify step must poll in a loop"
-    assert "RESTART_TS" in text
+    assert 'bash scripts/deploy_prod.sh' in text
+    assert 'nohup env' in text and 'DEPLOY_EXPECTED_SHA' in text
+    assert 'git -C "$REPO" pull --rebase' in text
+    assert 'rsync ' not in text
 
 
 def test_both_deploy_scripts_are_valid_bash():

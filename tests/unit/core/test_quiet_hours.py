@@ -99,6 +99,12 @@ class _FakeContainer:
 @pytest.fixture()
 def rail(tmp_path, monkeypatch):
     from core.surfaces import quiet_hours
+    # 2026-09-15 (C10): the rail resolves preferences on the IDENTITY axis (the
+    # DATA HOME), not from `container.config.data_dir` — on a server the latter
+    # is `<data_home>/data`, a shadow no preference writer writes to. Pin the
+    # data home so the pref this fixture writes is the one the rail reads.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
     sink = _FakeSink()
     log = _FakeEventLog()
     container = _FakeContainer(sink, tmp_path)

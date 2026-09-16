@@ -30,6 +30,7 @@ SEAM_MARKERS = (
 #: (auth.py was exempt while its parallel-session work was in flight on
 #: 2026-08-14; wired + removed 2026-08-15.)
 EXEMPT = {
+    "_options.py", "_session_control.py",  # helpers, no independently invocable commands
     "__init__.py",
     "_errors.py",
     "_grouped.py",
@@ -40,6 +41,15 @@ def test_every_command_module_loads_env():
     missing = []
     for path in sorted(COMMANDS_DIR.glob("*.py")):
         if path.name in EXEMPT:
+            continue
+        if path.name == "wallet_lp.py":
+            # A nested group is reached through its parent's callback. Verify
+            # that composition rather than requiring a duplicate env load.
+            import inspect
+            from cli.commands.wallet import wallet_cmd
+            from cli.commands.wallet_lp import lp_cmd
+            assert wallet_cmd.commands["lp"] is lp_cmd
+            assert "load_env(" in inspect.getsource(wallet_cmd.callback)
             continue
         src = path.read_text(encoding="utf-8")
         if not any(marker in src for marker in SEAM_MARKERS):

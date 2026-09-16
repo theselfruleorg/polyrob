@@ -14,7 +14,8 @@ from core.tool_capabilities import (
 
 def test_money_derivation_exact():
     assert ids_with("money") == frozenset(
-        {"x402_pay", "x402_invoice", "hyperliquid", "polymarket", "defi_trade"})
+        {"x402_pay", "x402_invoice", "hyperliquid", "polymarket", "defi_trade",
+         "launchpad", "dapp_browser"})
 
 
 def test_delegate_blocked_derivation_exact():
@@ -22,7 +23,7 @@ def test_delegate_blocked_derivation_exact():
         "code_execution", "coding", "cronjob", "x402_pay", "x402_invoice",
         "hyperliquid", "polymarket", "git", "github", "process", "tool_manage",
         "mcp", "shell", "self_env", "hf_deploy", "defi_trade", "x_browser",
-        "publish", "app_service",
+        "publish", "app_service", "launchpad", "dapp_browser",
     })
 
 
@@ -32,7 +33,7 @@ def test_high_impact_derivation_exact():
         "twitter", "browser", "web_fetch", "git", "github", "mcp", "process",
         "tool_manage", "shell", "self_env", "x402_invoice", "anysite",
         "perplexity", "hf_deploy", "defi_trade", "x_browser", "publish",
-        "app_service",
+        "app_service", "launchpad", "dapp_browser",
     })
 
 
@@ -81,13 +82,24 @@ def test_polarities_preserved():
 
 def test_catalog_risk_tiers_derive_exactly():
     """The catalog risk tiers (folded from core/tool_catalog.py's hand-sets) must
-    derive to the SAME memberships — independent literals, not self-comparison."""
+    derive to the SAME memberships — independent literals, not self-comparison.
+
+    F44/A9 (2026-09-14): filling the 19-id TOOL_PERMISSIONS gap widened both
+    sets — money/exec ids (code_execution/coding/shell/process/self_env/
+    x402_pay/x402_invoice/defi_trade) carry an external-write permission and
+    land HIGH; high_impact-only ids (goal/cronjob/git/github/hf_deploy/
+    publish/app_service/tool_manage/web_fetch) carry none and land MEDIUM."""
     from core.tool_capabilities import high_risk_tool_ids, medium_risk_tool_ids
 
     assert high_risk_tool_ids() == frozenset(
-        {"twitter", "email", "polymarket", "hyperliquid", "x_browser"})
+        {"twitter", "email", "polymarket", "hyperliquid", "x_browser",
+         "launchpad", "dapp_browser",
+         "code_execution", "coding", "shell", "process", "self_env",
+         "x402_pay", "x402_invoice", "defi_trade"})
     assert medium_risk_tool_ids() == frozenset(
-        {"mcp", "anysite", "browser_manager", "perplexity"})
+        {"mcp", "anysite", "browser_manager", "perplexity",
+         "goal", "cronjob", "git", "github", "hf_deploy", "publish",
+         "app_service", "tool_manage", "web_fetch"})
 
 
 def test_catalog_back_compat_names_are_the_derivations():

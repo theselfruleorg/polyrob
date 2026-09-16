@@ -188,10 +188,17 @@ def _fail_open_owner_user_id() -> Optional[str]:
     """Representative tenant for the process-level wallet singleton's pref
     lookup (the agent wallet is single/operator-owned — see
     ``core/wallet/factory.py``). Fail-open to ``None`` => no pref match =>
-    legacy env-only value, mirroring ``agents.task.goals.dispatcher._tick_owner_user_id``."""
+    legacy env-only value, mirroring ``agents.task.goals.dispatcher._tick_owner_user_id``.
+
+    ⚠️ Reads the ONE owner-tenant resolver (``resolve_owner_user_id``), not the
+    owner PRINCIPAL. This is money-adjacent: the console writes
+    ``budget.wallet_*`` under the tenant it reads (now ``local`` when unbound),
+    and a ceiling that stops applying falls back to the env value — which can be
+    WIDER than the pref the owner set.
+    """
     try:
-        from core.instance import resolve_owner_principal
-        return resolve_owner_principal()
+        from core.instance import resolve_owner_user_id
+        return resolve_owner_user_id()
     except Exception:
         return None
 

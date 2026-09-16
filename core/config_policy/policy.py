@@ -69,6 +69,7 @@ from core.config_policy.compute_posture import (  # noqa: F401
 from core.config_policy.payment_policy import (  # noqa: F401
     PAYMENT_APPROVAL_TOOLS,
     PAYMENT_RECEIVE_APPROVAL_TOOLS,
+    VERB_OWNED_APPROVAL_GATES,
     _FROZEN_APPROVAL_GRANT_TTL_HOURS,
     _FROZEN_PAYMENT_APPROVAL_MODE,
     _FROZEN_PAYMENT_APPROVAL_TIMEOUT_SEC,
@@ -90,6 +91,7 @@ from core.config_policy.capability_toggles import (  # noqa: F401
     email_provider,
     hmem_tail_placement,
     invoice_card_enabled,
+    room_action_card_enabled,
     memory_backend_default,
     memory_prefetch_cadence,
     message_autonomous_allowlisted,

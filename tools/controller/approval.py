@@ -229,6 +229,10 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = (
     "x402_invoice_x402_request",
     # Browser-based X posting — outward-facing, recommend owner approval.
     "x_browser_x_post",
+    # ⚠️ `defi_trade_bridge` is deliberately ABSENT (039). "Belt-and-braces" was
+    # the intent; two owner taps for one bridge, from two prompts describing the
+    # same transaction differently, was the result (2026-09-12). The verb owns its
+    # own gate and asks the better question — see core/config_policy/payment_tools.py.
     # NOTE: hf_deploy's `deploy` is deliberately NOT here. A blanket Controller
     # gate can't tell a FIRST publish (must be approved) from a redeploy of an
     # already-approved app (unattended within caps) — gating both would break the
@@ -476,7 +480,8 @@ def make_approval_hook(
         import time as _time
         waited_from = _time.monotonic()
         decision = "error"  # overwritten on every exit path; CancelledError keeps it
-        _emit_approval_event("awaiting", action_name, context, timeout_sec=timeout)
+        _emit_approval_event("awaiting", action_name, context, timeout_sec=timeout,
+                             provider=type(provider).__name__)
         try:
             try:
                 approved = await asyncio.wait_for(
@@ -486,6 +491,10 @@ def make_approval_hook(
             except asyncio.TimeoutError:
                 decision = "timeout"
                 logger.error(f"approval.timeout action={action_name} after {timeout}s")
+                from core.security.refusals import record_refusal
+                record_refusal("approval_timeout", tool=action_name,
+                               user_id=getattr(context, "user_id", None) or "",
+                               session_id=getattr(context, "session_id", None) or "")
                 return (f"approval denied (timeout) for '{action_name}'; owner can approve "
                         "via /pending — a decision recorded after this timeout still "
                         "applies to the next identical attempt (one-shot grant), or "
@@ -494,10 +503,23 @@ def make_approval_hook(
                 logger.error(
                     f"approval.error action={action_name} exc={type(e).__name__}: {e}"
                 )
+                # 045: a crashing approval provider DENIES — and denied silently
+                # until now, which is the exact class lane 2 exists to close.
+                # Same `approval_denied` slug (the outcome IS a denial); the
+                # detail names the crash so the reason is not lost in the count.
+                from core.security.refusals import record_refusal
+                record_refusal("approval_denied", tool=action_name,
+                               user_id=getattr(context, "user_id", None) or "",
+                               session_id=getattr(context, "session_id", None) or "",
+                               detail=f"provider crashed: {type(e).__name__}: {e}")
                 return (f"approval denied (error) for '{action_name}'; owner can approve "
                         "via /pending or loosen via the approvals.require pref")
             decision = "approved" if approved else "denied"
             if not approved:
+                from core.security.refusals import record_refusal
+                record_refusal("approval_denied", tool=action_name,
+                               user_id=getattr(context, "user_id", None) or "",
+                               session_id=getattr(context, "session_id", None) or "")
                 return (f"approval denied for '{action_name}'; owner can approve via /pending "
                         "or loosen via the approvals.require pref")
             return None

@@ -31,37 +31,151 @@ def build_api_argv(endpoint, params=None, output_format="json"):
     """Build the `anysite api …` argv. Pure; no I/O."""
     if not endpoint.startswith("/"):
         endpoint = "/" + endpoint
-    argv = ["anysite", "--non-interactive", "api", _safe_token(endpoint)]
+    # argv[0] is RESOLVED, not a bare name: the venv's bin dir is not on a
+    # systemd unit's PATH (see `binary_path`), so exec-ing "anysite" fails on a
+    # box where the CLI is installed.
+    argv = [binary_path() or "anysite", "--non-interactive", "api",
+            _safe_token(endpoint)]
     for k, v in (params or {}).items():
         argv.append(f"{_safe_token(str(k))}={_safe_token(str(v))}")
     argv += ["--format", _safe_token(output_format)]
     return argv
 
 
+def build_describe_argv(endpoint=None, search=None):
+    """Build the `anysite describe …` argv (endpoint DISCOVERY). Pure; no I/O.
+
+    `search` → paths-only JSON match list (a keyword can hit dozens of
+    endpoints; quiet keeps the agent's context small). `endpoint` → the FULL
+    schema for that one endpoint (input params + output fields) — the agent
+    reads the exact param names/types before calling `anysite api`.
+
+    2026-09-15 (owner rail "fix Anysite tool"): the CLI always had this and the
+    tool never exposed it, so agents guessed endpoint paths and burned steps on
+    Not Found / param-validation churn.
+    """
+    argv = [binary_path() or "anysite", "--non-interactive", "describe"]
+    if search:
+        argv += ["--search", _safe_token(str(search)), "--json", "--quiet"]
+        return argv
+    argv.append(_safe_token(str(endpoint)))
+    argv.append("--json")
+    return argv
+
+
+#: Env names that carry the credential, in order. `ANYSITE_API_KEY` is what this
+#: codebase has always read; `ANYSITE_ACCESS_TOKEN` is what AnySite's own docs and
+#: env templates call it (their REST auth header is literally `access-token`), and
+#: an operator who copies their template gets a key the agent could not see.
+#: Reading both costs nothing and removes a silent-dark failure.
+_KEY_ENV_NAMES = ("ANYSITE_API_KEY", "ANYSITE_ACCESS_TOKEN")
+
+
+def api_key():
+    """The configured credential, or None."""
+    for name in _KEY_ENV_NAMES:
+        value = (os.getenv(name) or "").strip()
+        if value:
+            return value
+    return None
+
+
+def binary_path():
+    """Absolute path to the `anysite` console script, or None.
+
+    ⚠️ ``shutil.which`` alone is NOT enough, and prod proved it. `anysite-cli` is a
+    declared dependency, so pip puts its console script in the SAME directory as
+    the running interpreter — ``/opt/polyrob/venv/bin/anysite``. A systemd unit
+    execs the venv's python directly and inherits the system PATH, which does not
+    contain that directory, so ``which("anysite")`` returned None on a box where
+    the binary was installed and working. The tool then reported "anysite CLI not
+    available — install with pip install anysite-cli" about a package that was
+    already there.
+    """
+    import sys
+    here = os.path.dirname(os.path.abspath(sys.executable))
+    for candidate in (os.path.join(here, "anysite"),
+                      os.path.join(here, "anysite.exe")):
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return shutil.which("anysite")
+
+
 def binary_available():
-    return shutil.which("anysite") is not None
+    return binary_path() is not None
+
+
+def missing_requirement():
+    """Which half is absent — ``"binary"``, ``"key"`` or ``None``.
+
+    Two failures with one message taught the operator to check the wrong thing.
+    """
+    if not binary_available():
+        return "binary"
+    if not api_key():
+        return "key"
+    return None
 
 
 def ensure_configured():
-    """Best-effort: push ANYSITE_API_KEY into the CLI's config once.
+    """Best-effort: push the credential into the CLI's config once.
 
-    Returns True if the binary is present and a key is available (or already
-    configured); False if we can't configure. Never raises.
+    Returns True only when the binary is present AND a key is configured. The
+    previous version returned True for "binary present, no key" on the assumption
+    the operator had configured it out of band — which turned a missing credential
+    into a call that fails later with the vendor's error instead of ours.
     """
-    key = os.getenv("ANYSITE_API_KEY")
-    if not binary_available():
+    key = api_key()
+    path = binary_path()
+    if not path or not key:
         return False
-    if not key:
-        return True  # binary present; assume operator configured it out-of-band
     try:
         import subprocess
+        # The key stays in argv here because `config set <name> <value>` is the
+        # CLI's only write path for it — there is no env-var form of the write.
+        # The ENV is scrubbed regardless (S2): argv exposure of this one key to
+        # `ps` is a far smaller hole than handing the CLI the wallet seed.
         subprocess.run(
-            ["anysite", "--non-interactive", "config", "set", "api_key", key],
+            [path, "--non-interactive", "config", "set", "api_key", key],
             capture_output=True, timeout=15, check=False,
+            env=build_anysite_env(),
         )
     except Exception:
         return False
     return True
+
+
+def build_anysite_env(extra=None):
+    """Scrubbed environment for an `anysite` child process (S2).
+
+    Was ``{**os.environ, **(env or {})}`` — the CLI (a third-party package the
+    agent can drive against arbitrary sites) inherited AGENT_WALLET_MASTER_SEED
+    and every provider API key. Now: the shared allowlist policy, plus the
+    anysite credential injected EXPLICITLY.
+
+    The explicit re-add is the same call the MCP policy makes
+    (``tools/mcp/child_env.py``): the shared policy strips every secret-NAMED
+    var, which is right for ambient inheritance and wrong for the one credential
+    this child is supposed to have. Passing it by env is also what lets the
+    argv form stay a fallback rather than the only channel.
+    """
+    from tools.code_exec.env_policy import build_child_env
+    env = build_child_env(
+        extra or {},
+        # Proxy settings: the CLI is an HTTP client and a proxied box cannot
+        # reach anysite without them. No POLYROB credential can live here.
+        extra_allowlist=("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY",
+                         "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+                         "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "APPDATA",
+                         "LOCALAPPDATA", "USERPROFILE", "SystemRoot",
+                         "SYSTEMROOT", "COMSPEC", "PATHEXT"),
+    )
+    key = api_key()
+    if key:
+        # Both names the CLI/vendor may read (see _KEY_ENV_NAMES).
+        for name in _KEY_ENV_NAMES:
+            env[name] = key
+    return env
 
 
 async def run_anysite(argv, *, timeout=60.0, env=None):
@@ -70,7 +184,7 @@ async def run_anysite(argv, *, timeout=60.0, env=None):
         *argv,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={**os.environ, **(env or {})},
+        env=build_anysite_env(env),
     )
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)

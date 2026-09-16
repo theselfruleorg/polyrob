@@ -109,23 +109,74 @@ def _is_sepolia_chain(chain: str) -> bool:
     return chain.strip().lower() in _SEPOLIA_CHAIN_NAMES
 
 
-def _usdc_contract_for_chain(chain: str) -> str:
-    return USDC_BASE_SEPOLIA if _is_sepolia_chain(chain) else USDC_BASE_MAINNET
+def _chain_id_for_chain(chain: str) -> Optional[int]:
+    """The EIP-155 chain id, or ``None`` when this is not an EVM chain.
 
-
-def _chain_id_for_chain(chain: str) -> int:
-    return _BASE_SEPOLIA_CHAIN_ID if _is_sepolia_chain(chain) else _BASE_CHAIN_ID
-
-
-def _atomic_usdc_amount(amount_usd: Any) -> int:
+    ⚠️ ``None`` matters: EIP-681 is an EVM URI, and emitting one for a Solana
+    invoice hands a payer a wallet link that resolves to nothing.
+    """
+    chain = (chain or "").strip().lower()
+    if _is_sepolia_chain(chain):
+        return _BASE_SEPOLIA_CHAIN_ID
     try:
-        return round(float(amount_usd or 0) * (10 ** _USDC_DECIMALS))
-    except (TypeError, ValueError):
-        return 0
+        from core.wallet import chains as _chains
+        row = _chains.get(chain)
+    except Exception:
+        row = None
+    if row is None or row.family != "evm" or not row.chain_id:
+        return None
+    return int(row.chain_id)
+
+
+def _invoice_asset(invoice: Dict[str, Any]):
+    """``(token_address, decimals, symbol, amount_raw)`` for this invoice.
+
+    046: read from the invoice's OWN asset columns when present. A pre-046
+    invoice dict has none, so it resolves the chain's default asset — which is
+    exactly what it always meant, so an outstanding invoice's QR never changes
+    meaning mid-flight.
+    """
+    address = (invoice.get("asset_address") or "").strip()
+    decimals = invoice.get("asset_decimals")
+    symbol = (invoice.get("asset_symbol") or "").strip()
+    raw = invoice.get("amount_raw")
+    if not address or decimals is None:
+        try:
+            from modules.x402.invoicing import resolve_invoice_asset
+            row = resolve_invoice_asset(str(invoice.get("chain") or "base"), None)
+            address = address or (row.address or "")
+            decimals = decimals if decimals is not None else row.decimals
+            symbol = symbol or row.symbol
+        except Exception:
+            address = address or ""
+            decimals = decimals if decimals is not None else _USDC_DECIMALS
+            symbol = symbol or "USDC"
+    if raw is None:
+        try:
+            raw = round(float(invoice.get("amount_usd") or 0)
+                        * (10 ** int(decimals)))
+        except (TypeError, ValueError):
+            raw = 0
+    return address, int(decimals), symbol or "USDC", int(raw or 0)
+
+
+def _format_token_amount(raw: int, decimals: int) -> str:
+    """The token amount at FULL precision.
+
+    ⚠️ Never a fixed two decimals. That money format rendered every memecoin
+    price as ``0.00`` (the 2026-09-14 finding), and a payer who sends what the
+    text shows would send nothing.
+    """
+    from decimal import Decimal
+    value = Decimal(int(raw)) / (Decimal(10) ** int(decimals))
+    text = format(value.normalize(), "f")
+    return text
 
 
 def _build_pay_text(*, request_id: str, amount_usd: float, chain: str,
-                     recipient: str, purpose: str, expiry_text: str) -> str:
+                     recipient: str, purpose: str, expiry_text: str,
+                     symbol: str = "USDC", amount_raw: int = 0,
+                     decimals: int = 6) -> str:
     """Human pay instructions — same facts as the x402_request result text
     (tools/x402/invoice_tool.py:97-106), reused by the card's "how to pay" block.
 
@@ -134,13 +185,42 @@ def _build_pay_text(*, request_id: str, amount_usd: float, chain: str,
     exactly what this text shows can never accidentally settle a DIFFERENT
     same-2dp-amount invoice on-chain."""
     amount_text = format_invoice_amount(amount_usd)
+    # 046: name the ACTUAL token. "Pay $0.50 USDC" on a ROB invoice tells the
+    # payer to send the wrong asset, which is money they do not get back.
+    token_text = (f"{_format_token_amount(amount_raw, decimals)} {symbol}"
+                  if symbol and symbol.upper() != "USDC"
+                  else f"${amount_text} USDC")
+    priced = (f"{token_text} (${amount_text})"
+              if symbol and symbol.upper() != "USDC" else token_text)
     lines = [
-        f"Pay ${amount_text} USDC on {chain} to {recipient}"
-        if recipient else f"Pay ${amount_text} USDC on {chain}",
+        f"Pay {priced} on {chain} to {recipient}"
+        if recipient else f"Pay {priced} on {chain}",
         f"for: {purpose}" if purpose else "for: (no purpose given)",
         f"request_id: {request_id} · expires {expiry_text}",
     ]
     return "\n".join(lines)
+
+
+def build_transfer_uri(invoice: Dict[str, Any]) -> Optional[str]:
+    """The EIP-681 transfer URI for *invoice*, or ``None``.
+
+    ⚠️ Independent of ``INVOICE_QR_STYLE``. That flag governs what the invoice
+    CARD puts in its QR (a bare address scans in more wallets); the API's
+    direct-transfer challenge wants the fully-specified URI regardless, because
+    its consumer is a payer choosing how to send, not a phone camera.
+
+    ``None`` when the chain is not EVM or the token address is unknown — a
+    malformed URI is worse than none.
+    """
+    recipient = str(invoice.get("recipient") or "").strip()
+    if not recipient:
+        return None
+    token_address, decimals, _symbol, amount_raw = _invoice_asset(invoice)
+    chain_id = _chain_id_for_chain(str(invoice.get("chain") or ""))
+    if not token_address or not chain_id:
+        return None
+    return (f"ethereum:{token_address}@{chain_id}/transfer"
+            f"?address={recipient}&uint256={amount_raw}")
 
 
 def build_payment_artifact(invoice: Dict[str, Any]) -> Dict[str, Optional[str]]:
@@ -160,19 +240,23 @@ def build_payment_artifact(invoice: Dict[str, Any]) -> Dict[str, Optional[str]]:
     purpose = str(invoice.get("purpose") or "").strip()
     expiry_text = _format_expiry(invoice.get("expires_at_epoch"))
 
+    token_address, decimals, symbol, amount_raw = _invoice_asset(invoice)
+
     pay_text = _build_pay_text(
         request_id=request_id, amount_usd=amount_usd, chain=chain,
         recipient=recipient, purpose=purpose, expiry_text=expiry_text,
+        symbol=symbol, amount_raw=amount_raw, decimals=decimals,
     )
 
     pay_uri: Optional[str] = None
     if recipient:
-        if invoice_qr_style() == "eip681":
-            contract = _usdc_contract_for_chain(chain)
-            chain_id = _chain_id_for_chain(chain)
-            atomic = _atomic_usdc_amount(amount_usd)
-            pay_uri = f"ethereum:{contract}@{chain_id}/transfer?address={recipient}&uint256={atomic}"
+        chain_id = _chain_id_for_chain(chain)
+        if invoice_qr_style() == "eip681" and token_address and chain_id:
+            pay_uri = (f"ethereum:{token_address}@{chain_id}/transfer"
+                       f"?address={recipient}&uint256={amount_raw}")
         else:
+            # No EVM chain id, or no token address: the bare address is the
+            # honest fallback. A malformed EIP-681 URI is worse than none.
             pay_uri = recipient
 
     return {"pay_text": pay_text, "pay_uri": pay_uri}

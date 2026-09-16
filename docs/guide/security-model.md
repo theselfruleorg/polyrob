@@ -29,14 +29,17 @@ actually trusted:
 | A **correspondent** (a third party the agent itself initiated contact with) | Untrusted DATA | Their reply is delivered to the session as framed data, never as a command — see §2 |
 | **Fetched web content / browser page content / MCP tool outputs** | Untrusted DATA | Anything from `browser`, `web_fetch`, `mcp`, `perplexity`, `anysite`, `email` bodies, etc. may contain adversarial text (indirect prompt injection) |
 | **Skill content** authored by the agent itself (writable skills) | Untrusted-by-default | Content is threat-scanned before write; a forged/background turn can never auto-activate or patch an active skill |
-| An **unknown or unverified sender** on any surface | Denied | No routing authority — see the OWNER/CORRESPONDENT/DENIED tiers below |
+| A **group member** in an allowlisted room | Untrusted, room-scoped | May trigger a turn, but that turn runs a public session on a read-only toolset — see §2's room rail |
+| An **unknown or unverified sender** on any surface | Denied | No routing authority — see the four tiers below |
 
 The dispatcher (`core/surfaces/dispatcher.py::route_inbound`) resolves exactly one
-of three tiers per inbound message, fail-closed once the access model is on
-(`CORRESPONDENT_ACCESS_ENABLED`): **OWNER**, **CORRESPONDENT**, or **DENIED**. A
-correspondent's reply can *never* reach COMMAND/STEER/TASK_AGENT — it is delivered
-as a `MessageOrigin.CORRESPONDENT` control message, framed with an
-`<untrusted_tool_result>` wrapper, exactly like a fetched web page.
+tier per inbound message, fail-closed once the access model is on
+(`CORRESPONDENT_ACCESS_ENABLED`): **OWNER**, **CORRESPONDENT**, **GROUP_MEMBER**,
+or **DENIED** (`core/surfaces/access.py::AccessTier`). A correspondent's reply can
+*never* reach COMMAND/STEER/TASK_AGENT — it is delivered as a
+`MessageOrigin.CORRESPONDENT` control message, framed with an
+`<untrusted_tool_result>` wrapper, exactly like a fetched web page. A group member
+can only ever reach the room rail.
 
 This page is about the layer *underneath* that model: given that untrusted content
 routinely reaches the agent's context (by design — that's how it does useful work),
@@ -139,8 +142,11 @@ on a probe error):
   `*.env`, key material, and the wallet's own `meta.json`/`audit.jsonl` (whose
   rewrite would reset the rolling caps or flip an address).
 
-What it stops: unbounded spend, spend without a paper trail, spend from a turn
-the owner did not drive, and spend authorized by an endpoint an attacker chose.
+Persistent policy history refuses damaged storage and invalid amounts. A shared
+POSIX lock serializes check/spend/record across cooperating local processes.
+This does not make settlement atomic with recording: a crash after broadcast can
+leave a completed payment unrecorded. Durable pre-broadcast reservations and
+reconciliation are still required to close that window.
 
 What it does not do: protect the wallet's *key material* from a host-level
 compromise — if the process itself is compromised (see §3's "process identity" gap),
@@ -168,7 +174,63 @@ out of convenience — the bidirectional money-verb ratchet
 (`tests/unit/core/test_money_verb_registration.py`) is the enforcement point:
 any new money verb must name its gate.
 
-### The pattern across all five
+### Host-capability gates (`tools/shell/tool.py`, `tools/self_env/tool.py`)
+
+Three tools reach the host on purpose, and each is gated by the compute posture
+rather than by a plain on/off flag:
+
+- **`shell`** (`shell_run`) and **`process`** (`process_list/poll/log/kill`) —
+  the persistent dev shell and its job manager. Every action asks
+  `compute_posture_allows(execution_context, 1)`: posture ≥ 1, owner tenant, not
+  a leaf or sub-agent, not a forged self-wake or delegation-result turn.
+  `SHELL_TOOLS_ENABLED` defaults ON at posture ≥ 1 and OFF below it.
+- **`self_env`** (`install_dep`, `read_source`, `patch_source`, `git_pull`,
+  `restart_service`) — the agent patching and restarting itself, as distinct
+  verbs, never raw bash. Every verb asks `compute_posture_allows(ctx, 2)` **and**
+  is approval-gated: at posture ≥ 2 the Controller unions `shell_run` and every
+  `self_env_*` verb into the gated set and defaults the approval provider to
+  interactive. Each call emits a `self_modification` audit event.
+  `SELF_ENV_ENABLED` defaults ON at posture ≥ 2.
+
+All three are `exec` + `high_impact` + `delegate_blocked` in the capability
+table: never in a default toolset, never given to a delegated sub-agent, and
+refused on a correspondent-tainted turn.
+
+What it stops: an autonomous, delegated, forged or non-owner turn from reaching
+the host at all, and — at posture ≥ 2 — self-modification without an explicit
+decision.
+
+What it does not do: sandbox the command once it is approved. `shell_run` runs
+inside the session's dev container; `self_env` runs against the install tree
+itself. The posture is the choice of how much host you are handing over — leave
+`AGENT_COMPUTE_POSTURE` at `0` unless you are deliberately building software
+with the agent, and `3` requires `POLYROB_LOCAL` on a single-tenant box (§3d).
+
+### The room rail (`core/surfaces/room_policy.py`)
+
+A session bound to a group chat is **PUBLIC**, and that is a capability decision,
+not a formatting one. A public session carries none of the owner tenant's private
+state (no owner facts, no SOUL/SELF docs, no tenant memory recall or write, no
+episodic digest, no project context — each injector asks `is_public_session()`
+and returns early), and it runs a fixed read-only toolset (`GROUP_TURN_TOOLS`,
+default `task,web_fetch,defi_data`) that the environment can only narrow, never
+widen. A fail-closed pre-tool hook denies every room-denied call by name:
+money by capability bit, the whole `kb_*` family, deferred execution
+(`goal_create`, `cronjob_schedule`, `skill_manage`, `load_tool`, …), cross-session
+recall, outbound to anywhere but this room, and delegation or control verbs.
+Every room turn is stamped `turn_kind="group"`, which the same forged-turn
+predicate that protects self-wakes treats as forged — so `tx_guard` refuses to
+sign for it even if a schema slipped through.
+
+What it stops: a stranger in a room from reading the owner's state, spending,
+scheduling work a later owner-tenant run would execute, or making the agent speak
+anywhere else.
+
+What it does not do: change the fact that this is the same in-process pattern as
+everything else in §2 — a room is a second line behind the allowlist, not a
+sandbox. Full behaviour, roles and caps: [groups.md](groups.md#what-the-agent-can-and-cannot-do-in-a-room).
+
+### The pattern across all of them
 
 Every one of these is **software logic evaluated by the same interpreter that
 runs the agent loop**. They're real, they're tested, and defeating them requires
@@ -185,53 +247,33 @@ These are not bugs to be quietly worked around; they are documented, deliberate
 trade-offs (or, in one case, an unwired-but-designed lever). Naming them precisely
 is the point of this page.
 
-### a) `run_code` / `run_tests` on the host under `POLYROB_LOCAL`
+### a) Local host execution is unavailable in custody processes
 
-`tools/code_exec/sandbox_guard.py::require_sandbox_or_none` / `code_exec_execution_blocked_reason`:
+`tools/code_exec/sandbox_guard.py` requires a sandbox-capable backend whenever
+`AGENT_WALLET_ENABLED` is true **or** a supported master seed is present
+(`AGENT_WALLET_MASTER_SEED`, `PAYMENT_MASTER_SEED`, or legacy `MASTER_SEED`).
+`POLYROB_LOCAL=1` cannot bypass this requirement. Local instances without custody
+retain the host subprocess option; servers always require a sandbox backend.
+This gate controls the supported tool path, not arbitrary trusted Python code.
 
-```python
-def require_sandbox_or_none(backend_name: str) -> Optional[str]:
-    from core.config_policy import local_mode_enabled
-    if local_mode_enabled():
-        return None          # <- local mode: always allowed, no sandbox check
-    ...
-```
+### b) Host Git, diagnostics and snapshots refuse alongside custody
 
-Under `POLYROB_LOCAL=1` (the CLI's local profile), `run_code`/`run_tests` are
-allowed on the `local_subprocess` backend — a **plain host subprocess**, not a
-sandbox (`capabilities["sandbox"] is False`) — no matter what `CODE_EXEC_BACKEND`
-is set to. This is a deliberate single-user trade for CLI convenience. On a
-server (`POLYROB_LOCAL` unset), the same guard **refuses** any backend that
-doesn't advertise `capabilities["sandbox"] is True` — so a server is fail-closed
-to `docker` (or nothing) by construction. `local_subprocess` on a server is a hard
-refusal, not a silent downgrade.
+`tools/git/tool.py`, `tools/coding/lsp.py` and `tools/coding/snapshot.py` check the
+same custody predicate before spawning host binaries. Git returns a refusal;
+diagnostics and snapshots skip their optional work. They do not route into
+Docker. In a non-custody process these helpers still run with the host user's
+privileges and must only consume trusted workspaces and configuration.
 
-### b) LSP diagnostics and shadow-git snapshots always run on the host
+### c) MCP stdio is refused in custody processes
 
-`tools/coding/tool.py` calls `tools.coding.lsp.diagnose_file` (~line 211, gated
-only by `CODING_LSP_ENABLED`, default OFF) and `tools.coding.snapshot.snapshot_file`
-(~line 274, gated by `CODING_SNAPSHOT_ENABLED` **and**
-`compute_posture_allows(ctx, 1)`) to run external checker binaries (pyright/tsc)
-and `git` as **host subprocesses** — every time, in every deployment shape,
-including a multi-tenant server. Unlike `run_code`/`run_tests`, there is **no
-sandbox routing for these at all**: `diagnose_file` has no posture check
-whatsoever, and `snapshot_file`'s posture check governs *who* can trigger it
-(owner tenant, non-leaf, non-forged turn) — it does not route the subprocess into
-any sandbox. Both are fail-open on error (a crash never blocks the edit) and both
-default OFF, but "OFF by default" is a flag, not a sandbox: turning either on
-anywhere except a fully-trusted single-user box means external binaries execute
-with the same host privileges as the whole agent process.
-
-### c) MCP stdio servers run as sibling host processes (env now allowlisted)
-
-**FIXED (2026-08, H2 of the crypto audit) — this section used to document full
-environment inheritance; it no longer exists.** MCP children are now spawned
-through `tools/mcp/child_env.py::build_mcp_child_env` (called from
-`tools/mcp/protocol.py`), which constructs the child env from a **fixed
-allowlist** (PATH/HOME/locale/runtime-lookup vars only). Credential-shaped
-variables — `AGENT_WALLET_MASTER_SEED`, LLM provider keys, DB credentials — are
-excluded by construction, not by name-matching, and this is the only stdio
-spawn site in the package.
+MCP stdio refuses to start when the wallet is enabled or a seed is present.
+Use a separately isolated HTTP service instead. Without custody, MCP children
+are spawned through `tools/mcp/child_env.py::build_mcp_child_env`
+(called from `tools/mcp/protocol.py`), which constructs the child env from a
+**fixed allowlist** (PATH/HOME/locale/runtime-lookup vars only).
+Credential-shaped variables — `AGENT_WALLET_MASTER_SEED`, LLM provider keys, DB
+credentials — are excluded by construction, not by name-matching, and this is
+the only stdio spawn site in the package.
 
 What remains true, and is the residual trade-off to respect: an MCP server is
 still a **full sibling host process** with the agent's own OS privileges (no
@@ -252,18 +294,15 @@ capability. If a feature is ever built against posture 3, it inherits the
 documented requirement: `POLYROB_LOCAL` **and** a single-tenant box, refused on
 any network-facing surface.
 
-### e) Process identity in the reference production deployment
+### e) Process identity is yours to set
 
-The shipped systemd units (`deployment/polyrob.service`,
-`polyrob-webview.service`, `polyrob-email.service`) all run `User=root`, with none
-of `ProtectSystem`, `ProtectHome`, `NoNewPrivileges`, or `PrivateTmp` set. This
-matters directly for everything above: on that exact deployment shape, the
-process every in-process gate in §2 lives inside **already has full host root**.
-The heuristic layers are, today, the *only* thing standing between a bug in one of
-them and full host compromise — not a second, independent wall. (`polyrob-api.service`
-/ `polyrob-webgate.service`, the self-hosting OSS posture, already run as
-`User=ubuntu` — non-root is achievable in this codebase's own deployment configs,
-it just isn't the reference-prod default yet.)
+Nothing in POLYROB drops privilege for you. If you run `polyrob telegram`,
+`polyrob dashboard` or `polyrob serve` as root — directly or from a systemd unit
+with no `User=` and no `NoNewPrivileges` / `ProtectSystem` / `ProtectHome` /
+`PrivateTmp` — then the process every in-process gate in §2 lives inside **has
+full host root**, and those heuristic layers are the only thing between a bug in
+one of them and full host compromise. Check it with `ps -o user= -p $(pgrep -f
+polyrob | head -1)`; §4 says what to run it as instead.
 
 ---
 
@@ -271,15 +310,16 @@ it just isn't the reference-prod default yet.)
 
 Given §3, here is what a real hard boundary looks like, concretely:
 
-- **A dedicated non-root system user** for the agent process, with systemd
+- **Separate non-root system users** for frontend and custody processes, with systemd
   hardening directives (`NoNewPrivileges=true`, `ProtectSystem=strict`,
   `ProtectHome=true`, `PrivateTmp=true`, `ReadWritePaths=` scoped to exactly
   `POLYROB_DATA_DIR`). This is the single highest-leverage change against §3(e) —
-  it doesn't require touching any code, just the unit files.
+  shared data permissions and browser/cache paths must be checked before cutover.
+  Rootful Docker group membership remains root-equivalent. A signer sharing the
+  agent interpreter is not isolated custody, even after a non-root migration.
 - **`CODE_EXEC_BACKEND=docker`** (never `local_subprocess`) for any deployment
   that isn't a single, fully-trusted operator on their own box. `sandbox_guard.py`
-  already enforces this server-side; the only way to weaken it is
-  `POLYROB_LOCAL=1`, so don't set that flag on a shared or network-facing host.
+  enforces this server-side and in custody processes, including local mode.
   See `tools/code_exec/SANDBOX_SECURITY.md` for exactly what the container
   hardening (`--network none`, `--cap-drop ALL`, read-only rootfs, non-root user,
   scrubbed env, pid/memory/cpu caps) does and doesn't cover.
@@ -303,17 +343,15 @@ Given §3, here is what a real hard boundary looks like, concretely:
 ## 5. Recommendations by deployment shape
 
 **Local CLI** (`polyrob` / `polyrob run`, `POLYROB_LOCAL=1`, your own machine) —
-you *are* the trust boundary. `local_subprocess` code exec and host LSP/git
-subprocesses run as you, with your privileges, same as running `pytest` or
-`git commit` yourself would. This is fine on a machine only you use; it is not
-fine on a shared machine, and `POLYROB_LOCAL` should never be set on one.
+without custody, host subprocesses run as you and require trusted inputs. With
+custody enabled, code execution requires a sandbox and host Git/LSP/snapshot
+helpers refuse. Local mode does not provide an OS isolation boundary.
 
 **Single-owner VPS** (the Rob #1 shape — headless agent, one owner,
 `POLYROB_LOCAL=1` on a private box you control) — the code-level trust decisions
 are the same as local CLI, but the box itself is network-facing. Prioritize:
 harden the systemd units to a non-root user (§4); if `CODE_EXEC_ENABLED` is ever
-turned on, prefer `CODE_EXEC_BACKEND=docker` unless you specifically want the
-local-subprocess convenience for your *own* trusted use; keep `CODING_LSP_ENABLED`
+turned on alongside custody, use a sandbox-capable backend; keep `CODING_LSP_ENABLED`
 / `CODING_SNAPSHOT_ENABLED` off unless you're actively using them, since they have
 no sandbox at all (§3b); review `config/mcp_config.json` and remove any server
 whose binary you wouldn't run with the agent's own host privileges (its env is
@@ -339,3 +377,14 @@ boundary and prefer per-tenant instances/containers over relying solely on the
 - [deployment-postures.md](deployment-postures.md) — the web console's `local`/`own_ops`/`multitenant` posture ladder
 - [configuration.md](configuration.md) · [`../CONFIGURATION.md`](../CONFIGURATION.md) — every flag named on this page, with its default and code anchor
 - [payments.md](payments.md) — the money-specific safety model (§1 there) in full
+
+### Browser launch restrictions
+
+Chromium sandboxing is explicitly enabled for local launches. Disabling it is
+limited to explicit local development without custody. A process holding an agent
+or payment master seed, or enabling the agent wallet, cannot launch local Chromium
+or attach through the existing-local-Chrome helper. It must use a separately
+isolated remote browser. Remote endpoint isolation and connection-time egress
+restrictions are operational requirements, not properties verified by the URL.
+The Playwright driver is still trusted host code; independent signer isolation
+remains necessary.

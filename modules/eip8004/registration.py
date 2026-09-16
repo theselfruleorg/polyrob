@@ -4,8 +4,10 @@ Generates the registration file that the Identity Registry tokenURI points to.
 This file links to A2A agent card, MCP endpoints, wallet addresses, etc.
 """
 
-import os
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Optional
 
 from .models import RegistrationFile, Endpoint, Registration, EIP8004Config
@@ -26,6 +28,84 @@ def get_eip8004_config() -> EIP8004Config:
         supported_trust=os.environ.get("EIP8004_SUPPORTED_TRUST", "reputation").split(","),
         ipfs_gateway=os.environ.get("IPFS_GATEWAY", "https://ipfs.io/ipfs/"),
     )
+
+
+#: Hosts that nobody outside this machine can resolve. An `image` or a service
+#: URL on one of these is not a public endpoint, and advertising it as one is
+#: the same defect as the `rob-logo.png` 404 this replaced.
+_PRIVATE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+
+
+def _is_public(base_url: str) -> bool:
+    if not base_url:
+        return False
+    low = base_url.lower()
+    if not low.startswith(("http://", "https://")):
+        return False
+    host = low.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
+    return host not in _PRIVATE_HOSTS and "." in host
+
+
+def _agent_identity() -> tuple:
+    """``(name, description)`` for THIS instance — never a framework literal.
+
+    ⚠️ W1 neutral-identity rule: a specific bot's name is DATA (its character,
+    its profile, its instance id), never code. Until 2026-09-15 this file
+    advertised ``name="POLYROB"`` with a fixed marketing description, so every
+    instance in the world published the framework's identity as its own.
+    """
+    from core.instance import resolve_instance_id
+    instance_id = resolve_instance_id()
+    name, description = instance_id, None
+    # ⚠️ The character file is read DIRECTLY, not via
+    # `agents.personality.persona_resolver`. The layering is
+    # core <- modules <- agents, so this module may not import `agents.*` —
+    # caught by tests/test_layering_ratchet.py, which is exactly what it is for.
+    try:
+        from core.runtime_paths import resolve_data_home
+        for candidate in (
+            Path(resolve_data_home()) / "characters" / f"{instance_id}.character.json",
+            (Path(__file__).resolve().parents[2] / "data" / "characters"
+             / f"{instance_id}.character.json"),
+        ):
+            if candidate.is_file():
+                char = json.loads(candidate.read_text(encoding="utf-8"))
+                if isinstance(char, dict):
+                    name = char.get("name") or name
+                    description = char.get("description") or char.get("bio") or None
+                break
+    except Exception:
+        logger.debug("eip8004: no character to describe this instance", exc_info=True)
+    if not description:
+        description = (
+            f"An autonomous agent instance ({instance_id}) running on the POLYROB "
+            f"framework. See the linked services for what it can actually do."
+        )
+    return name, description
+
+
+def _avatar(base_url: str) -> tuple:
+    """``(image_url_or_None, avatar_metadata_or_None)`` for the frozen Mindprint.
+
+    ⚠️ Returns ``None`` for the image rather than a guess. With no public base
+    URL there is nowhere to serve the PNG from, and a link that does not resolve
+    is worse than an absent field. The seed goes out instead, so the face stays
+    exactly reproducible.
+    """
+    try:
+        from core.instance import load_pfp_meta, pfp_path, resolve_instance_id
+        from core.runtime_paths import resolve_data_home
+        home, instance_id = resolve_data_home(), resolve_instance_id()
+        if not pfp_path(home, instance_id).is_file():
+            return None, None
+        meta = load_pfp_meta(home, instance_id) or {}
+        avatar = {k: meta[k] for k in ("generator", "seed", "variant", "seed_hex")
+                  if meta.get(k)}
+        image = f"{base_url.rstrip('/')}/pfp.png" if _is_public(base_url) else None
+        return image, (avatar or None)
+    except Exception:
+        logger.debug("eip8004: could not resolve the instance avatar", exc_info=True)
+        return None, None
 
 
 def build_registration_file(
@@ -125,11 +205,33 @@ def build_registration_file(
     # declares it (EIP8004_ONCHAIN_ENABLED). Until the on-chain write path exists
     # and ownership is verified, advertise honest "local" (off-chain) mode and do
     # NOT emit a registrations[] block we cannot back.
+    # 046: a VERIFIED record beats an operator claim. `register_agent` writes
+    # this file only from a confirmed on-chain receipt, so it is evidence rather
+    # than configuration — and the two are never both emitted, because two
+    # registrations[] entries would read as two identities.
+    verified = None
+    try:
+        from core.instance import load_erc8004_record, resolve_instance_id
+        from core.runtime_paths import resolve_data_home
+        verified = load_erc8004_record(resolve_data_home(), resolve_instance_id())
+    except Exception:
+        logger.debug("eip8004: could not read the on-chain record", exc_info=True)
+
     onchain_enabled = os.environ.get("EIP8004_ONCHAIN_ENABLED", "false").lower() == "true"
-    trust_mode = "onchain" if onchain_enabled else "local"
+    trust_mode = "onchain" if (verified or onchain_enabled) else "local"
 
     registrations = []
-    if onchain_enabled and config.agent_id and config.identity_registry_address:
+    if verified:
+        registrations.append(Registration(
+            agentId=int(verified["agent_id"]),
+            agentRegistry=(f"eip155:{verified.get('chain_id', config.chain_id)}:"
+                           f"{verified['registry']}"),
+            # ⚠️ "verified", not "operator": this one is backed by a transaction
+            # this code signed, broadcast and confirmed.
+            attestation="verified",
+        ))
+
+    if (not verified) and onchain_enabled and config.agent_id and config.identity_registry_address:
         # L11: EIP8004_ONCHAIN_ENABLED + agent_id/identity_registry_address are
         # operator-supplied env config, not proof of an on-chain transaction — no
         # code in this repo ever signs/broadcasts an Identity Registry registration.
@@ -141,16 +243,17 @@ def build_registration_file(
         ))
 
     # Build the registration file
+    name, description = _agent_identity()
+    image, avatar = _avatar(base_url)
     registration_file = RegistrationFile(
-        name="POLYROB",
-        description=(
-            "AI automation agent with browser control, file system access, "
-            "MCP integrations, and autonomous task execution capabilities. "
-            "Supports x402 pay-per-request payments and A2A protocol for agent interoperability."
-        ),
-        image=f"{base_url}/static/images/rob-logo.png",
+        name=name,
+        description=description,
+        image=image,
         trustMode=trust_mode,
-        endpoints=endpoints,
+        services=endpoints,
+        x402Support=x402_enabled,
+        active=True,
+        metadata=({"avatar": avatar} if avatar else None),
         registrations=registrations,
         supportedTrust=config.supported_trust if config.enabled else None
     )

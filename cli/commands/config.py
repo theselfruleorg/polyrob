@@ -84,6 +84,14 @@ def _read_env_file(path: Path) -> dict:
 
 
 def _env_path(is_global: bool) -> Path:
+    """The env file a scope resolves to, at CALL time.
+
+    F8: ``polyrob_home()`` reads ``POLYROB_HOME``, which profile activation
+    repoints — so ``--global`` targets the ACTIVE PROFILE's ``.env`` when a
+    profile is selected. That is the right behaviour (it is what an operator
+    inside a profile wants); only the option's name and help text were wrong.
+    Every write confirmation already prints the resolved path.
+    """
     return (polyrob_home() if is_global else Path.cwd() / ".polyrob") / ".env"
 
 
@@ -163,9 +171,8 @@ def _prompt_for_value(key: str) -> str:
 @config.command("set")
 @click.argument("key")
 @click.argument("value", required=False)
-@click.option("--global", "is_global", is_flag=True, default=False,
-              help="Write to ~/.polyrob/.env (default for flags: ./.polyrob/.env; "
-                   "secrets already default to global)")
+@click.option("--global", "--home", "is_global", is_flag=True, default=False,
+              help="Write to the ACTIVE home's .env ($POLYROB_HOME) — that is ~/.polyrob/.env normally, and the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default for flags: ./.polyrob/.env; secrets already default to the home file.)")
 @click.option("--project", "project_scope", is_flag=True, default=False,
               help="Write a secret to the per-directory ./.polyrob/.env instead "
                    "of the global file")
@@ -267,13 +274,13 @@ def set_cmd(key, value, is_global, project_scope, user_id, confirm, force, home_
 
 @config.command("unset")
 @click.argument("key")
-@click.option("--global", "is_global", is_flag=True, default=False,
-              help="Remove from ~/.polyrob/.env (default: ./.polyrob/.env)")
+@click.option("--global", "--home", "is_global", is_flag=True, default=False,
+              help="Remove from the ACTIVE home's .env ($POLYROB_HOME) — ~/.polyrob/.env normally, the active PROFILE's .env when a profile is selected. `--home` is an alias. (Default: ./.polyrob/.env.)")
 def unset_cmd(key, is_global):
     """Remove KEY from the env file — the counterpart of `config set`.
 
     This is how a stale or malformed credential/flag is cleared without
-    hand-editing the file (`polyrob doctor` names this verb on a
+    hand-editing the file (`polyrob doctor --full` names this verb on a
     "present but unusable" line). Scoping mirrors `set`: project file by
     default, ~/.polyrob/.env with --global.
     """

@@ -20,6 +20,8 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
+    # 043 phase 5: pages.router carries the /api/webgate/* endpoints; the
+    # WEBVIEW_UI legacy switch and webview.legacy were removed.
     return TestClient(app), pages
 
 
@@ -266,47 +268,9 @@ def test_read_only_still_allows_reads(monkeypatch, tmp_path):
 # --------------------------------------------------------------------------- #
 # Page routes render (bare pages-router app, like the other page tests)
 # --------------------------------------------------------------------------- #
-
-def test_config_page_renders(monkeypatch, tmp_path):
-    client, _ = _client(monkeypatch, tmp_path)
-    r = client.get("/config")
-    assert r.status_code == 200
-    assert 'id="config-root"' in r.text
-    # page JS is an EXTERNAL file (the CSP is being tightened) — never inline
-    assert "/static/js/pages/config.js" in r.text
-
-
-def test_autonomy_page_carries_killswitch_and_external_js(monkeypatch, tmp_path):
-    client, _ = _client(monkeypatch, tmp_path)
-    r = client.get("/autonomy")
-    assert r.status_code == 200
-    assert 'id="halt-panel"' in r.text
-    assert "/static/js/pages/autonomy.js" in r.text
-
-
-def test_finance_page_carries_invoices_section(monkeypatch, tmp_path):
-    client, _ = _client(monkeypatch, tmp_path)
-    r = client.get("/finance")
-    assert r.status_code == 200
-    assert 'id="invoices-section"' in r.text
-    assert "/static/js/pages/invoices.js" in r.text
-
-
-def test_layout_nav_links_config_page(monkeypatch, tmp_path):
-    client, _ = _client(monkeypatch, tmp_path)
-    assert 'href="/config"' in client.get("/config").text
-
-
-def test_config_page_via_real_server(monkeypatch):
-    """The full server mounts the pages router — /config must render there too."""
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
-    monkeypatch.setenv("ENV", "development")
-    import webview.server as server
-    server = importlib.reload(server)
-    client = TestClient(server._fastapi)
-    r = client.get("/config")
-    assert r.status_code == 200
-    assert 'id="config-root"' in r.text
+# 043 §9 phase 4: the legacy /config PAGE is deleted — the config catalog moved
+# to the new Agent destination's Settings › Advanced tab. The
+# PATCH /api/webgate/config/{key} writer (read-only refusal tested above) stays.
 
 
 @pytest.fixture(autouse=True)

@@ -5,6 +5,8 @@ exact signatures; behaviour is identical to the pre-split inline versions.
 """
 import asyncio
 import hashlib
+import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, Union, TYPE_CHECKING
 
 from tools.controller.registry.views import ActionModel
@@ -33,6 +35,11 @@ def _dedup_action_error(action_name: str, e: Exception, tb: str) -> str:
     if detail.startswith(dup):
         detail = detail[len(dup):]
     return f"Error executing action {action_name}: {detail}\n{tb}"
+
+
+# 043 A16: extensions that make a recorded artifact an image render, independent of
+# the coarse core/artifacts kind (which has no "image" class).
+_IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"})
 
 
 class ExecutionMixin:
@@ -271,6 +278,7 @@ class ExecutionMixin:
 						total_in_batch=action_count,
 					)
 
+					started_ns = time.monotonic_ns()
 					result = await asyncio.wait_for(
 						self.act(
 							action,
@@ -280,6 +288,8 @@ class ExecutionMixin:
 					)
 					# P2 hooks: transform may rewrite the result; post observes the final value.
 					result = await self._run_transform_tool_result_hooks(action_type, action_params, result, execution_context)
+					from core.action_receipt import stamp_receipt
+					stamp_receipt(result, started_ns=started_ns, context=execution_context)
 					await self._run_post_tool_call_hooks(action_type, action_params, result, execution_context)
 					result.tool_call_id = getattr(action, "_tool_call_id", None)
 					results.append(result)
@@ -869,6 +879,118 @@ Check the controller registry and action implementations.
 				result_preview=result_preview,
 				call_id=call_id
 			)
+
+			# 043 A16/A28: emit a typed `tool_result` feed event carrying a
+			# {kind, payload} render + the artifact id (when the tool recorded
+			# one at ActionResult.metadata["artifact_id"]). This is ADDITIVE to
+			# the tool_execution telemetry above — that event stays byte-identical
+			# for the CLI and legacy console readers; the new typed event is what
+			# the phase-2 transcript / Work pane render. Direct feed write (a
+			# `tool_result_*.json` file) so `?event_type=tool_result` can find it.
+			# Fail-open: a telemetry hiccup never breaks execution.
+			try:
+				artifact_id = None
+				meta = getattr(result, 'metadata', None) if result is not None else None
+				if isinstance(meta, dict):
+					artifact_id = meta.get('artifact_id')
+				user_id = getattr(execution_context, 'user_id', None) if execution_context else None
+				render = self._build_tool_result_render(
+					success=success,
+					error=error,
+					result_preview=result_preview,
+					artifact_id=artifact_id,
+					user_id=user_id,
+					tool_name=tool_name,
+				)
+				# 043 A14: the human one-line narration, computed ONCE here (the
+				# pure narrator) and shipped on the event, so the transcript and
+				# CLI read a server-computed line and never re-implement it.
+				try:
+					from agents.task.telemetry.narrate import narrate as _narrate
+					narration = _narrate({
+						'tool_name': tool_name,
+						'action_name': action_name,
+						'success': success,
+						'render': render,
+						'result_preview': result_preview,
+					})
+				except Exception:
+					narration = result_preview or ''
+				session_manager = getattr(self.orchestrator, 'session_manager', None)
+				if session_manager is not None:
+					session_manager.add_to_feed(
+						self.session_id,
+						'tool_result',
+						{
+							'tool_name': tool_name,
+							'action_name': action_name,
+							'success': success,
+							'duration_seconds': duration,
+							'error': error,
+							'result_size': result_size,
+							'result_truncated': result_truncated,
+							'result_preview': result_preview,
+							'call_id': call_id,
+							'render': render,
+							'artifact_id': artifact_id,
+							'narration': narration,
+							'step': step,
+						},
+					)
+			except Exception as e:
+				self.logger.debug(f"Failed to emit tool_result feed event: {e}")
 		except Exception as e:
 			# Don't let telemetry failures affect execution
 			self.logger.debug(f"Failed to capture tool telemetry: {e}")
+
+	def _build_tool_result_render(
+		self,
+		*,
+		success: bool,
+		error: Optional[str],
+		result_preview: Optional[str],
+		artifact_id: Optional[str],
+		user_id: Optional[str],
+		tool_name: Optional[str],
+	) -> Dict[str, Any]:
+		"""Derive the typed ``{kind, payload}`` render for a tool_result event (043 A16).
+
+		``kind`` ∈ ``text|table|file|image|money|error``. An error result is typed
+		as such; a resolvable recorded artifact upgrades the kind by its class
+		(``data``→table, ``report``/``code``→text, image extension→image, else
+		file); a money-tool result is ``money``; everything else is ``text``.
+		Fail-open to a ``text`` render — an unresolvable artifact id still yields
+		text (the id is carried on the event's ``data`` regardless).
+		"""
+		preview = result_preview or ""
+		if not success or error:
+			return {"kind": "error", "payload": {"error": error or preview}}
+		kind = "text"
+		payload: Dict[str, Any] = {"text": preview}
+		if artifact_id and user_id:
+			try:
+				from core.artifacts import (
+					get_artifact_ledger, KIND_DATA, KIND_REPORT, KIND_CODE,
+				)
+				art = get_artifact_ledger().get(str(artifact_id), str(user_id))
+				if art is not None:
+					ext = os.path.splitext(art.path or "")[1].lower()
+					base = os.path.basename(art.path or "")
+					if ext in _IMAGE_EXTS:
+						kind, payload = "image", {"artifact_id": artifact_id, "path": base}
+					elif art.kind == KIND_DATA:
+						kind, payload = "table", {"artifact_id": artifact_id, "path": base}
+					elif art.kind in (KIND_REPORT, KIND_CODE):
+						kind, payload = "text", {"artifact_id": artifact_id, "path": base, "text": preview}
+					else:
+						kind, payload = "file", {"artifact_id": artifact_id, "path": base}
+			except Exception:
+				pass
+		elif tool_name:
+			try:
+				from core.tool_capabilities import ids_with
+				if tool_name in ids_with("money"):
+					kind, payload = "money", {"text": preview}
+			except Exception:
+				pass
+		return {"kind": kind, "payload": payload}

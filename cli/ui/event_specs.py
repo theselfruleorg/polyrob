@@ -129,6 +129,18 @@ def _render_provider_failure(event: RegisteredEvent) -> Optional[str]:
     return line
 
 
+def _apply_provider_fallback(state, event: RegisteredEvent) -> None:
+    """The active model changes on a successful main-agent fallback, not failure."""
+    data = event.data or {}
+    if state.is_sub_agent(str(data.get("agent_id") or "")):
+        return
+    provider = data.get("fallback_provider")
+    model = data.get("fallback_model")
+    if provider:
+        state.provider = str(provider)
+        state.model = str(model or "")  # Never attach the failed provider's model.
+
+
 def _render_provider_fallback(event: RegisteredEvent) -> Optional[str]:
     d = event.data or {}
     return (f"provider fallback: {d.get('original_provider') or '?'}"
@@ -154,7 +166,7 @@ def _register_run_state_events() -> None:
         EventSpec(type="provider_failure", parse=_parse, layer=Layer.DIALOG,
                   render_line=_render_provider_failure),
         EventSpec(type="provider_fallback_success", parse=_parse, layer=Layer.DIALOG,
-                  render_line=_render_provider_fallback),
+                  apply=_apply_provider_fallback, render_line=_render_provider_fallback),
     )
     for spec in specs:
         register_event(spec)

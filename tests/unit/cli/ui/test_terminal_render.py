@@ -10,7 +10,7 @@ from cli.ui.terminal_render import (
 )
 from modules.pfp.mesh import Mesh
 
-CFG = {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "", "override": {}}
+CFG = {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "", "override": {}}
 
 
 def test_frame_has_half_the_width_in_char_rows():
@@ -34,7 +34,7 @@ def test_frame_is_deterministic():
 def test_text_line_has_seed_traits_and_voice():
     line = text_line(Mesh(CFG))
     assert "0x" in line                 # seed hex
-    assert "eyes" in line and "square" in line
+    assert "eyes" in line and "three" in line
     assert "voice" in line
 
 

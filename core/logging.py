@@ -20,9 +20,16 @@ class _LazyDirRotatingFileHandler(RotatingFileHandler):
         super().__init__(filename, **kwargs)
 
     def _open(self):
-        import os as _os
-
-        _os.makedirs(_os.path.dirname(self.baseFilename) or ".", exist_ok=True)
+        # A12 (2026-09-14): this used to do a LOCAL `import os` here. A log
+        # call that lands in this handler during interpreter shutdown (e.g.
+        # a `__del__` warning fired by GC) can hit this after the import
+        # machinery is already torn down, raising ImportError — which
+        # logging.Handler.handleError swallows internally and prints as its
+        # own multi-line "--- Logging error ---" dump straight to stderr
+        # (it never propagates, so a caller-side try/except cannot help).
+        # `Path` is already a MODULE-level global (bound at import time), so
+        # using it here needs no runtime import-machinery access at all.
+        Path(self.baseFilename).parent.mkdir(parents=True, exist_ok=True)
         return super()._open()
 from colorama import Fore, Back, Style, init as colorama_init
 from typing import Optional

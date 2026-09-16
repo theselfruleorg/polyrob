@@ -158,13 +158,15 @@ async def test_cancel_order_ALLOWED_while_halted_because_it_reduces_risk(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_concurrent_orders_cannot_both_pass_a_nearly_exhausted_cap(monkeypatch):
+async def test_concurrent_orders_cannot_both_pass_a_nearly_exhausted_cap(monkeypatch, tmp_path):
     """M4: check -> submit -> record is held under PolicyGate.reserve(), so two
     concurrent orders can't both read the same stale rolling-spend, both pass, and
     both record past the daily cap. With daily cap $10 and two concurrent $6 orders,
     exactly ONE may submit."""
     import asyncio
-    gate = PolicyGate(max_per_tx_usd=10_000.0, daily_cap_usd=10.0)
+    from core.wallet.audit_sink import JsonlAuditSink
+    gate = PolicyGate(max_per_tx_usd=10_000.0, daily_cap_usd=10.0,
+                      audit_sink=JsonlAuditSink(str(tmp_path / "audit.jsonl")))
     tool, ex = _tool(monkeypatch, gate)
 
     # Force a real await INSIDE the check->record span so, without the lock, both
@@ -201,3 +203,21 @@ def _enable_live_trading(monkeypatch):
     monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_TRADE_MAX_USD", "100000000")
     monkeypatch.setenv("HYPERLIQUID_TRADE_MAX_USD", "100000000")
+
+
+@pytest.mark.asyncio
+async def test_lost_order_response_blocks_retry(monkeypatch):
+    from core.wallet import submission_journal as journal
+    gate = PolicyGate(max_per_tx_usd=100)
+    tool, exchange = _tool(monkeypatch, gate)
+    calls = []
+    def lose_reply(**kwargs):
+        assert journal.unresolved()[0]["chain"] == "hyperliquid"
+        calls.append(kwargs)
+        raise TimeoutError("reply lost after venue acceptance")
+    monkeypatch.setattr(exchange, "order", lose_reply)
+    params = PlaceLimitOrderParams(coin="ETH", is_buy=True, size=0.01, price=100)
+    assert not (await tool.place_limit_order(params))["success"]
+    assert journal.unresolved()
+    assert not (await tool.place_limit_order(params))["success"]
+    assert len(calls) == 1

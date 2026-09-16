@@ -50,6 +50,18 @@ _BUILTIN: Dict[str, CatalogEntry] = {
         url="https://mcp.context7.com/sse",
         trust="trusted",
     ),
+    # Aave Labs' own server: markets, positions, health factors, simulations
+    # across Aave V3/V4. Non-custodial BY DESIGN — it prepares UNSIGNED
+    # transactions and never holds a key, so installing it grants read reach and
+    # no spend authority. POLYROB has no verb that executes third-party
+    # calldata, so its transaction-preparation tools are inert here today.
+    "aave": CatalogEntry(
+        server_id="aave",
+        description="Aave V3/V4 markets, positions and health factors (read-only here)",
+        transport="http",
+        url="https://mcp.aave.com",
+        trust="official",
+    ),
 }
 
 

@@ -3,7 +3,7 @@ name: Release
 # Builds, validates, and publishes a POLYROB release, and defines "latest" for the
 # `polyrob update --check` command. INERT until a version tag is pushed:
 #
-#   git tag -a v0.4.2 -m "POLYROB 0.4.2" && git push origin v0.4.2
+#   git tag -a vX.Y.Z -m "POLYROB vX.Y.Z" && git push origin vX.Y.Z
 #
 # One-time repo setup (Settings -> Secrets and variables -> Actions):
 #   PYPI_API_TOKEN   PyPI project token (scope: polyrob). Omit to skip the PyPI
@@ -54,11 +54,47 @@ jobs:
           python -m build
           twine check dist/*
 
+      - name: Verify release artifact hygiene
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import tarfile
+          import zipfile
+
+          leaked = []
+          for artifact in Path("dist").iterdir():
+              if artifact.suffix == ".whl":
+                  with zipfile.ZipFile(artifact) as archive:
+                      names = archive.namelist()
+              elif artifact.name.endswith(".tar.gz"):
+                  with tarfile.open(artifact, "r:gz") as archive:
+                      names = archive.getnames()
+              else:
+                  continue
+              for name in names:
+                  parts = name.split("/")
+                  if "node_modules" in parts or "__pycache__" in parts or name.endswith((".pyc", ".pyo")):
+                      leaked.append(f"{artifact.name}: {name}")
+          if leaked:
+              raise SystemExit("generated development files in release artifacts:\n" + "\n".join(leaked[:50]))
+          PY
+
       - name: Smoke-test the wheel in a clean venv
         run: |
           python -m venv /tmp/relvenv
           /tmp/relvenv/bin/pip install "$(ls dist/*.whl)"
-          /tmp/relvenv/bin/python -c "import core, cli.polyrob; print('polyrob', core.__version__)"
+          smoke_dir="$(mktemp -d)"
+          smoke_home="$(mktemp -d)"
+          cd "$smoke_dir"
+          HOME="$smoke_home" /tmp/relvenv/bin/polyrob version
+          HOME="$smoke_home" /tmp/relvenv/bin/polyrob --help >/dev/null
+          HOME="$smoke_home" /tmp/relvenv/bin/polyrob doctor >/dev/null
+          test -z "$(find . -mindepth 1 -maxdepth 1 -print -quit)"
+          cd "$smoke_home"
+          migration_rc=0
+          POLYROB_DATA_DIR="$smoke_home/data" HOME="$smoke_home" \
+            /tmp/relvenv/bin/python -m migrations.migrate status || migration_rc=$?
+          test "$migration_rc" -eq 0 -o "$migration_rc" -eq 1
 
       - name: Publish to PyPI
         if: ${{ env.PYPI_API_TOKEN != '' }}

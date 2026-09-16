@@ -44,6 +44,7 @@ async def run_turn(
     on_turn_complete: Optional[Callable[[], None]] = None,
     slash_dispatch: Optional[Callable[[str], Awaitable[bool]]] = None,
     request_exit: Optional[Callable[[], None]] = None,
+    owner_gate: Optional[Callable[[str], Optional[str]]] = None,
 ) -> None:
     """Run one REPL turn. Never raises — errors/cancel are rendered + swallowed.
 
@@ -62,6 +63,18 @@ async def run_turn(
         if handled:
             return
         # not a recognized slash → fall through and treat as a turn
+
+    if owner_gate is not None:
+        reply = owner_gate(line)
+        if reply is not None:
+            renderer.print_block(reply)
+            return
+    from cli.ui.input_policy import prepare_text
+    try:
+        line = prepare_text(line)
+    except Exception as exc:
+        if renderer is not None:
+            renderer.print_block(f"Context references could not be expanded; using original text: {exc}")
 
     lifecycle = lifecycle_of(renderer)
     token = lifecycle.begin_turn() if lifecycle is not None else 0
@@ -95,6 +108,8 @@ async def run_turn(
                 pass
 
         if renderer is not None:
+            if getattr(renderer, "turn_failed", lambda: False)():
+                outcome = TurnOutcome.ERROR
             renderer.on_turn_end(answer or "")
     finally:
         if lifecycle is not None:
@@ -158,22 +173,36 @@ class TurnController:
         *,
         run_coro_factory: Callable[[str], Any],
         schedule: Callable[[Any], Any],
+        control_factory: Optional[Callable[[str], Any]] = None,
+        rejected: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._factory = run_coro_factory
         self._schedule = schedule
         self._task: Optional[Any] = None
+        self._control_factory = control_factory
+        self._control_task = None
+        self._rejected = rejected
 
     @property
     def busy(self) -> bool:
         return self._task is not None and not self._task.done()
 
-    def submit(self, line: str) -> None:
-        """Schedule a turn for *line* (no-op if blank or a turn is already running)."""
+    def submit(self, line: str) -> bool:
+        """Return whether input was accepted; rejected text stays in the editor."""
         if not line.strip():
-            return
+            return False
         if self.busy:
-            return  # one turn at a time (the interactive idle gate's invariant)
+            from cli.ui.input_policy import is_live_command
+            if self._control_factory and is_live_command(line) and (
+                self._control_task is None or self._control_task.done()
+            ):
+                self._control_task = self._schedule(self._control_factory(line))
+                return True
+            if self._rejected:
+                self._rejected("Turn in progress. Your text is kept; use /steer for guidance, or Ctrl-C to interrupt.")
+            return False
         self._task = self._schedule(self._factory(line))
+        return True
 
     def interrupt(self) -> None:
         """Cancel the in-flight turn (Ctrl-C); no-op if idle."""

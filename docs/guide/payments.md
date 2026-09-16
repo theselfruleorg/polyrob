@@ -17,6 +17,7 @@ the crypto trading tools, and the unified ledger.
 
 ---
 
+
 ## 1. The safety model (read first)
 
 Three invariants hold across the whole surface:
@@ -81,6 +82,13 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   (`AGENT_WALLET_OPERATIONAL_VENUE`, default `treasury`) is the key that same-chain
   spends sign with, so the "fund me" address the owner sees equals the address that
   spends.
+- **Seed split — public-only processes** (`core/wallet/public_identity.py`): keep
+  `AGENT_WALLET_MASTER_SEED` in a `/etc/polyrob/wallet.env` that ONLY the agent unit loads.
+  The seeded process publishes its addresses to `<data_home>/wallet/public_identity.json`
+  (public, `0644`); a unit with `AGENT_WALLET_ENABLED=true` and no seed (console, email)
+  reads it and gets a wallet that answers every address and refuses every signature with
+  `WalletSigningUnavailable`. No flag — absence of the seed is the signal; with no record
+  published, an unconfigured deploy still fails fast exactly as before.
 - **Network** — `AGENT_WALLET_NETWORK` (default `testnet`). On mainnet, `x402_wallet_status`
   surfaces the live on-chain USDC/gas balance via public read-only RPCs
   (`core/wallet/onchain.py`; canonical USDC = `0x8335…2913` Base mainnet, `0x036C…CF7e`
@@ -88,7 +96,7 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
 - **Spend caps — the PolicyGate** (`core/wallet/policy.py`): every spend passes through
   `policy.check()` before signing and `policy.record()` after. Ceilings:
   `AGENT_WALLET_MAX_PER_TX_USD` (default `250`, a catastrophic loss-guard, *not* a
-  budget — was `1000` before the 2026-08-22 hardening pass); `WALLET_DAILY_CAP_USD`
+  budget); `WALLET_DAILY_CAP_USD`
   (a 24h rolling cap, default `100` — the per-tx ceiling alone cannot stop a
   within-ceiling loop draining the treasury one ticket at a time; set
   `none`/`off`/`unlimited`/`disabled` to restore the old unbounded behaviour
@@ -97,7 +105,9 @@ The wallet is the agent's on-chain identity and treasury. **Off by default**
   no-op for a per-venue key, and a malformed or negative value RAISES naming
   the key, same as the two caps above). Owner
   **preferences** can only *tighten* these (`/config set budget.wallet_daily_usd …`
-  min-merges with the env cap — never above the resolved default). An idempotency
+  min-merges with the env cap — never above the resolved default). Raising a cap is an
+  owner action: `polyrob wallet set-cap daily 250` / `set-cap per-tx 50` writes the
+  authoritative env var to `~/.polyrob/.env` after a confirmation. An idempotency
   replay-guard prevents a retried step from double-paying.
 - **Audit** — every spend appends a `wallet_spend` event: an append-only JSONL sink
   (`<data_dir>/wallet/audit.jsonl`) plus a telemetry event. This is what the unified
@@ -355,6 +365,98 @@ expiry it escalates to the session **and** a one-off owner notice. Events:
 
 ---
 
+## 4b. Payment assets — what the treasury can be paid in
+
+Before proposal 046 the answer was "USDC on Base", written into five places:
+the literal string `"usdc"` on every invoice row, a hardcoded `6` in the
+on-chain probe, a pair of constants in the settlement scan, a `fastapi_x402`
+lookup in the public challenge, and a USDC contract in the EIP-681 URI. Adding a
+second asset meant finding all of them, and missing one does not error — it
+prices, scans or settles the WRONG token.
+
+`core/payments/assets.py` is now the one registry. One row per asset, no default
+row: an unknown asset id resolves to `None` and the caller refuses with the
+known ids echoed back.
+
+**Pin an asset** (operator only — there is deliberately no agent action and no
+chat verb that writes one):
+
+```bash
+polyrob wallet asset add --id rob --chain robinhood \
+  --address 0xYourToken --verify --min-amount 1000000000000000000
+polyrob wallet asset list
+polyrob wallet asset verify rob
+```
+
+`--verify` reads `decimals()` and `symbol()` on-chain **once** and freezes them.
+A later differing read reports `metadata_changed` and leaves the pin alone:
+decimals denominate every amount comparison the settlement scan makes, so a
+token that reports 6 at mint and 18 at settlement must not be able to move the
+value the money math reads.
+
+### Two rails, and why the difference matters
+
+| rail | who settles it | which assets |
+|---|---|---|
+| `facilitator` | the x402 facilitator, via `POST /api/x402/requests/{id}/pay` | only what `fastapi_x402` knows — in practice USDC on Base |
+| `onchain_scan` | the settlement watcher, from a plain transfer into the treasury | anything you pin |
+| `svm_reference` | the Solana pass, matching a unique Solana Pay reference | the Solana USDC rows |
+
+⚠️ An `onchain_scan` invoice serves a **direct-transfer** challenge — the token,
+the chain id, the raw amount, the treasury and an EIP-681 URI — and carries **no
+`accepts` block**. An `accepts` block asks the payer to sign a payment
+authorization, and for an asset no facilitator knows nobody would ever verify
+that signature, while the payer would reasonably believe they had paid. `/pay`
+refuses such an invoice with the transfer instructions instead.
+
+### What settlement matches on
+
+`(recipient, asset_address, amount_raw)` — exact integers. Before 046 it was a
+float `amount_usd` compared treasury-wide with no asset filter, which was safe
+only because exactly one contract was ever queried. With two assets scannable, a
+$1 payment in a worthless token would have settled a $1 USDC invoice.
+
+⚠️ **The uniqueness that match depends on is the producer's job.** For an agent
+invoice it comes from the amount jitter (a sub-cent USD nudge). For a producer
+that PINS its raw amount — a paid room action — the jitter cannot help: the
+pinned integer is written verbatim, so the dollars moved and the payable integer
+did not. Such a producer is separated by a **raw-unit** nudge instead, spanning
+every payable kind, because the matcher itself is kind-blind. Two offers at the
+same price in one room used to share an amount, and the first payment settled the
+older one — a different payer's, against a different person.
+
+The configured chain's own asset is scanned on **every** tick, owed or not. Every
+other asset is scanned only while something is owed in it. The difference is
+deliberate: scanning only what is owed would silence `payment_unmatched`, and "no
+unmatched payments" must never come to mean "I was not looking".
+
+⚠️ Pin an asset **before** inviting payment in it. The first tick that sees a new
+asset seeds its checkpoint near the chain head and scans nothing — a transfer
+that already landed is not enumerated. The watcher logs this the one time it
+happens.
+
+### Paid room actions ride this rail (046)
+
+A `room_action` invoice is minted through the SAME `create_payment_request` an
+agent invoice uses, with `kind="room_action"`, so every filter that decides which
+rows settle, get notified, or are scanned must span **both** kinds
+(`invoicing.PAYABLE_KINDS`). A producer missing from that set mints rows that
+take real money and are then never settled, never actuated, and invisible to the
+owner.
+
+Two things are deliberately different for it:
+
+- it is **exempt** from `X402_INVOICE_DAILY_MAX` — that cap bounds the AGENT's own
+  judgment-driven invoicing, and a busy room must not exhaust the agent's ability
+  to invoice at all. The room has its OWN per-payer and per-target caps;
+- its settlement does not wake a session. It bought an EFFECT, so it routes to
+  `core.surfaces.room_actions.apply` and the room is told the outcome.
+
+⚠️ It needs `X402_SETTLE_ONCHAIN_DETECT` as well as `X402_INVOICE_ENABLED`: a room
+payer has no correspondent channel to attest through and no facilitator lane, so
+on-chain detection is the ONLY way the money is ever noticed. An offer refuses
+before the mint when either is off. See `docs/guide/groups.md`.
+
 ## 5. Watchtower subscriptions (`modules/x402/subscriptions.py`)
 
 Paid recurring monitoring — the first revenue product. Model: **prepaid period + renewal
@@ -376,8 +478,13 @@ invoice**, driven entirely from the same settlement-watcher tick. Gated
   takes a $0 `subscription_lapsed` skip (the agent is never invoked).
 - Admin: `polyrob owner sub list` / `polyrob owner sub cancel <id>`.
 
-> **Note:** the subscription machinery is inert until a `create_subscription` caller is
-> wired to a provisioning surface, and — like the rest of the settlement-watcher-driven
+> ⚠️ **The subscription machinery has NO production caller.** `create_subscription`
+> is reached only by `tests/unit/cli/test_owner_sub_cli.py`, so nothing in a running
+> deployment ever creates a subscription: the renewal invoices, the applied-settlements
+> ledger, the `subscription_lapsed` cron gate and `polyrob owner sub list/cancel` are
+> all unreachable today. Either wire one caller or retire it — dead money machinery is
+> worse than absent money machinery, because it reads as a shipped capability.
+> It also — like the rest of the settlement-watcher-driven
 > money layer (invoice amount-jitter dedupe, on-chain detection) — it assumes
 > `UVICORN_WORKERS=1`; the pending-renewal unique index is only a cross-process backstop,
 > not a substitute for single-worker. See the canonical `workers>1` note in
@@ -427,7 +534,7 @@ OFF) + a treasury (`X402_PAYMENT_RECIPIENT`).
 
 ---
 
-## 8. Payment-backed reputation — ERC-8004 (`modules/eip8004/`)
+## 8. On-chain identity and payment-backed reputation — ERC-8004 (`modules/eip8004/`)
 
 ERC-8004 is the **trust/discovery** layer (who is this agent, can I trust it), *not* a
 payment rail — it composes with x402 (how do I pay it). Gated `EIP8004_ENABLED`
@@ -435,6 +542,30 @@ payment rail — it composes with x402 (how do I pay it). Gated `EIP8004_ENABLED
 standard: an Identity Registry (a registration file linking the A2A card + wallet + x402
 pricing endpoint), a Reputation Registry, and a Validation Registry, served at
 `/eip8004/*`.
+
+### 8.1 Registering the identity on-chain (`EIP8004_REGISTER_ENABLED`, default OFF)
+
+The agent mints its **own** identity. `defi_trade.register_agent` calls a pinned
+Identity Registry — an ERC-721 collection, so the returned `agentId` is a token your
+wallet owns — and `defi_trade.set_agent_uri` republishes the file afterwards without
+minting anything. Both are money verbs on the capped lane (§10.2): the guard prices the
+fee, holds it to the declared `max_spend_usd`, and sends anything above
+`DEFI_AUTONOMOUS_MAX_USD` to the owner queue.
+
+`EIP8004_AGENT_URI_MODE` decides where the registration file lives. `auto` (the default)
+publishes a hosted URL when `A2A_BASE_URL` is a public host and otherwise inlines the
+whole file as a base64 `data:` URI — **so registering needs no hosting, no domain and no
+IPFS account**. `data` always inlines; `hosted` refuses unless a public URL exists. An
+oversized document is refused, never truncated.
+
+> ⚠️ **Registration is permanent, public, and not idempotent.** A second call mints a
+> second token and splits the identity between two `agentId`s, neither authoritative.
+> The verb therefore reads the chain first and refuses if this wallet already holds one;
+> a failed read also refuses rather than reading as "not registered". Once a
+> registration is confirmed, the served file carries it as
+> `attestation: "verified"` — evidence from a transaction this code signed, not a claim.
+
+### 8.2 Payment-backed reputation (`EIP8004_PAYMENT_FEEDBACK`, default OFF)
 
 With `EIP8004_PAYMENT_FEEDBACK` (default OFF), a settled invoice becomes a
 **verified-purchase** signal — but ⚠️ **only if `X402_INVOICE_ENABLED` is also on.** The
@@ -450,8 +581,10 @@ feedback on the payer's behalf). `submit_feedback` verifies the proof against th
 matches the EIP-712-signed authorization. This is the anti-sybil signal 8004 was designed
 for.
 
-> **Status:** the `ReputationManager` is currently a local simulation — nothing writes to
-> a real on-chain registry yet. Keep the flag off outside evaluation.
+> **Status:** the **Reputation** side is a local simulation — the `ReputationManager`
+> stores feedback locally and writes to no on-chain Reputation Registry. Keep
+> `EIP8004_PAYMENT_FEEDBACK` off outside evaluation. The **Identity** side (§8.1) is
+> real: it signs and broadcasts.
 
 ---
 
@@ -481,27 +614,23 @@ calls. The real gate is `ENABLE_AUTH` (off = no billing service registered at al
   `ETH_PRICE_USD_MAX`); there is no in-band credit-purchase POST.
 - **Treasury sweeper** (`modules/payments/treasury_sweeper.py`): sweeps per-user deposit
   balances into `TREASURY_ADDRESS` on an interval (`SWEEP_INTERVAL`, default 3600s). It
-  **signs and broadcasts real fund-moving transactions**, so it is gated by its own
-  dedicated switch, `TREASURY_SWEEPER_ENABLED` (default **false**) — before this flag
-  existed the sweeper started on config presence alone (`TREASURY_ADDRESS` + a resolved
-  master seed + `ENABLE_AUTH`), which meant a box that merely still *had* those three set
-  in an old env file re-lit fund-moving on next boot with no dedicated kill-switch. Now
-  `TREASURY_SWEEPER_ENABLED=true` must be set explicitly; with it off, config presence
-  alone only logs that the sweeper is disabled and moves nothing. See
-  `docs/CONFIGURATION.md` for `TREASURY_SWEEPER_ENABLED`/`TREASURY_ADDRESS`/`SWEEP_INTERVAL`.
+  **signs and broadcasts real fund-moving transactions**, so it has its own dedicated
+  switch, `TREASURY_SWEEPER_ENABLED` (default **false**). Config presence alone
+  (`TREASURY_ADDRESS` + a master seed + `ENABLE_AUTH`) never starts it: with the flag off
+  it logs that it is disabled and moves nothing.
 
 ---
 
 ## 10. On-chain token operations (`tools/defi/`, `core/wallet/tx_guard.py`)
 
-Two tools give the agent eyes on-chain and, separately, a guarded way to move value.
-They are split deliberately: **reading is a different risk class from spending**, so
-they are different tools behind different flags, and enabling sight never implies
-enabling spend.
+`defi_data` gives the agent eyes on-chain; `defi_trade` gives it a guarded way to move
+value; `launchpad` and `dapp_browser` reach two things neither of those covers. They are
+split deliberately: **reading is a different risk class from spending**, so they are
+different tools behind different flags, and enabling sight never implies enabling spend.
 
 ### 10.1 `defi_data` — read-only token sight (`DEFI_DATA_ENABLED`, default OFF)
 
-Nine read-only actions, **multichain**: the chain registry (`core/wallet/chains.py`)
+Fourteen read-only actions, **multichain**: the chain registry (`core/wallet/chains.py`)
 is the one table of supported chains — Base, Ethereum, Arbitrum, Polygon, Robinhood
 Chain, and **Solana** (reads; base58 addresses, no checksum). **No signer is
 constructed and nothing is broadcast**, so this tool cannot move value:
@@ -514,8 +643,13 @@ constructed and nothing is broadcast**, so this tool cannot move value:
 | `swap_quote` | Prices a swap through the *same* route seam `defi_trade.swap` uses — see what a trade would do for $0 | EVM |
 | `portfolio` | The agent's own holdings on one chain, USD-valued, with explicit coverage — includes the wallet's own address in the header | all, incl. Solana |
 | `reconcile` | Diffs the position ledger's `## Open positions` table against actual on-chain balances — see §10.4 | EVM (Solana: explicit refusal, do it by hand) |
+| `token_holders` | Top holders with their share, wallet-vs-contract, LP holders and lock state, creator stake — the concentration read | EVM (Solana: explicit refusal, that screener reports authorities, not holders) |
+| `ohlcv` | Price history as candles; pool-scoped, and the pool read is named | all, incl. Solana |
 | `new_pools` | Newest-indexed pools (the fresh-launch frontier), unscreened | all, incl. Solana |
 | `trending` | Pools an indexer ranks trending, unscreened | all, incl. Solana |
+| `scan` | The same pools with a verdict each — SURVIVOR / CANDIDATE / TOO_NEW / PASS / WASH / UNSCREENABLE — from measured depth, flow, age and participation thresholds | all, incl. Solana |
+| `nft_holdings` | The NFTs an address holds, own wallet by default — "I could not look" is never an empty list (needs `NFT_TOOLS_ENABLED`) | EVM |
+| `nft_info` | One NFT straight from the chain: owner, standard, metadata URI; an unanswered field reads NOT CHECKED (needs `NFT_TOOLS_ENABLED`) | EVM |
 | `contract_read` | Raw `eth_call` (returns raw hex, gas- and size-capped) | EVM |
 
 Two rules run through the whole tier:
@@ -526,6 +660,16 @@ returns *every* candidate and never picks — even when there is exactly one mat
 because one match is not a safety property. Binding a symbol to a contract is the
 primary injection surface for an agent that reads web pages, and liquidity ranking is
 purchasable, so a deeper pool does not mean genuine. **You choose the address.**
+
+**A partial screen is not a clean screen.** The safety screener does not cover every
+chain equally — on Robinhood Chain it answers with no honeypot check, no holder data
+and empty taxes. `token_info` prints `PARTIAL` and NAMES every check that did not run,
+because a check that did not run is not a check that passed, and "no risk flags raised"
+over an absent honeypot check is the one failure mode a screen must never have: it
+looks exactly like safety. The same rule shapes `scan`, where a pool whose liquidity or
+volume the indexer did not report is `UNSCREENABLE` rather than `WASH` — an indexer
+that has not caught up is not a manipulator — and `token_holders`, where "no holder
+data was reported" is said out loud and is never a wide distribution.
 
 **Unknown is never zero.** An unreadable price renders `unknown` (never `$0.00`); an
 unreachable safety screen renders `UNSCREENED` and never contains the word "safe"; a
@@ -556,16 +700,27 @@ outside that set is invisible. The indexer is an upgrade path, never a requireme
 
 ### 10.2 `defi_trade` — value movement behind a transaction guard (`DEFI_TRADE_ENABLED`, default OFF)
 
-**This one can move real funds.** Five verbs, every one defaulting `dry_run=true`
-so moving funds requires saying so explicitly:
+**This one can move real funds.** Sixteen verbs, every one defaulting `dry_run=true`
+so moving funds requires saying so explicitly. Most are behind a second flag of their
+own, named in the last column — arming `DEFI_TRADE_ENABLED` alone gives you the six
+verbs in the first five rows and nothing else.
 
-| Verb | What it does |
-|---|---|
-| `transfer` | Send tokens to an address, bounded by a declared `max_spend_usd` |
-| `approve_token` | Grant an EXACT allowance to a named spender (unlimited approvals are refused outright) |
-| `revoke_approval` | Set an allowance back to zero — retire the standing claim |
-| `swap` | Swap through the route seam: Uniswap V3 from pinned addresses FIRST, an operator-named aggregator only as fallback |
-| `solana_swap` | Swap SPL tokens via Jupiter on Solana — its own mirrored guard stack, §10.3 |
+| Verb | What it does | Also needs |
+|---|---|---|
+| `transfer` | Send tokens to an address, bounded by a declared `max_spend_usd` | — |
+| `approve_token` | Grant an EXACT allowance to a named spender (unlimited approvals are refused outright) | — |
+| `revoke_approval` | Set an allowance back to zero — retire the standing claim | — |
+| `swap` | Swap through the route seam: Uniswap V3 from pinned addresses FIRST, an operator-named aggregator only as fallback | — |
+| `wrap` / `unwrap` | Native ⟷ the chain registry's pinned wrapped native, 1:1 by the contract's own definition | — |
+| `register_agent` | Mint this agent's own ERC-8004 identity on the pinned Identity Registry — §8 | `EIP8004_REGISTER_ENABLED` |
+| `set_agent_uri` | Republish that registration file; mints nothing — §8 | `EIP8004_REGISTER_ENABLED` |
+| `solana_swap` | Swap SPL tokens via Jupiter on Solana — its own mirrored guard stack, §10.3 | `SOLANA_TRADE_ENABLED` |
+| `bridge` | Move native value between chains through Relay, proven by measured arrival — §10.5 | `DEFI_BRIDGE_ENABLED` |
+| `nft_transfer` | Send one NFT. Always owner-approved — §10.6 | `NFT_TOOLS_ENABLED` |
+| `nft_revoke_approval` | Clear a standing collection approval | `NFT_TOOLS_ENABLED` |
+| `deploy_token` / `deploy_contract` | Deploy the pinned fixed-supply token, or your own compiled init code — §10.7 | `DEFI_DEPLOY_ENABLED` |
+| `solana_deploy_token` | A fixed-supply Token-2022 mint with on-chain metadata — §10.7 | `DEFI_DEPLOY_ENABLED` + `SOLANA_TRADE_ENABLED` |
+| `call` | Any contract write, with both directions declared — §10.8 | `DEFI_CALL_ENABLED` |
 
 **The swap route is chosen conservatively.** Uniswap V3 calldata built locally
 from pinned contract addresses is the strongest trust position, so it is tried
@@ -580,7 +735,7 @@ bound (`slippage_bps`, default `DEFI_MAX_SLIPPAGE_BPS` = 100), and a
 independent source and a disagreement above `DEFI_ROUTE_DRIFT_MAX_PCT` (default
 3%, hard ceiling 25%) REFUSES to execute rather than narrating.
 
-**Exit untying (2026-08-26).** Two mechanisms keep fired stop rules executable
+**Exits stay executable.** Two mechanisms keep fired stop rules executable
 without weakening entries: a sell of a *held* token that no source can price is
 valued at the simulation's **measured quote-asset inflow** (the receipt is
 exact), and `DEFI_MONITOR_EXITS` (default OFF) lets a forged main-agent turn —
@@ -590,6 +745,18 @@ with the measured inflow asserted post-simulation. Entries, transfers and leaf
 turns still refuse; all caps still apply. An approve/revoke records $0 against
 the daily cap (the grant is still headroom-checked before landing; value is
 recorded once, on the swap), and cap arithmetic runs in cents.
+
+**An unvalued grant is not a free grant.** "Exit-bounded" means
+two things, not one: the grant cannot exceed the wallet's own held balance of
+the token, **and** its spender is the destination the intent declares *and* a
+route spender the chain pins (`univ3_router` / `aggregator_spender`) — the sell
+leg approves the router, nobody else. A grant that no source can price is then
+charged the **autonomous ceiling** (`DEFI_AUTONOMOUS_MAX_USD`) plus a cent, so
+it stays executable but lands on the owner queue and is charged to the caps
+instead of passing unattended at $0.00. A grant that is not exit-bounded and
+cannot be priced refuses outright, at the verb, naming the router as the
+remedy. `revoke_approval` declares no grant and is untouched — clearing a
+standing claim on a worthless token must never be blocked.
 
 Every call routes through `core/wallet/tx_guard.py`, the single choke point: **no
 value-moving transaction is broadcast without `Decision(allowed=True)`.** The bound is
@@ -642,13 +809,23 @@ transaction the agent never sees.
 
 `defi_trade` is classified `money` + `high_impact` + `delegate_blocked`, so it is
 explicit-grant-only (the agent cannot self-serve it via `load_tool`), never reachable by
-a delegated sub-agent, and never in the default toolset. All five verbs are in
-`PAYMENT_APPROVAL_TOOLS` on the **spend** side — irreversible and self-custodial, with
-no venue to dispute them, so never act-and-report. `DEFI_TIERED_SPEND_LANE` (default
-OFF) can exempt a call whose *declared* ceiling sits within the autonomous limit from
-the owner tap — dry runs and revokes are always exempt. All of this is ANDed with —
-never a replacement for — `AGENT_WALLET_MAX_PER_TX_USD`, `WALLET_DAILY_CAP_USD`, the
-owner pause and the `owner_queue` lane.
+a delegated sub-agent, and never in the default toolset. Every spending verb is on the
+approval lane — irreversible and self-custodial, with no venue to dispute them. Two
+buckets, and a new verb must land in one or the other or a contract test fails:
+
+- **Capped** — swap, solana_swap, transfer, approve/revoke, wrap/unwrap, bridge, all
+  three deploys, `call`, the NFT revoke, and the two ERC-8004 identity writes
+  (`register_agent`, `set_agent_uri` — a registration's whole cost is a fee the guard
+  prices, so the ceiling means something). Under `DEFI_AUTONOMOUS_MAX_USD` the call runs
+  and reports; above it, the durable owner queue. `DEFI_TIERED_SPEND_LANE` (default OFF)
+  can exempt a call whose *declared* ceiling sits within the autonomous limit from the
+  owner tap; dry runs and revokes are always exempt.
+- **Always owner-approved** — `nft_transfer`, and only that. An NFT has no reliable
+  price, so a USD cap cannot bound it, and a cap that cannot bound the thing it is
+  capping is worse than no cap because it reads as protection.
+
+All of this is ANDed with — never a replacement for — `AGENT_WALLET_MAX_PER_TX_USD`,
+`WALLET_DAILY_CAP_USD`, the owner pause and the `owner_queue` lane.
 
 **What the mechanism cannot see**, stated rather than implied: the declaration and the
 calldata can share an author (prompt injection authors both, and they will agree — the
@@ -694,12 +871,14 @@ address from the same seed (`m/44'/501'/0'/0'`, Phantom-compatible); see it via
 `polyrob wallet`, `x402_wallet_status`, or the `portfolio(chain=solana)` header,
 and fund it with SOL for fees before trading.
 
-### 10.4 `defi_data.reconcile` — the ledger⟷chain check
+### 10.4 The book — `reconcile`, and one verdict across every chain
 
-Born from a real incident: the agent kept a markdown position ledger, its table
-and its run-log diverged, and it published a false "book flat" claim while three
-positions sat open on-chain. `reconcile(chain, ledger_path)` is the mechanical
-answer — a server-side comparison no step budget or partial read can dilute:
+The treasury figure is **cash flow** (income − spend) and structurally cannot see a
+held bag. Two mechanisms close that gap, and neither ever reports a clean book it did
+not verify.
+
+`defi_data.reconcile(chain, ledger_path)` is the per-chain comparison, a server-side
+check no step budget or partial read can dilute:
 
 - parses the ledger's `## Open positions` **table** (state only, never the
   narrative), enumerates actual chain holdings through the same seams
@@ -710,38 +889,209 @@ answer — a server-side comparison no step budget or partial read can dilute:
   native are working capital; confidently-priced sub-$0.25 holdings classify
   as dust.
 
-The treasury-trading posture runs reconcile as step 0 of every trading run and
-again before any public claim. Solana is refused explicitly (compare the
-`portfolio(chain=solana)` output by hand) until the rail-written position store
-lands.
+Run it as step 0 of a trading session and again before any public claim about the
+book. Solana is refused explicitly — compare the `portfolio(chain=solana)` output by
+hand.
 
-```bash
-# Sight only — the safe posture to start from
-DEFI_DATA_ENABLED=true
-DEFI_EVM_RPC_BASE=https://base-mainnet.your-provider.example/v2/KEY
-# ALCHEMY_API_KEY=…            # optional: complete portfolio enumeration
+**The book across every chain, in one command.** `polyrob wallet book` loops
+`portfolio`/`reconcile` over every money-enabled chain plus Solana and prints one
+worst-verdict-wins answer — `clean`, `disagreement`, `unverified` or `no_ledger` —
+followed by what disagrees. `/book` on Telegram, `/book` in the REPL and the console's
+Money page read the same function through the same renderer, so no two seats can
+describe one book differently. **A chain it could not read is `unverified`, never
+clean.**
 
-# Adding EVM spend — requires a pinned RPC; keep the autonomous ceiling low
-DEFI_TRADE_ENABLED=true
-DEFI_AUTONOMOUS_MAX_USD=5      # above this, every trade waits for an owner tap
-WALLET_DAILY_CAP_USD=25
-PAYMENT_APPROVAL_MODE=approve
-# DEFI_ROUTE_AGGREGATOR=lifi   # optional: aggregator fallback for pools V3 can't reach
-
-# Adding Solana spend — a separate arming decision
-SOLANA_TRADE_ENABLED=true
-DEFI_SOLANA_RPC=https://solana-mainnet.your-provider.example/v2/KEY
-
-# Unattended (goal/cron) trading and monitor-loop exits — widenings, off by default
-# DEFI_AUTONOMOUS_TURN_TRADING=true
-# DEFI_MONITOR_EXITS=true
-```
+The ledger it compares against is resolved by `POSITION_LEDGER_PATH`: that variable if
+set (it wins even when the file is missing, so a typo surfaces as "not found"), else
+the default filename in the project directory, else a single `*position-ledger.md`
+there. **Two or more candidates resolve to none** — refusing to guess which book is
+live is the point — and an absent, ambiguous or unreadable ledger renders open
+positions as `UNKNOWN`, never `none`.
 
 > ⚠️ **The caps are global and chain-blind.** `AGENT_WALLET_MAX_PER_TX_USD`,
 > `WALLET_DAILY_CAP_USD` and `DEFI_AUTONOMOUS_MAX_USD` are one number across
 > every chain (EVM and Solana share the same rolling daily bucket under
 > `venue="defi"`). There are no per-chain caps yet; if you arm a second chain
 > with a different ticket size, size the global caps for the riskier one.
+
+---
+
+### 10.5 Bridging between chains (`DEFI_BRIDGE_ENABLED`, default OFF)
+
+`defi_trade.bridge` is the one cross-chain move, routed through **Relay.link** directly.
+The owner seat is the CLI:
+
+```bash
+polyrob wallet bridge solana robinhood 0.5            # quote + full assertion pass
+polyrob wallet bridge base robinhood 0.01 --execute   # sign and broadcast
+polyrob wallet bridges                                # rows not yet proven to arrive
+```
+
+A bridge runs on **caps, not taps**: it tiers exactly like a swap — under
+`DEFI_AUTONOMOUS_MAX_USD` the agent may run one and report, above it the durable owner
+queue decides. A delegated sub-agent never bridges, and the spend is recorded to the
+same ledger every other verb counts.
+
+**The guard is two-phase**, because arrival is a separate fact from sending:
+
+1. *Before broadcast* — the quote is asserted against what was asked for, the recipient
+   is this wallet, the destination chain is in the pinned registry, and the arrival floor
+   is positive. The durable row in `bridges.db` is written **before** the send.
+2. *After confirmation* — arrival is proved by **measuring the destination balance**
+   against `quoted_out − the route's destination slippage`. A provider reporting success
+   over a balance that did not move is not believed; an unreadable balance is `unknown`,
+   never zero.
+
+⚠️ **A bridge that has not arrived by the deadline is `in_flight` — never `failure`.**
+A re-sent bridge pays twice, so the row stays an open question handed to you rather than
+an error to dismiss.
+
+The origin must be **native** (an ERC-20 origin adds an allowance leg to a third party's
+spender, which is its own decision). The destination may be native or a token pinned in
+the chain registry; an arbitrary destination address is refused. Solana and EVM origins
+both work; bridging *into* Solana refuses, because phase 2 measures the arrival with an
+EVM balance read.
+
+`BRIDGE_WATCHER_ENABLED` (follows `DEFI_BRIDGE_ENABLED`) is the reconciliation ticker.
+Every pass re-measures the destination, re-reads the route status, settles rows that
+landed, and escalates a still-stuck bridge to you. It is deliberately **not** stopped by
+the owner pause: it signs nothing and starts nothing, and an owner who has just stopped
+everything is exactly the owner who needs to know where their in-flight funds are.
+
+### 10.6 NFTs (`NFT_TOOLS_ENABLED`, default OFF)
+
+Four verbs: `defi_data.nft_holdings` / `nft_info` (read) and `defi_trade.nft_transfer` /
+`nft_revoke_approval` (write).
+
+**There is deliberately no grant verb.** `setApprovalForAll(operator, true)` is refused
+by `tx_guard` for every transaction and is not expressible anywhere in the tree — it is
+the single approval that hands a whole collection to someone else.
+
+The flag gates the **verbs only**. The guard's refusals for an undeclared ERC-721 or
+ERC-1155 outflow, and for any observed `ApprovalForAll` grant, run whether or not it is
+set: a security refusal behind a default-off switch is not a refusal.
+
+`nft_transfer` is **always owner-approved** (see §10.2): a collectible has no reliable
+price, so no USD cap can bound it. Enumeration needs `ALCHEMY_API_KEY`; without it the
+read says so rather than returning an empty list.
+
+### 10.7 Deploying a contract (`DEFI_DEPLOY_ENABLED`, default OFF)
+
+`defi_trade.deploy_token` and `defi_trade.deploy_contract`. A CREATE has no
+destination and no counterparty, so `core/wallet/deploy_guard.py` asks different
+questions and `tx_guard.authorize` decides on the answers — it stays the ONE
+choke point.
+
+What is asserted before anything is signed: it IS a create (an intent claiming a
+deploy over a transaction carrying a `to` refuses); the init code is within
+EIP-3860 and the runtime within EIP-170; it **produces code at all**
+(`eth_simulateV1` returns the deployed runtime as the create's return data — an
+empty return is a constructor that reverted quietly); the constructor **moves no
+token and grants no allowance** (it is arbitrary code running as the wallet); and
+the address is PREDICTED from the nonce so the caller can name it before
+broadcast, with the receipt's `contractAddress` re-checked after.
+
+`deploy_token` takes **no bytecode**. It deploys the pinned
+`core/wallet/token_template.py` artifact — fixed supply, no mint function, no
+owner, no pause, no fee — and the guard compares the produced runtime **byte for
+byte**, excluding only the two immutable slots solc recorded. That is what makes
+those properties assertable rather than promised.
+
+A deployment sends nothing, so its cost is the FEE: priced as endowment +
+worst-case sized gas and charged to the same caps.
+
+```bash
+polyrob wallet deploy-token ROB 1000000000 Rob Coin --chain base   # quote
+polyrob wallet deploy-token ROB 1000000000 Rob Coin --execute      # deploy
+```
+
+**Deterministic addresses.** `--vanity b0b` / `--salt` route the
+deployment through Arachnid's CREATE2 proxy — verified live at the same address
+with an identical code hash on all five money chains, so the same bytes get the
+same address everywhere. The proof gets STRONGER: the address IS
+`keccak(0xff ++ factory ++ salt ++ keccak(init_code))`, a commitment to the init
+code, so the factory returning the address we computed from our bytes proves
+what was deployed without reading a byte of runtime back. A vanity pattern must
+be hex (an address has only 0-9a-f) and is capped at 8 characters, because each
+one is 16x the work.
+
+**Solana.** `defi_trade.solana_deploy_token`, gated `DEFI_DEPLOY_ENABLED`
+**and** `SOLANA_TRADE_ENABLED`. A mint has no bytecode, so instead of comparing
+runtime bytes the guard asserts the whole declared supply arriving in our own
+token account, then reads `getAccountInfo(mint)` back after confirmation.
+
+⚠️ **That read-back is the only place the revocation can be seen.** The delta
+parser's authority taxonomy reads token ACCOUNT fields and is structurally blind
+to `SetAuthority` on a MINT, so "the supply is fixed" is a claim the simulation
+cannot make. An unreadable mint renders UNVERIFIED and a surviving authority
+renders VERIFIED AND WRONG — neither ever reads as success.
+
+**The name and symbol ARE on-chain**: the mint is created under
+Token-2022 with the `MetadataPointer` + `TokenMetadata` extensions, so it carries
+them itself — no Metaplex account. Pass `--uri` to a JSON file
+(`{name, symbol, description, image}`) for a **logo**; without one the token
+shows with no picture anywhere. The metadata update authority is revoked in the
+same transaction, so the name and uri are fixed the moment it lands — get the
+uri right before `--execute`.
+
+⚠️ A few older AMMs do not support Token-2022. Jupiter and the major venues do.
+
+```bash
+polyrob wallet deploy-token ROB 1e9 Rob Coin --chain solana   # quote
+polyrob wallet deploy-token ROB 1e9 Rob Coin --vanity b0b     # mine an address
+```
+
+### 10.8 Calling any contract (`DEFI_CALL_ENABLED`, default OFF)
+
+`defi_trade.call` executes caller-supplied calldata, so a protocol nobody
+integrated ahead of time becomes usable. Declare BOTH directions — at most this
+much leaves, **at least this much must come back** — and the simulation decides
+whether that held. A call that spends and returns nothing is refused.
+
+⚠️ The bound `tx_guard` records still applies: delta assertion proves the
+transaction does what the intent SAYS, never that the intent is legitimate. Turn
+origin, the caps and the owner queue are what bound that.
+
+### 10.9 Launchpads (`LAUNCHPAD_ENABLED`, default OFF)
+
+`launchpad_launch` / `_buy` / `_sell` / `_claim` / `_quote` / `_status`, against
+**Pons V2 on Robinhood Chain**. `_claim` collects the creator fees a token you
+launched has earned: the launchpad credits your 1% creator tax to a fee escrow that
+holds it until you ask, one claim collects what every token this wallet launched has
+earned, and it sends nothing — its only cost is gas, and the simulation must prove
+the money arrives before anything is broadcast.
+Pins are re-verified by code hash on every call and REFUSE on
+mismatch; the fee, the config and the economics digest are read live and the
+digest is COMMITTED, so terms that move between the quote and the broadcast
+revert rather than silently applying. The curve is resolved from the factory's
+own record and from nowhere else.
+
+⚠️ The launch snipe tax opens at **99%** and decays over seconds. `launchpad_buy`
+refuses above 100 bps rather than paying it; a launch exempts its own recipient.
+
+```bash
+polyrob wallet launch ROB Rob Coin --buy 0.05     # quote the launch + opening buy
+polyrob wallet curve 0xToken… --buy 0.1           # price a curve trade
+```
+
+### 10.10 Using a web dapp (`DAPP_BROWSER_ENABLED`, default OFF)
+
+`dapp_connect` / `dapp_status` / `dapp_disconnect`. `dapp_connect` injects an
+EIP-1193 provider (and the EIP-6963 announcement) into
+the session's existing browser context, so a dapp's Connect button works and the
+ordinary browser actions keep driving the page. The injected script holds no key
+and makes no decision.
+
+`eth_sendTransaction` becomes a `TxIntent` bounded by the envelope declared at
+connect time and goes through `tx_guard`; above the autonomous ceiling it waits
+on the durable owner queue under a deadline. **Off-chain signatures are refused
+always** — a permit is submitted by someone else later, so no simulation can
+catch what it authorizes.
+
+⚠️ `dapp_connect` **is** the money verb (the spend happens in a browser callback),
+and a SESSION budget is required alongside the per-transaction ceiling: without
+it, a per-transaction ceiling is only a per-CLICK ceiling. Run `dapp_disconnect`
+when finished — an armed wallet on an open page is a standing authorization.
 
 ---
 
@@ -763,12 +1113,11 @@ set.
 - The `polymarket`/`hyperliquid` wallet venues never hold a spendable float in the
   hub-and-spoke model — funding those venues for live trading is a deliberate,
   separate operator step.
-- ⚠️ **Hyperliquid live trading currently refuses to arm on the polyrob-wallet
-  path** (H4, 2026-08 audit): on that path the derived venue key fully owns the
+- ⚠️ **Hyperliquid live trading refuses to arm on the polyrob-wallet
+  path**: on that path the derived venue key fully owns the
   account it trades, so the venue's approveAgent withdrawal firewall does not
   exist — with `HYPERLIQUID_TRADING_ENABLED` set, the client refuses with an
-  error naming H4 rather than trading behind a firewall the code does not
-  provide. Delegated DB credentials (via `approve_agent`) are unaffected.
+  error rather than trading behind a firewall the code does not provide. Delegated DB credentials (via `approve_agent`) are unaffected.
   `agent_status` reports the actual signer.
 - **Polymarket needs its SDK installed** (`py-clob-client`); without it every
   Polymarket verb errors on import. Install it deliberately or leave the tool
@@ -814,153 +1163,183 @@ Money line, and Telegram `/recap`.
 
 ---
 
-## 13. Deployment recipes
+## 13. Arming it, one step at a time
 
-**No payments (default).** Set nothing. The invoice tool is absent; `/finance` shows
-zeros; nothing crypto runs.
+Each step below is its own decision and its own widening. Stop at the one you need;
+nothing later is implied by anything earlier. Every step is additive to the one above
+it, and the caps — not the flags — are the damage bound once you reach step 5.
 
-**Tier 1 — self-contained receive, zero infra (2026-08-21).** Getting paid needs
-only a wallet address: mint an invoice, the payer sends USDC, on-chain detection
-confirms it. No domain, no cert, no HTTP server — the settlement watcher runs in
-the agent process. With the agent wallet enabled the treasury auto-fills
-(`X402_TREASURY_FROM_WALLET`, default ON), so the whole rail is:
+**Step 0 — no payments (the default).** Set nothing. The invoice tool is absent, the
+money surfaces show zeros, and no crypto code runs.
+
+**Step 1 — receive, with no infrastructure at all.** Getting paid needs only a wallet
+address: mint an invoice, the payer sends USDC, on-chain detection confirms it. No
+domain, no certificate, no HTTP server — the settlement watcher runs inside the agent
+process. With the wallet on, the treasury auto-fills (`X402_TREASURY_FROM_WALLET`).
+
 ```bash
 AGENT_WALLET_ENABLED=true
 AGENT_WALLET_MASTER_SEED=<secret>       # or run `polyrob wallet init`
-X402_INVOICE_ENABLED=true               # default ON under AUTONOMY_MODE=autonomous
-X402_SETTLE_ONCHAIN_DETECT=true         # default ON under AUTONOMY_MODE=autonomous
+X402_INVOICE_ENABLED=true
+X402_SETTLE_ONCHAIN_DETECT=true         # X402_INVOICE_AMOUNT_JITTER is forced on with it
 X402_DEFAULT_CHAIN=base-sepolia         # testnet first; flip to base after the dry run
 INVOICE_CARD_ENABLED=true               # branded QR cards
 PAYMENT_APPROVAL_MODE=approve           # tap to approve outward money
 ```
-Detection scans `base` (mainnet) and `base-sepolia` (testnet); `polyrob doctor`
-shows the resolved treasury and its source. Validate the full loop on
-base-sepolia before flipping the chain to mainnet.
 
-**Invoice-only (get paid, no agent wallet), testnet.**
-```bash
-X402_INVOICE_ENABLED=true
-X402_PAYMENT_RECIPIENT=0xYourTreasury…
-X402_DEFAULT_CHAIN=base-sepolia         # testnet first
-INVOICE_CARD_ENABLED=true               # branded QR cards
-PAYMENT_APPROVAL_MODE=approve           # tap to approve outward money
-```
+Detection scans `base` and `base-sepolia`; `polyrob doctor` shows the resolved treasury
+and where it came from. Validate the whole loop on base-sepolia, then set
+`AGENT_WALLET_NETWORK=mainnet` and `X402_DEFAULT_CHAIN=base`. To invoice with **no agent
+wallet**, drop the two wallet lines and set `X402_PAYMENT_RECIPIENT=0xYourTreasury…`
+instead.
 
-**Add facilitator-free on-chain settlement (mainnet).**
-```bash
-AGENT_WALLET_NETWORK=mainnet
-X402_SETTLE_ONCHAIN_DETECT=true         # scannable chain (base/base-sepolia) + treasury
-# X402_INVOICE_AMOUNT_JITTER is forced ON with detection
-```
+**Step 2 — a machine-callable HTTPS endpoint.** A public URL that returns a real 402
+needs a domain, TLS and the api app — the one part an agent can never self-provision.
+POLYROB's side of it is three flags:
 
-**Tier 2 — machine-callable HTTPS endpoint, one owner command.** A public URL
-that returns a real 402 needs a domain + TLS + the api app — the one part an
-agent can never self-provision. On the box, as root, from a full checkout:
-```bash
-X402_HOST=agent.example.com bash scripts/setup_x402_endpoint.sh
-```
-It checks auth secrets (fail-closed), DNS, installs a deny-by-default nginx
-vhost (only `/a2a`, `/v1`, `/api`, `/.well-known`, `/eip8004` are proxied),
-obtains the certificate, writes the endpoint block into
-`/etc/polyrob/polyrob.env`, starts `polyrob-x402-api.service` (loopback :9000),
-and verifies a live 402 + the agent card.
-
-The equivalent manual configuration:
-
-**Machine-payer HTTP surface (A2A / OpenAI-compat), mainnet.**
 ```bash
 X402_ENABLED=true
 X402_PAYMENT_RECIPIENT=0xYourTreasury…
-CDP_API_KEY_ID=…                        # mainnet facilitator
+CDP_API_KEY_ID=…                        # mainnet facilitator credentials
 CDP_API_KEY_SECRET=…
 ```
 
-**Agent pays for resources.**
+The serving side is yours to stand up once, as root on the box: point DNS at the host,
+run `polyrob serve` on loopback under a service manager, obtain a certificate, and put
+a **deny-by-default** reverse proxy in front of it that forwards only `/a2a`, `/v1`,
+`/api`, `/.well-known` and `/eip8004`. Then verify it end to end — a `curl` of
+`POST /a2a/rpc` with no payment must return a real `402` carrying a parseable
+challenge, and `/.well-known/agent.json` must answer. `x402_probe` scores your own
+endpoint out of 5 and names what is missing; see [self-hosting.md](self-hosting.md)
+for the deployment shapes.
+
+**Step 3 — let the agent pay for resources.**
+
 ```bash
 AGENT_WALLET_ENABLED=true
 AGENT_WALLET_MASTER_SEED=<secret>
 X402_CLIENT_ENABLED=true
-WALLET_DAILY_CAP_USD=25                 # tighten the $100 default rolling budget, if you want less
+WALLET_DAILY_CAP_USD=25                 # tighten the $100 default rolling budget
 ```
 
-Turning subscriptions, the usage bridge, or 8004 feedback on additionally requires their
-flags (`SUBSCRIPTIONS_ENABLED`, `USAGE_INVOICE_BRIDGE_ENABLED`,
-`EIP8004_ENABLED`+`EIP8004_PAYMENT_FEEDBACK`) — see the caveats in their sections above.
+**Step 4 — on-chain sight.** Read-only, no signer, nothing broadcast. This is the safe
+place to sit while you learn what the agent does with the data.
+
+```bash
+DEFI_DATA_ENABLED=true
+DEFI_EVM_RPC_BASE=https://base-mainnet.your-provider.example/v2/KEY
+# ALCHEMY_API_KEY=…                     # optional: complete portfolio enumeration
+```
+
+**Step 5 — spend on-chain.** Requires a pinned RPC; `tx_guard` refuses to move funds on
+the shared public endpoint. Keep the autonomous ceiling low to start.
+
+```bash
+DEFI_TRADE_ENABLED=true
+DEFI_AUTONOMOUS_MAX_USD=5               # above this, every trade waits for an owner tap
+WALLET_DAILY_CAP_USD=25
+PAYMENT_APPROVAL_MODE=approve
+# DEFI_ROUTE_AGGREGATOR=lifi            # optional aggregator fallback
+
+# Solana is a separate arming decision
+SOLANA_TRADE_ENABLED=true
+DEFI_SOLANA_RPC=https://solana-mainnet.your-provider.example/v2/KEY
+```
+
+Each further capability is its own flag on top of this: `DEFI_BRIDGE_ENABLED` (§10.5),
+`NFT_TOOLS_ENABLED` (§10.6), `DEFI_DEPLOY_ENABLED` (§10.7), `DEFI_CALL_ENABLED` (§10.8),
+`LAUNCHPAD_ENABLED` (§10.9), `DAPP_BROWSER_ENABLED` (§10.10).
+
+**Step 6 — unattended.** These let a run you are not watching reach the money verbs.
+Size `WALLET_DAILY_CAP_USD` as your loss bound before setting any of them.
+
+```bash
+# DEFI_AUTONOMOUS_TURN_TRADING=true     # a goal/cron run may reach the money verbs
+# DEFI_MONITOR_EXITS=true               # a monitor-loop turn may run EXIT-shaped ops only
+# DEFI_AGENT_AUTONOMY=true              # put the defi rail in the autonomous grant
+```
+
+`DEFI_AGENT_AUTONOMY` is what makes the rail *reachable* — it adds `defi_data`,
+`defi_trade`, `launchpad` and `dapp_browser` to the autonomous grant, including the
+owner's own chat toolset, so asking the agent to trade stops answering "no such verb".
+It is only meaningful under effective `AUTONOMY_MODE=autonomous`, and once armed a goal
+the agent writes itself can carry `defi_trade`. **The bound is the cap, not the
+toolset**: every verb still simulates and asserts its own deltas, the per-transaction
+ceiling and rolling daily cap still apply, a correspondent-tainted session still cannot
+reach it, and anything over `DEFI_AUTONOMOUS_MAX_USD` still routes to the owner queue.
+Reaching a capability and arming it are different decisions — this flag grants neither
+`x402_pay` nor any host tool, and `launchpad`/`dapp_browser` stay behind their own
+switches.
+
+**What you will be told.** `TX_NOTIFY_ENABLED` (default **on**) sends you **two**
+messages per broadcast: a BROADCAST notice the moment the transaction is accepted (verb,
+chain, amounts, USD value, tx hash, the lane that allowed it, the daily-cap headroom it
+consumed) and a SETTLED notice with the measured outcome — confirmed, reverted, arrived
+or in flight. It is deliberately not stopped by the owner pause: a report about funds
+already in flight is exactly what an owner who just stopped everything needs. A dry run
+never notifies, and an unknown value renders `unknown`, never `$0.00`.
+`WALLET_CONTEXT_VISIBLE` (default **on**) puts the agent's own balances into every
+turn's health note, read from a cache the bridge watcher refreshes — never a network
+read on the turn. An unreadable chain renders `unknown` and raises a health item; a
+stale snapshot is labelled stale.
+
+Subscriptions, the usage bridge and ERC-8004 feedback each need their own flag
+(`SUBSCRIPTIONS_ENABLED`, `USAGE_INVOICE_BRIDGE_ENABLED`,
+`EIP8004_ENABLED` + `EIP8004_PAYMENT_FEEDBACK`) — read the caveats in their sections
+first.
 
 ---
 
 ## 14. Flag reference
 
-`docs/CONFIGURATION.md` is the authoritative SSOT (each row has a code anchor); run
-`polyrob doctor --flags` for the live runtime view. The complete money/crypto flag set,
-with current defaults:
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md) owns every flag name, default and code
+anchor. Four groups cover this page:
 
-| Flag | Default | Purpose |
-|---|---|---|
-| `AGENT_WALLET_ENABLED` | OFF | Enable the agent wallet |
-| `AGENT_WALLET_NETWORK` | `testnet` | Wallet network |
-| `AGENT_WALLET_BACKEND` | `local_eoa` | Key backend |
-| `AGENT_WALLET_MAX_PER_TX_USD` | `250` | Per-tx loss guard (not a budget) |
-| `AGENT_WALLET_OPERATIONAL_VENUE` | `treasury` | Venue same-chain spends sign with |
-| `AGENT_WALLET_DERIVATION` | unset (`meta.json` wins; absent = legacy) | Recovery-hatch override for the key-derivation scheme (`legacy` \| `bip44`) |
-| `WALLET_DAILY_CAP_USD` | `100` | 24h rolling spend cap (`none`/`off` disables it) |
-| `X402_CLIENT_ENABLED` | OFF | Agent pay-side (`x402_pay`) |
-| `X402_ENABLED` | OFF | Machine-payer HTTP middleware |
-| `X402_PAYMENT_RECIPIENT` | `''` | Treasury/recipient address |
-| `X402_TREASURY_FROM_WALLET` | **ON** | When `X402_PAYMENT_RECIPIENT` is empty and the agent wallet is on, the wallet's **treasury-venue** address becomes the x402 receive address. |
-| `X402_SETTLEMENT_RPC` | `''` | Watcher-specific RPC pin for on-chain detection (any chain). The scan verifies the endpoint's `eth_chainId` matches the configured chain and refuses to scan on a mismatch. |
-| `X402_DEFAULT_CHAIN` | `base` | Default chain |
-| `X402_FACILITATOR_URL` | `''` | Facilitator endpoint (receive-side) |
-| `X402_PRICE_USD` / `X402_MAX_TOKENS_PER_REQUEST` / `X402_PRICE_MARKUP` | derived / `200000` / `2.0` | Machine-payer per-request price |
-| `X402_INVOICE_ENABLED` | OFF | Agent invoicing |
-| `X402_INVOICE_MAX_USD` / `X402_INVOICE_DAILY_MAX` | `50` / `10` | Invoice caps |
-| `INVOICE_CARD_ENABLED` | OFF (ON local) | Branded QR invoice cards |
-| `INVOICE_QR_STYLE` | `address` | `address` \| `eip681` |
-| `PAYMENT_APPROVAL_MODE` | `approve` | `approve` (owner tap) \| `auto` (within-caps) |
-| `APPROVAL_GRANT_TTL_HOURS` | `24` | One-shot post-timeout grant TTL |
-| `X402_SETTLE_ONCHAIN_DETECT` | OFF (ON under `AUTONOMY_MODE=autonomous`) | Facilitator-free on-chain USDC detection |
-| `X402_INVOICE_AMOUNT_JITTER` | ON | Sub-cent uniqueness for detection |
-| `X402_SETTLEMENT_WATCH_INTERVAL_SEC` | `60` | Settlement-watcher tick |
-| `X402_SETTLEMENT_SCAN_MAX_SPAN` / `X402_SETTLEMENT_CONFIRMATIONS` | `5000` / `2` | On-chain scan bounds |
-| `X402_PUBLIC_RATE_PER_WINDOW` / `X402_PUBLIC_RATE_WINDOW_SEC` / `X402_TRUSTED_PROXIES` | `20` / `60` / `''` | Public-endpoint rate limit |
-| `SUBSCRIPTIONS_ENABLED` | OFF | Watchtower subscriptions |
-| `WATCHTOWER_PRICE_USD` | `10.00` | Default monthly price |
-| `SUBSCRIPTION_RENEWAL_LEAD_DAYS` / `SUBSCRIPTION_GRACE_DAYS` | `5` / `3` | Renewal + grace windows |
-| `USAGE_INVOICE_BRIDGE_ENABLED` / `USAGE_INVOICE_MARKUP` | OFF / `1.0` | Usage→invoice draft |
-| `EIP8004_ENABLED` / `EIP8004_PAYMENT_FEEDBACK` | OFF / OFF | ERC-8004 identity + payment-backed reputation (feedback also needs `X402_INVOICE_ENABLED`) |
-| `EIP8004_ONCHAIN_ENABLED` | OFF | Flips the public `trustMode` claim to `onchain` (operator attestation only — no code registers on-chain) |
-| `EIP8004_AGENT_PRIVATE_KEY` | unset — secret | 8004 feedback signing key; a SECOND key, not derived from the wallet seed, not carried by wallet migration |
-| `ENABLE_AUTH` | OFF | Platform billing gate |
-| `CREDIT_VALUE_USD` / `WELCOME_BONUS` | `0.01` / `100` | Credit economics |
-| `CREDIT_SENTINEL_ENABLED` / `BILLING_FAILOVER_ENABLED` | ON / ON | Credit-death latch / provider failover |
-| `DEPOSIT_MONITOR_ENABLED` / `PAYMENT_MASTER_SEED` | OFF / unset | Crypto deposit monitor + address derivation |
-| `TREASURY_SWEEPER_ENABLED` / `TREASURY_ADDRESS` / `SWEEP_INTERVAL` | OFF / unset / `3600` | Sweeps deposit balances into the treasury (fund-moving; needs the flag AND the address) |
-| `DEFI_DATA_ENABLED` | OFF | Read-only on-chain token sight (`defi_data`, 9 verbs incl. `reconcile`) — never in the local safe group |
-| `DEFI_TRADE_ENABLED` | OFF | On-chain EVM money verbs (`defi_trade`: transfer/approve/revoke/swap) — can move real funds; needs a pinned RPC |
-| `SOLANA_TRADE_ENABLED` | OFF | Arms `defi_trade.solana_swap` (Jupiter) — a separate decision from the EVM verbs |
-| `DEFI_AUTONOMOUS_MAX_USD` | `25` | Per-tx ceiling below which a trade may execute autonomously; above it → `owner_queue` |
-| `DEFI_AUTONOMOUS_TURN_TRADING` | OFF | Lets a goal/cron-dispatched run reach the money verbs (a real widening — size the daily cap as your loss bound) |
-| `DEFI_MONITOR_EXITS` | OFF | Lets a forged main-agent (monitor-loop) turn run EXIT-shaped operations only |
-| `DEFI_MAX_SLIPPAGE_BPS` | `100` | Default swap slippage bound (basis points) |
-| `DEFI_ROUTE_DRIFT_MAX_PCT` | `3` (ceiling 25) | Route-vs-independent-price drift above this REFUSES the swap |
-| `DEFI_ROUTE_AGGREGATOR` | unset | Names the aggregator fallback (`lifi`) for pools local V3 construction can't reach |
-| `DEFI_TIERED_SPEND_LANE` | OFF | Exempts a within-ceiling declared spend from the owner tap (dry runs/revokes always exempt) |
-| `DEFI_EVM_RPC_BASE` / `DEFI_EVM_RPC_<CHAIN>` | public default | Operator-pinned JSON-RPC per chain; `tx_guard` refuses to move funds on the shared public default |
-| `DEFI_SOLANA_RPC` | public default | Pinned Solana RPC; `solana_swap` refuses to BROADCAST unpinned (dry runs/reads work) |
-| `X402_SOLANA_SETTLE` | OFF | USDC-on-Solana invoice settlement (reference-key matching) in the settlement watcher |
-| `X402_AUTONOMOUS_MAX_USD` | `1` | Per-payment ceiling below which `x402_fetch` runs act-and-report (deliberately far below the DeFi ceiling — x402 payments aren't simulated) |
-| `ALCHEMY_API_KEY` | unset | Optional holdings indexer — upgrades EVM `portfolio` from an honest partial scan to complete (Solana enumerates completely without it) |
-| `CRYPTO_TRADE_LIVE_ENABLED` | OFF | Master live-trade switch |
-| `HYPERLIQUID_TRADING_ENABLED` / `POLYMARKET_TRADING_ENABLED` | OFF / OFF | Per-venue live trade |
-| `HYPERLIQUID_TRADE_MAX_USD` / `POLYMARKET_TRADE_MAX_USD` | `5` / `5` | Per-venue trade caps |
+- [Billing / x402 / wallet](../CONFIGURATION.md#billing--x402--wallet) — the wallet, its
+  caps, x402 in and out, invoicing, settlement, subscriptions, credits.
+- [DeFi / on-chain trading](../CONFIGURATION.md#defi--on-chain-trading) — `defi_data`,
+  `defi_trade`, the RPC pins, the autonomous ceiling, deploys, the launchpad, the dapp
+  wallet, ERC-8004 identity.
+- [Crypto trading (Polymarket / Hyperliquid)](../CONFIGURATION.md#crypto-trading-polymarket--hyperliquid) —
+  the venue tools and their per-venue caps.
+- [Posture ↔ billing (C9)](../CONFIGURATION.md#posture--billing-c9) — which of the above
+  a deployment posture turns on for you.
+
+On a running box the resolved value and where it came from are one command away:
+
+```bash
+polyrob doctor --flags --search WALLET
+polyrob doctor --flags --search X402_
+polyrob doctor --flags --search DEFI_
+polyrob doctor --flags --changed          # only what this box set away from a default
+```
 
 ---
 
 ## See also
 
-- `docs/CONFIGURATION.md` — authoritative flag SSOT with code anchors.
-- `modules/x402/README.md` — deep x402 module reference (protocol, tables, facilitator).
-- `SECURITY.md` — the crypto/wallet/payment security posture.
+- [`docs/CONFIGURATION.md`](../CONFIGURATION.md) — the authoritative flag reference, with a code anchor per row.
 - [security-model.md](security-model.md) — the layered trust model these gates sit in.
-- `docs/guide/deployment-postures.md` — how the money flags interact with deployment shapes.
-- `docs/examples.md` — a worked end-to-end money-loop example.
+- [owner-controls.md](owner-controls.md) — pausing, approving and the owner inbox.
+- [deployment-postures.md](deployment-postures.md) — how the money flags interact with deployment shapes.
+- [../examples.md](../examples.md) — a worked end-to-end money loop.
+- `SECURITY.md` in the repository root — the crypto/wallet/payment security posture.
+
+
+## Liquidity positions (v3; live acceptance pending)
+
+`defi_data` exposes `lp_positions`, `lp_pool_info` and `lp_quote` without enabling
+writes. `DEFI_LIQUIDITY_ENABLED=true` enables `defi_trade.lp_add`, `lp_collect` and
+`lp_remove`; all default to dry run. The owner CLI (`polyrob wallet lp`) and `/lp`
+share the same guarded actions. Short allowances refuse with an exact approval
+remedy. v4 and Permit2 are not supported yet.
+
+Money › Book shows liquidity activity. Its explicit recheck enumerates positions
+for the wallet owner only; unread holdings are unknown, not zero. Collect minima
+use actual read-only collect returns because nominal fee growth can round higher.
+Landed receipts check observable token transfers as well as position events.
+Native refunds cannot be verified from receipt logs alone.
+
+Liquidity activity does not adjust the token-keyed cost book. LP remaining cost
+basis is unavailable, and cumulative deposit spending is not remaining basis.
+The USD charged for collect is gas, not fee revenue or treasury income.

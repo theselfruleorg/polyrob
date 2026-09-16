@@ -30,7 +30,6 @@ Ownership contract (the part users rely on):
   ``self.md``/``owner.md``). A distribution ships a soul — never someone
   else's memories.
 """
-import os
 import shutil
 import subprocess
 import tempfile
@@ -50,15 +49,16 @@ _USER_OWNED = frozenset({".env", "auth.json", "wallet", "data", "logs",
 
 
 def _git_env() -> dict:
-    env = dict(os.environ)
-    env["GIT_TERMINAL_PROMPT"] = "0"  # never prompt for credentials
-    env.setdefault("GIT_CONFIG_NOSYSTEM", "1")
-    # A distribution source string is attacker-controlled ("install my profile:
-    # <url>"). git's default protocol set includes ext::/fd::, which run an
-    # arbitrary command (ext::sh -c '…') at clone time = RCE. Pin the allowlist
-    # to real transports only, mirroring tools/self_env/tool.py.
-    env["GIT_ALLOW_PROTOCOL"] = "file:git:http:https:ssh"
-    return env
+    # S2 (2026-09-14): was `dict(os.environ)` — a clone of an ATTACKER-NAMED
+    # repo ran with the agent's whole environment (AGENT_WALLET_MASTER_SEED +
+    # every API key) in reach of any hook/filter/credential-helper git can be
+    # talked into running. `build_git_child_env` inherits an allowlist only and
+    # keeps the three hardening flags this function always set (never prompt for
+    # credentials; ignore /etc/gitconfig; and pin the protocol allowlist to real
+    # transports, because git's default set includes ext::/fd::, which run an
+    # arbitrary command (ext::sh -c '…') at clone time = RCE).
+    from cli.git_child_env import build_git_child_env
+    return build_git_child_env()
 
 
 def _fetch_source(source: str, tmp: Path) -> Path:
@@ -75,7 +75,12 @@ def _fetch_source(source: str, tmp: Path) -> Path:
         return dest
     dest = tmp / "clone"
     # `--` ends option parsing so an option-shaped source can't inject a git flag.
-    cmd = ["git", "clone", "--depth", "50", "--", source, str(dest)]
+    # M4 (2026-09-14): `-c core.hooksPath=` — a cloned repo ships its own
+    # `.git/hooks`, and a post-checkout hook runs as this process. Mirrors
+    # cli/commands/skill_install.py. `core.symlinks=false` stops a symlinked
+    # path escaping the temp clone dir.
+    cmd = ["git", "-c", "core.hooksPath=", "-c", "core.symlinks=false",
+           "clone", "--depth", "50", "--", source, str(dest)]
     r = subprocess.run(cmd, env=_git_env(), capture_output=True, text=True,
                        timeout=300)
     if r.returncode != 0:
@@ -86,7 +91,8 @@ def _fetch_source(source: str, tmp: Path) -> Path:
         # reject a leading dash outright — a real ref never starts with one.
         if ref.startswith("-"):
             raise click.ClickException(f"invalid ref {ref!r}")
-        r = subprocess.run(["git", "checkout", "--detach", ref], cwd=str(dest),
+        r = subprocess.run(["git", "-c", "core.hooksPath=", "checkout",
+                            "--detach", ref], cwd=str(dest),
                            env=_git_env(), capture_output=True, text=True,
                            timeout=120)
         if r.returncode != 0:

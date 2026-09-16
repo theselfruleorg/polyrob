@@ -17,9 +17,13 @@ The implementation purposefully avoids any heavy frameworks – *FastAPI* +
 runtime footprint minimal.
 """
 
+from collections import OrderedDict
 from pathlib import Path
 import asyncio
 import json
+from core.security.session_tokens import decode_session_token
+from webview.session_identity import require_session_identity
+
 import logging
 from typing import Any, Dict, List, Optional
 import os
@@ -62,6 +66,7 @@ import sys
 from agents.task.path import pm
 
 from core.version import get_version
+from webview import posture_routes, template_globals
 
 logger = logging.getLogger("webview.server")
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -74,51 +79,17 @@ logger.info(f"Feed event limits: default={FEED_DEFAULT_LIMIT}, max={FEED_MAX_LIM
 # SECURITY FIX: Get allowed origins from environment
 # Include the deploy's domain by default to prevent Socket.IO connection failures
 # One domain SSOT with api/auth_endpoints.py's SIWE `domain` (which already reads
-# WEBVIEW_DOMAIN) — an operator overrides one env var, not two independent hardcodes.
-_webview_domain = os.environ.get("WEBVIEW_DOMAIN", "localhost:3000").strip()
+# Socket.IO CORS: the allowlist + the true-same-origin callable live in
+# webview/cors.py (one concern, and server.py sits on its size ratchet). The
+# module-level names are re-bound here because the Socket.IO server, the tests
+# and the log line below resolve them off this module.
+from webview.cors import (  # noqa: E402
+    compute_cors_origins as _compute_cors_origins,
+    make_origin_allowed as _make_origin_allowed)
 
-
-def _compute_cors_origins() -> List[str]:
-    """Explicit CORS_ALLOW_ORIGINS wins verbatim; otherwise the default list:
-    legacy localhost:3000 entries + WEBVIEW_DOMAIN + the console's own serving
-    origins (bind port on localhost/127.0.0.1) — the webview serves its own UI,
-    so the serving origin must be allowed or the browser's same-origin
-    Socket.IO handshake is rejected with a 400 (P0-1, 2026-07-06)."""
-    raw = os.environ.get("CORS_ALLOW_ORIGINS", "").strip()
-    if raw:
-        return [origin.strip() for origin in raw.split(",") if origin.strip()]
-    origins = [
-        "http://localhost:3000",
-        "https://localhost:3000",
-        f"https://{_webview_domain}",
-        f"http://{_webview_domain}",
-    ]
-    port = webgate.bind_port()
-    for scheme in ("http", "https"):
-        for host in ("localhost", "127.0.0.1"):
-            origins.append(f"{scheme}://{host}:{port}")
-    return list(dict.fromkeys(origins))
-
-
-_cors_origins = _compute_cors_origins()
+_cors_origins = _compute_cors_origins(webgate.bind_port())
 logger.info(f"Socket.IO CORS allowed origins: {_cors_origins}")
-
-
-def _cors_origin_allowed(origin: Optional[str], environ: Optional[dict] = None) -> bool:
-    """engineio ``cors_allowed_origins`` callable: allow the explicit list OR a
-    TRUE same-origin request (Origin == scheme://Host).
-
-    Host is a browser-forbidden request header, so a cross-origin attacker page
-    cannot make Origin match it. X-Forwarded-Host/-Proto ARE settable from
-    cross-origin JS — they must never feed this comparison (only the scheme may
-    vary, which concedes nothing a network MITM doesn't already have).
-    """
-    if origin in _cors_origins:
-        return True
-    host = (environ or {}).get("HTTP_HOST")
-    if not origin or not host:
-        return False
-    return origin in (f"http://{host}", f"https://{host}")
+_cors_origin_allowed = _make_origin_allowed(_cors_origins)
 
 
 # Socket.IO instance that will be used for live updates
@@ -188,6 +159,31 @@ def _api_base() -> str:
     return (os.environ.get("POLYROB_API_BASE") or "http://127.0.0.1:9000").rstrip("/")
 
 
+def _api_proxy_auth_headers(request: Request) -> Dict[str, str]:
+    """Authentication for a WebView -> task-API server-side hop.
+
+    The browser has already been authenticated by this process. In the classic
+    two-service shape the downstream API must nevertheless validate the same
+    credential; dropping it made every chat message look like an invalid token.
+    Forward only the credential forms the API already understands, never
+    arbitrary browser headers.
+
+    A validated bearer wins, then the HttpOnly console cookie. ``API_AUTH_TOKEN``
+    is the machine-client fallback for a local/API-key deployment. Values are
+    deliberately never logged.
+    """
+    authorization = (request.headers.get("Authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return {"Authorization": authorization}
+    cookie_token = (request.cookies.get("auth_token") or "").strip()
+    if cookie_token:
+        return {"Authorization": f"Bearer {cookie_token}"}
+    api_token = (os.environ.get("API_AUTH_TOKEN") or "").strip()
+    if api_token:
+        return {"X-API-KEY": api_token}
+    return {}
+
+
 @_fastapi.get("/api/status")
 async def api_status(request: Request) -> Response:
     """Public, always-reachable status JSON — no posture gate, no auth.
@@ -255,6 +251,16 @@ async def startup_event():
     global _container
 
     logger.info("🚀 Initializing webview services...")
+
+    # S8 (2026-09-14): refuse to boot an ANONYMOUS console ('local' posture =
+    # every request is the owner) on a server-shaped deployment. Raises, so the
+    # boot aborts rather than serving the control plane to the internet.
+    from webview.posture_guard import assert_console_posture, assert_writable_console
+    assert_console_posture()
+    # W7 (043): a writable console must know WHOSE console it is — unbound, it
+    # scopes every read and write to the instance id and renders honest-looking
+    # empty lists. Read-only consoles are unaffected.
+    assert_writable_console()
 
     # 0. Install the process-global session data root BEFORE anything touches
     # pm() (RC-1, 2026-07-07): the agent process derives its tree from
@@ -332,6 +338,7 @@ async def add_security_headers(request: Request, call_next):
     if is_serve_endpoint:
         # Relaxed CSP for iframe-embedded content (presentations, HTML apps)
         response.headers["Content-Security-Policy"] = (
+            "sandbox allow-scripts; "
             "default-src 'self' https:; "
             "script-src 'self' 'unsafe-inline' https:; "
             "style-src 'self' 'unsafe-inline' https:; "
@@ -345,10 +352,10 @@ async def add_security_headers(request: Request, call_next):
         )
         # No X-Frame-Options for serve endpoint (allows iframe embedding)
     else:
-        # Content Security Policy - strict but allows needed resources
+        # CSP - strict. 043 R6: no `'unsafe-inline'` in `script-src` (de-inlined).
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.socket.io https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "script-src 'self' https://cdn.socket.io https://cdnjs.cloudflare.com https://fonts.googleapis.com https://cdn.jsdelivr.net; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdnjs.cloudflare.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https: blob:; "
@@ -359,6 +366,12 @@ async def add_security_headers(request: Request, call_next):
             "form-action 'self'"
         )
         response.headers["X-Frame-Options"] = "DENY"
+
+    # Raw workspace HTML/XML can also be navigated to directly, outside the
+    # preview iframe. Keep every workspace document off the console origin.
+    if (request.url.path.endswith("/workspace/file")
+            or "/workspace/file/" in request.url.path):
+        response.headers["Content-Security-Policy"] += "; sandbox"
 
     # Security headers (apply to all)
     response.headers["X-Content-Type-Options"] = "nosniff"
@@ -549,6 +562,14 @@ async def get_clean_session_id(session_id: str) -> str:
     return pm().clean_session_id(session_id)
 
 
+def _jti_revoked(jti: Optional[str]) -> bool:
+    """True if this token's jti was revoked via /logout (fails closed on store error)."""
+    try:
+        from core.token_denylist import jti_is_revoked
+        return jti_is_revoked({"jti": jti})
+    except Exception:
+        return True
+
 
 def _manual_auth_check(request: Request) -> None:
     """Manually validate JWT token and populate request.state for public endpoints.
@@ -586,7 +607,10 @@ def _manual_auth_check(request: Request) -> None:
             jwt_secret = os.environ.get("JWT_SECRET_KEY")
 
             if jwt_secret:
-                decoded = pyjwt.decode(auth_token, jwt_secret, algorithms=["HS256"])
+                decoded = decode_session_token(auth_token, jwt_secret)
+                require_session_identity(decoded)
+                if _jti_revoked(decoded.get("jti")):
+                    raise ValueError("token revoked via /logout")
                 from api.auth_state import set_auth_state
                 request.state.wallet_address = decoded.get("sub")
                 set_auth_state(
@@ -647,9 +671,9 @@ def _check_session_ownership(request: Request, session_id: str) -> tuple[bool, O
         # protected route in the first place). That owner owns EVERY session
         # in this instance, regardless of which surface/identity path tagged
         # it — e.g. CLI-created sessions are hardcoded to user_id="local"
-        # (core/identity.py), which never equals the own_ops owner-login id
-        # (webgate.local_owner_id(), default = the instance id). A strict per-session
-        # string match here false-denies the owner on their own CLI sessions.
+        # (core/identity.py), which need not equal the own_ops owner-login id
+        # (webgate.local_owner_id(): a BOUND owner, else "local"). A strict
+        # per-session string match false-denies the owner on their CLI sessions.
         # So: authenticated-as-owner -> allow unconditionally; anything else
         # (authenticated as someone/something else) -> deny. This keeps H2b's
         # real security value (a non-owner identity is still denied) without
@@ -676,72 +700,61 @@ except Exception:  # fail-open to the legacy repo-relative path
 
 _templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# UI branding (Workstream D): registered as Jinja globals so every template
-# can render the current console name / footer links without every route
-# threading them through its own context dict.
-_templates.env.globals["console_display_name"] = webgate.console_display_name
-_templates.env.globals["branding"] = webgate.branding_config
-_templates.env.globals["get_version"] = get_version
-# Posture default for the layout's tenant-nav block (P0-3): pages that don't
-# pass `is_multitenant` fall back to the posture SSOT instead of "shown".
-_templates.env.globals["is_multitenant_posture"] = webgate.is_multitenant
+# Every console-wide Jinja global (branding, version, posture defaults, auth
+# state, the upload allowlist) lives in ONE module — see webview/template_globals.py.
+template_globals.register(_templates, webgate)
+
+#: Console routers that failed to mount, ``"<name>: <error>"`` each (W13).
+#: The mounts fail OPEN so one broken page cannot take the whole console down —
+#: which used to mean a console could boot with its control plane missing and
+#: report it NOWHERE. Every failure lands here, is reported by
+#: ``GET /api/webgate/doctor``, and in the `local` posture (a developer at a
+#: terminal, no operator to page) is re-raised so the boot fails loudly.
+UNMOUNTED_ROUTERS: List[str] = []
 
 
-def _template_request_is_authenticated(request) -> bool:
-    """Jinja helper: auth state straight from request.state (C4 contract).
+def _record_unmounted(name: str, exc: BaseException) -> None:
+    UNMOUNTED_ROUTERS.append(f"{name}: {type(exc).__name__}: {exc}")
+    logger.error("❌ Failed to mount the %s router: %s", name, exc)
+    if webgate.is_local():
+        raise exc
 
-    030 S5: layout.html shows a Logout link for the authenticated own_ops
-    owner. Registered as a global (same pattern as `is_multitenant_posture`)
-    so every server-rendered page gets it without threading a context var
-    through each route; lazy import matches the route-level style.
-    """
-    from utils.auth_utils import is_authenticated
-    return is_authenticated(request)
-
-
-_templates.env.globals["is_own_ops_posture"] = webgate.is_own_ops
-_templates.env.globals["request_is_authenticated"] = _template_request_is_authenticated
 
 # Multitenant-only: the wallet auth router is the JWT/SIWE surface. In single-user
 # mode it is simply not mounted (no /api/auth/* — single-user has no auth).
 if webgate.is_multitenant():
     try:
         from api.auth_endpoints import router as auth_router
-        _fastapi.include_router(auth_router, prefix="/api/auth", tags=["authentication"])
+        _fastapi.include_router(auth_router, prefix="/api/auth",
+                                tags=["authentication"],
+                                dependencies=webgate.MUTATION_DEPS)
         AUTH_ROUTER_MOUNTED = True
         logger.info("✅ Auth endpoints mounted at /api/auth (nonce, verify, me)")
     except ImportError as e:
         AUTH_ROUTER_MOUNTED = False
-        logger.error(f"❌ Failed to mount auth router: {e}")
         logger.warning("⚠️ Wallet authentication will not work!")
+        _record_unmounted("auth", e)
 else:
     AUTH_ROUTER_MOUNTED = False
     logger.info("webgate single-user mode: auth router not mounted (no JWT/SIWE)")
 
-async def _task_router_read_only_guard(request: Request) -> None:
-    """WS-3.2 (2026-07-07): the task router is mounted DIRECTLY in this app,
-    so its mutating routes (POST /api/task/sessions, …/messages, …/cancel)
-    would bypass the wrapper endpoints' webgate.read_only() checks. Refuse
-    mutations at the router seam in read-only consoles; reads stay allowed."""
-    if request.method not in ("GET", "HEAD", "OPTIONS") and webgate.read_only():
-        raise HTTPException(
-            status_code=403,
-            detail="Console is read-only (WEBVIEW_READ_ONLY)",
-        )
-
-
+# WS-3.2 (2026-07-07) / W3 (043): the task + auth routers are mounted DIRECTLY
+# in this app, so their mutating routes (POST /api/task/sessions, …/messages,
+# …/cancel) would bypass the console's posture entirely. Their routes live in
+# api/, outside this package's guard ratchet — so the console applies the ONE
+# guard at the mount seam. Reads stay allowed.
 try:
     from api.task_http_api import router as task_router
     _fastapi.include_router(
         task_router, prefix="/api", tags=["task"],
-        dependencies=[Depends(_task_router_read_only_guard)],
+        dependencies=webgate.MUTATION_DEPS,
     )
     TASK_ROUTER_MOUNTED = True
     logger.info("✅ Task endpoints mounted at /api/task")
 except ImportError as e:
     TASK_ROUTER_MOUNTED = False
-    logger.error(f"❌ Failed to mount task router: {e}")
     logger.warning("⚠️ Task session creation from webview will not work!")
+    _record_unmounted("task", e)
 
 PAYMENT_ROUTER_MOUNTED = False
 
@@ -758,18 +771,22 @@ try:
     from webview.emit_api import router as _emit_api_router
     _fastapi.include_router(_emit_api_router)
 except Exception as _e:
-    logger.error(f"emit_api mount failed: {_e}")
+    _record_unmounted("emit_api", _e)
 
 try:
     from webview.pages import router as webgate_pages_router
     _fastapi.include_router(webgate_pages_router)
     from webview.apps_routes import router as apps_router  # 032 durable app service
     _fastapi.include_router(apps_router)
+    from webview.artifacts_api import router as artifacts_router  # 043 A16 Work-pane files
+    _fastapi.include_router(artifacts_router)
+    from webview.worklog_api import router as worklog_router  # 043 A16 Work › Log
+    _fastapi.include_router(worklog_router)
     PAGES_ROUTER_MOUNTED = True
     logger.info("✅ Webgate v1 pages mounted (memory/autonomy/identity/system)")
 except Exception as e:
     PAGES_ROUTER_MOUNTED = False
-    logger.error(f"❌ Failed to mount webgate pages router: {e}")
+    _record_unmounted("webgate pages", e)
 
 # /knowledge — the owner-facing knowledge wiki (C2, read-only v1: notes/episodes/
 # skills/KB/changes). Same contract + tenancy as the pages router; fail-open mount.
@@ -780,7 +797,7 @@ try:
     logger.info("✅ Knowledge pages mounted (/knowledge)")
 except Exception as e:
     KNOWLEDGE_ROUTER_MOUNTED = False
-    logger.error(f"❌ Failed to mount knowledge router: {e}")
+    _record_unmounted("knowledge", e)
 
 # Global activity stream (/activity page + /api/activity/*). Mounted in ALL
 # postures; access is enforced at request time inside webview/activity.py
@@ -794,7 +811,7 @@ try:
     logger.info("✅ Activity stream mounted (/activity)")
 except Exception as e:
     ACTIVITY_ROUTER_MOUNTED = False
-    logger.error(f"❌ Failed to mount activity router: {e}")
+    _record_unmounted("activity", e)
 
 def _login_redirect_path() -> str:
     """Where an unauthenticated browser request should be sent to authenticate.
@@ -839,19 +856,8 @@ async def auth_middleware(request: Request, call_next):
             pass
         return await call_next(request)
 
-    # We only reach here for own_ops/multitenant (local posture returned above via
-    # requires_owner_login()), and BOTH require an authenticated identity — so auth
-    # defaults ON, regardless of ENV. P1 finalization: the default was previously
-    # keyed on ENV=development, silently disabling auth on a multitenant/own_ops
-    # console running with ENV=development. An explicit WEBVIEW_AUTH_ENABLED=false
-    # operator override still wins (deliberate opt-out).
-    auth_enabled = os.environ.get("WEBVIEW_AUTH_ENABLED", "true").lower() == "true"
-
-    # If auth is disabled, skip all checks
-    if not auth_enabled:
-        logger.debug("Auth disabled - allowing request")
-        return await call_next(request)
-
+    # own_ops and multitenant always authenticate. Local posture has already
+    # returned above; WEBVIEW_AUTH_ENABLED cannot disable a public control plane.
     path = request.url.path
 
     # Public paths (no auth required)
@@ -868,24 +874,8 @@ async def auth_middleware(request: Request, call_next):
         "/api/webview/sessions/",  # Internal streaming from agent (localhost only, verified in endpoint)
         "/api/internal/emit",  # 030 D12: fast-push; endpoint enforces localhost-only
     ]
-    # Shareable-link viewing (/session/, /api/session/ — which also covers the
-    # workspace-file/screenshot sub-routes) stays public ONLY in the
-    # "multitenant" posture, matching the original shareable-link product
-    # intent (design predates the posture model, when "multitenant" was the
-    # only public posture that existed). own_ops has NO public session-viewing
-    # surface at all — there is only one owner, so "shareable" (implying
-    # sharing with someone who ISN'T the owner) has no identity model to hang
-    # off of — closing gaps 2/3 from the alignment assessment. "local" never
-    # reaches this middleware body (short-circuited above), so this branch is
-    # unreachable there and Posture 0 is unaffected.
-    if webgate.posture() == "multitenant":
-        public_paths += ["/session/", "/api/session/"]
-    # SECURITY ARCHITECTURE:
-    # - Session viewing endpoints are public ONLY in multitenant (shareable links)
-    # - Session interaction (POST messages) is protected by ownership check in endpoint
-    # - Ownership verification happens in send_message_to_session (401/403 responses)
-    # - User data isolation maintained via user_id in _get_user_sessions
-    #
+    # Session URLs never confer read authority. Explicit scoped preview tokens
+    # below are the only cookie-free artifact grant; feeds and files require owner auth.
     # `/` (exact match, NOT a prefix — a prefix would exempt every path) is the
     # B2 posture-aware root: it must always be reachable and does its OWN
     # is_authenticated()-branch (status page vs dashboard) in the handler, so
@@ -951,7 +941,11 @@ async def auth_middleware(request: Request, call_next):
 
     try:
         import jwt as pyjwt
-        decoded = pyjwt.decode(auth_token, jwt_secret, algorithms=["HS256"])
+        decoded = decode_session_token(auth_token, jwt_secret)
+        require_session_identity(decoded)
+        # 043 W5: a token whose jti /logout revoked is refused like a bad token.
+        if _jti_revoked(decoded.get("jti")):
+            raise pyjwt.InvalidTokenError("token revoked via /logout")
 
         # Token is valid - extract user info and role
         # NEW JWT STRUCTURE: "sub" = wallet_address, "user_id" = internal ID
@@ -970,6 +964,10 @@ async def auth_middleware(request: Request, call_next):
             payment_method=decoded.get("payment_method"),
             authenticated=True,
         )
+
+        from webview.session_access import may_read_session_path
+        if not may_read_session_path(path, request.state.user_id, pm()):
+            return JSONResponse(status_code=403, content={"error": "Session access denied"})
 
         # Admin check using centralized auth_constants (single source of truth)
         from api.auth_constants import is_admin as check_admin
@@ -995,7 +993,6 @@ async def auth_middleware(request: Request, call_next):
 
     except pyjwt.InvalidTokenError as e:
         logger.error(f"❌ Invalid token for path={path}: {e}")
-        logger.error(f"   Token (first 50 chars): {auth_token[:50] if auth_token else 'None'}")
         logger.error(f"   JWT_SECRET_KEY present: {bool(jwt_secret)}")
         if path.startswith("/api/"):
             return JSONResponse(status_code=401, content={"error": "Invalid token"})
@@ -1058,20 +1055,24 @@ def _collect_sessions_in_dir(user_path, user_label: str) -> List[Dict[str, Any]]
             except Exception as e:
                 logger.debug(f"Failed to read status.json: {e}")
 
-        # Fallback to metadata.json
-        if task_text == "No task description":
-            metadata_file = session_path / "metadata.json"
-            if metadata_file.exists():
-                try:
-                    with metadata_file.open('r') as f:
-                        metadata = json.load(f)
+        # metadata.json is the ONLY place `creator` (043 A17) lives — read it
+        # unconditionally (not just as a task_text fallback) — plus task/model/
+        # provider fallbacks for whatever task.json/status.json didn't supply.
+        creator = None
+        metadata_file = session_path / "metadata.json"
+        if metadata_file.exists():
+            try:
+                with metadata_file.open('r') as f:
+                    metadata = json.load(f)
+                    creator = metadata.get('creator')
+                    if task_text == "No task description":
                         task_text = metadata.get('task', task_text)
-                        if not model:
-                            model = metadata.get('model')
-                        if not provider:
-                            provider = metadata.get('provider')
-                except Exception as e:
-                    logger.debug(f"Failed to read metadata.json: {e}")
+                    if not model:
+                        model = metadata.get('model')
+                    if not provider:
+                        provider = metadata.get('provider')
+            except Exception as e:
+                logger.debug(f"Failed to read metadata.json: {e}")
 
         # Get creation time
         created_timestamp = session_path.stat().st_ctime
@@ -1089,7 +1090,8 @@ def _collect_sessions_in_dir(user_path, user_label: str) -> List[Dict[str, Any]]
             'steps': len(step_files),
             'status': status,
             'model': model or 'unknown',
-            'provider': provider or 'unknown'
+            'provider': provider or 'unknown',
+            'creator': creator or 'api',
         })
 
     return sessions
@@ -1261,29 +1263,27 @@ def _sessions_for_request(request: Request) -> List[Dict[str, Any]]:
     return []
 
 
-@_multitenant_get("/signin", response_class=HTMLResponse)
-async def signin_page(request: Request) -> Response:
-    """Show wallet sign in page."""
-    from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse(request, "signin.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": getattr(request.state, 'is_admin', False)
-    })
-
-
 @_posture_get("/logout", postures=("own_ops", "multitenant"), response_class=HTMLResponse)
 async def logout(request: Request) -> Response:
     """Log out and return to the posture's login surface.
 
     Registered for own_ops AND multitenant (030 S5 — it was `_multitenant_get`,
-    so the own_ops owner had NO way to end the 7-day owner session: the route
+    so the own_ops owner had NO way to end the ≤24h owner session: the route
     404'd there). own_ops answers with a real HTTP redirect + `delete_cookie`
     (the auth middleware's own rule: real redirects, never a 200 JS-hack page —
     the owner cookie is the only credential there). Multitenant keeps the
     legacy HTML page: the wallet/SIWE JWT also lives in localStorage, which
     only client-side JS can clear.
     """
+    # 043 W5: revoke this token's jti server-side so the cookie cannot be
+    # replayed after logout — delete_cookie only removes the browser's copy.
+    from core.token_denylist import RevocationUnavailable, revoke_cookie_token
+    try:
+        await asyncio.to_thread(revoke_cookie_token, request.cookies.get("auth_token"))
+    except RevocationUnavailable:
+        return JSONResponse(status_code=503, content={
+            "error": "Logout could not be saved. Please retry; your session has not been revoked."
+        }, headers={"Retry-After": "5"})
     if webgate.is_own_ops():
         response: Response = RedirectResponse(url="/owner-login", status_code=303)
         response.delete_cookie("auth_token")
@@ -1307,42 +1307,39 @@ async def logout(request: Request) -> Response:
 # throttling; 5 attempts / 5 min per IP is generous for one owner.
 _LOGIN_ATTEMPT_WINDOW_SEC = 300
 _LOGIN_ATTEMPT_MAX = 5
-_login_attempts: dict = {}
+#: Most recently seen IPs kept. W6 (043): the bound used to be enforced with
+#: `_login_attempts.clear()` — one address-churning attacker (trivially cheap
+#: over IPv6, where a single /64 hands out billions) wiped the attempt history of
+#: EVERY honest IP, including its own, and walked straight past the throttle.
+#: An LRU evicts the OLDEST entry instead: a flood loses its own oldest records
+#: and never the live ones.
+_LOGIN_ATTEMPT_LRU_MAX = 10000
+_login_attempts: "OrderedDict[str, list]" = OrderedDict()
 
 
 def _login_throttled(ip: str) -> bool:
     now = time.time()
     attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_ATTEMPT_WINDOW_SEC]
-    _login_attempts[ip] = attempts
+    if attempts:
+        _login_attempts[ip] = attempts
+        _login_attempts.move_to_end(ip)
+    elif ip in _login_attempts:
+        del _login_attempts[ip]   # expired window: drop the row, don't pin it
     return len(attempts) >= _LOGIN_ATTEMPT_MAX
 
 
 def _record_login_attempt(ip: str) -> None:
     _login_attempts.setdefault(ip, []).append(time.time())
-    if len(_login_attempts) > 10000:  # bound memory under address churn
-        _login_attempts.clear()
+    _login_attempts.move_to_end(ip)
+    while len(_login_attempts) > _LOGIN_ATTEMPT_LRU_MAX:
+        _login_attempts.popitem(last=False)
 
 
-def _csrf_token_for(nonce: Optional[str]) -> Optional[str]:
-    """Stateless double-submit token: HMAC(JWT_SECRET_KEY, nonce).
-
-    None when no JWT secret is configured (local/dev without auth) — CSRF
-    enforcement is skipped there, matching the no-auth posture.
-    """
-    secret = os.environ.get("JWT_SECRET_KEY")
-    if not secret or not nonce:
-        return None
-    import hashlib
-    import hmac as _hmac
-    return _hmac.new(secret.encode(), f"owner-login:{nonce}".encode(), hashlib.sha256).hexdigest()
-
-
-def _safe_return_to(raw) -> str:
-    """Only same-origin relative paths — kills open redirects via return_to."""
-    to = str(raw or "/")
-    if not to.startswith("/") or to.startswith("//") or "\\" in to:
-        return "/"
-    return to
+# The form's own double-submit token and the return_to sanitizer live beside the
+# render they protect (webview/owner_login_flow.py); aliased here because the
+# routes and tests resolve them off this module.
+from webview.owner_login_flow import (  # noqa: E402
+    csrf_token_for as _csrf_token_for, safe_return_to as _safe_return_to)
 
 
 # 030 S1: serve tokens live in webview/serve_tokens.py; private aliases kept —
@@ -1374,7 +1371,8 @@ async def owner_login_page(request: Request) -> Response:
     return _render_owner_login(request, return_to=return_to)
 
 
-@_posture_post("/owner-login", postures=("own_ops", "multitenant"))
+@_posture_post("/owner-login", postures=("own_ops", "multitenant"),
+               dependencies=webgate.MUTATION_DEPS)
 async def owner_login_submit(request: Request) -> Response:
     """Verify owner credentials and, on success, issue the owner session cookie.
 
@@ -1411,194 +1409,33 @@ async def owner_login_submit(request: Request) -> Response:
     return response
 
 
-@_multitenant_get("/profile", response_class=HTMLResponse)
-async def profile_page(request: Request) -> Response:
-    """Show user profile page with credits and deposit information."""
-    from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse(request, "profile.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": getattr(request.state, 'is_admin', False)
-    })
-
-
-@_fastapi.get("/settings", response_class=HTMLResponse)
-async def settings_page(request: Request) -> Response:
-    """Show user settings page (MCP servers, preferences, API keys)."""
-    from utils.auth_utils import is_authenticated
-    return _templates.TemplateResponse(request, "settings.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": getattr(request.state, 'is_admin', False)
-    })
-
-
-# ============================================================================
-# Admin Dashboard Routes
-# ============================================================================
-
-@_multitenant_get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(request: Request) -> Response:
-    """Show admin dashboard - requires admin access."""
-    from utils.auth_utils import is_authenticated
-
-    # Check if user is admin
-    is_admin = getattr(request.state, 'is_admin', False)
-    if not is_admin:
-        logger.warning(f"Non-admin attempted to access /admin: user_id={getattr(request.state, 'user_id', 'unknown')}")
-        return HTMLResponse(content="""
-            <html>
-                <head>
-                    <script>
-                        alert('Admin access required');
-                        window.location.href = '/';
-                    </script>
-                </head>
-            </html>
-        """, status_code=403)
-
-    return _templates.TemplateResponse(request, "admin/dashboard.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": True
-    })
-
-
-@_multitenant_get("/admin/users", response_class=HTMLResponse)
-async def admin_users_page(request: Request) -> Response:
-    """Show admin user management page."""
-    from utils.auth_utils import is_authenticated
-
-    is_admin = getattr(request.state, 'is_admin', False)
-    if not is_admin:
-        return RedirectResponse(url="/", status_code=303)
-
-    return _templates.TemplateResponse(request, "admin/users.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": True
-    })
-
-
-@_multitenant_get("/admin/users/{user_id}", response_class=HTMLResponse)
-async def admin_user_detail_page(request: Request, user_id: str) -> Response:
-    """Show admin user detail page."""
-    from utils.auth_utils import is_authenticated
-
-    is_admin = getattr(request.state, 'is_admin', False)
-    if not is_admin:
-        return RedirectResponse(url="/", status_code=303)
-
-    return _templates.TemplateResponse(request, "admin/user_detail.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": True,
-        "target_user_id": user_id
-    })
-
-
-@_multitenant_get("/admin/activity", response_class=HTMLResponse)
-async def admin_activity_page(request: Request) -> Response:
-    """Show admin activity/audit log page."""
-    from utils.auth_utils import is_authenticated
-
-    is_admin = getattr(request.state, 'is_admin', False)
-    if not is_admin:
-        return RedirectResponse(url="/", status_code=303)
-
-    return _templates.TemplateResponse(request, "admin/activity.html", {
-        "request": request,
-        "is_authenticated": is_authenticated(request),
-        "is_admin": True
-    })
+# The account + admin page surfaces (/signin, /profile, /admin*) are ONE posture
+# table in webview/posture_routes.py (W13) — they were seven hand-registered
+# routes that disagreed about what a denial looks like (/admin answered 403 with
+# an inline-script alert page; its three siblings redirected). The legacy
+# /settings page was deleted (043 §9 phase 4); the new Agent destination absorbs
+# its panels.
+posture_routes.mount(_fastapi, _templates)
 
 
 @_fastapi.get("/", response_class=HTMLResponse)
 async def index(request: Request) -> Response:
-    """Posture-aware root.
+    """Root fallback — the new chat shell serves `/` (043 phase 5).
 
-    - local: full dashboard (unchanged).
-    - own_ops/multitenant, unauthenticated: minimal public status page ONLY
-      (safe-by-default invariant — no console/SaaS UI exposed by default).
-    - own_ops/multitenant, authenticated (owner or, Posture 2, tenant session):
-      full dashboard.
-
-    Security:
-        - `/` itself is intentionally NOT in `public_paths`/exempt from
-          `auth_middleware`; enforcement here is the in-handler
-          `is_authenticated(request)` check above, which branches by
-          posture: local always gets the dashboard, own_ops/multitenant
-          get the dashboard only once authenticated (owner or, Posture 2,
-          a tenant session) and otherwise fall through to the public
-          status page.
-        - New sessions are always owned by the current user
+    ``pages_new.mount`` unregisters this handler by name (``_drop_legacy_index``)
+    and takes over `/`, where ``pages_new._public_visitor`` renders the public
+    status page for an unauthenticated stranger and the chat for the owner. This
+    handler survives only so a shell that fails to mount degrades to the public
+    status page rather than a dead route (the legacy /sessions dashboard is
+    deleted). It is never the primary `/` in a healthy console.
     """
-    from utils.auth_utils import is_authenticated
+    from core.instance import resolve_instance_id
 
-    if webgate.posture() != "local" and not is_authenticated(request):
-        from core.instance import resolve_instance_id
-
-        return _templates.TemplateResponse(request, "status.html", {
-            "request": request,
-            "instance_id": resolve_instance_id(),
-            "version": os.environ.get("WEBVIEW_VERSION", get_version()),
-        })
-
-    ws_url = os.environ.get("WEBVIEW_WS_URL", "")
-    version = os.environ.get("WEBVIEW_VERSION", get_version())
-
-    # For new sessions, the current user is always the owner
-    is_owner = True
-    user_is_authenticated = is_authenticated(request)
-
-    return _templates.TemplateResponse(request, "session.html",
-        {
-            "request": request,
-            "session_id": "new",  # Special value for empty state
-            "ws_url": ws_url,
-            "version": version,
-            "is_owner": is_owner,
-            "is_authenticated": user_is_authenticated,
-            "is_admin": getattr(request.state, 'is_admin', False),
-            "read_only": webgate.read_only(),
-        },
-    )
-
-
-@_fastapi.get("/sessions", response_class=HTMLResponse)
-async def sessions_list(request: Request) -> Response:
-    """Show a list of sessions with metadata.
-
-    Security:
-        - own_ops/local: the instance owner sees ALL sessions (RC-2)
-        - multitenant: only the authenticated tenant's own sessions
-        - anyone else sees an empty list (no shared DEFAULT_USER_ID sessions)
-    """
-    from utils.auth_utils import is_authenticated
-
-    # SECURITY: same scope rules as /api/sessions (_catalog_scope) — own_ops/
-    # local owner sees ALL user dirs (RC-2), multitenant stays per-tenant,
-    # everyone else gets an empty list.
-    scope, user_id = _catalog_scope(request)
-    sessions = _sessions_for_request(request)
-    logger.info(f"Sessions list: scope={scope} user={user_id}, count={len(sessions)}")
-
-    # Get WebSocket URL from environment variable
-    ws_url = os.environ.get("WEBVIEW_WS_URL", "")
-
-    # Get version from environment variable or use a default
-    version = os.environ.get("WEBVIEW_VERSION", get_version())
-
-    return _templates.TemplateResponse(request, "index.html",
-        {
-            "request": request,
-            "sessions": sessions,
-            "ws_url": ws_url,
-            "version": version,
-            "is_authenticated": is_authenticated(request),
-            "is_admin": getattr(request.state, 'is_admin', False)
-        },
-    )
+    return _templates.TemplateResponse(request, "status.html", {
+        "request": request,
+        "instance_id": resolve_instance_id(),
+        "version": os.environ.get("WEBVIEW_VERSION", get_version()),
+    })
 
 
 @_fastapi.get("/new", response_class=HTMLResponse)
@@ -1609,53 +1446,14 @@ async def new_session(request: Request) -> Response:
 
 @_fastapi.get("/session/{session_id}", response_class=HTMLResponse)
 async def session_page(request: Request, session_id: str) -> Response:
-    """Render the main session view.
-    
-    Security:
-        - Viewing is allowed for anyone (no auth required)
-        - Interaction (sending messages) requires ownership
-        - Ownership is determined by matching user_id in session metadata
-        
-    Note:
-        This endpoint is in public_paths, so auth middleware doesn't run.
-        We manually check for authentication token to populate request.state.
+    """Permanent redirect to the new chat (043 §9).
+
+    The legacy session view (session.html) is deleted; `/c/{id}` is the one
+    bound-session page. A 301 keeps an old bookmark or link landing on the
+    session it named.
     """
-    from utils.auth_utils import is_authenticated, get_authenticated_user_id
-    
-    # Get WebSocket URL from environment variable
-    ws_url = os.environ.get("WEBVIEW_WS_URL", "")
-
-    # Get version from environment variable or use a default
-    version = os.environ.get("WEBVIEW_VERSION", get_version())
-    
-    # Clean session ID
     clean_id = pm().clean_session_id(session_id)
-    
-    # Note: _manual_auth_check() is now called by auth middleware for all public paths
-    # This populates request.state if a valid token is present
-    
-    # Check authentication and ownership using centralized helper
-    is_owner, current_user_id, session_owner_id = _check_session_ownership(request, clean_id)
-    user_is_authenticated = is_authenticated(request)
-    
-    # Log ownership status
-    if user_is_authenticated and current_user_id:
-        logger.info(f"Session {clean_id}: current_user={current_user_id}, owner={session_owner_id}, is_owner={is_owner}")
-    else:
-        logger.info(f"Session {clean_id}: viewing without authentication")
-
-    return _templates.TemplateResponse(request, "session.html",
-        {
-            "request": request,
-            "session_id": session_id,
-            "ws_url": ws_url,
-            "version": version,
-            "is_owner": is_owner,
-            "is_authenticated": user_is_authenticated,
-            "is_admin": getattr(request.state, 'is_admin', False),
-            "read_only": webgate.read_only(),
-        },
-    )
+    return RedirectResponse(url=f"/c/{clean_id}", status_code=301)
 
 
 @_fastapi.get("/api/session/{session_id}/feed", response_class=JSONResponse)
@@ -2114,21 +1912,22 @@ async def api_refresh() -> Response:
         return JSONResponse({"status": "error", "message": str(exc)}, status_code=500)
 
 
-@_fastapi.get("/api/repair/{session_id}", response_class=JSONResponse)
+@_fastapi.post("/api/repair/{session_id}", response_class=JSONResponse,
+               dependencies=webgate.MUTATION_DEPS)
 async def api_repair(request: Request, clean_id: str = Depends(get_clean_session_id)) -> Response:
     """Repair a session's telemetry (dedup + token estimation + validation).
 
     Wired to the REAL ``webview.repair_sessions.repair_session_telemetry``
     (this endpoint used to return fake success without doing anything).
-    Mutates feed/llm_usage files, so it is refused in read-only mode AND
-    requires session ownership (SECURITY: previously unguarded — any
-    authenticated tenant could mutate another tenant's telemetry).
+
+    A POST since 043 W2. It rewrites the session's feed and llm_usage files, so
+    as a GET it was a mutation any link, prefetch or crawler could trigger — and
+    it sat outside both of this console's rules: the read-only guard passes GETs
+    (a read-only console is still a console) and the CSRF check could not see it
+    either. It now carries ``MUTATION_DEPS`` like every other mutation, on top of
+    session ownership (SECURITY: previously unguarded — any authenticated tenant
+    could mutate another tenant's telemetry).
     """
-    if webgate.read_only():
-        return JSONResponse(
-            {"status": "error", "message": "Console is read-only (WEBVIEW_READ_ONLY)"},
-            status_code=403,
-        )
     is_owner, _current, _owner = _check_session_ownership(request, clean_id)
     if not is_owner:
         return JSONResponse(
@@ -2165,8 +1964,11 @@ async def api_screenshot(request: Request, clean_id: str = Depends(get_clean_ses
         session_dir = pm().get_feed_dir(clean_id, user_id=user_id).parent
         screenshot_dir = session_dir / "screenshots"
         
-        # Check if the screenshots directory exists
-        if not screenshot_dir.exists():
+        # Check if the screenshots directory exists. Creating it is a WRITE on a
+        # GET (W13): a read-only console observes, it never materializes a
+        # directory in the agent's session tree — so the side effect is
+        # conditional, while the read itself stays allowed.
+        if not screenshot_dir.exists() and not webgate.read_only():
             # Try to create it, but no error if it already exists
             screenshot_dir.mkdir(exist_ok=True, parents=True)
             logger.info(f"Created screenshots directory for session {clean_id}")
@@ -2474,7 +2276,8 @@ async def api_feed_events(request: Request, session_id: str, event_type: Optiona
         'step', 'planner', 'evaluation', 'multi_agent_relationship',
         'agent_registration', 'session_start', 'task_update', 'llm_request',
         'service_actions', 'available_actions', 'status',
-        'user_message', 'queue_status'  # Chat UI events
+        'user_message', 'queue_status',  # Chat UI events
+        'tool_execution', 'tool_result'  # 043 A16: the typed tool_result event
     ]
 
     # Validate event_type if provided
@@ -2676,7 +2479,7 @@ async def api_session_status(request: Request, session_id: str) -> Response:
 
 
 @_fastapi.get("/api/session/{session_id}/debug", response_class=JSONResponse)
-async def api_session_debug(session_id: str) -> Response:
+async def api_session_debug(session_id: str, request: Request) -> Response:
     """Debug endpoint to inspect session state and troubleshoot chat issues.
 
     Returns comprehensive information about:
@@ -2687,8 +2490,21 @@ async def api_session_debug(session_id: str) -> Response:
     - Service connectivity status
 
     This endpoint is designed to help diagnose why the chat tab might be empty.
+
+    SECURITY (W13): it dumps another tenant's session tree — absolute paths, a
+    file inventory, feed samples — and carried NO ownership check. It now uses
+    the same posture-aware authority as every other per-session route
+    (``_check_session_ownership``: the local/own_ops owner owns every session;
+    multitenant compares the authenticated caller against the session's owner).
     """
     clean_id = pm().clean_session_id(session_id)
+    is_owner, current_user_id, _owner = _check_session_ownership(request, clean_id)
+    if not is_owner:
+        return JSONResponse(
+            {"error": ("Authentication required" if current_user_id is None
+                       else "Forbidden: not the session owner"),
+             "session_id": session_id},
+            status_code=401 if current_user_id is None else 403)
     logger.debug(f"API debug request for session {session_id} (cleaned: {clean_id})")
 
     try:
@@ -2885,7 +2701,8 @@ async def _handle_stream_chunk(session_id: str, request: Request) -> Response:
         )
 
 
-@_fastapi.post("/api/webview/sessions/{session_id}/stream", response_class=JSONResponse)
+@_fastapi.post("/api/webview/sessions/{session_id}/stream",
+               response_class=JSONResponse, dependencies=webgate.MUTATION_DEPS)
 async def receive_stream_chunk(session_id: str, request: Request) -> Response:
     """Receive streaming chunk from agent and broadcast to WebView clients.
 
@@ -2974,7 +2791,8 @@ async def _maybe_handle_console_command(clean_id: str, user_id: str, text: str):
         _in_process_task_agent(), clean_id, user_id, text)
 
 
-@_fastapi.post("/api/session/{session_id}/messages", response_class=JSONResponse)
+@_fastapi.post("/api/session/{session_id}/messages",
+               response_class=JSONResponse, dependencies=webgate.MUTATION_DEPS)
 async def send_message_to_session(session_id: str, request: Request) -> Response:
     """Send user message to running session.
 
@@ -2988,13 +2806,6 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
           posture-aware: the own_ops/local owner owns every session)
     """
     clean_id = pm().clean_session_id(session_id)
-
-    # Read-only console (monitoring deploys): no mutations, period.
-    if webgate.read_only():
-        return JSONResponse(
-            {"success": False, "error": "Console is read-only (WEBVIEW_READ_ONLY)"},
-            status_code=403,
-        )
 
     # SECURITY: Check authentication and ownership using centralized helper
     is_owner, current_user_id, session_owner_id = _check_session_ownership(request, clean_id)
@@ -3062,6 +2873,7 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
                     response = await client.post(
                         api_url,
                         json=payload,
+                        headers=_api_proxy_auth_headers(request),
                         timeout=10.0
                     )
 
@@ -3090,8 +2902,18 @@ async def send_message_to_session(session_id: str, request: Request) -> Response
                     elif response.status_code >= 400:
                         # Client error - don't retry
                         logger.error(f"Client error {response.status_code} for session {clean_id}: {response.text}")
+                        try:
+                            upstream = response.json()
+                        except Exception:
+                            upstream = None
+                        message = None
+                        if isinstance(upstream, dict):
+                            message = upstream.get("error") or upstream.get("message")
+                            if not message and isinstance(upstream.get("detail"), str):
+                                message = upstream["detail"]
                         return JSONResponse(
-                            {"success": False, "error": response.text or "Request failed"},
+                            {"success": False,
+                             "error": message or "The agent API refused the message"},
                             status_code=response.status_code
                         )
 
@@ -3267,6 +3089,17 @@ _socket_tier: Dict[str, Optional[str]] = {}
 # sids currently in the global "activity" room (drives hub start/stop).
 _activity_clients: set = set()
 
+from webview.socket_auth import SocketAuthMonitor
+
+
+async def _disconnect_expired_socket(sid):
+    _socket_user.pop(sid, None)
+    _socket_tier.pop(sid, None)
+    await _sio.disconnect(sid)
+
+
+_socket_auth_monitor = SocketAuthMonitor(_disconnect_expired_socket)
+
 
 def _decode_socket_payload(token: Optional[str]) -> Dict:
     """Decode a client-supplied JWT into its full claim dict ({} on any error).
@@ -3278,16 +3111,15 @@ def _decode_socket_payload(token: Optional[str]) -> Dict:
         jwt_secret = os.environ.get("JWT_SECRET_KEY")
         if not jwt_secret:
             return {}
-        return pyjwt.decode(token, jwt_secret, algorithms=["HS256"]) or {}
+        payload = decode_session_token(token, jwt_secret) or {}
+        require_session_identity(payload)
+        from core.token_denylist import jti_is_revoked
+        if jti_is_revoked(payload):
+            return {}
+        return payload
     except Exception as e:
         logger.debug(f"Socket.IO auth token decode failed: {e}")
         return {}
-
-
-def _decode_socket_token(token: Optional[str]) -> Optional[str]:
-    """Decode a client-supplied JWT from a Socket.IO connect() auth payload.
-    Fail-open to None (anonymous) on any error."""
-    return _decode_socket_payload(token).get("user_id")
 
 
 def _socket_cookie_token(environ: Dict) -> Optional[str]:
@@ -3314,7 +3146,7 @@ def _socket_cookie_token(environ: Dict) -> Optional[str]:
 
 
 @_sio.event
-async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> None:  # noqa: D401 – Socket.IO callback
+async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> bool | None:  # noqa: D401 – Socket.IO callback
     logger.debug("Client connected: %s", sid)
     # Posture "local": loopback operator IS the owner — no auth, no friction,
     # byte-identical to before. own_ops AND multitenant both require some
@@ -3329,8 +3161,13 @@ async def connect(sid: str, environ: Dict, auth: Dict | None = None) -> None:  #
     if not token:
         token = _socket_cookie_token(environ)
     payload = _decode_socket_payload(token)
+    if not isinstance(payload.get("user_id"), str) or not payload["user_id"]:
+        # Socket.IO interprets False as a rejected namespace connection. Never
+        # retain an anonymous connection on an authenticated console posture.
+        return False
     _socket_user[sid] = payload.get("user_id")
     _socket_tier[sid] = payload.get("tier")
+    _socket_auth_monitor.register(sid, payload)
 
 
 async def _stop_hub_if_activity_empty() -> None:
@@ -3347,6 +3184,7 @@ async def _stop_hub_if_activity_empty() -> None:
 @_sio.event
 async def disconnect(sid: str) -> None:  # noqa: D401 – Socket.IO callback
     """Handle client disconnect and clean up resources."""
+    _socket_auth_monitor.remove(sid)
     _socket_user.pop(sid, None)
     _socket_tier.pop(sid, None)
     if sid in _activity_clients:
@@ -3777,6 +3615,7 @@ async def _startup_late_services():
 async def shutdown_event():
     """Clean up resources when the server is shutting down."""
     logger.info("Server shutting down, cancelling all watcher tasks...")
+    await _socket_auth_monitor.aclose()
     try:
         from webview.activity import get_hub
         await get_hub().aclose()
@@ -3799,9 +3638,22 @@ async def shutdown_event():
 
 @_fastapi.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> Response:
-    """Render a custom error page for HTTP errors."""
+    """Render a custom error page for HTTP errors — HTML for a PAGE, JSON for an API.
+
+    W3 (043): the console answers every HTTPException with ``error.html``. That
+    is right for ``/session/<id>`` in a browser tab and wrong for ``/api/…``,
+    where the caller is ``fetch(…).then(r => r.json())`` — an HTML body turns a
+    clear 403 ("Console is read-only") into a JSON parse error with no message.
+    So an API path answers JSON. Both ``detail`` (FastAPI's convention, which
+    ``chat.js`` already reads) and ``error`` (what the older page scripts read)
+    carry the SAME string — one message, two readers, never two messages.
+    """
     status_code = exc.status_code
     detail = exc.detail
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": detail, "error": detail},
+                            status_code=status_code,
+                            headers=getattr(exc, "headers", None) or None)
     
     # Get WebSocket URL from environment variable
     ws_url = os.environ.get("WEBVIEW_WS_URL", "")
@@ -3823,3 +3675,20 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> Respon
         },
         status_code=status_code
     )
+
+# --- the new console shell (043 C-series) ----------------------------------- #
+# Mounted LAST, on purpose: webview/pages_new.py skips any path this app already
+# serves, and that set is only complete after every registration above —
+# including the console index `/`, whose decorator sits near the bottom of this
+# module. Fail-open: the shell is additive. 043 phase 5 removed the WEBVIEW_UI
+# switch and the legacy pages — this is the ONLY console now.
+try:
+    from webview.pages_new import mount as _mount_console_shell
+    _mount_console_shell(_fastapi)
+except Exception as _e:  # pragma: no cover — additive mount, never fatal
+    logger.warning("new console shell not mounted: %s", _e)
+
+
+# Register last so request bodies are bounded before authentication helpers or parsers.
+from api.request_limits import RequestBodyLimitMiddleware
+_fastapi.add_middleware(RequestBodyLimitMiddleware)

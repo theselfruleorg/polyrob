@@ -543,23 +543,18 @@ class HierarchicalMemory(BaseModel):
         embedding: Optional[List[float]] = None,
         similarity_threshold: float = 0.85
     ) -> bool:
-        """Add a finding to a specific phase with intelligent deduplication.
+        """Add a finding, rejecting exact duplicates but preserving corrections.
 
-        FIX #9 (Nov 26, 2025): Lowered threshold from 0.92 to 0.85
-        - 0.92 was too strict, rejecting semantically different findings with similar wording
-        - 0.85 provides better balance: rejects true duplicates, accepts varied findings
-        - Example: "Found 5 researchers" vs "Found 3 researchers" now both kept
-
-        Deduplication Strategy:
-        - Exact text match: Always reject (100% duplicate)
-        - High semantic similarity (>85%): Reject near-duplicates
-        - Moderate similarity (70-85%): Allow - these are related but distinct
+        Cosine similarity is useful for retrieval, not proof of equivalence:
+        corrected quantities, negation, and names can have identical embeddings.
+        Never discard nonidentical facts solely on that signal. The existing
+        phase capacity/forgetting policy still bounds retained findings.
 
         Args:
             phase_name: Phase to add finding to
             finding: Finding to add
             embedding: Optional vector embedding for semantic search
-            similarity_threshold: Cosine similarity threshold (default 0.85)
+            similarity_threshold: Retained for call compatibility; no longer a deletion gate
 
         Returns:
             True if finding was added, False if duplicate was rejected
@@ -578,36 +573,6 @@ class HierarchicalMemory(BaseModel):
             if self.consecutive_rejections >= self.rejection_threshold:
                 logger.info(f"📊 H-MEM: {self.consecutive_rejections} consecutive rejections")
             return False
-
-        # DEDUPLICATION CHECK 2: Semantic Similarity (near-duplicate)
-        if embedding and len(embedding) > 0 and phase_memory.finding_embeddings:
-            import numpy as np
-
-            query_emb = np.array(embedding)
-            query_norm = np.linalg.norm(query_emb)
-
-            if query_norm > 0:  # Valid embedding
-                for existing_idx, existing_emb in enumerate(phase_memory.finding_embeddings):
-                    if existing_emb and len(existing_emb) > 0:
-                        existing_emb_np = np.array(existing_emb)
-                        existing_norm = np.linalg.norm(existing_emb_np)
-
-                        if existing_norm > 0:
-                            # Cosine similarity: dot(A,B) / (||A|| * ||B||)
-                            dot_product = np.dot(query_emb, existing_emb_np)
-                            similarity = dot_product / (query_norm * existing_norm)
-
-                            if similarity >= similarity_threshold:
-                                existing_finding = phase_memory.key_findings[existing_idx]
-                                logger.info(
-                                    f"❌ Rejected semantically similar finding ({similarity:.1%} match):\n"
-                                    f"   New: {finding[:80]}...\n"
-                                    f"   Existing: {existing_finding[:80]}..."
-                                )
-                                self.consecutive_rejections += 1
-                                if self.consecutive_rejections >= self.rejection_threshold:
-                                    logger.info(f"📊 H-MEM: {self.consecutive_rejections} semantic rejections")
-                                return False
 
         # Threat scan (opt-in): reject obviously-injected findings before they become
         # recallable memory. Default off => no behaviour change.

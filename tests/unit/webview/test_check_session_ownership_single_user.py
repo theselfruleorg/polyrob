@@ -134,12 +134,18 @@ def test_own_ops_ownership_mismatched_user_denied(monkeypatch):
 def test_own_ops_ownership_owner_allowed_on_cli_created_session(monkeypatch):
     """H2b regression: own_ops has exactly ONE owner. The authenticated owner
     must reach a session created via the CLI surface (hardcoded
-    user_id="local", core/identity.py::LocalIdentity.resolve()), which never
-    equals the own_ops owner-login id (webgate.local_owner_id(), default
-    "rob"). A strict per-session string match here wrongly denies the owner
-    on their own CLI-created sessions -- the single-owner model must allow it."""
+    user_id="local", core/identity.py::LocalIdentity.resolve()), which need not
+    equal the own_ops owner-login id (webgate.local_owner_id()). A strict
+    per-session string match here wrongly denies the owner on their own
+    CLI-created sessions -- the single-owner model must allow it.
+
+    ⚠️ The two ids diverge only on a BOUND install. Since 2026-09-15 an unbound
+    `local_owner_id()` IS "local" (one owner-tenant resolver), so the owner is
+    bound here explicitly — otherwise this test would pass on a string match and
+    stop exercising the single-owner allowance it exists for."""
     server = _reload_server(monkeypatch, multitenant=False)
     monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
 
     owner_id = server.webgate.local_owner_id()
     assert owner_id != "local"  # sanity: the two identities really do differ

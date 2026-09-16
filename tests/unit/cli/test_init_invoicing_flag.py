@@ -20,13 +20,14 @@ def test_init_wallet_optin_names_invoice_flag(monkeypatch, tmp_path):
     # shape as test_init_bridge.test_init_wallet_optin_prompt_wired — see that
     # test for the per-line prompt-order comment; the now-removed autonomy-budget
     # prompt is NOT one of these 9 slots):
-    #   1. "" model  2. "" toolset  3. "" template  4. "" instance id
+    #   1. "" model  2. "" toolset  3. "" template
+    #   3b. "" own character? (No, F0)  4. "" instance id
     #   5. "" owner id  6. "n" interactive local tools?  7. "n" autonomy?
     #   8. "n" approval preset?  9. "" digest channel
     #  10. "y" wallet opt-in (<- what this test checks)
     result = runner.invoke(
         init_mod.init_cmd, ["--skip-keys"],
-        input="\n\n\n\n\nn\nn\nn\n\ny\n")
+        input="\n\n\n\n\n\nn\nn\nn\n\ny\n")
     assert result.exit_code == 0, result.output
     assert "X402_INVOICE_ENABLED" in result.output
 

@@ -7,6 +7,7 @@ is a TTY (and not ``NO_COLOR`` / ``--plain``), Plain otherwise.  The whole-phase
 and errors surface.
 """
 import asyncio
+import contextlib
 import os
 import signal
 import sys
@@ -24,17 +25,25 @@ from cli.toolset import resolve_tool_list as _resolve_tool_list  # noqa: F401
 
 @click.command()
 @click.argument("task", required=False)
+@click.option("--task-file", type=click.File("r", encoding="utf-8"), help="Read task from a UTF-8 file; use - for stdin.")
+@click.option("--attach", "attachments", multiple=True, type=click.Path(exists=True, dir_okay=False), help="Attach a local file or image (repeatable).")
+@click.option("--output-format", type=click.Choice(["text", "json", "jsonl"]), default="text", help="Structured formats keep diagnostics on stderr.")
+@click.option("--no-input", is_flag=True, help="Never prompt for setup or interactive approvals.")
 @click.option("--resume", "resume_id", default=None, metavar="SESSION_ID",
               help="Resume an existing session by id (continue it) instead of starting a new task.")
 @click.option("--model", "-m", default=None, help="Model name (e.g. gemini-2.5-flash, gpt-5)")
 @click.option("--provider", "-p", default=None, help="Provider (openrouter, anthropic, openai, gemini, nvidia, or any provider declared in ~/.polyrob/providers.yaml; DeepSeek via openrouter + deepseek/deepseek-chat)")
 @click.option("--tools", "-t", default=None, help="Comma-separated tool list (e.g. browser,mcp,filesystem). Takes precedence over --toolset.")
 @click.option("--toolset", default=None, help="Named toolset (minimal/default/research/coding/development/browser/full/safe). Ignored when --tools is given.")
-@click.option("--max-steps", default=50, type=int, help="Maximum steps (default: 50)")
+@click.option("--max-steps", default=50, type=click.IntRange(min=1), help="Maximum steps (default: 50)")
 @click.option("--plain", is_flag=True, help="Force plain, line-oriented output (no ANSI / panels)")
 @click.option("--verbose", "-v", is_flag=True, help="Show debug logging")
 def run(
     task: Optional[str],
+    task_file,
+    attachments,
+    output_format,
+    no_input,
     resume_id: Optional[str],
     model: Optional[str],
     provider: Optional[str],
@@ -49,19 +58,56 @@ def run(
     Provide a TASK to start a new session, or --resume SESSION_ID to continue an
     existing one (exactly one of the two).
     """
+    if task_file is not None:
+        if task is not None or resume_id:
+            raise click.UsageError("--task-file cannot be combined with TASK or --resume.")
+        task = task_file.read()
+        if getattr(task_file, "name", None) == "<stdin>":
+            no_input = True
+    elif task == "-":
+        no_input = True
+        task = click.get_text_stream("stdin").read()
+    from cli.commands._options import inherit_options
+    inherited = inherit_options(plain=plain, model=model, provider=provider, toolset=toolset)
+    plain, model, provider, toolset = (inherited[k] for k in ("plain", "model", "provider", "toolset"))
+    if resume_id:
+        from click.core import ParameterSource
+        ctx = click.get_current_context()
+        overrides = [k for k, v in dict(model=model, provider=provider, tools=tools, toolset=toolset).items() if v]
+        if ctx.get_parameter_source("max_steps") == ParameterSource.COMMANDLINE:
+            overrides.append("max-steps")
+        if overrides:
+            raise click.UsageError("--resume uses the saved session settings; remove overrides: " + ", ".join(overrides))
     if bool(task) == bool(resume_id):
         raise click.UsageError("provide either a TASK or --resume SESSION_ID (exactly one).")
     # Name the terminal tab (otherwise it shows the interpreter's "Python").
     from cli.ui import terminal_title
     from core.env import bool_env
     from core.version import get_version
-    _titled = (not (plain or bool_env("POLYROB_PLAIN", False))) and \
+    _titled = output_format == "text" and (not (plain or bool_env("POLYROB_PLAIN", False))) and \
         terminal_title.set_terminal_title(f"polyrob {get_version()}")
+    from cli.ui.json_renderer import JsonRenderer
+    from cli.ui.state import SessionState
+    machine = JsonRenderer(SessionState(), sys.stdout, output_format) if output_format != "text" else None
+    code = 0
     try:
-        # The banner announces the resolved model — no extra echo needed.
-        asyncio.run(_run_session(task, model, provider, tools, toolset, max_steps, plain, verbose,
-                                 resume_id=resume_id))
+        with contextlib.redirect_stdout(sys.stderr) if machine else contextlib.nullcontext():
+            asyncio.run(_run_session(task, model, provider, tools, toolset, max_steps, plain, verbose,
+                                     resume_id=resume_id, attachments=attachments,
+                                     machine=machine, no_input=no_input or machine is not None))
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+        raise
+    except Exception as exc:
+        code = 1
+        raise click.ClickException(str(exc)) from exc
+    except BaseException:
+        code = 130
+        raise
     finally:
+        if machine:
+            sys.stderr.flush()
+            machine.finish(code)
         if _titled:
             terminal_title.clear_terminal_title()
 
@@ -76,6 +122,9 @@ async def _run_session(
     plain: bool,
     verbose: bool,
     resume_id: Optional[str] = None,
+    attachments=(),
+    machine=None,
+    no_input=False,
 ):
     """Create and execute a task session, rendering the feed to stdout."""
     import logging as _logging
@@ -99,7 +148,7 @@ async def _run_session(
     # preflight and to resolve_provider_model. setdefault preserves an explicit
     # `POLYROB_LOCAL=0 polyrob run …` opt-out.
     os.environ.setdefault("POLYROB_LOCAL", "1")
-    if not preflight_or_onboard(interactive=True):
+    if not preflight_or_onboard(interactive=not no_input):
         sys.exit(1)
 
     # Validate an explicit -p against the registry (incl. providers.yaml rows
@@ -232,8 +281,8 @@ async def _run_session(
     from cli.ui.events import normalize as _normalize_event
     from cli.ui.state import SessionState
 
-    _ui_state = SessionState()
-    _renderer = select_renderer(_ui_state, plain=plain, stream=_cli_out, one_shot=True)
+    _ui_state = machine.state if machine else SessionState()
+    _renderer = machine or select_renderer(_ui_state, plain=plain, stream=_cli_out, one_shot=True)
     # --verbose drives the renderer's trace layer too (full step blocks live),
     # not just the log level — same contract as the REPL's /verbose toggle.
     _renderer.verbose = verbose
@@ -272,6 +321,7 @@ async def _run_session(
                     user_id=user_id,
                     request=request,
                     skip_credit_check=True,
+                    creator="cli",
                 )
             session_id = session_info["id"]
         except Exception as e:
@@ -280,6 +330,14 @@ async def _run_session(
             from cli.commands._errors import echo_create_session_error
             echo_create_session_error(e, user_id)
             sys.exit(1)
+
+    if machine:
+        machine.session_id = session_id
+    if attachments:
+        from cli.attachments import attach_to_session
+        receipt_paths = await attach_to_session(task_agent.get_orchestrator(session_id), session_id, user_id, attachments)
+        for path in receipt_paths:
+            click.echo(f"Attached: {path}", err=True)
 
     # First-run banner (proposal §9): one compact panel — version, model/provider,
     # tools, short session id, configured-provider key NAMES (never values).
@@ -298,6 +356,17 @@ async def _run_session(
             _autonomy_on = _ae()
         except Exception:
             _autonomy_on = None
+        # F13: name the persona when the operator chose one; "" keeps the
+        # neutral packaged default off the banner (it carries no signal).
+        try:
+            from agents.personality.persona_resolver import DEFAULT_CHARACTER_NAME
+            from cli.persona import describe_active_persona
+            _p = describe_active_persona(user_id, _data_home)
+            _character = _p["name"] if (
+                _p["gate"] and _p["kind"] in ("character", "template")
+                and _p["name"] != DEFAULT_CHARACTER_NAME) else ""
+        except Exception:
+            _character = ""
         print_banner(
             _renderer,
             version=_ROB_VERSION,
@@ -310,6 +379,7 @@ async def _run_session(
             instance_id=resolve_instance_id(),
             user_id=user_id,
             autonomy_on=_autonomy_on,
+            character=_character,
         )
     except Exception:
         # Banner is cosmetic; never block the run on it.
@@ -409,6 +479,11 @@ async def _run_session(
     # summary; the answer block is the canonical assistant message).
     _renderer.on_turn_start(task)
 
+    from core.approval_input import approval_input
+    async def deny_prompt(_prompt):
+        click.echo("Interactive approval required; denied in --no-input mode.", err=True)
+        return "deny"
+    input_token = approval_input.set(deny_prompt) if no_input else None
     try:
         result = await task_agent.run_session(user_id=user_id, session_id=session_id)
         # Final safety poll (idempotent — only reads usage files not yet seen)
@@ -442,6 +517,8 @@ async def _run_session(
             click.echo(click.style(remedy, fg="yellow"))
         sys.exit(1)
     finally:
+        if input_token is not None:
+            approval_input.reset(input_token)
         ProductTelemetry._on_feed_entry = None
 
 

@@ -5,6 +5,7 @@ Playwright browser on steroids.
 import asyncio
 import gc
 import logging
+import sys
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Type, List
 import platform
@@ -236,10 +237,15 @@ class Browser(BaseTool):
 		self.server_args = server_args or []
 		self.browser_path = browser_path
 		
-		# Initialize base environment
-		base_env = os.environ.copy()
-		if env:
-			base_env.update(env)
+		# Initialize base environment.
+		# S2 (2026-09-14): NEVER `os.environ.copy()`. This dict is handed to
+		# `playwright.chromium.launch(env=...)`, so a full copy gave every page
+		# Chromium renders a process environment holding AGENT_WALLET_MASTER_SEED
+		# and every provider API key. `build_browser_env` inherits only what a
+		# browser needs (see tools/browser/child_env.py) and drops every
+		# secret-named var.
+		from tools.browser.child_env import build_browser_env
+		base_env = build_browser_env(env or {})
 		
 		# Handle server environment if needed
 		if self.browser_config.auto_configure_for_server:
@@ -269,7 +275,8 @@ class Browser(BaseTool):
 		import time
 
 		if not env:
-			env = os.environ.copy()
+			from tools.browser.child_env import build_browser_env
+			env = build_browser_env()
 
 		# If no DISPLAY, try to check if Xvfb is already running
 		if "DISPLAY" not in env:
@@ -278,10 +285,11 @@ class Browser(BaseTool):
 			# Check if Xvfb is already running on :99
 			try:
 				xvfb_check = subprocess.run(
-					["pgrep", "-f", "Xvfb :99"], 
-					stdout=subprocess.PIPE, 
-					stderr=subprocess.PIPE, 
-					text=True
+					["pgrep", "-f", "Xvfb :99"],
+					stdout=subprocess.PIPE,
+					stderr=subprocess.PIPE,
+					text=True,
+					env=env,  # S2: scrubbed
 				)
 				
 				if xvfb_check.returncode == 0:
@@ -298,6 +306,7 @@ class Browser(BaseTool):
 								["Xvfb", ":99", "-screen", "0", "1920x1080x24"],
 								stdout=subprocess.DEVNULL,
 								stderr=subprocess.DEVNULL,
+								env=env,  # S2: scrubbed, never the agent's own environment
 							)
 							# Give Xvfb a moment to start
 							time.sleep(1)
@@ -330,9 +339,10 @@ class Browser(BaseTool):
 		if "DISPLAY" in env and not self.browser_config.headless:
 			try:
 				display_check = subprocess.run(
-					["xdpyinfo", "-display", env["DISPLAY"]], 
-					stdout=subprocess.DEVNULL, 
-					stderr=subprocess.DEVNULL
+					["xdpyinfo", "-display", env["DISPLAY"]],
+					stdout=subprocess.DEVNULL,
+					stderr=subprocess.DEVNULL,
+					env=env,  # S2: scrubbed
 				)
 				if display_check.returncode != 0:
 					logging.warning(f"Display {env['DISPLAY']} not accessible, forcing headless mode")
@@ -478,6 +488,49 @@ class Browser(BaseTool):
 			self.logger.error(f"❌ Google search failed after {duration:.2f}s: {str(e)}")
 			return ActionResult(error=f"Search failed: {str(e)}", include_in_memory=True)
 
+	async def _pre_navigation_check(self, url: str, browser_context) -> Optional[ActionResult]:
+		"""The ONE guard set every agent-driven navigation passes, or None.
+
+		M3 (2026-09-14): ``go_to_url`` applied three guards and ``open_tab``
+		applied one — ``open_tab`` would happily load
+		``file:///etc/polyrob/polyrob.env`` (the file that holds the wallet seed
+		and the approval flags) and read it back into model context, and it
+		ignored the operator's ``allowed_domains`` allowlist entirely. Two
+		navigation verbs with two different guard sets is the shape that bug is
+		made of, so there is now one helper and both call it.
+
+		Returns an ``ActionResult`` to hand straight back to the agent, or None
+		when the URL may be navigated.
+		"""
+		# 1. file:// — the filesystem is not a web origin. `data:` URLs stay
+		#    allowed (the agent renders generated images with them).
+		if (url.startswith('file://') or 'file:///' in url) and not url.startswith('data:'):
+			self.logger.warning(f"Blocked file:// navigation to {url}")
+			return ActionResult(
+				error="Cannot open file:// URLs in browser. If you're trying to view an image, you already have vision capabilities - just analyze the image content that was passed to you in the message. Alternatively, you can use filesystem_read_file to get the image content and create an HTML page with a data URL.",
+				include_in_memory=True
+			)
+
+		# 2. SSRF — reject loopback / RFC1918 / link-local / cloud-metadata
+		#    hosts (gated by BROWSER_ALLOW_PRIVATE_URLS). Offload the blocking
+		#    DNS resolution to a thread so a slow resolver can't freeze the loop.
+		ssrf_error = await asyncio.get_running_loop().run_in_executor(
+			None, _check_url_ssrf, url)
+		if ssrf_error:
+			self.logger.warning(f"Blocked navigation to {url}: {ssrf_error}")
+			return ActionResult(error=ssrf_error, include_in_memory=True)
+
+		# 3. The operator's allowed_domains allowlist, which
+		#    context.navigate_to() enforces — these verbs call page.goto()
+		#    directly and would otherwise bypass it.
+		if browser_context is not None and not browser_context._is_url_allowed(url):
+			self.logger.warning(f"Blocked navigation to disallowed domain: {url}")
+			return ActionResult(
+				error=f"Navigation blocked: {url} is not in the allowed domains list",
+				include_in_memory=True,
+			)
+		return None
+
 	@BaseTool.action(
 		'Navigate to a URL and get page snapshot.',
 		param_model=GoToUrlAction
@@ -492,32 +545,9 @@ class Browser(BaseTool):
 		if not browser_context:
 			return ActionResult(error="Browser context not available", include_in_memory=True)
 
-		# GUARD: Prevent file:// URLs (local files not supported)
-		# BUT allow data: URLs for rendering images
-		if (params.url.startswith('file://') or 'file:///' in params.url) and not params.url.startswith('data:'):
-			return ActionResult(
-				error="Cannot open file:// URLs in browser. If you're trying to view an image, you already have vision capabilities - just analyze the image content that was passed to you in the message. Alternatively, you can use filesystem_read_file to get the image content and create an HTML page with a data URL.",
-				include_in_memory=True
-			)
-
-		# GUARD: SSRF — reject loopback / RFC1918 / link-local / cloud-metadata
-		# hosts before navigating (gated by BROWSER_ALLOW_PRIVATE_URLS). Offload the
-		# blocking DNS resolution to a thread so a slow resolver can't freeze the loop.
-		ssrf_error = await asyncio.get_running_loop().run_in_executor(
-			None, _check_url_ssrf, params.url)
-		if ssrf_error:
-			self.logger.warning(f"Blocked navigation to {params.url}: {ssrf_error}")
-			return ActionResult(error=ssrf_error, include_in_memory=True)
-
-		# GUARD: respect the user-configured allowed_domains allowlist that
-		# context.navigate_to() enforces — go_to_url uses page.goto() directly
-		# and would otherwise bypass it.
-		if not browser_context._is_url_allowed(params.url):
-			self.logger.warning(f"Blocked navigation to disallowed domain: {params.url}")
-			return ActionResult(
-				error=f"Navigation blocked: {params.url} is not in the allowed domains list",
-				include_in_memory=True,
-			)
+		refusal = await self._pre_navigation_check(params.url, browser_context)
+		if refusal:
+			return refusal
 
 		try:
 			page = await browser_context.get_current_page()
@@ -702,13 +732,9 @@ class Browser(BaseTool):
 		if not browser_context:
 			return ActionResult(error="Browser context not available", include_in_memory=True)
 
-		# GUARD: SSRF — same protection as go_to_url for the new-tab nav path.
-		# Offload the blocking DNS resolution to a thread (see go_to_url).
-		ssrf_error = await asyncio.get_running_loop().run_in_executor(
-			None, _check_url_ssrf, params.url)
-		if ssrf_error:
-			self.logger.warning(f"Blocked open_tab to {params.url}: {ssrf_error}")
-			return ActionResult(error=ssrf_error, include_in_memory=True)
+		refusal = await self._pre_navigation_check(params.url, browser_context)
+		if refusal:
+			return refusal
 
 		try:
 			context = browser_context
@@ -1170,8 +1196,18 @@ class Browser(BaseTool):
 		"""Initialize the browser session"""
 		if not PLAYWRIGHT_AVAILABLE:
 			raise ImportError(PLAYWRIGHT_MISSING_HINT)
+		if not (self.browser_config.cdp_url or self.browser_config.wss_url):
+			from tools.browser.launch_security import require_local_browser_allowed
+			require_local_browser_allowed()
 		self._playwright = await async_playwright().start()
-		self._browser = await self._setup_browser(self._playwright)
+		try:
+			self._browser = await self._setup_browser(self._playwright)
+		except BaseException:
+			try:
+				await self._playwright.stop()
+			finally:
+				self._playwright = None
+			raise
 
 		return self._browser
 
@@ -1179,20 +1215,27 @@ class Browser(BaseTool):
 		"""Sets up and returns a Playwright Browser instance with anti-detection measures."""
 		if not self.browser_config.cdp_url:
 			raise ValueError('CDP URL is required')
-		self.logger.info(f'Connecting to remote browser via CDP {self.browser_config.cdp_url}')
-		browser = await playwright.chromium.connect_over_cdp(self.browser_config.cdp_url)
-		return browser
+		self.logger.info('Connecting to remote browser via CDP')
+		try:
+			return await playwright.chromium.connect_over_cdp(self.browser_config.cdp_url)
+		except Exception as exc:
+			raise BrowserError(f"Remote CDP connection failed ({type(exc).__name__})") from None
 
 	async def _setup_wss(self, playwright: Playwright) -> PlaywrightBrowser:
 		"""Sets up and returns a Playwright Browser instance with anti-detection measures."""
 		if not self.browser_config.wss_url:
 			raise ValueError('WSS URL is required')
-		self.logger.info(f'Connecting to remote browser via WSS {self.browser_config.wss_url}')
-		browser = await playwright.chromium.connect(self.browser_config.wss_url)
-		return browser
+		self.logger.info('Connecting to remote browser via WSS')
+		try:
+			return await playwright.chromium.connect(self.browser_config.wss_url)
+		except Exception as exc:
+			raise BrowserError(f"Remote browser connection failed ({type(exc).__name__})") from None
 
 	async def _setup_browser_with_instance(self, playwright: Playwright) -> PlaywrightBrowser:
 		"""Sets up and returns a Playwright Browser instance with anti-detection measures."""
+		from tools.browser.launch_security import require_local_browser_allowed, chromium_sandbox_enabled
+		require_local_browser_allowed()
+		chromium_sandbox_enabled(self.browser_config, self.browser_config.extra_chromium_args)
 		if not self.browser_config.chrome_instance_path:
 			raise ValueError('Chrome instance path is required')
 		import subprocess
@@ -1221,6 +1264,7 @@ class Browser(BaseTool):
 			+ self.browser_config.extra_chromium_args,
 			stdout=subprocess.DEVNULL,
 			stderr=subprocess.DEVNULL,
+			env=self.env,  # S2: scrubbed, never the agent's own environment
 		)
 
 		# Attempt to connect again after starting a new instance
@@ -1248,7 +1292,9 @@ class Browser(BaseTool):
 
 	async def _setup_standard_browser(self, playwright: Playwright) -> PlaywrightBrowser:
 		"""Standard browser setup with proper server environment handling."""
-		browser_args = self._configure_server_args(self.server_args)
+		browser_args = self._configure_server_args(list(self.server_args))
+		from tools.browser.launch_security import chromium_sandbox_enabled
+		sandbox_enabled = chromium_sandbox_enabled(self.browser_config, browser_args)
 		
 		# If in server environment, double-check headless mode
 		if self.browser_config.auto_configure_for_server:
@@ -1270,6 +1316,7 @@ class Browser(BaseTool):
 				headless=self.browser_config.headless,
 				slow_mo=self.slow_mo,
 				args=browser_args,
+				chromium_sandbox=sandbox_enabled,
 				timeout=self.timeout,
 				executable_path=self.browser_path,
 				env=self.env,
@@ -1285,6 +1332,7 @@ class Browser(BaseTool):
 					headless=True,
 					slow_mo=self.slow_mo,
 					args=browser_args,
+					chromium_sandbox=sandbox_enabled,
 					timeout=self.timeout,
 					executable_path=self.browser_path,
 					env=self.env,
@@ -1406,15 +1454,40 @@ class Browser(BaseTool):
 		Async cleanup in __del__ is unreliable and can cause issues.
 		This method only handles synchronous cleanup (like Xvfb processes).
 		"""
+		# A12 fix round 3 (2026-09-14): __del__ can fire during interpreter
+		# shutdown, a state where even a fresh `import` (or a module-level
+		# global) can already be torn down. A logging call made in that state
+		# walks into RotatingFileHandler.emit -> shouldRollover -> _open ->
+		# `import os`, which raises ImportError; logging.Handler.handleError
+		# swallows that internally and PRINTS its own multi-line
+		# "--- Logging error ---" dump straight to stderr instead of
+		# propagating it, so a try/except around the call cannot catch it --
+		# the only reliable guard is to not run ANY of this best-effort
+		# cleanup once the interpreter is finalizing (the docstring above
+		# already calls every bit of it "unreliable"; subprocess handling
+		# below is no safer than logging in that state). `sys` is a
+		# MODULE-level import (not a fresh one here) so checking it costs no
+		# import-machinery access. Round-2 review finding: this early return
+		# must come BEFORE the logger branch below, and stand alone -- an
+		# `else:` attached to this condition (the round-2 bug) both logs via
+		# the bare, unguarded `logging.warning` while finalizing (the exact
+		# case this guards against) AND drops the warning entirely on a
+		# normal (non-finalizing) GC when `self.logger` isn't set.
+		if sys is not None and sys.is_finalizing():
+			return
+
 		# Log warning if browser wasn't properly closed
 		if hasattr(self, '_browser') and self._browser:
-			if hasattr(self, 'logger'):
-				self.logger.warning(
-					"Browser was not properly closed before garbage collection. "
-					"Use 'async with Browser()' or call 'await browser.close()' explicitly."
-				)
-			else:
-				logging.warning("Browser not properly closed before GC")
+			try:
+				if hasattr(self, 'logger'):
+					self.logger.warning(
+						"Browser was not properly closed before garbage collection. "
+						"Use 'async with Browser()' or call 'await browser.close()' explicitly."
+					)
+				else:
+					logging.warning("Browser not properly closed before GC")
+			except Exception:
+				pass
 
 			# Force nullify Python references (doesn't close actual browser process)
 			self._browser = None

@@ -555,6 +555,10 @@ class StepMixin:
 		# This prevents unnecessary LLM calls just to check for new messages
 		# See run() method for message draining logic
 
+		# Refresh the dynamic capability snapshot BEFORE materializing this turn's
+		# messages. load_tool may have registered schemas since the previous step.
+		from agents.task.agent.core.runtime_catalog import refresh_tool_catalog
+		refresh_tool_catalog(self)
 		input_messages = self.message_manager.get_messages()
 
 		# DIAGNOSTIC: Log control flags before check to help debug unexpected stops

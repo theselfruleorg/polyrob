@@ -7,7 +7,7 @@ from core.config import BotConfig
 from tools.base_tool import BaseTool
 from tools.controller.views import WebFetchAction
 from tools.web_fetch.fetcher import safe_fetch, WebFetchError
-from tools.web_fetch.render import render_html_to_markdown, classify_content
+from tools.web_fetch.render import render_html_to_markdown, render_text, classify_content
 
 
 def _allow_private_urls() -> bool:
@@ -27,8 +27,9 @@ class WebFetchTool(BaseTool):
 
 	@BaseTool.action(
 		description=(
-			"Fetch a single web page by URL and return its main content as markdown. "
-			"Use this to READ a page you have the URL for (articles, docs, API pages). "
+			"Fetch a single URL and return its content: an HTML page as markdown, and a "
+			"JSON / CSV / XML / plain-text answer verbatim. Use this to READ a page or to "
+			"call a keyless read-only HTTP API you have the URL for. "
 			"Lightweight and fast — no browser. For SEARCH use perplexity/anysite; for "
 			"pages needing login/clicks/forms use the browser tool."
 		),
@@ -54,7 +55,10 @@ class WebFetchTool(BaseTool):
 			return (f"[web_fetch: {result.final_url} returned non-HTML content "
 			        f"({result.content_type}); cannot render as markdown.]")
 		try:
-			html = result.body.decode("utf-8", errors="replace")
+			text = result.body.decode("utf-8", errors="replace")
 		except Exception:
-			html = result.body.decode("latin-1", errors="replace")
-		return render_html_to_markdown(html, max_chars=params.max_chars)
+			text = result.body.decode("latin-1", errors="replace")
+		if kind == "text":
+			# JSON/CSV/XML/plain: hand back what the endpoint said, verbatim.
+			return render_text(text, max_chars=params.max_chars)
+		return render_html_to_markdown(text, max_chars=params.max_chars)

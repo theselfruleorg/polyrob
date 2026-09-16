@@ -40,7 +40,7 @@ def test_webview_preferences_payload_covers_every_schema_key(monkeypatch, tmp_pa
 
 @pytest.mark.asyncio
 async def test_telegram_config_listing_covers_every_schema_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
 
@@ -66,9 +66,9 @@ async def test_telegram_config_listing_covers_every_schema_key(tmp_path, monkeyp
 
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text="/config",
-                             identity=Identity(user_id="gleb", source=src, raw_user_id="555"))
+                             identity=Identity(user_id="alice", source=src, raw_user_id="555"))
     result = InboundResult(inbound=inbound, decision=RouteDecision(
-        RouteKind.COMMAND, "agent:main:telegram:dm:555:gleb", command="/config"))
+        RouteKind.COMMAND, "agent:main:telegram:dm:555:alice", command="/config"))
 
     out = await act_on_inbound(_Agent(str(tmp_path)), result)
     missing = [key for key in PREF_SCHEMA if key not in out]

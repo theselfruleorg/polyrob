@@ -102,3 +102,61 @@ def _resolve_chat_runtime(env=None):
     if not model:
         model = get_default_model(provider)
     return provider, model
+
+
+def room_session_source(session_source) -> bool:
+    """Is this session being created for a ROOM? (044 C2, fail-CLOSED-to-private.)
+
+    Delegates to the ONE derivation (``core.surfaces.room_policy.is_public_source``)
+    rather than re-reading ``chat_type`` here — two derivations of "is this public"
+    is exactly how one of them goes stale. Lives here rather than in
+    ``task_agent_lite`` because that module is under a shrink-only size ratchet.
+    """
+    try:
+        from core.surfaces.room_policy import is_public_source
+        return is_public_source(session_source)
+    except Exception as e:  # pragma: no cover - import guard
+        import logging
+        logging.getLogger(__name__).debug(
+            "public-session stamp probe failed (treating as private): %s", e)
+        return False
+
+
+def build_session_metadata(session_request, *, effective_tool_ids, public_session) -> dict:
+    """The durable session record ``create_session`` writes and
+    ``_recreate_orchestrator`` reads back.
+
+    Two keys carry what the legacy shape could not (044 C1):
+    ``effective_tools`` — the toolset the session ACTUALLY ran with. ``request.
+    tools`` is only the CALLER's ask; a room's real toolset arrives as the
+    ``tool_ids`` override, so recreating from ``request.tools`` brought an evicted
+    ROOM session back private-shaped (browser + filesystem, no gate). Its own key,
+    because an explicit EMPTY toolset (a locked-down ``GROUP_TURN_TOOLS=""`` room)
+    is authoritative and any ``or``-chain fallback would swallow it.
+    ``public_session`` — the AUDIENCE. The recreate path cannot re-derive it: the
+    chat rebind needs the ``session_chat_registry`` service, which does not exist
+    at all when the Singular Chat bus is off.
+    """
+    from datetime import datetime as _dt
+    tools_config = (session_request.session_config.get('tools_config', {})
+                    if session_request.session_config else {})
+    return {
+        'task': session_request.task,
+        'model': session_request.model,
+        'tools': session_request.tools,
+        'config': {
+            'model': session_request.model,
+            'provider': session_request.provider,
+            'tools': session_request.tools,
+            'max_steps': session_request.max_steps,
+            'temperature': session_request.temperature,
+            'use_vision': session_request.use_vision,
+            'tools_config': tools_config,
+        },
+        'request': session_request.__dict__,
+        'effective_tools': list(effective_tool_ids or []),
+        'public_session': bool(public_session),
+        'created_at': _dt.now().isoformat(),
+        'status': 'created',
+        'orchestrator_ready': True,
+    }

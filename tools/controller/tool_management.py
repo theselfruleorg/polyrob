@@ -72,6 +72,12 @@ class ToolManagementMixin:
 
 		for tool_id in tool_ids:
 			try:
+				from core.wallet.authority import money_tool, owner_refusal
+				if money_tool(tool_id):
+					error = owner_refusal(getattr(self, 'user_id', None))
+					if error:
+						self._record_tool_load_failure(tool_id, 'gated:wallet_owner — ' + error)
+						continue
 				tool = None
 				tool_service_name = f"{tool_id}_tool"
 

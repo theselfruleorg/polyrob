@@ -55,13 +55,13 @@
 .tier-badge.tier-holder {
     background-color: var(--color-accent-green);
     color: var(--color-bg-primary);
-    box-shadow: 0 0 20px rgba(86, 226, 194, 0.3);
+    box-shadow: 0 0 20px var(--color-accent-green-wash-30);
 }
 
 .tier-badge.tier-premium {
     background-color: var(--color-accent-yellow);
     color: var(--color-bg-primary);
-    box-shadow: 0 0 20px rgba(226, 192, 112, 0.3);
+    box-shadow: 0 0 20px var(--color-accent-yellow-wash-30);
 }
 
 .tier-description {

@@ -51,14 +51,15 @@ def test_no_resolver_is_byte_identical_legacy():
     assert paired["x"][0] == body
 
 
-def test_short_untrusted_error_passes_through():
-    # Short errors stay unwrapped (UNTRUSTED_WRAP_MIN_CHARS skip) — no injection surface.
+def test_short_untrusted_error_is_wrapped():
+    # A short external error can carry a directive too.
     tcs = [{"id": "x", "name": "mcp_search"}]
     r = ActionResult(error="boom from mcp"); r.tool_call_id = "x"
     paired = _pair_results_to_calls([r], tcs, source_for=_resolver({"x": ("mcp_search", "mcp")}))
     content, had_error = paired["x"]
     assert had_error is True
-    assert content == "Error: boom from mcp"
+    assert "Error: boom from mcp" in content
+    assert '<untrusted_tool_result' in content
 
 
 def test_long_untrusted_error_is_wrapped():

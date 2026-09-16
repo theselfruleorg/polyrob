@@ -3,11 +3,12 @@
 The narrow, audited path for the agent to manage its OWN service — distinct
 approvable verbs, NEVER raw bash, so each host-touching action is individually
 gated and logged:
-- ``self_env_install_dep`` — pip-install into the agent's own venv (pinned, validated);
-- ``self_env_read_source`` / ``self_env_patch_source`` — read/edit source under the
-  install tree, realpath-confined, env/config files HARD-DENIED;
-- ``self_env_restart_service`` — request a supervised respawn (never arbitrary systemctl);
-- ``self_env_git_pull`` — fast-forward-only pull on the install tree (ext:: rejected).
+- ``self_env_install_dep`` / ``self_env_patch_source`` — create exact, durable
+  maintenance proposals only; they never install packages or edit live code;
+- ``self_env_read_source`` — reads bounded, install-tree-confined source with
+  secrets/config hard-denied;
+- ``self_env_restart_service`` / ``self_env_git_pull`` — refuse and direct the
+  owner to the trusted update supervisor.
 
 Gated by ``compute_posture_allows(ctx, 2)`` AND (via the Controller's posture-2
 approval wiring, WS-6) an owner approval decision. Registered only at
@@ -47,8 +48,8 @@ def register_self_env_tool(force: bool = False) -> bool:
         SelfEnvTool,
         ToolDescriptor(
             name="self_env",
-            description="Manage the agent's own service: install_dep/read_source/"
-                        "patch_source/restart_service/git_pull (approval-gated)",
+            description="Review agent source and create maintenance proposals; live updates "
+                        "require the trusted supervisor (approval-gated)",
             category=ToolCategory.INTEGRATION,
             is_optional=True,
             init_priority=80,

@@ -1,413 +1,564 @@
-# Configuration
+# Configuring the agent
 
-polyrob is configured through environment files. Legacy CLI preferences may
-exist in `~/.polyrob/cli.json`; `polyrob init` migrates default provider/model
-values into `~/.polyrob/.env`.
+This page explains how POLYROB is configured and walks you through the settings
+you will actually touch. It does not list every flag. The complete reference —
+every environment flag, its default, and the code that reads it — is
+[`docs/CONFIGURATION.md`](../CONFIGURATION.md). When this page and that file
+disagree, that file wins; it is generated from the code and contract-tested.
 
-> This page is the practical getting-started guide. For the **complete
-> environment-flag reference** (every flag, default, and code anchor), see
-> [../CONFIGURATION.md](../CONFIGURATION.md) — it is the single source of truth.
+Read this page top to bottom once. After that, `polyrob doctor` and
+`polyrob config explain KEY` answer most questions faster than any document.
 
 ---
 
-## Environment file
+## 1. How configuration works
 
-The recommended path is:
+POLYROB has three kinds of settings. Each has one home and one command.
+
+| Kind | Example | Where it lives | Set it with |
+|---|---|---|---|
+| **Secret** (an API key or token) | `ANTHROPIC_API_KEY` | `~/.polyrob/.env` | `polyrob config set ANTHROPIC_API_KEY` (prompts, hidden) |
+| **Environment flag** (a switch or number the process reads at start) | `AUTONOMY_ENABLED`, `MEMORY_BACKEND` | `./.polyrob/.env` (this project) or `~/.polyrob/.env` (`--global`) | `polyrob config set KEY VALUE [--global]` |
+| **Preference** (an owner setting the running agent reads live) | `style.verbosity`, `goals.daily_quota`, `chat.mode` | `<data_home>/identity/{instance_id}/user_{uid}/preferences.toml` | `polyrob config set style.verbosity brief` |
+
+`polyrob config set` routes by the shape of the key: a secret-shaped name goes
+to the **global** env file (so it never vanishes when you `cd` away), a dotted
+name that is a known preference goes to `preferences.toml`, and a name in the
+flag catalog goes to the **project** env file unless you pass `--global`. Pass
+`--project` to keep a secret per directory. Every write tells you which file it
+wrote and when the value applies (`live`, `next-turn`, `next-session`, or `restart`).
+
+An **environment flag is read when the process starts**, so a change needs a
+restart of whatever is running (the REPL, `polyrob serve`, a surface, a systemd
+unit). Two of them are stricter still: `AGENT_COMPUTE_POSTURE` and the approval
+flags (`PAYMENT_APPROVAL_MODE`, `APPROVAL_GRANT_TTL_HOURS`,
+`PAYMENT_APPROVAL_TIMEOUT_SEC`) are frozen when the module first imports, so
+changing them inside a live process is ignored on purpose — a running agent
+cannot widen its own host access or approval lane. A **preference** needs no
+restart at all.
+
+### Files and precedence
+
+On the CLI (local mode) the first value found wins, in this order:
+
+1. your shell environment,
+2. `./.polyrob/.env` — project overrides (`polyrob config set`),
+3. `~/.polyrob/.env` — your global config (`polyrob config set --global`, `polyrob auth add`, `polyrob init`),
+4. the legacy `~/.rob/.env` (read only; `polyrob` copies `~/.rob` to `~/.polyrob` once, automatically),
+5. a repo-root `.env`, then `config/.env.<env>` and `config/.env.<env>.local` (dev checkouts only).
+
+A server started with `polyrob serve` or `python main.py` loads the `config/`
+files last and lets them win. A systemd deploy reads its environment from the
+unit file (for example `/etc/polyrob/polyrob.env`) and never touches `config/`.
+
+```bash
+polyrob config path        # the ENV files this process reads, highest precedence first
+polyrob config show        # the merged result, secrets redacted
+polyrob config explain KEY # every layer that sets KEY, and which one won
+```
+
+`config path` lists env files only. To validate your preferences file as well,
+name the tenant: `polyrob config check --user <uid>`.
+
+There are two environment names, `development` (default) and `production`,
+resolved from `CONFIG_ENV`, then `ENV`. There is no staging.
+
+### A named profile is a whole separate home
+
+`polyrob -P scout …` (or `POLYROB_PROFILE=scout`) runs the agent from
+`~/.polyrob/profiles/scout/`: its own `.env`, characters, skills, memory,
+goals, sessions. Everything on this page applies per profile. See
+[profiles.md](profiles.md).
+
+### Check what you did
+
+```bash
+polyrob doctor                     # health first: providers, memory, autonomy, pauses
+polyrob doctor --flags --changed   # only the flags you set away from their default
+polyrob doctor --flags --group memory
+polyrob config check               # validate the env files against the catalog
+polyrob config search "quiet"      # find a setting by name or description
+```
+
+`doctor --changed` is the fastest way to answer "what did I change on this box".
+
+---
+
+## 2. First run
 
 ```bash
 polyrob init
 ```
 
-This writes `~/.polyrob/.env` and creates `./.polyrob/sessions`. You can also
-write project-local overrides in `./.polyrob/.env` or set variables in your shell;
-shell values override file values.
+The wizard connects a provider key, picks a default model, chooses a starter
+template (`general`, `research`, `coding`, `social`, `trading`, `blank`) and
+writes `~/.polyrob/.env`. Scripts use `polyrob init --no-prompt` with `--anthropic-key`
+/ `--openai-key`, `--default-provider`, `--default-model`, `--toolset`, `--template`.
+
+Two options matter beyond keys:
+
+- `--owner <user id>` binds the instance to you as its owner. Owner binding is
+  what lets chat surfaces tell you apart from strangers (§7).
+- `--instance-id <name>` names the instance; the default is `polyrob`. The
+  instance id is the tenant key for memory, goals and identity. Change it only
+  before the first real session.
+
+To give the instance its own character at init time use `--character <slug>`
+or `--character-from <name>`; see §8.
 
 ---
 
-## LLM provider keys
+## 3. Providers and models
 
-Set **at least one** provider key. When you don't pin a provider, polyrob auto-selects the
-**first provider with a usable key in canonical order** — `openrouter → anthropic → openai →
-gemini → nvidia → deepseek`, then your `providers.yaml` rows in file order — and falls back to
-alternatives on error. (So adding an `OPENROUTER_API_KEY` to a box that used Anthropic changes the
-default to OpenRouter; pin with `DEFAULT_PROVIDER=<name>` or `-p` to override. Full precedence:
-[CONFIGURATION.md](../CONFIGURATION.md).)
+### Keys
 
-| Variable | Provider |
-|----------|----------|
-| `ANTHROPIC_API_KEY` | Anthropic (Claude) |
-| `OPENAI_API_KEY` | OpenAI (GPT-5.x, o-series) |
-| `GEMINI_API_KEY` | Google Gemini |
-| `DEEPSEEK_API_KEY` | DeepSeek. Its direct client doesn't support tool-calling and isn't auto-selected — pass `-p deepseek` explicitly, or reach DeepSeek via `OPENROUTER_API_KEY` with model `deepseek/deepseek-chat`. |
-| `OPENROUTER_API_KEY` | OpenRouter (proxies many models) |
-| `NVIDIA_API_KEY` | NVIDIA NIM |
-| `PERPLEXITY_API_KEY` | Perplexity — a web-search *tool*, not an LLM provider (optional) |
-
----
-
-## Subscription plans (flat-rate providers)
-
-Some plans hand you an **API key** instead of metering you per token. POLYROB
-ships provider rows for these, so all you do is set the key — no
-`providers.yaml` needed. `polyrob init` names them rather than prompting for
-them (nobody without the plan can answer), so set the key directly:
+Set at least one key. With no provider pinned, POLYROB picks the **first
+provider with a usable key** in this order: `openrouter`, `anthropic`,
+`openai`, `gemini`, `nvidia`, then the rows of your `providers.yaml` in file
+order. It fails over to the next usable provider on a billing, quota or
+rate-limit error.
 
 ```bash
-polyrob config set OLLAMA_API_KEY      # prompts; stays out of shell history
-polyrob run -p ollama-cloud "…"
+polyrob config set OPENROUTER_API_KEY     # one key that reaches most models
+polyrob config set ANTHROPIC_API_KEY
+polyrob model list                        # every provider: key present, models, default
 ```
 
-### Providers that take an API key
-
-Set the key and go — `polyrob run -p <provider> "…"`. Run `polyrob model list`
-for the live table.
-
-| Provider | Key | Endpoint |
-|----------|-----|----------|
-| `openrouter`, `anthropic`, `openai`, `gemini`, `nvidia`, `deepseek` | the six originals | — |
-| `ollama-cloud` | `OLLAMA_API_KEY` | `https://ollama.com/v1` |
-| `zai` | `GLM_API_KEY` (or `Z_AI_API_KEY`) | `https://api.z.ai/api/paas/v4` |
-| `zai-coding` | `ZAI_API_KEY` | `https://api.z.ai/api/anthropic` |
-| `cerebras` | `CEREBRAS_API_KEY` | `https://api.cerebras.ai/v1` |
-| `moonshot` / `moonshot-cn` | `KIMI_API_KEY` / `KIMI_CN_API_KEY` | `api.moonshot.ai/v1` |
-| `kimi-coding` | `KIMI_CODING_API_KEY` | `https://api.kimi.com/coding` |
-| `minimax` / `minimax-cn` | `MINIMAX_API_KEY` / `MINIMAX_CN_API_KEY` | `api.minimax.io/anthropic` |
-| `xai` | `XAI_API_KEY` | `https://api.x.ai/v1` |
-| `dashscope` | `DASHSCOPE_API_KEY` | DashScope compatible-mode |
-| `alibaba-coding` | `ALIBABA_CODING_PLAN_API_KEY` | `coding-intl.dashscope.aliyuncs.com/v1` |
-| `stepfun` | `STEPFUN_API_KEY` | `api.stepfun.ai/step_plan/v1` |
-| `ai-gateway` (Vercel) | `AI_GATEWAY_API_KEY` | `ai-gateway.vercel.sh/v1` |
-| `opencode-zen` / `opencode-go` | `OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY` | `opencode.ai/zen…` |
-| `kilocode` | `KILOCODE_API_KEY` | `api.kilo.ai/api/gateway` |
-| `huggingface` | `HF_TOKEN` | `router.huggingface.co/v1` |
-| `xiaomi` | `XIAOMI_API_KEY` | `api.xiaomimimo.com/v1` |
-| `tencent-tokenhub` | `TOKENHUB_API_KEY` | `tokenhub.tencentmaas.com/v1` |
-| `copilot` | `COPILOT_GITHUB_TOKEN` | `api.githubcopilot.com` |
-
-Flat-rate among these: `ollama-cloud`, `zai-coding`, `kimi-coding`,
-`alibaba-coding`, `copilot`. Cerebras serves both plan types on one endpoint, so
-it defaults to metered — see `subscription:` below.
-
-Every provider also takes a `*_BASE_URL` override (e.g. `GLM_BASE_URL`) for a
-proxy or a regional endpoint.
-
-### Providers that need you to sign in (OAuth)
-
-Some plans issue no API key at all. `polyrob auth add <provider>` runs their
-OAuth flow:
-
-| Provider | Plan |
-|----------|------|
-| `anthropic-oauth` | Claude Pro / Max |
-| `openai-codex` | ChatGPT plan (Codex) |
-| `github-copilot` | GitHub Copilot |
-| `xai-oauth` | SuperGrok / X Premium+ |
-| `qwen-oauth` | Qwen portal |
-| `minimax-oauth` | MiniMax |
+Adding a key can change the auto-selected default (a new `OPENROUTER_API_KEY`
+on a box that used Anthropic moves the default to OpenRouter). Pin it:
 
 ```bash
-polyrob config set LLM_OAUTH_ENABLED true   # OFF by default, everywhere
-polyrob auth add anthropic-oauth            # prints the ToS note, then the flow
-polyrob auth status
+polyrob model set-default anthropic claude-sonnet-4-5   # persists DEFAULT_PROVIDER / DEFAULT_MODEL
+polyrob run -p openai -m gpt-5 "…"                      # per run
 ```
 
-> **⚠ Read this before connecting one.** These plans issue no OAuth `client_id`
-> to third-party applications. The only ids that work are the ones published in
-> the vendors' own CLIs (Claude Code, Codex CLI, VS Code, Grok CLI, Qwen CLI),
-> so connecting authenticates POLYROB **as that client**. Every open-source
-> agent offering "sign in with your Claude/ChatGPT plan" does the same thing,
-> but it is a genuine terms-of-service exposure and it lands on **your**
-> account, not ours. `polyrob auth add` states this and asks before doing
-> anything, and the feature is off by default. Your account, your call.
+`DEEPSEEK_API_KEY` is never auto-selected (its direct client has no tool
+calling); pass `-p deepseek` or reach DeepSeek through OpenRouter.
+`PERPLEXITY_API_KEY` is a web-search tool key, not a provider.
 
-Notes:
+### Flat-rate and subscription plans
 
-- **`ollama-cloud` is not a local Ollama.** A local server stays a keyless
-  `ollama` row in `providers.yaml` (`auth_type: none`, `http://127.0.0.1:11434/v1`).
-  Two different products from the same vendor.
-- These rows are **appended after** the six built-ins and are excluded from
-  automatic failover, so adding them cannot change which provider an existing
-  install resolves to.
-- **Flat-rate means $0 per-token cost.** A row marked `subscription: true`
-  records no marginal API cost in `usage_records` — multiplying tokens by a
-  price does not describe any charge you actually incur. Cerebras defaults to
-  metered because one endpoint serves both plans; on Code Pro/Max, declare it:
+Some plans hand you a key instead of metering tokens. POLYROB ships provider
+rows for them, so setting the key is all you do:
 
-  ```yaml
-  providers:
-    cerebras:
-      subscription: true
-  ```
-- **Not yet live-verified.** These rows are declared from vendor
-  documentation; we have no seat on each plan to run the tool-executing
-  verification (proposal 024 §8) against. A wrong model id or endpoint surfaces
-  as a provider 4xx, not a wrong answer. Reports welcome.
-### Declaring your own OAuth provider
+```bash
+polyrob config set ZAI_API_KEY        # then: polyrob run -p zai-coding "…"
+polyrob config set KIMI_CODING_API_KEY
+polyrob config set OLLAMA_API_KEY     # ollama-cloud — NOT a local Ollama
+```
 
-Beyond the built-in seats above, any OAuth provider can be declared in
-`providers.yaml` — the flows are driven entirely by this data:
+`polyrob model list` prints the live table of these rows (`ollama-cloud`,
+`zai`, `zai-coding`, `cerebras`, `moonshot`, `kimi-coding`, `minimax`, `xai`,
+`dashscope`, `alibaba-coding`, `stepfun`, `ai-gateway`, `opencode-zen`,
+`kilocode`, `huggingface`, `xiaomi`, `tencent-tokenhub`, `copilot`, and their
+regional variants). Every provider also takes a `*_BASE_URL` override for a
+proxy or regional endpoint.
+
+A row marked `subscription: true` records no per-token cost, because you incur
+none. Cerebras serves both plan types on one endpoint and defaults to metered;
+on a flat plan declare it in `providers.yaml`:
 
 ```yaml
 providers:
-  myplan:
-    base_url: https://api.example.com/v1
-    transport: chat_completions
-    models: [some-model]
-    oauth:
-      auth_url: https://example.com/oauth/device   # device grant → the DEVICE endpoint
-      token_url: https://example.com/oauth/token
-      client_id: your-client-id
-      scopes: [inference]
-      grant: device_code            # or authorization_code
-      redirect_mode: manual         # 'manual' (paste the code) or 'loopback'
-      device_auth_style: form       # 'json' if the device leg wants JSON
-      refresh_skew_sec: 120         # refresh this long before expiry
+  cerebras:
+    subscription: true
 ```
 
-Three redirect shapes are supported, and which you can use depends on where the
-agent runs:
+These rows are appended after the six built-ins and are excluded from
+automatic failover, so adding one never changes what an existing install
+resolves to.
 
-| Flow | Works headless / over SSH? | Notes |
-|------|---------------------------|-------|
-| `device_code` | ✅ | Prints a URL + short code; polls for the token. The default. |
-| `authorization_code` + `redirect_mode: manual` | ✅ | Provider shows the code on its own page; you paste it back. |
-| `authorization_code` + `redirect_mode: loopback` | ❌ | Opens a `127.0.0.1` listener — **refused unless `POLYROB_LOCAL`**, since a server must never open a redirect listener. |
+### Plans that need a sign-in (OAuth)
 
-Both OAuth endpoints must be `https` and are refused otherwise (a token would
-cross the network in plaintext).
+Claude Pro/Max, ChatGPT (Codex), GitHub Copilot, SuperGrok, Qwen and MiniMax
+issue no API key. `polyrob auth add <provider>` runs their sign-in:
 
----
+```bash
+polyrob config set LLM_OAUTH_ENABLED true   # off by default, everywhere
+polyrob auth add anthropic-oauth            # anthropic-oauth | openai-codex | github-copilot | xai-oauth | qwen-oauth | minimax-oauth
+polyrob auth status                         # source, health, expiry of every credential
+polyrob auth refresh anthropic-oauth
+polyrob auth remove anthropic-oauth         # forgets the token; does not revoke it
+```
 
-## Custom LLM providers (`providers.yaml`)
+> **Read before you connect one.** These plans publish no OAuth client id for
+> third-party apps. The only ids that work are the ones inside the vendors'
+> own CLIs, so connecting authenticates POLYROB **as that client**. Every
+> open-source agent that offers "sign in with your Claude/ChatGPT plan" does
+> the same thing. It is a real terms-of-service exposure and it lands on
+> **your** account. `polyrob auth add` says this and asks before it acts.
 
-Beyond the built-in providers, you can declare **any OpenAI-compatible or
-Anthropic-compatible endpoint with zero code** — a local Ollama / LM Studio /
-vLLM / llama.cpp server, an aggregator (Groq, Together, Fireworks, LiteLLM), or
-a corporate gateway. Declare it in `~/.polyrob/providers.yaml` (path override:
-`LLM_CUSTOM_PROVIDERS`):
+The device-code and manual-paste flows work headless and over SSH. The
+loopback flow opens a listener on `127.0.0.1` and is refused unless
+`POLYROB_LOCAL` is set. Both OAuth endpoints must be `https`.
+
+### Model behaviour knobs
+
+`THINKING_CONFIG_ENABLED=true` turns on extended reasoning for models that
+support it (off by default because it changes cost and latency).
+`RUN_BUDGET_USD=<dollars>` sets a per-session ceiling on real provider cost;
+the run halts honestly when it is reached, and the remaining budget is shown to
+the model so it can pace itself.
+
+### Your own endpoint (`providers.yaml`)
+
+Any OpenAI-compatible or Anthropic-compatible endpoint can be declared with no
+code, in `~/.polyrob/providers.yaml` (path override `LLM_CUSTOM_PROVIDERS`):
+a local Ollama, LM Studio, vLLM or llama.cpp server, an aggregator, or a
+corporate gateway.
 
 ```yaml
 providers:
   ollama:
     base_url: http://127.0.0.1:11434/v1
-    auth_type: none                    # no key needed
+    auth_type: none
     transport: chat_completions
     default_model: qwen3-coder:30b
     models: [qwen3-coder:30b, llama3.3:70b]
   mygateway:
     base_url: https://gateway.corp.internal/anthropic
-    env_key: MYGATEWAY_API_KEY         # must be *_API_KEY-shaped
-    transport: anthropic_messages      # Anthropic-shaped endpoint
-    bearer_auth: true                  # Authorization: Bearer, not x-api-key
+    env_key: MYGATEWAY_API_KEY          # must be *_API_KEY-shaped
+    transport: anthropic_messages
+    bearer_auth: true
     default_model: glm-5
     models: [glm-5]
 ```
 
-> The z.ai GLM Coding Plan used to be the worked example here. It now ships as
-> the built-in `zai-coding` row — an existing hand-written row still works and
-> simply overrides the built-in.
+Then `polyrob run -p ollama "…"` or `DEFAULT_PROVIDER=ollama`. A row can
+override a built-in (give `openai:` a gateway `base_url`). Rules:
 
-Then use it like any built-in: `polyrob run -p ollama "…"`, or make it the
-default with `DEFAULT_PROVIDER=ollama`. A row can also **override a built-in**
-(e.g. give `openai:` a corporate-gateway `base_url`).
+- `transport` is `chat_completions` or `anthropic_messages`. A row names a wire
+  shape, never a client class.
+- Declare `models:` so they are listable and route through the `/v1` surface.
+- `prompt_in_init: false` keeps the wizard from asking for that row's key.
+- Load-time checks: `env_key` must look like an API key (never a wallet or
+  token name), `base_url` must be http(s) and never a cloud-metadata address,
+  and a group- or world-writable file is refused. Each loaded row is logged
+  with its endpoint.
+- The file decides where your prompts and keys go. Keep it mode `600`. Agent
+  file tools cannot read it and the console cannot write it.
 
-Rules worth knowing:
-
-- **`transport`** selects the wire shape: `chat_completions` (OpenAI-style) or
-  `anthropic_messages`. A row can never name a client class — only a transport.
-- **Declare `models:`** — declared models become listable and route correctly
-  through the OpenAI-compat `/v1` surface. A row without `models:` still works,
-  but only when named explicitly (`-p <name> -m <model>`).
-- **`subscription: true`** marks a flat-rate plan, so per-token cost accounting
-  is skipped for it (see [Subscription plans](#subscription-plans-flat-rate-providers)).
-- **`prompt_in_init: false`** keeps `polyrob init` from asking for that row's
-  key — useful for a plan-specific row that only you have.
-- **Security is enforced at load**: `env_key` must be an `*_API_KEY`-shaped
-  variable (never a wallet/telegram/JWT secret name), `base_url` must be
-  http(s) and never a cloud-metadata endpoint, and a group/world-writable file
-  is refused. Every loaded row is logged with its effective endpoint, so a
-  redirect is always visible.
-- **The file is credential-equivalent** (it decides where your prompts and keys
-  go): agent file tools are denied access to it, and it is not writable from
-  the webview console. Keep it under `~/.polyrob/` with mode `600`.
-- (The `LLM_PROVIDER_REGISTRY` kill-switch was removed on 2026-08-29, two releases after it shipped; the registry is the only path. It used to restore the legacy built-in-only
-  provider tables and ignores the file entirely.
+Any OAuth provider can be declared in the same file with an `oauth:` block
+(`grant: device_code` or `authorization_code`, `redirect_mode: manual` or
+`loopback`); the flows are driven from that data.
 
 ---
 
-## Core feature flags
+## 4. Memory
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POLYROB_INSTANCE_ID` | `rob` | Which instance to run. See [instances.md](instances.md). |
-| `POLYROB_LOCAL` | `false` | Set to `true` for single-user / local mode. Enables the **interactive** local tools (coding, git, knowledge base, memory/RAG, project-context) as a group. The self-directed **autonomy** loops (goals, self-wake, writable skills, curator, insights, …) are OFF by default and additionally need `AUTONOMY_ENABLED` — see [Autonomy](#autonomy). Per-flag values still override. |
-| `AUTONOMY_ENABLED` | `false` | Master switch for the self-directed autonomy loops. OFF by default for a new install (the agent is interactive-only). ON automatically when you set an autonomous posture/mode (`AUTONOMY_MODE=autonomous`, or `AUTONOMY_POSTURE` owner-visible/full). See [Autonomy](#autonomy). |
-| `MEMORY_BACKEND` | `sqlite` (**`local_vector` under `POLYROB_LOCAL`**) | Memory backend: `sqlite` (keyword FTS), `local_vector` (FTS + vector), `none` / `off` (disabled). |
-| `MEMORY_REQUIRE_USER_ID` | `true` | When `true`, memory read/write is refused for anonymous sessions. Set `false` for single-user local installs to use a shared bucket. |
-| `SUB_AGENTS_ENABLED` | `true` | Allow the agent to spawn sub-agents for parallel work. |
+Cross-session memory is on by default and tenant-scoped.
 
----
+| `MEMORY_BACKEND` | What you get |
+|---|---|
+| `sqlite` (server default) | keyword recall over SQLite FTS5, no extra dependencies |
+| `local_vector` (default under `POLYROB_LOCAL`) | hybrid keyword + vector recall; needs `pip install "polyrob[memory-vector]"` |
+| `none` | no cross-session memory |
 
-## Memory: sqlite-vec and the apsw note
+Vector recall loads the `sqlite-vec` extension through `apsw`, because the
+standard-library `sqlite3` is often built without extension loading. If the
+extension or the embedder is missing, the agent logs one warning and degrades
+to keyword recall. It keeps working.
 
-Keyword memory (FTS) works out of the box with no extra dependencies.
+`MEMORY_REQUIRE_USER_ID` (default on) refuses memory for anonymous sessions;
+set it to `false` only on a single-user box that wants one shared bucket.
+The knowledge base (`polyrob kb add|search|list|remove|export`) is a separate,
+document-shaped store behind `KB_ENABLED`, on by default under `POLYROB_LOCAL`.
 
-**Vector / semantic recall** requires two things:
-
-1. Install the `memory-vector` extra:
-   ```bash
-   pip install "polyrob[memory-vector]"
-   ```
-   This pulls in `sentence-transformers` (used to generate embeddings).
-
-2. The `sqlite-vec` extension must be loadable at runtime. `apsw` and `sqlite-vec`
-   ship as base dependencies of polyrob, so this is usually already satisfied —
-   the caveat below covers the platforms where it isn't.
-
-**Important caveat:** Python's standard-library `sqlite3` is often compiled **without** extension-loading support, which is why polyrob uses `apsw` (Another Python SQLite Wrapper) to load the `sqlite-vec` extension. If `apsw` is unavailable or the extension file cannot be found, polyrob logs a warning and **transparently degrades to keyword-only FTS** — the agent still works, recall quality is just lower.
-
-To enable vector recall, set:
-```
-MEMORY_BACKEND=local_vector
-```
-
-This is already the default under `POLYROB_LOCAL=true` — you only need to set it
-explicitly for a headless/server install that wants vector recall.
-
-If you see a log warning like `sqlite-vec extension unavailable ... Falling back to FTS5 keyword recall`, the agent is still operational; only semantic similarity search is unavailable.
+Inspect the active provider from the REPL with `/memory`.
 
 ---
 
-## CLI config
+## 5. The autonomy dial
+
+Out of the box the agent is **interactive**: it acts on your messages and on
+nothing else. Autonomy is a set of loops you opt into, governed by four axes.
+Set them in this order and stop when you have what you want.
+
+| Axis | Default | What it moves |
+|---|---|---|
+| `POLYROB_LOCAL` | off | The single-user profile. Turns on the interactive tools (coding, git, knowledge base, memory, project context) as a group. Set automatically by the CLI. |
+| `AUTONOMY_ENABLED` | off | The master switch for the self-directed loops: self-wake, the goal board and planner, the curator, background review, episodic continuity, writable skills. |
+| `AUTONOMY_POSTURE` | `silent` | How visible the autonomous work is. `owner-visible` adds completion judging, blocker escalation and continuity; `full` adds time-based initiative (cron) and the no-change wake gate. Recommended for a single-user box: `owner-visible`. |
+| `AUTONOMY_MODE` | `supervised` | `autonomous` = act-and-report on a single-owner box: capability flags (Twitter, MCP, groups, email surface, invoicing) default on, approvals become allow-audit-notify, outbound policy opens. Effective only with `POLYROB_LOCAL` and a bound owner; otherwise it clamps back to `supervised`. |
 
 ```bash
-polyrob config show                            # view merged config, with secrets redacted
-polyrob config path                            # show project/global config file locations
-polyrob config set KEY VALUE                   # write to ./.polyrob/.env (add --global for ~/.polyrob/.env)
-polyrob config set KEY                         # omit VALUE → prompted, hidden for secrets (no shell history)
-polyrob init                                   # interactive first-run setup (writes ~/.polyrob/.env)
-polyrob model set-default                      # interactive model picker
-polyrob model set-default <provider> <model>   # persist a specific default — see `polyrob model list`
+polyrob autonomy status            # the posture card: every axis, pauses, loop state
+polyrob autonomy on                # writes AUTONOMY_ENABLED=true (add --global to keep it out of this project)
+polyrob autonomy on --mode autonomous
+polyrob autonomy off
 ```
 
-Run `polyrob doctor` any time to check that your configuration resolved the way
-you expect (provider, model, memory backend). See [cli.md](cli.md#polyrob-doctor).
+**If you set axis 3 or 4, skip axis 2 — they turn it on.** Choosing
+`AUTONOMY_MODE=autonomous` or an `owner-visible`/`full` posture flips
+`AUTONOMY_ENABLED` on for you, so a deliberate choice is never left inert. An
+explicit per-flag value always wins over any group default.
 
-Global config is stored at `~/.polyrob/.env`. Project overrides live at
-`./.polyrob/.env`. Legacy `~/.polyrob/cli.json` may exist for older CLI
-preferences and is migrated by `polyrob init` when possible.
+**What never moves with the dial:** spending money, host access and secrets.
+Each keeps its own gate (§9, §6) under every mode.
 
-Example:
-```dotenv
-DEFAULT_PROVIDER=anthropic
-DEFAULT_MODEL=<model-name>          # run `polyrob model list` to see available models
-POLYROB_AGENT_TOOLSET=coding
-```
+### Stopping it
 
-Legacy note: installs from before the project was renamed from `rob` to
-`polyrob` used `~/.rob` as the config home (including its `cli.json`).
-polyrob copies `~/.rob` to `~/.polyrob` automatically the first time you run
-a local-mode command, if `~/.polyrob` doesn't already exist — no manual
-migration needed.
-
----
-
-## Autonomy
-
-**Autonomy is OFF by default for new installs.** Out of the box the agent is
-*interactive* — it acts on your messages and nothing else. The self-directed loops —
-**self-wake** (re-entering an idle session on its own), the **goal board + planner**
-(pursuing background goals across sessions), the **curator** and **background review**,
-**episodic continuity**, and **self-writing** (editing its own skills / identity) — only
-run once you opt in.
-
-Turn them on with the single master switch:
+A pause is immediate and needs no restart:
 
 ```bash
-AUTONOMY_ENABLED=true        # or run `polyrob init` and answer "yes" to the autonomy prompt
+polyrob autonomy pause                   # everything
+polyrob autonomy pause trading --for 6h  # one scope, timed
+polyrob autonomy resume
 ```
 
-`AUTONOMY_ENABLED` also flips ON automatically when you choose an autonomous posture or
-mode (`AUTONOMY_MODE=autonomous`, or `AUTONOMY_POSTURE` set to `owner-visible`/`full`), so
-a deliberate autonomy choice is never left inert. On the local CLI the loops need **both**
-`POLYROB_LOCAL` (the local profile) and `AUTONOMY_ENABLED`; a multi-tenant server keeps
-every loop OFF unless you enable it explicitly. An explicit per-flag value always wins.
+The same words work in chat ("stop", "halt", "pause", "freeze", "standby";
+"resume", "unpause", "unfreeze"). `polyrob owner …` and the console expose the
+same record. Details: [owner-controls.md](owner-controls.md).
 
-Check the current state anytime with `polyrob doctor` (the `autonomy:` line) or `/autonomy`
-in the chat REPL.
+### Compute posture
 
-## Advanced / autonomy flags
-
-These are all `false` / conservative by default except where noted. Setting `POLYROB_LOCAL=true`
-enables the **interactive** subset as a group; the self-directed autonomy loops in this table
-additionally require `AUTONOMY_ENABLED` (see [Autonomy](#autonomy) above).
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AUTONOMY_ENABLED` | `false` (**ON under `AUTONOMY_MODE=autonomous` / `AUTONOMY_POSTURE` owner-visible/full**) | Master switch for the self-directed autonomy loop group below. |
-| `CRON_ENABLED` | `false` | Enable the cron scheduler (runs scheduled tasks). |
-| `CRON_DELIVERY_ENABLED` | `false` | Deliver cron results out-of-band (telegram/email/twitter). Needs a recipient (see below). |
-| `POLYROB_OWNER_EMAIL` / `BOT_OWNER_EMAIL` | unset | Owner email address for cron **email** delivery on single-owner deploys (used when no `user_directory` service is registered). Telegram delivery uses `POLYROB_OWNER_TELEGRAM_ID`. |
-| `GOALS_ENABLED` | `false` | Enable the durable goal board (background goal pursuit). Goals can depend on other goals — the agent's `goal_create` tool takes `depends_on`, and a goal waits for its prerequisites before running. |
-| `GOAL_BLOCKED_PROVIDER_RETRY_MIN` | `30` | Minutes before a goal blocked by a *transient* provider outage self-heals back to `ready` (a goal blocked because it `needs_input`, or because a prerequisite failed, is never auto-requeued — only the owner or the dependency sweep clears those). |
-| `SKILLS_WRITABLE` | `false` | Allow the agent to create and edit skills. |
-| `BACKGROUND_REVIEW_ENABLED` | `false` | Enable periodic background aux-model review (fires every N productive turns). |
-| `CURATOR_ENABLED` | `false` | Enable the skill curator (archives stale authored skills). |
-| `SELF_WAKE_ENABLED` | `false` | Allow the agent to re-enter idle sessions autonomously. |
-| `CODE_EXEC_ENABLED` | `false` | Enable local code execution (subprocess). **Not sandboxed — single-user only.** |
-| `THINKING_CONFIG_ENABLED` | `false` | Enable extended reasoning tokens (Claude, DeepSeek, OpenAI reasoning models). |
-| `PROJECT_CONTEXT_AUTOLOAD` | `false` | Auto-load a per-repo context file (`polyrob.md` > `POLYROB.md` > `AGENTS.md` > `CLAUDE.md` > `.cursorrules`, highest-precedence name wins, not concatenated) as steering context. Use `polyrob.md` to give POLYROB per-repo guidance without touching the file your other coding agents read. |
+`AGENT_COMPUTE_POSTURE` is a separate axis for how much of the host the agent
+may use. `0` (default) is a confined, ephemeral sandbox. `1` gives it a
+persistent dev container with a `shell` and pip installs. `2` adds the
+approval-gated `self_env` verbs that patch and restart the agent itself. `3`
+means the host and requires `POLYROB_LOCAL`. Leave it at `0` unless you are
+building software with the agent. See [security-model.md](security-model.md).
 
 ---
 
-## Run budget (spend ceiling)
+## 6. Tools and capabilities
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RUN_BUDGET_USD` | `0` (off) | A per-session dollar ceiling. When set above `0`, a run **halts honestly** the moment its summed real provider cost reaches the cap — reported as a stopped run with a budget marker, never a fabricated "completed". The cap counts real provider cost (not the marked-up user price); sub-agents share the parent's budget. Anonymous sessions with no database are ungated (fail-open). |
+### Toolsets
 
-The remaining budget is surfaced in the agent's environment block, so the model can
-see how much room it has left and pace itself.
+A session runs with a named toolset. Pick one with `--toolset` or
+`POLYROB_AGENT_TOOLSET`: `minimal`, `safe`, `default`, `research`,
+`trading_research`, `coding`, `development`, `browser`, `social`, `full`,
+`earn`, `owner_interactive`.
+
+With `POLYROB_AGENT_TOOLSET` unset the CLI runs the **default** toolset —
+`filesystem`, `task`, `web_fetch` — plus `coding`, `anysite` and `defi_data`
+when their own flags are on. Nothing else is loaded, which is why an agent that
+"refuses" a tool is usually one that was never given it.
+
+```bash
+polyrob tools list        # the catalog
+polyrob tools status      # the same rows plus WHY each disabled one is disabled
+```
+
+`/toolset` in the REPL lists the toolsets and sets the default for new sessions.
+Under the dynamic tool rig (`TOOL_PROGRESSIVE_DISCLOSURE`, on under
+`POLYROB_LOCAL`) the agent sees every loadable tool and pulls one in mid-session
+with `load_tool`; money tools are never loadable that way.
+
+### Code execution
+
+Off by default and never in a default toolset.
+
+```bash
+polyrob config set CODE_EXEC_ENABLED true
+polyrob config set CODE_EXEC_BACKEND docker      # local_subprocess | docker | ssh
+```
+
+`local_subprocess` is a plain host process and **not a sandbox**; a server
+refuses it. `docker` is the hardened container. `ssh` runs on a remote host
+you name with `CODE_EXEC_SSH_HOST` and must be attested disposable with
+`CODE_EXEC_SSH_SANDBOXED=true` before a server accepts it.
+
+### MCP
+
+`MCP_ENABLED=true` connects the outbound `mcp` tool to the servers in
+`config/mcp_config.json` (secrets as `${VAR}` placeholders). Adding a server
+from chat — and what an added server can and cannot reach — is in
+[owner-controls.md](owner-controls.md#mcp-servers-giving-the-agent-new-tools).
+`MCP_SERVE_ENABLED=true` mounts POLYROB as an inbound MCP server at `POST /mcp`
+for Claude Desktop or Cursor. See [api.md](api.md#mcp-server-inbound).
+
+### Browser, web and search
+
+`web_fetch` is on by default; browser automation needs the `browser` extra
+and `python -m playwright install chromium`. `PERPLEXITY_API_KEY` enables the
+search tool. Fetched content always enters the model as untrusted data.
+
+### Project context
+
+Under `POLYROB_LOCAL` the agent auto-loads one context file from the current
+repository (`polyrob.md`, then `POLYROB.md`, `AGENTS.md`, `CLAUDE.md`,
+`.cursorrules`; highest precedence wins, never concatenated). Use `polyrob.md`
+to steer POLYROB without touching the file your other coding agents read.
+Switch with `PROJECT_CONTEXT_AUTOLOAD`.
 
 ---
 
-## Reliability defaults (on by default)
+## 7. Surfaces and who may talk to it
 
-These two are **on by default** because they're pure hygiene — set them to `false`
-only if you have a specific reason.
+Every chat surface runs the same agent. Start one with `polyrob telegram`,
+`polyrob email`, `polyrob discord`, `polyrob slack`, `polyrob signal`,
+`polyrob whatsapp`, `polyrob x`, or all enabled ones with `polyrob gateway`.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `DEAD_TARGET_REGISTRY` | `true` | Skip outbound sends to provably-dead targets (a chat you've been blocked from, or a deleted conversation) and auto-revive the target the next time it messages you. Only definitively-classified failures are suppressed; ambiguous errors are unaffected. |
-| `COMPACTION_PROMPT_GUARD` | `true` | Frame the context-compaction summarizer prompt (and the prior-summary block it rebuilds) so adversarial text captured earlier in a long conversation can't hijack the summarization step. |
+### The owner
+
+Bind yourself before exposing any surface:
+
+```bash
+polyrob config set POLYROB_OWNER_TELEGRAM_ID 123456789   # your numeric Telegram id
+polyrob config set ALLOWED_TELEGRAM_USER_IDS 123456789   # the DM lock
+polyrob owner show                                        # the bound owner and per-surface posture
+```
+
+With no allowlist the bot is locked and replies with the sender's id so you
+can copy it. `POLYROB_OWNER_USER_ID` is the internal principal and you
+normally do not set it; a single Telegram id in the allowlist becomes the owner
+alias automatically.
+
+### Strangers
+
+Private chats are permission-list by default. Beyond the owner, a sender is
+either **paired** (`POLYROB_REQUIRE_PAIRING=true`, then `polyrob owner pair
+approve <code>`) or a **correspondent** the agent contacted first, whose
+replies arrive as data, never as instructions (`CORRESPONDENT_ACCESS_ENABLED`).
+Email senders are always correspondent-or-denied.
+
+### Groups
+
+Groups are a different regime: the agent answers anyone in a room you have
+allowed, from a read-only room toolset, with per-chat roles and a per-chat
+policy (`chat.mode`, `chat.instructions`, caps, quiet hours). Enable with
+`GROUP_CHAT_ENABLED=true` (on under `AUTONOMY_MODE=autonomous`), then
+`/groups allow here` in the room. The full setup, including the BotFather
+privacy-mode step, is in [groups.md](groups.md).
+
+### Outbound
+
+Who the agent may message on its own is an allowlist (`polyrob owner allow
+telegram <id>`), widened by `OUTBOUND_POLICY` and capped by
+`OUTBOUND_DAILY_SEND_CAP`.
+
+Everything the agent sends **you** rides one delivery rail, bounded so a
+runaway loop cannot fill your chat:
+
+| Bound | Default | Flag |
+|---|---|---|
+| messages per day | 30 | `USER_DELIVERY_DAILY_CAP`, pref `delivery.daily_cap` |
+| messages per hour | 10 | `USER_DELIVERY_RATE_PER_HOUR`, pref `delivery.rate_per_hour` |
+| identical text suppressed for | 24h | `USER_DELIVERY_DEDUP_HOURS` |
+| framework status pings per day | 10 | `USER_DELIVERY_LIFECYCLE_DAILY_CAP` |
+| slots reserved from low-priority traffic | 8 | `USER_DELIVERY_RESERVED_SLOTS` |
+| gap before the agent repeats the same text to you | 2h | `OWNER_MESSAGE_COOLDOWN_SEC` |
+
+Three rules make those bounds safe to live with:
+
+- **Safety-bearing messages are exempt, and do not spend your budget.** An
+  approval the agent is blocked on, a blocked goal, a transaction that has
+  already moved money, a credit-death or security notice — none of them queue
+  behind ordinary traffic, and none of them consume a slot that ordinary
+  traffic could be denied for.
+- **A bounded message is never lost.** It is recorded durably and read back
+  with `polyrob owner missed` / `/missed`, which names the bound that held it.
+  Dedup is the one exception, and only because you already received that text.
+- **The preference wins unless the deployment set a ceiling.** With no explicit
+  `USER_DELIVERY_DAILY_CAP` in the environment, `polyrob config set
+  delivery.daily_cap 60` raises your cap. With one set, the preference may only
+  tighten it.
+
+Quiet hours (`digest.quiet_hours`) defer rather than drop. Framework run pings
+(`▶ goal started`) are OFF by default in every posture —
+`AUTONOMY_START_NOTICE=true` turns them on. See
+[owner-controls.md](owner-controls.md#what-did-i-miss).
 
 ---
 
-## Code execution
+## 8. Identity, character and profiles
 
-Code execution is **off by default** and never in the default toolset. When you
-enable it, choose a backend that matches your trust boundary.
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CODE_EXEC_ENABLED` | `false` | Enable the `run_code` tool. |
-| `CODE_EXEC_BACKEND` | `local_subprocess` | `local_subprocess` (a plain host subprocess — a convenience, **not a sandbox**; single-user/local only), `docker` (hardened container — the multi-tenant/server choice), or `ssh` (runs on a remote host). |
-| `CODE_EXEC_SSH_HOST` / `_USER` / `_PORT` / `_KEY` | unset / unset / `22` / unset | Target for `CODE_EXEC_BACKEND=ssh`, run over your system `ssh` binary. `HOST` is required when `ssh` is selected. |
-| `CODE_EXEC_SSH_SANDBOXED` | `false` | Operator attestation that the SSH host is hardened/disposable. By default the `ssh` backend is honestly reported as **not** a sandbox (agent code runs with the SSH user's full privileges), so a server refuses it unless you attest here. |
-
-On a server (`POLYROB_LOCAL` unset), a non-sandboxed backend is refused by
-construction — see [security-model.md](security-model.md) and
-[`tools/code_exec/SANDBOX_SECURITY.md`](../../tools/code_exec/SANDBOX_SECURITY.md).
+- **Instance id** (`POLYROB_INSTANCE_ID`, default `polyrob`): the name of this
+  deployment and the tenant key. See [instances.md](instances.md).
+- **SOUL** (`polyrob identity soul`): operator-authored identity documents the
+  agent cannot change.
+- **Character** (`polyrob identity persona`, `PERSONALITY_DEFAULT_CHARACTER`):
+  the voice layer, a `<name>.character.json`. The package ships the neutral
+  `polyrob` character plus six curated ones — `default`, `writer`, `researcher`,
+  `analyst`, `coder`, `ops` — and your own go in your data or profile dir, which
+  wins over both.
+- **Avatar** (`polyrob identity avatar`): the generated face used on cards
+  and profiles.
+- **Profiles** (`polyrob profile create|use|export|install`): whole isolated
+  homes for running several bots on one machine. See [profiles.md](profiles.md).
 
 ---
 
-## MCP: outbound client and inbound server
+## 9. Money
 
-polyrob is both an MCP *client* (it reaches out to external MCP servers) and,
-optionally, an MCP *server* (other tools reach in to it).
+Everything that touches money is off by default and has its own gates that
+no autonomy setting moves: the wallet daily and per-transaction caps, the
+approval lane (`PAYMENT_APPROVAL_MODE`, `APPROVAL_PROVIDER`), the DeFi
+autonomous ceiling, and the trading grants.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `MCP_ENABLED` | `false` | Enable the outbound MCP client — connect the `mcp` tool to external MCP servers configured in `config/mcp_config.json` (STDIO / SSE / HTTP / Streamable HTTP). |
-| `MCP_SERVE_ENABLED` | `false` | Mount the **inbound** MCP server surface at `POST /mcp`, so an MCP client (Claude Desktop, Cursor) can connect to polyrob as a tool provider. v1 is read-only and exposes five tenant-scoped tools; auth is the same `X-API-KEY` / bearer-JWT / x402 policy as the REST/A2A surface. See [api.md](api.md#mcp-server-inbound). |
-| `MCP_OAUTH_ENABLED` | `false` | For outbound connections only: inject and refresh OAuth `Authorization` headers on SSE/HTTP MCP servers whose config declares an `auth` block. Forward-looking scaffolding — no shipped server declares `auth` yet. |
+The ceilings are environment flags — `WALLET_DAILY_CAP_USD`,
+`AGENT_WALLET_MAX_PER_TX_USD`, `DEFI_AUTONOMOUS_MAX_USD`. Each has a preference
+twin (`budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`,
+`budget.defi_autonomous_usd`) you can set live from chat, and the effective
+value is the **minimum of the two**: a preference only ever tightens what the
+environment already allows.
+
+Start with [payments.md](payments.md); it is the complete reference for the
+wallet, invoicing, x402, trading and token deployment.
+
+---
+
+## 10. Preferences you set from chat or the CLI
+
+Preferences apply live or on the next turn and never need a restart. They are
+per owner (and per room for `chat.*`). `polyrob config list` prints them all
+with their current value; from chat, `/config set KEY VALUE`.
+
+| Group | Keys | Notes |
+|---|---|---|
+| Style | `style.verbosity`, `style.tone`, `style.language` | how the agent writes to you |
+| Session | `session.toolset`, `session.persona` | next session |
+| Approvals | `approvals.require`, `approvals.deny`, `approvals.provider` | tighten only; an env value is the floor |
+| Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | effective value is the minimum of pref and env |
+| Goals | `goals.daily_quota`, `goals.max_concurrent`, `goals.notify_on_done` | |
+| Autonomy | `autonomy.self_wake`, `autonomy.background_review` | |
+| Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `progress.telegram`, `pause.phrases` | owner notices and the daily digest |
+| Outbound | `outbound.policy`, `outbound.domains`, `outbound.max_new_recipients_per_day`, `outbound.daily_send_cap` | |
+| Rooms | `chat.mode`, `chat.name`, `chat.instructions`, `chat.wake_words`, `chat.reply_cap_per_hour`, `chat.member_cooldown_sec`, `chat.context_lines`, `chat.quiet_hours`, `chat.mute_until`, `chat.tone`, `chat.verbosity`, `chat.language` | per room; set with `/groups set here KEY VALUE` |
+| UI | `ui.show_avatar` | |
+
+A guarded preference (approvals, budget) can only tighten what the environment
+allows. The agent may propose a preference change itself; proposals wait in
+`polyrob owner pending` until you promote them.
+
+---
+
+## 11. Server and console
+
+A server (`polyrob serve`) and the console (`polyrob dashboard`) derive their
+posture from how you bind them: `local` on loopback with no auth, `own_ops`
+on a public host with owner login (`--host 0.0.0.0` upgrades to this so a
+no-auth console is never exposed by accident), `multitenant` with wallet
+sign-in and billing. `WEBVIEW_READ_ONLY=true` makes the console a monitor
+that cannot act.
+
+Setting `WEBVIEW_READ_ONLY=false` on a **non-local** console has two
+preconditions, checked at boot: a bound owner (`POLYROB_OWNER_USER_ID`) and
+`SESSION_REGISTRY_BACKEND=sqlite` on both the console and the agent. Without
+them the console refuses to start rather than write into a tenant nobody chose
+or resume a session another process owns. See
+[deployment-postures.md](deployment-postures.md),
+[self-hosting.md](self-hosting.md) and [console.md](console.md).
+
+---
+
+## 12. Troubleshooting
+
+Two reliability defaults you can leave alone, before the table:
+`DEAD_TARGET_REGISTRY` skips sends to a chat that has blocked or deleted the
+bot and revives it when it writes again. `COMPACTION_PROMPT_GUARD` frames the
+context-compaction step so old adversarial text cannot hijack it. Both are on.
+
+| Symptom | Check |
+|---|---|
+| "polyrob stopped seeing my key" | `polyrob config explain ANTHROPIC_API_KEY` — a key written with `--project` lives in `./.polyrob/.env` and only applies in that directory. |
+| The wrong provider answers | `polyrob model list`; pin with `polyrob model set-default`. |
+| Recall feels shallow | the log says the `sqlite-vec` extension was unavailable; install the `memory-vector` extra. |
+| Autonomy "does nothing" | `polyrob autonomy status` — check the master switch, the posture and whether a pause is active. |
+| A flag has no effect | `polyrob doctor --flags --search NAME` shows the resolved value and its source; `polyrob config check` finds a mistyped name. |
+| The agent will not run a tool | `polyrob tools status` names the gate — `disabled (missing config: KEY)` or `disabled (gated by FLAG=false)`. |
+
+The complete flag reference: [`docs/CONFIGURATION.md`](../CONFIGURATION.md).
+The CLI reference: [cli.md](cli.md). What actually stops the agent from doing
+something harmful: [security-model.md](security-model.md).

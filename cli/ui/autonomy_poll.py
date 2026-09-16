@@ -21,11 +21,11 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
     review = False
     try:
         try:
-            from agents.task.constants import AutonomyConfig
+            from core.config_policy import AutonomyConfig
 
             review = bool(AutonomyConfig.background_review_enabled())
         except Exception:
-            review = False
+            review = None
 
         from core.runtime_paths import cron_db_path, goals_db_path
 
@@ -37,7 +37,7 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
 
                 cron = len(CronService(CronJobStore(cron_db)).list_jobs(user_id=user_id))
             except Exception:
-                cron = 0
+                cron = None
 
         goals_db = goals_db_path(data_dir)
         if os.path.exists(goals_db):
@@ -49,10 +49,10 @@ def read_autonomy_snapshot(user_id: str, data_dir: str = "data") -> Optional[dic
                     [g for g in all_goals if getattr(g, "status", "") not in ("done", "cancelled")]
                 )
             except Exception:
-                goals = 0
+                goals = None
     except Exception:
         return None
 
-    if not (goals or cron or review):
+    if goals == 0 and cron == 0 and review is False:
         return None
     return {"goals": goals, "cron": cron, "review": review}

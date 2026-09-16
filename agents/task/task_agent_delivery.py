@@ -20,6 +20,30 @@ from agents.task.task_agent_support import (
 logger = logging.getLogger("agents.task_agent_lite")
 
 
+def _drop_queued_room_context(message_manager) -> int:
+    """044 I8: remove any ALREADY-queued room context block. Returns how many.
+
+    A room has exactly one current context — the newest. Fail-open: the queue is
+    an optimization, so an odd message shape or a missing attribute costs the
+    collapse, never the push that follows.
+    """
+    try:
+        from modules.llm.messages import MessageOrigin
+        queue = getattr(message_manager, "_ephemeral_messages", None)
+        if not queue:
+            return 0
+        stale = [m for m in queue
+                 if getattr(m, "origin", None) == MessageOrigin.GROUP_CONTEXT]
+        for m in stale:
+            queue.remove(m)
+        if stale:
+            logger.debug("collapsed %d stale room context block(s)", len(stale))
+        return len(stale)
+    except Exception as e:  # pragma: no cover - never block the push
+        logger.debug("room context collapse skipped: %s", e)
+        return 0
+
+
 class TaskAgentDeliveryMixin:
     def _rebind_recreated_chat(self, orchestrator, session_id: str, user_id: str) -> None:
         """Re-attach the outbound chat surface to a recreated orchestrator (#0).
@@ -40,20 +64,84 @@ class TaskAgentDeliveryMixin:
                 return  # not a chat-bound session
             from core.surfaces.binding import bind_chat_surface
             from core.surfaces.envelopes import SessionSource
+            from core.surfaces.session_chat_registry import row_from_session_key
+            # 044 C1: derive the chat TYPE from the binding key, which IS the
+            # address (`agent:main:{surface}:{chat_type}:{chat_id}`). It was
+            # hardcoded "dm", so every recreated ROOM session was rebound as a
+            # private chat — `bind_chat_surface` then cleared `_public_session`
+            # and the room came back with no gate, no turn_kind, owner docs and
+            # tenant recall. Fail-open to the stored row's own type, then "dm".
+            _key = row.get("session_key")
+            _implied = row_from_session_key(_key) or {}
+            _chat_type = (row.get("chat_type") or _implied.get("chat_type") or "dm")
             src = SessionSource(
                 surface_id=row.get("surface_id"),
                 chat_id=row.get("chat_id"),
-                chat_type="dm",
+                chat_type=_chat_type,
             )
             bind_chat_surface(
                 orchestrator, self.container,
                 session_source=src,
-                chat_session_key=row.get("session_key"),
+                chat_session_key=_key,
                 session_id=session_id,
                 user_id=user_id,
             )
         except Exception as e:
             logger.debug(f"_rebind_recreated_chat failed for {session_id}: {e}")
+    def _bound_key_is_room(self, session_id: str) -> bool:
+        """Is this session bound to a ROOM chat key? (044 C1 round 2.)
+
+        The fallback audience probe for a session record that predates the
+        `public_session` metadata key. The chat key IS the address, so
+        `is_group_session_key` answers exactly; it is read from the durable
+        chat<->session registry, the same row `_rebind_recreated_chat` resolves.
+
+        Fail-open to False: no registry (the Singular Chat bus is off), no row,
+        or a lookup fault all mean "nothing says this is a room", which leaves
+        the legacy behaviour untouched rather than inventing a profile.
+        """
+        try:
+            if not self.container:
+                return False
+            registry = self.container.get_service("session_chat_registry")
+            if registry is None or not hasattr(registry, "resolve_by_session_id"):
+                return False
+            row = registry.resolve_by_session_id(session_id)
+            if not row:
+                return False
+            from core.surfaces.room_keys import is_group_session_key
+            return is_group_session_key(row.get("session_key"))
+        except Exception as e:
+            logger.debug("room-key audience probe failed for %s: %s", session_id, e)
+            return False
+
+    def set_turn_reply_to(self, session_id: str, message_id: Optional[str]) -> None:
+        """044 T10: the surface message this turn answers (rooms thread their replies).
+
+        Read back by ``tools/controller/emit.py::publish_context`` and stamped onto
+        every ``OutboundMessage`` the turn publishes. Fail-open/no-op when the
+        session isn't resident (nothing to reply-to yet, or the caller raced a
+        recreate) — a missing anchor just means the reply lands unthreaded.
+
+        ⚠️ Fix round 1 (review finding #1): this is a DIRECT, once-at-creation
+        poke — the harness calls it ONLY right after ``create_session`` returns
+        for a brand-new room session, because turn 1's seed task bypasses the
+        HITL queue entirely (there is no drained message to carry the anchor
+        on yet). Every OTHER path (STEER, a later turn, self-wake, delegation
+        reentry, ...) must carry ``reply_to`` on the QUEUED MESSAGE's own
+        ``metadata`` instead — ``agent/core/user_ingress.py::
+        _drain_user_messages`` recomputes ``orchestrator._turn_reply_to`` from
+        the last drained batch on every drain, which is what stops this
+        setter's one-time value from going stale (a plain follow-up message,
+        a self-wake, or a delegation reentry — none of which carry
+        ``reply_to`` — clears it back to None the moment they drain). Do NOT
+        call this from a path where a rejected/"busy" submission could leave
+        a stale anchor behind — route ``reply_to`` through the message's
+        metadata there instead."""
+        orch = self.get_orchestrator(session_id) if hasattr(self, "get_orchestrator") else None
+        if orch is not None:
+            orch._turn_reply_to = message_id
+
     def touch_chat_binding(self, session_key: str) -> None:
         """Bump a chat binding's last-activity clock (idle boundary, a1). Fail-open;
         resolves the session_chat_registry from the container. No-op if the bus is off."""
@@ -159,6 +247,198 @@ class TaskAgentDeliveryMixin:
                 f"ensure_session_and_deliver failed for {session_id}: {e}", exc_info=True
             )
             return "gone"
+    def push_room_context(self, session_id: str, context_block: str,
+                          *, orchestrator: Optional[Any] = None) -> bool:
+        """044 T14: put a room's ``<group-context>`` block in front of ONE call.
+
+        The block is an EPHEMERAL control message — never a stored user turn, so
+        old chatter cannot replay as work on a later step (044 §4.4). This is the
+        seam BOTH room paths use: the warm turn (``deliver_group_turn``) and the
+        cold start, which calls it after ``create_session`` returns rather than
+        folding the block into the session's ``request`` (a task string lives for
+        the whole session, which is exactly what "API-only" forbids).
+
+        ``orchestrator`` lets a caller that ALREADY resolved one pass it in
+        rather than paying a second registry lookup that could race an eviction;
+        the cold start omits it and this resolves from the registry.
+
+        On a COLD start there is no agent yet — ``create_session`` returns before
+        ``create_agent`` runs — so the block is buffered on the orchestrator and
+        flushed as an ephemeral when the agent is built.
+
+        Fail-open and WARNING-loud: no resident agent means the turn still runs,
+        it just answers without the room's recent lines. Returns True iff pushed.
+        """
+        if not context_block:
+            return False
+        try:
+            if orchestrator is None:
+                orchestrator = (self.get_orchestrator(session_id)
+                                if hasattr(self, "get_orchestrator") else None)
+            if orchestrator is None:
+                logger.warning("room context dropped for %s: no orchestrator "
+                               "(the addressed line still lands)", session_id)
+                return False
+            from core.surfaces.group_turn import frame_context
+            from modules.llm.messages import MessageOrigin, make_control_message
+            framed = frame_context(context_block)
+            agent = next(iter(getattr(orchestrator, "agents", {}).values()), None)
+            mm = getattr(agent, "message_manager", None)
+            if mm is not None and hasattr(mm, "push_ephemeral_message"):
+                # 044 I8: a room has exactly ONE current context — the newest.
+                # The ephemeral queue caps at 30 and drops the OLDEST, so a busy
+                # room that outran its turns could stack up to 30 blocks (6000
+                # chars each) in front of one call, every one of them a stale
+                # view of the same conversation and all but the last already
+                # answered. Collapse to the newest before pushing.
+                _drop_queued_room_context(mm)
+                mm.push_ephemeral_message(
+                    make_control_message(framed, MessageOrigin.GROUP_CONTEXT))
+                return True
+            # ⚠️ A COLD start has no agent yet: `create_session` builds and
+            # initializes the ORCHESTRATOR, but `create_agent` runs inside
+            # `run_session`. Buffer it the same way a pre-agent user message is
+            # buffered (`_pending_messages`); `session/execution.py::create_agent`
+            # flushes it as an ephemeral. Bounded — a room turn needs ONE block,
+            # and an orchestrator that never runs must not hold a growing list.
+            pending = getattr(orchestrator, "_pending_room_context", None)
+            if pending is None:
+                logger.warning("room context dropped for %s: no pending buffer "
+                               "(the addressed line still lands)", session_id)
+                return False
+            # 044 I8: same rule pre-agent — the newest block is the room, the
+            # older ones are a stale view of the same conversation.
+            pending.clear()
+            pending.append(framed)
+            return True
+        except Exception as e:
+            logger.warning("room context push failed for %s: %s", session_id, e,
+                           exc_info=True)
+            return False
+
+    async def deliver_group_turn(
+        self,
+        session_id: str,
+        *,
+        user_id: str,
+        context_block: str,
+        addressed_block: str,
+        role: str,
+        reply_to: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        surface: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        shown_message_ids=None,
+    ) -> str:
+        """044 T14: queue one ROOM turn into the bound PUBLIC session.
+
+        The ``<group-context>`` block rides ONE LLM call as an EPHEMERAL control
+        message — it is never stored as user turns, so old chatter can't replay
+        as work on a later step (044 §4.4). The addressed line's channel is the
+        speaker's resolved role: a member's is untrusted DATA, an owner's or an
+        admin's is a genuine ``kind="comment"`` steer.
+
+        No correspondent TAINT is set (unlike ``deliver_correspondent_data``):
+        the capability bound here is the PUBLIC session profile plus the room
+        tool gate (``core/surfaces/room_policy.py``), which apply to every turn
+        in the room including the owner's — a taint that only the member's turn
+        raised would make the room's power depend on who spoke last.
+
+        Queue-only, mirroring ``ensure_session_and_deliver``: the CALLER runs the
+        session (the harness spawns ``_run_and_deliver`` so one place owns the
+        reply). Returns ``"delivered"`` / ``"busy"`` / ``"held"`` / ``"gone"``.
+        """
+        try:
+            session_info = self.session_manager.get_session_info(session_id)
+            if not session_info:
+                return "gone"
+            # 031 owner pause: a room line re-runs a session — autonomous work.
+            from core.autonomy_control import allows as _allows
+            _dec = _allows("resume_session")
+            if not _dec.allowed:
+                logger.warning("group turn HELD for %s (%s)", session_id, _dec.reason)
+                return "held"
+            orchestrator = await self._resolve_or_recreate(session_id, session_info)
+            if not orchestrator:
+                return "gone"
+            # The OWNER of the session, never the speaker: a member's uid must not
+            # become the tenant a room turn runs as (tenant safety).
+            owner_user_id = (session_info.get("user_id")
+                             if isinstance(session_info, dict)
+                             else getattr(session_info, "user_id", None)) or user_id
+            agent = next(iter(getattr(orchestrator, "agents", {}).values()), None)
+            mm = getattr(agent, "message_manager", None)
+            from core.surfaces.group_turn import (
+                frame_addressed, mark_room_lines_answered,
+            )
+            from modules.llm.messages import MessageOrigin, make_control_message
+            _shown = self.push_room_context(session_id, context_block,
+                                            orchestrator=orchestrator)
+
+            def _mark() -> None:
+                """Presented = handled. At DISPATCH, so a crashed or refused turn
+                cannot leave the room re-asking the same lines forever.
+
+                The CONTEXT ids are marked only when the block actually reached
+                the model — a dropped block means those lines were never shown,
+                and marking them would lose them permanently. The ADDRESSED
+                message is marked either way: it IS this turn."""
+                ids = list(shown_message_ids or []) if _shown else []
+                if reply_to:
+                    ids.append(str(reply_to))
+                mark_room_lines_answered(
+                    getattr(self, "container", None), surface=surface or "",
+                    chat_id=chat_id or "", message_ids=ids, session_id=session_id)
+
+            if role in ("owner", "admin"):
+                # A steer: it rides the HITL queue, so the reply anchor travels on
+                # the message's OWN metadata and `_drain_user_messages` recomputes
+                # `_turn_reply_to` from the batch that actually drains. `metadata`
+                # carries the turn's absorbed attachments (image blocks), which
+                # only an owner/admin turn ever has.
+                _md = dict(metadata or {})
+                if reply_to:
+                    _md["reply_to"] = reply_to
+                _status = await self.ensure_session_and_deliver(
+                    owner_user_id, session_id, addressed_block, kind="comment",
+                    metadata=(_md or None),
+                )
+                if _status == "delivered":
+                    _mark()
+                return _status
+            if mm is None or not hasattr(mm, "push_ephemeral_message"):
+                return "gone"
+            mm.push_ephemeral_message(make_control_message(
+                frame_addressed(addressed_block, role=role),
+                MessageOrigin.CORRESPONDENT))
+            # A member's line is an EPHEMERAL control message, not a drained HITL
+            # message, so NEITHER per-turn recompute in `_drain_user_messages`
+            # fires for it — both have to be done here or the turn inherits the
+            # PREVIOUS one's state:
+            #   * `_turn_reply_to` — the reply lands unthreaded;
+            #   * the reply LATCH (fix round 1, Critical 1) — a latch left set by
+            #     the previous turn would make this turn's `send_message` look
+            #     like a SECOND reply. `reset_turn` is the same call
+            #     `_drain_user_messages` makes for a drained batch.
+            # ⚠️ 2026-09-16: this reset no longer re-arms `done()` as a room
+            # fallback — `build_completion_publish` refuses a room session key
+            # outright, because the text it was falling back to is an internal
+            # completion record and publishing it leaked an owner question into a
+            # public group. A room turn that says nothing is now CORRECT (and is
+            # logged by the mirror), not a hole to be plugged with `done`.
+            # Safe: the push above already succeeded, so neither can be left
+            # stale behind a rejected submission (the hazard the
+            # `set_turn_reply_to` docstring warns about).
+            orchestrator._turn_reply_to = reply_to
+            from core.surfaces.turn_reply import reset_turn
+            reset_turn(orchestrator)
+            _mark()
+            logger.info("📨 room turn from a member queued into session %s", session_id)
+            return "delivered"
+        except Exception as e:
+            logger.error(f"deliver_group_turn failed for {session_id}: {e}", exc_info=True)
+            return "gone"
+
     def _session_has_pending_input(self, session_id: str) -> bool:
         """True if the session has genuine queued input waiting to be processed.
 
@@ -347,6 +627,7 @@ class TaskAgentDeliveryMixin:
         metadata: Optional[Dict[str, Any]] = None,
         *,
         surface: Optional[str] = None,
+        group: bool = False,
     ) -> bool:
         """WS-A: deliver a third-party correspondent reply as DATA into ``session_id``.
 
@@ -356,10 +637,12 @@ class TaskAgentDeliveryMixin:
         dropped + audit-logged (a third party can't resurrect a dead session). The
         owner ``user_id`` for the re-run comes from the session's OWN metadata, never
         the correspondent's identity (tenant safety). Gated ``CORRESPONDENT_ACCESS_ENABLED``
-        (default OFF → no-op). Returns True iff the data was delivered.
+        (default OFF → no-op) — UNLESS ``group=True`` (044 T6), in which case the room
+        rail rides ``GROUP_CHAT_ENABLED`` alone and this flag check is skipped. Returns
+        True iff the data was delivered.
         """
         from core.surfaces.config import SurfaceConfig
-        if not SurfaceConfig.correspondent_access_enabled():
+        if not group and not SurfaceConfig.correspondent_access_enabled():
             return False
         try:
             store = None
@@ -409,12 +692,16 @@ class TaskAgentDeliveryMixin:
                 # E6/A6 (2026-07-13 review): the originating session is dead. Try to
                 # RESUME the conversation into a replacement session instead of the
                 # legacy silent drop (the third party's message just vanished).
-                if await self._try_conversation_resume(
+                # getattr-guarded: _try_conversation_resume ships on ConversationResumeMixin,
+                # a separate mixin from this one — a host that doesn't compose it (e.g. a
+                # minimal test double) degrades to "no resume available" rather than crashing.
+                _resume = getattr(self, "_try_conversation_resume", None)
+                if _resume is not None and await _resume(
                         session_id, source, text, metadata, surface=surface, store=store):
                     return True
                 logger.warning(
                     f"correspondent delivery: session {session_id} not resident/recreatable "
-                    f"— dropping (audit)")
+                    f"— dropping (audit) group={group}")
                 return False
             owner_user_id = (session_info.get("user_id")
                              if isinstance(session_info, dict)
@@ -433,7 +720,8 @@ class TaskAgentDeliveryMixin:
                 text_to_inject, source, metadata, surface=surface, address=source)
             if not delivered:
                 logger.warning(
-                    f"correspondent delivery: no resident agent for {session_id} — dropping (audit)")
+                    f"correspondent delivery: no resident agent for {session_id} — dropping "
+                    f"(audit) group={group}")
                 return False
             if store is not None and surface and owner_user_id:
                 try:
@@ -496,19 +784,61 @@ class TaskAgentDeliveryMixin:
                 on_stream_chunk=stream_callback,
             )
 
+            # 044 C1: restore the session's AUDIENCE from its own durable
+            # metadata FIRST — before the rebind, before initialize(), before any
+            # agent is built — because everything that protects a room reads this
+            # one flag live (the fail-closed room tool gate, every owner-state
+            # injector, `turn_kind="group"`). The chat rebind below cannot be the
+            # stamp's only source: it needs the `session_chat_registry` service,
+            # which does not exist at all when the Singular Chat bus is off.
+            #
+            # ⚠️ Round 2: a session created BEFORE this key existed has no
+            # `public_session` at all, and prod holds exactly such a row (a July
+            # `session_chat_map` binding for a live room). `bool(None)` is False,
+            # so the oldest, longest-lived room sessions — the ones most likely to
+            # be recreated — came back private-shaped. An ABSENT key falls back to
+            # the binding KEY, which IS the address
+            # (`agent:main:{surface}:{chat_type}:{chat_id}`), and fails toward
+            # PUBLIC: a room key means a room whatever the record forgot to say.
+            # An explicit recorded False stays False — only the missing case moves.
+            _recorded_public = session_info.get('public_session')
+            if _recorded_public is None:
+                _recorded_public = self._bound_key_is_room(session_id)
+            orchestrator._public_session = bool(_recorded_public)
+
             # #0 mute-on-resume: re-attach the outbound chat surface BEFORE initialize()
             # so a resumed chat's replies route back out (recreation otherwise leaves
             # _message_router/_chat_session_key unset → the agent answers into the void).
             self._rebind_recreated_chat(orchestrator, session_id, user_id)
 
-            # Initialize with same tools - check multiple sources for tools
-            # Priority: request.tools > config.tools > session_info.tools > defaults
-            tool_ids = (
-                request.get('tools') or
-                config.get('tools') or
-                session_info.get('tools') or
-                default_session_tools()
-            )
+            # Initialize with same tools. 044 C1: the EFFECTIVE toolset the
+            # session was CREATED with wins over every other source — it is the
+            # only one that knows about a `tool_ids` override (a room's read-only
+            # `room_tool_ids()`, the owner-interactive set). Checked with `is not
+            # None`, never `or`: an explicit EMPTY toolset (a locked-down
+            # `GROUP_TURN_TOOLS=""` room) is authoritative and an `or`-chain would
+            # silently widen it back to the full default set.
+            # Legacy fallback for sessions created before this key existed:
+            # a PUBLIC session gets the room toolset (round 2 — the legacy chain
+            # below restores `request.tools`, i.e. the DEFAULT browser+filesystem
+            # set, which is exactly the private shape a room must never come back
+            # in; the audience is already resolved above, and by then the rebind
+            # may have raised it too). Everything else keeps the historical order:
+            # request.tools > config.tools > session_info.tools > defaults.
+            tool_ids = session_info.get('effective_tools')
+            if tool_ids is None and orchestrator._public_session:
+                from core.surfaces.room_policy import room_tool_ids
+                tool_ids = room_tool_ids()
+                logger.info("recreating a pre-044 ROOM session %s on the room "
+                            "toolset %s (its record predates `effective_tools`)",
+                            session_id, tool_ids)
+            if tool_ids is None:
+                tool_ids = (
+                    request.get('tools') or
+                    config.get('tools') or
+                    session_info.get('tools') or
+                    default_session_tools()
+                )
 
             # Get tools_config from multiple sources
             tools_config = (

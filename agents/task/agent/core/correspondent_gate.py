@@ -62,6 +62,23 @@ _HIGH_IMPACT_NAMES = frozenset({
     # register as {tool_id}_{action}, so a bare "portfolio" would never match
     # (the live x402_request bug, audit 2026-08-07 P0-2).
     "defi_data_portfolio",
+    # 2026-09-15: the non-fungible twin of the holdings read. "What collectibles
+    # do you own" is the SAME pre-drain reconnaissance, and a collection name is
+    # often more identifying than a balance. NAMESPACED runtime name -- a bare
+    # "nft_holdings" would match nothing (the live x402_request bug, P0-2).
+    "defi_data_nft_holdings",
+    # The non-fungible WRITE verbs. `defi_trade` is already a high_impact
+    # tool_id, so the wired hook would block these by tool-id resolution — but
+    # that resolution DEGRADES to the name-only path when the owning tool
+    # cannot be resolved, and `tests/unit/core/test_money_verb_registration.py`
+    # asserts the name-only predicate for exactly that reason. Enumerated, so
+    # the block does not depend on a resolver succeeding.
+    "defi_trade_nft_transfer",
+    "defi_trade_nft_revoke_approval",
+    # 046: an injected third party must never be able to publish -- or rewrite
+    # -- the agent's permanent on-chain identity.
+    "defi_trade_register_agent",
+    "defi_trade_set_agent_uri",
     # 023 T3: the on-chain money verb. tx_guard refuses a tainted turn anyway,
     # but the enumerated name is the layer that survives a tool-id resolver
     # fault — and this is an irreversible, self-custodial send.
@@ -71,8 +88,28 @@ _HIGH_IMPACT_NAMES = frozenset({
     # single point of failure these name entries exist to remove. Same
     # rationale as transfer: irreversible, self-custodial value movement
     # (an approval is a standing claim whose drain lands in a later tx).
-    "defi_trade_swap", "defi_trade_solana_swap",
+    "defi_trade_swap", "defi_trade_solana_swap", "defi_trade_bridge",
     "defi_trade_approve_token", "defi_trade_revoke_approval",
+    # 2026-09-13: wrap is 1:1 into the same wallet, so it moves no value OUT --
+    # but it is a signed native-value send, and a tainted session must not be
+    # able to spend the wallet's gas or reshape its holdings between an owner's
+    # turns. Enumerated by name for the same reason as its siblings: so a tool-id
+    # resolver fault is not the only thing standing in the way.
+    "defi_trade_wrap",
+    "defi_trade_unwrap",
+    # 042: deployment and the generic contract call. `call` in particular is the
+    # widest money verb in the tree -- it executes calldata supplied at the call
+    # site -- so a session holding a third party's text is exactly the session
+    # that must never reach it.
+    "defi_trade_deploy_token", "defi_trade_deploy_contract", "defi_trade_call",
+    "defi_data_lp_positions", "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
+    "defi_trade_solana_deploy_token",
+    # 042: the launchpad writes. Enumerated by NAME as well as by tool-id
+    # membership, for the same reason as their siblings: so a tool-id resolver
+    # fault is not the only thing standing in the way.
+    "launchpad_launch", "launchpad_buy", "launchpad_sell", "launchpad_claim",
+    # 042: a tainted session must never arm a wallet inside a web page.
+    "dapp_browser_dapp_connect",
     # I-6: read-only runtime introspection (registered directly, no owning
     # tool_id) — reveals wallet balance + tenant ledger, the same money data the
     # gate deliberately blocks via x402_pay/x402_invoice tool-id membership.
@@ -107,6 +144,10 @@ _HIGH_IMPACT_NAMES = frozenset({
     # per-run spend + task text (the same money-adjacent data agent_status and
     # usage_summary are already gated for).
     "session_search", "memory_search", "recent_activity",
+    # 2026-09-15 (owner rail "fix tg chat reading"): read-only view of the group
+    # ledger for allowlisted rooms. The owner's own room lines are in there —
+    # the same disclosure class as contact_history, not a live-history fetch.
+    "room_read",
     # Materializes a tool into the session mid-turn. USING the loaded tool stays
     # gated, but a tainted turn must not widen the surface that the next (untainted)
     # turn inherits — the owner clears taint without being told the toolset grew.
@@ -160,8 +201,8 @@ _HIGH_IMPACT_NAMES = frozenset({
     "git_push", "github_open_pr", "github_merge_pr", "github_pr_comment",
     "github_issue_create",
     # The auto-paying x402 action (tool_id x402_pay, method x402_fetch) — runtime
-    # name is namespaced. (The "pay" substring in _HIGH_IMPACT_PREFIXES also catches
-    # it, but an entry should name the thing it actually gates.)
+    # name is namespaced. (The "x402_pay_" prefix in _HIGH_IMPACT_PREFIXES also
+    # catches it, but an entry should name the thing it actually gates.)
     "x402_pay_x402_fetch",
     # Legacy tool_id tokens kept so is_high_impact(tool_id) stays truthy for callers/
     # tests that probe by tool_id. Real per-verb coverage of these tools comes from
@@ -195,8 +236,13 @@ HIGH_IMPACT_TOOL_IDS = _ids_with("high_impact")
 # Substrings that mark a high-impact action even if the exact name isn't enumerated
 # (e.g. provider-prefixed MCP/web tools that reach the outside world). NOTE: do NOT add
 # "trade" here — as a substring it falsely flags the read action get_trade_history while
-# matching no real trade verb (those are enumerated above).
-_HIGH_IMPACT_PREFIXES = ("mcp_", "browser_", "web_", "email_", "pay", "send_email")
+# matching no real trade verb (those are enumerated above). F4 (2026-09-14): the same
+# reasoning killed the bare "pay" entry — it matched every action whose name merely
+# CONTAINS "pay" (e.g. a hypothetical get_payment_history read verb), not just the real
+# payer verb, so it is narrowed to the actual namespaced prefix "x402_pay_" (the only
+# tool_id whose actions are auto-paying verbs; x402_invoice's request verb is enumerated
+# by name above instead, since it isn't namespaced under "x402_pay_").
+_HIGH_IMPACT_PREFIXES = ("mcp_", "browser_", "web_", "email_", "x402_pay_", "send_email")
 
 # H10 (2026-07-15): the crypto TRADE verbs, matched as substrings so BOTH the bare
 # name AND every venue-namespaced runtime form are caught. Container-tool actions
@@ -406,6 +452,10 @@ def make_correspondent_gate_hook(
                         return None
                 except Exception as e:  # fail-closed: exemption probe never opens
                     logger.debug("scoped-reply exemption probe failed (deny): %s", e)
+            from core.security.refusals import record_refusal
+            record_refusal("correspondent_taint", tool=action_name,
+                           user_id=getattr(context, "user_id", None) or "",
+                           session_id=getattr(context, "session_id", None) or "")
             return (f"'{action_name}' is blocked: the latest input is untrusted "
                     f"correspondent DATA — owner confirmation is required before a "
                     f"high-impact action.")

@@ -1,14 +1,23 @@
-"""P3 — render smoke: webgate pages serve 200 and link the design system.
+"""P3 — render smoke: the layout.html webgate page serves 200 and links the
+design system.
 
-Each v1 page (and the index) must render in single-user mode and pull in the
-design-system stylesheets (`variables.css` then `components.css`) wired into
-``layout.html`` <head>. This proves the targeted CSS cleanup is actually loaded by
-the pages, not just present on disk.
+The surviving layout.html page (`/pending`) must render in single-user mode and
+pull in the design-system stylesheets (`variables.css` then `components.css`)
+wired into ``layout.html`` <head>. This proves the targeted CSS cleanup is
+actually loaded by the pages, not just present on disk.
+
+⚠️ 043 phase 5: `/` is now the new chat shell (app.css), and the legacy index
+dashboard is deleted, so these render assertions target `/pending` — the one
+surviving page on the ``layout.html`` shell.
 """
 import importlib
 
 import pytest
 from fastapi.testclient import TestClient
+
+#: The surviving layout.html-based webgate page (the console's design-system
+#: shell). `/` is the new chat shell now and uses app.css instead.
+_PAGE = "/pending"
 
 
 def _reload_server(monkeypatch, multitenant=False):
@@ -18,7 +27,7 @@ def _reload_server(monkeypatch, multitenant=False):
     return importlib.reload(server)
 
 
-@pytest.mark.parametrize("path", ["/", "/memory", "/autonomy", "/identity", "/system"])
+@pytest.mark.parametrize("path", [_PAGE])
 def test_page_renders_and_links_design_system(monkeypatch, path):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
@@ -33,7 +42,7 @@ def test_design_system_loads_before_style(monkeypatch):
     """variables.css + components.css must precede style.css in the <head>."""
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     i_vars = html.find("/static/css/variables.css")
     i_comp = html.find("/static/css/components.css")
     i_style = html.find("/static/css/style.css")
@@ -48,7 +57,7 @@ def test_fastapi_title_is_polyrob_console(monkeypatch):
 def test_index_page_shows_console_display_name(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     assert "POLYROB Console" in html
 
 
@@ -56,7 +65,7 @@ def test_index_page_honors_console_name_override(monkeypatch):
     monkeypatch.setenv("POLYROB_CONSOLE_NAME", "Rob Console")
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     assert "Rob Console" in html
     assert "POLYROB Console" not in html
 
@@ -76,11 +85,14 @@ def test_cors_default_unset_uses_local_webview(monkeypatch):
 
 
 def test_index_page_uses_branding_config_defaults(monkeypatch):
+    # 043 A12: with brand/org URLs unset, the console renders no placeholder
+    # host / framework-author domain footer links (no dead links on an
+    # unconfigured deploy).
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
-    assert "your-polyrob-host.example" in html
-    assert "theselfrule.org" in html
+    html = client.get(_PAGE).text
+    assert "your-polyrob-host.example" not in html
+    assert "theselfrule.org" not in html
     # Beta banner removed 2026-07-06 — must never come back
     assert "beta-banner" not in html
     assert "DEN holders" not in html
@@ -91,7 +103,7 @@ def test_index_page_honors_branding_overrides(monkeypatch):
     monkeypatch.setenv("POLYROB_ORG_URL", "https://org.example")
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     assert "brand.example" in html
     assert "org.example" in html
     assert "your-polyrob-host.example" not in html
@@ -101,17 +113,14 @@ def test_footer_renders_real_version(monkeypatch):
     from core.version import get_version
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     assert f"ver. {get_version()}" in html
     assert "1.0.0. 2025" not in html
 
 
-def test_index_header_renders_real_version(monkeypatch):
-    from core.version import get_version
-    server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    html = client.get("/").text
-    assert f"v{get_version()}" in html
+# 043 phase 5: the legacy index dashboard (index.html) carried a `v{version}`
+# header and is deleted; the footer version above is the surviving check. The
+# new chat shell renders no version header.
 
 
 def test_signin_has_no_placeholder_legal_links(monkeypatch):
@@ -147,7 +156,7 @@ def test_rebrand_did_not_add_new_stylesheet_links(monkeypatch):
     """
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
-    html = client.get("/").text
+    html = client.get(_PAGE).text
     assert html.count("/static/css/variables.css") == 1
     assert html.count("/static/css/components.css") == 1
     assert html.count("/static/css/style.css") == 1
@@ -155,22 +164,6 @@ def test_rebrand_did_not_add_new_stylesheet_links(monkeypatch):
     i_comp = html.find("/static/css/components.css")
     i_style = html.find("/static/css/style.css")
     assert -1 < i_vars < i_comp < i_style
-
-
-def test_settings_page_has_no_coming_soon_stubs(monkeypatch):
-    """P0-2 (2026-07-06 UX handoff): the Preferences/API-Keys 'Coming soon'
-    placeholder tabs were removed entirely — dead UI must not come back."""
-    server = _reload_server(monkeypatch, multitenant=False)
-    client = TestClient(server._fastapi)
-    r = client.get("/settings")
-    assert r.status_code == 200
-    html = r.text
-    assert "Coming soon" not in html
-    assert "section-preferences" not in html
-    assert "section-api-keys" not in html
-    # The real sections stay.
-    assert "section-mcp" in html
-    assert "section-skills" in html
 
 
 def test_rebrand_left_variables_css_untouched():

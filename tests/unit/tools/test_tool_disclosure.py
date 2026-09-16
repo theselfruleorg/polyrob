@@ -266,3 +266,53 @@ def test_the_money_remedy_still_applies_to_every_money_tool():
                                      loaded_ids=set())
         assert status.reason == "money", tool_id
         assert status.remedy, tool_id
+
+
+# ---------------------------------------------------------------------------
+# Capability self-knowledge: a tool that EXISTS is never reported as unknown.
+#
+# Twice in three days the agent denied a shipped capability — a stale memory beat
+# the authoritative skill (2026-09-10 Solana), then a deployed bridge rail was
+# reported as absent from the tool catalog (2026-09-12). The distinction the
+# agent has to be able to draw is "missing from MY toolset" vs "does not exist",
+# and `unknown-tool` is the only status that asserts the second. It must be
+# reachable only for an id that genuinely is not a tool.
+# ---------------------------------------------------------------------------
+
+def test_no_known_tool_ever_reports_as_unknown():
+    from tools.descriptors import TOOL_DESCRIPTORS
+    from core.tool_capabilities import TOOL_CAPABILITIES
+
+    liars = []
+    for tool_id in sorted(set(TOOL_DESCRIPTORS) | set(TOOL_CAPABILITIES)):
+        status = resolve_tool_status(tool_id, container=FakeContainer(set()),
+                                     loaded_ids=set())
+        if status.reason == "unknown-tool":
+            liars.append(tool_id)
+    assert liars == [], (
+        "these tools exist but resolve as 'not a known tool id' — the agent "
+        f"would tell its owner the system lacks them: {liars}")
+
+
+def test_every_gated_status_carries_a_remedy():
+    """A refusal with no remedy is where a retry loop starts."""
+    from tools.descriptors import TOOL_DESCRIPTORS
+    from core.tool_capabilities import TOOL_CAPABILITIES
+
+    silent = []
+    for tool_id in sorted(set(TOOL_DESCRIPTORS) | set(TOOL_CAPABILITIES)):
+        status = resolve_tool_status(tool_id, container=FakeContainer(set()),
+                                     loaded_ids=set())
+        if status.status == "gated" and not (status.remedy or "").strip():
+            silent.append(tool_id)
+    assert silent == [], f"gated with no remedy: {silent}"
+
+
+def test_the_money_remedy_names_a_verb_the_owner_can_actually_type():
+    """The 2026-09-12 failure in one assertion: the owner asked for a bridge and
+    was handed a list of grants instead of the verb that was already deployed."""
+    text = resolve_tool_status("defi_trade", container=FakeContainer(set()),
+                               loaded_ids=set()).remedy
+    assert "/trade" in text or "/bridge" in text, (
+        "when the OWNER is asking, the remedy must name the chat verb that "
+        "reaches the capability from their seat")

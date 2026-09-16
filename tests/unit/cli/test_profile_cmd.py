@@ -4,6 +4,7 @@ Isolated via POLYROB_HOME + POLYROB_BIN_DIR; nothing touches the real
 ~/.polyrob or ~/.local/bin.
 """
 import json
+import shlex
 from pathlib import Path
 
 import pytest
@@ -123,12 +124,20 @@ def test_clone_from_profile_gets_own_instance_id(env):
     assert (p2 / "characters" / "rob.character.json").is_file()
 
 
+def _assert_wrapper_command(text, profile_name):
+    command = next(line for line in text.splitlines() if line.startswith("exec "))
+    words = shlex.split(command)
+    assert words[0] == "exec"
+    assert Path(words[1]).name in ("polyrob", "polyrob.exe")
+    assert words[2:] == ["-P", profile_name, "$@"]
+
+
 def test_wrapper_script_content_and_collision(env, tmp_path):
     r = _run("create", "scout")  # default --alias
     assert r.exit_code == 0, r.output
     wrapper = tmp_path / "bin" / "scout"
     text = wrapper.read_text()
-    assert 'exec polyrob -P scout "$@"' in text
+    _assert_wrapper_command(text, "scout")
     assert "polyrob-profile-wrapper: scout" in text
     # collision with a foreign file refuses
     foreign = tmp_path / "bin" / "mytool"
@@ -147,7 +156,7 @@ def test_rename_updates_sticky_and_wrapper(env, tmp_path):
     assert not (env / "profiles" / "old").exists()
     assert (env / "active_profile").read_text().strip() == "new"
     assert not (tmp_path / "bin" / "old").exists()
-    assert 'exec polyrob -P new "$@"' in (tmp_path / "bin" / "new").read_text()
+    _assert_wrapper_command((tmp_path / "bin" / "new").read_text(), "new")
     assert "POLYROB_INSTANCE_ID=new" in (env / "profiles" / "new" / ".env").read_text()
 
 

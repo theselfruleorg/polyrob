@@ -75,3 +75,39 @@ async def test_unsupported_language():
     r = await b.run(ExecutionRequest(language="ruby", code="puts 1"))
     assert r.exit_code == 2
     assert "unsupported" in r.stderr
+
+
+@pytest.mark.asyncio
+async def test_unlimited_output_is_stopped_before_timeout(monkeypatch):
+    monkeypatch.setenv("CODE_EXEC_MAX_OUTPUT_BYTES", "4096")
+    backend = LocalSubprocessBackend()
+    result = await backend.run(ExecutionRequest(
+        language="python", code="import os\nwhile True: os.write(1, b'x' * 65536)",
+        timeout=10,
+    ))
+    assert result.truncated
+    assert not result.timed_out
+    assert not result.ok
+    assert len(result.stdout.encode()) <= 4096
+    assert result.duration_sec < 5
+
+
+@pytest.mark.asyncio
+async def test_cancellation_kills_child_before_returning(tmp_path):
+    import asyncio
+    backend = LocalSubprocessBackend()
+    task = asyncio.create_task(backend.run(ExecutionRequest(
+        language="python", workdir=str(tmp_path),
+        code="import os,time; open('pid','w').write(str(os.getpid())); time.sleep(30)",
+    )))
+    for _ in range(100):
+        if (tmp_path / "pid").exists():
+            break
+        await asyncio.sleep(0.02)
+    assert (tmp_path / "pid").exists()
+    pid = int((tmp_path / "pid").read_text())
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)

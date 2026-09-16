@@ -17,6 +17,39 @@ import re
 _TG_USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
 _TG_LINK_RE = re.compile(r"^(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/([^/?#\s]+)",
                          re.IGNORECASE)
+#: An address with an ``@`` between two non-empty parts and a dotted domain. A
+#: telegram ``@handle`` never matches (nothing precedes the ``@``).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$")
+
+
+def wrong_surface_target_reason(surface: str, target):
+    """Why this target can NEVER be delivered on this surface, or None.
+
+    2026-09-15 prod review, C8: the dead-target registry held
+    ``telegram / rob@theselfrule.org / chat_not_found`` — an email address
+    handed to the Bot API. Nothing checked the SHAPE, so the send was spent, it
+    failed, and the address was durably marked dead on a surface it was never
+    addressable on. This is the same courtesy :func:`is_bot_username` already
+    extends: refuse before the send, and say which surface would work.
+
+    Deliberately narrow — only shapes that are unambiguous. An unknown surface,
+    a non-string, or anything that could plausibly be a real id returns None.
+    """
+    if not isinstance(target, str):
+        return None
+    t = target.strip()
+    if not t:
+        return None
+    if surface == "telegram" and _EMAIL_RE.match(t):
+        return (f"{t} is an email address, not a Telegram chat — the Bot API "
+                f"will answer 'chat not found'. Use surface='email' for this "
+                f"recipient, or target='owner' for the owner's Telegram.")
+    if surface == "email" and not _EMAIL_RE.match(t):
+        if t.lstrip("-").isdigit() or t.startswith("@") or _TG_LINK_RE.match(t):
+            return (f"{t} is not an email address — it looks like a chat "
+                    f"target. Use surface='telegram' for it, or target='owner' "
+                    f"for the owner's email.")
+    return None
 
 
 def normalize_surface_target(surface: str, target):

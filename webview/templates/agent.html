@@ -1,0 +1,269 @@
+{#
+  Agent — one screen, six tabs (043 §7, phase 4 / WS-AF1).
+
+  Derived from docs/design/040/web/agent*.html. The six-tab subnav is
+  server-rendered; every pane below it is drawn client-side by
+  webview/static/app/agent.js from the tenant-scoped Agent readers
+  (/api/webgate/{doctor,capabilities,memory/search,flags,identity,preferences,
+  ledger}, /pfp.json, /api/webgate/knowledge/kb). The tabs are panes on this one
+  page, not six routes: agent.js reveals the pane whose `data-pane` matches the
+  active tab and hides the rest, so /agent answers with the whole screen and the
+  switch is client-side.
+
+  Every word comes from webview/copy/en.py. No inline script on any 043 template
+  (tests/unit/webview/test_no_new_inline_script.py): the words ride on
+  #agent-copy's data attributes and agent.js reads them off `dataset`. ⚠️ The
+  names carry an UNDERSCORE, not a hyphen: `dataset` camel-cases a hyphen away,
+  and the JS keys the words by the copy name, which is snake_case.
+
+  The four posture axes ride here as DATA (server-computed from
+  build_posture_card), so a person reads one plain sentence per axis and the
+  state it is in — never the same axis twice in two vocabularies, which is what
+  doctor and /autonomy print on one screen today.
+#}
+{% extends "shell.html" %}
+{% block body %}
+    <div class="page">
+      <div class="page-head">
+        <h1 class="page-title">{{ t('agent.title') }}</h1>
+        <p class="page-sub">{{ t('agent.sub') }}</p>
+      </div>
+      <nav class="subnav" aria-label="{{ t('agent.title') }}">
+        <a href="#overview" data-tab="overview" aria-current="page">{{ t('agent.tab_overview') }}</a>
+        <a href="#identity" data-tab="identity">{{ t('agent.tab_identity') }}</a>
+        <a href="#capabilities" data-tab="capabilities">{{ t('agent.tab_capabilities') }}</a>
+        <a href="#memory" data-tab="memory">{{ t('agent.tab_memory') }}</a>
+        <a href="#settings" data-tab="settings">{{ t('agent.tab_settings') }}</a>
+        <a href="#advanced" data-tab="advanced">{{ t('agent.tab_advanced') }}</a>
+      </nav>
+
+      {# Overview — health leads, then the face, then the four posture axes, then
+         what Rob is connected to. Drawn by agent.js from /api/webgate/doctor +
+         /pfp.json; the posture axes render from the data attributes below. #}
+      <div data-pane="overview">
+        <div id="agent-ov-health"></div>
+        <div id="agent-ov-face"></div>
+        <div id="agent-ov-posture"></div>
+        <div id="agent-ov-connected"></div>
+      </div>
+
+      {# Identity — the persona you wrote (read-only) and what Rob has learned
+         about itself (a reviewable change). Drawn from /api/webgate/identity;
+         an edit posts /api/webgate/self-context and lands in review. #}
+      <div data-pane="identity" hidden>
+        <div id="agent-identity"></div>
+      </div>
+
+      {# Capabilities — skills, tools and connected services as one list, plus
+         the read-only helpers. Drawn from /api/webgate/capabilities. #}
+      <div data-pane="capabilities" hidden>
+        <div class="search"><span aria-hidden="true">&#8981;</span>
+          <input id="agent-cap-search" type="text" autocomplete="off"
+                 placeholder="{{ t('agent.cap_search') }}"
+                 aria-label="{{ t('agent.cap_search') }}"></div>
+        <div class="chips" id="agent-cap-chips" style="margin-bottom:var(--s5)"></div>
+        <div id="agent-capabilities"></div>
+      </div>
+
+      {# Memory — what Rob remembers about you (add/forget here), what it works
+         out on its own, and what it has read. Drawn from /api/webgate/memory/search
+         + /api/webgate/knowledge/kb; add posts /api/webgate/memory, forget deletes it. #}
+      <div data-pane="memory" hidden>
+        <div class="search"><span aria-hidden="true">&#8981;</span>
+          <input id="agent-mem-search" type="text" autocomplete="off"
+                 placeholder="{{ t('agent.mem_search') }}"
+                 aria-label="{{ t('agent.mem_search') }}"></div>
+        <div id="agent-mem-notes"></div>
+        <div id="agent-mem-recall"></div>
+        <div id="agent-mem-kb"></div>
+      </div>
+
+      {# Settings — the preferences people actually change, grouped by intent,
+         plus the money limits. Drawn from /api/webgate/preferences + /ledger. #}
+      <div data-pane="settings" hidden>
+        <div id="agent-settings"></div>
+      </div>
+
+      {# Advanced — every setting, search-first (nothing until you ask), and the
+         diagnostic report behind a disclosure. Drawn from /api/webgate/flags +
+         /api/webgate/doctor. #}
+      <div data-pane="advanced" hidden>
+        <div class="search"><span aria-hidden="true">&#8981;</span>
+          <input id="agent-adv-search" type="text" autocomplete="off"
+                 placeholder="{{ t('agent.adv_search') }}"
+                 aria-label="{{ t('agent.adv_search') }}"></div>
+        <div class="chips" id="agent-adv-chips" style="margin-bottom:var(--s6)"></div>
+        <div id="agent-adv-flags"></div>
+        <div id="agent-adv-diag"></div>
+      </div>
+
+      <p class="sources">{{ t('agent.sources')|safe }}</p>
+    </div>
+
+    {# The words agent.js renders, and the posture values it renders once as four
+       sentences. read_only rides here so the module draws no write control it
+       cannot act on. #}
+    <div id="agent-copy" hidden
+         data-control_saved="{{ t('agent.control_saved') }}"
+         data-control_queued="{{ t('agent.control_queued') }}"
+         data-control_save="{{ t('agent.control_save') }}"
+         data-control_confirm="{{ t('agent.control_confirm') }}"
+         data-control_cancel="{{ t('agent.control_cancel') }}"
+         data-control_confirmation="{{ t('agent.control_confirmation') }}"
+         data-control_effective="{{ t('agent.control_effective') }}"
+         data-control_list="{{ t('agent.control_list') }}"
+         data-control_restart="{{ t('agent.control_restart') }}"
+         data-read_only="{{ 1 if read_only else 0 }}"
+         data-name="{{ wordmark }}"
+         data-unreachable="{{ t('agent.unreachable') }}"
+         data-when_now="{{ t('agent.when_now') }}"
+         data-when_min="{{ t('agent.when_min') }}"
+         data-when_hour="{{ t('agent.when_hour') }}"
+         data-when_day="{{ t('agent.when_day') }}"
+         data-posture_local="{{ posture.local }}"
+         data-posture_mode="{{ posture.mode }}"
+         data-posture_loop="{{ posture.loop }}"
+         data-posture_compute="{{ posture.compute }}"
+         data-posture_compute_locked="1"
+         data-ov_health_title="{{ t('agent.ov_health_title') }}"
+         data-ov_health_aside="{{ t('agent.ov_health_aside') }}"
+         data-ov_health_unreadable="{{ t('agent.ov_health_unreadable') }}"
+         data-ov_health_unreadable_why="{{ t('agent.ov_health_unreadable_why') }}"
+         data-ov_health_ok_title="{{ t('agent.ov_health_ok_title') }}"
+         data-ov_health_none="{{ t('agent.ov_health_none') }}"
+         data-ov_health_ok_body="{{ t('agent.ov_health_ok_body') }}"
+         data-ov_report_link="{{ t('agent.ov_report_link') }}"
+         data-ov_unverified="{{ t('agent.ov_unverified') }}"
+         data-ov_identity_no_avatar="{{ t('agent.ov_identity_no_avatar') }}"
+         data-ov_posture_title="{{ t('agent.ov_posture_title') }}"
+         data-ov_posture_aside="{{ t('agent.ov_posture_aside') }}"
+         data-ov_axis_local_title="{{ t('agent.ov_axis_local_title') }}"
+         data-ov_axis_local_why="{{ t('agent.ov_axis_local_why') }}"
+         data-ov_axis_mode_title="{{ t('agent.ov_axis_mode_title') }}"
+         data-ov_axis_mode_why="{{ t('agent.ov_axis_mode_why') }}"
+         data-ov_axis_loop_title="{{ t('agent.ov_axis_loop_title') }}"
+         data-ov_axis_loop_why="{{ t('agent.ov_axis_loop_why') }}"
+         data-ov_axis_compute_title="{{ t('agent.ov_axis_compute_title') }}"
+         data-ov_axis_compute_why="{{ t('agent.ov_axis_compute_why') }}"
+         data-ov_axis_compute_locked="{{ t('agent.ov_axis_compute_locked') }}"
+         data-ov_connected_title="{{ t('agent.ov_connected_title') }}"
+         data-ov_models_label="{{ t('agent.ov_models_label') }}"
+         data-ov_memory_label="{{ t('agent.ov_memory_label') }}"
+         data-ov_change="{{ t('agent.ov_change') }}"
+         data-id_loading="{{ t('agent.id_loading') }}"
+         data-id_unreadable="{{ t('agent.id_unreadable') }}"
+         data-id_unreadable_why="{{ t('agent.id_unreadable_why') }}"
+         data-id_face_title="{{ t('agent.id_face_title') }}"
+         data-id_face_body="{{ t('agent.id_face_body') }}"
+         data-id_reroll="{{ t('agent.id_reroll') }}"
+         data-id_reroll_done="{{ t('agent.id_reroll_done') }}"
+         data-id_reroll_failed="{{ t('agent.id_reroll_failed') }}"
+         data-id_persona_title="{{ t('agent.id_persona_title') }}"
+         data-id_persona_aside="{{ t('agent.id_persona_aside') }}"
+         data-id_persona_empty="{{ t('agent.id_persona_empty') }}"
+         data-id_learned_title="{{ t('agent.id_learned_title') }}"
+         data-id_learned_aside="{{ t('agent.id_learned_aside') }}"
+         data-id_learned_empty="{{ t('agent.id_learned_empty') }}"
+         data-id_edit="{{ t('agent.id_edit') }}"
+         data-id_edit_hint="{{ t('agent.id_edit_hint') }}"
+         data-id_edit_save="{{ t('agent.id_edit_save') }}"
+         data-id_edit_cancel="{{ t('agent.id_edit_cancel') }}"
+         data-id_edit_saved="{{ t('agent.id_edit_saved') }}"
+         data-id_edit_failed="{{ t('agent.id_edit_failed') }}"
+         data-cap_loading="{{ t('agent.cap_loading') }}"
+         data-cap_unreadable="{{ t('agent.cap_unreadable') }}"
+         data-cap_unreadable_why="{{ t('agent.cap_unreadable_why') }}"
+         data-cap_list_title="{{ t('agent.cap_list_title') }}"
+         data-cap_list_aside="{{ t('agent.cap_list_aside') }}"
+         data-cap_part_unreadable="{{ t('agent.cap_part_unreadable') }}"
+         data-cap_part_unreadable_why="{{ t('agent.cap_part_unreadable_why') }}"
+         data-cap_empty="{{ t('agent.cap_empty') }}"
+         data-cap_col_what="{{ t('agent.cap_col_what') }}"
+         data-cap_col_from="{{ t('agent.cap_col_from') }}"
+         data-cap_col_last="{{ t('agent.cap_col_last') }}"
+         data-cap_money_note="{{ t('agent.cap_money_note') }}"
+         data-cap_source_default="{{ t('agent.cap_source_default') }}"
+         data-cap_source_builtin="{{ t('agent.cap_source_builtin') }}"
+         data-cap_source_optional="{{ t('agent.cap_source_optional') }}"
+         data-cap_source_profile="{{ t('agent.cap_source_profile') }}"
+         data-cap_source_mcp="{{ t('agent.cap_source_mcp') }}"
+         data-cap_source_skill="{{ t('agent.cap_source_skill') }}"
+         data-cap_source_kept="{{ t('agent.cap_source_kept') }}"
+         data-cap_state_on="{{ t('agent.cap_state_on') }}"
+         data-cap_state_off="{{ t('agent.cap_state_off') }}"
+         data-cap_helpers_title="{{ t('agent.cap_helpers_title') }}"
+         data-cap_helpers_aside="{{ t('agent.cap_helpers_aside') }}"
+         data-cap_helpers_unreadable="{{ t('agent.cap_helpers_unreadable') }}"
+         data-cap_helpers_unreadable_why="{{ t('agent.cap_helpers_unreadable_why') }}"
+         data-cap_helpers_empty="{{ t('agent.cap_helpers_empty') }}"
+         data-cap_chip_all="{{ t('agent.cap_chip_all') }}"
+         data-cap_chip_on="{{ t('agent.cap_chip_on') }}"
+         data-cap_chip_off="{{ t('agent.cap_chip_off') }}"
+         data-cap_chip_money="{{ t('agent.cap_chip_money') }}"
+         data-cap_chip_helpers="{{ t('agent.cap_chip_helpers') }}"
+         data-mem_loading="{{ t('agent.mem_loading') }}"
+         data-mem_forget="{{ t('agent.mem_forget') }}"
+         data-mem_forgotten="{{ t('agent.mem_forgotten') }}"
+         data-mem_forget_failed="{{ t('agent.mem_forget_failed') }}"
+         data-mem_notes_title="{{ t('agent.mem_notes_title') }}"
+         data-mem_notes_aside="{{ t('agent.mem_notes_aside') }}"
+         data-mem_notes_unavailable="{{ t('agent.mem_notes_unavailable') }}"
+         data-mem_notes_unavailable_why="{{ t('agent.mem_notes_unavailable_why') }}"
+         data-mem_notes_error="{{ t('agent.mem_notes_error') }}"
+         data-mem_notes_error_why="{{ t('agent.mem_notes_error_why') }}"
+         data-mem_notes_empty="{{ t('agent.mem_notes_empty') }}"
+         data-mem_add_open="{{ t('agent.mem_add_open') }}"
+         data-mem_add_title="{{ t('agent.mem_add_title') }}"
+         data-mem_add_aside="{{ t('agent.mem_add_aside') }}"
+         data-mem_add_save="{{ t('agent.mem_add_save') }}"
+         data-mem_add_cancel="{{ t('agent.mem_add_cancel') }}"
+         data-mem_add_hint="{{ t('agent.mem_add_hint') }}"
+         data-mem_add_done="{{ t('agent.mem_add_done') }}"
+         data-mem_add_failed="{{ t('agent.mem_add_failed') }}"
+         data-mem_recall_title="{{ t('agent.mem_recall_title') }}"
+         data-mem_recall_aside="{{ t('agent.mem_recall_aside') }}"
+         data-mem_recall_error="{{ t('agent.mem_recall_error') }}"
+         data-mem_recall_error_why="{{ t('agent.mem_recall_error_why') }}"
+         data-mem_recall_empty="{{ t('agent.mem_recall_empty') }}"
+         data-mem_kb_title="{{ t('agent.mem_kb_title') }}"
+         data-mem_kb_aside="{{ t('agent.mem_kb_aside') }}"
+         data-mem_kb_unreadable="{{ t('agent.mem_kb_unreadable') }}"
+         data-mem_kb_unreadable_why="{{ t('agent.mem_kb_unreadable_why') }}"
+         data-mem_kb_empty="{{ t('agent.mem_kb_empty') }}"
+         data-mem_kb_passages="{{ t('agent.mem_kb_passages') }}"
+         data-set_loading="{{ t('agent.set_loading') }}"
+         data-set_limits_title="{{ t('agent.set_limits_title') }}"
+         data-set_limits_aside="{{ t('agent.set_limits_aside') }}"
+         data-set_limits_unreadable="{{ t('agent.set_limits_unreadable') }}"
+         data-set_limits_unreadable_why="{{ t('agent.set_limits_unreadable_why') }}"
+         data-set_limit_no_cap="{{ t('agent.set_limit_no_cap') }}"
+         data-set_limit_unknown="{{ t('agent.set_limit_unknown') }}"
+         data-set_limit_daily="{{ t('agent.set_limit_daily') }}"
+         data-set_limit_used="{{ t('agent.set_limit_used') }}"
+         data-set_prefs_unreadable="{{ t('agent.set_prefs_unreadable') }}"
+         data-set_prefs_unreadable_why="{{ t('agent.set_prefs_unreadable_why') }}"
+         data-set_prefs_empty="{{ t('agent.set_prefs_empty') }}"
+         data-set_prefs_other="{{ t('agent.set_prefs_other') }}"
+         data-set_col_what="{{ t('agent.set_col_what') }}"
+         data-set_col_value="{{ t('agent.set_col_value') }}"
+         data-set_more="{{ t('agent.set_more') }}"
+         data-set_more_link="{{ t('agent.set_more_link') }}"
+         data-adv_idle_title="{{ t('agent.adv_idle_title') }}"
+         data-adv_idle_body="{{ t('agent.adv_idle_body') }}"
+         data-adv_unreadable="{{ t('agent.adv_unreadable') }}"
+         data-adv_unreadable_why="{{ t('agent.adv_unreadable_why') }}"
+         data-adv_no_match="{{ t('agent.adv_no_match') }}"
+         data-adv_col_name="{{ t('agent.adv_col_name') }}"
+         data-adv_col_what="{{ t('agent.adv_col_what') }}"
+         data-adv_col_default="{{ t('agent.adv_col_default') }}"
+         data-adv_guarded="{{ t('agent.adv_guarded') }}"
+         data-adv_secret="{{ t('agent.adv_secret') }}"
+         data-adv_diag_title="{{ t('agent.adv_diag_title') }}"
+         data-adv_diag_aside="{{ t('agent.adv_diag_aside') }}"
+         data-adv_diag_show="{{ t('agent.adv_diag_show') }}"
+         data-adv_diag_hide="{{ t('agent.adv_diag_hide') }}"
+         data-adv_diag_empty="{{ t('agent.adv_diag_empty') }}"
+         data-adv_diag_unreadable="{{ t('agent.adv_diag_unreadable') }}"
+         data-adv_diag_unreadable_why="{{ t('agent.adv_diag_unreadable_why') }}"></div>
+    <script src="/static/app/agent.js" type="module"></script>
+{% endblock %}

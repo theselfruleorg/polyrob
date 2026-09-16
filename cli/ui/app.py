@@ -106,7 +106,7 @@ PROMPT_CARET = "❯"
 MAX_INPUT_ROWS = 10
 
 
-def input_height_dimension(line_count: int, max_rows: int = MAX_INPUT_ROWS) -> Any:
+def input_height_dimension(line_count: Optional[int] = None, max_rows: int = MAX_INPUT_ROWS) -> Any:
     """Height for the thin growing input: 1 row when empty, +1 per content line,
     clamped to ``max_rows`` (bug B).
 
@@ -116,6 +116,9 @@ def input_height_dimension(line_count: int, max_rows: int = MAX_INPUT_ROWS) -> A
     """
     from prompt_toolkit.layout.dimension import Dimension
 
+    # No explicit preference lets Window measure wrapped display rows itself.
+    if line_count is None:
+        return Dimension(min=1, max=max_rows)
     preferred = min(max(1, line_count), max_rows)
     return Dimension(min=1, max=max_rows, preferred=preferred)
 
@@ -288,7 +291,7 @@ def build_prompt_session(
         clock:        Monotonic clock (injectable for tests).
     """
     from prompt_toolkit import PromptSession
-    from prompt_toolkit.history import FileHistory
+    from cli.ui.history import TerminalHistory as FileHistory
 
     hpath = history_path or default_history_path()
     hpath.parent.mkdir(parents=True, exist_ok=True)
@@ -382,6 +385,7 @@ def build_app(
     """
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
+    from cli.ui.history import TerminalHistory as FileHistory
     from prompt_toolkit.filters import Condition, has_completions
     from prompt_toolkit.formatted_text import FormattedText
     from prompt_toolkit.key_binding import merge_key_bindings
@@ -394,17 +398,19 @@ def build_app(
     from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
     from prompt_toolkit.layout.menus import CompletionsMenu
 
+    from cli.ui.line_layout import fit_fragments
     from cli.ui.model_selector import ReplPicker
     from cli.ui.slash_highlight import SlashHighlightProcessor
 
     def _accept(buff: Any) -> bool:
         text = buff.text
         if text.strip():
-            on_submit(text)
-        buff.reset()  # clear the input after submit
-        return False  # don't keep the text in the buffer
+            if on_submit(text) is False:
+                return True  # preserve rejected input rather than discarding it
+        return False  # Buffer records history before clearing accepted text
 
     input_buffer = Buffer(
+        history=FileHistory(str(default_history_path())),
         multiline=False,
         accept_handler=_accept,
         completer=completer,
@@ -430,16 +436,21 @@ def build_app(
         # The ❯ caret prefixes every input row (thin design — no box border).
         return FormattedText([("class:prompt.caret", f"{PROMPT_CARET} ")])
 
+    def _columns() -> int:
+        return max(1, app.output.get_size().columns)
+
     def _separator_label() -> Any:
         # The agent name + active model sit on the thin rule above the input —
         # the heavy 4-sided Frame is gone (bug B).
         return FormattedText(
-            [("class:prompt.frame.title", f"─ {separator_label(state)} ")]
+            fit_fragments([("class:prompt.frame.title", f"─ {separator_label(state)} ")], _columns())
         )
 
     def _input_height() -> Any:
         # 1 row when empty; grows with typed/pasted newlines; clamped.
-        return input_height_dimension(input_buffer.document.line_count)
+        # Let prompt_toolkit count wrapped rows (including wide Unicode), not
+        # just logical newlines. A long single-line paste must remain visible.
+        return input_height_dimension()
 
     def _status() -> Any:
         frame_idx = int(clock() * 5) % len(SPINNER_FRAMES)
@@ -451,9 +462,11 @@ def build_app(
         if _lc is not None and _lc.is_active():
             spinner = SPINNER_FRAMES[frame_idx] + " "
         # Model lives on the box's top edge (the frame title), so omit it here.
-        status = statusbar.status_formatted(state, spinner=spinner, include_model=False)
+        status = statusbar.status_formatted(
+            state, spinner=spinner, include_model=False, width=_columns()
+        )
         # Indent one space so the status bar aligns under the box body.
-        return FormattedText([("", " ")] + list(status))
+        return status
 
     def _hint() -> Any:
         # Context-aware hint row (cli/ui/hints.py): idle keys + rotating tip,
@@ -464,7 +477,9 @@ def build_app(
             return FormattedText([])
         from cli.ui import hints
 
-        return FormattedText(hints.hint_fragments(state, input_buffer.text, clock()))
+        return FormattedText(fit_fragments(
+            hints.hint_fragments(state, input_buffer.text, clock()), _columns()
+        ))
 
     input_window = Window(
         BufferControl(
@@ -520,8 +535,13 @@ def build_app(
     # Reserve rows under the input while the menu is open (PromptSession's
     # reserve_space_for_menu pattern) — floats don't add preferred height, so
     # without this the bottom-anchored region has no room for the menu.
+    def _menu_height():
+        completion = input_buffer.complete_state
+        rows = min(_MENU_ROWS, len(completion.completions)) if completion else 0
+        return Dimension(min=0, max=rows, preferred=rows)
+
     menu_space = ConditionalContainer(
-        Window(height=Dimension(min=0, max=_MENU_ROWS, preferred=_MENU_ROWS)),
+        Window(height=_menu_height),
         filter=has_completions,
     )
     body = HSplit([

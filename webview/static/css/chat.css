@@ -224,7 +224,7 @@
         90deg,
         var(--color-accent-green) 0%,
         var(--color-accent-green) 40%,
-        #fff 50%,
+        var(--color-text-highlight) 50%,
         var(--color-accent-green) 60%,
         var(--color-accent-green) 100%
     );
@@ -251,7 +251,7 @@
 .thinking-dots span {
     display: inline-block;
     color: var(--color-accent-green);
-    text-shadow: 0 0 8px rgba(86, 226, 194, 0.6), 0 0 16px rgba(86, 226, 194, 0.3);
+    text-shadow: 0 0 8px var(--color-accent-green-wash-60), 0 0 16px var(--color-accent-green-wash-30);
     animation: dotGlow 1.4s infinite ease-in-out;
 }
 
@@ -262,12 +262,12 @@
 @keyframes dotGlow {
     0%, 100% {
         opacity: 0.3;
-        text-shadow: 0 0 4px rgba(86, 226, 194, 0.3);
+        text-shadow: 0 0 4px var(--color-accent-green-wash-30);
         transform: translateY(0);
     }
     50% {
         opacity: 1;
-        text-shadow: 0 0 12px rgba(86, 226, 194, 0.9), 0 0 24px rgba(86, 226, 194, 0.5);
+        text-shadow: 0 0 12px var(--color-accent-green-wash-90), 0 0 24px var(--color-accent-green-wash-50);
         transform: translateY(-1px);
     }
 }
@@ -307,7 +307,7 @@
 .message-result {
     margin-top: var(--spacing-md);
     padding: var(--spacing-md);
-    background: rgba(86, 226, 194, 0.05);
+    background: var(--color-accent-green-wash-05);
     border-radius: var(--border-radius-sm);
     border-left: var(--border-width-accent) solid var(--color-accent-green);
     font-size: var(--font-size-base);
@@ -318,7 +318,7 @@
 .message-errors {
     margin-top: var(--spacing-md);
     padding: var(--spacing-md);
-    background: rgba(255, 94, 94, 0.05);
+    background: var(--color-accent-red-wash-05);
     border-radius: var(--border-radius-sm);
     border-left: var(--border-width-accent) solid var(--color-accent-red);
 }
@@ -348,8 +348,8 @@
     left: 0;
     right: 0;
     padding: var(--spacing-md);
-    background: rgba(26, 26, 26, 0.98);
-    border-top: 2px solid rgba(255, 193, 7, 0.5);
+    background: var(--color-surface-tint-wash-98);
+    border-top: 2px solid var(--color-accent-yellow-wash-50);
     color: var(--color-accent-yellow);
     font-size: var(--font-size-sm);
     text-align: center;
@@ -422,7 +422,7 @@
     top: -4px;
     right: -4px;
     background: var(--color-accent-blue);
-    color: white;
+    color: var(--color-on-accent);
     font-size: 9px;
     font-weight: bold;
     padding: 2px 5px;
@@ -586,7 +586,7 @@
     border-radius: 20px;
     font-size: var(--font-size-sm);
     cursor: pointer;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 2px 8px var(--color-shadow-wash-30);
     display: none;
     transition: background 0.2s, transform 0.1s;
     z-index: 10;
@@ -736,8 +736,8 @@
 
 /* Agent Message Styles */
 .feed-content.agent-message {
-    background: rgba(59, 130, 246, 0.1);
-    border-left: 3px solid rgba(59, 130, 246, 0.6);
+    background: var(--color-accent-blue-wash-10);
+    border-left: 3px solid var(--color-accent-blue-wash-60);
     padding: 12px;
     border-radius: 4px;
 }
@@ -752,17 +752,17 @@
 .feed-content.agent-message .message-waiting {
     margin-top: 8px;
     padding: 8px 12px;
-    background: rgba(251, 191, 36, 0.15);
+    background: var(--color-accent-yellow-wash-15);
     border-radius: 4px;
-    color: rgba(251, 191, 36, 0.9);
+    color: var(--color-accent-yellow-wash-90);
     font-size: var(--font-size-sm);
     font-style: italic;
 }
 
 /* Task Complete Styles */
 .feed-content.task-complete {
-    background: rgba(34, 197, 94, 0.1);
-    border-left: 3px solid rgba(34, 197, 94, 0.6);
+    background: var(--color-accent-green-wash-10);
+    border-left: 3px solid var(--color-accent-green-wash-60);
     padding: 12px;
     border-radius: 4px;
 }
@@ -777,11 +777,11 @@
 
 /* Event type specific colors */
 .event-agent-message {
-    border-left-color: rgba(59, 130, 246, 0.6) !important;
+    border-left-color: var(--color-accent-blue-wash-60) !important;
 }
 
 .event-task-complete {
-    border-left-color: rgba(34, 197, 94, 0.6) !important;
+    border-left-color: var(--color-accent-green-wash-60) !important;
 }
 
 /* ========================================================================== */
@@ -846,7 +846,7 @@
 /* Hover effect for details */
 .llm-request-message:hover {
     opacity: 1;
-    background: rgba(213, 128, 255, 0.05);
+    background: var(--color-accent-purple-wash-05);
 }
 
 /* Tool Execution Messages */
@@ -904,7 +904,7 @@
     margin-left: 24px;
     margin-top: 2px;
     padding: 4px 8px;
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--color-accent-red-wash-10);
     border-left: 2px solid var(--color-accent-red);
 }
 
@@ -915,7 +915,7 @@
     margin-left: 24px;
     margin-top: 2px;
     padding: 4px 8px;
-    background: rgba(59, 130, 246, 0.05);
+    background: var(--color-accent-blue-wash-05);
     border-left: 2px solid var(--color-accent-blue);
     max-width: 600px;
     overflow-x: auto;
@@ -931,17 +931,17 @@
     margin: 4px 0;
     border-radius: 6px;
     font-size: 0.9em;
-    background: rgba(59, 130, 246, 0.05);
+    background: var(--color-accent-blue-wash-05);
     border-left: 3px solid var(--color-accent-blue);
 }
 
 .tool-execution-inline.tool-success {
-    background: rgba(34, 197, 94, 0.05);
-    border-left-color: var(--color-accent-green, #22c55e);
+    background: var(--color-accent-green-wash-05);
+    border-left-color: var(--color-accent-green, var(--color-accent-green));
 }
 
 .tool-execution-inline.tool-error {
-    background: rgba(239, 68, 68, 0.08);
+    background: var(--color-accent-red-wash-08);
     border-left-color: var(--color-accent-red);
 }
 
@@ -952,7 +952,7 @@
 .tool-execution-inline .tool-badge {
     display: inline-block;
     padding: 2px 8px;
-    background: rgba(33, 150, 243, 0.15);
+    background: var(--color-accent-blue-wash-15);
     border-radius: 4px;
     font-weight: 600;
     font-size: 0.85em;
@@ -966,7 +966,7 @@
 
 .tool-execution-inline .tool-action {
     font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
-    color: var(--color-accent-teal, #14b8a6);
+    color: var(--color-accent-teal, var(--color-accent-teal));
 }
 
 .tool-execution-inline .tool-duration {
@@ -979,7 +979,7 @@
     width: 100%;
     margin-top: 4px;
     padding: 6px 10px;
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--color-accent-red-wash-10);
     border-radius: 4px;
     color: var(--color-accent-red);
     font-size: 0.9em;
@@ -989,7 +989,7 @@
     width: 100%;
     margin-top: 4px;
     padding: 8px 10px;
-    background: rgba(0, 0, 0, 0.15);
+    background: var(--color-shadow-wash-15);
     border-radius: 4px;
     font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
     font-size: 0.85em;
@@ -1021,12 +1021,12 @@
 }
 
 .error-content.warning {
-    background: rgba(251, 191, 36, 0.1);
+    background: var(--color-accent-yellow-wash-10);
     border-left: 3px solid var(--color-accent-yellow);
 }
 
 .error-content.critical {
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--color-accent-red-wash-10);
     border-left: 3px solid var(--color-accent-red);
 }
 
@@ -1058,7 +1058,7 @@
     font-family: 'Monaco', 'Menlo', monospace;
     font-size: 0.75em;
     color: var(--color-text-muted);
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--color-shadow-wash-05);
     border: 1px solid var(--color-border);
     border-radius: 4px;
     padding: 8px;
@@ -1102,7 +1102,7 @@
 }
 
 .irc-session-line:hover {
-    background-color: rgba(86, 226, 194, 0.08);
+    background-color: var(--color-accent-green-wash-08);
 }
 
 .irc-timestamp {
@@ -1132,7 +1132,7 @@
 }
 
 .irc-runtime-agent {
-    color: #ffa500;
+    color: var(--color-accent-yellow);
 }
 
 .irc-session-id {
@@ -1193,7 +1193,7 @@
     margin: 8px 0 8px 24px;
     border: 1px solid var(--color-border);
     border-radius: 4px;
-    background: rgba(0, 0, 0, 0.2);
+    background: var(--color-shadow-wash-20);
     overflow: hidden;
     max-width: 800px;
 }
@@ -1203,7 +1203,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--color-shadow-wash-30);
     border-bottom: 1px solid var(--color-border);
     font-family: var(--code-font);
     font-size: var(--font-size-xs);
@@ -1228,7 +1228,7 @@
     overflow-x: auto;
     max-height: 400px;
     overflow-y: auto;
-    background: rgba(0, 0, 0, 0.1);
+    background: var(--color-shadow-wash-10);
 }
 
 .chat-message .file-preview-content code {
@@ -1259,7 +1259,7 @@
     display: block;
     margin-top: 12px;
     padding-top: 8px;
-    border-top: 1px solid rgba(86, 226, 194, 0.15);
+    border-top: 1px solid var(--color-accent-green-wash-15);
 }
 
 /* Thinking line - clean bullet alignment */
@@ -1295,7 +1295,7 @@
 
 .step-action-line:hover {
     opacity: 1;
-    background: rgba(86, 226, 194, 0.05);
+    background: var(--color-accent-green-wash-05);
 }
 
 .step-action-line .action-service {
@@ -1414,7 +1414,7 @@
 
 /* Thinking indicator - aligned with step-action-line content */
 .iteration-thinking {
-    color: rgba(255, 255, 255, 0.6);
+    color: var(--color-text-primary-wash-60);
     margin-top: 4px;
     margin-left: 12px;  /* Match step-action-line indentation */
     display: block;
@@ -1517,7 +1517,7 @@
 }
 
 .queue-indicator .queue-item {
-    color: var(--text-secondary, #94a3b8);
+    color: var(--text-secondary, var(--color-accent-blue));
     font-size: var(--font-size-xs);
     max-width: 200px;
     overflow: hidden;
@@ -1539,12 +1539,12 @@
 }
 
 .msg-state.queued {
-    background-color: rgba(245, 158, 11, 0.2);
+    background-color: var(--color-accent-yellow-wash-20);
     color: var(--color-accent-yellow);
 }
 
 .msg-state.injected {
-    background-color: rgba(59, 130, 246, 0.2);
+    background-color: var(--color-accent-blue-wash-20);
     color: var(--color-accent-blue);
 }
 
@@ -1647,7 +1647,7 @@
     display: block;
     margin-top: 8px;
     padding-top: 6px;
-    border-top: 1px solid rgba(86, 226, 194, 0.15);
+    border-top: 1px solid var(--color-accent-green-wash-15);
 }
 
 /* Error chunks */
@@ -1671,17 +1671,17 @@
 
 .chunk-status .status-completed,
 .chunk-status .status-done {
-    background: rgba(34, 197, 94, 0.15);
+    background: var(--color-accent-green-wash-15);
     color: var(--color-accent-green);
 }
 
 .chunk-status .status-paused {
-    background: rgba(251, 191, 36, 0.15);
+    background: var(--color-accent-yellow-wash-15);
     color: var(--color-accent-yellow);
 }
 
 .chunk-status .status-cancelled {
-    background: rgba(239, 68, 68, 0.15);
+    background: var(--color-accent-red-wash-15);
     color: var(--color-accent-red);
 }
 
@@ -1695,7 +1695,7 @@
 .agent_chunk-message.chunk-group-start {
     margin-top: 10px;
     padding-top: 6px;
-    border-top: 1px solid rgba(86, 226, 194, 0.08);
+    border-top: 1px solid var(--color-accent-green-wash-08);
 }
 
 .agent_chunk-message.chunk-group-end {
@@ -1718,7 +1718,7 @@
     align-items: center;
     gap: 8px;
     padding: 8px 12px;
-    background: rgba(86, 226, 194, 0.05);
+    background: var(--color-accent-green-wash-05);
     border-left: 3px solid var(--color-accent-green);
     border-radius: 0 4px 4px 0;
     cursor: pointer;
@@ -1728,7 +1728,7 @@
 }
 
 .chunk-summary:hover {
-    background: rgba(86, 226, 194, 0.1);
+    background: var(--color-accent-green-wash-10);
 }
 
 .chunk-summary-icon {

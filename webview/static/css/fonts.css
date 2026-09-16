@@ -1,0 +1,27 @@
+/*
+ * fonts.css — the console's two faces, VENDORED.
+ *
+ * The design of record (variables.css) is set in JetBrains Mono, with VT323 for
+ * the wordmark. Both were fetched from Google's font CDN by layout.html; a console
+ * on a box with no outbound internet — the normal shape for an agent host — then
+ * silently lost its typography. The files are the `latin` subsets from the
+ * @fontsource packages (jetbrains-mono 5.3.0, vt323 5.3.0), SIL Open Font License
+ * 1.1; each licence sits beside them as ../fonts/LICENSE-<family>.
+ *
+ * Loaded FIRST by both layout.html and shell.html (one family, two shells). A glyph
+ * outside `latin` falls back to the system monospace, which is a visible degradation
+ * and not a wrong answer. `font-weight: 700` (used by a few legacy rules) synthesises
+ * from the 500 cut.
+ */
+@font-face{
+  font-family:'JetBrains Mono'; font-style:normal; font-weight:400; font-display:swap;
+  src:url(../fonts/JetBrainsMono-Regular.woff2) format('woff2');
+}
+@font-face{
+  font-family:'JetBrains Mono'; font-style:normal; font-weight:500 700; font-display:swap;
+  src:url(../fonts/JetBrainsMono-Medium.woff2) format('woff2');
+}
+@font-face{
+  font-family:'VT323'; font-style:normal; font-weight:400; font-display:swap;
+  src:url(../fonts/VT323-Regular.woff2) format('woff2');
+}

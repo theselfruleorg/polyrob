@@ -40,16 +40,106 @@ from core.env import bool_env, float_env
 #: outflow and holds it to the declared ``max_spend_usd`` before signing.
 DEFI_SPEND_VERBS = frozenset({
     "defi_trade_swap",
+    # 2026-09-12: the bridge JOINED this set. It sat in
+    # ALWAYS_OWNER_APPROVED_VERBS on the reasoning that it can relocate the
+    # treasury in one action; the owner's verdict after actually using it was
+    # that a money rail needing a tap per move is not autonomy at all. Caps, not
+    # taps — the per-tx ceiling, the rolling daily cap and the simulated,
+    # asserted deltas bound it exactly as they bound every verb below, and the
+    # owner queue still catches anything over DEFI_AUTONOMOUS_MAX_USD.
+    "defi_trade_bridge",
     "defi_trade_solana_swap",
     "defi_trade_transfer",
     "defi_trade_approve_token",
     "defi_trade_revoke_approval",
+    # 2026-09-15: retiring a blanket operator approval on an NFT collection.
+    # It grants nothing and moves nothing; its only effect is to remove a
+    # standing claim on the wallet. Making the owner tap to REDUCE risk is how
+    # a wallet stays exposed.
+    "defi_trade_nft_revoke_approval",
+    # 046: ERC-8004 identity. Unlike an NFT transfer, a registration's whole
+    # cost IS a bounded fee that tx_guard prices and holds to max_spend_usd, so
+    # the ceiling is meaningful and the capped lane is the right one. Above it
+    # the owner queue still catches the act, which is the default posture for a
+    # permanent public identity.
+    "defi_trade_register_agent",
+    "defi_trade_set_agent_uri",
+    # Wrapping native -> wrapped native. The most benign verb in this set: the
+    # destination is the chain registry's PINNED wrapped_native (never caller
+    # supplied), the rate is 1:1 by the contract's definition, and the value
+    # never leaves the wallet -- it changes form. tx_guard still simulates it and
+    # asserts the measured native outflow against the declared amount.
+    "defi_trade_wrap",
+    "defi_trade_unwrap",
+    # 042. Caps, not taps — the same posture the owner set for the bridge.
+    # A deployment's whole cost is its fee plus whatever native it endows, both
+    # priced and both held to the declared `max_spend_usd` by tx_guard; `call`
+    # is held to a declared outflow AND a declared MINIMUM INFLOW, so a call
+    # that spends and returns nothing never reaches a signature. Above the
+    # ceiling all three still reach the owner queue.
+    "defi_trade_deploy_token",
+    "defi_trade_deploy_contract",
+    "defi_trade_call",
+    "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
+    # 042b: the Solana twin. Bounded by measured rent (~0.0035 SOL) held to the
+    # declared max_spend_usd, and by the same ceiling above it.
+    "defi_trade_solana_deploy_token",
+    # 042: the launchpad writes. Caps, not taps -- each is a bounded spend the
+    # guard simulates and asserts, and the owner queue still catches anything
+    # over DEFI_AUTONOMOUS_MAX_USD.
+    "launchpad_launch",
+    "launchpad_buy",
+    "launchpad_sell",
+    # Caps, not taps: a claim is bounded by its FEE, and the money moves
+    # TOWARD the treasury. Making the agent ask permission to collect its
+    # own revenue is the shape the owner rejected on 2026-09-12.
+    "launchpad_claim",
+    # 042: the dapp connect. Bounded by a declared per-transaction ceiling AND
+    # a session budget, with every individual transaction simulated and asserted
+    # by tx_guard inside the bridge.
+    "dapp_browser_dapp_connect",
+})
+
+#: Money-spend verbs that are NEVER exemptible by this lane, and the reason.
+#: A verb must be in DEFI_SPEND_VERBS or here — the bidirectional contract test
+#: (`tests/unit/core/test_money_verb_registration.py`) fails on one that is in
+#: neither, so a new verb cannot be forgotten into the wrong lane.
+#:
+#: `bridge` (037): the owner's explicit decision on 2026-09-11 was that a bridge
+#: is ALWAYS owner-approved with NO dollar cap, because it is the only money verb
+#: that can relocate the whole treasury in one action. Putting it in
+#: DEFI_SPEND_VERBS would let `DEFI_TIERED_SPEND_LANE=true` exempt it below a
+#: ceiling — i.e. one env flag would silently overturn that decision. It is also
+#: not simulate-and-assert in the single-transaction sense this lane is scoped to:
+#: its proof is the ARRIVAL on another chain (core/wallet/bridge_guard.py).
+#: Empty since 2026-09-12 — the bridge moved to :data:`DEFI_SPEND_VERBS` above.
+#: KEPT as the classification seam rather than deleted: the bidirectional
+#: contract test requires every defi spend verb to sit in one bucket or the
+#: other, so a future always-approve verb has a home and cannot be forgotten
+#: into the exemptible set by default.
+ALWAYS_OWNER_APPROVED_VERBS = frozenset({
+    # 2026-09-15: sending a non-fungible. ⚠️ This is the first genuine member,
+    # and it is the shape the bucket was kept for.
+    #
+    # Every other verb here is bounded by a USD figure the guard can compute and
+    # hold the caller to. An NFT has NO reliable price: a floor is thin,
+    # trivially wash-traded, and often absent entirely. `tx_guard` therefore
+    # prices the TRANSACTION at its worst-case fee -- true, and no bound at all
+    # on what is being sent. A cap that cannot bound the thing it is capping is
+    # worse than no cap, because it reads as protection.
+    #
+    # So the OWNER is the bound. Putting this in DEFI_SPEND_VERBS instead would
+    # let one env flag (`DEFI_TIERED_SPEND_LANE=true`) wave through the transfer
+    # of an asset of unknown value under a $25 ceiling it has no relation to.
+    "defi_trade_nft_transfer",
 })
 
 #: ``revoke_approval`` sets an allowance to ZERO. It grants nothing and moves
 #: no token; its only effect is to retire a standing claim on the wallet. It
 #: carries no ``max_spend_usd`` for that reason, so it is tiered on identity.
-_RISK_REDUCING_VERBS = frozenset({"defi_trade_revoke_approval"})
+_RISK_REDUCING_VERBS = frozenset({
+    "defi_trade_lp_remove", "defi_trade_lp_collect","defi_trade_revoke_approval",
+                                  "defi_trade_nft_revoke_approval"})
 
 #: The x402 auto-pay verb. It is on `PAYMENT_APPROVAL_TOOLS` (H1a) so an
 #: above-ceiling payment reaches the owner queue, but a micro-payment must not:

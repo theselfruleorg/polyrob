@@ -102,11 +102,94 @@ class DiscoverParams(BaseModel):
         "Exclude pools whose 24h volume is below this. Same unknown rule."))
 
 
+class OhlcvParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("read candles on"))
+    address: str = Field(..., description=(
+        "The TOKEN contract address. Candles are POOL-scoped on this indexer, so "
+        "the deepest pool for this token is resolved and named in the answer."))
+    pool: Optional[str] = Field(None, description=(
+        "Read this exact POOL instead of resolving one. Use it when you already "
+        "know which pool you mean — a token's pools disagree."))
+    timeframe: str = Field("hour", description=(
+        "Candle window: 'day', 'hour' or 'minute'. Use 'day' to see whether a "
+        "token climbed over weeks, 'hour' to see whether it went vertical."))
+    aggregate: int = Field(1, ge=1, le=60, description=(
+        "Bars to merge per candle, e.g. timeframe='minute' aggregate=15."))
+    limit: int = Field(48, ge=1, le=300, description="How many candles to return.")
+
+
+class ScanParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("scan pools on"))
+    kind: str = Field("trending", description=(
+        "'trending' (what the indexer currently ranks) or 'new' (the "
+        "fresh-launch frontier). Trending is a popularity claim and popularity "
+        "is purchasable; new is unproven by definition."))
+    limit: int = Field(20, ge=1, le=50, description="How many pools to classify.")
+    min_liquidity_usd: float = Field(0.0, ge=0.0, description=(
+        "Exclude pools whose reported liquidity is BELOW this. A pool whose "
+        "liquidity is UNKNOWN is never excluded — unknown is not a number."))
+
+
 class ContractReadParams(BaseModel):
     chain: str = Field("base", description=_chain_field("read from"))
     address: str = Field(..., description="Contract address to read from (0x…)")
     signature: str = Field(..., description="Function signature, e.g. 'totalSupply()'")
     args: List[Any] = Field(default_factory=list, description="Arguments (currently unencoded; prefer no-arg views)")
+
+
+class NftHoldingsParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("list NFT holdings on"))
+    address: Optional[str] = Field(
+        None, description="Address to inspect. Defaults to this agent's own wallet.")
+
+
+class NftInfoParams(BaseModel):
+    chain: str = Field("base", description=_chain_field("read the token on"))
+    contract: str = Field(..., description="The NFT collection contract (0x…)")
+    token_id: int = Field(..., ge=0, description="The token id to read.")
+
+
+class LpPositionsParams(BaseModel):
+    chain: str = Field("robinhood", description=_chain_field("read Uniswap v3 positions on"))
+    protocol: str = Field("v3", description="Uniswap protocol: v3 (v4 in a later phase).")
+    address: Optional[str] = Field(None, description="Owner address; defaults to the agent wallet.")
+
+
+class LpPoolInfoParams(BaseModel):
+    chain: str = Field("robinhood", description=_chain_field("read a Uniswap v3 pool on"))
+    protocol: str = Field("v3", description="v3 only for now.")
+    pool: Optional[str] = Field(None, description="Pool address, OR give token_a+token_b+fee.")
+    token_a: Optional[str] = None
+    token_b: Optional[str] = None
+    fee: Optional[int] = Field(None, description="Fee tier in hundredths of a bip: 100, 500, 3000, 10000.")
+
+
+class LpQuoteParams(BaseModel):
+    chain: str = Field("robinhood", description=_chain_field("quote a Uniswap v3 deposit on"))
+    protocol: str = Field("v3", description="v3 only for now.")
+    token_a: str
+    token_b: str
+    fee: int = Field(3000, description="100 | 500 | 3000 | 10000")
+    amount_a: Optional[float] = Field(None, description="Human units of token_a to deposit (give one or both).")
+    amount_b: Optional[float] = None
+    range: str = Field("full", description="'full' or 'price_lo,price_hi' in token_b per token_a.")
+    initial_price: Optional[float] = Field(
+        None, description="token_b per token_a — REQUIRED when the pool does not exist yet.")
+
+
+def _default_json_fetch(url: str):
+    """One bounded JSON GET for the NFT enumeration read.
+
+    Kept tiny and local: the only caller is an allow-listed indexer host built
+    in `nft_verbs`, never a model-supplied URL, so this is not a fetch surface
+    that needs the SSRF validator `web_fetch` carries.
+    """
+    import json
+    import urllib.request
+    req = urllib.request.Request(url, headers={"Accept": "application/json",
+                                               "User-Agent": "polyrob-nft"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read().decode("utf-8"))
 
 
 def _quote_slippage_bps() -> int:
@@ -123,8 +206,347 @@ def _quote_slippage_bps() -> int:
         return 100
 
 
+def _is_finite(value) -> bool:
+    """False for None, NaN and ±inf — the three values that are not a figure.
+
+    A feed that yields NaN once will render it everywhere a number goes unless
+    every formatter agrees to call it what it is.
+    """
+    try:
+        import math
+        return value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _fmt_usd(value: Optional[float]) -> str:
-    return "unknown" if value is None else f"${value:,.2f}"
+    """Money, with a real sub-cent figure kept instead of rounded to zero.
+
+    A memecoin trades at 1e-5 to 1e-8 almost by definition, so the plain
+    two-decimal money format turned nearly every token this path exists to
+    assess into "$0.00" — a real price, with earned confidence, rendered as the
+    one number that means "worthless". Observed live on a Robinhood token, and
+    already filed by the agent as a token property ("price feed shows $0.00
+    (edge case)") rather than as the formatting bug it is.
+
+    A TRUE zero still renders "$0.00", and unknown still renders the word.
+    """
+    if value is None or not _is_finite(value):
+        # NaN IS the canonical "not a number". Rendering it `$nan` puts a
+        # non-figure where a figure goes; an infinity is no better.
+        return "unknown"
+    if value == 0:
+        return "$0.00"          # also normalises -0.0
+    if abs(value) < 0.01:
+        import math
+        # Four significant digits, written out. Decimal rather than scientific
+        # because the figure is compared by eye against a ledger and an
+        # explorer, both of which write it out.
+        places = min(18, 3 - int(math.floor(math.log10(abs(value)))))
+        text = f"{value:,.{places}f}".rstrip("0").rstrip(".")
+        if float(text.replace(",", "")) == 0:
+            # Below what 18 places can show. Writing it out would strip back to
+            # "0" — the confident zero this whole branch exists to remove — so
+            # the compact form is the honest one.
+            return f"${value:.4g}"
+        return f"${text}" if not text.startswith("-") else f"-${text[1:]}"
+    return f"${value:,.2f}"
+
+
+def _fmt_pct(fraction: Optional[float]) -> str:
+    """A FRACTION (0.30) as a percentage. Unknown stays the word, never 0%:
+    "this wallet holds 0%" and "the screener did not say" are different facts."""
+    return "unknown" if not _is_finite(fraction) else f"{fraction * 100:.1f}%"
+
+
+def _fmt_count(value: Optional[int]) -> str:
+    return "unknown" if value is None else f"{value:,}"
+
+
+def _fmt_ratio(value: Optional[float], places: int = 1) -> str:
+    return "unknown" if not _is_finite(value) else f"{value:,.{places}f}"
+
+
+def _fmt_hours(hours: Optional[float]) -> str:
+    if not _is_finite(hours):
+        return "unknown"
+    if hours < 48:
+        return f"{hours:.0f}h"
+    return f"{hours / 24:.0f}d"
+
+
+#: "no cap" sentinel for a single-sided liquidity quote (proposal 048 P12) —
+#: astronomically larger than any real deposit, so it is never the binding
+#: side of `univ3_math.liquidity_for_amounts` when only one amount is given.
+_LP_MAX_RAW = 2 ** 128 - 1
+
+#: The one honest refusal for every LP read action until phase 3 of 048 ships
+#: Uniswap v4 support — never a stub answer for a protocol this tier cannot
+#: read yet.
+_LP_V4_NOT_YET = "Uniswap v4 reads land in phase 3 of proposal 048; v3 only today"
+
+
+def _lp_read_error_text(exc: Exception) -> str:
+    """The one wording every LP action uses when `lp_reads.LpReadError` is
+    raised — a failed chain read, never a silently-guessed 0/[]/None."""
+    return f"the position read could not be completed ({exc}) — unknown is not zero"
+
+
+def _lp_number_text(value: Optional[float]) -> str:
+    """A plain figure (a price, an implied ratio) at up to 8 significant
+    decimals — mirrors `_fmt_usd`'s refusal to round a real nonzero value to
+    a confident 0, without `_fmt_usd`'s `$` framing (an LP figure is not
+    always USD)."""
+    if value is None or not _is_finite(value):
+        return "unknown"
+    if value == 0:
+        return "0"
+    text = f"{value:,.8f}".rstrip("0").rstrip(".")
+    if text in ("", "-", "0", "-0"):
+        import math
+        places = min(24, 7 - int(math.floor(math.log10(abs(value)))))
+        text = f"{value:.{places}f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _lp_amount_text(raw: Optional[int], dec: Optional[int]) -> str:
+    """Raw base units -> human units, at up to 8 significant decimals."""
+    if raw is None or dec is None:
+        return "unknown"
+    return _lp_number_text(raw / (10 ** dec))
+
+
+def _lp_invert_if_flipped(price: float, flipped: bool) -> float:
+    """token_b-per-token_a <-> token1-per-token0 (or the reverse — an
+    involution, since inverting twice is a no-op). `flipped` is
+    `univ3_math.sort_tokens(token_a, token_b)`'s third element: True means
+    token_a is the numerically HIGHER address, so it became token1."""
+    return (1.0 / price) if flipped else price
+
+
+def _render_lp_position(pv, *, sym0: str, sym1: str) -> List[str]:
+    fee_pct = pv.fee / 1e4
+    state = "IN RANGE" if pv.in_range else "OUT OF RANGE"
+    return [
+        f"#{pv.token_id} pool {pv.pool} {sym0}/{sym1} fee {fee_pct:g}% "
+        f"ticks [{pv.tick_lower},{pv.tick_upper}] {state}",
+        f"  holds:  {_lp_amount_text(pv.amount0, pv.dec0)} {sym0} + "
+        f"{_lp_amount_text(pv.amount1, pv.dec1)} {sym1}",
+        f"  fees:   {_lp_amount_text(pv.fees0, pv.dec0)} {sym0} + "
+        f"{_lp_amount_text(pv.fees1, pv.dec1)} {sym1} uncollected",
+    ]
+
+
+def _fmt_trade_shape(pool) -> str:
+    """The separators, on one line, from fields the indexer already sent.
+
+    These are the measured discriminators between a token that survived and one
+    that was wash-traded into a chart: volume over liquidity, hourly volume over
+    liquidity (a wash in progress that the 24h figure smears out), transactions
+    per UNIQUE buyer, and market cap against liquidity. Every one renders
+    "unknown" rather than a number it cannot compute.
+    """
+    trades = getattr(pool, "trades_h24", None)
+    buyers = "unknown" if trades is None or trades.buyers is None else f"{trades.buyers:,}"
+    buys = "unknown" if trades is None or trades.buys is None else f"{trades.buys:,}"
+    sells = "unknown" if trades is None or trades.sells is None else f"{trades.sells:,}"
+    return (f"V/L {_fmt_ratio(getattr(pool, 'vol_liq_ratio', None))}   "
+            f"V/L 1h {_fmt_ratio(getattr(pool, 'hourly_vol_liq_ratio', None), 2)}   "
+            f"mcap {_fmt_usd(getattr(pool, 'market_cap_usd', None))} "
+            f"(mcap/liq {_fmt_ratio(getattr(pool, 'mcap_liq_ratio', None))})   "
+            f"unique buyers 24h {buyers}   buys/sells {buys}/{sells}   "
+            f"txns per buyer {_fmt_ratio(getattr(pool, 'txns_per_buyer', None))}")
+
+
+#: Worst news first. A scan is read top-down and the rows that cost money are
+#: the ones that must not be below the fold.
+_SCAN_ORDER = ("SURVIVOR", "CANDIDATE", "TOO_NEW", "PASS", "UNSCREENABLE", "WASH")
+
+
+def _render_scan(rows, *, chain: str, kind: str, excluded: int, floor: float) -> List[str]:
+    """Pure. Every classified pool, ordered by verdict, nothing dropped."""
+    label = "newest" if kind == "new" else "trending"
+    head = [
+        f"{label} pools on {chain} — {len(rows)} classified",
+        "",
+        "A verdict here reads the MARKET (depth, flow, age, participation). It "
+        "says NOTHING about the contract: honeypot, sell tax, mint authority and "
+        "holder concentration are token_info and token_holders, and a SURVIVOR "
+        "is not a safety claim.",
+        "",
+    ]
+    if not rows:
+        return head + [
+            "  no pools were returned for this chain and window.",
+            "  That is an empty answer from the indexer, not a verdict on the chain.",
+        ]
+
+    counts = {}
+    for _, verdict in rows:
+        counts[verdict.verdict] = counts.get(verdict.verdict, 0) + 1
+    head.append("  " + "   ".join(
+        f"{name} {counts[name]}" for name in _SCAN_ORDER if name in counts))
+    stock = sum(1 for _, v in rows if v.stock_pair)
+    if stock:
+        head.append(f"  {stock} pool(s) quoted against a TOKENIZED STOCK — such a "
+                    f"position is two bets stacked, the meme and the stock.")
+    head.append("")
+
+    order = {name: i for i, name in enumerate(_SCAN_ORDER)}
+    lines = list(head)
+    for pool, verdict in sorted(rows, key=lambda r: order.get(r[1].verdict, 99)):
+        tag = "  [STOCK PAIR]" if verdict.stock_pair else ""
+        lines.append(f"  {verdict.verdict}{tag}  {pool.name}")
+        lines.append(f"      token: {pool.base_token or 'UNKNOWN — the indexer named a base token this chain does not accept'}")
+        lines.append(f"      {_fmt_trade_shape(pool)}")
+        lines.append(f"      age: {_fmt_hours(getattr(pool, 'age_hours', None))}"
+                     f"   liquidity: {_fmt_usd(pool.liquidity_usd)}"
+                     f"   vol 24h: {_fmt_usd(pool.volume_h24_usd)}")
+        for reason in verdict.reasons:
+            lines.append(f"      · {reason}")
+        for unknown in verdict.unknowns:
+            lines.append(f"      ? NOT CHECKED: {unknown}")
+        lines.append("")
+    if excluded:
+        lines.append(f"  {excluded} pool(s) excluded by your liquidity floor "
+                     f"({_fmt_usd(floor)}). Said out loud because a silent filter "
+                     f"reads as 'this is all there was'.")
+    return lines
+
+
+def _render_candles(candles, summary, *, chain: str, token: str, pool: str,
+                    timeframe: str, aggregate: int) -> List[str]:
+    """Pure. The series plus the shape read; no candles is SAID, never drawn flat."""
+    head = [
+        f"price history for {token} (chain {chain})",
+        f"  pool read: {pool}   window: {aggregate}x{timeframe}",
+        "  ⚠ Candles are POOL-scoped. Another pool for the same token can show a "
+        "different history; this is the one named above.",
+        "",
+    ]
+    if not candles:
+        return head + [
+            "  NO CANDLES — the indexer returned no price history for this pool.",
+            "  That is not a flat chart and not a price of zero; it is an absence "
+            "of data, and for a pool minutes old it is the expected answer.",
+        ]
+
+    lines = head + [
+        f"  {summary.count} candles   "
+        f"first {_fmt_price(summary.first)} -> last {_fmt_price(summary.last)} "
+        f"({_fmt_signed_pct(summary.pct_from_first)})",
+        f"  peak {_fmt_price(summary.peak)} at candle {summary.candles_to_peak} of "
+        f"{summary.count - 1}   now {_fmt_signed_pct(summary.pct_off_peak)} off peak"
+        f"   trough {_fmt_price(summary.trough)}",
+        f"  shape: {_candle_shape_note(summary)}",
+        "",
+        "  ts                    open        high         low       close      vol usd",
+    ]
+    for c in candles:
+        from datetime import datetime, timezone
+        when = datetime.fromtimestamp(c.timestamp, timezone.utc).strftime("%Y-%m-%d %H:%M")
+        lines.append(f"  {when}  {_fmt_price(c.open):>10} {_fmt_price(c.high):>11} "
+                     f"{_fmt_price(c.low):>11} {_fmt_price(c.close):>11} "
+                     f"{_fmt_usd(c.volume_usd):>13}")
+    return lines
+
+
+def _candle_shape_note(summary) -> str:
+    """Name the shape without turning it into a verdict.
+
+    Where the peak SITS in the series is the measured separator; this states it
+    and stops. Deciding is the caller's job, with the screen and the holders.
+    """
+    if summary.peak_in_first_half is None or summary.pct_off_peak is None:
+        return "unknown"
+    if summary.peak_in_first_half and summary.pct_off_peak < -50:
+        return ("peaked EARLY in this window and sits more than 50% below it — "
+                "the round-trip shape, where the exit was the only trade")
+    if summary.peak_in_first_half:
+        return "peaked early in this window and has held most of it"
+    if summary.pct_off_peak > -20:
+        return "peaked LATE in this window and sits near that peak — still climbing"
+    return "peaked late in this window and has pulled back from it"
+
+
+def _fmt_price(value: Optional[float]) -> str:
+    if value is None:
+        return "unknown"
+    if value == 0:
+        return "0"
+    return f"{value:,.8g}"
+
+
+def _fmt_signed_pct(value: Optional[float]) -> str:
+    return "unknown" if not _is_finite(value) else f"{value:+.1f}%"
+
+
+def _render_holder_rows(rows, indent: str = "      ") -> List[str]:
+    lines = []
+    for row in rows:
+        kind = ("contract" if row.is_contract is True
+                else "wallet" if row.is_contract is False
+                else "wallet-or-contract unknown")
+        bits = [f"{_fmt_pct(row.percent)}", kind]
+        if row.is_locked is True:
+            bits.append("locked/burned")
+        if row.tag:
+            bits.append(f"tagged {row.tag!r}")
+        lines.append(f"{indent}{row.address}  " + "  ".join(bits))
+    return lines
+
+
+def _render_holders(report, *, chain: str, address: str) -> List[str]:
+    """Pure. The concentration read, with every unknown stated as unknown."""
+    head = [f"holders of {address} (chain {chain})", ""]
+    if not report.available:
+        return head + [
+            f"  UNAVAILABLE — {report.reason or 'the screener said nothing'}.",
+            "  This is NOT a clean result and NOT evidence of a wide holder base: "
+            "nobody reported the distribution, so it is unknown.",
+        ] + _render_creator(report)
+
+    lines = head + [
+        f"  holder count: {_fmt_count(report.holder_count)}"
+        f"   total supply: {'unknown' if report.total_supply is None else f'{report.total_supply:,.0f}'}",
+        f"  top {len(report.top_holders)} reported hold {_fmt_pct(report.top_percent)} "
+        f"of supply ({_fmt_pct(report.top_percent_wallets)} of it in non-contract wallets)",
+    ]
+    if report.top_holders:
+        lines.append("  top holders:")
+        lines += _render_holder_rows(report.top_holders)
+    lines.append("")
+    if report.lp_holders or report.lp_holder_count is not None:
+        lines.append(f"  LP holders: {_fmt_count(report.lp_holder_count)}"
+                     f"   LP supply: {'unknown' if report.lp_total_supply is None else f'{report.lp_total_supply:,.6f}'}"
+                     f"   locked/burned share: {_fmt_pct(report.lp_locked_percent)}")
+        lines += _render_holder_rows(report.lp_holders)
+    else:
+        lines.append("  LP holders: unknown — the screener reported none, which is "
+                     "NOT the same as an unlocked pool")
+    lines += _render_creator(report)
+    lines += [
+        "",
+        "  ⚠ Concentration is a claim about ADDRESSES, not people. One holder can "
+        "split across many addresses, and this source does not trace funding "
+        "between them, so a flat-looking distribution can still be one party.",
+    ]
+    return lines
+
+
+def _render_creator(report) -> List[str]:
+    lines = []
+    if report.creator_address:
+        lines.append(f"  creator: {report.creator_address}  holds "
+                     f"{_fmt_pct(report.creator_percent)}")
+    if report.owner_address:
+        lines.append(f"  owner:   {report.owner_address}  holds "
+                     f"{_fmt_pct(report.owner_percent)}")
+    if report.honeypot_with_same_creator is True:
+        lines.append("  ⚠ FLAG: the same creator has already deployed a honeypot.")
+    elif report.honeypot_with_same_creator is None:
+        lines.append("  same-creator honeypot history: unknown (not checked here)")
+    return lines
 
 
 class DefiDataTool(BaseTool):
@@ -132,45 +554,119 @@ class DefiDataTool(BaseTool):
 
     def __init__(self, name: str = "defi_data", config=None, container=None, *,
                  search_fn: Optional[Callable] = None,
+                 search2_fn: Optional[Callable] = None,
                  price_fn: Optional[Callable] = None,
                  screen_fn: Optional[Callable] = None,
+                 holders_fn: Optional[Callable] = None,
+                 ohlcv_fn: Optional[Callable] = None,
+                 pool_for_token_fn: Optional[Callable] = None,
                  balances_fn: Optional[Callable] = None,
                  index_fn: Optional[Callable] = None,
                  identity_fn: Optional[Callable] = None,
                  call_fn: Optional[Callable] = None,
+                 nft_fetch: Optional[Callable] = None,
                  native_fn: Optional[Callable] = None,
                  discover_fn: Optional[Callable] = None,
                  route_fn: Optional[Callable] = None,
+                 lp_rpc: Optional[Callable] = None,
                  holder: Optional[str] = "__from_wallet__"):
         super().__init__(name=name, config=config if config is not None else _NULL_CONFIG,
                          container=container)
+        # 046 §4.4: the price behind a non-stable payable asset is a DeFi read,
+        # so this tool's presence is enough to supply it. Idempotent and
+        # fail-open, and `X402InvoiceTool` registers the same helper — either
+        # tier-legal entry point suffices, neither can drift from the other.
+        if container is not None:
+            from tools.defi.payment_quote import register_payment_quoter
+            register_payment_quoter(container)
         self._search_fn = search_fn
+        self._search2_fn = search2_fn
         self._price_fn = price_fn
         self._screen_fn = screen_fn
+        self._holders_fn = holders_fn
+        self._ohlcv_fn = ohlcv_fn
+        self._pool_for_token_fn = pool_for_token_fn
         self._balances_fn = balances_fn
         self._index_fn = index_fn
         self._identity_fn = identity_fn
         self._call_fn = call_fn
+        #: HTTP fetcher for the NFT enumeration read (an indexer — a plain RPC
+        #: node cannot answer "everything this address holds"). Injected in
+        #: tests; the default does one bounded JSON GET.
+        self._nft_fetch = nft_fetch if nft_fetch is not None else _default_json_fetch
         self._native_fn = native_fn
         self._discover_fn = discover_fn
         self._route_fn = route_fn
+        #: Injectable `rpc(method, params, timeout=8.0)` for the liquidity-pool
+        #: reads (`lp_positions`/`lp_pool_info`/`lp_quote`, proposal 048 P12).
+        #: Tests inject a fake; production builds one per chain in
+        #: `_lp_rpc_for`.
+        self._lp_rpc = lp_rpc
         self._holder = holder
 
     # -- seams ------------------------------------------------------------
-    def _ar(self, *, content: str = None, error: str = None):
+    def _ar(self, *, content: str = None, error: str = None, metadata: dict = None):
         from tools.controller.types import ActionResult
         if error is not None:
             return ActionResult(error=error)
-        return ActionResult(extracted_content=content)
+        return ActionResult(extracted_content=content, metadata=metadata)
+
+    #: The resolver's indexes, in the order they are asked. ONE index is not
+    #: enough: DexScreener lags a fresh launch by hours, so prod found the
+    #: resolver "only knows wrong-chain or established tokens" — precisely the
+    #: tokens a launch hunt is not looking for.
+    _INDEX_NAMES = ("dexscreener", "geckoterminal")
 
     def _search(self, symbol: str) -> List[Candidate]:
         return (self._search_fn or dexscreener.search)(symbol)
+
+    def _search2(self, symbol: str) -> List[Candidate]:
+        from tools.defi.providers import geckoterminal as _gt
+        return (self._search2_fn or _gt.search_candidates)(symbol)
+
+    def _search_all(self, symbol: str):
+        """Both indexes, merged and deduped by (chain, address).
+
+        Returns ``(candidates, answered, failed)``. A failing index is NAMED,
+        never swallowed: "no candidates" and "one of the two indexes was down"
+        are different answers and only one of them means the token is not there.
+        On a duplicate the row with the larger reported liquidity wins, because
+        the thinner figure is usually the index that has not caught up.
+        """
+        merged, answered, failed = {}, [], []
+        for name, fn in (("dexscreener", self._search),
+                         ("geckoterminal", self._search2)):
+            try:
+                rows = fn(symbol) or []
+            except Exception as exc:
+                logger.debug("token_resolve: %s failed", name, exc_info=True)
+                failed.append(f"{name} ({exc.__class__.__name__})")
+                continue
+            answered.append(name)
+            for cand in rows:
+                key = (cand.chain, (cand.address or "").lower())
+                seen = merged.get(key)
+                if seen is None or (cand.liquidity_usd or 0.0) > (seen.liquidity_usd or 0.0):
+                    merged[key] = cand
+        out = sorted(merged.values(), key=lambda c: -(c.liquidity_usd or 0.0))
+        return out, answered, failed
 
     def _price_for(self, chain: str, address: str) -> PriceInfo:
         return (self._price_fn or dexscreener.token)(chain, address)
 
     def _screen_for(self, chain: str, address: str) -> ScreenVerdict:
         return (self._screen_fn or goplus.screen)(chain, address)
+
+    def _holders_for(self, chain: str, address: str):
+        return (self._holders_fn or goplus.holders)(chain, address)
+
+    def _ohlcv_for(self, chain: str, pool: str, **kw):
+        from tools.defi.providers import geckoterminal as _gt
+        return (self._ohlcv_fn or _gt.ohlcv)(chain, pool, **kw)
+
+    def _pool_for_token(self, chain: str, address: str):
+        from tools.defi.providers import geckoterminal as _gt
+        return (self._pool_for_token_fn or _gt.top_pool_for_token)(chain, address)
 
     def _identity(self, chain: str, address: str):
         """Token identity, family-dispatched.
@@ -304,25 +800,29 @@ class DefiDataTool(BaseTool):
         "never a single answer — you must choose an address before using any "
         "other verb.", param_model=ResolveParams)
     async def token_resolve(self, params: ResolveParams, execution_context=None):
-        try:
-            cands = self._search(params.symbol)
-        except Exception as exc:
-            logger.debug("token_resolve failed", exc_info=True)
-            return self._ar(error=f"token_resolve failed: {exc}")
+        cands, answered, failed = self._search_all(params.symbol)
+        if not answered:
+            return self._ar(error=(
+                f"token_resolve failed: no index answered "
+                f"({'; '.join(failed) or 'unknown reason'})"))
 
         searched = ", ".join(SUPPORTED_CHAINS)
+        indexes = f"indexes asked: {', '.join(answered)}"
+        if failed:
+            indexes += f"; DID NOT ANSWER: {', '.join(failed)}"
         if not cands:
             return self._ar(content=(
                 f"no candidates for ticker {params.symbol!r} on {searched}. "
                 "Nothing was resolved.\n"
-                "NOTE: the index returns a ranked, capped result set, so this "
+                f"{indexes}.\n"
+                "NOTE: each index returns a ranked, capped result set, so this "
                 "means 'not in the top results for this ticker' — NOT 'no such "
                 "token exists'. If you know the contract address, use it "
                 "directly with token_info."))
 
         lines = [
             f"{len(cands)} candidate contract(s) claim the ticker {params.symbol!r} "
-            f"(searched: {searched}).",
+            f"(searched: {searched}; {indexes}).",
             "",
             "This is NOT a resolution — you must choose an address. Ranking is by "
             "liquidity, which is PURCHASABLE, so a deeper pool does not mean the "
@@ -368,14 +868,49 @@ class DefiDataTool(BaseTool):
             f"   pools: {price.pool_count}   liquidity: {_fmt_usd(price.liquidity_usd)}",
         ]
         if verdict.available:
-            lines.append(f"  screen:   {len(verdict.checks)} checks ran; "
-                         + (f"FLAGS: {', '.join(verdict.flags)}" if verdict.flags
-                            else "no risk flags raised"))
+            # A screener can cover a chain PARTIALLY. Rendering "N checks ran;
+            # no risk flags raised" over a payload that never carried
+            # is_honeypot makes a partial screen read exactly like a clean one,
+            # which is the worst failure a screen has: it looks like safety.
+            partial = bool(getattr(verdict, "missing", None))
+            head = f"  screen:   {len(verdict.checks)} checks ran"
+            if partial:
+                head += " — PARTIAL"
+            head += "; " + (f"FLAGS: {', '.join(verdict.flags)}" if verdict.flags
+                            else ("no risk flags raised among the checks THAT RAN"
+                                  if partial else "no risk flags raised"))
+            lines.append(head)
             for k, v in sorted(verdict.checks.items()):
                 lines.append(f"      {k} = {v}")
+            if partial:
+                lines.append(
+                    f"      ⚠ {len(verdict.missing)} check(s) did NOT run on this "
+                    f"chain: {', '.join(sorted(verdict.missing))}")
+                lines.append(
+                    "      A check that did not run is not a check that passed. "
+                    "Do not read this as a clean screen.")
         else:
             lines.append("  screen:   unavailable — the screener returned nothing. "
                          "This is NOT a clean result; the token is UNSCREENED.")
+
+        # Concentration, from the SAME screener answer. Cheap, and it is the
+        # question a holder-cluster map is opened for.
+        try:
+            holders = self._holders_for(params.chain, address)
+        except Exception:
+            holders = None
+        if holders is None or not getattr(holders, "available", False):
+            reason = getattr(holders, "reason", None) if holders is not None else None
+            lines.append(f"  holders:  unknown — {reason or 'no holder data was reported'}. "
+                         "Unknown distribution is NOT a wide one.")
+        else:
+            lines.append(
+                f"  holders:  {_fmt_count(holders.holder_count)} addresses; "
+                f"top {len(holders.top_holders)} hold {_fmt_pct(holders.top_percent)} "
+                f"({_fmt_pct(holders.top_percent_wallets)} in non-contract wallets)"
+                + ("   ⚠ same creator has deployed a honeypot before"
+                   if holders.honeypot_with_same_creator is True else "")
+                + "   — run token_holders for the per-address breakdown")
         # What the ADDRESS itself does or does not prove. On EVM a mistyped
         # address would almost certainly have failed EIP-55; on Solana nothing
         # would have caught it, and carrying the EVM habit across is how funds
@@ -383,6 +918,106 @@ class DefiDataTool(BaseTool):
         from core.wallet.addresses import typo_protection_note
         lines.append(f"  address:  {typo_protection_note(params.chain)}")
         return self._ar(content="\n".join(lines))
+
+    @BaseTool.action(
+        "Scan a chain's pools and return a VERDICT for each — SURVIVOR / "
+        "CANDIDATE / TOO_NEW / PASS / WASH / UNSCREENABLE — from the measured "
+        "separators: 24h volume over liquidity, 1h volume over liquidity, "
+        "transactions per unique buyer, depth and age. This reads the MARKET "
+        "around a token, never the contract: run token_info for honeypot, taxes "
+        "and mint authority, and token_holders for concentration, before acting "
+        "on anything here.",
+        param_model=ScanParams)
+    async def scan(self, params: ScanParams, execution_context=None):
+        from tools.defi import pool_screen
+        if params.chain not in SUPPORTED_CHAINS:
+            return self._ar(error=(
+                f"chain {params.chain!r} is not supported (this tier covers "
+                f"{', '.join(SUPPORTED_CHAINS)})"))
+        kind = (params.kind or "trending").strip().lower()
+        if kind not in ("trending", "new"):
+            return self._ar(error=f"kind {params.kind!r} must be 'trending' or 'new'")
+        try:
+            pools = self._discover(params.chain, kind) or []
+        except Exception as exc:
+            return self._ar(error=f"pool discovery failed: {exc}")
+
+        kept, excluded = [], 0
+        for pool in pools:
+            if (pool.liquidity_usd is not None
+                    and pool.liquidity_usd < params.min_liquidity_usd):
+                excluded += 1
+                continue
+            kept.append((pool, pool_screen.classify(pool)))
+            if len(kept) >= params.limit:
+                break
+        return self._ar(content="\n".join(_render_scan(
+            kept, chain=params.chain, kind=kind, excluded=excluded,
+            floor=params.min_liquidity_usd)))
+
+    @BaseTool.action(
+        "PRICE HISTORY as candles. A 24h change figure cannot tell a steady "
+        "climber from one spike twenty hours ago, and that difference is the "
+        "whole read: the tokens that survived climbed over WEEKS in steps, the "
+        "wash-traded ones peaked 2-6 hours after launch and lost 75-99%. "
+        "Candles are POOL-scoped, so the pool actually read is named.",
+        param_model=OhlcvParams)
+    async def ohlcv(self, params: OhlcvParams, execution_context=None):
+        from tools.defi.providers.geckoterminal import (
+            OHLCV_TIMEFRAMES, summarize_candles,
+        )
+        address, err = self._validate(params.chain, params.address)
+        if err:
+            return self._ar(error=err)
+        timeframe = (params.timeframe or "hour").strip().lower()
+        if timeframe not in OHLCV_TIMEFRAMES:
+            return self._ar(error=(f"timeframe {params.timeframe!r} is not one of "
+                                   f"{', '.join(OHLCV_TIMEFRAMES)}"))
+        pool = (params.pool or "").strip()
+        if pool:
+            # `pool` is a SECOND caller-supplied address and it reaches the
+            # indexer as a URL path segment. `address` above was validated;
+            # this one was not, which is the whole finding.
+            pool, pool_err = self._validate(params.chain, pool)
+            if pool_err:
+                return self._ar(error=f"pool: {pool_err}")
+        if not pool:
+            try:
+                pool = self._pool_for_token(params.chain, address)
+            except Exception as exc:
+                return self._ar(error=f"could not resolve a pool for {address}: {exc}")
+        if not pool:
+            return self._ar(error=(
+                f"no indexed pool found for {address} on {params.chain}, so there "
+                f"are no candles to read. For a token minutes old this is the "
+                f"honest answer, not an outage — the indexer has not caught up."))
+        try:
+            candles = self._ohlcv_for(params.chain, pool, timeframe=timeframe,
+                                      aggregate=params.aggregate, limit=params.limit)
+        except Exception as exc:
+            return self._ar(error=f"ohlcv failed: {exc}")
+        return self._ar(content="\n".join(_render_candles(
+            candles, summarize_candles(candles), chain=params.chain,
+            token=address, pool=pool, timeframe=timeframe,
+            aggregate=params.aggregate)))
+
+    @BaseTool.action(
+        "WHO owns this token: top holders with their share, wallet vs contract, "
+        "LP holders and whether the LP is locked, and the creator's own stake. "
+        "This is the concentration read — a holder-cluster map in text. It does "
+        "NOT prove wallets are unrelated: one person can hold ten addresses, and "
+        "nothing here traces funding between them.",
+        param_model=TokenRefParams)
+    async def token_holders(self, params: TokenRefParams, execution_context=None):
+        address, err = self._validate(params.chain, params.address)
+        if err:
+            return self._ar(error=err)
+        try:
+            report = self._holders_for(params.chain, address)
+        except Exception as exc:
+            return self._ar(error=f"token_holders failed: {exc}")
+        return self._ar(content="\n".join(
+            _render_holders(report, chain=params.chain, address=address)))
 
     @BaseTool.action(
         "Price a SWAP before committing to one: best Uniswap V3 fee tier and the "
@@ -722,7 +1357,8 @@ class DefiDataTool(BaseTool):
                           evm_chain=(row is None or row.family == "evm"))
         return self._ar(content=rec.render(
             report, chain=chain, holder=holder, ledger_path=ledger_path,
-            coverage=coverage))
+            coverage=coverage),
+            metadata={"report": report.to_dict(), "coverage": coverage})
 
     @BaseTool.action(
         "List the POOLS most recently indexed on a chain — the fresh-launch "
@@ -788,10 +1424,12 @@ class DefiDataTool(BaseTool):
             lines.append(
                 f"  {pool.name}\n"
                 f"    token: {token}\n"
-                f"    dex: {pool.dex}   created: {pool.created_at or 'unknown'}\n"
+                f"    dex: {pool.dex}   created: {pool.created_at or 'unknown'}"
+                f"   age: {_fmt_hours(getattr(pool, 'age_hours', None))}\n"
                 f"    liquidity: {_fmt_usd(pool.liquidity_usd)}   "
                 f"vol 24h: {_fmt_usd(pool.volume_h24_usd)}   "
-                f"24h: {'unknown' if pool.price_change_h24_pct is None else f'{pool.price_change_h24_pct:+.1f}%'}")
+                f"24h: {'unknown' if pool.price_change_h24_pct is None else f'{pool.price_change_h24_pct:+.1f}%'}\n"
+                f"    {_fmt_trade_shape(pool)}")
         if excluded:
             lines += ["", f"  {excluded} pool(s) excluded by your floors "
                           f"(liquidity < {_fmt_usd(params.min_liquidity_usd)}, "
@@ -928,6 +1566,318 @@ class DefiDataTool(BaseTool):
                     f"broadcast on {chain}, entries and EXITS alike, until it is funded."]
         return [f"  gas ({symbol}): {native:,.6f} {symbol} — pays fees on {chain}. "
                 f"Not a position and not counted in the total below."]
+
+    @BaseTool.action(
+        "List the non-fungible tokens (NFTs) an address holds. Defaults to your "
+        "own wallet. Read-only. ⚠️ If no enumeration provider is configured this "
+        "says so — it never returns an empty list, because 'you own nothing' and "
+        "'I could not look' are different answers.",
+        param_model=NftHoldingsParams)
+    async def nft_holdings(self, params: NftHoldingsParams, execution_context=None):
+        from tools.defi import nft_verbs
+
+        address = params.address
+        if not address:
+            try:
+                from core.wallet.factory import get_agent_wallet
+                w = get_agent_wallet()
+                address = w.operational_signer().address if w else None
+            except Exception:
+                address = None
+        if not address:
+            return self._ar(error=(
+                "no address given and this agent's own wallet could not be "
+                "resolved (AGENT_WALLET_ENABLED)"))
+        try:
+            held = nft_verbs.enumerate_holdings(
+                chain=params.chain, address=address, fetch=self._nft_fetch)
+        except nft_verbs.EnumerationUnavailable as exc:
+            # UNAVAILABLE is not EMPTY. Rendering [] here would read as a
+            # confident "you hold nothing".
+            return self._ar(error=str(exc))
+        except Exception as exc:
+            return self._ar(error=f"the holdings read failed: {exc}")
+        if not held:
+            return self._ar(content=(
+                f"{address} on {params.chain}: the indexer returned no NFTs. "
+                f"This IS an answer from a working read, not a failed one."))
+        lines = [f"{address} on {params.chain} — {len(held)} NFT(s):"]
+        for item in held[:50]:
+            name = item.get("name") or "(unnamed)"
+            std = item.get("standard") or "standard unknown"
+            bal = f" x{item['balance']}" if item.get("balance") not in (None, "1") else ""
+            lines.append(f"  {name} — {item['contract']} #{item.get('token_id')} "
+                         f"[{std}]{bal}")
+        if len(held) > 50:
+            lines.append(f"  …and {len(held) - 50} more")
+        return self._ar(content="\n".join(lines))
+
+    @BaseTool.action(
+        "Read one NFT straight from the chain: who owns it, which standard it "
+        "implements, and its metadata URI. Keyless and exact. A field that the "
+        "node did not answer is reported as NOT CHECKED, never as a default.",
+        param_model=NftInfoParams)
+    async def nft_info(self, params: NftInfoParams, execution_context=None):
+        from core.wallet.onchain import _rpc, rpc_url_for_chain
+        from tools.defi import nft_verbs
+
+        contract, err = self._validate(params.chain, params.contract)
+        if err:
+            return self._ar(error=err)
+
+        def _call(method, args, timeout=8.0):
+            return _rpc(rpc_url_for_chain(params.chain), method, args, timeout)
+
+        try:
+            facts = nft_verbs.read_token_facts(
+                _call, chain=params.chain, contract=contract,
+                token_id=params.token_id)
+        except Exception as exc:
+            return self._ar(error=f"the token read failed: {exc}")
+        lines = [f"{contract} #{params.token_id} on {params.chain}"]
+        if facts.get("standard"):
+            lines.append(f"  standard: {facts['standard']}")
+        if facts.get("owner"):
+            lines.append(f"  owner: {facts['owner']}")
+        if facts.get("uri"):
+            lines.append(f"  metadata: {facts['uri']}")
+        if facts.get("not_checked"):
+            # ⚠️ A check that did not run is not a check that passed.
+            lines.append("  NOT CHECKED: " + "; ".join(facts["not_checked"]))
+        return self._ar(content="\n".join(lines))
+
+    # -- liquidity pools (proposal 048 P12) --------------------------------
+
+    def _lp_rpc_for(self, chain: str) -> Callable:
+        """The `rpc(method, params, timeout=8.0)` the LP reads call. Tests
+        inject `lp_rpc` at construction; production builds one per chain,
+        matching the existing `_eth_call` pattern."""
+        if self._lp_rpc is not None:
+            return self._lp_rpc
+        from core.wallet.onchain import _rpc, rpc_url_for_chain
+        return lambda method, params, timeout=8.0: _rpc(
+            rpc_url_for_chain(chain), method, params, timeout)
+
+    def _lp_symbol(self, chain: str, address: str) -> str:
+        """Best-effort token symbol via the existing `_identity` seam — falls
+        back to the raw address when the read is unavailable or fails, so a
+        symbol lookup never blocks or breaks an LP render."""
+        try:
+            ident = self._identity(chain, address)
+            return getattr(ident, "symbol", None) or address
+        except Exception:
+            return address
+
+    @BaseTool.action(
+        "List this address's Uniswap v3 liquidity positions: pool, range, "
+        "whether it is in range right now, current holdings and uncollected "
+        "fees. Defaults to your own wallet. Read-only. Uniswap v4 lands in a "
+        "later phase.",
+        param_model=LpPositionsParams)
+    async def lp_positions(self, params: LpPositionsParams, execution_context=None):
+        if params.protocol != "v3":
+            return self._ar(error=_LP_V4_NOT_YET)
+        address = params.address
+        if not address:
+            try:
+                from core.wallet.factory import get_agent_wallet
+                w = get_agent_wallet()
+                address = w.operational_signer().address if w else None
+            except Exception:
+                address = None
+        if not address:
+            return self._ar(error=(
+                "no address given and this agent's own wallet could not be "
+                "resolved (AGENT_WALLET_ENABLED)"))
+
+        from tools.defi import lp_reads
+
+        rpc = self._lp_rpc_for(params.chain)
+        try:
+            ids = lp_reads.owned_position_ids(rpc, params.chain, address)
+        except lp_reads.LpReadError as exc:
+            return self._ar(error=_lp_read_error_text(exc))
+        if not ids:
+            return self._ar(content=(
+                f"{address} on {params.chain}: no Uniswap v3 positions. This "
+                f"IS an answer from a working read, not a failed one."))
+
+        lines = [f"{address} on {params.chain} — {len(ids)} Uniswap v3 "
+                 f"position(s):"]
+        try:
+            for token_id in ids:
+                pv = lp_reads.position(rpc, params.chain, token_id)
+                sym0 = self._lp_symbol(params.chain, pv.token0)
+                sym1 = self._lp_symbol(params.chain, pv.token1)
+                lines.extend(_render_lp_position(pv, sym0=sym0, sym1=sym1))
+                from tools.defi.lp_valuation import value_lines
+                lines.extend(value_lines(self, params.chain, pv, execution_context))
+        except lp_reads.LpReadError as exc:
+            return self._ar(error=_lp_read_error_text(exc))
+        return self._ar(content="\n".join(lines))
+
+    @BaseTool.action(
+        "Read a Uniswap v3 pool's live state: tokens, fee tier, current tick, "
+        "price and liquidity. Give a pool address, OR token_a + token_b + "
+        "fee to locate one. A pair with no pool yet is reported, not "
+        "invented. Read-only. Uniswap v4 lands in a later phase.",
+        param_model=LpPoolInfoParams)
+    async def lp_pool_info(self, params: LpPoolInfoParams, execution_context=None):
+        if params.protocol != "v3":
+            return self._ar(error=_LP_V4_NOT_YET)
+
+        from tools.defi import lp_reads
+
+        rpc = self._lp_rpc_for(params.chain)
+        pool = params.pool
+        if not pool:
+            if not (params.token_a and params.token_b and params.fee):
+                return self._ar(error=(
+                    "give either pool, OR token_a + token_b + fee to locate "
+                    "a Uniswap v3 pool."))
+            try:
+                pool = lp_reads.pool_address(
+                    rpc, params.chain, params.token_a, params.token_b, params.fee)
+            except lp_reads.LpReadError as exc:
+                return self._ar(error=_lp_read_error_text(exc))
+            if pool is None:
+                return self._ar(content=(
+                    f"no Uniswap v3 pool exists yet for {params.token_a}/"
+                    f"{params.token_b} at fee {params.fee} on {params.chain} "
+                    f"— this pool does not exist. Use lp_add with "
+                    f"initial_price to create and seed one."))
+
+        try:
+            ps = lp_reads.pool_state(rpc, params.chain, pool)
+        except lp_reads.LpReadError as exc:
+            return self._ar(error=_lp_read_error_text(exc))
+
+        sym0 = self._lp_symbol(params.chain, ps.token0)
+        sym1 = self._lp_symbol(params.chain, ps.token1)
+        fee_pct = ps.fee / 1e4
+        inv_price = None if not ps.price0_in_1 else 1.0 / ps.price0_in_1
+        lines = [
+            f"pool {ps.pool} on {params.chain} — {sym0}/{sym1} fee {fee_pct:g}%",
+            f"  tick: {ps.tick} (spacing {ps.tick_spacing})",
+            f"  liquidity: {ps.liquidity:,}",
+            f"  price: 1 {sym0} = {_lp_number_text(ps.price0_in_1)} {sym1}   "
+            f"|   1 {sym1} = {_lp_number_text(inv_price)} {sym0}",
+        ]
+        return self._ar(content="\n".join(lines))
+
+    @BaseTool.action(
+        "Quote a Uniswap v3 liquidity deposit: given one or both token "
+        "amounts and a price range, compute the liquidity this would mint "
+        "and the exact paired amounts. Works against an existing pool (its "
+        "live price is read) or a not-yet-created one (give initial_price). "
+        "Read-only — never deposits. Uniswap v4 lands in a later phase.",
+        param_model=LpQuoteParams)
+    async def lp_quote(self, params: LpQuoteParams, execution_context=None):
+        if params.protocol != "v3":
+            return self._ar(error=_LP_V4_NOT_YET)
+
+        from tools.defi import lp_abi as A
+        from tools.defi import lp_reads
+        from core.wallet import univ3_math as M
+
+        if params.fee not in A.FEE_TIERS:
+            return self._ar(error=(
+                f"fee {params.fee} is not a Uniswap v3 tier — use one of "
+                f"{', '.join(str(f) for f in sorted(A.FEE_TIERS))}."))
+        if params.amount_a is None and params.amount_b is None:
+            return self._ar(error=(
+                "give amount_a and/or amount_b to quote a deposit."))
+
+        rpc = self._lp_rpc_for(params.chain)
+        token0, token1, flipped = M.sort_tokens(params.token_a, params.token_b)
+
+        try:
+            pool = lp_reads.pool_address(
+                rpc, params.chain, params.token_a, params.token_b, params.fee)
+        except lp_reads.LpReadError as exc:
+            return self._ar(error=_lp_read_error_text(exc))
+
+        if pool is not None:
+            try:
+                ps = lp_reads.pool_state(rpc, params.chain, pool)
+            except lp_reads.LpReadError as exc:
+                return self._ar(error=_lp_read_error_text(exc))
+            sqrt_p, dec0, dec1 = ps.sqrt_price_x96, ps.dec0, ps.dec1
+            pool_note = f"pool {pool}"
+        else:
+            if params.initial_price is None:
+                return self._ar(error=(
+                    f"no Uniswap v3 pool exists yet for {params.token_a}/"
+                    f"{params.token_b} at fee {params.fee} on {params.chain} "
+                    f"— initial_price (token_b per token_a) is REQUIRED to "
+                    f"quote a deposit into a pool that has not been created."))
+            if params.initial_price <= 0:
+                return self._ar(error="initial_price must be greater than 0.")
+            try:
+                dec0 = lp_reads.decimals(rpc, params.chain, token0)
+                dec1 = lp_reads.decimals(rpc, params.chain, token1)
+            except lp_reads.LpReadError as exc:
+                return self._ar(error=_lp_read_error_text(exc))
+            price0_in_1 = _lp_invert_if_flipped(params.initial_price, flipped)
+            sqrt_p = M.sqrt_price_from_price(price0_in_1, dec0, dec1)
+            pool_note = "not-yet-created pool"
+
+        spacing = A.FEE_TIERS[params.fee]
+        if params.range == "full":
+            tick_lower, tick_upper = M.full_range_ticks(spacing)
+        else:
+            try:
+                lo_s, hi_s = params.range.split(",", 1)
+                lo, hi = float(lo_s), float(hi_s)
+            except (ValueError, AttributeError):
+                return self._ar(error=(
+                    f"range {params.range!r} is not 'full' or "
+                    f"'price_lo,price_hi'."))
+            if lo <= 0 or hi <= 0:
+                return self._ar(error="range prices must be greater than 0.")
+            if flipped:
+                price0_lo = _lp_invert_if_flipped(hi, True)
+                price0_hi = _lp_invert_if_flipped(lo, True)
+            else:
+                price0_lo, price0_hi = lo, hi
+            tick_lower = M.align_tick(M.price_to_tick(price0_lo, dec0, dec1), spacing)
+            tick_upper = M.align_tick(M.price_to_tick(price0_hi, dec0, dec1), spacing)
+
+        if tick_lower >= tick_upper:
+            return self._ar(error=(
+                f"range collapses to an empty tick window "
+                f"[{tick_lower},{tick_upper}] after aligning to the "
+                f"{spacing}-tick spacing for fee {params.fee} — widen it."))
+
+        sqrt_a = M.sqrt_price_at_tick(tick_lower)
+        sqrt_b = M.sqrt_price_at_tick(tick_upper)
+
+        amount0_human = params.amount_b if flipped else params.amount_a
+        amount1_human = params.amount_a if flipped else params.amount_b
+        raw0 = (_LP_MAX_RAW if amount0_human is None
+                else int(round(amount0_human * (10 ** dec0))))
+        raw1 = (_LP_MAX_RAW if amount1_human is None
+                else int(round(amount1_human * (10 ** dec1))))
+
+        liquidity = M.liquidity_for_amounts(sqrt_p, sqrt_a, sqrt_b, raw0, raw1)
+        out0, out1 = M.amounts_for_liquidity(sqrt_p, sqrt_a, sqrt_b, liquidity)
+
+        sym_a = self._lp_symbol(params.chain, params.token_a)
+        sym_b = self._lp_symbol(params.chain, params.token_b)
+        sym0 = self._lp_symbol(params.chain, token0)
+        sym1 = self._lp_symbol(params.chain, token1)
+        price0_in_1_now = (sqrt_p / M.Q96) ** 2 * (10 ** dec0) / (10 ** dec1)
+        implied = _lp_invert_if_flipped(price0_in_1_now, flipped)
+
+        lines = [
+            f"lp_quote {params.chain} v3 fee {params.fee / 1e4:g}% — {pool_note}",
+            f"  ticks: [{tick_lower},{tick_upper}]",
+            f"  liquidity: {liquidity:,}",
+            f"  amount0: {_lp_amount_text(out0, dec0)} {sym0}",
+            f"  amount1: {_lp_amount_text(out1, dec1)} {sym1}",
+            f"  implied price: 1 {sym_a} = {_lp_number_text(implied)} {sym_b}",
+        ]
+        return self._ar(content="\n".join(lines))
 
     @BaseTool.action(
         "Raw read-only eth_call against a contract. Returns the raw hex; any "

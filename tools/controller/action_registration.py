@@ -35,38 +35,16 @@ from tools.controller.turn_origin import (  # noqa: F401 — re-exported: extern
 
 logger = logging.getLogger(__name__)
 
-# Outcomes from core.surfaces.user_delivery.deliver_user_message (via
-# maybe_deliver_autonomous_send) that mean the text did NOT reach the user
-# live, so send_message's own report must say so instead of a blanket
-# "sent" — a resumed/recreated session (e.g. `polyrob run --resume`) has no
-# other delivery path, and a blind "success" here is what let a genuinely
-# undelivered owner reply go unnoticed on 2026-08-28 (fixed alongside this).
-_ROUTE_OUTCOME_NOT_DELIVERED = {
-	"capped": "the owner's daily message cap was already reached",
-	"rate_limited": "the owner's hourly rate limit was already reached",
-	"deduped": "an identical message was already sent recently",
-	"quiet_held": "quiet hours are in effect",
-	"failed": "the delivery attempt raised an error",
-	"empty": "the message text was empty",
-}
-
-
-def _describe_route_outcome(route_outcome: Optional[str]) -> Optional[str]:
-	"""Honest suffix for send_message's ActionResult, or None to change nothing.
-
-	``None``/``"sent"`` mean either a live mirror already handled delivery or
-	the fallback rail genuinely delivered — the default "sent" wording stays
-	accurate. Anything else means the text was NOT delivered to the user this
-	way; say so rather than reporting a blanket success.
-	"""
-	if route_outcome in (None, "sent"):
-		return None
-	if route_outcome == "fallback":
-		return ("no live delivery channel — queued as a durable owner notice "
-				"(not an instant push; check `polyrob owner` on the next contact)")
-	reason = _ROUTE_OUTCOME_NOT_DELIVERED.get(
-		route_outcome, f"outcome={route_outcome}")
-	return f"NOT delivered to the user — {reason}"
+# Emit-side glue (route-outcome honesty + the mirror's session context) lives in
+# tools/controller/emit.py — this module is a god-file under a shrink-only size
+# ratchet, so new behaviour goes in a new module. Imported under the original
+# private names because existing call sites and a test use them.
+from tools.controller.emit import (  # noqa: E402
+	attachment_receipt,
+	_describe_route_outcome,
+	_publish_context,
+	_ROUTE_OUTCOME_NOT_DELIVERED,  # noqa: F401  (re-export for existing importers)
+)
 
 
 class ActionRegistrationMixin(DocAuthoringMixin):
@@ -100,6 +78,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				SUB-AGENT ISOLATION: Sub-agents skip adding to main context and feed.
 				Their messages are captured in their own context and returned as output.
 				"""
+				# C5: what became of any workspace file this message named. Initialised
+				# here so every return path is safe on branches that skip the mirror.
+				_attach_note = None
 				import time
 				
 				# Check if this is a sub-agent (skip side effects for isolation)
@@ -158,11 +139,19 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					# session_key are bound (later phases). No-op + fail-open otherwise.
 					try:
 						from core.surfaces.outbound_mirror import build_discrete_publish
+						from core.surfaces.turn_reply import mark_reply_published
 						_mirror = build_discrete_publish(
 							getattr(self.orchestrator, "_message_router", None),
 							getattr(self.orchestrator, "_chat_session_key", None),
+							**_publish_context(self, reply_to=params.reply_to),
 						)
-						await _mirror(params.text)
+						_resolution = await _mirror(params.text)
+						# C1: send_message is the speech verb — it claims this turn's
+						# reply (done's mirror then stands down) and records the text,
+						# which the unbound delivery path needs. See core.surfaces.turn_reply.
+						mark_reply_published(self.orchestrator, params.text)
+						# C5: tell the AGENT what became of the files it named.
+						_attach_note = attachment_receipt(_resolution)
 					except Exception as e:
 						self.logger.debug(f"Could not mirror message to router: {e}")
 
@@ -209,6 +198,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					_route_status = _describe_route_outcome(_route_outcome)
 					_paused_summary = (f"Message sent to user. Task paused - will resume when user responds. — {_route_status}"
 						if _route_status else "Message sent to user. Task paused - will resume when user responds.")
+					if _attach_note:
+						_paused_summary = f"{_paused_summary} {_attach_note}"
 					return ActionResult(
 						extracted_content=_paused_summary,
 						include_in_memory=True,
@@ -223,6 +214,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 				_route_status = _describe_route_outcome(_route_outcome)
 				_send_summary = (f"Message sent to user (non-blocking) — {_route_status}"
 					if _route_status else "Message sent to user (non-blocking)")
+				if _attach_note:
+					_send_summary = f"{_send_summary} {_attach_note}"
 				return ActionResult(
 					extracted_content=_send_summary,
 					include_in_memory=False,
@@ -314,11 +307,18 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					# Without this, the harness skipping its post-run deliver for bound sessions
 					# would silence done()-terminated turns (done doesn't otherwise reach the
 					# router). No-op + fail-open when unbound (build_discrete_publish → no router).
+					#
+					# C1: this mirror is now the turn's SAFETY NET, not a second voice —
+					# it publishes only when the turn spoke nothing, so a done()-only turn
+					# still reaches the user while an answer-then-recap turn delivers one
+					# message instead of two. Gate CHAT_SINGLE_FINAL.
 					try:
-						from core.surfaces.outbound_mirror import build_discrete_publish
-						_mirror = build_discrete_publish(
+						from core.surfaces.outbound_mirror import build_completion_publish
+						_mirror = build_completion_publish(
 							getattr(self.orchestrator, "_message_router", None),
 							getattr(self.orchestrator, "_chat_session_key", None),
+							self.orchestrator,
+							**_publish_context(self),
 						)
 						await _mirror(completion_msg)
 					except Exception as e:
@@ -994,6 +994,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			new_string: Optional[str] = None     # patch: replacement
 			replace_all: bool = False
 			description: str = ""
+			expected_revision: Optional[str] = None  # promote/patch CAS token from pending review
 
 		@self.registry.action(
 			"Author your own durable SKILLS (procedures you can reload in future "
@@ -1061,7 +1062,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 							error="promote is owner-only; your pending draft awaits operator review.",
 							include_in_memory=True)
 					res = sm.promote_pending_skill(params.skill_id, user_id=user_id,
-					                               description=params.description)
+					                               description=params.description,
+					                               expected_revision=params.expected_revision)
 					if not res.ok:
 						return ActionResult(error=f"promote failed: {'; '.join(res.errors)}",
 						                    include_in_memory=True)
@@ -1080,7 +1082,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 						                    include_in_memory=True)
 					res = sm.patch_skill(params.skill_id, user_id=user_id,
 					                     old_string=params.old_string, new_string=params.new_string,
-					                     replace_all=params.replace_all, created_by=created_by)
+					                     replace_all=params.replace_all, created_by=created_by,
+					                     expected_revision=params.expected_revision)
 				else:  # delete
 					ok = sm.delete_skill(params.skill_id, user_id=user_id, created_by=created_by)
 					if ok:
@@ -1133,9 +1136,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		from tools.controller.views import MessageTargetAction
 
 		@self.registry.action(
-			'Send a message to a specific chat/recipient on a given surface '
-			'(telegram/email/whatsapp/discord/slack/signal/x). Only the owner and '
-			'owner-allowlisted targets are permitted; other targets are denied.',
+			'Send a message — and any FILES you made — to a chat/recipient on a surface '
+			'(telegram/email/whatsapp/discord/slack/signal/x). Attach with media_paths, '
+			'one call per file; a path in text is NOT a delivery. Owner/allowlisted only.',
 			param_model=MessageTargetAction,
 		)
 		async def message(params: MessageTargetAction, execution_context=None) -> ActionResult:
@@ -1158,8 +1161,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			# owner within the cooldown window (checked against the durable
 			# conversation store, not the model's own elapsed-time claim).
 			cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
-				execution_context, self, container=container, user_id=user_id,
-				surface=surface, target=target, owner_targets=owner_targets)
+				execution_context, self, container=container, user_id=user_id, surface=surface,
+				target=target, owner_targets=owner_targets, text=params.text)
 			if cooldown_refusal is not None:
 				return cooldown_refusal
 
@@ -1249,11 +1252,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		  still read its own effective config).
 		- `contract_propose` follows the skill_manage/self_context_manage
 		  create/patch idiom instead: it is NOT refused for a forged turn, but
-		  `created_by` is forced to `PROVENANCE_BACKGROUND`, which makes
-		  `ContractWriter.propose` quarantine unconditionally (never active,
-		  regardless of `CONTRACT_DOC_REQUIRE_REVIEW`) — the owner promotes with
-		  `/pending`. This is safe because `contract_propose` never writes
-		  active state directly, unlike a SAFE `set`.
+		  `created_by` is forced to `PROVENANCE_BACKGROUND`, which makes the
+		  RULES writer quarantine unconditionally (never active) — the owner
+		  promotes with `/pending`. Since 035 P1-7 it records into `owner.md`,
+		  so a GENUINE owner turn may bind it now (`OWNER_RULES_IMMEDIATE`); a
+		  forged one still cannot, which is what makes that safe.
 		- A leaf/sub-agent additionally never sees this tool at all — it is
 		  excluded from the child's registry via
 		  `tools.controller.delegation.delegation_exclusions_for_child`
@@ -1289,7 +1292,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 		@self.registry.action(
 			"Manage your typed conversational preferences (approvals, budget caps, "
 			"goal quotas, digest/delivery settings, reply style, session defaults) and "
-			"propose durable operating rules. operation='list' shows every preference "
+			"propose durable operating rules. PREFER THIS over writing prose into an "
+			"identity doc whenever the owner's instruction maps to a typed key "
+			"(e.g. 'be brief' -> style.verbosity, 'write in German' -> style.language): "
+			"a SAFE key applies immediately and is actually enforced at read time, "
+			"while a prose note is only advisory. operation='list' shows every preference "
 			"(effective value/source/applies); operation='get' with `key` shows one; "
 			"operation='explain' with `key` shows the full provenance chain for ANY "
 			"setting (preference or env flag) — use it to answer 'why is X off?'. "
@@ -1297,9 +1304,9 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			"immediately (per their `applies` granularity: live/next-turn/next-session); "
 			"GUARDED keys (budget/approval ceilings) are NEVER changed directly by you — "
 			"`set` instead queues a proposal for the owner to review (see /pending). "
-			"operation='contract_propose' with `text` proposes durable operating "
-			"rules/constraints for the owner to review (quarantined, applies only after "
-			"the owner approves).",
+			"operation='contract_propose' with `text` records a durable operating "
+			"rule/constraint in the owner's RULES doc (it binds immediately when the "
+			"owner asks for it on this turn, otherwise it is queued for review).",
 			param_model=PreferencesAction,
 		)
 		async def preferences(params: PreferencesAction, execution_context=None) -> ActionResult:
@@ -1313,7 +1320,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			from core.instance import resolve_instance_id
 			instance_id = resolve_instance_id()
 
-			from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, display_effective, validate_pref
+			from core.prefs import PREF_SCHEMA, SENSITIVITY_GUARDED, display_effective, unknown_pref_error
 
 			if params.operation == "list":
 				lines: list = []
@@ -1366,7 +1373,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					return ActionResult(error="get requires `key`.", include_in_memory=True)
 				spec = PREF_SCHEMA.get(params.key)
 				if spec is None:
-					_ok, _coerced, err = validate_pref(params.key, None)
+					err = unknown_pref_error(params.key)
 					return ActionResult(error=err, include_in_memory=True)
 				value, source = display_effective(params.key, user_id, data_dir, instance_id)
 				out = [f"{params.key} = {value}   ({source})", f"applies: {spec.applies}"]
@@ -1384,11 +1391,11 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			#     there is no pending/promote step to fall back on, so a forged turn
 			#     is refused OUTRIGHT (owner must be in the loop before anything
 			#     changes). A GUARDED key never writes active state either way.
-			#   - `contract_propose` ALWAYS quarantines-or-not via the SAME
-			#     CONTRACT_DOC_REQUIRE_REVIEW gate skill_manage/self_context_manage
-			#     use for create/patch — so a forged turn is allowed to PROPOSE, just
-			#     forced to PROVENANCE_BACKGROUND, which makes ContractWriter quarantine
-			#     unconditionally (never active) regardless of the review flag.
+			#   - `contract_propose` (035 P1-7: writes the RULES doc) is allowed to
+			#     PROPOSE on a forged turn, just forced to PROVENANCE_BACKGROUND,
+			#     which makes the writer quarantine unconditionally. Activation is
+			#     decided by OWNER_RULES_IMMEDIATE + a genuine owner turn, not by
+			#     a per-doc review flag.
 			is_forged = _is_forged_or_autonomous_turn(execution_context, self)
 
 			_self_mod_ev = self_mod_emitter(
@@ -1406,7 +1413,7 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					                    include_in_memory=True)
 				spec = PREF_SCHEMA.get(params.key)
 				if spec is None:
-					_ok, _coerced, err = validate_pref(params.key, params.value)
+					err = unknown_pref_error(params.key, params.value)
 					return ActionResult(error=err, include_in_memory=True)
 
 				if spec.sensitivity == SENSITIVITY_GUARDED:
@@ -1433,23 +1440,19 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					extracted_content=f"Set {params.key} = {coerced} (applies: {spec.applies}).",
 					include_in_memory=True)
 
-			# contract_propose
+			# contract_propose — 035 P1-7: FOLDED INTO RULES. Body (and the why) in
+			# `doc_authoring.perform_rules_propose`; no NEW contract.md is created.
 			if not params.text:
 				return ActionResult(error="contract_propose requires `text`.",
 				                    include_in_memory=True)
-			from core.contract_writer import ContractWriter, PROVENANCE_AGENT, PROVENANCE_BACKGROUND
-			created_by = PROVENANCE_BACKGROUND if is_forged else PROVENANCE_AGENT
-			writer = ContractWriter(data_dir, instance_id=instance_id)
-			res = writer.propose(params.text, user_id=user_id, created_by=created_by)
-			if not res.ok:
-				return ActionResult(error=f"Contract proposal rejected: {'; '.join(res.errors)}",
-				                    include_in_memory=True)
-			_self_mod_ev("contract_propose", user_id, pending=bool(res.pending),
-			            created_by=created_by)
-			where = "pending owner review (see /pending)" if res.pending else "active"
-			return ActionResult(
-				extracted_content=f"Operating contract proposal saved ({where}).",
-				include_in_memory=True)
+			from tools.controller.doc_authoring import perform_rules_propose
+			res, result = perform_rules_propose(
+				params.text, user_id=user_id, data_dir=data_dir,
+				instance_id=instance_id, is_forged=is_forged)
+			if res.ok:
+				_self_mod_ev("contract_propose", user_id, pending=bool(res.pending),
+				            created_by=("background_review" if is_forged else "agent"))
+			return result
 
 	def _register_mcp_install_action(self):
 		"""Register the agent-callable `mcp_install` action (T3-01/W4-1).
@@ -1888,10 +1891,8 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 
 		# Expose the gated core so UP-12 (background delegation) and tests can reach it.
 		self._delegate_core = _delegate
-
 		# One-shot deprecation notices for the legacy verbs.
 		_deprecation_warned = {"subtask": False, "parallel_subtasks": False}
-
 		@self.registry.action(
 			'Delegate a subtask to a sub-agent for focused execution '
 			'(deprecated alias of delegate_task; use delegate_task with goal=...)',
@@ -1920,7 +1921,6 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 			return await _delegate(
 				tasks=params.subtasks, execution_context=execution_context, label="parallel_subtasks",
 			)
-
 		# Unified Reference-style delegation surface (roadmap P1): one ergonomic tool
 		# (goal XOR tasks) with an explicit role/depth gate.
 		@self.registry.action(

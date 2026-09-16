@@ -4,7 +4,7 @@ Build-time SSOT is pyproject.toml. Resolution order at runtime:
 
 1. The **source** ``pyproject.toml`` next to this checkout — authoritative when you
    run ``polyrob`` from a source tree. This is FIRST on purpose: a stale editable
-   or wheel install (e.g. a venv still carrying ``polyrob 1.0.0`` while the source
+   or wheel install (e.g. a venv still carrying ``polyrob 0.13.0`` while the source
    is ``0.4.2``) must NOT shadow the version of the code you're actually running.
 2. Installed package metadata — for a real ``pip install`` where there's no source
    ``pyproject.toml`` adjacent to this module (site-packages).
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Optional
 
 # Dev-checkout fallback. MUST equal pyproject.toml [project].version.
-_FALLBACK_VERSION = "0.13.0"
+_FALLBACK_VERSION = "1.0.0"
 
 # Project names this module is willing to claim from an adjacent pyproject.toml, so
 # a parent/monorepo pyproject can never mislabel the version.

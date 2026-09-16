@@ -27,6 +27,7 @@ the NEXT process but the result says so explicitly.
 """
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -283,6 +284,75 @@ CONSOLE_UNWRITABLE_FLAGS = frozenset({
     "LLM_CREDENTIAL_BORROW",
 })
 
+# S8 (agent + wallet security evaluation, 2026-09-14). The set above named four
+# flags; the write it guards is far wider. A remote flag write lands in
+# ``./.polyrob/.env``, which ``polyrob.service`` loads AFTER
+# ``/etc/polyrob/polyrob.env`` — so it OUTRANKS the operator's own env file on
+# the next restart. Four families can therefore hand the instance over, and are
+# refused on every non-local surface:
+#
+#   owner binding  — who the agent obeys (POLYROB_OWNER_*/BOT_OWNER_*/
+#                    TELEGRAM_OWNER_ID/ALLOWED_*/*ALLOWLIST*/pairing)
+#   money bounds   — the caps, venues and endpoints the spend guard measures
+#                    against (WALLET/USD/CAP/RPC/TREASURY segments, X402_*MAX*)
+#   approval       — whether a money verb needs an owner tap at all (APPROVAL)
+#   posture/trust  — POLYROB_LOCAL, AUTONOMY_MODE, *_POSTURE, the console's own
+#                    gating (WEBGATE_*/WEBVIEW_READ_ONLY/WEBVIEW_AUTH_ENABLED)
+#                    and the host-reach surface (CODE_EXEC_*/SHELL/SELF_ENV)
+#
+# …plus every secret-shaped flag (``is_secret_flag`` — the wallet master seed
+# lives there). Matching is by NAME SEGMENT (split on ``_``), so a cap added
+# tomorrow is covered without editing this file; over-blocking is the deliberate
+# bias (the remedy — the local CLI — is one command and is named in the refusal).
+# Known collateral: ALLOWED_REASONING_TURNS, OWNER_DIGEST_ENABLED and friends are
+# ordinary knobs caught by the ALLOWED_/OWNER rules. Pinned by
+# tests/unit/core/test_console_unwritable_flags.py.
+_UNWRITABLE_SEGMENTS = frozenset({
+    "OWNER", "PAIRING",                       # owner binding / identity
+    "WALLET", "USD", "CAP", "RPC", "TREASURY",  # money bounds + endpoints
+    "APPROVAL",                               # approval policy
+    "POSTURE",                                # trust posture ladders
+})
+_UNWRITABLE_PREFIXES = ("WEBGATE_", "CODE_EXEC_", "ALLOWED_")
+_UNWRITABLE_EXACT = frozenset({
+    "POLYROB_LOCAL", "POLYROB_LOCAL_OWNER", "AUTONOMY_MODE",
+    "WEBVIEW_READ_ONLY", "WEBVIEW_AUTH_ENABLED", "WEBVIEW_HOST",
+    "WEBVIEW_ALLOW_LOCAL_POSTURE",
+    "DELEGATE_BLOCKED_TOOLS", "SELF_ENV_ENABLED", "SHELL_TOOLS_ENABLED",
+    "ADMIN_WALLETS", "OUTBOUND_POLICY", "X402_PAYMENT_RECIPIENT",
+})
+# Flag names only (UPPER_SNAKE). A typed preference key (``budget.wallet_daily_usd``)
+# reads money-shaped but has its OWN trust ladder (guarded ⇒ queued for owner
+# review) and must never be swallowed by this denylist.
+_FLAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+def is_console_unwritable(key: str) -> bool:
+    """Whether *key* is an env flag no REMOTE surface may write (S8).
+
+    True ⇒ the console/telegram/API PATCH surfaces refuse it at every posture;
+    the local CLI (`polyrob config set`) is the only writer. Never raises.
+    """
+    name = str(key or "")
+    if name in CONSOLE_UNWRITABLE_FLAGS:
+        return True
+    if not _FLAG_NAME_RE.match(name):
+        return False          # a pref key / anything non-flag-shaped
+    if name in _UNWRITABLE_EXACT or name.startswith(_UNWRITABLE_PREFIXES):
+        return True
+    segments = set(name.split("_"))
+    if segments & _UNWRITABLE_SEGMENTS:
+        return True
+    if "ALLOWLIST" in name or "ALLOWLISTED" in name:
+        return True
+    if name.startswith("X402_") and "MAX" in segments:
+        return True
+    try:
+        from core.flags import is_secret_flag
+        return bool(is_secret_flag(name))
+    except Exception:         # pragma: no cover — fail CLOSED on a broken import
+        return True
+
 
 def set_value(key: str, value: str, *, scope: Optional[str] = None,
               user_id: Optional[str] = None, home_dir=None,
@@ -302,11 +372,12 @@ def set_value(key: str, value: str, *, scope: Optional[str] = None,
     from core.prefs import PREF_SCHEMA
     if scope is not None and scope not in _SCOPES:
         return SetResult(False, "refused", f"unknown scope: {scope}")
-    if surface != "local" and key in CONSOLE_UNWRITABLE_FLAGS:
+    if surface != "local" and is_console_unwritable(key):
         return SetResult(
             False, "refused",
-            f"'{key}' selects the agent's inference/credential surface and is "
-            f"not writable from a remote surface — set it from the local CLI "
+            f"'{key}' selects the agent's owner binding, money bounds, approval "
+            f"policy, trust posture or credential surface and is not writable "
+            f"from a remote surface — set it from the local CLI "
             f"(`polyrob config set {key} <value>`)")
     if key in PREF_SCHEMA:
         return _set_pref(key, value, user_id, home_dir, confirm)

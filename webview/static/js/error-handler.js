@@ -190,11 +190,11 @@ errorStyles.textContent = `
     }
 
     .error-notification-content {
-        background: rgba(239, 68, 68, 0.95);
-        color: white;
+        background: var(--color-accent-red-wash-95);
+        color: var(--color-on-accent);
         padding: 12px 16px;
         border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 12px var(--color-shadow-wash-30);
         display: flex;
         align-items: center;
         gap: 12px;
@@ -215,7 +215,7 @@ errorStyles.textContent = `
     .error-close {
         background: transparent;
         border: none;
-        color: white;
+        color: var(--color-on-accent);
         font-size: 24px;
         cursor: pointer;
         padding: 0;
@@ -235,7 +235,7 @@ errorStyles.textContent = `
         left: 0;
         right: 0;
         bottom: 0;
-        background: rgba(0, 0, 0, 0.9);
+        background: var(--color-shadow-wash-90);
         z-index: 100000;
         display: flex;
         align-items: center;
@@ -243,8 +243,8 @@ errorStyles.textContent = `
     }
 
     .error-critical-content {
-        background: #1a1a1a;
-        color: white;
+        background: var(--color-bg-elevated);
+        color: var(--color-text-primary);
         padding: 32px;
         border-radius: 12px;
         text-align: center;
@@ -263,8 +263,8 @@ errorStyles.textContent = `
     }
 
     .btn-reload {
-        background: #3b82f6;
-        color: white;
+        background: var(--color-accent-blue);
+        color: var(--color-on-accent);
         border: none;
         padding: 12px 24px;
         border-radius: 6px;
@@ -274,7 +274,7 @@ errorStyles.textContent = `
     }
 
     .btn-reload:hover {
-        background: #2563eb;
+        background: var(--color-accent-blue);
     }
 
     @keyframes slideIn {
@@ -293,8 +293,8 @@ document.head.appendChild(errorStyles);
 // Initialize error handler
 const errorHandler = new ErrorHandler();
 
-// Bridge for CLASSIC (non-module) scripts — profile.js / settings.js /
-// activity.js load without type="module" and cannot import this file. They
+// Bridge for CLASSIC (non-module) scripts — profile.js / activity.js load
+// without type="module" and cannot import this file. They
 // use `window.errorHandler?.notify(...)` (guarded: module scripts execute
 // after classic ones, so the global may not exist at their top-level run).
 window.errorHandler = errorHandler;

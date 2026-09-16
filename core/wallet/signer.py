@@ -1,8 +1,10 @@
 """Signer seam: produces ECDSA / EIP-712 signatures for ONE agent address.
 
-The raw private key NEVER crosses this boundary outward. LocalEoaSigner is the
-self-custody backend; CdpSigner/TurnkeySigner (deferred) implement the same
-Protocol so the custody backend is swappable without touching venue tools.
+LocalEoaSigner and its SDK account adapter hold keys in the agent interpreter.
+This is an integration seam, not a security boundary: trusted in-process code
+can read the key and bypass callers' policy. A separate signer must independently
+authorize transactions and non-transaction signatures; a matching Python
+Protocol alone does not establish that isolation.
 """
 from __future__ import annotations
 
@@ -51,9 +53,9 @@ class LocalEoaSigner:
     def sign_transaction(self, tx: dict) -> bytes:
         """Sign a transaction dict, returning the raw signed bytes.
 
-        ⚠️ SIGNING PERIMETER. This and ``sign_message``/``sign_typed_data`` are
-        the only ways signing authority leaves this object, and this is the ONLY
-        one that produces something broadcastable. Two rules follow:
+        These checks constrain this method only; the SDK account adapter and
+        other code in this interpreter retain direct signing authority.
+        Non-transaction signatures can also transfer spending authority.
 
         * ``chainId`` is MANDATORY. An unpinned chainId is EIP-155 replay
           exposure — the same signed payload would be valid on every EVM chain

@@ -66,8 +66,10 @@ def _spy_resolve(monkeypatch):
 
 
 def _owner_ctx():
+    # The owner tenant; "polyrob" (the instance id) stopped being the unbound
+    # owner principal on 2026-09-15 and now refuses at the posture gate.
     return SimpleNamespace(session_id="s1", role="orchestrator", is_sub_agent=False,
-                           user_id="polyrob", metadata={})
+                           user_id="local", metadata={})
 
 
 @pytest.mark.asyncio

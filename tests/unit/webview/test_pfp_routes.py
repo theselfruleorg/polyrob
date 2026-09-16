@@ -21,7 +21,7 @@ def _write_avatar(home):
     d.mkdir(parents=True)
     (d / "pfp.png").write_bytes(b"\x89PNG\r\n\x1a\npng")
     (d / "pfp.json").write_text(json.dumps(
-        {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "",
+        {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "",
          "traits": {"eyes": "square"}, "voice": {"pitch": 1.0, "rate": 1.0, "timbre": 0.5}}))
 
 

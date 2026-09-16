@@ -398,29 +398,25 @@ class BrowserContext:
 		context.on("close", on_close)
 		
 	async def _ssrf_route_guard(self, route):
-		"""Abort a top-level navigation whose (possibly redirected) URL resolves to an
-		internal / metadata address. Runs per request, so redirect hops are re-checked.
+		"""Validate every routed resource, not just document navigations.
 
-		Only ``document`` requests are validated (the SSRF-to-metadata vector); all other
-		resource types continue immediately to keep interception overhead low. Fail-open
-		on the guard's own error (the initial-URL guard in browser.py still applies) so a
-		handler bug can't wedge all browsing.
+		An image, script or fetch can target an internal service too. Validator
+		failure aborts the request. DNS pinning and redirect enforcement still
+		require a network-level egress boundary; interception alone is insufficient.
 		"""
 		try:
-			request = route.request
-			if request.resource_type == 'document':
-				from tools.browser.browser import _check_url_ssrf
-				err = await asyncio.get_running_loop().run_in_executor(
-					None, _check_url_ssrf, request.url)
-				if err:
-					self.logger.warning(f"SSRF: aborting navigation to {request.url}: {err}")
-					await route.abort('blockedbyclient')
-					return
+			from tools.browser.browser import _check_url_ssrf
+			err = await asyncio.get_running_loop().run_in_executor(
+				None, _check_url_ssrf, route.request.url)
+			if err:
+				self.logger.warning("SSRF: aborting blocked browser request")
+				await route.abort('blockedbyclient')
+				return
 			await route.continue_()
 		except Exception as e:
-			self.logger.debug(f"SSRF route guard error (continuing): {e}")
+			self.logger.warning("SSRF route guard failed; aborting: %s", type(e).__name__)
 			try:
-				await route.continue_()
+				await route.abort('blockedbyclient')
 			except Exception:
 				pass
 
@@ -439,13 +435,15 @@ class BrowserContext:
 			# localStorage) so the context starts authenticated.
 			if getattr(self.config, "storage_state", None):
 				context_options["storage_state"] = self.config.storage_state
+			# Service workers can bypass Playwright request interception.
+			from tools.browser._flags import allow_private_urls
+			if not allow_private_urls():
+				context_options["service_workers"] = "block"
 			# Original code for creating new context
 			context = await browser.new_context(**context_options)
 
-		# SSRF: validate EVERY top-level navigation at request time — including redirect
-		# hops — so a public URL that 302-redirects to a link-local / cloud-metadata
-		# address is aborted. page.goto only checks the initial URL; with route
-		# interception active, Playwright re-fires this handler for each redirect target.
+		# SSRF: validate every intercepted request. Browser-side redirects and DNS
+		# rebinding still need an egress firewall/proxy; this is defense in depth.
 		# Gated by BROWSER_ALLOW_PRIVATE_URLS (same switch as the initial-URL guard).
 		from tools.browser._flags import allow_private_urls
 		if not allow_private_urls():

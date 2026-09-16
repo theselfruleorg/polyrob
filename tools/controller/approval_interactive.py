@@ -89,6 +89,7 @@ class InteractiveCLIApprover(ApprovalProvider):
     def __init__(self, input_fn: Optional[Callable[[str], str]] = None,
                  user_id: Optional[str] = None, home_dir: Any = None) -> None:
         self._input_fn = input_fn or input  # real stdin by default; injectable for tests
+        self._custom_input = input_fn is not None
         self._user_id = user_id
         self._home_dir = home_dir
         # [s]ession/[a]lways-allow auto-approve set: process-local, in-memory
@@ -236,6 +237,15 @@ class InteractiveCLIApprover(ApprovalProvider):
         # [s]ession/[a]lways-allow short-circuit: no prompt, no disk I/O.
         if action_name in self._session_approved:
             return True
+
+        from core.approval_input import get_approval_input
+        reader = get_approval_input()
+        if reader is not None and not self._custom_input:
+            answer = await reader(self._prompt(action_name, params))
+            decision = _parse_ladder(answer)
+            if decision is None:
+                decision = _parse_ladder(await reader(self._reprompt(action_name)))
+            return self._apply_decision(decision or "deny", action_name)
 
         # H8: only one interactive prompt may own stdin at a time. If a prompt is
         # already outstanding, deny (fail-closed) rather than spawn a competing reader.

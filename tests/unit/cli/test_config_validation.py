@@ -35,6 +35,7 @@ def test_unknown_flag_written_with_force(tmp_path, monkeypatch):
 
 def test_known_flag_and_secret_still_write(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("POLYROB_HOME", str(tmp_path / "home"))
     assert CliRunner().invoke(config, ["set", "GOAL_DAILY_QUOTA", "4"]).exit_code == 0
     assert CliRunner().invoke(config, ["set", "OPENAI_API_KEY", "sk-x"]).exit_code == 0
 

@@ -119,3 +119,33 @@ async def test_bound_orchestrator_publishes_resolvably(tmp_path, monkeypatch):
                       session_id="sess_1", user_id="u_abc")
     await orch._message_router.publish(OutboundMessage(session_key=orch._chat_session_key, text="hi"))
     assert len(surf.sent) == 1 and surf.sent[0].text == "hi"
+
+
+# ---------------------------------------------------------------------------
+# 044 T20 fix round 2 (N1): a room with no durable chat row
+# ---------------------------------------------------------------------------
+
+def test_surface_profile_reads_the_key_when_no_row_exists(tmp_path, monkeypatch):
+    """A room the owner allowlisted but that has never run a LIVE turn has no
+    `session_chat_map` row, so the service run lost its `<surface>` block and did
+    not even know it was speaking into a room."""
+    import types
+    monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    from core.surfaces.binding import surface_profile
+    from core.surfaces.envelopes import SurfaceCapabilities
+
+    c, reg = _container_with_bus(tmp_path)
+    caps = SurfaceCapabilities(max_message_bytes=4096, media_out=True,
+                               markdown_flavor="html")
+    c.register_service("surface_registry", types.SimpleNamespace(
+        get=lambda sid: types.SimpleNamespace(capabilities=caps)))
+    key = "agent:main:telegram:supergroup:-1001"
+    assert reg.resolve(key) is None
+
+    orch = types.SimpleNamespace(_chat_session_key=key, container=c)
+    profile = surface_profile(orch)
+    assert profile is not None
+    assert profile["chat_id"] == "-1001" and profile["chat_type"] == "supergroup"
+    assert profile["surface_id"] == "telegram"
+    assert reg.resolve(key) is None, "reading the key must not WRITE the row"

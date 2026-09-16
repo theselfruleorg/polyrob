@@ -159,9 +159,11 @@ def default_goal_tools() -> list:
     (self-maintenance tier). Under effective AUTONOMY_MODE=autonomous the base
     switches to the full AUTONOMOUS_MODE_TOOLS grant (never money/host — those
     still ride compute posture, unaffected by mode)."""
-    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
+    from agents.task.constants import autonomous_mode_tools, full_autonomy_enabled
     from agents.task.tool_defaults import with_compute_tools
-    tools = list(AUTONOMOUS_MODE_TOOLS) if full_autonomy_enabled() else list(_DEFAULT_GOAL_TOOLS)
+    # `autonomous_mode_tools()` folds in the defi rail when DEFI_AGENT_AUTONOMY is
+    # armed; unarmed it IS the bare constant, so the default posture is unchanged.
+    tools = list(autonomous_mode_tools()) if full_autonomy_enabled() else list(_DEFAULT_GOAL_TOOLS)
     with_compute_tools(tools)  # SSOT for the posture>=1 additions (014 A2)
     if _hf_deploy_goal_tool_enabled() and "hf_deploy" not in tools:
         tools.append("hf_deploy")
@@ -248,11 +250,14 @@ def _tick_owner_user_id() -> Optional[str]:
     (design constraint: resolve once per tick, not per item), before the ready
     set (which may span tenants) is even fetched. v1 is single-owner (mirrors
     ``_maybe_plan``'s ``sorted(users)[0]`` convention elsewhere in this file),
-    so the resolved owner principal is the sound representative tenant.
-    Fail-open to None (=> legacy env-only value; see ``core.prefs.resolve``)."""
+    so the resolved owner tenant is the sound representative tenant.
+    Fail-open to None (=> legacy env-only value; see ``core.prefs.resolve``).
+
+    Reads the ONE owner-tenant resolver (``resolve_owner_user_id``) so a pref the
+    owner wrote from any seat is the pref this tick reads."""
     try:
-        from core.instance import resolve_owner_principal
-        return resolve_owner_principal()
+        from core.instance import resolve_owner_user_id
+        return resolve_owner_user_id()
     except Exception:
         return None
 
@@ -667,7 +672,7 @@ class GoalDispatcher:
                     await push_owner_message(
                         getattr(self.task_agent, "container", None),
                         f"▶ goal started: {_title} ({goal.id[:8]})",
-                        priority="low")
+                        priority="low", source="lifecycle")
                 except Exception:
                     logger.debug("goal start notice failed for %s", goal.id, exc_info=True)
         except asyncio.CancelledError:
@@ -740,6 +745,48 @@ class GoalDispatcher:
                 "temperature": 0.0,
                 "goal_id": goal.id,
             }
+            # 044 T20: a goal carrying `payload.group` SERVICES a room — the run
+            # session IS the room's bound session (PUBLIC profile + room toolset,
+            # applied by bind_chat_surface), and its task is the room's ledger
+            # tail since THIS reader's checkpoint. An empty tail is a $0 skip:
+            # nothing was asked, so no model is paid to discover that.
+            from agents.task.goals.group_service import (
+                build_service_task, close_room_books, room_binding,
+                service_read_mark,
+            )
+            _room = room_binding(payload)
+            _room_read_at = _room_sid = None
+            if _room is not None:
+                _src, _key = _room
+                _room_read_at = service_read_mark()
+                _room_task, _skip = build_service_task(
+                    getattr(self.task_agent, "container", None), payload,
+                    owner_uid=goal.user_id,
+                    max_replies=AutonomyConfig.goal_group_max_replies_per_run())
+                if _room_task is None:
+                    # There is no `record_skip` on the board, and a failure would
+                    # feed the circuit breaker for a room that simply went quiet
+                    # (or that the owner muted). The completion path with an
+                    # explicit, typed reason is the honest one.
+                    _skip = _skip or "no_change"
+                    logger.info("goal %s: room %s:%s — $0 skip (%s)",
+                                goal.id, _src.surface_id, _src.chat_id, _skip)
+                    self.board.record_success(
+                        goal.id, result=f"skipped: {_skip} — no service work for "
+                                        f"{_src.surface_id}:{_src.chat_id} this run")
+                    _goal_ev(goal, "skipped", _skip)
+                    return
+                # Pre-generate the session id so the `finally` below can still
+                # find the orchestrator when a wall-clock timeout cancels the run
+                # (fix round 1, Important 5), and bind WITHOUT writing the
+                # chat<->session row (Critical 1: the room's live session keeps it).
+                import uuid as _uuid
+                _room_sid = str(_uuid.uuid4())
+                request["task"] = _room_task
+                request["session_source"] = _src
+                request["chat_session_key"] = _key
+                request["bind_write_row"] = False
+                request["session_id"] = _room_sid
             # §6.2 fail-closed: a money-enabled run must not START unmetered —
             # without a database_manager, spend tracking is blind on a live
             # wallet. Clear recorded error, never a silent spend loop.
@@ -755,12 +802,28 @@ class GoalDispatcher:
             # timeout the TimeoutError is handled by the except below (record_failure) and
             # the finally cancels the claim heartbeat, so reclaim_stale can recover the slot.
             _max_run = AutonomyConfig.goal_max_run_seconds()
-            run = await asyncio.wait_for(
-                _run_task_to_outcome(
-                    self.task_agent, user_id=goal.user_id, request=request, autonomous=True
-                ),
-                timeout=_max_run,
-            )
+            run = None
+            try:
+                run = await asyncio.wait_for(
+                    _run_task_to_outcome(
+                        self.task_agent, user_id=goal.user_id, request=request,
+                        autonomous=True, goal_id=goal.id, creator="goal",
+                    ),
+                    timeout=_max_run,
+                )
+            finally:
+                # 044 T20 fix round 1 (Important 5): close the room's books even
+                # when the run is CANCELLED by the wall-clock cap and never
+                # returns an outcome — otherwise the next tick re-answers every
+                # line the timed-out run already answered.
+                # Fix round 2 (N2): the REAL session id when the run produced one
+                # — our pre-generated id is only honoured if create_session took
+                # it, and a test fake (or a future path) may hand back another.
+                if _room is not None:
+                    close_room_books(
+                        self.task_agent, payload,
+                        session_id=getattr(run, "session_id", None) or _room_sid,
+                        up_to_ts=_room_read_at)
             session_id = run.session_id
             if session_id is None:
                 _g = self.board.record_failure(goal.id, error="create_session returned no id")
@@ -1190,6 +1253,17 @@ class GoalDispatcher:
         while never self-granting money/social tools); else the safe default.
         """
         payload = goal.payload or {}
+        # 044 T20: a ROOM service run is PUBLIC — its audience is many humans, so
+        # the toolset is the room's read-only one and nothing in the payload can
+        # widen it. Said out loud rather than silently dropped: a goal that asked
+        # for `defi_trade` must leave a line naming the refusal.
+        if payload.get("group"):
+            from core.surfaces.room_policy import room_tool_ids
+            if payload.get("tools"):
+                logger.warning(
+                    "goal %s: payload.tools ignored — a room service run uses the "
+                    "room toolset (%s)", goal.id, payload.get("tools"))
+            return room_tool_ids()
         own = payload.get("tools")
         if own:
             return own
@@ -1520,7 +1594,8 @@ class GoalDispatcher:
                 "temperature": 0.0,
             }
             session_id, final = await _run_task_as_session(
-                self.task_agent, user_id=user_id, request=request, autonomous=True)
+                self.task_agent, user_id=user_id, request=request, autonomous=True,
+                creator="goal")
             # 015 #3 (planner leg): a planner run killed by provider exhaustion
             # must not read as "planner correctly found nothing to do" — that
             # ambiguity hid a 13h board-dark outage from two intel reviews.

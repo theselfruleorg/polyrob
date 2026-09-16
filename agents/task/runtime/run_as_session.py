@@ -6,10 +6,30 @@ Canonical location for:
 """
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def create_session_accepts(create_fn, name: str) -> bool:
+    """Best-effort: would *create_fn* (a ``create_session`` callable) accept
+    keyword *name* without raising — either it names the param explicitly or
+    accepts ``**kwargs``? False (never raises) on introspection failure.
+
+    Shared by ``run_task_to_outcome`` (session_id/creator pre-checks) and
+    cron/runner.py's legacy direct ``create_session`` call (043 A17
+    ``creator``) — a narrow test fake with neither the named param nor
+    ``**kwargs`` must not start raising ``TypeError``.
+    """
+    try:
+        sig = inspect.signature(create_fn)
+    except Exception:
+        return False
+    return name in sig.parameters or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+
 
 # Known non-completion returns from TaskAgent.run_session — truthy strings that
 # mean "the loop did NOT run", so callers must treat them as failure.
@@ -82,6 +102,8 @@ async def run_task_to_outcome(
     user_id: str,
     request: dict,
     autonomous: bool = False,
+    goal_id: str | None = None,
+    creator: str | None = None,
 ):
     """The primary run entry (§2): create_session → run_session → RunOutcome.
 
@@ -92,6 +114,18 @@ async def run_task_to_outcome(
     *autonomous* marks the created session (goal/cron/planner-spawned) in the
     in-process autonomy registry (``agents.task.goals.autonomy_marker``) so
     the goal tool can refuse objective mutations from that session later.
+
+    *goal_id* records WHICH goal the session is running, when there is one (a
+    cron/planner run has none). The approval queue reads it to stamp
+    ``blocks_goal_ids`` on an owner-queue ask, so approving the ask re-arms the
+    goal that raised it — otherwise the owner presses /approve and nothing
+    happens (039).
+
+    *creator* (043 A17): the session-creator display label. This helper is
+    shared by BOTH the goal dispatcher and cron runner, which resolve to
+    different labels ("goal" vs "cron") — so the CALLER must pass it
+    explicitly; ``None`` here falls back to ``resolve_creator``'s own default
+    ("api") rather than mislabeling an autonomous run.
 
     Returns a ``RunOutcome`` assembled while the orchestrator is still resident
     (``session_id is None`` when no session was created; ``refusal=True`` when
@@ -105,24 +139,48 @@ async def run_task_to_outcome(
     # marker is visible DURING construction — the communication-contract block
     # gates on it at prompt-build time. Only when the task_agent's
     # create_session accepts a session_id (the real TaskAgent does); legacy
-    # fakes/custom agents keep the post-create marking below.
-    pre_sid = None
-    if autonomous:
+    # fakes/custom agents keep the post-create marking below. The same
+    # ``create_session_accepts`` check gates `creator` (043 A17).
+    # 044 T20: a ROOM-bound autonomous run (a `payload.group` cron job or goal)
+    # carries its binding IN the request dict, because every producer on this
+    # path builds a request and has no other channel to create_session. Popped
+    # here and forwarded as kwargs — `create_session` passes them straight to
+    # `bind_chat_surface`, which is what stamps `_public_session` and makes the
+    # run BE the room session instead of a private session posting into a room.
+    # Absent (every legacy caller) => not passed at all, so a narrow test fake
+    # with neither param nor **kwargs is untouched.
+    #
+    # `session_id` rides the same channel (T20 fix round 1, Important 5): a room
+    # service caller PRE-generates it so its `finally` can still find the
+    # orchestrator — and close the room's books — when the run is cancelled by a
+    # wall-clock timeout and never returns a RunOutcome at all.
+    room_kwargs = {}
+    if isinstance(request, dict):
+        for _name in ("session_source", "chat_session_key", "bind_write_row",
+                      "session_id"):
+            _val = request.pop(_name, None)
+            if _val is not None:
+                room_kwargs[_name] = _val
+
+    pre_sid = room_kwargs.pop("session_id", None)
+    if pre_sid is not None and not create_session_accepts(
+            task_agent.create_session, "session_id"):
+        pre_sid = None  # narrow legacy fake: drop it rather than raise
+    if autonomous and pre_sid is None:
         try:
-            import inspect
             import uuid
-            sig = inspect.signature(task_agent.create_session)
-            if "session_id" in sig.parameters or any(
-                    p.kind is inspect.Parameter.VAR_KEYWORD
-                    for p in sig.parameters.values()):
+            if create_session_accepts(task_agent.create_session, "session_id"):
                 pre_sid = str(uuid.uuid4())
         except Exception:
             pre_sid = None
-        if pre_sid:
-            from agents.task.goals.autonomy_marker import mark_autonomous
-            mark_autonomous(pre_sid)
+    if autonomous and pre_sid:
+        from agents.task.goals.autonomy_marker import mark_autonomous
+        mark_autonomous(pre_sid, goal_id)
 
     kwargs = {"session_id": pre_sid} if pre_sid else {}
+    if creator is not None and create_session_accepts(task_agent.create_session, "creator"):
+        kwargs["creator"] = creator
+    kwargs.update(room_kwargs)
     session_info = await task_agent.create_session(
         user_id=user_id, request=request, **kwargs)
     session_id = (session_info or {}).get("id")
@@ -130,7 +188,7 @@ async def run_task_to_outcome(
         return RunOutcome(session_id=None)
     if autonomous:
         from agents.task.goals.autonomy_marker import mark_autonomous
-        mark_autonomous(session_id)
+        mark_autonomous(session_id, goal_id)
     status = await task_agent.run_session(user_id, session_id)
     outcome = await build_run_outcome(task_agent, session_id, status)
     if autonomous:
@@ -176,6 +234,7 @@ async def run_task_as_session(
     user_id: str,
     request: dict,
     autonomous: bool = False,
+    creator: str | None = None,
 ) -> tuple[Optional[str], Optional[str]]:
     """Legacy tuple shape over :func:`run_task_to_outcome`.
 
@@ -189,9 +248,12 @@ async def run_task_as_session(
     ``final`` is the envelope's honest ``result_text()`` (done() ledger text →
     extracted reply → non-generic status), degrading to the raw status string
     only when nothing else exists — never worse than the pre-§2 behavior.
+
+    *creator* (043 A17): forwarded verbatim to :func:`run_task_to_outcome`.
     """
     outcome = await run_task_to_outcome(
-        task_agent, user_id=user_id, request=request, autonomous=autonomous)
+        task_agent, user_id=user_id, request=request, autonomous=autonomous,
+        creator=creator)
     if outcome.session_id is None:
         return (None, None)
     if outcome.refusal:

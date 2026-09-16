@@ -41,6 +41,43 @@ async def _resolve_db(db=None):
     return DependencyContainer.get_instance().get_service("database_manager")
 
 
+def _policy_gate():
+    """Seam over ``core.wallet.factory.get_policy_gate()`` — module-level so a
+    test can monkeypatch it directly (A39/A6, 043). Fail-open to ``None`` on
+    ANY exception (wallet disabled, misconfigured env, no data home yet):
+    the caps block this feeds must degrade to all-``None``, never a
+    fabricated ``$0.00`` cap."""
+    try:
+        from core.wallet.factory import get_policy_gate
+        return get_policy_gate()
+    except Exception:
+        logger.warning("ledger: policy gate unavailable for caps block", exc_info=True)
+        return None
+
+
+def _caps_block() -> Dict[str, Any]:
+    """Display-only wallet policy headroom — configuration, not money, so it
+    is its own top-level ``caps`` block (never folded into ``treasury``).
+    Every value is ``None`` when the gate can't be read, never ``0`` (a
+    ``$0.00`` cap would read as "spending is fully blocked", which is not
+    what "we couldn't check" means)."""
+    empty = {"daily_cap_usd": None, "daily_used_usd": None,
+             "daily_left_usd": None, "per_tx_cap_usd": None}
+    gate = _policy_gate()
+    if gate is None:
+        return empty
+    try:
+        cap = gate.daily_cap_usd
+        used = gate.rolling_24h_spend_usd()
+        per_tx = getattr(gate, "per_tx_cap_usd", None)
+        left = max(0.0, cap - used) if (cap is not None and used is not None) else None
+        return {"daily_cap_usd": cap, "daily_used_usd": used,
+                "daily_left_usd": left, "per_tx_cap_usd": per_tx}
+    except Exception:
+        logger.warning("ledger: policy gate caps unreadable", exc_info=True)
+        return empty
+
+
 async def _costs_leg(database, user_id: str, days: int) -> Dict[str, Any]:
     # H14b (2026-07-15): each leg carries an availability marker so a MISSING /
     # corrupt table ("no data yet") is distinguishable from a genuine $0.00 —
@@ -166,6 +203,13 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
     unless the caller opts in, since this function is also called on hot
     non-display paths (e.g. ``core/recap.py`` via a synchronous bridge) that
     must never block on a network read.
+
+    Also returns a ``caps`` block (A39/A6, 043) — ``daily_cap_usd``/
+    ``daily_used_usd``/``daily_left_usd``/``per_tx_cap_usd`` read from the
+    wallet ``PolicyGate`` (a local, non-network read, so it runs
+    unconditionally). This is configuration/headroom, not money — it is
+    never folded into ``treasury``. Every value is ``None`` when the gate
+    can't be read (wallet disabled/misconfigured), never a fabricated ``0``.
     """
     if not user_id:
         raise ValueError("accounting requires an authenticated tenant (empty user_id refused)")
@@ -227,6 +271,7 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
         **inbound,
         "treasury": treasury,
         "runtime": runtime,
+        "caps": _caps_block(),
     }
 
 

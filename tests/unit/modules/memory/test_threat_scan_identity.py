@@ -43,7 +43,7 @@ def test_benign_identity_text_not_flagged():
     for ok in [
         "I am ROB, a careful research and automation assistant.",
         "I prefer concise answers and confirm before destructive actions.",
-        "My owner is Gleb; I help with crypto and coding tasks.",
+        "My owner is Alice; I help with crypto and coding tasks.",
     ]:
         assert not is_identity_suspicious(ok), ok
 

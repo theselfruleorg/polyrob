@@ -1,12 +1,10 @@
-"""Dead-target registry: store + liveness classifier (T1.5). Wired: message_router skips a
-dead target before sending and marks one on a classified send failure.
+"""Dead-target registry: store + liveness classifier (T1.5).
 
 Every surface's send path collapses exception TYPES to a plain string
-(``SendResult(success=False, error=str(e))`` — telegram ``surface.py:112-114`` +
-six siblings), so a send to a definitively-dead target (bot blocked, chat
-deleted, user deactivated) is retried forever alongside genuinely transient
-failures. This module ships the two pure pieces the later wiring tasks build
-on:
+(``SendResult(success=False, error=str(e))`` — telegram ``surface.py`` + six
+siblings), so a send to a definitively-dead target (bot blocked, chat deleted,
+user deactivated, bot kicked from a room) is otherwise retried forever alongside
+genuinely transient failures. Two pure pieces:
 
 - ``DeadTargetStore`` — a tiny SQLite-backed registry keyed ``(surface,
   address)``, shaped after ``CircuitStore`` (``core/surfaces/circuit.py``):
@@ -17,9 +15,20 @@ on:
   network resets) always classifies as ``None`` — mark only on a hard,
   known-definitive liveness signal, never on a guess.
 
-Not wired into any send path yet (see the plan's Task 2/3). No `from __future__
-import annotations` — mirrors circuit.py's convention for modules whose callers
-may introspect param annotations.
+WHERE IT IS WIRED (the previous docstring said both "wired" and "not wired into
+any send path yet" — it was the second that was stale):
+
+- ``core/surfaces/message_router.py`` — ``publish`` and the ``send_message``
+  shim skip a dead target before sending and mark one on a classified failure.
+  Both gated by ``DEAD_TARGET_REGISTRY``.
+- ``core/surfaces/dispatcher.py`` — revive-on-inbound clears the row.
+- 044 T21: when the dead target is a ROOM key, ``publish`` ALSO moves the room's
+  allowlist row to ``left`` (``core/surfaces/room_keys.py::mark_room_left``), so
+  the owner can see in ``/groups list`` that the bot was removed rather than
+  wondering why a live-looking room went quiet.
+
+No `from __future__ import annotations` — mirrors circuit.py's convention for
+modules whose callers may introspect param annotations.
 """
 import logging
 import time
@@ -144,7 +153,24 @@ _DEAD_PATTERNS = (
     ("chat not found", "chat_not_found"),
     ("peer_id_invalid", "chat_not_found"),
     ("bot was kicked", "kicked"),
+    # 044 T21: the room revoked the bot's right to post (restricted, or
+    # send-messages turned off for it). Definitive for THIS chat until an admin
+    # changes it back, and an owner re-`allow` is exactly that signal.
+    # ⚠️ The bare word "Forbidden" is deliberately NOT a pattern: Telegram also
+    # answers "Forbidden: bots can't send messages to bots", which says nothing
+    # about a chat's liveness. Mark on the specific signal, never on the family.
+    ("chat_write_forbidden", "write_forbidden"),
+    # 044 T21 fix round 1: what Telegram answers after the bot is REMOVED by an
+    # admin (as opposed to "kicked", which it uses when the bot is banned).
+    ("bot is not a member of the", "not_a_member"),
 )
+
+#: 044 T21: the reasons that mean THE CHAT is gone for us, as opposed to one
+#: PERSON being gone. Only these move a room's allowlist row to ``left`` — a
+#: room cannot "block" the bot or be "deactivated", so marking a room left on
+#: those would be inferring a room departure from a user-level signal.
+ROOM_DEATH_REASONS = frozenset({"kicked", "chat_not_found", "write_forbidden",
+                                "not_a_member"})
 
 
 def classify_dead_error(surface_id: str, error_text: Optional[str]) -> Optional[str]:

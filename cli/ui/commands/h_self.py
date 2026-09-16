@@ -69,12 +69,12 @@ def h_self(ctx: CommandContext) -> None:
             FRAMEWORK_NAME,
             load_self_context,
             load_self_doc,
+            owner_label,
             resolve_instance_id,
-            resolve_owner_principal,
         )
 
         instance_id = resolve_instance_id()
-        owner = resolve_owner_principal() or "unbound (local owner)"
+        owner = owner_label()
         home_dir = _resolve_home_dir(ctx)
         user_id = ctx.user_id or "local"
 
@@ -89,16 +89,15 @@ def h_self(ctx: CommandContext) -> None:
         except Exception:
             self_doc = ""
 
-        # Auto-derived owner == the instance's own tenant: label it instead of
-        # printing the same name twice (mirrors owner_awareness_line's guard).
-        owner_label = owner
-        if owner_label == instance_id:
-            owner_label = f"{owner_label} (auto-derived — this instance's own tenant)"
+        # The label is resolved once, by the ONE helper every owner seat shares
+        # (`core.instance.owner_label`): unbound SAYS unpaired, and a bound owner
+        # equal to the instance id is marked so it does not read as a second,
+        # distinct human owner.
         lines = [
             candy.kv_lines([
                 ("framework", FRAMEWORK_NAME),
                 ("instance", instance_id),
-                ("owner", owner_label),
+                ("owner", owner),
                 ("user", user_id),
             ]),
             "",

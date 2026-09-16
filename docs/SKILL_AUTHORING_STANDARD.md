@@ -90,7 +90,15 @@ Overwriting an active skill creates a `.pending` proposal that the owner must pr
 
 ## 8. Security checks
 
-The threat scanner scans both the skill **body** and its **description** for injection attempts. The following are rejected at write time:
+The threat scanner scans both the skill **body** and its **description** for injection attempts.
+
+New writes and promotions are refused if the scanner is unavailable or fails.
+Tenant IDs must pass the shared tenant validator. User-scope reads and mutations
+use descriptor-relative, no-symlink file operations; unsafe legacy paths require
+owner remediation, not automatic migration. File replacement is atomic, but the
+body and `rules.json` are not yet a single revision/CAS transaction.
+
+The following are rejected at write time:
 
 - "Ignore previous instructions" or equivalents
 - System-prompt reveal requests

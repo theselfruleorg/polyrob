@@ -11,6 +11,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
+from agents.task.agent.core.untrusted_render import stamp_result_source
 from agents.task.agent.views import ActionResult, AgentBrain
 from core.security.untrusted_wrap import maybe_wrap
 from modules.llm.messages import AIMessage, ToolMessage
@@ -36,8 +37,14 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 	tool result (mcp/browser/web/perplexity) is framed in
 	``<untrusted_tool_result>`` delimiters. ``source_for=None`` (default) skips
 	wrapping entirely — preserving the legacy 2-arg call sites/tests byte-for-byte.
-	Only the returned string is wrapped; the ``ActionResult`` object is never
-	mutated, so memory previews / telemetry stay clean.
+	Only the returned string is wrapped; the ``ActionResult``'s CONTENT is never
+	rewritten, so memory previews / telemetry stay clean.
+
+	S5 (2026-09-14): the resolved source IS stamped onto ``ar.metadata`` (a label,
+	never content) by ``stamp_result_source``. The same bytes get rendered a second
+	time — raw — in the next step's state message (`prompts.AgentMessagePrompt`),
+	and that render site has no controller to resolve a source with. Stamping here
+	keeps ONE resolution for both renders.
 	"""
 	def _entry(ar, tc_id=None):
 		if ar.error:
@@ -47,12 +54,14 @@ def _pair_results_to_calls(result, tool_calls_to_pass, source_for=None,
 			content = f"Error: {ar.error}"
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
+				stamp_result_source(ar, action_name, tool)
 				content = maybe_wrap(action_name, tool, content)
 			return (content, True)
 		if ar.extracted_content:
 			content = str(ar.extracted_content)
 			if source_for is not None and tc_id is not None:
 				action_name, tool = source_for(tc_id)
+				stamp_result_source(ar, action_name, tool)
 				content = maybe_wrap(action_name, tool, content)
 			return (content, False)
 		if ar.is_done:

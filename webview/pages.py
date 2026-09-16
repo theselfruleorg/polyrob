@@ -5,7 +5,9 @@ one Jinja template + one JSON read endpoint here. Every endpoint **reuses the
 existing service** — it never reimplements a second source of truth:
 
 - Memory   → the active ``MemoryProvider.search()`` (``modules/memory/*``).
-- Autonomy → ``GoalBoard.list()`` (``agents/task/goals/board.py``) +
+- Autonomy → ``GoalBoard.list_recent()`` + ``status_counts()`` + ``asks()``
+             (``agents/task/goals/board.py`` — never ``list()``, the
+             dispatcher's priority-ordered claim queue, forbidden as a view) +
              ``CronService.list_jobs()`` (``cron/service.py``).
 - Identity → ``core/instance.py`` SOUL/SELF (``load_self_context`` /
              ``load_self_doc``) — **read-only**, no web write path (editing stays
@@ -33,6 +35,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 
 from webview import webgate
+from webview.audit import console_write
+from core.event_kinds import (
+    CONSOLE_CONFIG_WRITE, CONSOLE_CRON_CANCEL, CONSOLE_GOAL_VERB,
+    CONSOLE_INVOICE_SETTLE, CONSOLE_PENDING_DECIDE, CONSOLE_PFP_WRITE,
+    CONSOLE_PREF_WRITE,
+)
 
 # Reused services / config — imported at module level so tests can monkeypatch
 # them at the ``webview.pages`` seam (the proof of reuse).
@@ -58,6 +66,11 @@ from cron.jobs import CronJobStore
 from cron.service import CronService
 from core.version import get_version
 from modules.credits.unified_ledger import build_ledger, ledger_availability_note
+# One reader over EVERY money chain (043 A34) — the loop lives in the tools
+# tier (core may not import tools.*); imported at module level so tests can
+# monkeypatch it at this seam, same pattern as every other reused service
+# above.
+from tools.defi.book import read_book
 # Owner goal-verb SSOT (030 C3): the SAME transition table + prefix resolver the
 # Telegram `/goal` and `/settle` verbs use (surfaces/telegram/owner_ops.py) —
 # never a second rulebook. The module is import-light (logging/os/typing only).
@@ -81,18 +94,13 @@ def _templates() -> Jinja2Templates:
 
 
 _TEMPLATES = _templates()
-_TEMPLATES.env.globals["console_display_name"] = webgate.console_display_name
-_TEMPLATES.env.globals["branding"] = webgate.branding_config
-_TEMPLATES.env.globals["get_version"] = get_version
-# Posture default for the layout's tenant-nav block (P0-3) — same global as
-# server.py's env; the explicit `is_multitenant` context var still wins.
-_TEMPLATES.env.globals["is_multitenant_posture"] = webgate.is_multitenant
-# Own-ops Logout visibility (030 S5) — same globals as server.py's env: the
-# layout shows a Logout link for the authenticated own_ops owner, reading
-# auth state straight from request.state (C4 contract).
-from utils.auth_utils import is_authenticated as _request_is_authenticated  # noqa: E402
-_TEMPLATES.env.globals["is_own_ops_posture"] = webgate.is_own_ops
-_TEMPLATES.env.globals["request_is_authenticated"] = _request_is_authenticated
+# ONE global set for every server-rendered console page (webview/template_globals.py):
+# branding, version, posture defaults, auth state, the upload allowlist, and (043
+# C8) the nav table. These used to be hand-copied here, in server.py and in
+# activity.py — three copies that drifted, which is how a page could render with
+# a global undefined.
+from webview import template_globals as _template_globals  # noqa: E402
+_template_globals.register(_TEMPLATES, webgate)
 
 
 # --- shared helpers --------------------------------------------------------- #
@@ -144,12 +152,46 @@ def _effective_user_id(request: Request) -> str:
     already 401s unauthenticated requests in multitenant mode before this is
     ever called, so the 403 here is defense-in-depth, not the expected path —
     but it must never resolve to the owner's identity.
+
+    ⚠️ It fails closed a SECOND way (043 residue W1). ``local_owner_id()`` does
+    not refuse an own_ops console with no bound owner: it warns once and answers
+    its unbound fallback tenant, so every reader below used to serve a tenant
+    nobody uses and render an empty goal board, an empty invoice list and an
+    empty app list as FACTS. :func:`webview.inbox.unbound_console` is the ONE
+    predicate for that condition — the Inbox endpoint (``inbox._tenant``) and
+    the new shell (``pages_new._tenant``) already ask it — and asking it here
+    covers every read that resolves a tenant through THIS function: 34 call
+    sites across ``pages.py`` (24), ``knowledge.py`` (7) and ``apps_routes.py``
+    (3). So the two halves of the console cannot disagree about whether this
+    deployment knows whose data it shows. The predicate itself is what exempts
+    ``local`` (one owner by construction) and ``multitenant`` (the tenant comes
+    from the authenticated caller, which the branch above already resolved and
+    refused).
+
+    ⚠️ This is NOT every tenant resolver in the console, and claiming so would
+    be wider than the code: ``server.py::_catalog_scope`` and ``owner_auth.py``
+    still call ``webgate.local_owner_id()`` directly, so an unbound console with
+    owner credentials configured still mints a cookie for the fallback tenant
+    and lists sessions at scope ``all``. That residue OVER-reads rather than
+    under-reads, which is why it is residue and not the confident-zero defect
+    this check closes.
+
+    The import is lazy on purpose: ``webview.inbox`` imports THIS module (also
+    lazily) for the same tenant seam, so a module-level import here would close
+    the cycle.
     """
     if webgate.is_multitenant():
         uid = getattr(request.state, "user_id", None)
         if uid:
             return uid
         raise HTTPException(status_code=403, detail="Authenticated tenant identity required")
+    from webview.inbox import UNBOUND_REMEDY, unbound_console
+    unbound = unbound_console()
+    if unbound:
+        # The reason carries no flag name (the copy rules keep one off a first
+        # screen); the REMEDY names it, and rides only on this API refusal,
+        # which an operator reads in a terminal.
+        raise HTTPException(status_code=403, detail=f"{unbound} {UNBOUND_REMEDY}")
     return webgate.local_owner_id()
 
 
@@ -248,12 +290,45 @@ def _provider_model():
         return (None, None)
 
 
+def _pause_headline() -> str:
+    """The ONE pause sentence, for the console's own verbs (043 W11).
+
+    ``core.status_render.pause_headline_from`` over the ONE 031 record — the
+    same text Telegram ``/status``, the REPL and ``polyrob autonomy status``
+    render, so the console can never state a pause the runtime does not enforce,
+    or miss one it does. (``pause_headline`` takes a whole StatusSnapshot; the
+    ``_from`` twin takes the record's dict, which is all a page render needs and
+    all it should pay for.)
+
+    ⚠️ Fail to "" — a headline we could not build must be ABSENT from the page,
+    never a cheerful "RUNNING" over an unreadable record.
+    """
+    try:
+        from core.status_render import pause_headline_from
+        return pause_headline_from(owner_admin.pause_state(_data_dir()).to_dict(),
+                                   resume_hint="the Resume button",
+                                   pause_hint="the Pause button")
+    except Exception:
+        logger.debug("pause headline unavailable", exc_info=True)
+        return ""
+
+
 def _page_context(request: Request) -> dict:
+    """The context EVERY console page renders from.
+
+    ``pause_headline`` and ``read_only`` live here, not per page (W11/N11): six
+    pages used to hand-set ``read_only`` and exactly ONE (``/autonomy``) showed
+    the pause state, so a paused agent looked identical to a running one on the
+    nine other surfaces — where the operator can be reading numbers that stopped
+    moving hours ago.
+    """
     return {
         "request": request,
         "is_multitenant": webgate.is_multitenant(),
         "version": _version(),
         "ws_url": os.environ.get("WEBVIEW_WS_URL", ""),
+        "pause_headline": _pause_headline(),
+        "read_only": webgate.read_only(),
     }
 
 
@@ -287,16 +362,32 @@ async def api_memory(request: Request, q: str = "", limit: int = 10):
 
 @router.get("/api/webgate/goals")
 async def api_goals(request: Request):
-    """Durable goal board for the effective tenant — reuse ``GoalBoard.list()``."""
+    """Durable goal board for the effective tenant.
+
+    ``GoalBoard.list()`` is the dispatcher's ``priority DESC, created_at ASC
+    LIMIT`` order — forbidden as a VIEW (AGENTS.md: "what is on my board" reads
+    ``list_recent``/``status_counts``/``asks``, never ``list``). Mirrors
+    ``api_cron``'s honest-failure shape: a read error is named in ``error``,
+    never swallowed into a confident empty board.
+    """
     if not AutonomyConfig.goals_enabled():
         return JSONResponse({"enabled": False, "goals": []})
     user_id = _effective_user_id(request)  # raises 403 outside this try — must not be fail-open-swallowed
     try:
         board = GoalBoard(os.path.join(_data_dir(), "goals.db"))
-        goals = board.list(user_id=user_id)
-        return JSONResponse({"enabled": True, "goals": [_goal_dict(g) for g in goals]})
-    except Exception:
-        return JSONResponse({"enabled": True, "goals": []})
+        goals = board.list_recent(user_id=user_id)
+        counts = board.status_counts(user_id=user_id)
+        asks = board.asks(user_id=user_id, status="open")
+        return JSONResponse({
+            "enabled": True,
+            "goals": [_goal_dict(g) for g in goals],
+            "counts": counts,
+            "asks": [_goal_dict(a) for a in asks],
+        })
+    except Exception as exc:
+        # 030 D4: a failed read is NOT "no goals" — name it (still 200).
+        return JSONResponse({"enabled": True, "goals": [], "counts": {}, "asks": [],
+                             "error": f"{type(exc).__name__}: {exc}"[:200]})
 
 
 @router.get("/api/webgate/cron")
@@ -400,37 +491,48 @@ async def avatar_live():
     return FileResponse(str(p), media_type="application/javascript")
 
 
+def _pfp_owner_required(request: Request) -> None:
+    """W13: avatar setup is an INSTANCE-identity write, and ``keep`` is one-way.
+
+    It carried no principal check at all — any authenticated multitenant tenant
+    could re-roll the instance's face and voice, or lock them forever. The gate
+    is the same pair every other instance-wide control uses: the OWNER console
+    (local/own_ops posture) plus the fail-closed tenant resolution.
+    """
+    _owner_console_required(what="avatar setup")
+    _effective_user_id(request)  # 403 in multitenant without identity
+
+
 # --- avatar SETUP (web) — the same one-time draft→randomize→keep contract the CLI
-# enforces. All three routes are 403 in read-only consoles, and the lock contract is
-# enforced by modules/pfp/store (PfpLockedError) regardless of the caller — these
-# routes surface it as {ok:false} rather than a 500.
-def _pfp_setup_refused() -> None:
-    if webgate.read_only():
-        raise HTTPException(status_code=403, detail="read-only console")
-
-
-@router.post("/api/pfp/generate")
-async def api_pfp_generate():
+# enforces. All three routes carry the ONE read-only guard (W3) via
+# ``webgate.MUTATION_DEPS``, and the lock contract is enforced by
+# modules/pfp/store (PfpLockedError) regardless of the caller — these routes
+# surface it as {ok:false} rather than a 500.
+@router.post("/api/pfp/generate", dependencies=webgate.MUTATION_DEPS)
+async def api_pfp_generate(request: Request):
     """Start setup: mint a RANDOM draft identity (no-op if an avatar already exists)."""
-    _pfp_setup_refused()
+    _pfp_owner_required(request)
     from modules.pfp import store
     from modules.pfp.identity import random_config
     home, instance_id = _pfp_data_dir(), resolve_instance_id()
     try:
         existing = load_pfp_meta(home, instance_id)
         if existing is not None:
+            # A no-op — nothing changed, so no completed-action audit row.
             return JSONResponse({"ok": True, "meta": existing,
                                  "message": "avatar already exists"})
         meta = store.generate_pfp(home, instance_id, config=random_config())
+        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
+                      attrs={"action": "generate", "outcome": "created"})
         return JSONResponse({"ok": True, "meta": meta})
     except Exception as e:
         return JSONResponse({"ok": False, "message": str(e)})
 
 
-@router.post("/api/pfp/randomize")
+@router.post("/api/pfp/randomize", dependencies=webgate.MUTATION_DEPS)
 async def api_pfp_randomize(request: Request):
     """Re-roll the DRAFT (body: {"what": "all"|"face"|"voice"}). Refused once kept."""
-    _pfp_setup_refused()
+    _pfp_owner_required(request)
     from modules.pfp import store
     from modules.pfp.config import load_frozen_config
     from modules.pfp.identity import core_config, default_config, shuffle_face, shuffle_voice
@@ -457,19 +559,23 @@ async def api_pfp_randomize(request: Request):
             config = shuffle_face(current)
             config["override"].pop("voice", None)
         new_meta = store.generate_pfp(home, instance_id, config=config, force=True)
+        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
+                      attrs={"action": "randomize", "what": what})
         return JSONResponse({"ok": True, "meta": new_meta})
     except Exception as e:
         return JSONResponse({"ok": False, "message": str(e)})
 
 
-@router.post("/api/pfp/keep")
-async def api_pfp_keep():
+@router.post("/api/pfp/keep", dependencies=webgate.MUTATION_DEPS)
+async def api_pfp_keep(request: Request):
     """Accept the draft — lock the identity PERMANENTLY (one-way)."""
-    _pfp_setup_refused()
+    _pfp_owner_required(request)
     from modules.pfp import store
     home, instance_id = _pfp_data_dir(), resolve_instance_id()
     try:
         meta = store.keep_pfp(home, instance_id)
+        console_write(CONSOLE_PFP_WRITE, user_id=_effective_user_id(request),
+                      attrs={"action": "keep", "outcome": "locked"})
         return JSONResponse({"ok": True, "meta": meta})
     except FileNotFoundError:
         return JSONResponse({"ok": False, "message": "no avatar to keep — generate first"})
@@ -488,7 +594,13 @@ def _empty_ledger(user_id: str, days: int) -> dict:
     genuine zero) and both balance fields are ``None`` (H14b: never a
     fabricated $0.00). No ``earned_usd``/``total_spend_usd``/top-level
     ``net_usd`` — those merged fields were deleted from ``build_ledger`` in
-    Task 8 with no alias, and the fallback must stay shape-identical."""
+    Task 8 with no alias, and the fallback must stay shape-identical.
+
+    A39/A6 (043): also carries a top-level ``caps`` key (all-``None``) for the
+    same shape-identity reason — ``build_ledger`` now returns one too. This
+    dict is REPLACED by ``ledger["caps"] = _ledger_caps(ledger)`` right after
+    the call site uses this fallback, so its content here is a placeholder;
+    only its presence matters for the shape contract."""
     return {"user_id": user_id, "window_days": days,
             "llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
             "wallet_spend_usd": 0.0, "wallet_payments": 0, "settled_payments": 0,
@@ -500,7 +612,9 @@ def _empty_ledger(user_id: str, days: int) -> dict:
                          "available": False},
             "runtime": {"spend_window_usd": 0.0, "spend_total_usd": 0.0,
                         "calls_window": 0, "calls_total": 0,
-                        "provider_balance_usd": None, "available": False}}
+                        "provider_balance_usd": None, "available": False},
+            "caps": {"daily_cap_usd": None, "daily_used_usd": None,
+                     "daily_left_usd": None, "per_tx_cap_usd": None}}
 
 
 def _wallet_daily_cap_display() -> dict:
@@ -533,34 +647,71 @@ def _wallet_daily_cap_display() -> dict:
     return {"amount": amount, "state": "default" if is_unset else "explicit", "error": None}
 
 
-def _ledger_caps() -> dict:
+def _ledger_caps(ledger: dict = None) -> dict:
     """Display-only policy caps (NOT part of the ledger read model) — the operator
     context for the income/spend/pending numbers. Resolved from env, fail-open.
 
     NOTE: ``autonomy_budget_usd`` was removed — the budget gate it described no
     longer exists (see the money-ledger split proposal §5.3); this must never
-    advertise a flag that's gone."""
+    advertise a flag that's gone.
+
+    A39/A6 (043): merges in ``daily_used_usd``/``daily_left_usd`` from the
+    ``caps`` block ``build_ledger`` already computed (the SAME PolicyGate
+    read, never a second divergent one) — ``ledger`` may be omitted/None
+    (e.g. the error fallback path), in which case both stay ``None``.
+
+    Fix round 1 (review of A6): ``wallet_daily_cap_usd`` now PREFERS the
+    ledger's ``caps.daily_cap_usd`` (the real ``PolicyGate.daily_cap_usd`` —
+    which can apply a per-user pref, e.g. ``budget.wallet_daily_usd``, on top
+    of the env default) over ``_wallet_daily_cap_display()``'s env-only
+    parse. The two used to diverge whenever the owner tightened the cap via
+    prefs rather than the env var, which made the page show a
+    ``used + left != cap`` figure — the DISPLAYED cap must be the same
+    number ``daily_used_usd``/``daily_left_usd`` were computed against, or
+    the arithmetic on the page doesn't add up. The env-only read is now only
+    a FALLBACK for when the ledger cap is unknown (gate unreadable, or no
+    ledger passed at all) — ``wallet_daily_cap_state`` still reflects the
+    env parse's own state (default/explicit/disabled/misconfigured)
+    unchanged, since prefs don't have an equivalent state taxonomy."""
     def _f(name, default):
         try:
             v = os.environ.get(name)
             return float(v) if v not in (None, "") else default
         except (TypeError, ValueError):
             return default
-    # H3 (2026-08-22): wallet_daily_cap_usd/_state delegate to the SAME parser
-    # load_wallet_config() uses (never a second, divergent display parser).
-    # _wallet_daily_cap_display() never raises (fail-open, this endpoint must
-    # keep working); a genuinely unexpected error here still degrades to the
-    # honest "misconfigured" state rather than silently claiming a cap.
+    # H3 (2026-08-22): wallet_daily_cap_state still delegates to the SAME
+    # parser load_wallet_config() uses. _wallet_daily_cap_display() never
+    # raises (fail-open, this endpoint must keep working); a genuinely
+    # unexpected error here still degrades to the honest "misconfigured"
+    # state rather than silently claiming a cap.
     try:
         _daily = _wallet_daily_cap_display()
     except Exception:
         _daily = {"amount": None, "state": "misconfigured", "error": None}
+    ledger_caps = (ledger or {}).get("caps") or {}
+    ledger_cap = ledger_caps.get("daily_cap_usd")
+    displayed_cap = ledger_cap if ledger_cap is not None else _daily["amount"]
     return {
-        "wallet_daily_cap_usd": _daily["amount"],
+        "wallet_daily_cap_usd": displayed_cap,
         "wallet_daily_cap_state": _daily["state"],
         "invoice_max_usd": _f("X402_INVOICE_MAX_USD", 50.0),
         "invoice_daily_max": _f("X402_INVOICE_DAILY_MAX", 10.0),
+        "daily_used_usd": ledger_caps.get("daily_used_usd"),
+        "daily_left_usd": ledger_caps.get("daily_left_usd"),
     }
+
+
+def _wallet_owner_id(request: Request) -> str:
+    from core.wallet.authority import owner_refusal
+    uid = _effective_user_id(request)
+    error = owner_refusal(uid)
+    if error:
+        raise HTTPException(status_code=403, detail=error)
+    return uid
+
+
+from webview.wallet_reader import api_wallet
+router.add_api_route("/api/webgate/wallet", api_wallet, methods=["GET"])
 
 
 @router.get("/api/webgate/ledger")
@@ -575,12 +726,20 @@ async def api_ledger(request: Request, days: int = 7):
     tolerant: a ledger error degrades to zeros (``_empty_ledger``, shape-
     identical to a real read)."""
     days = max(1, min(int(days), 365))
-    user_id = _effective_user_id(request)  # 403 in multitenant if no tenant identity
+    user_id = _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
     try:
         ledger = await build_ledger(user_id, days=days, include_balances=True)
     except Exception:
         ledger = _empty_ledger(user_id, days)
-    ledger["caps"] = _ledger_caps()
+    # Merge, don't overwrite: ledger["caps"] already carries the raw
+    # PolicyGate reads (daily_cap_usd/per_tx_cap_usd) from build_ledger —
+    # _ledger_caps() adds the legacy display keys (wallet_daily_cap_usd/
+    # _state, invoice_*) on top. A wholesale overwrite would drop
+    # daily_cap_usd/per_tx_cap_usd from the JSON even though a consumer
+    # could reasonably want the raw figures alongside the display ones.
+    # ``.get(..., {})`` (not ``["caps"]``): a test double / older caller
+    # standing in for ``build_ledger`` may not carry a ``caps`` key at all.
+    ledger["caps"] = {**(ledger.get("caps") or {}), **_ledger_caps(ledger)}
     # H14b (final whole-branch review, Finding 1 — related root cause):
     # treasury/runtime carry `available` markers (and _empty_ledger's honest
     # `available: False`) with zero production readers — finance.html never
@@ -590,15 +749,6 @@ async def api_ledger(request: Request, days: int = 7):
     # every leg is available, so a healthy ledger gets no new key.
     ledger["note"] = ledger_availability_note(ledger)
     return JSONResponse(ledger)
-
-
-@router.get("/finance", response_class=HTMLResponse)
-async def finance_page(request: Request):
-    ctx = _page_context(request)
-    # 030 C3: the Invoices section renders a Settle action only on a writable
-    # console — same read_only plumbing as /preferences and /pending.
-    ctx["read_only"] = webgate.read_only()
-    return _TEMPLATES.TemplateResponse(request, "finance.html", ctx)
 
 
 @router.get("/api/webgate/positions")
@@ -611,9 +761,12 @@ async def api_positions(request: Request, chain: str = "base", ledger: str = "")
     ``DEFI_DATA_ENABLED``; every failure degrades to a LABELED unavailability,
     never a fabricated empty book. The ledger path is confined by the tool
     itself (data home / cwd only, credential files refused)."""
-    _effective_user_id(request)  # 403 in multitenant if no tenant identity
+    _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
+    if ledger:
+        raise HTTPException(status_code=400, detail="Use the server-resolved wallet ledger")
     out = {"chain": chain, "enabled": None, "addresses": {}, "portfolio": None,
-           "reconcile": None, "ledger_path": None, "error": None}
+           "reconcile": None, "ledger_path": None, "error": None,
+           "verdict": None, "rows": None}
     try:
         from tools.defi import defi_data_enabled
         out["enabled"] = bool(defi_data_enabled())
@@ -648,11 +801,8 @@ async def api_positions(request: Request, chain: str = "base", ledger: str = "")
         lp = (ledger or "").strip()
         if not lp:
             try:
-                from core.runtime_paths import resolve_data_home
-                cand = (resolve_data_home() / "project"
-                        / "kb-root-position-ledger.md")
-                if cand.is_file():
-                    lp = str(cand)
+                from core.position_ledger import resolve_position_ledger_path
+                lp = resolve_position_ledger_path(_data_dir()) or ""
             except Exception:
                 lp = ""
         if lp:
@@ -661,14 +811,67 @@ async def api_positions(request: Request, chain: str = "base", ledger: str = "")
                 ReconcileParams(chain=chain, ledger_path=lp))
             out["reconcile"] = {"text": rres.extracted_content,
                                 "error": rres.error}
+            from core.book import verdict_from_report
+            if rres.error:
+                # An errored read (wallet not enabled, ledger outside the data
+                # home, a ledger without the Open-positions heading, an
+                # oversized file — see DefiDataTool.reconcile) carries no
+                # report to derive a verdict from. Rendering CLEAN over an
+                # error the page ALSO shows is the exact false-all-clear this
+                # task exists to remove — the honest state is "could not
+                # verify", never green.
+                out["verdict"] = "unverified"
+                out["rows"] = {}
+            else:
+                d = (getattr(rres, "metadata", None) or {}).get("report") or {}
+                out["verdict"] = verdict_from_report(d, ledger_found=True).value
+                out["rows"] = d
+        else:
+            out["verdict"] = "no_ledger"
     except Exception as exc:
         out["error"] = f"positions read failed: {exc}"
     return JSONResponse(out)
 
 
-@router.get("/positions", response_class=HTMLResponse)
-async def positions_page(request: Request):
-    return _TEMPLATES.TemplateResponse(request, "positions.html", _page_context(request))
+@router.get("/api/webgate/liquidity")
+async def api_liquidity(request: Request, chain: str = "robinhood", onchain: bool = False):
+    """Read the shared liquidity snapshot section; chain enumeration is opt-in."""
+    from dataclasses import asdict
+    from core.instance import resolve_owner_user_id
+    from core.status_snapshot import _guarded
+    from core.status_liquidity import liquidity_section
+    user_id = _wallet_owner_id(request)
+    enumerate_fn = None
+    if onchain:
+        if user_id != resolve_owner_user_id():
+            raise HTTPException(status_code=403, detail="Only the wallet owner can enumerate treasury positions")
+        def enumerate_fn(**_):
+            from core.wallet.factory import get_agent_wallet
+            from core.wallet.simulation import _default_rpc_for
+            from tools.defi.lp_reads import owned_position_ids, position
+            wallet = get_agent_wallet()
+            if wallet is None:
+                raise ValueError("agent wallet is not enabled")
+            owner = wallet.operational_signer().address
+            rpc = _default_rpc_for(chain)
+            return [dict(asdict(position(rpc, chain, i)), chain=chain)
+                    for i in owned_position_ids(rpc, chain, owner)]
+    section = await asyncio.to_thread(_guarded, "liquidity", liquidity_section,
+                                      user_id, _data_dir(), enumerate_fn)
+    return JSONResponse(asdict(section))
+
+
+@router.get("/api/webgate/book")
+async def api_book(request: Request):
+    """One reader over EVERY money chain (043 A34) — worst-chain-wins, not a
+    single chain at a time. ``/api/webgate/positions`` above answers "how does
+    THIS chain look"; this answers "is the book clean, anywhere". Delegates
+    the whole loop to ``tools.defi.book.read_book`` — the SAME function a
+    later REPL ``/book`` verb calls, so the two surfaces can never diverge.
+    Read-only, tenant-scoped (``_effective_user_id`` 403s in multitenant
+    outside this call — must not be fail-open-swallowed)."""
+    user_id = _wallet_owner_id(request)  # 403 in multitenant if no tenant identity
+    return JSONResponse(await read_book(user_id, _data_dir()))
 
 
 @router.get("/api/webgate/config")
@@ -689,7 +892,7 @@ async def api_config_search(request: Request, query: str = ""):
             "enforcement": info.enforcement, "secret": info.secret,
             # legibility for the UI: which flags the console can never write
             # (otherwise discoverable only by PATCHing into a 403)
-            "console_writable": info.key not in config_service.CONSOLE_UNWRITABLE_FLAGS,
+            "console_writable": not config_service.is_console_unwritable(info.key),
         })
     return JSONResponse({"user_id": user_id, "settings": items})
 
@@ -708,13 +911,13 @@ async def api_config_explain(request: Request, key: str):
         "value": str(info.effective), "source": info.source,
         "applies": info.applies, "sensitivity": info.sensitivity,
         "enforcement": info.enforcement, "secret": info.secret,
-        "console_writable": info.key not in config_service.CONSOLE_UNWRITABLE_FLAGS,
+        "console_writable": not config_service.is_console_unwritable(info.key),
         "description": info.description,
         "chain": [{"origin": s.origin, "value": str(s.value)} for s in info.chain],
     })
 
 
-@router.patch("/api/webgate/config/{key}")
+@router.patch("/api/webgate/config/{key}", dependencies=webgate.MUTATION_DEPS)
 async def api_config_set(request: Request, key: str):
     """018 P3: write one setting through the config service.
 
@@ -723,8 +926,6 @@ async def api_config_set(request: Request, key: str):
     additionally restricted to the local/own_ops postures (an authenticated
     OWNER console — never multitenant) and land in ./.polyrob/.env or
     ~/.polyrob/.env with the catalog shape-check, restart-effective."""
-    if webgate.read_only():
-        return JSONResponse({"error": "webview is read-only"}, status_code=403)
     user_id = _effective_user_id(request)
     from core import config_service
     from core.prefs import PREF_SCHEMA
@@ -732,12 +933,16 @@ async def api_config_set(request: Request, key: str):
         return JSONResponse(
             {"error": "env-flag writes require the owner console "
                       "(local/own_ops posture)"}, status_code=403)
-    # 024 §2.6: credential-equivalent flags (inference endpoint / credential
-    # store selection) are never console-writable, at ANY posture — use the
-    # local CLI (`polyrob config set …`).
-    if key in config_service.CONSOLE_UNWRITABLE_FLAGS:
+    # 024 §2.6 + S8 (2026-09-14): flags that can hand the instance over — owner
+    # binding, money bounds, approval policy, trust posture, credential/inference
+    # surface, any secret — are never console-writable, at ANY posture. The write
+    # lands in ./.polyrob/.env, which polyrob.service loads AFTER its own env
+    # file, so a console write would OUTRANK the operator on the next restart.
+    # Use the local CLI (`polyrob config set …`).
+    if config_service.is_console_unwritable(key):
         return JSONResponse(
-            {"error": f"'{key}' selects the agent's inference/credential "
+            {"error": f"'{key}' controls the agent's owner binding, money "
+                      "bounds, approval policy, trust posture or credential "
                       "surface and is not writable from the console — set it "
                       "from the local CLI"}, status_code=403)
     try:
@@ -748,6 +953,8 @@ async def api_config_set(request: Request, key: str):
         key, str(body.get("value", "")),
         scope=body.get("scope"), user_id=user_id, home_dir=_data_dir(),
         confirm=bool(body.get("confirm")), surface="console")
+    console_write(CONSOLE_CONFIG_WRITE, user_id=user_id,
+                  attrs={"key": key, "outcome": res.outcome, "ok": bool(res.ok)})
     status = 200 if res.ok else 400
     if res.ok and res.outcome == "queued":
         status = 202
@@ -788,7 +995,7 @@ async def api_preferences(request: Request):
     return JSONResponse({"user_id": user_id, "preferences": items})
 
 
-@router.patch("/api/webgate/preferences")
+@router.patch("/api/webgate/preferences", dependencies=webgate.MUTATION_DEPS)
 async def api_preferences_patch(request: Request):
     """Write one preference: ``{key, value, confirm?}`` (owner-UX P4 T3).
 
@@ -815,8 +1022,6 @@ async def api_preferences_patch(request: Request):
     ``/approve remove`` — the owner reviews it via ``/pending``). A pure
     addition (no entry removed) or a scalar guarded key is unaffected and
     keeps the existing direct-apply, 200 response."""
-    if webgate.read_only():
-        raise HTTPException(status_code=403, detail="read-only console")
     user_id = _effective_user_id(request)
     try:
         body = await request.json()
@@ -863,6 +1068,9 @@ async def api_preferences_patch(request: Request):
                 if ok_add:
                     applied_additions = added
             value, source = display_effective(key, user_id, _data_dir())
+            console_write(CONSOLE_PREF_WRITE, user_id=user_id,
+                          attrs={"key": key, "queued": len(queued),
+                                 "applied_additions": len(applied_additions)})
             return JSONResponse({
                 "ok": True, "key": key, "queued": queued,
                 "applied_additions": applied_additions,
@@ -872,6 +1080,7 @@ async def api_preferences_patch(request: Request):
     ok, err = write_preference(_data_dir(), user_id, key, body.get("value"))
     if not ok:
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    console_write(CONSOLE_PREF_WRITE, user_id=user_id, attrs={"key": key})
     value, source = display_effective(key, user_id, _data_dir())
     return JSONResponse({"ok": True, "key": key, "applies": spec.applies,
                          "value": value, "source": source})
@@ -892,6 +1101,24 @@ def _webgate_goal_board():
     """Same construction ``polyrob owner pending`` uses (``cli/commands/owner.py::
     _goal_board`` / ``api_goals`` above) — one ``goals.db`` under the data home."""
     return GoalBoard(os.path.join(_data_dir(), "goals.db"))
+
+
+def _console_task_agent():
+    """The ``TaskAgent`` living in THIS process, or None (043 W10). Passed to
+    ``decide_tool_approval`` so an approval decided in the SAME process that owns
+    the session wakes it in-process; when the console is a SEPARATE service (prod
+    Rob #1) this returns a monitoring agent that does NOT own the session (or
+    None), and ``decide_tool_approval`` writes a durable cross-process wake row
+    instead — it checks ``route_session().is_local``, never trusts mere presence."""
+    try:
+        from core.container import DependencyContainer
+        container = DependencyContainer.get_instance()
+        agent = container.get_agent("task_agent")
+        if not agent:
+            agent = container.get_service("task_agent")
+        return agent or None
+    except Exception:
+        return None
 
 
 def _webgate_correspondent_registry():
@@ -975,34 +1202,41 @@ def _decide_pending(kind: str, item_id: str, kw: dict, *, approved: bool) -> tup
     ``core.self_evolution`` aggregator (identity/skills/contract/pref changes)."""
     if kind == "tool_approval":
         from tools.controller.approval_queue import decide_tool_approval
+        # W10: pass the in-process agent so an approval wakes its OWNING session.
+        # `decide_tool_approval` uses it only when it truly owns the session
+        # (route_session().is_local); otherwise it writes a durable cross-process
+        # wake row the owning process drains.
         return decide_tool_approval(_webgate_goal_board(), item_id,
-                                    user_id=kw["user_id"], approved=approved)
+                                    user_id=kw["user_id"], approved=approved,
+                                    task_agent=_console_task_agent())
     if kind == "correspondent":
         return _decide_correspondent(item_id, kw["user_id"], approved=approved)
     fn = self_evolution.promote if approved else self_evolution.reject
     return fn(kind, item_id, **kw)
 
 
-@router.post("/api/webgate/pending/{kind}/{item_id}/promote")
+@router.post("/api/webgate/pending/{kind}/{item_id}/promote", dependencies=webgate.MUTATION_DEPS)
 async def api_pending_promote(request: Request, kind: str, item_id: str):
     """Owner decision: promote a pending proposal to active. 403 in read-only;
     tenant-scoped (a tenant can only act on its OWN queue). A miss/failure is
     ``{ok:false, message}``, never a 500 — the aggregator is the authority."""
-    if webgate.read_only():
-        raise HTTPException(status_code=403, detail="read-only console")
     kw = _pending_kwargs(request)
     ok, msg = _decide_pending(kind, item_id, kw, approved=True)
+    console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
+                  attrs={"kind": kind, "item_id": item_id,
+                         "approved": True, "ok": bool(ok)})
     return JSONResponse({"ok": ok, "message": msg})
 
 
-@router.post("/api/webgate/pending/{kind}/{item_id}/reject")
+@router.post("/api/webgate/pending/{kind}/{item_id}/reject", dependencies=webgate.MUTATION_DEPS)
 async def api_pending_reject(request: Request, kind: str, item_id: str):
     """Owner decision: reject (archive) a pending proposal. Same gating as
     promote."""
-    if webgate.read_only():
-        raise HTTPException(status_code=403, detail="read-only console")
     kw = _pending_kwargs(request)
     ok, msg = _decide_pending(kind, item_id, kw, approved=False)
+    console_write(CONSOLE_PENDING_DECIDE, user_id=kw["user_id"],
+                  attrs={"kind": kind, "item_id": item_id,
+                         "approved": False, "ok": bool(ok)})
     return JSONResponse({"ok": ok, "message": msg})
 
 
@@ -1023,23 +1257,33 @@ _WEBGATE_GOAL_VERBS = ("pause", "resume", "retry", "cancel")
 _INVOICE_STATUSES = ("pending", "completed", "expired")
 
 
-def _mutation_refused() -> None:
-    """Shared WEBVIEW_READ_ONLY gate for the C3 write verbs — the EXACT check
-    the preferences PATCH and pending promote/reject use (403, same detail)."""
-    if webgate.read_only():
-        raise HTTPException(status_code=403, detail="read-only console")
-
-
-def _owner_console_required() -> None:
-    """Instance-wide controls (halt/resume) additionally require the OWNER
-    console — local/own_ops posture — mirroring the env-flag write rule in
-    ``api_config_set``: an authenticated multitenant TENANT must never halt
-    (or resume) the whole instance's autonomy."""
+def _owner_console_required(what: str = "the pause controls") -> None:
+    """Instance-wide controls (halt/resume, app decisions, avatar setup) require
+    the OWNER console — local/own_ops posture — mirroring the env-flag write rule
+    in ``api_config_set``: an authenticated multitenant TENANT must never halt
+    (or resume) the whole instance's autonomy, decide another principal's app, or
+    re-roll the instance's own identity. ``what`` names the refused control so
+    the message is specific instead of always saying "pause"."""
     if webgate.posture() not in ("local", "own_ops"):
         raise HTTPException(
             status_code=403,
-            detail="the pause controls require the owner console "
-                   "(local/own_ops posture)")
+            detail=f"{what} require the owner console (local/own_ops posture)")
+
+
+def _unmounted_routers() -> list:
+    """Console routers that failed to mount, as ``"<name>: <error>"`` strings.
+
+    The mount block fails OPEN (a broken page must not take the whole console
+    down) — which used to mean a console could boot with its control plane
+    missing and report nothing anywhere. Read lazily off ``webview.server`` so
+    this module never imports it at import time; an empty list is the healthy
+    answer, and a console mounted standalone (no ``webview.server``) reads [].
+    """
+    try:
+        import webview.server as _srv
+        return list(getattr(_srv, "UNMOUNTED_ROUTERS", []) or [])
+    except Exception:
+        return []
 
 
 def _pause_state_json(st) -> dict:
@@ -1052,20 +1296,26 @@ def _pause_state_json(st) -> dict:
 
 
 @router.get("/api/webgate/pause")
-async def api_pause_state():
+async def api_pause_state(request: Request):
     """The live pause state — read through the ONE record (031, fail-closed),
-    so the page can never show a state the runtime does not enforce."""
+    so the page can never show a state the runtime does not enforce.
+
+    The record is instance-wide, not per tenant, which is exactly why the READ
+    still resolves the caller (W13): every other webgate read 403s a multitenant
+    request with no identity, and a route that answers anyway tells an
+    unidentified caller whether this instance's autonomy is running."""
+    _effective_user_id(request)  # 403 in multitenant without identity
     return JSONResponse(_pause_state_json(owner_admin.pause_state(_data_dir())))
 
 
 @router.get("/api/webgate/halt")
-async def api_halt_state():
+async def api_halt_state(request: Request):
     """Alias kept for the old panel/scripts: halt == pause(all)."""
+    _effective_user_id(request)  # 403 in multitenant without identity
     return JSONResponse(_pause_state_json(owner_admin.pause_state(_data_dir())))
 
 
 async def _do_pause(request: Request, scopes, duration_minutes):
-    _mutation_refused()
     _owner_console_required()
     _effective_user_id(request)  # 403 in multitenant without identity
     try:
@@ -1089,7 +1339,7 @@ async def _do_pause(request: Request, scopes, duration_minutes):
     return JSONResponse(body)
 
 
-@router.post("/api/webgate/pause")
+@router.post("/api/webgate/pause", dependencies=webgate.MUTATION_DEPS)
 async def api_pause(request: Request):
     """Pause autonomous work (031): body ``{scopes?: [...], duration_minutes?: int}``.
 
@@ -1108,13 +1358,13 @@ async def api_pause(request: Request):
     return await _do_pause(request, tuple(scopes), body.get("duration_minutes"))
 
 
-@router.post("/api/webgate/halt")
+@router.post("/api/webgate/halt", dependencies=webgate.MUTATION_DEPS)
 async def api_halt(request: Request):
     """Alias of ``POST /api/webgate/pause`` with no body: pause everything."""
     return await _do_pause(request, ("all",), None)
 
 
-@router.post("/api/webgate/resume")
+@router.post("/api/webgate/resume", dependencies=webgate.MUTATION_DEPS)
 async def api_resume(request: Request):
     """Lift the pause (everything, or ``{scopes: [...]}``) — mirrors
     `polyrob autonomy resume` / REPL `/resume` / Telegram `/resume`.
@@ -1122,7 +1372,6 @@ async def api_resume(request: Request):
     Honest verified-state reporting: never claims RESUMED while the runtime
     still reports a pause (e.g. ``AUTONOMY_HALT`` set in the environment, which
     only an env-file edit + restart can clear)."""
-    _mutation_refused()
     _owner_console_required()
     _effective_user_id(request)  # 403 in multitenant without identity
     try:
@@ -1153,7 +1402,7 @@ async def api_resume(request: Request):
     return JSONResponse(body)
 
 
-@router.post("/api/webgate/goals/{goal_id}/{verb}")
+@router.post("/api/webgate/goals/{goal_id}/{verb}", dependencies=webgate.MUTATION_DEPS)
 async def api_goal_verb(request: Request, goal_id: str, verb: str):
     """Per-goal owner write verb (030 C3, owner decision Q2 = yes) — the same
     ``GoalBoard.update_status`` transitions Telegram's `/goal` uses, via the
@@ -1163,7 +1412,6 @@ async def api_goal_verb(request: Request, goal_id: str, verb: str):
     CALLER's own goals and the write passes ``user_id=``, exactly as
     ``owner_ops.goal_reply`` does. A goal id belonging to another tenant is a
     404 miss, never a cross-tenant mutation."""
-    _mutation_refused()
     if verb not in _WEBGATE_GOAL_VERBS:
         return JSONResponse(
             {"ok": False,
@@ -1200,18 +1448,19 @@ async def api_goal_verb(request: Request, goal_id: str, verb: str):
         return JSONResponse(
             {"ok": False, "message": f"could not update {goal_id}"},
             status_code=409)
+    console_write(CONSOLE_GOAL_VERB, user_id=user_id,
+                  attrs={"goal_id": goal_id, "verb": verb, "status": target})
     suffix = " (failures cleared)" if reset else ""
     return JSONResponse({"ok": True, "status": target,
                          "message": f"goal → {target}{suffix}",
                          "warning": warning})
 
 
-@router.post("/api/webgate/cron/{job_id}/cancel")
+@router.post("/api/webgate/cron/{job_id}/cancel", dependencies=webgate.MUTATION_DEPS)
 async def api_cron_cancel(request: Request, job_id: str):
     """Cancel a cron job — mirrors Telegram `/cron cancel` (``CronService.
     cancel`` with ``user_id=``). The id is resolved within the caller's OWN
     jobs first, so another tenant's job id is a 404 miss."""
-    _mutation_refused()
     user_id = _effective_user_id(request)
     service = CronService(CronJobStore(os.path.join(_data_dir(), "cron.db")))
     mine = {j.id for j in service.list_jobs(user_id=user_id)}
@@ -1224,6 +1473,7 @@ async def api_cron_cancel(request: Request, job_id: str):
         return JSONResponse(
             {"ok": False, "message": f"could not cancel {job_id}"},
             status_code=409)
+    console_write(CONSOLE_CRON_CANCEL, user_id=user_id, attrs={"job_id": job_id})
     return JSONResponse({"ok": True, "message": f"cancelled {job_id}"})
 
 
@@ -1296,7 +1546,7 @@ async def api_invoices(request: Request, status: str = ""):
                          "count": len(rows), "note": _invoicing_off_note()})
 
 
-@router.post("/api/webgate/invoices/{request_id}/settle")
+@router.post("/api/webgate/invoices/{request_id}/settle", dependencies=webgate.MUTATION_DEPS)
 async def api_invoice_settle(request: Request, request_id: str):
     """Attest an invoice as PAID (pending → completed) — owner attestation,
     not a payment. Same primitive as `polyrob owner settle <id> [--tx-hash]`
@@ -1305,7 +1555,6 @@ async def api_invoice_settle(request: Request, request_id: str):
     pending invoices first (via ``owner_ops.resolve_prefix``, so the short
     ids listings show are accepted), so one tenant can never attest another
     tenant's row. Optional JSON body: ``{"tx_hash": "0x…"}``."""
-    _mutation_refused()
     user_id = _effective_user_id(request)
     try:
         body = await request.json()
@@ -1343,12 +1592,14 @@ async def api_invoice_settle(request: Request, request_id: str):
         return JSONResponse({"ok": False, "message": str(out)},
                             status_code=503)
     status_code = out.pop("status_code", 200)
+    console_write(CONSOLE_INVOICE_SETTLE, user_id=user_id,
+                  attrs={"request_id": request_id, "ok": bool(out.get("ok"))})
     out["note"] = _invoicing_off_note()
     return JSONResponse(out, status_code=status_code)
 
 
 @router.get("/api/webgate/doctor")
-async def api_doctor():
+async def api_doctor(request: Request):
     """System health — reuse ``doctor_report`` (same checks as ``polyrob doctor``).
 
     The webview is a SERVER process — nothing does the CLI's POLYROB_LOCAL
@@ -1364,15 +1615,43 @@ async def api_doctor():
         checks = []
     provider, model = _provider_model()
     rob_local = local_flag_on(env, absent_means_on=False)
-    # 2026-08-28 status SSOT: the same snapshot Telegram /status renders, for
-    # the instance owner (the console's single principal on the local/own_ops
-    # postures). A builder failure is reported, never an empty "healthy".
+    # 2026-08-28 status SSOT: the same snapshot Telegram /status renders — for
+    # the CALLER's tenant (W13). It used to build it for webgate.local_owner_id()
+    # in EVERY posture, so an authenticated multitenant tenant was served the
+    # instance owner's health, goals, cron and money. `_effective_user_id` is
+    # the same fail-closed resolver every other read here uses (403 in
+    # multitenant without an identity, never a fallback to the owner) and is
+    # called OUTSIDE the try so its 403 is not swallowed into a health line.
+    # A builder failure is reported, never an empty "healthy".
+    #
+    # ⚠️ I1 (043 final review): this endpoint is the ONE HTTP report of the
+    # owner-binding state, and `_effective_user_id` refuses BECAUSE of that
+    # state — so a 403 here is a diagnostic that conceals the very fact it
+    # exists to report, and the console write-flip's own verification step reads
+    # it. THIS endpoint alone therefore catches the unbound refusal and answers
+    # 200 with `owner_bound: false` and the reason. Every other read keeps its
+    # 403: those would otherwise serve a confident empty list for a tenant
+    # nobody uses. A multitenant 403 ("authenticated tenant identity required")
+    # is a DIFFERENT refusal and is re-raised — it is not about the binding.
+    owner = None
+    unbound_reason = ""
+    try:
+        owner = _effective_user_id(request)
+    except HTTPException as exc:
+        if exc.status_code != 403 or webgate.is_multitenant():
+            raise
+        unbound_reason = str(exc.detail)
     health: dict
     status_lines: list = []
+    if owner is None:
+        health = {"overall": "unavailable", "items": [], "unverified": [],
+                  "lines": [f"Health: unavailable ({unbound_reason})"]}
+        return JSONResponse(_doctor_payload(
+            checks, health, status_lines, env, provider, model, rob_local,
+            unbound_reason=unbound_reason))
     try:
         from core.status_snapshot import build_status_snapshot
         from core.status_render import render_health_lines, render_status_lines
-        owner = webgate.local_owner_id()
         snap = await asyncio.to_thread(build_status_snapshot, owner, data_dir=_data_dir(),
                                        include_money=True)
         health = {"overall": snap.overall,
@@ -1384,7 +1663,14 @@ async def api_doctor():
     except Exception as e:
         health = {"overall": "unavailable", "items": [], "unverified": [],
                   "lines": [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]}
-    return JSONResponse({
+    return JSONResponse(_doctor_payload(
+        checks, health, status_lines, env, provider, model, rob_local))
+
+
+def _doctor_payload(checks, health, status_lines, env, provider, model, rob_local,
+                    *, unbound_reason: str = "") -> dict:
+    """The ONE doctor body, so the bound and unbound answers cannot drift apart."""
+    return {
         "checks": checks,
         "health": health,
         "status_lines": status_lines,
@@ -1393,87 +1679,28 @@ async def api_doctor():
         "provider": provider,
         "model": model,
         "memory_backend": resolve_memory_backend(env, rob_local),
-    })
+        # W13: a console that booted with half its control plane missing used to
+        # say nothing at all — the mount block logged and moved on. Report the
+        # failures the operator can act on.
+        "unmounted_routers": _unmounted_routers(),
+        # W7: false when no owner is bound — the state in which every list on
+        # this console can look empty while the agent's own tenant is full.
+        "owner_bound": webgate.owner_is_bound(),
+        # I1: WHY, not just false. Empty string when an owner IS bound.
+        "owner_unbound_reason": unbound_reason,
+    }
 
 
 # --- page routes (render the template; data fetched client-side via the API) - #
 
-@router.get("/memory", response_class=HTMLResponse)
-async def memory_page(request: Request):
-    ctx = _page_context(request)
-    # 030 D4: a broken memory backend must not render as an empty list — the
-    # template shows "memory backend unavailable: <reason>" when this is set.
-    ctx["memory_error"] = _memory_provider_status()[1]
-    return _TEMPLATES.TemplateResponse(request, "memory.html", ctx)
-
-
-@router.get("/autonomy", response_class=HTMLResponse)
-async def autonomy_page(request: Request):
-    ctx = _page_context(request)
-    # 030 D4: a broken cron CHECK must not render as "cron disabled".
-    ctx["cron_error"] = _cron_enabled_status()[1]
-    # 030 C3: kill switch + per-row goal/cron actions render only on a
-    # writable console; the halt controls additionally need the owner console
-    # (local/own_ops — the same posture rule the POST endpoints enforce), so
-    # the page never shows a button the API would refuse.
-    ctx["read_only"] = webgate.read_only()
-    ctx["halt_controls"] = (not webgate.read_only()
-                            and webgate.posture() in ("local", "own_ops"))
-    return _TEMPLATES.TemplateResponse(request, "autonomy.html", ctx)
-
-
-@router.get("/identity", response_class=HTMLResponse)
-async def identity_page(request: Request):
-    """Read-only Identity page. ``ui.show_avatar`` (owner-UX prefs) decides whether
-    the avatar block renders at all — resolved for the page's effective tenant
-    (same seam the identity JSON endpoint uses), fail-open to True on ANY
-    resolution error (missing prefs module, unsafe/absent tenant id, disk error)."""
-    ctx = _page_context(request)
-    show_avatar = True
-    try:
-        from core import prefs as _prefs
-        user_id = _effective_user_id(request)
-        show_avatar = bool(_prefs.resolve("ui.show_avatar", user_id, _data_dir(),
-                                          env_value=None, default=True))
-    except Exception:
-        show_avatar = True
-    ctx["show_avatar"] = show_avatar
-    ctx["read_only"] = webgate.read_only()
-    return _TEMPLATES.TemplateResponse(request, "identity.html", ctx)
-
-
-@router.get("/system", response_class=HTMLResponse)
-async def system_page(request: Request):
-    return _TEMPLATES.TemplateResponse(request, "system.html", _page_context(request))
-
-
-@router.get("/preferences", response_class=HTMLResponse)
-async def preferences_page(request: Request):
-    ctx = _page_context(request)
-    ctx["read_only"] = webgate.read_only()
-    return _TEMPLATES.TemplateResponse(request, "preferences.html", ctx)
-
-
-@router.get("/config", response_class=HTMLResponse)
-async def config_page(request: Request):
-    """030 C3 (018 P3 residue): the UI over the three already-shipped
-    ``/api/webgate/config*`` endpoints — searchable flag+pref list with
-    explain-on-click and editing per the API's own rules. ``flags_writable``
-    mirrors the PATCH endpoint's env-flag posture rule so the page never
-    offers an edit the server would 403 (prefs stay editable everywhere the
-    console is writable)."""
-    ctx = _page_context(request)
-    ctx["read_only"] = webgate.read_only()
-    ctx["flags_writable"] = (not webgate.read_only()
-                             and webgate.posture() in ("local", "own_ops"))
-    return _TEMPLATES.TemplateResponse(request, "config.html", ctx)
-
-
+# 043 phase 5 (§9): the WEBVIEW_UI switch is removed and the new console is the
+# ONLY console. /pending is the one surviving webgate PAGE (it carries the shared
+# _page_context and is the console's approve/reject-quarantine surface), so it
+# registers as a normal route now rather than behind the deleted legacy switch.
 @router.get("/pending", response_class=HTMLResponse)
 async def pending_page(request: Request):
-    ctx = _page_context(request)
-    ctx["read_only"] = webgate.read_only()
-    return _TEMPLATES.TemplateResponse(request, "pending.html", ctx)
+    return _TEMPLATES.TemplateResponse(request, "pending.html",
+                                      _page_context(request))
 
 
 __all__ = ["router"]

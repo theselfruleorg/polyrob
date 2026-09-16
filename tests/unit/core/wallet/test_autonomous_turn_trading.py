@@ -31,7 +31,7 @@ def _authorize(*, forged, autonomous_ok, halted=False):
     return tx_guard.authorize(
         _intent(), {"to": "0x" + "2" * 40, "data": "0x"},
         holder="0x" + "3" * 40, gate=_Gate(),
-        execution_context=object(), tool_self=None,
+        execution_context=__import__("types").SimpleNamespace(user_id="local"), tool_self=None,
         halted_fn=lambda: halted,
         forged_fn=lambda _ec, _ts: forged,
         autonomous_ok_fn=(None if autonomous_ok is None
@@ -79,16 +79,28 @@ class TestFlagOn:
         d = tx_guard.authorize(
             _intent(), {"to": "0x" + "2" * 40, "data": "0x"},
             holder="0x" + "3" * 40, gate=_Gate(),
-            execution_context=object(), tool_self=None,
+            execution_context=__import__("types").SimpleNamespace(user_id="local"), tool_self=None,
             halted_fn=lambda: False,
             forged_fn=lambda _ec, _ts: True,
             autonomous_ok_fn=_boom,
             rpc_is_pinned_fn=lambda _c: False)
         assert not d.allowed and "forged/autonomous turn" in d.reason
 
-    def test_the_kill_switch_still_wins(self):
+    def test_the_owner_pause_still_wins(self):
+        """The owner's stop beats the autonomous lane, whatever the flag says.
+
+        Renamed from `test_the_kill_switch_still_wins` and re-pointed at the CLAIM
+        rather than the word: it asserted the literal "HALTED" from the legacy
+        text, which named a lever that does not exist (`autonomy_halted()` is
+        `not allows("dispatch").allowed`, a facet of the 031 pause record). Pinning
+        that wording is what let the phantom survive in `tx_guard` for a day after
+        `125f83dd` removed it from the bridge. What must hold is that it REFUSES
+        and says why (census, 2026-09-12).
+        """
         d = _authorize(forged=True, autonomous_ok=True, halted=True)
-        assert not d.allowed and "HALTED" in d.reason
+        assert not d.allowed
+        assert "pause" in d.reason.lower()
+        assert "(owner kill-switch)" not in d.reason
 
 
 class TestAutonomousLaneNeedsADailyCap:
@@ -115,7 +127,7 @@ class TestAutonomousLaneNeedsADailyCap:
         return tx_guard.authorize(
             intent, {"to": "0x" + "2" * 40, "data": "0x"},
             holder="0x" + "3" * 40, gate=gate,
-            execution_context=object(), tool_self=None,
+            execution_context=__import__("types").SimpleNamespace(user_id="local"), tool_self=None,
             halted_fn=lambda: False,
             forged_fn=lambda _ec, _ts: forged,
             autonomous_ok_fn=lambda _ec, _ts: autonomous_ok,
@@ -143,3 +155,8 @@ class TestAutonomousLaneNeedsADailyCap:
         gate = PolicyGate(max_per_tx_usd=100.0)  # no daily_cap_usd
         d = self._run(gate, forged=False, autonomous_ok=False)
         assert d.allowed and d.lane == "autonomous"
+
+
+@pytest.fixture(autouse=True)
+def _wallet_owner_identity(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "local")

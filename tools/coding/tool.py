@@ -193,9 +193,9 @@ class CodingTool(BaseTool):
         return await resolve_cached_backend(self, execution_context, dev_mode, resolve_backend)
 
     @staticmethod
-    def _ok(content):
+    def _ok(content, metadata: Optional[dict] = None):
         from tools.controller.types import ActionResult
-        return ActionResult(extracted_content=content)
+        return ActionResult(extracted_content=content, metadata=metadata)
 
     @staticmethod
     def _err(msg):
@@ -264,24 +264,29 @@ class CodingTool(BaseTool):
         except Exception:
             return None
 
-    def _record_artifact(self, target: str, execution_context=None) -> None:
+    def _record_artifact(self, target: str, execution_context=None) -> Optional[str]:
         """Record a coding-tool write in the artifact ledger (fail-open).
 
         The filesystem tool records its writes at its choke point; the coding
         tool writes with bare open(), so without this a file the agent BUILT via
         str_replace/apply_patch/create_file is invisible to the ledger and the
         `artifact` acceptance check reports it "never produced" (a real goal
-        failing on evidence that exists)."""
+        failing on evidence that exists).
+
+        Returns the artifact's row id (043 A18) so a caller can stamp it onto
+        its ``ActionResult.metadata["artifact_id"]`` — or ``None`` on every
+        fail-open path (no user_id, or a bookkeeping error)."""
         try:
             uid = getattr(execution_context, "user_id", None) or getattr(self, "user_id", None)
             if not uid:
-                return
+                return None
             sid = getattr(execution_context, "session_id", None) or getattr(self, "session_id", None)
             from core.artifacts import record_artifact
-            record_artifact(str(uid), target, session_id=str(sid or ""))
+            return record_artifact(str(uid), target, session_id=str(sid or ""))
         except Exception:
             getattr(self, "logger", logging.getLogger(__name__)).debug(
                 "artifact ledger record skipped for %s", target, exc_info=True)
+            return None
 
     async def _snapshot_before_edit(self, target: str, root: str, execution_context=None) -> None:
         """Best-effort pre-mutation snapshot (I-4 / H2): commit the single
@@ -329,13 +334,14 @@ class CodingTool(BaseTool):
             await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
-            self._record_artifact(target, execution_context)
+            artifact_id = self._record_artifact(target, execution_context)
             n = content.count(params.old_string) if params.replace_all else 1
             if rung == "exact" or params.replace_all:
                 msg = f"Edited {params.file_path} ({n} replacement{'s' if n != 1 else ''})."
             else:
                 msg = f"Edited {params.file_path} (1 replacement, via {rung} match)."
-            return self._ok(await self._with_diagnostics(msg, target, root))
+            metadata = {"artifact_id": artifact_id} if artifact_id else None
+            return self._ok(await self._with_diagnostics(msg, target, root), metadata)
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -361,9 +367,10 @@ class CodingTool(BaseTool):
             await self._snapshot_before_edit(target, root, execution_context)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(updated)
-            self._record_artifact(target, execution_context)
+            artifact_id = self._record_artifact(target, execution_context)
             msg = f"Patched {params.file_path}."
-            return self._ok(await self._with_diagnostics(msg, target, root))
+            metadata = {"artifact_id": artifact_id} if artifact_id else None
+            return self._ok(await self._with_diagnostics(msg, target, root), metadata)
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:
@@ -463,9 +470,10 @@ class CodingTool(BaseTool):
             os.makedirs(os.path.dirname(target) or root, exist_ok=True)
             with open(target, "w", encoding="utf-8") as f:
                 f.write(params.content or "")
-            self._record_artifact(target, execution_context)
+            artifact_id = self._record_artifact(target, execution_context)
             msg = f"Created {params.file_path} ({len(params.content or '')} bytes)."
-            return self._ok(await self._with_diagnostics(msg, target, root))
+            metadata = {"artifact_id": artifact_id} if artifact_id else None
+            return self._ok(await self._with_diagnostics(msg, target, root), metadata)
         except CodingError as e:
             return self._err(str(e))
         except Exception as e:

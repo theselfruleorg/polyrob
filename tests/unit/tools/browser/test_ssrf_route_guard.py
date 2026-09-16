@@ -63,11 +63,19 @@ async def test_public_document_continues():
 
 
 @pytest.mark.asyncio
-async def test_non_document_subresource_is_not_blocked():
-    # Sub-resources (images/scripts) are not the SSRF-to-metadata vector and must
-    # not pay the resolve cost; they continue unconditionally.
+@pytest.mark.parametrize("resource_type", ["image", "script", "fetch", "xhr", "stylesheet"])
+async def test_private_subresource_is_blocked(resource_type):
     os.environ.pop("BROWSER_ALLOW_PRIVATE_URLS", None)
-    route = _route("http://169.254.169.254/x.png", resource_type="image")
+    route = _route("http://169.254.169.254/x.png", resource_type=resource_type)
     await _guard()._ssrf_route_guard(route)
-    route.continue_.assert_awaited_once()
-    route.abort.assert_not_called()
+    route.abort.assert_awaited_once()
+    route.continue_.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_validator_failure_aborts_request():
+    route = _route("https://example.com/", resource_type="fetch")
+    with patch("tools.browser.browser._check_url_ssrf", side_effect=RuntimeError("broken validator")):
+        await _guard()._ssrf_route_guard(route)
+    route.abort.assert_awaited_once()
+    route.continue_.assert_not_called()

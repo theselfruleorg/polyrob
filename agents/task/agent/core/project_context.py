@@ -4,16 +4,16 @@ CLI-only, default-OFF on server (gated by ``AutonomyConfig.project_context_autol
 AND ``local_mode_enabled()`` in construction.py).
 
 ``load_project_context(root, *, cap_tokens)`` walks from *root* up to the git root,
-finds the first occurrence of each recognised filename, runs the injection-threat scan
-(fail-OPEN on import error, fail-CLOSED on scan error), caps total content to
-*cap_tokens* via ``estimate_tokens_rough``, and returns the concatenated result.
+selects the highest-precedence recognised filename, runs the injection-threat scan
+(fail-CLOSED on unavailable scanner or scan error), bounds the file snapshot to 4 MiB,
+caps content to *cap_tokens*, and returns the selected context.
 Returns ``None`` if nothing is found or any unrecoverable error occurs (fully
 fail-open at the outer level).
 
 Safety properties:
   - Skips any file whose path is flagged by ``is_secret_path``.
   - Rejects any document whose content is flagged by the ``is_suspicious`` threat
-    scanner (fail-OPEN if the scanner is unavailable; fail-CLOSED if it raises).
+    scanner (fail-CLOSED if unavailable or if it raises).
   - Truncates concatenated content to *cap_tokens* with an appended notice.
   - All I/O errors are swallowed; the whole function returns ``None`` on exception.
 """
@@ -154,9 +154,9 @@ def load_project_context(
 ) -> Optional[str]:
     """Load and return project context from recognised context files.
 
-    Walks from *root* upward to the git root, collects the first occurrence of
-    each name in ``_CONTEXT_FILENAMES``, filters secret/suspicious files, and
-    returns their concatenated content capped to *cap_tokens*.
+    Walks from *root* upward to the git root, selects the highest-precedence
+    usable name in ``_CONTEXT_FILENAMES``, filters secret/suspicious files, and
+    returns its bounded snapshot capped to *cap_tokens*.
 
     ``confine_to_root=True`` (the server tier, P1-8) caps the search at *root*
     itself — no upward walk — so a tenant workspace nested inside a deployment
@@ -177,11 +177,12 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
     """Implementation (raises on error; caller wraps in try/except)."""
     from core.security.secret_guard import is_secret_path, estimate_tokens_rough
 
-    # Resolve the threat-scanner once; None means scanner unavailable (fail-OPEN).
+    # A missing scanner cannot authorize a new project instruction source.
     try:
         from modules.memory.task.threat_scan import is_suspicious
     except Exception:
-        is_suspicious = None  # type: ignore[assignment]
+        logger.warning("project context not loaded: threat scanner unavailable")
+        return None
 
     root_resolved = root.resolve()
     # P1-8: confined mode never ascends — the search root IS the given root.
@@ -232,7 +233,11 @@ def _load_project_context_impl(root: Path, *, cap_tokens: int,
 
             # Read the file.
             try:
-                raw = candidate.read_text(encoding="utf-8", errors="replace")
+                from core.security.confined_read import read_confined_bytes
+                # A prompt-token cap does not bound the allocation while reading.
+                # Allow up to 4 UTF-8 bytes per character; refuse oversized files.
+                raw = read_confined_bytes(candidate, search_root, 4 * 1024 * 1024).decode(
+                    "utf-8", errors="replace")
             except OSError as e:
                 logger.debug("project_context: could not read %s: %s", candidate, e)
                 continue

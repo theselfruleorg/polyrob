@@ -41,6 +41,15 @@ def _surface_gc_enabled() -> bool:
     return SurfaceConfig.surface_gc_enabled()
 
 
+def _sandbox_reap_enabled() -> bool:
+    """043 A8/A42: `sandbox_reap` was the only always-on loop with no flag and
+    no pause kind — this + the ``allows("sandbox_reap")`` check in its tick
+    close both gaps. Default ON: reach only, no behavior change for an
+    install that never touches the flag."""
+    from core.env import bool_env
+    return bool_env("SANDBOX_REAP_ENABLED", True)
+
+
 def _x402_invoicing_enabled() -> bool:
     # Read the env directly (core.env SSOT) — importing modules.x402 here would
     # put a server-tier module on the core import graph (C3 boundary), so this
@@ -100,6 +109,68 @@ def _build_quiet_release_ticker(task_agent):
             logger.debug("quiet release tick failed: %s", e)
 
     return IntervalTicker(_tick, interval_seconds=_QUIET_RELEASE_INTERVAL_SEC)
+
+
+def _wake_drain_enabled() -> bool:
+    """043 W10: the cross-process wake-drain loop only makes sense where the
+    self-wake rail is on — ``deliver_self_wake`` no-ops otherwise, so a drain
+    would just churn rows to ``dropped``. Gated on the SAME process-level
+    env/posture default ``deliver_self_wake`` reads
+    (``AutonomyConfig.self_wake_enabled``), so a default install (self-wake OFF)
+    starts no drain and leaves the loop set the autonomy tests assert unchanged.
+    When ON, the OWNING process drains the rows a SEPARATE console process
+    enqueued on an owner approval."""
+    return AutonomyConfig.self_wake_enabled()
+
+
+def _build_wake_drain_ticker(task_agent, data_dir):
+    """043 W10: drain durable cross-process session-wake rows (a console approval
+    in a SEPARATE process wrote them) and deliver each through THIS process's own
+    self-wake rail — ``deliver_self_wake`` refuses a remote session, so the wake
+    must run where the session lives. Single-winner CAS per row (safe if two
+    processes both drain); the 031 pause is honored inside ``deliver_self_wake``
+    (a held wake is retried, then dropped at the attempt cap — the grant is
+    durable, so a lost nudge is safe). Fail-open: a tick never disrupts the
+    runtime."""
+    import os
+
+    from core.tickers import IntervalTicker
+    from core.wake_queue import WAKE_DRAIN_INTERVAL_SEC, get_wake_queue
+
+    def _queue():
+        db_path = os.path.join(data_dir, "wakes.db") if data_dir else None
+        return get_wake_queue(db_path)
+
+    async def _tick():
+        try:
+            owner = f"pid:{os.getpid()}"
+            queue = _queue()
+            for row in queue.claim_pending(owner):
+                # I1 (043 W10): under opt-in SESSION_REGISTRY_BACKEND=sqlite +
+                # workers>1, a NON-owning worker that wins the CAS here could
+                # recreate an evicted session in the wrong worker — we do NOT
+                # re-gate the drain on `route_session().is_local`. That is safe in
+                # the default single-agent topology (one process runs
+                # start_autonomy) and acceptable under the opt-in one: the drain
+                # trusts `deliver_self_wake`'s own resident-or-recreatable check
+                # (it drops + audits a session it cannot legitimately own), and a
+                # wrongly-recreated session's forged wake still cannot spend.
+                try:
+                    ok = await task_agent.deliver_self_wake(
+                        row.session_id, row.user_id, row.text,
+                        metadata=row.metadata)
+                except Exception:
+                    logger.debug("wake drain: deliver raised for %s (fail-open)",
+                                 row.session_id, exc_info=True)
+                    ok = False
+                if ok:
+                    queue.mark_delivered(row.id)
+                else:
+                    queue.fail(row.id)
+        except Exception as e:
+            logger.debug("wake drain tick failed: %s", e)
+
+    return IntervalTicker(_tick, interval_seconds=WAKE_DRAIN_INTERVAL_SEC)
 
 
 def _build_surface_gc_ticker(task_agent):
@@ -199,6 +270,10 @@ def _build_sandbox_reaper_ticker(task_agent):
 
     async def _tick():
         try:
+            from core.autonomy_control import allows
+            if not allows("sandbox_reap").allowed:
+                return  # 031 owner pause
+
             import shutil
             from tools.code_exec import code_exec_docker_persistent_enabled
 
@@ -262,11 +337,51 @@ def _build_curator_ticker(data_dir):
     return build_curator_ticker(data_dir=data_dir)
 
 
+def _build_bridge_watcher(task_agent):
+    """039 Unit C — reconcile in-flight bridges and refresh the balance cache.
+
+    ⚠️ NOT pause-gated, and that is deliberate. Every other starter here begins
+    WORK; this one reads balances and reports what it finds. An owner who has just
+    stopped everything is exactly the owner who needs to know where their
+    in-flight funds are, and a stop button that also switched off the answer would
+    be one nobody dares press. See the module docstring.
+    """
+    from core.tickers import IntervalTicker
+    from core.wallet import bridge_watcher
+
+    container = getattr(task_agent, "container", None)
+
+    async def _tick():
+        try:
+            result = await bridge_watcher.tick(container)
+            if result.arrived or result.failed or result.escalated:
+                logger.info("bridge watcher: %s", result.as_dict())
+        except Exception as e:
+            logger.warning("bridge watcher tick failed: %s", e)
+        try:
+            await asyncio.to_thread(bridge_watcher.refresh_balances, container)
+        except Exception as e:
+            logger.debug("bridge watcher: balance refresh failed: %s", e)
+
+    return IntervalTicker(_tick, interval_seconds=bridge_watcher.INTERVAL_SEC)
+
+
 def _build_settlement_watcher(task_agent):
     # Lazy server-tier import — only executes when X402_INVOICE_ENABLED is on,
     # so a rob-core-only environment never touches modules.x402.
     from modules.x402.settlement_watcher import build_settlement_watcher
-    return build_settlement_watcher(task_agent)
+    watcher = build_settlement_watcher(task_agent)
+    # 046 T1: the room-action branch of `_notify` needs a CONTAINER to reach the
+    # offer store and the chat transport. The seam declared itself "assigned
+    # after construction by whoever wires the watcher" and nobody did, so every
+    # settled paid action was credited instead of applied. This is that wiring;
+    # `_room_moderator` stays None and is resolved from the container service,
+    # which is also what keeps it injectable in a test.
+    try:
+        watcher._room_container = getattr(task_agent, "container", None)
+    except Exception as e:      # pragma: no cover - an exotic watcher shape
+        logger.debug("settlement watcher: room container not attached (%s)", e)
+    return watcher
 
 
 def _schedule_cold_start_orphan_reap() -> None:
@@ -523,6 +638,9 @@ class AutonomyHandles:
         #: dispatcher / cron scheduler that own the in-flight work.
         self._loops: Dict[str, Any] = {}
         self._task_agent: Any = None
+        #: 046: the data home the heartbeat's room-action expiry sweep reads.
+        #: None until `start_autonomy` sets it; the sweep then no-ops.
+        self._data_dir: "str | None" = None
         self._watch_task: "asyncio.Task | None" = None
         self._watch_stop: "asyncio.Event | None" = None
 
@@ -653,6 +771,44 @@ class AutonomyHandles:
             if self._hb_stop is not None and self._hb_stop.is_set():
                 break
             self.emit_heartbeats()
+            self._expire_room_action_offers()
+
+    def _expire_room_action_offers(self) -> None:
+        """046: an UNPAID offer stops inviting payment once its room's TTL
+        passes — a payer who sends late would pay for something nothing will
+        apply.
+
+        Rides the heartbeat because it is a pure local sweep: no network, no
+        model call, and it must run in every posture. Deliberately NOT
+        pause-gated — expiring an offer is protective, and a paused instance
+        that kept inviting payment would be the worse failure. Fail-open: a
+        sweep fault must never stop the heartbeat.
+        """
+        try:
+            import os as _os
+
+            from core.surfaces.chat_policy import load_for_chat
+            from core.surfaces.room_action_store import OfferStore, store_path
+            from core.surfaces.room_actions import parse_duration
+            if not self._data_dir:
+                return
+            path = store_path(self._data_dir)
+            if not _os.path.exists(path):
+                return
+            store = OfferStore(path)
+            expired = 0
+            # ⚠️ Per ROOM, not one global cutoff: `chat.paid_offer_ttl` is the
+            # room's own setting, and sweeping everything on a single TTL would
+            # silently override it.
+            for surface, chat_id in store.pending_rooms():
+                policy = load_for_chat(self._data_dir, surface, chat_id)
+                ttl = parse_duration(policy.paid_offer_ttl) or 1800
+                expired += store.expire_stale(ttl, surface=surface,
+                                              chat_id=chat_id)
+            if expired:
+                logger.info("room actions: expired %d unpaid offer(s)", expired)
+        except Exception as e:
+            logger.debug("room-action expiry sweep failed (%s)", e)
 
     async def stop(self) -> None:
         try:
@@ -699,6 +855,87 @@ class AutonomyHandles:
         self._entries.clear()
 
 
+#: The characters a role string may contain. A role is stamped into a telemetry
+#: row an owner reads, so it is bounded rather than free argv text.
+_ROLE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_-")
+
+#: ⚠️ The `polyrob` GROUP options that take a VALUE (`cli/polyrob.py::cli`).
+#: Their argument is the next token, and it is NOT the subcommand: without this
+#: `polyrob -P work telegram` reported the role `work` — a profile name where
+#: the field promises a process role. `--opt=value` needs no entry here (it is
+#: one token). Flags (`--plain`, `-V/--version`, `--help`) take no value.
+_VALUE_OPTIONS = frozenset({
+    "--project", "--model", "-m", "--provider", "-p", "--toolset",
+    "--profile", "-P",
+})
+
+
+def _service_role() -> str:
+    """Which PROCESS this is: ``telegram`` / ``email`` / ``api`` / ``console`` / ``repl`` / …
+
+    Derived from ``sys.argv`` ALONE, deliberately. A role is an observation
+    about the running process, not configuration: an env var would be one more
+    thing an operator could set to something untrue, and every env read in the
+    shipped tree owes a `docs/CONFIGURATION.md` row (`test_flags_reverse`) —
+    a catalog row for a value nobody should ever set is a lie in the catalog.
+
+    Descriptive only. Nothing is gated on it; the status snapshot groups rows by
+    ``pid``. Unknown is said out loud rather than guessed.
+
+    The two non-CLI entry points are named from argv[0], because neither has a
+    click subcommand to read: ``python main.py`` is the API service (``api``),
+    and ``python -m uvicorn <app>`` is ``console`` when it serves a
+    ``webview.*`` app (the units at `deployment/polyrob-webview.service` and
+    `polyrob-webgate.service`) else ``api``. They are kept DISTINCT because they
+    are distinct processes with distinct loop sets; collapsing the console into
+    ``api`` would put one name on two things an owner has to tell apart.
+    """
+    try:
+        import os
+        import sys
+        argv = list(sys.argv or [])
+        if not argv:
+            return "unknown"
+        prog = str(argv[0] or "")
+        rest = [str(a or "") for a in argv[1:]]
+        # uvicorn is reached BOTH as `python -m uvicorn` (argv[0] is the
+        # package's `__main__.py`, so the basename is not "uvicorn") and as the
+        # console script, so the whole path is what is searched.
+        if "uvicorn" in prog.lower():
+            for token in rest:
+                if token.startswith("-"):
+                    continue
+                return "console" if token.lower().startswith("webview") else "api"
+            return "api"
+        skip_next = False
+        for raw in rest:
+            token = raw.strip().lower()
+            if skip_next:
+                skip_next = False
+                continue
+            if not token:
+                continue
+            if token.startswith("-"):
+                # A group option's VALUE is the next token — skip both, or the
+                # value is read as the subcommand.
+                skip_next = "=" not in token and token in _VALUE_OPTIONS
+                continue
+            # The click subcommand, if it looks like one. Free text (a `polyrob
+            # run "…"` task) is reported unknown rather than quoted back.
+            if (len(token) <= 24 and token[0].isascii() and token[0].isalpha()
+                    and all(c in _ROLE_CHARS for c in token)):
+                return token
+            return "unknown"
+        base = os.path.basename(prog).lower()
+        if base.startswith("polyrob") or base == "rob":
+            return "repl"          # a bare `polyrob` opens the chat REPL
+        if base == "main.py":
+            return "api"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
 def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandles:
     # WS-3: an omitted data_dir resolves to the data home, never a relative "data"
     # under the cwd. Every real caller (api/app.py lifespan, the CLI surface
@@ -707,6 +944,7 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
     data_dir = data_dir_or_home(data_dir)
     handles = AutonomyHandles()
     handles._task_agent = task_agent
+    handles._data_dir = data_dir
 
     # 031: the owner pause record. Loops always start ARMED (a paused deployment
     # keeps its tickers so a resume takes effect without a restart); each tick
@@ -794,13 +1032,14 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("curator", _build_curator_ticker(data_dir))
         except Exception as e:
             logger.warning("Could not start skill curator: %s", e)
-    try:
-        # Ownership-keyed sandbox container sweep. Safe to run periodically (see
-        # the builder's docstring for why this does not violate the
-        # cold-start-only rule that governs the AGE-based reap_orphans).
-        handles._add("sandbox_reap", _build_sandbox_reaper_ticker(task_agent))
-    except Exception as e:
-        logger.warning("Could not start sandbox reaper ticker: %s", e)
+    if _sandbox_reap_enabled():
+        try:
+            # Ownership-keyed sandbox container sweep. Safe to run periodically
+            # (see the builder's docstring for why this does not violate the
+            # cold-start-only rule that governs the AGE-based reap_orphans).
+            handles._add("sandbox_reap", _build_sandbox_reaper_ticker(task_agent))
+        except Exception as e:
+            logger.warning("Could not start sandbox reaper ticker: %s", e)
     if _surface_gc_enabled():
         try:
             handles._add("surface_gc", _build_surface_gc_ticker(task_agent))
@@ -811,9 +1050,46 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("quiet_release", _build_quiet_release_ticker(task_agent))
         except Exception as e:
             logger.warning("Could not start quiet-hours release ticker: %s", e)
+    if _wake_drain_enabled():
+        try:
+            # 043 W10: deliver durable cross-process session wakes a console
+            # approval (a separate service) enqueued for a session THIS process
+            # owns.
+            handles._add("wake_drain", _build_wake_drain_ticker(task_agent, data_dir))
+        except Exception as e:
+            logger.warning("Could not start wake-drain ticker: %s", e)
     if _x402_invoicing_enabled():
         try:
             handles._add("settlement", _build_settlement_watcher(task_agent))
         except Exception as e:
             logger.warning("Could not start x402 settlement watcher: %s", e)
+    try:
+        from core.wallet import bridge_watcher as _bw
+        if _bw.enabled():
+            handles._add("bridges", _build_bridge_watcher(task_agent))
+    except Exception as e:
+        logger.warning("Could not start the bridge watcher: %s", e)
+    # 043 A8/A42: the durable "what did this process actually start" record —
+    # the status snapshot's loop-liveness check reads it as its `expected` set
+    # instead of hardcoding cron/goals.
+    #
+    # 043 T3: stamped with the PID (and a descriptive role) because the reader
+    # used to take the newest row from ANY process. On a box where the owner
+    # opens a `rob` REPL beside the service — exactly what local mode is for —
+    # the REPL's row is newer and names ITS loops, silently redefining what the
+    # SERVICE is expected to be running. The pid is what lets the reader union
+    # the live processes instead of trusting whoever wrote last.
+    #
+    # Fail-open: a telemetry write must never affect startup.
+    try:
+        import os
+
+        from core.event_kinds import AUTONOMY_STARTED
+        from core.event_log import get_event_log
+        get_event_log().record(AUTONOMY_STARTED, user_id="", source="runtime",
+                               attrs={"loops": sorted(handles._loops.keys()),
+                                      "pid": os.getpid(),
+                                      "role": _service_role()})
+    except Exception:
+        logger.debug("autonomy_started record failed (non-fatal)", exc_info=True)
     return handles

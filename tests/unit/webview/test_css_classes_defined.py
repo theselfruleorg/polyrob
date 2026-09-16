@@ -32,8 +32,10 @@ _SELECTORS = [
 
 # 030 D-6 — the webgate component classes are not a hardcoded list: scan the
 # templates for every `webgate-*` class token actually referenced (both HTML
-# `class="…"` attributes and JS `el.className = '…'` assignments, which is how
-# memory.html applies `webgate-caption`/`webgate-item`).
+# `class="…"` attributes and JS `el.className = '…'` assignments). (043 §9 phase 4
+# deleted the memory/knowledge/config pages that were the only users of
+# `webgate-caption`/`webgate-empty`/`webgate-item`; the surviving legacy pages are
+# layout.html + pending.html.)
 _CLASS_ASSIGN_RE = re.compile(r"""class(?:Name)?\s*=\s*["']([^"']+)["']""")
 _WEBGATE_TOKEN_RE = re.compile(r"webgate-[A-Za-z0-9_-]+")
 
@@ -77,7 +79,7 @@ def test_webgate_scan_finds_the_known_core_classes():
     """Guard the scanner itself — if the regex rots, the parametrized list
     silently shrinks to nothing and the suite goes green vacuously."""
     for expected in ("webgate-page", "webgate-header", "webgate-list",
-                     "webgate-empty", "webgate-caption"):
+                     "webgate-pause-headline", "webgate-readonly-banner"):
         assert expected in _WEBGATE_CLASSES, (
             f"template scan lost {expected!r} — scanner regex or templates changed"
         )

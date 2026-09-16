@@ -117,6 +117,8 @@ only and is never consulted by the enforcement/accounting math.
 """
 from __future__ import annotations
 
+import asyncio
+
 import logging
 from typing import Optional
 
@@ -764,7 +766,8 @@ class RealX402Client:
         x402_c = x402Client()
         register_exact_evm_client(x402_c, sdk_signer, policies=[max_amount(max_amount_atomic)])
 
-        payment_info: dict = {"happened": False, "amount": None, "pay_to": None}
+        payment_info: dict = {"happened": False, "amount": None, "pay_to": None,
+                              "submission_ref": None, "authorized_amount": None}
 
         def _abort_if_invalid_requirement(ctx):
             selected = ctx.selected_requirements
@@ -806,6 +809,17 @@ class RealX402Client:
                 reason = self._policy_recheck_reason(self._policy, selected_amount_usd)
                 if reason is not None:
                     return AbortResult(reason=reason)
+            # Persist BEFORE the SDK signs a transferable authorization. A
+            # response loss or a rejected HTTP status cannot prove it was unused.
+            try:
+                from core.wallet.submission_journal import prepare_attempt
+                authorized_amount = float(selected.get_amount()) / _USDC_ATOMIC_PER_USD
+                payment_info["submission_ref"] = prepare_attempt(
+                    "x402", signer.address, authorized_amount,
+                )
+                payment_info["authorized_amount"] = authorized_amount
+            except Exception:
+                return AbortResult(reason="x402 submission journal unavailable or unresolved; reconcile before paying")
             return None
 
         def _capture_payment_info(ctx):
@@ -822,13 +836,13 @@ class RealX402Client:
 
         from x402.http.clients.httpx import x402AsyncTransport
         from tools.x402.net_guard import (
-            PinnedAsyncTransport, X402_HTTP_TIMEOUT_SEC, MAX_X402_BODY_BYTES)
+            BoundedAsyncTransport, PinnedAsyncTransport, X402_HTTP_TIMEOUT_SEC, MAX_X402_BODY_BYTES)
         import httpx as _httpx
         from urllib.parse import urlparse as _urlparse
 
         _host = _urlparse(url).hostname
         _inner = (PinnedAsyncTransport(_host, pinned_ip)
-                  if (pinned_ip and _host) else _httpx.AsyncHTTPTransport())
+                  if (pinned_ip and _host) else BoundedAsyncTransport())
         # x402AsyncTransport wraps an INNER transport (verified against the
         # installed SDK: x402 2.15.0, `x402AsyncTransport.__init__(self, client,
         # transport=None)`), which is what makes end-to-end DNS pinning reachable
@@ -842,7 +856,7 @@ class RealX402Client:
             req_kwargs: dict = {"method": method, "url": url}
             if body_bytes:
                 req_kwargs["content"] = body_bytes
-            response = await http.request(**req_kwargs)
+            response = await asyncio.wait_for(http.request(**req_kwargs), timeout=X402_HTTP_TIMEOUT_SEC)
 
         # N-F: bound what reaches the agent. The prober caps at the same number;
         # this verb returns the body into the context window, so an unbounded read
@@ -864,9 +878,9 @@ class RealX402Client:
         # history in this repo (2026-07-19) of an under-marked money result being
         # misreported by the agent as a completed payment.
         _raw_body = response.content
-        if len(_raw_body) > MAX_X402_BODY_BYTES:
+        if response.extensions.get("polyrob_body_truncated") or len(_raw_body) > MAX_X402_BODY_BYTES:
             _body_text = (
-                f"[TRUNCATED: response body was {len(_raw_body)} bytes, capped at "
+                f"[TRUNCATED: response body exceeded the limit, capped at "
                 f"{MAX_X402_BODY_BYTES}. You are seeing the first {MAX_X402_BODY_BYTES} "
                 f"bytes. The payment, if any, DID settle — check x402_wallet_status.]\n"
                 + _raw_body[:MAX_X402_BODY_BYTES].decode("utf-8", errors="replace")
@@ -907,4 +921,6 @@ class RealX402Client:
             pay_to=pay_to or None,
             status_code=response.status_code,
             amount_is_estimate=amount_is_estimate,
+            submission_ref=payment_info["submission_ref"],
+            authorized_amount_usd=payment_info["authorized_amount"],
         )

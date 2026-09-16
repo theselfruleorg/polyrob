@@ -218,3 +218,124 @@ async def test_the_spend_is_recorded_even_when_confirmation_is_unknown(monkeypat
     await tool.solana_swap(_params(dry_run=False))
     assert wallet.policy.recorded
     assert wallet.policy.recorded[0]["result_ref"] == "sigunk"
+
+
+# -- native SOL: the sell IS the native move (prod 2026-09-08) --------------
+#
+# A native-SOL sell reached prod and was refused twice over. The wallet holds
+# NATIVE SOL; Jupiter wraps it into a temporary wSOL account inside the very
+# transaction being simulated and closes it again, so the outflow lands in
+# `native_delta` (lamports) and the wSOL token account nets to nothing — often
+# it never appears in `token_deltas` at all.
+#
+# Two guards then read a legitimate sell as an attack:
+#   * `is_plausible_rent(native_delta)` sees ~0.93 SOL leaving, vastly more
+#     than the 0.01 SOL rent ceiling, and calls it a drain.
+#   * `token_in not in token_deltas` sees no wSOL observation and refuses,
+#     correctly, on the rule that a check which did not run never passed.
+#
+# The held side already knows this: `_solana_held_raw` folds native SOL into
+# the wSOL balance, "Jupiter wraps through it". The outflow side must fold the
+# same way — and stay bounded by the DECLARED amount, so folding buys no
+# licence to move more than was asked for.
+
+SOL_DEC = 9
+
+
+def _sol_tool(deltas, **kw):
+    """A tool selling native SOL: 9 decimals, priced, USDC out."""
+    defaults = dict(deltas=deltas,
+                    solana_decimals_fn=lambda m: SOL_DEC if m == WSOL else 6,
+                    price_fn=lambda c, a: 200.0)
+    defaults.update(kw)
+    return _tool(**defaults)
+
+
+def _sol_params(amount=0.93, **kw):
+    base = dict(token_in=WSOL, token_out=USDC, amount_in=amount,
+                max_spend_usd=500.0, dry_run=True)
+    base.update(kw)
+    return _params(**base)
+
+
+@pytest.mark.asyncio
+async def test_a_native_sol_sell_is_not_a_rent_drain():
+    """0.93 SOL leaving natively IS the swap, not rent the guard should fear.
+
+    Before the fix this refused at the rent classifier, which is armed to catch
+    a SOL drain and cannot tell one from a declared SOL sell on its own.
+    """
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True,
+                          native_delta=-930_000_000,          # the sell itself
+                          token_deltas={USDC: 186_000_000})   # ~$186 received
+    res = await _sol_tool(deltas).solana_swap(_sol_params())
+    assert res.error is None, res.error
+
+
+@pytest.mark.asyncio
+async def test_a_native_sol_sell_is_observed_through_the_native_delta():
+    """The wSOL account never appears, and that must NOT read as unobserved:
+    the observation exists, it is just denominated in lamports."""
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, native_delta=-930_000_000,
+                          token_deltas={USDC: 186_000_000})
+    res = await _sol_tool(deltas).solana_swap(_sol_params())
+    assert res.error is None or "could not observe" not in res.error
+
+
+@pytest.mark.asyncio
+async def test_folding_native_sol_still_bounds_the_declared_amount():
+    """The fold is an observation, never a licence. Declaring 0.93 SOL while
+    the simulation moves 2 SOL must still refuse — otherwise the fix would
+    trade one blind spot for a far worse one."""
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True,
+                          native_delta=-2_000_000_000,        # 2 SOL leaves
+                          token_deltas={USDC: 400_000_000})
+    res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
+    assert res.error, "an outflow larger than declared must refuse"
+    assert "declared" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_wrapped_wsol_account_and_native_sol_are_summed():
+    """A partially-wrapped wallet spends from BOTH: the token account and the
+    native balance. Counting only one under-reports the true outflow."""
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True,
+                          native_delta=-500_000_000,
+                          token_deltas={WSOL: -1_500_000_000,
+                                        USDC: 400_000_000})
+    res = await _sol_tool(deltas).solana_swap(_sol_params(amount=0.93))
+    assert res.error, "2 SOL total leaving against 0.93 declared must refuse"
+    assert "declared" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_non_sol_swap_still_refuses_an_unexplained_native_move():
+    """The rent classifier stays ARMED everywhere else. Selling a memecoin
+    while 0.5 SOL quietly leaves is exactly the drain it exists to catch, and
+    the SOL carve-out must not disarm it."""
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True,
+                          native_delta=-500_000_000,
+                          token_deltas={MEME: -1_000_000, USDC: 4_000_000})
+    tool = _tool(deltas=deltas, price_fn=lambda c, a: 1.0)
+    res = await tool.solana_swap(
+        _params(token_in=MEME, token_out=USDC, amount_in=1.0,
+                max_spend_usd=5.0, dry_run=True))
+    assert res.error, "an unexplained native outflow must still refuse"
+    assert "rent" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_sol_sell_that_moves_nothing_natively_still_refuses():
+    """Fold or not, a swap that moves no SOL at all is not a SOL swap. Zero
+    must never be mistaken for a small, acceptable outflow."""
+    from core.wallet.solana_simulation import SolanaDeltas
+    deltas = SolanaDeltas(ok=True, native_delta=0,
+                          token_deltas={USDC: 186_000_000})
+    res = await _sol_tool(deltas).solana_swap(_sol_params())
+    assert res.error, "no observed SOL outflow must refuse"
+    assert "observe" in res.error.lower() or "moves nothing" in res.error.lower()

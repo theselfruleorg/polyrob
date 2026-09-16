@@ -54,19 +54,11 @@ def _print_scrubbed(out, renderable) -> None:
 
 
 def _h_help(ctx: CommandContext) -> None:
-    from cli.ui import candy
+    """Grouped ``/help`` / ``/help <verb>`` (043 A13/A24) — delegates to
+    h_help.py (this file is at its size ratchet: extract, don't grow)."""
+    from cli.ui.commands.h_help import h_help
 
-    lines = ["Commands:"]
-    reg = ctx.registry or default_registry()
-    for cmd in reg.commands():
-        invoke = f"/{cmd.name}"
-        if cmd.usage:
-            invoke = f"{invoke} {cmd.usage}"
-        alias_str = ""
-        if cmd.aliases:
-            alias_str = "  (" + ", ".join(f"/{a}" for a in cmd.aliases) + ")"
-        lines.append(f"{candy.GUTTER}{invoke:<28} {cmd.help}{alias_str}")
-    ctx.emit("\n".join(lines), title="help")
+    h_help(ctx)
 
 
 def _h_exit(ctx: CommandContext) -> None:
@@ -422,144 +414,13 @@ def _h_toolset(ctx: CommandContext) -> None:
         ctx.emit("\n".join(lines), title="toolset")
 
 
-def _list_persona_names(characters_dir: Optional[Path] = None) -> List[str]:
-    """Return sorted persona names from ``*.character.json`` files.
-
-    Falls back gracefully (``[]`` on any read error). An explicit
-    *characters_dir* isolates tests; otherwise UNIONS every tier of the ONE
-    character-dir precedence (``persona_resolver.character_search_dirs``) —
-    the old cwd-relative heuristic never saw a profile's character set.
-    """
-    if characters_dir is None:
-        try:
-            from agents.personality.persona_resolver import character_search_dirs
-            names = set()
-            for d in character_search_dirs():
-                try:
-                    names.update(p.stem.removesuffix(".character")
-                                 for p in d.glob("*.character.json"))
-                except Exception:
-                    continue
-            return sorted(names)
-        except Exception:
-            return []
-
-    try:
-        return sorted(
-            # p.name = "researcher.character.json" → stem "researcher.character"
-            # We strip the trailing ".character" to get the bare slug.
-            p.stem.removesuffix(".character")
-            for p in characters_dir.glob("*.character.json")
-        )
-    except Exception:
-        return []
-
-
-def _h_persona(ctx: CommandContext) -> None:
-    """List available personas, or set the DEFAULT persona for future sessions.
-
-    Usage:
-      /persona                  — list all available (character) persona names
-      /persona <name-or-text>   — set the ``session.persona`` preference: a
-                                   known template key (general, research,
-                                   coding, social, trading, blank) persists
-                                   that key; anything else is treated as
-                                   literal persona text
-
-    The literal-text branch is threat-scanned at write time
-    (``core.prefs.write_preference`` — same fail-closed scan as the SELF/
-    identity docs); a flagged value is REJECTED and the error is surfaced
-    verbatim, never silently written.
-
-    NOTE (owner-UX P2 T6): like ``/toolset``, this does not live-patch the
-    CURRENT session's already-built system prompt — the ``<identity>`` block
-    is assembled once, at agent-creation time
-    (``agents/task/agent/message_manager/service.py``), not re-read per turn.
-    The persisted preference takes effect starting the NEXT session
-    (``session.persona``'s schema ``applies`` is ``"next-session"`` — see
-    ``core/prefs.py``). Best-effort: the live orchestrator's ``_persona_block``
-    seam (``cli/persona.py``) is still refreshed, so anything freshly created
-    within THIS session (e.g. a delegated sub-agent) picks up the new persona
-    immediately — but the current turn's system prompt is unchanged.
-    """
-    args = ctx.args
-    console = ctx.console()
-    names = _list_persona_names()
-
-    if args:
-        value = " ".join(args).strip()
-        from agents.task.templates import TEMPLATES
-
-        key_candidate = value.lower()
-        persisted = key_candidate if key_candidate in TEMPLATES else value
-
-        home_dir = _resolve_prefs_home_dir(ctx)
-        from core.prefs import write_preference
-        ok, err = write_preference(home_dir, ctx.user_id or "local", "session.persona", persisted)
-        if not ok:
-            ctx.emit(f"persona not saved: {err}", title="persona")
-            return
-
-        # Best-effort: refresh the live orchestrator's persona seam (does NOT
-        # rewrite this session's already-built system prompt — see NOTE above).
-        orch = ctx.orchestrator
-        if orch is not None:
-            try:
-                from cli.persona import resolve_cli_persona
-                refreshed = resolve_cli_persona(user_id=ctx.user_id, home_dir=home_dir)
-                if refreshed:
-                    orch._persona_block = refreshed
-            except Exception:
-                pass
-
-        ctx.emit(
-            f"persona saved (session.persona = {persisted!r}) — applies to the "
-            "NEXT session. This session's active persona is unchanged.",
-            title="persona",
-        )
-        return
-
-    # /persona (no arg) — list all available persona names.
-    from cli.ui import candy
-    from cli.ui.theme import style
-
-    def _persona_bio(pname: str) -> str:
-        try:
-            from pathlib import Path as _Path
-            import json as _json
-
-            pfile = _Path("data") / "characters" / f"{pname}.character.json"
-            if pfile.exists():
-                d = _json.loads(pfile.read_text(encoding="utf-8"))
-                raw = d.get("bio", "")
-                return (raw if isinstance(raw, str) else " ".join(raw))[:80]
-        except Exception:
-            pass
-        return ""
-
-    guidance = [
-        "Set the CLI persona with POLYROB_PERSONA=<template> "
-        "(general, research, coding, social, trading, blank).",
-        "Or use /persona <name-or-text> to set it as your default for "
-        "new sessions (applies next session).",
-    ]
-
-    if console is not None:
-        from rich import box
-        from rich.table import Table
-
-        table = Table(box=box.SIMPLE, header_style=style("label"), pad_edge=False, show_edge=False)
-        table.add_column("name", style=style("value"))
-        table.add_column("bio")
-        for pname in names:
-            table.add_row(pname, _persona_bio(pname))
-        _print_scrubbed(console, table)
-        for line in guidance:
-            _print_scrubbed(console, line)
-    else:
-        rows = [[pname, _persona_bio(pname)] for pname in names]
-        lines = [candy.table_lines(["name", "bio"], rows)] + guidance
-        ctx.emit("\n".join(lines), title="personas")
+# 042b: `/persona` moved to h_persona.py — this file is AT its size ratchet,
+# whose instruction is to extract rather than grow. Re-exported so every
+# existing importer (and the test that reaches for _list_persona_names) works.
+from cli.ui.commands.h_persona import (  # noqa: E402
+    _h_persona,
+    _list_persona_names,
+)
 
 
 def _h_sessions(ctx: CommandContext) -> None:
@@ -909,19 +770,18 @@ def _session_info_rows(ctx: CommandContext) -> list:
     """
     from core.instance import (
         FRAMEWORK_NAME,
+        owner_label,
         resolve_instance_id,
-        resolve_owner_principal,
     )
 
     state = ctx.state
     model = getattr(state, "model", "") or "—"
     provider = getattr(state, "provider", "") or "—"
 
-    owner = resolve_owner_principal() or "unbound (local owner)"
-    # Auto-derived owner == the instance's own tenant: label it instead of
-    # printing the same name twice (mirrors owner_awareness_line's guard).
-    if owner == resolve_instance_id():
-        owner = f"{owner} (auto-derived — this instance's own tenant)"
+    # ONE owner label for every seat (`polyrob doctor`, `/self`, this line):
+    # the STRICT resolution, so an unbound install SAYS so instead of naming
+    # the tenant `local` as though an owner had been bound to it.
+    owner = owner_label()
 
     workspace = "—"
     try:
@@ -1308,7 +1168,7 @@ def _h_logs(ctx: CommandContext) -> None:
         lines.append(f"  {f.name} ({size} bytes, {ts})")
 
     ctx.emit("\n".join(lines))
-    ctx.emit("Use `polyrob logs` for full log access")
+    ctx.emit(f"Full log files: {log_dir}")
 
 
 def _h_export(ctx: CommandContext) -> None:
@@ -1320,6 +1180,9 @@ def _h_export(ctx: CommandContext) -> None:
         return
 
     format_type = args[0] if args else "json"
+    if format_type not in ("json", "txt"):
+        ctx.emit("Supported REPL formats: json, txt. For raw/sharegpt/openai use polyrob session export <id> --format <format>.")
+        return
     output = args[1] if len(args) > 1 else None
 
     from datetime import datetime
@@ -1479,70 +1342,9 @@ def _h_telemetry(ctx: CommandContext) -> None:
     ctx.emit("\n".join(lines), title="telemetry")
 
 
-def _h_pending(ctx: CommandContext) -> None:
-    """Owner review queue for the agent's self-evolution proposals (T4-06b/T4-07).
-
-    Umbrella over `core.self_evolution` — the same pipeline `polyrob owner
-    pending/promote/reject` administers, now reachable without leaving the REPL.
-    (NOT the marketplace-install quarantine — that stays under `/skills approve`.)
-
-    Usage:
-      /pending                       — list pending proposals (skills + identity notes)
-      /pending show <kind> <id>      — full-body review of one proposal (T3-09)
-      /pending approve <kind> <id>   — promote to active
-                                        (kind: skill | self_context | owner_doc |
-                                         contract | pref_change)
-      /pending reject <kind> <id>    — reject (archive, recoverable)
-    """
-    import core.instance as _ci
-    from cli.ui import candy
-    from core import self_evolution
-
-    uid = (ctx.user_id or "").strip() or "local"
-    # The REPL is a trusted local operator surface ({cli,local,repl}); the
-    # local=True bypass is the documented owner check for it. A bound owner
-    # principal always wins; an unbound local operator IS the owner here.
-    if not _ci.is_owner(uid, local=True):
-        ctx.emit("(owner-only command — the review queue gates self-evolution)")
-        return
-
-    cfg = getattr(ctx.container, "config", None) if ctx.container else None
-    home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
-    instance_id = _ci.resolve_instance_id()
-
-    args = list(ctx.args or [])
-    if args and args[0].lower() in ("approve", "promote", "reject", "show"):
-        if len(args) < 3:
-            ctx.emit("usage: /pending show|approve|reject <kind> <id>   "
-                     "(kind: skill | self_context | owner_doc | contract | pref_change)")
-            return
-        verb, kind, item_id = args[0].lower(), args[1], " ".join(args[2:])
-        if verb == "show":
-            ok, body = self_evolution.show(kind, item_id, user_id=uid,
-                                           home_dir=home_dir, instance_id=instance_id)
-            ctx.emit(body, title=f"pending {kind}:{item_id}" if ok else "pending")
-            return
-        fn = self_evolution.reject if verb == "reject" else self_evolution.promote
-        ok, msg = fn(kind, item_id, user_id=uid, home_dir=home_dir, instance_id=instance_id)
-        ctx.emit(msg, title="pending")
-        return
-
-    items = self_evolution.list_pending(uid, home_dir=home_dir, instance_id=instance_id)
-    if not items:
-        ctx.emit(candy.empty("pending proposals", "/approve <id> reviews one"), title="pending")
-        return
-    lines = [f"{len(items)} pending proposal(s):"]
-    for it in items:
-        # pending_kind_label is landing from a parallel wave; fall back to the
-        # raw kind so /pending never breaks on a tree without it.
-        label = getattr(self_evolution, "pending_kind_label", lambda k: k)(it["kind"])
-        lines.append(candy.status_line(
-            "pending", f"[{label}] {it['kind']}:{it['id']}  ({it['chars']} chars)"
-        ))
-        lines.append(f"{candy.GUTTER}  {it['preview']}")
-    lines.append("")
-    lines.append("approve: /pending approve <kind> <id>    reject: /pending reject <kind> <id>")
-    ctx.emit("\n".join(lines), title="pending")
+# 2026-09-15 extraction: `/pending` lives in h_pending.py (this file is at its
+# size ratchet); re-exported here so the registry entry below is unchanged.
+from cli.ui.commands.h_pending import _h_pending  # noqa: E402,F401
 
 
 def _h_context(ctx: CommandContext) -> None:
@@ -1570,51 +1372,57 @@ def _h_context(ctx: CommandContext) -> None:
 def build_default_registry() -> CommandRegistry:
     """Build the registry with all built-in commands registered."""
     reg = CommandRegistry()
-    reg.register(Command("help", _h_help, "Show this help", aliases=("h", "?")))
-    reg.register(Command("exit", _h_exit, "Leave the REPL", aliases=("quit", "q")))
-    reg.register(Command("status", _h_status, "Live session status (tokens, cost, ctx)"))
+    from cli.ui.commands.h_help import help_kwargs
+    reg.register(Command("help", _h_help, "Show this help", aliases=("h", "?"), group="leave"))
+    reg.register(Command("exit", _h_exit, "Leave the REPL", aliases=("quit", "q"), group="leave"))
+    reg.register(Command("status", _h_status, "Live session status (tokens, cost, ctx)", group="look", **help_kwargs("status")))
     reg.register(
-        Command("usage", _h_usage, "Authoritative usage breakdown (DB / estimate)", aliases=("cost",))
+        Command("usage", _h_usage, "Authoritative usage breakdown (DB / estimate)", aliases=("cost",), group="money")
     )
     reg.register(
         Command("telemetry", _h_telemetry,
-                "Cross-session event counts + wallet spend (arg: window e.g. 24h)")
+                "Cross-session event counts + wallet spend (arg: window e.g. 24h)", group="look")
     )
     from cli.ui.commands.h_journey import h_journey as _h_journey
     reg.register(
         Command("journey", _h_journey,
                 "Timeline: what I did, learned, changed, and my income (arg: window e.g. 24h|7d)",
-                usage="[window]", aliases=("recap",))
+                usage="[window]", aliases=("recap",), group="remember")
     )
     from cli.ui.commands.h_finance import h_finance as _h_finance
     reg.register(
         Command("finance", _h_finance,
                 "Balance sheet: income, spend, pending, net + runtime cost (arg: days)",
-                usage="[days]")
+                usage="[days]", group="money", **help_kwargs("finance"))
     )
+    # 042b: /launch + /deploy. Their registrar lives beside them in h_token.py —
+    # this file is AT its size ratchet, whose instruction is to extract rather
+    # than grow.
+    from cli.ui.commands.h_token import register as _register_token
+    _register_token(reg, Command)
     from cli.ui.commands.h_learn import h_learn as _h_learn
     reg.register(
         Command("learn", _h_learn,
                 "Describe a procedure; distill it into a pending skill for review",
-                usage="<description>")
+                usage="<description>", group="work", raw_arguments=True)
     )
-    reg.register(Command("tools", _h_tools, "List the agent's registered tools/actions"))
+    reg.register(Command("tools", _h_tools, "List the agent's registered tools/actions", group="look"))
     from cli.ui.commands.h_diag import h_auth, h_doctor
-    reg.register(Command("auth", h_auth, "Show provider credentials + how to connect one"))
-    reg.register(Command("doctor", h_doctor, "Run the polyrob doctor health report"))
+    reg.register(Command("auth", h_auth, "Show provider credentials + how to connect one", group="set up"))
+    reg.register(Command("doctor", h_doctor, "Run the polyrob doctor health report", group="look", **help_kwargs("doctor")))
     reg.register(Command(
         "toolset",
         _h_toolset,
         "List named toolsets, or set the default toolset for new sessions",
-        usage="[name]",
+        usage="[name]", group="set up",
     ))
     reg.register(Command(
         "persona",
         _h_persona,
         "List available personas, or set the default persona for new sessions",
-        usage="[name-or-text]",
+        usage="[name-or-text]", group="set up", raw_arguments=True,
     ))
-    reg.register(Command("sessions", _h_sessions, "List all known sessions"))
+    reg.register(Command("sessions", _h_sessions, "List all known sessions", group="talk"))
     # NOTE (030 WS-C C2): /resume lifts the owner pause (mirrors
     # `polyrob owner resume` + telegram /resume) — it is NO LONGER an alias of
     # /replay. Session replay stays on its canonical /replay name.
@@ -1624,59 +1432,62 @@ def build_default_registry() -> CommandRegistry:
             _h_resume,
             "Replay a session's feed (visual history) — NOT a re-attach; continue a "
             "session with `polyrob run --resume <id>`",
-            usage="<session-id>",
+            usage="<session-id>", group="talk",
         )
     )
-    reg.register(Command("history", _h_history, "Show this conversation's turns"))
-    reg.register(Command("clear", _h_clear, "Clear history (keep the system prompt)"))
-    reg.register(Command("compact", _h_compact, "Compact conversation history (runs in background)", aliases=("compress",)))
+    reg.register(Command("history", _h_history, "Show this conversation's turns", group="talk"))
+    reg.register(Command("clear", _h_clear, "Clear history (keep the system prompt)", group="talk"))
+    reg.register(Command("compact", _h_compact, "Compact conversation history (runs in background)", aliases=("compress",), group="talk"))
     reg.register(
         Command(
             "model",
             _h_model,
             "Swap the session model live + persist as default",
             usage="<provider> <model> | <provider>/<model> | <alias> (see model_aliases)",
+            group="set up", **help_kwargs("model"),
         )
     )
-    reg.register(Command("cwd", _h_cwd, "Show the session workspace directory"))
+    reg.register(Command("cwd", _h_cwd, "Show the session workspace directory", group="leave"))
     reg.register(Command(
         "session", _h_session,
         "Session identity: polyrob/instance, owner, user, model, memory, workspace",
-        aliases=("info",),
+        aliases=("info",), group="talk",
     ))
     from cli.ui.commands.h_self import h_self
     reg.register(Command(
         "self", h_self,
         "Show the instance identity (SOUL + SELF docs, read-only)",
-        aliases=("identity", "soul"),
+        aliases=("identity", "soul"), group="remember",
     ))
     reg.register(Command(
         "memory", _h_memory,
         "Show the memory provider; /memory search <query> to recall cross-session",
-        usage="[search <query>]",
+        usage="[search <query>]", group="remember",
     ))
     from cli.ui.commands.h_profile import h_profile
     reg.register(Command(
         "profile", h_profile,
         "Show the active named profile (isolated home/identity) and its homes",
+        group="set up",
     ))
-    reg.register(Command("verbose", _h_verbose, "Toggle the live trace (steps, tools, reasoning)"))
-    reg.register(Command("quiet", _h_quiet, "Mute/restore the default tool transcript"))
-    reg.register(Command("steps", _h_steps, "Show the last turn's steps/tools trace"))
+    reg.register(Command("verbose", _h_verbose, "Toggle the live trace (steps, tools, reasoning)", group="display"))
+    reg.register(Command("quiet", _h_quiet, "Mute/restore the default tool transcript", group="display"))
+    reg.register(Command("steps", _h_steps, "Show the last turn's steps/tools trace", group="look"))
     reg.register(Command(
         "autonomy", _h_autonomy,
         help="show autonomy loops + scheduled cron jobs / open goals",
+        group="control",
     ))
-    reg.register(Command("goals", _h_goals, "Show goals board summary"))
-    reg.register(Command("apps", _h_apps, "Show deployed apps (032)"))
-    reg.register(Command("subagents", _h_subagents, "Show delegation capability info"))
-    reg.register(Command("todos", _h_todos, "Show workspace todos from todo.md"))
-    reg.register(Command("logs", _h_logs, "Show recent log entries for this session"))
+    reg.register(Command("goals", _h_goals, "Show goals board summary", group="work", **help_kwargs("goals")))
+    reg.register(Command("apps", _h_apps, "Show deployed apps (032)", group="work"))
+    reg.register(Command("subagents", _h_subagents, "Show delegation capability info", group="work"))
+    reg.register(Command("todos", _h_todos, "Show workspace todos from todo.md", group="work"))
+    reg.register(Command("logs", _h_logs, "Show recent log entries for this session", group="look"))
     reg.register(Command(
         "export",
         _h_export,
         "Export current session data",
-        usage="<format> [output]",
+        usage="<format> [output]", group="talk",
     ))
     # Capability surfaces (each handler lives in its own cli/ui/commands/h_*.py
     # module so the REPL can reach subsystems the CLI groups already exposed —
@@ -1692,27 +1503,33 @@ def build_default_registry() -> CommandRegistry:
         "skills", h_skills,
         "List/search skills; manage the install pipeline (list/info/install/approve/remove)",
         usage="[query | list | info <id> | install <spec> | approve <id> | remove <id>]",
+        group="work",
     ))
     reg.register(Command(
         "cron", h_cron,
         "List scheduled cron jobs (read-only)",
-        aliases=("crons",), usage="[list]",
+        aliases=("crons",), usage="[list]", group="work", **help_kwargs("cron"),
     ))
-    reg.register(Command("mcp", h_mcp, "List configured MCP servers + status", usage="[list]"))
+    reg.register(Command("mcp", h_mcp, "MCP servers: list, add, remove, test", usage="[list|add <id> <https-url> [key]|remove <id>|test <id>]", group="set up"))
     reg.register(Command(
         "kb", h_kb,
         "List + search the local knowledge base",
-        usage="[list [collection] | search <query>]",
+        usage="[list [collection] | search <query>]", group="remember",
     ))
     reg.register(Command(
         "pfp", h_pfp,
         "Show/generate the agent avatar (Mindprint; generation is optional)",
-        usage="[status|generate [force]|show]", aliases=("avatar",),
+        usage="[status|generate [force]|show]", aliases=("avatar",), group="display",
     ))
+    # 043 D1: /inbox + /book. Their registrar lives beside them in h_inbox.py —
+    # this file is AT its size ratchet, whose instruction is to extract rather
+    # than grow (the same call h_help.py and h_token.py already made).
+    from cli.ui.commands.h_inbox import register as _register_inbox
+    _register_inbox(reg, Command)
     reg.register(Command(
         "pending", _h_pending,
         "Review the agent's pending self-evolution proposals (show/approve/reject)",
-        usage="[show|approve|reject <kind> <id>]",
+        usage="[show|approve|reject <kind> <id>]", group="needs you", **help_kwargs("pending"),
     ))
 
     # Owner control plane (030 WS-C C2 / finding G1): the owner pause and the
@@ -1727,58 +1544,66 @@ def build_default_registry() -> CommandRegistry:
         h_fulfill,
         h_halt,
         h_invoices,
+        h_missed,
         h_pause,
         h_settle,
     )
     from cli.ui.commands.h_owner import h_resume as _h_resume_autonomy
     reg.register(Command(
         "pause", h_pause,
-        "Pause autonomous work now (all, or scopes: trading streams planner cron social "
-        "oversight pings; `for 6h` makes it temporary)",
-        usage="[scope…] [for <N>m|h|d]",
+        "Pause autonomous work now: everything, or a word — trading, "
+        "background, messages, deploying (or a scope; `for 6h` is temporary)",
+        usage="[word…] [for <N>m|h|d]", group="control", **help_kwargs("pause"),
     ))
     reg.register(Command(
         "halt", h_halt,
         "Alias of /pause — pause everything now",
+        group="control", **help_kwargs("halt"),
     ))
     reg.register(Command(
         "resume", _h_resume_autonomy,
-        "Lift the pause (all, or scopes)",
-        usage="[scope…]",
+        "Lift the pause (everything, or a word/scope)",
+        usage="[word…]", group="control", **help_kwargs("resume"),
     ))
     reg.register(Command(
         "asks", h_asks,
         "List the agent's open asks (what it needs from you to unblock work)",
-        usage="[list]",
+        usage="[list]", group="needs you", **help_kwargs("asks"),
     ))
     reg.register(Command(
         "fulfill", h_fulfill,
         "Mark an ask fulfilled (unblocks its goals)",
-        usage="<id>",
+        usage="<id>", group="needs you", **help_kwargs("fulfill"),
+    ))
+    reg.register(Command(
+        "missed", h_missed,
+        "Owner notices the delivery rail could not send live (capped/paused/undelivered)",
+        usage="[n]", group="leave", **help_kwargs("missed"),
     ))
     reg.register(Command(
         "allow", h_allow,
         "Allow the agent to send outbound messages to a target",
-        usage="<surface> <target>",
+        usage="<surface> <target>", group="set up",
     ))
     reg.register(Command(
         "deny", h_deny,
         "Revoke outbound-send permission for a target",
-        usage="<surface> <target>",
+        usage="<surface> <target>", group="set up",
     ))
     reg.register(Command(
         "allowlist", h_allowlist,
         "Show who the agent is allowed to message (outbound allowlist)",
+        group="set up",
     ))
     reg.register(Command(
         "invoices", h_invoices,
         "List agent invoices (x402 receivables)",
-        usage="[pending|completed|expired]",
+        usage="[pending|completed|expired]", group="money", **help_kwargs("invoices"),
     ))
     reg.register(Command(
         "settle", h_settle,
         "Attest an invoice as paid (pending -> completed)",
-        usage="<id> [tx-hash]",
+        usage="<id> [tx-hash]", group="money", **help_kwargs("settle"),
     ))
 
     from cli.ui.commands.h_config import ConfigCtx, cmd_config
@@ -1838,6 +1663,7 @@ def build_default_registry() -> CommandRegistry:
         "View/change preferences and flags (list|get|set|explain|search|check)",
         usage="list [group] | get KEY | set KEY VALUE [--confirm] | "
               "explain KEY | search QUERY | check",
+        group="set up", **help_kwargs("config"),
     ))
 
     from cli.ui.commands.h_approve import ApproveCtx, cmd_approve
@@ -1854,12 +1680,14 @@ def build_default_registry() -> CommandRegistry:
     reg.register(Command(
         "approve", _h_approve,
         "Manage approval gates (list|add|remove)",
-        usage="list | add <action> | remove <action>",
+        usage="list | add <action> | remove <action>", group="control",
     ))
     reg.register(Command(
         "context", _h_context,
         "Context-assembly breakdown: per-slot token counts + % of context",
+        group="look",
     ))
+    from cli.ui.commands.h_a23 import register as _a23; _a23(reg, Command)  # 043 A23: the ten REPL parity verbs (own h_*.py modules; this file is at its size ratchet)
     return reg
 
 

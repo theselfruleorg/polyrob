@@ -52,8 +52,9 @@ def test_positions_renders_portfolio_and_reconcile(monkeypatch, tmp_path):
     monkeypatch.setattr(dt, "DefiDataTool", _FakeTool)
     ledger = tmp_path / "ledger.md"
     ledger.write_text("## Open positions\n")
+    monkeypatch.setenv("POSITION_LEDGER_PATH", str(ledger))
     client, _ = _client()
-    res = client.get(f"/api/webgate/positions?chain=base&ledger={ledger}")
+    res = client.get("/api/webgate/positions?chain=base")
     assert res.status_code == 200
     data = res.json()
     assert data["portfolio"]["text"].startswith("holdings for")

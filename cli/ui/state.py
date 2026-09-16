@@ -21,6 +21,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -93,6 +94,7 @@ class SessionState:
         self.tokens_cached: int = 0
         self.tokens_total: int = 0
         self.cost_estimate_total: float = 0.0
+        self.unpriced_calls: int = 0
 
         # Step / progress
         self.step: int = 0
@@ -199,7 +201,7 @@ class SessionState:
         # as a user turn, so letting them set ``status`` is exactly what flipped the
         # idle bar to "running". Events here only accumulate counters/metadata.
         if isinstance(event, SessionStart):
-            if event.model_name:
+            if event.model_name and not self.is_sub_agent(event.agent_id):
                 self.model = event.model_name
 
         elif isinstance(event, LLMCall):
@@ -215,6 +217,8 @@ class SessionState:
                 self.tokens_total += event.token_count
             if event.cost_estimate is not None:
                 self.cost_estimate_total += event.cost_estimate
+            elif event.success:
+                self.unpriced_calls += 1
 
         elif isinstance(event, Step):
             self.step = max(self.step, event.step)
@@ -405,25 +409,33 @@ class SessionState:
                 name = path.name
                 if name in self._seen_usage_files:
                     continue
-                # Mark as seen up-front: a file that fails to parse once (e.g.
-                # mid-write) is unlikely to be the live source of truth, and we
-                # never want to re-add its tokens on a later poll.
-                self._seen_usage_files.add(name)
                 try:
                     record = json.loads(path.read_text(encoding="utf-8"))
                 except (json.JSONDecodeError, OSError):
                     continue
+                if not isinstance(record, dict):
+                    continue
                 self._apply_usage_record(record)
+                # A concurrent writer may have exposed a partial file. Retry it
+                # next poll; only a successfully applied record is deduplicated.
+                self._seen_usage_files.add(name)
         except Exception:
             # poll_usage must never raise into the render loop.
             return
 
     def _apply_usage_record(self, record: dict[str, Any]) -> None:
         """Add one llm_usage record's tokens + cost into the running totals."""
-        prompt = record.get("prompt_tokens")
-        completion = record.get("completion_tokens")
-        total = record.get("token_count")
-        cost = record.get("cost_estimate")
+        def number(key):
+            value = record.get(key)
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value) and value >= 0):
+                return value
+            return None
+
+        prompt = number("prompt_tokens")
+        completion = number("completion_tokens")
+        total = number("token_count")
+        cost = number("cost_estimate")
         if isinstance(prompt, (int, float)):
             self.tokens_in += int(prompt)
         if isinstance(completion, (int, float)):
@@ -432,6 +444,8 @@ class SessionState:
             self.tokens_total += int(total)
         if isinstance(cost, (int, float)):
             self.cost_estimate_total += float(cost)
+        else:
+            self.unpriced_calls += 1
         provider = record.get("provider")
         if provider and not self.provider:
             self.provider = str(provider)
@@ -445,4 +459,4 @@ class SessionState:
 
     def elapsed(self) -> float:
         """Seconds elapsed since this ``SessionState`` was constructed."""
-        return time.monotonic() - self.started_at
+        return max(0.0, self._clock() - self.started_at)

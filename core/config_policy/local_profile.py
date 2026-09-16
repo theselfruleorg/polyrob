@@ -46,6 +46,12 @@ _SAFE_LOCAL_FLAGS = frozenset({
     "AGENT_STATUS_TOOL",
     "VERIFY_BEFORE_DONE",
     "PREFS_TOOL_ENABLED",
+    # The agent reading its OWN frozen face/voice, and copying that PNG into its
+    # own session workspace so the existing `message(media_paths=…)` rail can
+    # carry it. Read + one workspace-local write; it can never generate,
+    # randomize, keep or push -- the identity ceremony is permanent and stays
+    # the owner's.
+    "AVATAR_TOOL_ENABLED",
     # Branded PNG invoice card alongside the text-only x402_request result
     # (presentation nicety, fail-open, never blocks the request).
     "INVOICE_CARD_ENABLED",

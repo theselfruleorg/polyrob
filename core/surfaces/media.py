@@ -16,6 +16,14 @@ class Media:
     caption: Optional[str] = None
     filename: Optional[str] = None
     transcript: Optional[str] = None
+    #: Opaque transport handle the OWNING surface can exchange for bytes later
+    #: (a Telegram file_id, an IMAP part index). Distinct from ``url``, which is
+    #: a fetchable address anyone can resolve. Lets a surface record what arrived
+    #: without paying a download for an update it may still drop.
+    ref: Optional[str] = None
+    #: Workspace-relative path once the bytes have been stored
+    #: (``core.surfaces.inbound_attachments.persist_inbound_file``).
+    path: Optional[str] = None
 
 
 def coerce_media(items: list) -> List[Media]:
@@ -27,6 +35,6 @@ def coerce_media(items: list) -> List[Media]:
             out.append(Media(
                 kind=it["kind"], mime=it.get("mime"), data=it.get("data"),
                 url=it.get("url"), caption=it.get("caption"), filename=it.get("filename"),
-                transcript=it.get("transcript"),
+                transcript=it.get("transcript"), ref=it.get("ref"), path=it.get("path"),
             ))
     return out

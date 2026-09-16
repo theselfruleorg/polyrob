@@ -309,7 +309,8 @@ def _make_chat_agent_stub(tmp_path):
         return ["filesystem"]
     agent._chat_tool_ids = _tool_ids
 
-    async def _create_session(user_id, req, chat_session_key=None, skip_credit_check=False):
+    async def _create_session(user_id, req, chat_session_key=None, skip_credit_check=False,
+                               creator=None):
         captured["task"] = req.task
         return {"id": "sess-1"}
     agent.create_session = _create_session

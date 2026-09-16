@@ -58,9 +58,11 @@ def _tool(backend):
 
 
 def _owner_ctx():
-    # clean env: owner principal defaults to the instance id 'polyrob'
+    # clean env: the owner principal is the owner TENANT, `local`. ⚠️ It was the
+    # instance id 'polyrob' until 2026-09-15; an instance-id context now refuses
+    # at `compute_posture_allows`.
     return ActionExecutionContext(role="orchestrator", is_sub_agent=False,
-                                  user_id="polyrob", session_id="s1",
+                                  user_id="local", session_id="s1",
                                   metadata={"turn_kind": None})
 
 

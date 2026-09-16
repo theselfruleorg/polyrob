@@ -1,122 +1,58 @@
-# Getting Started with POLYROB
+# Getting started
 
-POLYROB is an open-source autonomous AI agent framework. The default instance is `rob`. This guide gets you from zero to running your first task in under five minutes.
+POLYROB is a self-hosted autonomous AI agent you run on your own machine. This
+page takes you from nothing to a working agent, and points at the guide that
+owns each subject after that.
 
----
-
-## Table of Contents
-
-- [New Here?](#new-here)
-- [Quick Start](#quick-start)
-- [Installation Options](#installation-options)
-- [First Run Setup](#first-run-setup)
-- [Running Your First Task](#running-your-first-task)
-- [Interactive Chat](#interactive-chat)
-- [Configuration](#configuration)
-- [Where Data Lives](#where-data-lives)
-- [Updating](#updating)
-- [Troubleshooting](#troubleshooting)
-- [Next Steps](#next-steps)
+The default instance is named `polyrob`, and the command is `polyrob`.
 
 ---
 
-## New Here?
-
-Welcome! POLYROB is a **self-hosted autonomous AI agent** that you run on your own machine. Think of it as:
-
-- **A research assistant** — Scrape websites, extract data, compile reports
-- **An automation tool** — Fill forms, navigate pages, run workflows
-- **A code companion** — Analyze code, write tests, generate docs
-- **A scheduler** — Run recurring tasks, monitor changes, deliver results
-
-**What makes POLYROB different:**
-- ✅ **Multi-provider** — OpenAI, Anthropic, Google, DeepSeek, OpenRouter, NVIDIA NIM
-- ✅ **Automatic failover** — Switches providers if one has issues
-- ✅ **Self-hosted** — Full control, no vendor lock-in
-- ✅ **Persistent memory** — Remembers context across sessions
-- ✅ **Durable autonomy** — Goals survive restarts
-
----
-
-## Quick Start
-
-Get running in 4 commands:
+## Quick start
 
 ```bash
-# 1. Install
 pipx install "polyrob[all]"
-
-# 2. Configure
-polyrob init
-
-# 3. Verify (catches a missing/malformed API key before your first run)
-polyrob doctor
-
-# 4. Run
-polyrob run "Summarize https://example.com"
+polyrob init                        # keys, model, toolset, owner
+polyrob doctor                      # catches a missing or malformed key first
+polyrob run "summarize https://example.com"
 ```
 
-That's it! POLYROB fetches the page, reads the content, and summarizes it — using the
-lightweight `web_fetch` tool, so no browser install is needed for this first task.
-(Full browser automation is opt-in; see [Step 1 below](#step-1-install-browser-engine-optional).)
+That last command fetches the page with the lightweight `web_fetch` tool, so no
+browser install is needed. Full browser automation is opt-in
+([below](#optional-the-browser-engine)).
 
-### Owner-paired install
-
-`polyrob init` also pairs the instance to an **owner** — the identity autonomy and
-self-evolution answer to. Interactively it asks for an instance id and owner user id
-(both default `polyrob` for a single-user setup). To script it:
+`polyrob init` also binds an **owner** — the identity that autonomy, approvals
+and self-evolution answer to. Interactively it asks for an instance id and an
+owner id. To script it:
 
 ```bash
-polyrob init --non-interactive --owner aria --instance-id aria --openai-key sk-...
+polyrob init --no-prompt --owner aria --instance-id aria --openai-key sk-...
 ```
 
-`--owner` alone backfills the instance id (and vice-versa). The pairing is written to
-`~/.polyrob/.env` as `POLYROB_OWNER_USER_ID` / `POLYROB_INSTANCE_ID`; `polyrob doctor`
-reports it (`owner:` / `instance id:` lines).
+`--owner` alone backfills the instance id and the reverse. The pairing lands in
+`~/.polyrob/.env` as `POLYROB_OWNER_USER_ID` / `POLYROB_INSTANCE_ID`, and
+`polyrob doctor` reports both.
 
 ---
 
-## Installation Options
+## Installing
 
-### Option A — pipx (Recommended)
-
-**Best for:** End users who want a clean, isolated installation.
+**pipx (recommended)** — a clean, isolated install:
 
 ```bash
 pipx install "polyrob[all]"
 ```
 
-This installs POLYROB with all optional features:
-- Browser automation (Playwright)
-- Vector memory (sentence-transformers)
-- Crypto/x402 (optional)
-- Telegram surface
-- REST API + WebView
-
-### Option B — pip with Selected Extras
-
-**Best for:** Users who want minimal installs or specific features.
+**pip with the extras you want** — smaller, explicit:
 
 ```bash
-# Core only (smallest - ~50MB)
-pip install polyrob
-
-# With browser automation
+pip install polyrob                      # core agent, keyword memory, CLI
 pip install "polyrob[browser]"
-
-# With REST API + WebView
 pip install "polyrob[server]"
-
-# With vector memory
-pip install "polyrob[memory-vector]"
-
-# Mix and match
 pip install "polyrob[browser,server]"
 ```
 
-### Option C — Development Install
-
-**Best for:** Contributors and developers.
+**From source** — for contributors:
 
 ```bash
 git clone https://github.com/theselfruleorg/polyrob
@@ -124,491 +60,259 @@ cd polyrob
 pip install -e ".[dev,all]"
 ```
 
-### Extras Reference
+### Extras
 
-| Extra | What It Adds | Size |
-|-------|--------------|------|
-| *(none)* | Core agent, keyword memory, CLI | ~50MB |
-| `server` | FastAPI REST API + WebView | +20MB |
-| `browser` | Playwright browser automation | +100MB |
-| `memory-vector` | Semantic vector recall | +500MB |
-| `crypto` | Web3, x402 pay-per-request | +10MB |
-| `telegram` | Telegram surface | +5MB |
-| `twitter` | Twitter/X integration | +5MB |
-| `voice` | Voice transcription (faster-whisper) | +50MB |
-| `dev` | Testing, linting, type-checking | +30MB |
-| `all` | Everything above | ~700MB |
+| Extra | What it adds | Size |
+|---|---|---|
+| *(none)* | Core agent, keyword memory, CLI | ~50 MB |
+| `server` | FastAPI REST API + console | +20 MB |
+| `browser` | Playwright browser automation | +100 MB |
+| `memory-vector` | Hybrid vector recall | +500 MB |
+| `crypto` | Web3, x402, the EVM venues | +10 MB |
+| `solana` | Solana signing and trading | +15 MB |
+| `telegram` | Telegram surface | +5 MB |
+| `twitter` | X / Twitter integration | +5 MB |
+| `voice` | Voice transcription (faster-whisper) | +50 MB |
+| `dev` | Tests, linting, build tooling | +30 MB |
+| `all` | Everything above | ~700 MB |
+
+Python 3.11 or newer. pipx works on macOS, Linux and Windows PowerShell alike;
+on Windows a plain virtualenv (`python -m venv venv`) is equally fine.
 
 ---
 
-## First Run Setup
+## Connecting a provider
 
-### Step 1: Install Browser Engine (Optional)
-
-```bash
-# pip install into your own venv:
-python -m playwright install chromium
-# pipx install (isolated venv — your `python` has no playwright; run it
-# from polyrob's venv instead):
-"$(pipx environment --value PIPX_LOCAL_VENVS)/polyrob/bin/playwright" install chromium
-# On a fresh Linux server, also pull the system libraries (needs sudo):
-# python -m playwright install --with-deps chromium
-```
-
-**Why?** POLYROB's default web tool (`web_fetch`) is a lightweight, no-browser HTTP
-fetch — it's what handles the Quick Start example above and most "read this page"
-tasks. The heavier Playwright `browser` tool (clicking, filling forms, multi-step
-navigation) needs the Chromium binary. This is a one-time download (~100MB).
-
-**Skip this if:** You're not using interactive browser automation yet — you can
-always run this later, whenever a task needs it.
-
-### Step 2: Configure Your LLM Provider
-
-POLYROB needs at least one LLM provider. The easiest way is `polyrob init`:
-
-```bash
-polyrob init
-```
-
-This creates `~/.polyrob/.env` and walks you through configuration.
-
-**Minimum required — pick any one** (OpenRouter is recommended: one key reaches
-every model, and `polyrob init` prompts for it first):
+You need one LLM provider. `polyrob init` asks for OpenRouter first, because one
+OpenRouter key reaches most models:
 
 ```bash
 # ~/.polyrob/.env
-OPENROUTER_API_KEY=sk-or-...   # recommended — one key, all models
-# or
-ANTHROPIC_API_KEY=sk-ant-...
-# or
-OPENAI_API_KEY=sk-...
-# or
-GEMINI_API_KEY=...
+OPENROUTER_API_KEY=sk-or-...
+# or ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY
 ```
 
-> DeepSeek has no standalone bootstrap path — its direct client is disabled
-> (tool-calling is unreliable there). Use DeepSeek via
-> `OPENROUTER_API_KEY` with a `deepseek/deepseek-chat` model instead.
+Three things worth knowing:
 
-**Skipped `polyrob init`?** You don't have to run it first. The first time you run
-`polyrob run` or `polyrob chat` interactively with no usable provider key configured,
-POLYROB runs the same OpenRouter-first key wizard inline — no separate step required.
-Once a key is saved, it asks:
+- **You can skip `polyrob init`.** The first interactive `polyrob run` or
+  `polyrob chat` with no usable key runs the same key wizard inline, then offers
+  to finish full setup. It never prompts in CI, a script, or a piped run.
+- **A subscription or sign-in plan** (Claude Pro/Max, ChatGPT Codex, Copilot,
+  z.ai, Kimi and others) is connected with `polyrob auth add <provider>`;
+  `polyrob auth status` shows every credential's source, health and expiry. Read
+  the terms-of-service warning in
+  [configuration.md §3](configuration.md#plans-that-need-a-sign-in-oauth) first.
+- **No key at all?** Declare any OpenAI- or Anthropic-compatible endpoint in
+  `~/.polyrob/providers.yaml` — a local Ollama needs no key:
 
+  ```yaml
+  providers:
+    ollama:
+      base_url: http://127.0.0.1:11434/v1
+      auth_type: none
+      transport: chat_completions
+      default_model: qwen3-coder:30b
+      models: [qwen3-coder:30b]
+  ```
+
+  Then `polyrob run -p ollama "hello"`. Full rules:
+  [configuration.md §3](configuration.md#your-own-endpoint-providersyaml).
+
+DeepSeek has no standalone bootstrap path (its direct client's tool calling is
+unreliable); reach it through OpenRouter with a `deepseek/deepseek-chat` model.
+
+### Optional: the browser engine
+
+```bash
+# Recommended pipx install (macOS/Linux):
+"$(pipx environment --value PIPX_LOCAL_VENVS)/polyrob/bin/playwright" install chromium
+# Windows PowerShell:
+# & "$(pipx environment --value PIPX_LOCAL_VENVS)\polyrob\Scripts\playwright.exe" install chromium
+# A normal virtualenv or pip install:
+python -m playwright install chromium
+# on a fresh Linux server, also pull the system libraries (needs sudo):
+# python -m playwright install --with-deps chromium
 ```
-Key saved. Finish full setup now (model, persona, autonomy — ~1 min)? [y/N]
-```
 
-Accepting bridges straight into the full `polyrob init` wizard (model, toolset,
-persona, owner pairing, autonomy guardrails, optional wallet) without re-prompting for
-the key you just entered; declining leaves a one-line reminder that `polyrob init` is
-available anytime. This inline wizard only fires on a real interactive terminal — it
-never prompts (and never blocks) in CI, scripts, or a piped/non-interactive run.
+Only the Playwright `browser` tool (clicking, forms, multi-step navigation)
+needs this. `web_fetch` handles "read this page" with no browser at all.
 
-**No key at all? Use a local or custom endpoint.** POLYROB can also run against
-any OpenAI- or Anthropic-compatible endpoint you declare in
-`~/.polyrob/providers.yaml` — a local Ollama needs **no API key**:
-
-```yaml
-providers:
-  ollama:
-    base_url: http://127.0.0.1:11434/v1
-    auth_type: none        # no key needed
-    transport: chat_completions
-    default_model: qwen3-coder:30b
-    models: [qwen3-coder:30b]
-```
-
-Then `polyrob run -p ollama "hello"` (or make it the default with
-`DEFAULT_PROVIDER=ollama`). Full reference — z.ai Coding Plan, vLLM, gateways,
-transports, security rules: [configuration.md](configuration.md#custom-llm-providers-providersyaml).
-
-### Step 3: Verify Setup
+### Verify
 
 ```bash
 polyrob doctor
 ```
 
-This checks:
-- ✅ Which provider API keys are present and usable
-- ✅ The provider/model `polyrob run` will actually resolve to
-- ✅ The active memory backend + optional vector-search dependencies
-- ✅ Workspace isolation, the `POLYROB_LOCAL` footgun, and the `autonomy:` state (OFF by default)
-- ✅ Skill library compliance
-
-**Fix any issues before proceeding.**
+It reports the pause state, ranked health issues and every status section:
+which provider keys are present and usable, what `polyrob run` will actually
+resolve to, the memory backend and its optional dependencies, workspace
+isolation, and whether autonomy is on. Fix what it flags before going further.
 
 ---
 
-## Running Your First Task
-
-### Non-Interactive (One-Shot)
-
-**Best for:** Scripts, automation, quick tasks.
+## Running your first task
 
 ```bash
 polyrob run "summarize https://example.com"
+polyrob run "search for AI automation trends and summarize the top 5 results"
+polyrob run "analyze the code in ./src for security issues"
+polyrob run "go to producthunt.com, find the top 3 AI tools, build a comparison table"
 ```
 
-POLYROB creates a session, runs the task, and prints the result.
+Each `polyrob run` is a fresh session. `--resume <id>` continues one.
 
-### More Examples
+For anything exploratory, use the REPL instead:
 
 ```bash
-# Research
-polyrob run "Search for 'AI automation trends 2026' and summarize the top 5 results"
-
-# Code analysis
-polyrob run "Analyze the code in ./src/ for security issues"
-
-# File operations
-polyrob run "Create a markdown todo list from the items in items.txt"
-
-# Multi-step
-polyrob run "Go to producthunt.com, find top 3 AI tools, and create a comparison table"
+polyrob
 ```
 
-### Interactive Mode
+Type your goal and press Enter. The agent acts step by step and prints each
+action and result. `Alt+Enter` (or `Esc` then `Enter`) inserts a newline,
+`Ctrl-L` repaints the screen, `Ctrl-C` interrupts the current turn, and `exit`
+or `Ctrl-D` leaves.
 
-**Best for:** Exploratory work, iteration, collaboration.
-
-```bash
-polyrob chat
-```
-
-This opens a REPL (Read-Eval-Print Loop) where you can:
+The startup banner is two quiet lines:
 
 ```
-You: Research the latest Python 3.12 features
-Agent: [Performs research, provides summary]
-You: Focus on the performance improvements
-Agent: [Filters and elaborates on performance]
-You: Create a markdown summary
-Agent: [Writes to file]
-You: exit
-```
-
-See [Interactive Chat](#interactive-chat) below for the everyday slash commands, or [cli.md](cli.md#slash-commands-repl) for the full reference.
-
----
-
-## Interactive Chat
-
-The `polyrob chat` command opens a REPL with the following features:
-
-### Features
-
-| Feature | Description |
-|---------|-------------|
-| **Multiline editing** | Use `Shift+Enter` for new lines |
-| **Session history** | Up/Down arrows for previous commands |
-| **Tool transparency** | See what tools are being called |
-| **Progress indicators** | Real-time status updates |
-| **Auto-save** | Sessions saved automatically |
-
-This is a curated subset for everyday use — see the [full slash-command reference](cli.md#slash-commands-repl) in the CLI docs for everything else.
-
-```
-/help                     — Show available commands
-/exit                     — Leave the REPL (aliases: /quit, /q)
-/clear                    — Clear history, keep the system prompt (start fresh)
-/model <provider> <model> — Swap the model for this session and persist it as the default
-/compact                  — Compact history via the LLM (alias: /compress)
-/usage                    — Authoritative usage breakdown, tokens + cost (alias: /cost)
-/memory [search <query>]  — Show the memory provider, or recall from cross-session memory
-/skills [list|info <id>|install <spec>] — List, inspect, or install agent skills
-/self                     — Show the instance identity (SOUL + SELF docs, read-only)
-/kb [search <query>]      — List or search the local knowledge base
-/goals                    — Show goals board summary
-/autonomy                 — Show autonomy loops + scheduled cron jobs / open goals
-/tools                    — List the agent's registered tools/actions
-/sessions                 — List all known sessions
-/replay <session>         — Replay a session's feed (visual history, not a re-attach)
-/pause [scope…] [for 6h]  — Pause autonomous work now (live); /resume lifts it
-```
-
-### Example Session
-
-The startup banner is deliberately quiet — two lines, never competing with your first
-message:
-
-```bash
-$ polyrob chat
-● polyrob v0.10.0 · claude-sonnet-4.5 (anthropic)
+$ polyrob
+● polyrob vX.Y.Z · claude-sonnet-4-5 (anthropic)
   session a1b2c3d4 · tools filesystem, task · /help · /session
-
-You: I need to research quantum computing companies for an investment report.
-
-Agent: I'll help you research quantum computing companies. Let me search for recent information...
-
-→ Tool: search(query="quantum computing companies 2026 funding")
-→ Found: 15 results
-
-Agent: I found several key quantum computing companies. Let me organize this information...
-
-[Research continues...]
-
-You: Focus on the ones with Series C or later funding.
-
-Agent: Filtering for Series C+ companies...
-
-[Filtered results...]
-
-You: Now create a markdown report with a comparison table.
-
-Agent: Creating report...
-
-→ Tool: write_file(path="quantum_companies_report.md", content="...")
-
-✓ Wrote quantum_companies_report.md
-
-You: /compress
-Agent: Context compressed. Token count: 8,432 → 3,210
-
-You: /usage
-Agent: Session usage: 12,432 tokens ($0.15 estimated)
-
-You: exit
-Session saved to ./.polyrob/sessions/
 ```
+
+### The dozen slash commands you will use
+
+```
+/help                    the grouped command list; /help <verb> explains one
+/status                  live session status: tokens, cost, context
+/usage                   authoritative usage and cost breakdown
+/model <provider> <model>  swap the model live and persist it as the default
+/memory [search <query>]   the memory provider, or recall across sessions
+/tools                   the agent's registered tools
+/goals                   the goal board summary
+/autonomy                loops, scheduled cron jobs, open goals
+/inbox                   everything waiting on a decision from you
+/pause [word…] [for 6h]  stop autonomous work now; /resume lifts it
+/compact                 compact the conversation through the model
+/exit                    leave the REPL
+```
+
+All 58 of them: [cli.md](cli.md#slash-commands-repl).
 
 ---
 
-## Configuration
+## Configuring it
 
-### Where Configuration Lives
-
-| Location | Purpose |
-|----------|---------|
-| `~/.polyrob/.env` | Global user configuration |
-| `./.polyrob/.env` | Project-local overrides |
-| `~/.polyrob/cli.json` | CLI preferences (default provider/model set via `model set-default`; `polyrob init` migrates old entries into `.env`) |
-| `~/.rob/.env` | Legacy pre-rename home — read-only fallback, lowest precedence of the three `.env` layers above. `polyrob` migrates it into `~/.polyrob/` once, automatically, the first time it runs; you never need to touch it by hand. |
-| `config/.env.{development,production}` | Source/server-install layer (git clone, not pipx) — read after the three layers above, so an explicit key there is only used when none of `~/.polyrob/.env`/`./.polyrob/.env`/the process env set it. |
-
-Full precedence (highest wins): process env → `./.polyrob/.env` → `~/.polyrob/.env` →
-`~/.rob/.env` (legacy) → root `.env` → `config/.env.{env}` → `config/.env.{env}.local`.
-
-### View Configuration
+`polyrob config set KEY VALUE` is the one write command; it routes a secret, an
+environment flag and a preference to the right file and tells you which one it
+wrote and when the value applies.
 
 ```bash
-polyrob config show    # View merged config (secrets redacted)
-polyrob config path    # Show config file locations
+polyrob config show          # the merged result, secrets redacted
+polyrob config path          # the files this process reads, highest first
+polyrob config explain KEY   # every layer that set KEY, and which one won
+polyrob model set-default    # interactive picker for provider + model
 ```
 
-### Set Default Model
+Where each file lives and how precedence resolves:
+[configuration.md §1](configuration.md#1-how-configuration-works).
+
+### Turning things on
+
+Out of the box the agent acts on your messages and nothing else. Two switches
+govern the rest:
 
 ```bash
-# Interactive picker (recommended) — lists what your configured keys can reach
-polyrob model set-default
-
-# Or set it directly once you know the provider + model name
-polyrob model list                     # see what's available
-polyrob model set-default <provider> <model>
+polyrob config set POLYROB_LOCAL true       # the CLI sets this for you
+polyrob autonomy on                         # writes AUTONOMY_ENABLED=true
 ```
 
-### Enable Features
-
-```bash
-# Edit ~/.polyrob/.env
-POLYROB_LOCAL=true    # Enable interactive local tools (coding, git, KB, RAG)
-AUTONOMY_ENABLED=true # Enable the self-directed autonomy loops (OFF by default)
-GOALS_ENABLED=true    # (optional) force-enable just the goal board
-SKILLS_WRITABLE=true  # (optional) force-enable just skill creation
-```
-
-> **Autonomy is OFF by default.** Out of the box the agent only acts on your
-> messages. `POLYROB_LOCAL` turns on the interactive tools; the self-directed loops
-> (goals, self-wake, curator, self-editing) need `AUTONOMY_ENABLED=true` (or an
-> `AUTONOMY_MODE`/`AUTONOMY_POSTURE`). Run `polyrob doctor` to see the current state.
+`POLYROB_LOCAL` turns on the **interactive** tools you drive; the
+**self-directed loops** — goals, self-wake, the curator, writable skills — need
+`AUTONOMY_ENABLED` as well. The four axes, what each one moves, and how to stop
+it again: [configuration.md §5](configuration.md#5-the-autonomy-dial).
 
 ---
 
-## Where Data Lives
-
-### Directory Structure
+## Where data lives
 
 ```
-~/.polyrob/               # Global POLYROB home
-├── .env                   # User configuration
-├── cli.json               # CLI preferences (e.g. default model)
-└── sessions/              # Global sessions (rare)
+~/.polyrob/                 # your global home
+├── .env                    # keys and flags
+├── cli.json                # default provider/model from `model set-default`
+├── providers.yaml          # your own endpoints (optional)
+└── profiles/               # named profiles, each a full home
 
-./.polyrob/                # Project-local (default runtime data root)
-├── .env                   # Project overrides
-├── memory.db              # Memory store
-├── goals.db               # Goal board
-├── cron.db                # Scheduled runs
-└── sessions/              # Project sessions
-    ├── session-abc123/
-    │   ├── workspace/     # Working files
-    │   ├── screenshots/   # Screenshots
-    │   ├── feed/          # Message feed
-    │   └── logs/          # Session logs
-    └── session-def456/
-        └── ...
+./.polyrob/                 # this project's runtime data (the default root)
+├── .env                    # project overrides
+├── memory.db               # cross-session memory
+├── goals.db                # the goal board
+├── cron.db                 # scheduled runs
+├── conversations.db        # per-correspondent conversation log
+├── telemetry_events.db     # events, costs, wallet spend
+└── sessions/
+    └── session-abc123/
+        ├── workspace/      # files the agent creates
+        ├── screenshots/
+        ├── feed/
+        └── logs/
 ```
 
-`./.polyrob/` is the default when no project-scoped manager overrides it (e.g. via
-`POLYROB_PROJECT_DIR`/`POLYROB_DATA_DIR` — see [configuration.md](configuration.md)).
+About twenty-five more sidecar stores sit beside those (surfaces, dedup cursors,
+artifacts, apps, bridges); the authoritative list is
+`core/db_manifest.py::SIDECAR_DB_NAMES`, and `polyrob update` snapshots every
+one of them together.
 
-### Isolation
-
-**Everything is local by default.** No data leaves your machine unless:
-- You configure an external LLM provider (required for AI features)
-- You enable external integrations (email, Telegram, etc.)
+`POLYROB_DATA_DIR` moves the runtime root; a named profile replaces both homes
+at once ([profiles.md](profiles.md)). Nothing leaves your machine except calls
+to the LLM provider you configured and any integration you switch on.
 
 ---
 
 ## Updating
 
 ```bash
-polyrob update --check    # current vs latest (exit code 10 when an update exists)
-polyrob update            # status + the exact update steps for YOUR install method
-polyrob update --apply    # automated update (git/editable installs):
-                          #   snapshot → install → migrate (guarded) → verify,
-                          #   with automatic rollback on any failure
+polyrob update --check     # exit 0 up to date, 10 newer, 1 unknown/error
+polyrob update             # the exact steps for YOUR install method
+polyrob update --apply     # git/editable installs: snapshot -> install -> migrate -> verify
+polyrob update --rollback  # restore the most recent snapshot
 ```
 
-For pip/pipx installs, update through the package manager — schema migrations
-apply automatically on the next start (server boot and the CLI container both
-run the idempotent boot migrator):
-
-```bash
-pip install -U "polyrob[all]"        # or: pipx upgrade polyrob
-```
-
-**Safety net:** every `--apply` first takes a WAL-safe snapshot of your databases,
-config, and identity. If an update misbehaves:
-
-```bash
-polyrob update --list-snapshots   # see what you can roll back to
-polyrob update --rollback         # restore the most recent full snapshot
-```
+`--apply` is the automated path for git and editable installs. A pip or pipx
+install updates through the package manager (`pipx upgrade polyrob`), and schema
+migrations run on the next start either way. Every `--apply` takes a WAL-safe
+snapshot first — what it covers and what `--rollback` restores are in
+[upgrading.md](upgrading.md#the-safety-net). Options in full:
+[cli.md](cli.md#polyrob-update).
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+| Symptom | What to run |
+|---|---|
+| "No API key found" | `polyrob init`, or `polyrob auth add <provider>` for a sign-in plan |
+| The wrong provider answers | `polyrob model list`, then `polyrob model set-default` |
+| "Browser not available" | `pip install "polyrob[browser]"`, then `python -m playwright install chromium` |
+| Recall feels shallow | `pip install "polyrob[memory-vector]"`; the log names the missing extension |
+| A setting seems ignored | `polyrob config explain KEY`, then `polyrob doctor --flags --changed` to see everything you moved off its default |
+| The agent refuses a tool | `polyrob tools status` names the gate and the remedy |
+| Autonomy "does nothing" | `polyrob autonomy status` — check the master switch, the posture and any active pause |
+| Running two bots collides | give each one a profile: `polyrob profile create scout`, then `polyrob -P scout …` |
 
-#### Issue: "No API key found"
-
-**Solution:** Configure at least one provider key:
-
-```bash
-polyrob init
-# Or manually edit ~/.polyrob/.env
-echo "OPENAI_API_KEY=sk-..." >> ~/.polyrob/.env
-```
-
-#### Issue: "Browser not available"
-
-**Solution:** Install Playwright (`pip install 'polyrob[browser]'` if the
-package itself is missing), then the browser engine:
-
-```bash
-python -m playwright install chromium   # pipx: run playwright from polyrob's venv, see Step 1
-# On Linux, if system libraries are missing (needs sudo):
-# python -m playwright install --with-deps chromium
-```
-
-#### Issue: "Permission denied" errors
-
-**Solution:** Check file permissions:
-
-```bash
-# Ensure POLYROB can write to sessions directory
-chmod 755 ./.polyrob/
-```
-
-#### Issue: "Import error"
-
-**Solution:** Ensure you installed with the correct extras:
-
-```bash
-pip install "polyrob[all]"  # Or specific extras you need
-```
-
-#### Issue: "Module not found" for vector memory
-
-**Solution:** Install the memory-vector extra:
-
-```bash
-pip install "polyrob[memory-vector]"
-```
-
-### Get Help
-
-```bash
-polyrob doctor    # Run diagnostics
-```
-
-If issues persist:
-1. Check [docs/CONFIGURATION.md](../CONFIGURATION.md)
-2. Search [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
-3. Ask in [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions)
+Still stuck: [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
+or [Discussions](https://github.com/theselfruleorg/polyrob/discussions).
 
 ---
 
-## Platform-Specific Notes
+## Next
 
-### macOS
-
-```bash
-# pipx recommended
-pipx install "polyrob[all]"
-```
-
-### Linux
-
-```bash
-# pipx recommended
-pipx install "polyrob[all]"
-
-# Ensure Python 3.11+
-python3 --version
-```
-
-### Windows (PowerShell)
-
-```bash
-# pipx works on Windows too
-pipx install "polyrob[all]"
-
-# Or use pip in a virtual environment
-python -m venv venv
-.\venv\Scripts\activate
-pip install "polyrob[all]"
-```
-
----
-
-## Next Steps
-
-### Learn More
-
-- [Configuration Guide](configuration.md) — All flags and options
-- [CLI Reference](cli.md) — Complete command documentation
-- [API Guide](api.md) — REST API and A2A protocol
-- [Architecture](architecture.md) — How POLYROB works
-- [Examples](../examples.md) — Real-world usage examples
-
-### Explore Features
-
-- **Memory System** — Cross-session recall
-- **Goal Board** — Durable task scheduling
-- **Delegation** — Parallel sub-agents
-- **Skills** — Reusable agent capabilities
-- **Surfaces** — Telegram, Email, API, Web
-
-### Join the Community
-
-- [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions)
-- [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
-- [Contributing](../../CONTRIBUTING.md)
-
----
-
-**Ready to dive deeper?** Check out the [examples](../examples.md) for real-world use cases, or read the [comparison](../comparison.md) to see how POLYROB stacks up against other agent frameworks.
+- [cli.md](cli.md) — every command and slash command
+- [configuration.md](configuration.md) — how settings work, and the ones you will touch
+- [owner-controls.md](owner-controls.md) — stopping, pausing and approving
+- [skills.md](skills.md) — reusable procedures the agent loads on demand
+- [groups.md](groups.md) — putting the agent in a group chat
+- [payments.md](payments.md) — the wallet, invoicing and trading
+- [security-model.md](security-model.md) — what actually stops the agent
+- [self-hosting.md](self-hosting.md) · [deployment-postures.md](deployment-postures.md) — running it on a server
+- [api.md](api.md) · [architecture.md](architecture.md) · [examples](../examples.md) · [comparison](../comparison.md)

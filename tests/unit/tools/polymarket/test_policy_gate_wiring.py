@@ -100,3 +100,21 @@ def _enable_live_trading(monkeypatch):
     monkeypatch.setenv("HYPERLIQUID_TRADING_ENABLED", "true")
     monkeypatch.setenv("POLYMARKET_TRADE_MAX_USD", "100000000")
     monkeypatch.setenv("HYPERLIQUID_TRADE_MAX_USD", "100000000")
+
+
+@pytest.mark.asyncio
+async def test_lost_order_response_blocks_retry(monkeypatch):
+    from core.wallet import submission_journal as journal
+    gate = PolicyGate(max_per_tx_usd=100)
+    tool, client = _tool(monkeypatch, gate)
+    calls = []
+    def lose_reply(args):
+        assert journal.unresolved()[0]["chain"] == "polymarket"
+        calls.append(args)
+        raise TimeoutError("reply lost after venue acceptance")
+    monkeypatch.setattr(client, "create_and_post_order", lose_reply)
+    params = PlaceLimitOrderParams(market_id="m1", token_id="t1", side="buy", price=0.5, size_usd=5)
+    assert not (await tool.place_limit_order(params))["success"]
+    assert journal.unresolved()
+    assert not (await tool.place_limit_order(params))["success"]
+    assert len(calls) == 1

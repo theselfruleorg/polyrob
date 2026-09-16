@@ -188,3 +188,18 @@ def test_get_user_sessions_shape_unchanged(monkeypatch, catalog_tree):
     assert [r["id"] for r in rows] == ["s-cli-1"]
     assert rows[0]["user"] == "local"
     assert "created_timestamp" not in rows[0]
+    # A17: no `creator` in metadata.json -> an honest default, never a KeyError.
+    assert rows[0]["creator"] == "api"
+
+
+def test_get_user_sessions_carries_creator_label(monkeypatch, catalog_tree):
+    """A17: `creator` recorded in the session's metadata.json at creation
+    survives into the console catalog row (and therefore GET /api/sessions)."""
+    import webview.server as server
+    meta_file = catalog_tree / "local" / "s-cli-1" / "metadata.json"
+    meta = json.loads(meta_file.read_text())
+    meta["creator"] = "cron"
+    meta_file.write_text(json.dumps(meta))
+
+    rows = server._get_user_sessions(user_id="local")
+    assert rows[0]["creator"] == "cron"

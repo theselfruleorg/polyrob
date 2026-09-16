@@ -27,7 +27,8 @@ def test_session_cancel_restores_logging_disable_to_notset():
     with patch("core.bootstrap.build_cli_container", _fake_build), \
          patch("core.bootstrap.setup_project_path", lambda: None), \
          patch("core.bootstrap.setup_sqlite_compat", lambda: None), \
-         patch("cli.keys.preflight_or_onboard", lambda **k: True):
+         patch("cli.keys.preflight_or_onboard", lambda **k: True), \
+         patch("cli.commands._session_control.control_live_session", new_callable=AsyncMock):
         asyncio.run(sess._session_cancel("sess-1"))
 
     assert logging.Logger.manager.disable == logging.NOTSET, (

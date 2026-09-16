@@ -133,11 +133,15 @@ load_dotenv()
 logger = get_task_logger('agent')
 
 
+from agents.task.agent.core.session_control import controlled_run, control_checkpoint
+
+
 class RunLoopMixin:
 	"""The agent run loop (run), split whole out of Agent so service.py drops toward
 	its constructor core (P9). Agent composes RunLoopMixin; callers use agent.run()
 	unchanged via MRO. Imports above are service.py's (incl. module-level logger)."""
 
+	@controlled_run
 	async def run(self, max_steps: int = 100, _continue_session: bool = False) -> AgentHistoryList:
 			"""Run agent for the task.
 
@@ -334,6 +338,8 @@ class RunLoopMixin:
 				consecutive_reply_steps = 0
 
 				for step_num in range(max_steps):
+					if not await control_checkpoint(self):
+						break
 					# Check for cancellation first
 					if self._cancelled:
 						self.logger.warning(f"❌ Agent execution cancelled at step {step_num}")

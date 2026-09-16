@@ -335,10 +335,11 @@ async def test_paid_fetch_still_reports_the_payment_header():
 
 
 @pytest.mark.asyncio
-async def test_fetch_refuses_a_forged_turn_and_never_calls_the_client():
+async def test_fetch_refuses_a_forged_turn_and_never_calls_the_client(monkeypatch):
     """H1a: the gate must run BEFORE any network/signing work, and the refusal
     must be an error result the agent cannot mistake for a payment."""
     import types
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u")
     client = _ResultClient(X402Result(body="b", paid=True, amount_usd=0.01,
                                       tx_hash="0xabc", pay_to="0xdef",
                                       status_code=200))
@@ -402,3 +403,26 @@ async def test_a_failed_solana_usdc_read_is_unavailable_never_zero(monkeypatch):
     out = (await tool.x402_wallet_status(EmptyWalletParams())).extracted_content
     sol_line = next(l for l in out.splitlines() if "Solana address" in l)
     assert "unavailable" in sol_line and "0.00 USDC" not in sol_line
+
+
+@pytest.mark.asyncio
+async def test_prepared_but_unconfirmed_payment_is_not_reported_as_free():
+    client = _ResultClient(X402Result(body="b", paid=False, amount_usd=0,
+                                      tx_hash=None, pay_to=None, status_code=402,
+                                      submission_ref="attempt:test"))
+    result = await _tool(client).x402_fetch(FetchParams(url="http://paid", max_amount_usd=1))
+    assert result.error and "unconfirmed" in result.error
+    assert "NO PAYMENT MADE" not in (result.extracted_content or "")
+
+
+@pytest.mark.asyncio
+async def test_merchant_cannot_discount_signed_authorization_from_spend_cap():
+    wallet = _wallet()
+    client = _ResultClient(X402Result(body='b', paid=True, amount_usd=0.01,
+                                     tx_hash='0xtx', pay_to='0xrecipient', status_code=200,
+                                     authorized_amount_usd=0.75))
+    result = await X402PayTool(wallet=wallet, client=client).x402_fetch(
+        FetchParams(url='http://paid', max_amount_usd=1))
+    assert result.error is None
+    assert wallet.policy.audit_log[-1]['amount_usd'] == 0.75
+    assert 'signed authorization ceiling' in result.extracted_content

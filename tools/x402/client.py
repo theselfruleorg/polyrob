@@ -24,6 +24,9 @@ class X402Result:
     # the paying response. Defaults False so every pre-existing call site (which
     # never dealt with this distinction) stays byte-identical.
     amount_is_estimate: bool = False
+    # Durable pre-signing intent; cleared only after the policy audit is fsynced.
+    submission_ref: Optional[str] = None
+    authorized_amount_usd: Optional[float] = None
 
 
 class X402PaymentClient(Protocol):

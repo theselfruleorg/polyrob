@@ -1033,6 +1033,8 @@ class HyperliquidTool(BaseTool):
                 order_type = {"limit": {"tif": "Alo" if params.post_only else "Gtc"}}
 
                 # Place order via SDK
+                from core.wallet.submission_journal import prepare_attempt
+                submission_ref = prepare_attempt("hyperliquid", self._user_id, order_value_usd)
                 result = exchange.order(
                     name=params.coin.upper(),
                     is_buy=params.is_buy,
@@ -1047,6 +1049,7 @@ class HyperliquidTool(BaseTool):
                     venue="hyperliquid", action="place_limit_order",
                     amount_usd=order_value_usd, counterparty=params.coin.upper(),
                     idempotency_key=None, result_ref=str(result)[:80],
+                    chain="hyperliquid", submission_ref=submission_ref,
                 )
 
                 # Audit log
@@ -1175,6 +1178,8 @@ class HyperliquidTool(BaseTool):
 
             try:
                 order_type = {"limit": {"tif": "Ioc"}}
+                from core.wallet.submission_journal import prepare_attempt
+                submission_ref = prepare_attempt("hyperliquid", self._user_id, order_value_usd)
                 result = exchange.order(
                     name=params.coin.upper(),
                     is_buy=params.is_buy,
@@ -1188,6 +1193,7 @@ class HyperliquidTool(BaseTool):
                     venue="hyperliquid", action="place_market_order",
                     amount_usd=order_value_usd, counterparty=params.coin.upper(),
                     idempotency_key=None, result_ref=str(result)[:80],
+                    chain="hyperliquid", submission_ref=submission_ref,
                 )
 
                 if self.db:

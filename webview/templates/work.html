@@ -1,0 +1,229 @@
+{#
+  Work — one screen, four tabs (043 §5, phase 3).
+
+  The four tabs show live work, schedules, apps/artifacts, and classified activity.
+
+  The tabs are panes in this one page, not four routes: work-now.js reveals the
+  pane whose `data-pane` matches the active tab and hides the rest, so /work
+  answers with the whole screen and the switch is client-side. Every word comes
+  from webview/copy/en.py — no inline script on any 043 template
+  (tests/unit/webview/test_no_new_inline_script.py): the words ride on the
+  #work-now-copy / #worklog-copy data attributes and the modules read them off
+  `dataset`.
+#}
+{% extends "shell.html" %}
+{% block body %}
+    <div class="page">
+      <div class="page-head">
+        <h1 class="page-title">{{ t('work.title') }}</h1>
+        <p class="page-sub">{{ t('work.sub') }}</p>
+      </div>
+      <nav class="subnav" aria-label="{{ t('work.title') }}">
+        <a href="#now" data-tab="now" aria-current="page">{{ t('work.tab.now') }}</a>
+        <a href="#schedule" data-tab="schedule">{{ t('work.tab.schedule') }}</a>
+        <a href="#apps" data-tab="apps">{{ t('work.tab.apps') }}</a>
+        <a href="#log" data-tab="log">{{ t('work.tab.log') }}</a>
+      </nav>
+
+      {# Now & next — running goals + background helpers, and what is queued.
+         Drawn by work-now.js from /api/webgate/goals + /api/webgate/running. #}
+      <div data-pane="now">
+        {% if not read_only %}
+        <details class="section">
+          <summary>{{ t('work.create.goal_label') }}</summary>
+          <form class="setting-control" data-create="goals" data-unreachable="{{ t('work.create.unreachable') }}">
+            <label>{{ t('work.create.title_label') }}<textarea name="title" required></textarea></label>
+
+            <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
+            <p class="why" role="status"></p>
+          </form>
+        </details>
+        {% endif %}
+
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('work.now.section_now') }}</h2>
+            <span class="section-aside" id="work-now-running-aside"></span>
+          </div>
+          <div class="ledger" id="work-now-running"></div>
+        </div>
+        <div class="section">
+          <div class="section-head">
+            <h2 class="section-title">{{ t('work.now.section_next') }}</h2>
+            <span class="section-aside" id="work-now-next-aside"></span>
+          </div>
+          <div class="ledger" id="work-now-next"></div>
+        </div>
+      </div>
+
+      {# On a clock — cron jobs, listed with Cancel. Drawn by work-now.js from
+         /api/webgate/cron; Cancel posts to /api/webgate/cron/{id}/cancel. #}
+      <div data-pane="schedule" hidden>
+        {% if not read_only %}
+        <details class="section">
+          <summary>{{ t('work.create.cron_label') }}</summary>
+          <form class="setting-control" data-create="cron" data-unreachable="{{ t('work.create.unreachable') }}">
+            <label>{{ t('work.create.title_label') }}<textarea name="task" required></textarea></label>
+            <label>{{ t('work.create.schedule_label') }}<input name="schedule" required></label>
+            <p class="why">{{ t('work.create.schedule_hint') }}</p>
+            <button class="btn" type="submit">{{ t('work.create.submit') }}</button>
+            <p class="why" role="status"></p>
+          </form>
+        </details>
+        {% endif %}
+
+        <div class="section">
+          <div class="ledger" id="work-schedule-notice"></div>
+          <table class="table" id="work-schedule-table" hidden>
+            <thead><tr>
+              <th>{{ t('work.schedule.header_what') }}</th>
+              <th>{{ t('work.schedule.header_when') }}</th>
+              <th>{{ t('work.schedule.header_last') }}</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="work-schedule-rows"></tbody>
+          </table>
+        </div>
+      </div>
+
+      {# Apps — everything Rob built you can open, in three tiers by reach.
+         Drawn by work-apps.js from /api/webgate/apps + /api/webgate/artifacts. #}
+      <div data-pane="apps" hidden>
+        <div id="work-apps"></div>
+        <p class="state-body" id="work-apps-state" hidden></p>
+      </div>
+
+      {# Log — the classified activity stream, drawn by worklog.js. #}
+      <div data-pane="log" hidden>
+        <div class="chips" id="worklog-chips" style="margin-bottom:var(--s4)"></div>
+        <div class="section" id="worklog-stream"></div>
+        <p class="state-body" id="worklog-state" hidden></p>
+        <div class="section">
+          <table class="table"><tbody>
+            <tr>
+              <td class="what">{{ t('work.log.diagnostics') }}
+                <span class="why">{{ t('work.log.diagnostics_why') }}</span></td>
+              <td class="num"><button type="button" class="switch" id="worklog-diagnostics"
+                  role="switch" aria-checked="false"
+                  aria-label="{{ t('work.log.diagnostics') }}"></button></td>
+            </tr>
+          </tbody></table>
+        </div>
+      </div>
+
+      <p class="sources">{{ t('work.sources')|safe }}</p>
+    </div>
+
+    {# The words the Log stream is read into (unchanged). data-classes is
+       core.activity_class.CLIENT_CLASSES, server-rendered so the chips can never
+       drift from the classifier. #}
+    <div id="worklog-copy" hidden
+         data-classes="{{ worklog_classes }}"
+         data-everything="{{ t('work.log.everything') }}"
+         data-class_goal="{{ t('work.log.class_goal') }}"
+         data-class_cron="{{ t('work.log.class_cron') }}"
+         data-class_money="{{ t('work.log.class_money') }}"
+         data-class_message="{{ t('work.log.class_message') }}"
+         data-class_system="{{ t('work.log.class_system') }}"
+         data-class_tool="{{ t('work.log.class_tool') }}"
+         data-raw="{{ t('work.log.raw') }}"
+         data-raw_hide="{{ t('work.log.raw_hide') }}"
+         data-header_what="{{ t('work.log.header_what') }}"
+         data-header_when="{{ t('work.log.header_when') }}"
+         data-loading="{{ t('work.log.loading') }}"
+         data-empty="{{ t('work.log.empty') }}"
+         data-unreadable="{{ t('work.log.unreadable') }}"
+         data-unreadable_why="{{ t('work.log.unreadable_why') }}"
+         data-when_now="{{ t('work.log.when_now') }}"
+         data-when_min="{{ t('work.log.when_min') }}"
+         data-when_hour="{{ t('work.log.when_hour') }}"
+         data-when_day="{{ t('work.log.when_day') }}"></div>
+
+    {# The words work-now.js renders itself. read_only rides here so the module
+       draws no Stop / Pause / Cancel it cannot act on (the shell states the
+       posture once, so the buttons are simply absent). #}
+    <div id="work-now-copy" hidden
+         data-read_only="{{ 1 if read_only else 0 }}"
+         data-loading="{{ t('work.now.loading') }}"
+         data-empty_now="{{ t('work.now.empty_now') }}"
+         data-cron_title="{{ t('work.now.cron_title') }}"
+         data-session_title="{{ t('work.now.session_title') }}"
+         data-open_chat="{{ t('work.now.open_chat') }}"
+         data-live_unreadable="{{ t('work.now.live_unreadable') }}"
+         data-live_unreadable_why="{{ t('work.now.live_unreadable_why') }}"
+         data-empty_next="{{ t('work.now.empty_next') }}"
+         data-disabled="{{ t('work.now.disabled') }}"
+         data-unreadable="{{ t('work.now.unreadable') }}"
+         data-unreadable_why="{{ t('work.now.unreadable_why') }}"
+         data-running_count="{{ t('work.now.running_count') }}"
+         data-next_queued="{{ t('work.now.next_queued') }}"
+         data-elapsed_started="{{ t('work.now.elapsed_started') }}"
+         data-stop="{{ t('work.now.stop') }}"
+         data-pause="{{ t('work.now.pause') }}"
+         data-drop="{{ t('work.now.drop') }}"
+         data-retry="{{ t('work.now.retry') }}"
+         data-helper_lead="{{ t('work.now.helper_lead') }}"
+         data-helper_body="{{ t('work.now.helper_body') }}"
+         data-helper_goal="{{ t('work.now.helper_goal') }}"
+         data-status_ready="{{ t('work.now.status_ready') }}"
+         data-status_waiting="{{ t('work.now.status_waiting') }}"
+         data-status_triage="{{ t('work.now.status_triage') }}"
+         data-status_blocked="{{ t('work.now.status_blocked') }}"
+         data-unreachable="{{ t('work.now.unreachable') }}"
+         data-secs="{{ t('work.now.secs') }}"
+         data-mins="{{ t('work.now.mins') }}"
+         data-hours="{{ t('work.now.hours') }}"
+         data-days="{{ t('work.now.days') }}"
+         data-sched_loading="{{ t('work.schedule.loading') }}"
+         data-sched_empty="{{ t('work.schedule.empty') }}"
+         data-sched_disabled="{{ t('work.schedule.disabled') }}"
+         data-sched_unreadable="{{ t('work.schedule.unreadable') }}"
+         data-sched_unreadable_why="{{ t('work.schedule.unreadable_why') }}"
+         data-sched_cancel="{{ t('work.schedule.cancel') }}"
+         data-sched_last_never="{{ t('work.schedule.last_never') }}"
+         data-sched_ran_ago="{{ t('work.schedule.ran_ago') }}"
+         data-sched_unreachable="{{ t('work.schedule.unreachable') }}"></div>
+
+    {# The words work-apps.js renders (WS-P2). Its own copy node, since it is its
+       own module; the tab switch is still work-now.js's (one Work subnav). #}
+    <div id="work-apps-copy" hidden
+         data-loading="{{ t('work.apps.loading') }}"
+         data-online_title="{{ t('work.apps.online_title') }}"
+         data-online_aside="{{ t('work.apps.online_aside') }}"
+         data-online_empty="{{ t('work.apps.online_empty') }}"
+         data-online_unreadable="{{ t('work.apps.online_unreadable') }}"
+         data-online_unreadable_why="{{ t('work.apps.online_unreadable_why') }}"
+         data-online_open="{{ t('work.apps.online_open') }}"
+         data-status_live="{{ t('work.apps.status_live') }}"
+         data-status_deploying="{{ t('work.apps.status_deploying') }}"
+         data-status_approved="{{ t('work.apps.status_approved') }}"
+         data-status_pending="{{ t('work.apps.status_pending') }}"
+         data-status_unhealthy="{{ t('work.apps.status_unhealthy') }}"
+         data-status_failed="{{ t('work.apps.status_failed') }}"
+         data-status_stopped="{{ t('work.apps.status_stopped') }}"
+         data-status_paused="{{ t('work.apps.status_paused') }}"
+         data-published_title="{{ t('work.apps.published_title') }}"
+         data-published_aside="{{ t('work.apps.published_aside') }}"
+         data-published_empty="{{ t('work.apps.published_empty') }}"
+         data-published_unreadable="{{ t('work.apps.published_unreadable') }}"
+         data-published_unreadable_why="{{ t('work.apps.published_unreadable_why') }}"
+         data-col_what="{{ t('work.apps.col_what') }}"
+         data-col_link="{{ t('work.apps.col_link') }}"
+         data-open_link="{{ t('work.apps.open_link') }}"
+         data-made_title="{{ t('work.apps.made_title') }}"
+         data-made_aside="{{ t('work.apps.made_aside') }}"
+         data-made_empty="{{ t('work.apps.made_empty') }}"
+         data-made_unreadable="{{ t('work.apps.made_unreadable') }}"
+         data-made_unreadable_why="{{ t('work.apps.made_unreadable_why') }}"
+         data-col_file="{{ t('work.apps.col_file') }}"
+         data-col_kind="{{ t('work.apps.col_kind') }}"
+         data-made_note="{{ t('work.apps.made_note') }}"
+         data-empty_title="{{ t('work.apps.empty_title') }}"
+         data-empty_body="{{ t('work.apps.empty_body') }}"
+         data-empty_action="{{ t('work.apps.empty_action') }}"></div>
+
+    <script src="/static/app/worklog.js" type="module"></script>
+    <script src="/static/app/work-now.js" type="module"></script>
+    <script src="/static/app/work-apps.js" type="module"></script>
+    <script src="/static/app/work-create.js" type="module"></script>
+{% endblock %}

@@ -80,7 +80,7 @@ class _ResidentAgent(_Agent):
         return self._busy
 
 
-def _cmd(command, text, user="gleb", session_id=None):
+def _cmd(command, text, user="alice", session_id=None):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -91,7 +91,7 @@ def _cmd(command, text, user="gleb", session_id=None):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
@@ -117,7 +117,7 @@ async def test_dispatcher_routes_status_as_command(tmp_path):
             return None
 
     msg = InboundMessage(text="/status",
-                         identity=Identity(user_id="gleb",
+                         identity=Identity(user_id="alice",
                                           source=SessionSource("telegram", "555", "dm")))
     decision = await route_inbound(_FakeContainer(), msg)
     assert decision.kind == RouteKind.COMMAND
@@ -165,8 +165,8 @@ async def test_status_bound_and_idle_session(env):
 async def test_status_reflects_goal_counts(env):
     from agents.task.goals.board import STATUS_RUNNING, GoalBoard
     board = GoalBoard(os.path.join(str(env), "goals.db"))
-    board.create(user_id="gleb", title="Draft the quarterly report")
-    board.create(user_id="gleb", title="Migrate the billing database",
+    board.create(user_id="alice", title="Draft the quarterly report")
+    board.create(user_id="alice", title="Migrate the billing database",
                  status=STATUS_RUNNING)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))
     # 2026-08-28: "open" answered the wrong question (D4) — the line now says
@@ -242,7 +242,7 @@ async def test_status_ledger_lookup_failure_is_fail_open(env, monkeypatch):
 async def test_recap_happy_path(env):
     from core import event_log as el
     log = el.TelemetryEventLog(str(env / "telemetry_events.db"))
-    log.record("goal_run", user_id="gleb", ts=time.time(), outcome="done")
+    log.record("goal_run", user_id="alice", ts=time.time(), outcome="done")
 
     out = await act_on_inbound(_Agent(str(env)), _cmd("/recap", "/recap"))
     assert "# Recap" in out
@@ -274,9 +274,9 @@ async def test_goals_empty_board(env):
 async def test_goals_summary_with_seeded_rows(env):
     from agents.task.goals.board import STATUS_DONE, STATUS_RUNNING, GoalBoard
     board = GoalBoard(os.path.join(str(env), "goals.db"))
-    board.create(user_id="gleb", title="Write the report")
-    board.create(user_id="gleb", title="Deploy the release", status=STATUS_RUNNING)
-    board.create(user_id="gleb", title="Old finished thing", status=STATUS_DONE)
+    board.create(user_id="alice", title="Write the report")
+    board.create(user_id="alice", title="Deploy the release", status=STATUS_RUNNING)
+    board.create(user_id="alice", title="Old finished thing", status=STATUS_DONE)
     other = board.create(user_id="someone_else", title="Not mine")
     assert other.user_id == "someone_else"
 
@@ -292,7 +292,7 @@ async def test_goals_summary_with_seeded_rows(env):
 @pytest.mark.asyncio
 async def test_prefs_shows_written_pref_with_pref_source(env):
     from core.prefs import write_preference
-    ok, err = write_preference(str(env), "gleb", "style.verbosity", "terse",
+    ok, err = write_preference(str(env), "alice", "style.verbosity", "terse",
                                instance_id="rob")
     assert ok, err
 
@@ -346,15 +346,15 @@ async def test_missed_lists_suppressed_notices(env, monkeypatch):
     path = os.path.join(str(env), "telemetry_events.db")
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", path)
     log = TelemetryEventLog(path)
-    log.record("owner_notice", user_id="gleb", source="user_delivery",
+    log.record("owner_notice", user_id="alice", source="user_delivery",
                attrs={"text": "[suppressed by daily proactive-message cap; source=self_evolution] "
                               "✅ Background goal 'Refresh trackrecord' completed."})
     log.record("owner_notice", user_id="other", source="user_delivery",
-               attrs={"text": "[suppressed by daily proactive-message cap; source=x] not gleb's"})
+               attrs={"text": "[suppressed by daily proactive-message cap; source=x] not alice's"})
     out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
     assert "Last 1 suppressed owner message(s)" in out
     assert "Refresh trackrecord" in out
-    assert "not gleb's" not in out          # tenant-scoped
+    assert "not alice's" not in out          # tenant-scoped
     assert "delivery.daily_cap" in out      # the remedy
 
 
@@ -391,7 +391,7 @@ async def test_status_leads_with_degraded_health(env, monkeypatch):
                                                "reason": "Error code: 402"}}}, f)
     from agents.task.goals.board import GoalBoard
     GoalBoard(os.path.join(str(env), "goals.db")).create_ask(
-        user_id="gleb", what="Grant defi_trade on the treasury objective", why="")
+        user_id="alice", what="Grant defi_trade on the treasury objective", why="")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/status", "/status"))
     lines = out.splitlines()
     assert lines[0] == "Status:"

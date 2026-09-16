@@ -42,6 +42,21 @@ def test_forged_turns_is_pure():
     _assert_pure("core.security.forged_turns")
 
 
+def test_refusals_is_pure():
+    """045 lane 2. It is called from the agents and tools tiers (the
+    correspondent gate, the approval hook, tx_guard) — an upward import here
+    would make the ledger un-importable from core, which is where the reader
+    (core/security_digest.py) lives."""
+    _assert_pure("core.security.refusals")
+
+
+def test_threat_report_is_pure():
+    """045 lane 3. Same contract: the scanner is INJECTED by the caller
+    (layering ratchet — core never imports modules.*), so this module must
+    never reach for `modules.memory.task.threat_scan` itself."""
+    _assert_pure("core.security.threat_report")
+
+
 def test_forged_kinds_identity_across_homes():
     from core.security.forged_turns import FORGED_TURN_KINDS as canonical
     from agents.task.agent.core.self_wake import FORGED_TURN_KINDS as via_self_wake

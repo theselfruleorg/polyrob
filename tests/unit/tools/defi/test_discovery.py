@@ -278,3 +278,51 @@ async def test_swap_quote_prefers_the_wallets_own_address_when_there_is_one():
     await tool.swap_quote(SwapQuoteParams(
         token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0))
     assert holders == [mine]
+
+
+# --------------------------------------------------------------------------
+# D4 — the discovery render carries the separators, not just the headline
+# --------------------------------------------------------------------------
+
+def _rich_pool(**over):
+    d = dict(chain="base", pool_address="0xpool", base_token=TOK,
+             name="MEME / WETH", dex="aerodrome-base",
+             created_at="2026-08-24T16:08:05Z",
+             liquidity_usd=250_000.0, volume_h24_usd=3_000_000.0,
+             price_change_h24_pct=42.0, volume_h1_usd=200_000.0,
+             market_cap_usd=2_500_000.0, fdv_usd=2_600_000.0,
+             trades_h24=gt.PoolTrades(buys=14641, sells=3768, buyers=570, sellers=400),
+             trades_h1=gt.PoolTrades(buys=100, sells=90, buyers=40, sellers=35))
+    d.update(over)
+    return gt.PoolCandidate(**d)
+
+
+@pytest.mark.asyncio
+async def test_discovery_states_the_volume_over_liquidity_ratio():
+    tool = DefiDataTool(discover_fn=lambda c, k: [_rich_pool()])
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=0)))
+    assert "V/L" in out and "12" in out
+
+
+@pytest.mark.asyncio
+async def test_discovery_states_unique_buyers_and_txns_per_buyer():
+    tool = DefiDataTool(discover_fn=lambda c, k: [_rich_pool()])
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=0)))
+    assert "570" in out            # unique buyers
+    assert "buyers" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_discovery_states_market_cap():
+    tool = DefiDataTool(discover_fn=lambda c, k: [_rich_pool()])
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=0)))
+    assert "mcap" in out.lower() or "market cap" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_ratio_renders_unknown_never_zero():
+    tool = DefiDataTool(discover_fn=lambda c, k: [
+        _rich_pool(liquidity_usd=None, trades_h24=None, market_cap_usd=None)])
+    out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=0)))
+    assert "unknown" in out.lower()
+    assert "V/L 0" not in out
