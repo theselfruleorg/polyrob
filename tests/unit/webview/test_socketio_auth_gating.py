@@ -5,6 +5,24 @@ import importlib
 import asyncio
 
 import pytest
+import time
+import pytest_asyncio
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def close_socket_monitors(monkeypatch):
+    from webview.socket_auth import SocketAuthMonitor
+    monitors = []
+    original = SocketAuthMonitor.__init__
+
+    def track(self, *args, **kwargs):
+        original(self, *args, **kwargs)
+        monitors.append(self)
+
+    monkeypatch.setattr(SocketAuthMonitor, "__init__", track)
+    yield
+    for monitor in monitors:
+        await monitor.aclose()
 
 
 def _reload_server(monkeypatch, multitenant: bool):
@@ -19,6 +37,7 @@ def _reload_server_own_ops(monkeypatch):
     from the explicit POLYROB_POSTURE override (WEBGATE_MULTITENANT unset)."""
     monkeypatch.delenv("WEBGATE_MULTITENANT", raising=False)
     monkeypatch.setenv("POLYROB_POSTURE", "own_ops")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner-1")
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     return importlib.reload(server)
@@ -93,7 +112,7 @@ def test_connect_decodes_jwt_in_multitenant(monkeypatch):
     server = _reload_server(monkeypatch, multitenant=True)
     monkeypatch.setenv("JWT_SECRET_KEY", "test-secret")
     import jwt as pyjwt
-    token = pyjwt.encode({"user_id": "tenant-a"}, "test-secret", algorithm="HS256")
+    token = pyjwt.encode({"user_id": "tenant-a", "exp": time.time() + 60, "jti": "tenant-session"}, "test-secret", algorithm="HS256")
     asyncio.run(server.connect("sid2", {}, auth={"token": token}))
     assert server._socket_user["sid2"] == "tenant-a"
 
@@ -141,7 +160,7 @@ async def test_own_ops_cookie_authenticated_owner_join_allowed(monkeypatch):
     monkeypatch.setattr(type(server.pm()), "get_session_user", lambda self, sid: "owner-1")
 
     import jwt as pyjwt
-    token = pyjwt.encode({"user_id": "owner-1"}, "test-secret", algorithm="HS256")
+    token = pyjwt.encode({"user_id": "owner-1", "exp": time.time() + 60, "jti": "owner-session"}, "test-secret", algorithm="HS256")
     environ = {"HTTP_COOKIE": f"auth_token={token}; other=ignored"}
 
     await server.connect("sid-owner", environ, auth=None)

@@ -77,6 +77,11 @@ async def _run_telegram(token_opt: Optional[str], verbose: bool):
                 click.echo(click.style(
                     "no allowlist set — message the bot once and it will reply with your id, "
                     "then set ALLOWED_TELEGRAM_USER_IDS and restart.", fg="yellow"))
+            # 044: Telegram caches privacy-mode at join — a bot added to a room
+            # BEFORE privacy mode is off never sees non-command messages there.
+            click.echo(click.style(
+                "Groups: turn BotFather privacy mode OFF (or make the bot a room "
+                "admin), then /groups allow here in the room.", dim=True))
             click.echo(click.style("polling… (Ctrl-C to stop)", dim=True))
 
         def _halt():

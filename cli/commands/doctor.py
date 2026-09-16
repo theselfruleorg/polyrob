@@ -62,6 +62,35 @@ def server_extra_line() -> str:
             "run `pip install 'polyrob[server]'` before `polyrob serve`")
 
 
+def a2a_v1_line(env: dict) -> str:
+    """A2A agent-card + OpenAI-compat `/v1` reachability (043 A31).
+
+    Both surfaces live ONLY on the API server (`polyrob serve` / `python main.py`),
+    never this CLI/telegram process — so doctor reports the CONFIGURED state over
+    ``env``, not a live network probe, and never claims a bare "reachable". The A2A
+    agent card mounts unconditionally when the API runs (no flag); the OpenAI-compat
+    `/v1` router is gated by ``OPENAI_COMPAT_API_ENABLED`` — flag-off means it is NOT
+    served. Without the ``[server]`` extra the API app cannot build at all, so both
+    surfaces are honestly "absent". The path names are always shown either way.
+    """
+    v1_on = str(env.get("OPENAI_COMPAT_API_ENABLED", "")).strip().lower() \
+        in ("1", "true", "yes", "on")
+    server_missing = [m for m in ("fastapi", "uvicorn")
+                      if importlib.util.find_spec(m) is None]
+    if server_missing:
+        gone = ("absent (needs the [server] extra: " + ", ".join(server_missing)
+                + " missing — `pip install 'polyrob[server]'`)")
+        a2a_state = v1_state = gone
+    else:
+        a2a_state = "mounted when the API server runs"
+        # Honest: flag-off is reported as off, never as reachable/enabled.
+        v1_state = ("enabled when serving" if v1_on
+                    else "off (OPENAI_COMPAT_API_ENABLED)")
+    return ("machine API surfaces (served by the API server, not this process): "
+            f"A2A agent card /.well-known/agent.json — {a2a_state}; "
+            f"/v1 OpenAI-compat — {v1_state}")
+
+
 def playwright_line(env: dict) -> str:
     """Playwright + chromium probe (O6) — the guide's own most-common issue.
     Filesystem heuristic over the browsers cache; never launches anything."""
@@ -230,6 +259,15 @@ def setup_lines(env: dict) -> list[str]:
     except Exception:
         out.append("surfaces: unknown")
 
+    # persona / character (F13) — the active <identity> persona source. Nothing
+    # reported this before, so a wrong pref, a dropped field or an absent
+    # character file were all invisible at once.
+    try:
+        from cli.persona import active_persona_line, cli_gate_on
+        out.append(active_persona_line("local", data_home, gate=cli_gate_on(env)))
+    except Exception:
+        out.append("persona: unknown")
+
     # SOUL / identity docs
     try:
         base = Path(data_home) / "identity"
@@ -320,6 +358,46 @@ def _fmt_expiry(epoch: float) -> str:
     if delta < 86400:
         return f"in {int(delta // 3600)}h"
     return f"in {int(delta // 86400)}d"
+
+
+def _credential_alert_lines_from(status_by_provider: dict, present_providers: set,
+                                 usable_providers: set) -> list[str]:
+    """The `!` provider-credential remedy line(s) — pure formatting over
+    already-computed :func:`credential_status` sets (043 A13 fix round 1).
+    Extracted so ``doctor_report``'s transcript and the default leading-
+    snapshot view (:func:`credential_alert_lines`) print the EXACT same
+    words rather than two independently-maintained copies. Empty when at
+    least one provider credential is usable."""
+    if not present_providers and not usable_providers:
+        # Keep the words people actually search for ("no provider API key") in
+        # the line, even though a credential need not be an API key any more.
+        return ["  ! no provider credential found (no API key, no connected "
+                "account) — run `polyrob init` or `polyrob config set <KEY>`"]
+    if not usable_providers:
+        # Say WHICH problem: "malformed" and "expired" and "quota exhausted" send
+        # the owner to three different fixes.
+        why = "; ".join(sorted({s.reason for s in status_by_provider.values()
+                                if s.present and s.reason}))
+        return [f"  ! no usable provider credential — {why}"]
+    return []
+
+
+def credential_alert_lines(env: dict) -> list[str]:
+    """:func:`_credential_alert_lines_from`, computing its inputs fresh via
+    :func:`credential_status` (043 A13 fix round 1).
+
+    The default (non ``--full``) ``doctor`` view and the REPL ``/doctor``
+    verb call this to surface the SAME provider-credential remedy the full
+    transcript prints, for a case the leading status snapshot's own health
+    block cannot see: ``core/status_snapshot.py``'s ``_providers_section``
+    only raises a CRIT when ``live is None and usable`` (usable credentials
+    exist but none is live — all credit-dead); a box with ZERO provider
+    credentials at all has an empty ``usable`` set, so that branch never
+    fires and the snapshot alone reads a clean "Health: OK" lie."""
+    status_by_provider = credential_status(env)
+    present_providers = {n for n, s in status_by_provider.items() if s.present}
+    usable_providers = {n for n, s in status_by_provider.items() if s.usable}
+    return _credential_alert_lines_from(status_by_provider, present_providers, usable_providers)
 
 
 def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
@@ -419,17 +497,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         rest = f" (+{len(unconfigured) - 6} more)" if len(unconfigured) > 6 else ""
         lines.append(f"  not configured: {shown}{rest} — connect: "
                      "`polyrob auth add <name>` · list: `polyrob model list`")
-    if not present_providers and not usable_providers:
-        # Keep the words people actually search for ("no provider API key") in
-        # the line, even though a credential need not be an API key any more.
-        lines.append("  ! no provider credential found (no API key, no connected "
-                     "account) — run `polyrob init` or `polyrob config set <KEY>`")
-    elif not usable_providers:
-        # Say WHICH problem: "malformed" and "expired" and "quota exhausted" send
-        # the owner to three different fixes.
-        why = "; ".join(sorted({s.reason for s in status_by_provider.values()
-                                if s.present and s.reason}))
-        lines.append(f"  ! no usable provider credential — {why}")
+    lines.extend(_credential_alert_lines_from(status_by_provider, present_providers, usable_providers))
 
     # providers.yaml load state (queryable, not just a transient load-time log
     # line — UX assessment 2026-08-07, Q7). Shown only when a file exists.
@@ -637,7 +705,22 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
         except Exception as e:
             lines.append(f"! wallet ENABLED but MISCONFIGURED: {e}")
     else:
-        lines.append("! wallet ENABLED but AGENT_WALLET_MASTER_SEED missing/short — run `polyrob wallet init`")
+        # S1 (2026-09-14): the seed is split into `wallet.env`, loaded ONLY by
+        # the agent unit. A console/email process legitimately has NO seed and
+        # reads the public addresses from `wallet/public_identity.json` — that
+        # is the intended posture, not a misconfiguration. Fail-open: any read
+        # error falls through to the legacy remedy line.
+        _pub = None
+        try:
+            from core.wallet.public_identity import read_public_identity
+            _pub = read_public_identity()
+        except Exception:
+            _pub = None
+        if _pub:
+            lines.append("wallet: on, PUBLIC-ONLY in this process (no seed here; addresses from "
+                         "wallet/public_identity.json; signing lives in the agent unit)")
+        else:
+            lines.append("! wallet ENABLED but AGENT_WALLET_MASTER_SEED missing/short — run `polyrob wallet init`")
 
     # x402 treasury source (W1.1, 2026-08-21): where invoice money lands and
     # WHY — explicit env, the wallet auto-fill, or nothing (with the remedy).
@@ -677,6 +760,11 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
                      "`X402_HOST=<host> bash scripts/setup_x402_endpoint.sh` as "
                      "root from a full repo checkout — the install tree has no "
                      "deployment/ templates)")
+
+    # A2A agent-card + OpenAI-compat /v1 reachability (043 A31): both live on the
+    # API server, never this process — report the configured state honestly (a
+    # flag-off /v1 is never rendered as reachable).
+    lines.append(a2a_v1_line(env))
 
     # sqlite-vec probe — never crash doctor on import/connection failure.
     try:
@@ -756,6 +844,94 @@ def health_lines(owner: "str | None", *, prefix: str = "  ") -> list[str]:
         return out
     except Exception as e:
         return [f"health: unavailable ({type(e).__name__}: {str(e)[:120]})"]
+
+
+#: The pointer line the default (non ``--full``) doctor view ends on — a
+#: shared constant so `polyrob doctor` and the REPL `/doctor` verb
+#: (``cli/ui/commands/h_diag.py::h_doctor``) print the identical words
+#: (043 A13 fix round 1, Important 3).
+DOCTOR_FULL_POINTER = "run `polyrob doctor --full` for every check"
+
+
+def build_doctor_snapshot():
+    """Build the ``StatusSnapshot`` that leads `polyrob doctor` / REPL
+    `/doctor` output (043 A13) — the ONE build point, so rendering AND the
+    credential-alert gate (:func:`status_snapshot_lines`) read the SAME
+    snapshot rather than paying for (and risking disagreement between) two
+    separate builds per invocation.
+
+    Owner resolution mirrors ``autonomy status``'s ``resolve_identity()``
+    (never None — an explicitly-bound owner, else the single-user local
+    tenant ``"local"``) rather than the STRICT ``resolve_owner_principal``
+    used for the transcript's separate "owner: (unpaired...)" diagnostic
+    line, so a fresh, unpaired install still gets a real snapshot instead of
+    an "unavailable" stub.
+
+    Returns ``(snapshot, error_line)``: on success ``error_line`` is
+    ``None``; on any failure ``snapshot`` is ``None`` and ``error_line`` is a
+    ready-to-print ``"status: unavailable (...)"`` string. Fail-open by
+    construction — `doctor` must never crash because the status SSOT
+    couldn't be read.
+    """
+    try:
+        from core.admin_data_home import AmbiguousDataHome, admin_data_home
+        from core.identity import resolve_identity
+        from core.status_snapshot import build_status_snapshot
+
+        owner = resolve_identity()
+        try:
+            data_home = admin_data_home(
+                echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
+        except AmbiguousDataHome as exc:
+            return None, f"status: unavailable ({exc})"
+        snap = build_status_snapshot(str(owner), data_dir=data_home, include_money=True)
+        return snap, None
+    except Exception as e:
+        return None, f"status: unavailable ({type(e).__name__}: {str(e)[:120]})"
+
+
+def status_snapshot_lines() -> list:
+    """The full status-snapshot view (043 A13) that leads plain `polyrob doctor`
+    output — the SAME builder/renderer `polyrob autonomy status` uses
+    (``build_status_snapshot`` / ``render_status_lines``, see
+    ``cli/commands/autonomy.py::status_cmd``), but with every section
+    (``include_money=True``, which `autonomy status` deliberately omits) since
+    `doctor` is the one seat meant to show the whole picture at a glance.
+
+    043 A13 fix round 1 (Important 1): ``core/status_snapshot.py``'s own CRIT
+    (``_providers_section``, ``if live is None and usable``) only fires when
+    usable credentials exist but none is live (all credit-dead) — a box with
+    ZERO provider credentials at all has an empty ``usable`` set, so that
+    branch never fires and the snapshot alone renders a clean "Health: OK"
+    lie. When the snapshot's own providers section shows no live AND no
+    usable provider, this appends :func:`credential_alert_lines`' remedy —
+    the exact words `doctor --full`'s transcript prints — so the default
+    view never claims a clean bill of health over a box that cannot run at
+    all. (The "some credential, none usable" and "credit-dead" cases are
+    already surfaced by the snapshot's own health block, so this never
+    duplicates those.)
+
+    Both this function and the CLI/REPL callers using
+    :data:`DOCTOR_FULL_POINTER` are the ONE shared view both `polyrob doctor`
+    and the REPL `/doctor` verb render (Important 3) — imported, not copied.
+    """
+    snap, error_line = build_doctor_snapshot()
+    if snap is None:
+        return [error_line]
+    from core.status_render import render_status_lines
+    lines = render_status_lines(
+        snap,
+        resume_hint="`polyrob autonomy resume`",
+        pause_hint="`polyrob autonomy pause`",
+    )
+    try:
+        prov = snap.sections.get("providers")
+        data = prov.data if (prov is not None and prov.available) else {}
+    except Exception:
+        data = {}
+    if not data.get("live") and not data.get("usable"):
+        lines.extend(credential_alert_lines(dict(os.environ)))
+    return lines
 
 
 def _frozen_flag_truth() -> tuple:
@@ -923,11 +1099,18 @@ def flags_report(env: dict, local_absent_means_on: bool = True, *,
 @click.option("--changed", "flag_changed", is_flag=True,
               help="Only flags set away from their default, plus the "
                    "frozen/INERT ones. Implies --flags.")
+@click.option("--full", "show_full", is_flag=True,
+              help="Print the full check transcript after the status snapshot "
+                   "(the whole pre-043 `doctor` report). No effect with --flags.")
 @click.option("--json", "as_json", is_flag=True,
-              help="Emit the report as JSON ({\"report\": [lines]}).")
+              help="Emit as JSON ({\"report\": [lines], \"status\": [lines]}; "
+                   "--flags mode emits {\"report\": [lines]} only).")
 def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
-           flag_changed: bool, as_json: bool):
-    """Show resolved providers/model, memory backend, and config footguns."""
+           flag_changed: bool, show_full: bool, as_json: bool):
+    """Health snapshot first (pause state, ranked issues, every status
+    section) — the same view `polyrob autonomy status` renders. The full
+    check transcript (resolved providers/model, memory backend, config
+    footguns) prints under --full."""
     # Load env the same way the REPL does (./.polyrob, ~/.polyrob, root .env, config/.env.*
     # + the local-mode key backfill) so doctor reports the keys `rob` actually sees,
     # not just the bare process environment.
@@ -936,12 +1119,34 @@ def doctor(show_flags: bool, flag_group: str | None, flag_search: str | None,
     setup_sqlite_compat()
     load_env(local_mode=True)
     show_flags = show_flags or bool(flag_group) or bool(flag_search) or flag_changed
-    report = (flags_report(dict(os.environ), group=flag_group,
-                           search=flag_search, changed=flag_changed)
-              if show_flags else doctor_report(dict(os.environ)))
+
+    if show_flags:
+        report = flags_report(dict(os.environ), group=flag_group,
+                              search=flag_search, changed=flag_changed)
+        if as_json:
+            import json as _json
+            click.echo(_json.dumps({"report": report}, indent=2))
+            return
+        for line in report:
+            click.echo(line)
+        return
+
+    # 043 A13: plain `doctor` leads with the SAME status snapshot every other
+    # seat renders (`polyrob autonomy status`, Telegram /status, the webview
+    # /system page) — the full check transcript (`doctor_report`, its own
+    # provider/DB/skill probes) is detail, not the headline, computed only
+    # when actually needed: under --full, or folded into --json.
+    status = status_snapshot_lines()
     if as_json:
         import json as _json
-        click.echo(_json.dumps({"report": report}, indent=2))
+        report = doctor_report(dict(os.environ))
+        click.echo(_json.dumps({"report": report, "status": status}, indent=2))
         return
-    for line in report:
+    for line in status:
         click.echo(line)
+    click.echo("")
+    if show_full:
+        for line in doctor_report(dict(os.environ)):
+            click.echo(line)
+    else:
+        click.echo(DOCTOR_FULL_POINTER)

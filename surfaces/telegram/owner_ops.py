@@ -173,6 +173,75 @@ def cron_reply(user_id: str, data_dir: str, args: List[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# /trade — the owner launches a money-granted run
+# ---------------------------------------------------------------------------
+
+#: What an owner-launched trading run carries. ``defi_trade`` is the money verb;
+#: ``defi_data`` is how it reads the market it is about to act in. Nothing else
+#: is added — a money run is not the place for a wide toolset.
+_TRADE_TOOLS = ["defi_trade", "defi_data", "knowledge", "filesystem", "task"]
+
+
+def trade_reply(user_id: Optional[str], data_dir: str, args: List[str],
+                board: Optional[Any] = None) -> str:
+    """``/trade <what to do>`` — seed a run that actually carries the money verb.
+
+    A money verb reaches a run only through a stream leg in
+    ``data/streams/streams.yaml``, which seeds on a timer. Everything the agent
+    writes for ITSELF has money stripped by ``goal_create`` — correctly, since
+    an injected goal must never trade — so "bridge my SOL" produced a goal that
+    looked fine and could never execute, roughly fifty times over.
+
+    The signal the system was throwing away is that the OWNER asking, from an
+    authenticated seat, IS the authorization. This verb carries it into the
+    payload. The agent still cannot self-grant; nothing here widens a cap; and
+    every spend is still bounded by the per-transaction ceiling and still
+    queues for ``/approve`` above the autonomous ceiling.
+    """
+    if not user_id:
+        return "Only the owner can launch a trading run."
+    task = " ".join(args).strip()
+    if not task:
+        return ("Usage: /trade <what to do>\n"
+                "e.g. /trade bridge 0.93 SOL to USDC on Base\n"
+                "Seeds a run that carries the money verb. Spends above the "
+                "autonomous ceiling still come to you via /pending.")
+
+    if board is None:
+        from agents.task.goals.board import GoalBoard
+        from core.runtime_paths import goals_db_path
+        board = GoalBoard(goals_db_path(data_dir))
+
+    body = (
+        f"{task}\n\n"
+        "The owner asked for this directly, so this run carries `defi_trade`. "
+        "Read the treasury-trading skill before acting. Every spend is still "
+        "bounded by the wallet caps, and anything above the autonomous ceiling "
+        "returns lane=owner_queue — that is normal, not a blocker: report it "
+        "and stop, the owner approves from chat. Do NOT create follow-up goals "
+        "to 'get the tool granted' — you have it here."
+    )
+    try:
+        goal = board.create(
+            user_id=user_id,
+            title=f"Owner-launched: {task}"[:200],
+            body=body,
+            priority=9,                     # the owner asked; it goes first
+            payload={"tools": list(_TRADE_TOOLS), "max_steps": 40,
+                     "owner_granted": True},
+        )
+    except Exception as e:
+        logger.warning("trade run could not be seeded: %s", e)
+        return f"Could not seed the run: {e}"
+
+    return (f"✅ Launched {_code(str(getattr(goal, 'id', '?'))[:8])} with "
+            f"`defi_trade` granted.\n{task}\n\n"
+            "It runs on the next dispatcher tick. Spends above the autonomous "
+            "ceiling come to you for approval — /pending, then /approve <id>. "
+            "Progress: /goals")
+
+
+# ---------------------------------------------------------------------------
 # /goal
 # ---------------------------------------------------------------------------
 
@@ -273,8 +342,32 @@ def goal_reply(user_id: str, data_dir: str, args: List[str],
 
     target, reset, allowed, participle = _GOAL_TRANSITIONS[verb]
     if allowed is not None and goal.status not in allowed:
-        return (f"{_code(goal.id[:8])} is {goal.status} — only "
+        base = (f"{_code(goal.id[:8])} is {goal.status} — only "
                 f"{'/'.join(allowed)} goals can be {participle}.")
+        # `waiting` is the ORDINARY state for a seeded chain whose prerequisite
+        # has not run, and the bare refusal above was a dead end: the owner was
+        # told no with no reason, no prerequisite and no next step
+        # (2026-09-08). Forcing the transition would be wrong — the dependency
+        # is doing its job — so explain it instead.
+        if goal.status == "waiting":
+            try:
+                pending = [d for d in (board.dependencies(goal.id) or [])
+                           if (board.get(d) is not None
+                               and getattr(board.get(d), "status", None) != "done")]
+            except Exception:
+                pending = []
+            if pending:
+                out = [base, "It is queued behind:"]
+                for dep_id in pending:
+                    dep = board.get(dep_id)
+                    out.append(f"  • {_code(dep_id[:8])} [{dep.status}] {dep.title}")
+                out.append("That runs first, then this one is picked up "
+                           "automatically. Detail: /goal show <id>")
+                return "\n".join(out)
+            return (f"{base}\nNothing unfinished is blocking it — it looks "
+                    f"stranded and should be picked up on the next sweep. "
+                    f"Detail: /goal show {goal.id[:8]}")
+        return base
     if goal.status == target:
         return f"{_code(goal.id[:8])} is already {target}."
     warning = ""
@@ -301,12 +394,75 @@ _CAP_NOTE = (
 )
 
 
-def wallet_reply(args: List[str]) -> str:
-    """`/wallet` — addresses, network, caps. Read-only on purpose.
+def _set_autonomous_ceiling(rest: List[str], user_id: Optional[str],
+                            data_dir: Optional[str]) -> str:
+    """Write ``budget.defi_autonomous_usd`` — how much runs without asking.
+
+    The owner had to SSH in and edit an env file to change this, which is why
+    a $96 bridge sat behind a $5 ceiling for a day. It is safe from chat
+    precisely because it is not a loss limit: ``tx_guard.autonomous_max_usd``
+    clamps it to the catastrophic per-transaction ceiling, so raising it can
+    only reduce how often the owner is interrupted.
+    """
+    if not user_id:
+        return "Only the owner can change spend settings."
+    if not rest:
+        return ("Usage: /wallet autonomous <usd>\n"
+                "How much may execute without asking you. Anything above it "
+                "queues for /approve. It can never exceed the per-transaction "
+                "ceiling, which stays env-only on purpose.")
+    try:
+        value = float(str(rest[0]).lstrip("$"))
+    except (TypeError, ValueError):
+        return f"{_code(rest[0])} is not a number — usage: /wallet autonomous <usd>"
+    if value < 0:
+        return "A ceiling cannot be negative."
+    try:
+        from core import prefs
+        from core.paths import polyrob_home
+        prefs.write_preference(polyrob_home(), user_id,
+                               "budget.defi_autonomous_usd", value)
+        from core.wallet import tx_guard
+        effective = tx_guard.autonomous_max_usd(user_id, polyrob_home())
+    except Exception as e:
+        logger.warning("autonomous ceiling not written: %s", e)
+        return f"Could not save it: {e}"
+    out = [f"✅ Autonomous ceiling set to ${value:,.2f}.",
+           f"Effective now: ${effective:,.2f} — spends up to this run without "
+           f"asking you; above it they queue for /approve."]
+    if effective < value:
+        out.append(f"⚠️ Clamped to the per-transaction ceiling ${effective:,.2f}. "
+                   f"That one is a catastrophic-loss limit and is not settable "
+                   f"from chat by design.")
+    return "\n".join(out)
+
+
+def wallet_reply(args: List[str], user_id: Optional[str] = None,
+                 data_dir: Optional[str] = None) -> str:
+    """`/wallet` — addresses, network, caps, and the one cap the owner may set.
 
     On-chain balance probes are network reads, so they are opt-in via
     `/wallet balances` rather than paid for on every status glance.
+
+    `/wallet autonomous <usd>` sets how much executes WITHOUT interrupting the
+    owner. That is deliberately the only cap writable from chat: it cannot
+    widen maximum loss, because the catastrophic per-transaction ceiling still
+    binds above it (and is clamped to it at the read site). The catastrophic
+    ceiling itself stays env-only — if a chat surface could raise it, a
+    compromised chat surface could drain the treasury.
     """
+    from core.wallet.authority import owner_refusal
+    refusal = owner_refusal(user_id)
+    if refusal:
+        return refusal
+    if args and args[0].lower() in ("autonomous", "auto", "ceiling"):
+        return _set_autonomous_ceiling(args[1:], user_id, data_dir)
+    if not args or args[0].lower() in ("overview", "accounts"):
+        from core.wallet.view import wallet_view, render_wallet
+        try:
+            return render_wallet(wallet_view(user_id, data_dir=data_dir))
+        except PermissionError as exc:
+            return str(exc)
     want_balances = bool(args) and args[0].lower() in ("balances", "balance", "full")
     try:
         from core.wallet.factory import get_agent_wallet
@@ -483,3 +639,201 @@ async def settle_reply(user_id: str, args: List[str]) -> str:
     out += (note if note else
             "\nThe settlement watcher will wake the originating session.")
     return out
+
+
+# ---------------------------------------------------------------------------
+# /bridge (037)
+# ---------------------------------------------------------------------------
+
+def bridge_reply(user_id: Optional[str], data_dir: str, args: List[str]) -> str:
+    """`/bridge <from> <to> <amount> [go]` — move NATIVE value between chains.
+
+    Why this exists: the bridge shipped CLI-only, which meant the one person
+    allowed to run it had to SSH to the box. The owner's standing directive is
+    that he can do anything from the chat, and he is usually on a phone. Without
+    this verb the whole rail is unreachable from where he actually is.
+
+    Bare form QUOTES (dry run — asserts everything, broadcasts nothing). Adding
+    `go` executes: within the autonomous ceiling it runs and reports; above it,
+    the durable owner-approval queue holds it — typing `go` is a deliberate
+    second act, not the approval itself.
+    """
+    if not user_id:
+        return "Only the owner can bridge."
+    if len(args) < 3:
+        return ("Usage: /bridge <from> <to> <amount> [go]\n"
+                "e.g. /bridge solana robinhood 0.9      — quote only\n"
+                "     /bridge solana robinhood 0.9 go   — execute\n\n"
+                "Chains: solana, base, robinhood, ethereum, arbitrum, polygon.\n"
+                "NATIVE asset only (SOL on solana, ETH on an EVM chain).\n"
+                "Under your autonomous ceiling it runs and reports; above it, "
+                "it waits for you in /pending.")
+
+    from_chain, to_chain, amount_raw = args[0], args[1], args[2]
+    execute = len(args) > 3 and args[3].lower() in ("go", "execute", "confirm")
+    try:
+        amount = float(amount_raw)
+        if amount <= 0:
+            raise ValueError
+    except ValueError:
+        return f"Amount must be a positive number, got {amount_raw!r}."
+
+    import asyncio
+    from types import SimpleNamespace
+
+    try:
+        from tools.defi.bridge_verb import perform_bridge
+        from tools.defi.trade_tool import BridgeParams, DefiTradeTool
+    except Exception as exc:                       # pragma: no cover - import guard
+        return f"The bridge rail is unavailable: {exc}"
+
+    params = BridgeParams(from_chain=from_chain, to_chain=to_chain,
+                          amount=amount, dry_run=not execute)
+    # A genuine owner chat turn. Not forged, not a sub-agent — the same seat the
+    # CLI is, reached from the phone instead of a shell.
+    ctx = SimpleNamespace(user_id=user_id, role="owner", is_sub_agent=False)
+    try:
+        result = asyncio.run(perform_bridge(DefiTradeTool(), params, ctx))
+    except RuntimeError:
+        # Already inside a loop (the surface runs async) — hand it to a thread.
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(
+                asyncio.run, perform_bridge(DefiTradeTool(), params, ctx)).result()
+    except Exception as exc:
+        logger.warning("bridge verb failed", exc_info=True)
+        return f"The bridge did not run: {exc}"
+
+    if getattr(result, "error", None):
+        return f"❌ {result.error}"
+    body = getattr(result, "extracted_content", None)
+    if not body:
+        return ("The bridge returned neither an error nor a report. That is a "
+                "bug — do NOT retry until it is understood; assume nothing "
+                "about what happened to the funds.")
+    if not execute:
+        body += ("\n\nAdd `go` to execute: "
+                 f"/bridge {from_chain} {to_chain} {amount_raw} go")
+    return body
+
+
+# ---------------------------------------------------------------------------
+# /mcp — per-tenant MCP servers
+# ---------------------------------------------------------------------------
+
+def mcp_reply(user_id: Optional[str], args: List[str]) -> str:
+    """`/mcp [add <id> <url> [key] | remove <id> | test <id>]`.
+
+    Thin plumbing over ``core.mcp_admin`` — the ONE helper set every owner seat
+    renders, so Telegram, the REPL and the console can never drift into three
+    different answers about which MCP servers exist.
+    """
+    from core import mcp_admin
+    return mcp_admin.mcp_reply(user_id, args)
+
+
+# ---------------------------------------------------------------------------
+# /avatar — the owner SEES the agent's face, from the phone
+#
+# The Mindprint identity reached no chat surface at all: `pfp push` sets a
+# profile picture on X and Discord and prints BotFather steps for Telegram, but
+# nothing ever showed the owner the face, its traits, or the voice signature.
+# Read-only on purpose -- `pfp keep` is a one-way permanent lock, so the setup
+# ceremony stays on the CLI where it cannot be fired by a stray chat message.
+# ---------------------------------------------------------------------------
+
+def avatar_reply(data_dir: str, args: List[str]) -> Tuple[str, Optional[str]]:
+    """``(text, png_path_or_None)`` for the instance's frozen identity.
+
+    Returns the image path SEPARATELY rather than embedding it, so this stays a
+    pure function the tests can read and the one side effect (sending a photo)
+    lives at the single call site in the harness.
+    """
+    from core.instance import load_pfp_meta, pfp_path, resolve_instance_id
+
+    if args:
+        return ("/avatar is read-only — it shows this instance's face, traits "
+                "and voice signature.\nSetting up or changing the identity is a "
+                "one-time owner ceremony on the CLI: `polyrob pfp generate`, "
+                "`polyrob pfp randomize`, then `polyrob pfp keep` (permanent).",
+                None)
+
+    instance_id = resolve_instance_id()
+    png = pfp_path(data_dir, instance_id)
+    if not png.is_file():
+        return (f"*{instance_id}* — avatar not set up.\n"
+                f"That is a normal optional state. To give this instance a face: "
+                f"`polyrob pfp generate`, re-roll with `polyrob pfp randomize`, "
+                f"then `polyrob pfp keep` (permanent).", None)
+
+    meta = load_pfp_meta(data_dir, instance_id)
+    if not isinstance(meta, dict):
+        # The image is there but its record does not parse. Neither "kept" nor
+        # "not set up" is true, and both would read as confident.
+        return (f"*{instance_id}* — the avatar image exists but its record "
+                f"(pfp.json) is unreadable, so I cannot show its traits.",
+                str(png))
+
+    kept = bool(meta.get("locked", True))
+    traits = meta.get("traits") if isinstance(meta.get("traits"), dict) else {}
+    voice = meta.get("voice") if isinstance(meta.get("voice"), dict) else {}
+    lines = [f"*{instance_id}* — avatar "
+             + ("kept (permanent)" if kept else "DRAFT — not kept yet")]
+    if meta.get("seed_hex"):
+        lines.append(f"seed {meta['seed_hex']} · {meta.get('generator', '?')}")
+    if traits:
+        lines.append("traits: " + ", ".join(f"{k} {v}" for k, v in sorted(traits.items())))
+    if voice:
+        lines.append("voice: pitch {p} · rate {r} · timbre {t}".format(
+            p=voice.get("pitch", "?"), r=voice.get("rate", "?"),
+            t=voice.get("timbre", "?")))
+    if not kept:
+        lines.append("_re-roll:_ `polyrob pfp randomize` · _accept:_ "
+                     "`polyrob pfp keep` (permanent)")
+    return ("\n".join(lines), str(png))
+
+
+# --------------------------------------------------------------------------- #
+# 043 D1 — /inbox and /book on the phone
+# --------------------------------------------------------------------------- #
+
+#: Phone width. The 80-column renderer is right for a terminal; a chat client
+#: re-wraps proportional text, so a narrower measure keeps a line one line.
+_CHAT_WIDTH = 60
+#: Rows per section before the reply becomes a scroll rather than a decision.
+_CHAT_ITEMS = 5
+
+
+def inbox_reply(user_id: str, data_dir: str) -> str:
+    """Everything waiting on an owner decision, blocking first.
+
+    The SAME composition the console and the REPL render
+    (``core.surfaces.inbox`` over ``surfaces.inbox_sources``), through the SAME
+    text renderer (``core.surfaces.inbox_render``) with this seat's own remedy
+    verbs — so three seats can never disagree about what is waiting.
+
+    ⚠️ A composer failure is reported as UNKNOWN, never as "nothing needs you".
+    """
+    from core.surfaces.inbox_render import CHAT_REMEDIES, render_inbox
+    from surfaces.inbox_sources import build_inbox
+    try:
+        body = build_inbox(user_id, data_dir=data_dir)
+    except Exception as exc:
+        logger.warning("inbox: composition failed", exc_info=True)
+        return (f"I could not read the inbox at all ({exc}). That is UNKNOWN, "
+                f"not 'nothing needs you'.")
+    return render_inbox(body, remedies=CHAT_REMEDIES, limit=_CHAT_ITEMS,
+                        width=_CHAT_WIDTH)
+
+
+async def book_reply(user_id: str, data_dir: str) -> str:
+    """The ledger against every money chain — one verdict, then what disagrees."""
+    from core.surfaces.inbox_render import render_book
+    from tools.defi.book import read_book
+    try:
+        body = await read_book(user_id, data_dir)
+    except Exception as exc:
+        logger.warning("book: read failed", exc_info=True)
+        return (f"I could not read the book ({exc}). That is UNKNOWN, not a "
+                f"clean book — do not trade on it.")
+    return render_book(body, width=_CHAT_WIDTH)

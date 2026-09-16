@@ -55,6 +55,26 @@ logger = logging.getLogger(__name__)
 #: aggregator, and it must never resolve to some other provider.
 KNOWN_AGGREGATORS = ("lifi",)
 
+#: The sentinel a caller uses to mean "the chain's NATIVE gas asset" as the
+#: token being SOLD. Deliberately the word, not an address: every 0x value that
+#: flows through this rail is checksum-validated and pinned, and smuggling a
+#: magic zero-address through that machinery is how a sentinel ends up
+#: interpreted as a real contract. Providers translate it to whatever their API
+#: wants, at the edge, on the way out.
+#:
+#: Why it exists (live, 2026-09-13): the chain registry recorded that on
+#: Robinhood "Native ETH in is the cheapest entry and needs no allowance at
+#: all", and there was no way to express it — `SwapParams.token_in` demanded a
+#: contract address and both value checks refused a native-carrying quote
+#: outright. So the agent could only enter via WETH, which meant an allowance it
+#: had to grant, and WETH it did not hold.
+NATIVE = "native"
+
+
+def is_native(token: Optional[str]) -> bool:
+    """True when *token* is the native-asset sentinel (case-insensitive)."""
+    return str(token or "").strip().lower() == NATIVE
+
 _FALSEY = {"", "none", "off", "false", "0", "no"}
 
 
@@ -283,7 +303,22 @@ def best_route_with_reason(chain: str, token_in: str, token_out: str,
         if not _calldata_ok(quote.calldata):
             logger.warning("route provider %s returned malformed calldata — refused", name)
             continue
-        if quote.value_raw:
+        if is_native(token_in):
+            # A NATIVE-in swap moves native value BY DEFINITION, and the caller
+            # declares it to tx_guard as a native send (`TxIntent.token=None`),
+            # whose branch asserts the measured native outflow against this same
+            # amount. So the requirement here is not "no value" but "exactly the
+            # value we asked to sell" — anything else is a different transaction
+            # from the one that was priced. Measured on Robinhood 2026-09-13:
+            # LI.FI returns value == fromAmount exactly for a native quote, and
+            # 0x0 for the ERC-20 control.
+            if quote.value_raw != amount_in_raw:
+                logger.error(
+                    "route provider %s attached native value %s to a native "
+                    "swap of %s — REFUSED (not the amount that was priced)",
+                    name, quote.value_raw, amount_in_raw)
+                continue
+        elif quote.value_raw:
             # An ERC-20 -> ERC-20 swap moves no native value. A non-zero value
             # here is an outflow the intent does not declare.
             logger.error("route provider %s attached native value %s to an "

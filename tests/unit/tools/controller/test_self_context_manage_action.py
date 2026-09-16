@@ -174,7 +174,8 @@ async def test_forged_turn_quarantined_even_review_off(monkeypatch, tmp_path):
     ctx = types.SimpleNamespace(user_id="u1", is_sub_agent=True, role="leaf")
     params = action.param_model(action="update", content="learned note from background run")
     res = await action.function(params, execution_context=ctx)
-    assert res.extracted_content and "pending review" in res.extracted_content
+    # 035 P0-4: the reply names inertness + the activating command, not "saved".
+    assert res.extracted_content and "NOT YET IN EFFECT" in res.extracted_content
     # proof on disk: pending, NOT active
     assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "self.md").exists()
     assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "self.md").exists()

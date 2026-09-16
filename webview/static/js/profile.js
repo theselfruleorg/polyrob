@@ -2,24 +2,9 @@
  * Profile page - Display user credits, tier, and deposit info
  */
 
-// Get JWT token from localStorage
-function getAuthToken() {
-    return localStorage.getItem('auth_token');
-}
-
 // Fetch data from API with auth
 async function fetchWithAuth(url) {
-    const token = getAuthToken();
-
-    // Prepare headers - include token if available in localStorage
-    const headers = {};
-    if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-    }
-    // Cookie will be sent automatically by browser
-
     const response = await fetch(url, {
-        headers: headers,
         credentials: 'include'  // Ensure cookies are sent
     });
 

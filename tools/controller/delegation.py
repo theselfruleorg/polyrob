@@ -67,17 +67,28 @@ _BLOCKED_TOOLS_ENV = "DELEGATE_BLOCKED_TOOLS"
 
 
 def get_blocked_child_tools() -> frozenset:
-    """Resolve the child tool_id blocklist (default + env override).
+    """Resolve the child tool_id blocklist: the default UNION the env additions.
 
-    ``DELEGATE_BLOCKED_TOOLS`` (comma list) **replaces** the default when set to a
-    non-empty value; unset OR empty-string keeps the default. Whitespace/empty
-    entries are ignored.
+    ``DELEGATE_BLOCKED_TOOLS`` (comma list) can only ever **ADD** to the default.
+    Whitespace/empty entries are ignored; unset or empty keeps the default.
+
+    M5 (wallet-security evaluation, 2026-09-14): this used to **replace** the
+    default. So ``DELEGATE_BLOCKED_TOOLS=some_new_tool`` — a plausible thing for
+    an operator to write, meaning "also block this one" — silently unblocked
+    every money tool (`defi_trade`, `x402_pay`, `wallet`, …) for delegated leaf
+    sub-agents, in one env line, with no warning. The default set is DERIVED
+    from the capability table (`core/tool_capabilities.py::ids_with
+    ("delegate_blocked")`) and `tests/unit/tools/test_gate_set_consistency.py`
+    asserts ``MONEY_TOOLS <= DELEGATE_BLOCKED_TOOLS``; a replacing env override
+    was the one way to break that invariant at runtime while the test stayed
+    green. Widening a capability now needs a code change to the capability
+    table, where it is reviewed.
     """
     raw = os.getenv(_BLOCKED_TOOLS_ENV)
     if raw is None:
         return DELEGATE_BLOCKED_TOOLS
     entries = frozenset(t.strip() for t in raw.split(",") if t.strip())
-    return entries if entries else DELEGATE_BLOCKED_TOOLS
+    return DELEGATE_BLOCKED_TOOLS | entries
 
 
 def narrow_child_tools(

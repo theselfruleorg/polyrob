@@ -459,3 +459,45 @@ def test_actions_refuse_anonymous_context():
     ):
         res = asyncio.run(coro)
         assert res.error and "authenticated tenant" in res.error
+
+
+# --- 046 phase 2: the agent can reach the asset registry --------------------
+
+def test_x402_request_forwards_the_asset_and_chain(monkeypatch):
+    """⚠️ Phase 0 built the payment-asset registry and the agent could not
+    reach it: `x402_request` had no asset or chain parameter, so every invoice
+    it minted was the default chain's canonical USDC whatever the payer could
+    actually pay in."""
+    import asyncio
+
+    from tools.x402.invoice_tool import InvoiceParams, X402InvoiceTool
+    seen = {}
+
+    async def fake_create(**kw):
+        seen.update(kw)
+        return {"request_id": "inv_1", "amount_usd": 1.0, "asset": "rob",
+                "chain": "robinhood", "recipient": "0x" + "11" * 20,
+                "purpose": "p", "expires_at_epoch": 1, "amount_raw": "5"}
+
+    monkeypatch.setattr("modules.x402.invoicing.create_payment_request",
+                        fake_create)
+    monkeypatch.setenv("INVOICE_CARD_ENABLED", "false")
+    ctx = type("C", (), {"user_id": "u", "session_id": "s"})()
+    tool = X402InvoiceTool()
+    res = asyncio.run(tool.x402_request(
+        InvoiceParams(amount_usd=1.0, purpose="a thing", asset_id="rob",
+                      chain="robinhood"), execution_context=ctx))
+    assert seen["asset_id"] == "rob" and seen["chain"] == "robinhood"
+    assert "5 raw units" in (res.extracted_content or "")
+
+
+def test_the_invoice_card_is_on_for_an_instance_that_invoices(monkeypatch):
+    """⚠️ `INVOICE_CARD_ENABLED` defaulted to local mode, so a SERVER — the only
+    posture that bills a stranger — never rendered a card."""
+    from core.config_policy import capability_toggles as ct
+    monkeypatch.delenv("INVOICE_CARD_ENABLED", raising=False)
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    monkeypatch.setenv("X402_INVOICE_ENABLED", "true")
+    assert ct.invoice_card_enabled() is True
+    monkeypatch.setenv("INVOICE_CARD_ENABLED", "false")
+    assert ct.invoice_card_enabled() is False

@@ -68,7 +68,32 @@ KIND_SCOPES: Dict[str, Tuple[str, ...]] = {
     # 032: the durable app service — the agent verb and the supervisor tick.
     "app_deploy": ("all", "apps"),
     "app_serve": ("all", "apps"),
+    # 043 A8/A42: the ownership-keyed sandbox container sweep — the one
+    # always-on autonomy_runtime loop that had neither a flag nor a pause kind.
+    "sandbox_reap": ("all",),
+    # 046: minting a PAID room-action offer. Riding `social` puts it under
+    # `/pause social` with the rest of the room's outbound life.
+    #
+    # ⚠️ A row is REQUIRED, not optional: `allows()` denies an UNKNOWN kind
+    # under EVERY scope, so without it a `trading` pause would also stop a room
+    # action — a refusal the owner never asked for.
+    #
+    # ⚠️ There is deliberately NO kind for APPLYING one. We already hold the
+    # payer's money at that point, and stranding the effect behind a pause is a
+    # silent default on an obligation — the same reasoning that leaves the 031
+    # cold-start requeue ungated.
+    "room_action_offer": ("all", "social"),
 }
+
+#: 043 A8/A42: kinds declared above with no caller anywhere in the tree yet —
+#: a plain-word must not be offered for a scope whose kinds are all dormant.
+#: `tests/test_autonomy_control_ratchet.py::test_every_kind_has_a_caller_or_is_dormant`
+#: keeps this set bidirectionally honest: a kind gains a caller, it comes out
+#: of here the same day; a kind loses its last caller, it goes back in.
+DORMANT_KINDS = frozenset({
+    "trade_exit", "oversight_seed", "oversight_dial", "oversight_deploy",
+    "oversight_alert",
+})
 
 
 @dataclass(frozen=True)
@@ -408,8 +433,18 @@ def pause(data_dir: Optional[str] = None, *, scopes: Tuple[str, ...] = ("all",),
           duration_minutes: Optional[int] = None, set_by: str = "owner",
           via: str = "cli", reason: str = "") -> PauseResult:
     """Write the record to every base. A scoped pause MERGES into an existing
-    record; ``all`` replaces it. ``effective`` is the READ-BACK state."""
-    requested = tuple(dict.fromkeys(s for s in scopes if s in SCOPES)) or ("all",)
+    record; ``all`` replaces it. ``effective`` is the READ-BACK state.
+
+    A19: an unknown scope REFUSES (``ValueError``) instead of being silently
+    dropped — every real caller validates through
+    ``core.surfaces.owner_intent.parse_pause_args`` first, so this is a
+    backstop, not the primary gate. An EMPTY *scopes* still defaults to
+    ``("all",)``.
+    """
+    bad = [s for s in scopes if s not in SCOPES]
+    if bad:
+        raise ValueError(f"unknown scope(s) {bad!r} (one of {', '.join(SCOPES)})")
+    requested = tuple(dict.fromkeys(scopes)) or ("all",)
     with _RecordLock(data_dir):
         old = read_state(data_dir)
         scopes = requested
@@ -459,8 +494,15 @@ def resume(data_dir: Optional[str] = None, *, scopes: Optional[Tuple[str, ...]] 
     ``state.env_scopes`` names it). A SCOPED resume never narrows a FULL pause —
     "resume trading" while everything is paused is refused (``effective=False``,
     ``note`` says why); only a full ``resume`` lifts an ``all`` pause.
+
+    A19: an unknown scope REFUSES (``ValueError``) instead of being silently
+    dropped — see :func:`pause`. ``scopes=None`` (or empty) still means
+    "resume everything".
     """
-    requested = tuple(dict.fromkeys(s for s in (scopes or ()) if s in SCOPES)) or None
+    bad = [s for s in (scopes or ()) if s not in SCOPES]
+    if bad:
+        raise ValueError(f"unknown scope(s) {bad!r} (one of {', '.join(SCOPES)})")
+    requested = tuple(dict.fromkeys(scopes or ())) or None
     if requested and "all" in requested:
         requested = None
     with _RecordLock(data_dir):
@@ -514,3 +556,64 @@ def resume(data_dir: Optional[str] = None, *, scopes: Optional[Tuple[str, ...]] 
             note = (f"still paused: {', '.join(new.scopes) or 'unknown'}; the record could not "
                     f"be cleared (see the log)")
     return PauseResult(state=new, written=written, removed=removed, effective=effective, note=note)
+
+
+#: The half of a pause refusal that is TRUE regardless of what the record says:
+#: it is not a separate lever, it binds the owner's own typed command, here is the
+#: remedy, and nothing happened. Kept beside the record so no caller can ship a
+#: refusal that carries only some of these (census, 2026-09-12).
+_PAUSE_REFUSAL_TAIL = (
+    " This is the autonomy pause, NOT a separate kill-switch, and it binds YOUR"
+    " OWN seat too: typing the command yourself hits this same check, because it"
+    " runs before any seat distinction. Lift it with `/resume` (or `polyrob"
+    " autonomy resume`), then run this again. Nothing was broadcast."
+)
+
+
+def pause_refusal_text(kind: str, *, what: str = "this action",
+                       data_dir: Optional[str] = None,
+                       force: bool = False) -> Optional[str]:
+    """The ONE honest refusal sentence for a pause-blocked action, or None.
+
+    ⚠️ There is no separate kill-switch to name. ``AutonomyConfig.autonomy_halted``
+    is literally ``not allows("dispatch").allowed`` — a FACET of this same record —
+    so the legacy "autonomy is HALTED (owner kill-switch)" text sent the owner
+    looking for a lever that does not exist, and offered no remedy at all.
+
+    Live, 2026-09-12: the owner's `/pause all` (reason "Stop all goals") denied
+    ``spend`` and ``trade_exit`` too, because both map to ``("all",)``. He was then
+    told a bridge was "a hard safety gate I can't self-grant". It was his own stop.
+    A refusal on the money path must therefore name three things: WHAT refused, WHO
+    set it, and a remedy that actually works — including that it binds the owner's
+    OWN typed command, since these predicates run before any seat distinction.
+
+    ``force=True`` renders the sentence even when this record reads ALLOWED. That
+    is not a courtesy: ``autonomy_halted`` also answers to the legacy env/touch-file
+    facets and to an injected probe, so a caller can know it was stopped while the
+    record here is silent. Without ``force`` those callers fell back to a one-line
+    refusal that dropped every honesty property the record-backed path carries —
+    i.e. the exact defect, reintroduced on the rarer branch.
+
+    Returns ``None`` when *kind* may run and ``force`` is not set, so the caller
+    reads as a guard clause. Never raises: a probe fault is the CALLER's
+    fail-closed decision to make, not this renderer's.
+    """
+    # Call shape matters: every caller in the tree (and every test stub) uses the
+    # one-arg `allows(kind)`, so only pass `data_dir` when one was actually given.
+    decision = allows(kind, data_dir) if data_dir is not None else allows(kind)
+    allowed = bool(getattr(decision, "allowed", False))
+    if allowed and not force:
+        return None
+    # `decision.reason` already reads "paused (<scopes>) by <who> via <surface>",
+    # so WHAT and WHO are covered; only the owner's own stated reason and the
+    # remedy need adding. Re-stating set_by/via here printed them twice.
+    # Read through getattr throughout: this renderer's job is to make a refusal
+    # clearer, so it must never be the thing that raises on an odd Decision.
+    cause = (getattr(decision, "reason", None) or "paused") if not allowed \
+        else "paused (autonomy halted)"
+    stated = getattr(getattr(decision, "state", None), "reason", None)
+    return (
+        f"refused: {what} is {cause}"
+        + (f" — the stated reason was {stated!r}" if stated else "")
+        + "." + _PAUSE_REFUSAL_TAIL
+    )

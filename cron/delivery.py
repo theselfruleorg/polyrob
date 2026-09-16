@@ -266,6 +266,39 @@ async def _deliver_twitter(task_agent: Any, job: Any, final: str) -> bool:
     return True
 
 
+async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> bool:
+    """044 T21: deliver a cron report INTO an allowlisted room.
+
+    Two rules a public room adds over an owner DM, both the SAME ones
+    ``MessageRouter.publish`` applies to a live room reply:
+
+    - the room's hourly reply cap (``RoomCaps``), spent only by a post that
+      LANDED — a suppressed or failed report never burns the budget;
+    - a secret re-scrub, because a room is many humans and a secret shape that
+      survived every other scrub must not be the thing the agent posts publicly.
+    """
+    from core.secret_scrub import scrub_secret_shapes
+
+    job_id = getattr(job, "id", "?")
+    caps = container.get_service("room_caps") if container is not None else None
+    if caps is not None:
+        ok_room, why = caps.may_reply("telegram", chat_id)
+        if not ok_room:
+            logger.warning("cron delivery: room %s suppressed for job %s — %s",
+                           chat_id, job_id, why)
+            return False
+    router = container.get_service("message_router") if container is not None else None
+    if router is None:
+        logger.info("cron delivery: no message_router for room %s (job %s)",
+                    chat_id, job_id)
+        return False
+    ok = bool(await router.send_message(chat_id, scrub_secret_shapes(final or ""),
+                                        "telegram"))
+    if ok and caps is not None:
+        caps.record_reply("telegram", chat_id)
+    return ok
+
+
 async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> bool:
     # Recipient + sink resolution both live on the user-delivery rail (T6): the rail
     # does its own sink lookup and records a durable owner_notice fallback when no
@@ -276,6 +309,17 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
     if not chat_id:
         logger.info("cron delivery: no telegram recipient for job %s", getattr(job, "id", "?"))
         return False
+
+    # 044 T21: a ROOM is not the owner's DM. The user-delivery rail below dedups
+    # and caps against the OWNER's private notice budget — the wrong bound for a
+    # public room, and one that would let a cron report bypass the room's own
+    # hourly cap entirely. Route it through the router with the room's rules
+    # instead. (The explicit-target gate above is unchanged: without
+    # CRON_DELIVERY_ALLOW_EXPLICIT_TARGET, `deliver_target` was already dropped
+    # before this function was called, so this opens no new recipient.)
+    from core.surfaces.room_keys import is_room_target
+    if is_room_target(container, "telegram", chat_id):
+        return await _deliver_room(container, job, final, str(chat_id))
 
     # Gate proactive send by surface send-policy (WhatsApp 24h window etc.).
     # For Telegram (no window), resolve_proactive_send returns ("send", None) — no-op.

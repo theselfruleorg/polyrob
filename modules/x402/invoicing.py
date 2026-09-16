@@ -33,7 +33,9 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-INVOICE_KIND = "agent_invoice"
+#: 046: defined in `invoice_assets` and imported here, not the reverse —
+#: that module is imported BY this one for the re-exports below.
+from modules.x402.invoice_assets import INVOICE_KIND  # noqa: E402
 
 
 def _norm_tx(tx_hash) -> Optional[str]:
@@ -155,79 +157,8 @@ def _jitter_should_apply(chain: Optional[str] = None) -> bool:
             "same-amount pending-invoice collision (Task 11 I2 safety fix)."
         )
     return True
-
-
-# Per-treasury in-process locks (I1 fix): serialize the amount-collision
-# dedupe SELECT + INSERT critical section in `create_payment_request` so two
-# concurrent creates for the SAME treasury+amount can never both observe "no
-# collision" before either has inserted — closing the TOCTOU window that
-# would otherwise let both keep the exact, unjittered amount (defeating the
-# whole point of the jitter). Scoped to a single process (POLYROB's default
-# `UVICORN_WORKERS=1` deployment model — see the session-registry SQLite
-# backend for the cross-process class of this problem, which is out of scope
-# here); a module-level dict is fine since treasuries are few and long-lived.
-_treasury_locks: Dict[str, asyncio.Lock] = {}
-
-
-def _treasury_lock(recipient: str) -> asyncio.Lock:
-    lock = _treasury_locks.get(recipient)
-    if lock is None:
-        lock = asyncio.Lock()
-        _treasury_locks[recipient] = lock
-    return lock
-
-
-# M5: the partial UNIQUE index name — the CROSS-process backstop the in-process
-# `_treasury_lock` cannot provide under UVICORN_WORKERS>1 (each worker runs its
-# own settlement watcher and can create a same-(recipient, amount) invoice
-# concurrently; the in-process lock only serializes within one process).
-_PENDING_AMOUNT_INDEX = "idx_x402_requests_pending_amount_unique"
-
-
-def _is_pending_amount_conflict(err: Exception) -> bool:
-    """True when an ``IntegrityError`` is the M5 pending-amount unique
-    violation. SQLite reports a UNIQUE index on plain COLUMNS by the column
-    names — NOT the index name (that form is reserved for indexes on
-    expressions, like the subscription index ``json_extract(...)``), so match
-    on the ``(recipient, amount_usd)`` column signature."""
-    msg = str(err)
-    return ("UNIQUE constraint failed" in msg
-            and "recipient" in msg and "amount_usd" in msg)
-
-
-async def _ensure_pending_amount_unique_index(database) -> None:
-    """Create the M5 partial UNIQUE index on ``(recipient, amount_usd)`` for
-    PENDING agent invoices. Created ONLY on the jitter-active path (on-chain
-    detection ON) — with detection OFF, two same-amount pending invoices are
-    INTENTIONALLY allowed (byte-identical legacy; see the note in
-    ``modules.database.x402_tables.X402Tables.create_tables``), so the index
-    must NOT exist to enforce uniqueness in that case.
-
-    Mirrors the SHAPE of ``x402_tables.dedupe_and_create_tx_hash_unique_index``
-    (self-healing ``CREATE ... IF NOT EXISTS``, degrade-not-crash). It does NOT
-    mutate an existing pending invoice's amount to clear a legacy duplicate (a
-    payer may already have been quoted the old amount — changing it silently
-    could misdirect their payment). If the index cannot be created because such
-    duplicates already exist, it degrades to the in-process ``_treasury_lock``
-    guard with a loud log rather than raising into the create path — strictly
-    no worse than today (today has no index at all)."""
-    try:
-        await database.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {_PENDING_AMOUNT_INDEX} "
-            "ON x402_payment_requests(recipient, amount_usd) "
-            "WHERE status = 'pending' "
-            "AND json_extract(metadata, '$.kind') = 'agent_invoice'"
-        )
-    except Exception as e:
-        logger.warning(
-            "x402 invoicing: could not create %s (likely pre-existing legacy "
-            "duplicate same-amount pending agent invoices) — degrading to the "
-            "in-process per-treasury lock; workers>1 same-amount collision "
-            "protection is reduced until those duplicates clear: %s",
-            _PENDING_AMOUNT_INDEX, e)
-
-
 from modules.x402._db import resolve_db as _resolve_db  # shared plumbing (one home)
+from modules.x402.invoice_sizing import _UNSET, _size_invoice_raw, scale_raw  # 046 §4.4
 
 
 def _emit(kind: str, *, user_id: str, session_id: str = "", attrs: Optional[dict] = None) -> None:
@@ -249,8 +180,20 @@ def _row_metadata(row: Dict[str, Any]) -> dict:
         return {}
 
 
+#: Kinds that are AGENT-CREATED payable rows, as opposed to the middleware's
+#: already-settled platform-charge rows. Every one of these is readable through
+#: `get_payment_request`, servable as a public challenge, and settleable.
+#:
+#: ⚠️ A new producer MUST be added here. `is_invoice_row` is the filter on the
+#: public read path, so a kind missing from this set produces rows that mint
+#: fine, take real money, and then read as NOT FOUND — no challenge, no
+#: settlement, no way for anyone to see what happened.
+PAYABLE_KINDS = (INVOICE_KIND, "room_action")
+
+
 def is_invoice_row(row: Dict[str, Any]) -> bool:
-    return _row_metadata(row).get("kind") == INVOICE_KIND
+    """Is this an agent-created payable row (not a platform-charge row)?"""
+    return _row_metadata(row).get("kind") in PAYABLE_KINDS
 
 
 def normalize_recipient(address: str, chain: Optional[str] = None) -> str:
@@ -312,32 +255,6 @@ def _sanitize_correspondent_ref(ref: Optional[Dict[str, Any]]) -> Optional[dict]
             "thread_id": str(ref.get("thread_id") or "").strip()[:128]}
 
 
-async def _dedupe_amount_for_treasury(
-    amount_usd: float, recipient: str, cap: float, database,
-) -> float:
-    """Task 11 amount-collision jitter: if a PENDING agent invoice for this
-    treasury already carries the exact same amount, nudge by deterministic
-    whole steps of $0.0001 (sub-cent) until unique among pending invoices for
-    this treasury, or the cap is reached. Returns the ORIGINAL amount
-    unchanged when there is no collision (the common case, zero-cost) or when
-    every candidate up to the cap is still colliding/over — in which case the
-    watcher's oldest-first ambiguity policy is the fallback disambiguator."""
-    step = 0.0001
-    for i in range(100):
-        candidate = round(amount_usd + step * i, 6)
-        if candidate > cap:
-            break
-        row = await database.fetch_one(
-            """SELECT COUNT(*) AS n FROM x402_payment_requests
-               WHERE status = 'pending' AND recipient = ? AND amount_usd = ?
-                 AND json_extract(metadata, '$.kind') = ?""",
-            (recipient, candidate, INVOICE_KIND),
-        )
-        if not row or not int(row.get("n") or 0):
-            return candidate
-    return amount_usd
-
-
 async def create_payment_request(
     *,
     user_id: str,
@@ -350,6 +267,11 @@ async def create_payment_request(
     correspondent_ref: Optional[Dict[str, Any]] = None,
     subscription_id: Optional[str] = None,
     chain: Optional[str] = None,
+    asset_id: Optional[str] = None,
+    amount_raw: Optional[int] = None,
+    quoter: Any = _UNSET,
+    kind: str = INVOICE_KIND,
+    extra_metadata: Optional[Dict[str, Any]] = None,
     db=None,
 ) -> Dict[str, Any]:
     """Create a pending invoice row. Returns payment instructions, or raises
@@ -365,7 +287,16 @@ async def create_payment_request(
     the settlement watcher can detect it on settlement and call
     ``modules.x402.subscriptions.apply_settlement`` — extending the
     subscription's ``paid_through`` instead of treating it as an ordinary
-    one-off invoice. None for every other invoice (unchanged legacy shape)."""
+    one-off invoice. None for every other invoice (unchanged legacy shape).
+
+    046 Phase 0. ``asset_id`` names WHICH token this invoice is payable in (see
+    `core/payments/assets.py`); unset resolves the chain's canonical USDC, which
+    is what every pre-046 caller meant. ``amount_raw`` is the exact integer the
+    settlement scan matches on — pass it for a non-stable asset, whose sizing is
+    the quoter's job (proposal 046 §4.4), and leave it unset for a dollar-pegged
+    one. ``kind``/``extra_metadata`` let a NON-agent-invoice producer ride this
+    ONE mint path rather than forking it; a distinct ``kind`` also keeps that
+    producer out of the agent's own ``X402_INVOICE_DAILY_MAX`` bucket."""
     # H5: the owner kill-switch halts ALL autonomous activity — including minting new
     # payment requests (agent invoices AND the settlement watcher's auto-mode renewals),
     # not just outbound spend. Fail closed: a probe error blocks creation.
@@ -415,11 +346,37 @@ async def create_payment_request(
     if not recipient:
         raise ValueError("no treasury configured — set X402_PAYMENT_RECIPIENT")
 
+    # 046 Phase 0: WHICH token, at what precision, in what raw amount. Resolved
+    # BEFORE the daily-cap query so an unknown asset is refused without ever
+    # touching the store.
+    asset = resolve_invoice_asset(chain, asset_id)
+    raw = _size_invoice_raw(amount_usd, asset, amount_raw, quoter)
+    # The jitter below moves the dollars AFTER this one sizing decision, so
+    # every later raw figure scales it — never re-quotes. See `invoice_sizing`.
+    _base_raw, _base_usd = raw, float(amount_usd)
+    def _raw_for(usd: float) -> int:
+        return scale_raw(_base_raw, _base_usd, usd)
+    if raw <= 0:
+        raise ValueError(
+            f"invoice amount ${amount_usd} resolves to {raw} raw units of "
+            f"{asset.symbol or asset.asset_id} — refusing rather than minting an "
+            f"invoice nobody can pay")
+    if asset.min_amount_raw and raw < asset.min_amount_raw:
+        raise ValueError(
+            f"{raw} raw units is below the {asset.asset_id} floor of "
+            f"{asset.min_amount_raw} (set with `polyrob wallet asset add "
+            f"--min-amount`)")
+
     database = await _resolve_db(db)
     if database is None:
         raise ValueError("payment-request store unavailable (no database service)")
 
-    daily_cap = invoice_daily_max()
+    # 046: the daily cap bounds the AGENT's own judgment-driven invoicing. A
+    # non-agent producer (a room action) rides this same mint path but is
+    # bounded by its OWN per-payer and per-target caps, so charging it against
+    # this bucket would let one busy room exhaust the agent's ability to invoice
+    # at all. Kind-scoped, and skipped entirely for a non-agent kind.
+    daily_cap = invoice_daily_max() if kind == INVOICE_KIND else 0
     # Tenant match covers both storage shapes: user_id column when the tenant has
     # a user_profiles row, metadata.tenant_id when the FK fallback stored NULL.
     # json_extract (SQLite JSON1, bundled) not LIKE: a LIKE pattern treats `_`/`%`
@@ -433,9 +390,9 @@ async def create_payment_request(
            WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?)
              AND created_at >= datetime('now', '-1 day')
              AND json_extract(metadata, '$.kind') = ?""",
-        (user_id, user_id, INVOICE_KIND),
+        (user_id, user_id, kind),
     )
-    if row and int(row.get("n") or 0) >= daily_cap:
+    if daily_cap and row and int(row.get("n") or 0) >= daily_cap:
         raise ValueError(
             f"daily invoicing cap reached ({daily_cap}/day, X402_INVOICE_DAILY_MAX)"
         )
@@ -465,8 +422,8 @@ async def create_payment_request(
         if family == "svm":
             from modules.x402.solana_settlement import reference_for_invoice
             solana_reference = reference_for_invoice(request_id)
-        metadata = json.dumps({
-            "kind": INVOICE_KIND,
+        metadata_dict = {
+            "kind": kind,
             "chain_family": family,
             "solana_reference": solana_reference,
             "session_id": session_id,
@@ -476,16 +433,35 @@ async def create_payment_request(
             "wake_delivered": False,
             "correspondent_ref": _sanitize_correspondent_ref(correspondent_ref),
             "subscription_id": subscription_id,
-        })
+        }
+        if extra_metadata:
+            metadata_dict.update(extra_metadata)
+        metadata = json.dumps(metadata_dict)
+        # 046: the jitter path moves `final_amount` AFTER the sizing above. Re-
+        # derive the raw amount from the FINAL figure, or the row's amount_raw
+        # describes the pre-jitter price and the on-chain match never fires.
+        # ⚠️ Reads the ENCLOSING `amount_raw`, which the pinned-raw dedupe above
+        # may have nudged. Capturing the original would write a row whose
+        # payable integer is one nobody was quoted.
+        final_raw = (int(amount_raw) if amount_raw is not None
+                     else _raw_for(final_amount))
         try:
             await database.execute(
                 """INSERT INTO x402_payment_requests (
                        id, user_id, amount, amount_usd, asset, chain, recipient, nonce,
-                       deadline, status, metadata, created_at, updated_at
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                (request_id, column_user, str(final_amount), final_amount, "usdc", chain,
+                       deadline, status, metadata,
+                       asset_id, asset_address, asset_decimals, amount_raw,
+                       created_at, updated_at
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                             datetime('now'), datetime('now'))""",
+                # ⚠️ The LEGACY `asset` column keeps its lowercase symbol. Every
+                # existing reader (api/x402_endpoints.py, tools/x402/service.py)
+                # displays it, and a USDC invoice must keep reading "usdc".
+                (request_id, column_user, str(final_amount), final_amount,
+                 (asset.symbol or "usdc").lower(), chain,
                  normalize_recipient(recipient, chain), nonce, deadline,
-                 "pending", metadata),
+                 "pending", metadata,
+                 asset.asset_id, asset.address, asset.decimals, str(final_raw)),
             )
         except sqlite3.IntegrityError as e:
             # Task 14 review Finding 2 (duplicate-renewal TOCTOU): with
@@ -522,13 +498,35 @@ async def create_payment_request(
     # either has inserted, so BOTH keep the exact amount (defeating the
     # jitter). Hold the per-treasury lock across the dedupe SELECT + INSERT
     # so the second racer's SELECT always sees the first racer's row.
-    if _jitter_should_apply(chain):
+    if amount_raw is not None:
+        # 046 phase 2: a PINNED raw amount cannot be separated by the USD jitter
+        # below — `_insert` writes `final_raw = int(amount_raw)` when the caller
+        # pins one, so the jitter moved only the displayed dollars while the
+        # payable integer (the one the settlement match compares, exactly,
+        # oldest-first) stayed identical. Two same-price room offers therefore
+        # shared an amount and one payment applied the OTHER payer's action
+        # against a different person. The RAW is nudged instead, always — a room
+        # action is identified BY its amount, so this may not depend on the
+        # detection flag. The loop, the lock, the index and the retry live in
+        # `invoice_jitter` (this file is under a size ratchet for good reason).
+        from modules.x402.invoice_jitter import insert_with_unique_raw
+
+        async def _insert_at(_raw: int) -> None:
+            nonlocal amount_raw
+            amount_raw = _raw       # read back by `_insert`'s closure
+            await _insert(amount_usd)
+
+        amount_raw = await insert_with_unique_raw(
+            _insert_at, int(raw), normalize_recipient(recipient, chain),
+            database, asset_address=asset.address, decimals=asset.decimals)
+    elif _jitter_should_apply(chain):
         # M5: the partial UNIQUE index is the CROSS-process backstop for the
         # in-process dedupe below. Created only here (jitter-active path).
         await _ensure_pending_amount_unique_index(database)
         async with _treasury_lock(normalize_recipient(recipient, chain)):
             candidate = await _dedupe_amount_for_treasury(
-                amount_usd, normalize_recipient(recipient, chain), cap, database)
+                amount_usd, normalize_recipient(recipient, chain), cap, database,
+                asset_address=asset.address, decimals=asset.decimals, kind=kind)
             # The dedupe SELECT closes the SAME-process TOCTOU; the index closes
             # the CROSS-process one (workers>1). If a concurrent worker inserted
             # this exact (recipient, amount) between our SELECT and INSERT, the
@@ -585,10 +583,17 @@ async def create_payment_request(
         "request_id": request_id, "amount_usd": amount_usd, "chain": chain,
         "purpose": purpose.strip()[:200], "deadline": deadline,
     })
+    final_raw = (int(amount_raw) if amount_raw is not None
+                 else _raw_for(amount_usd))
     return {
         "request_id": request_id,
         "amount_usd": amount_usd,
-        "asset": "usdc",
+        "asset": (asset.symbol or "usdc").lower(),
+        "asset_id": asset.asset_id,
+        "asset_symbol": asset.symbol,
+        "asset_address": asset.address,
+        "asset_decimals": asset.decimals,
+        "amount_raw": final_raw,
         "chain": chain,
         "recipient": recipient,
         "purpose": purpose.strip(),
@@ -664,6 +669,13 @@ async def get_payment_request(request_id: str, *, db=None) -> Optional[Dict[str,
         "request_id": row.get("id"),
         "amount_usd": row.get("amount_usd"),
         "asset": row.get("asset"),
+        # 046: WHICH token, at what precision, in what raw amount. Without
+        # these the public challenge reads every invoice as usdc-base and
+        # serves a facilitator shape for an asset no facilitator can settle.
+        "asset_id": row.get("asset_id"),
+        "asset_address": row.get("asset_address"),
+        "asset_decimals": row.get("asset_decimals"),
+        "amount_raw": row.get("amount_raw"),
         "chain": row.get("chain"),
         "recipient": row.get("recipient"),
         "nonce": row.get("nonce"),
@@ -671,6 +683,8 @@ async def get_payment_request(request_id: str, *, db=None) -> Optional[Dict[str,
         "status": row.get("status"),
         "purpose": meta.get("purpose") or "",
         "payer_contact": meta.get("payer_contact") or meta.get("payer_hint"),
+        "kind": meta.get("kind") or INVOICE_KIND,
+        "room_action": meta.get("room_action"),
         "created_at": row.get("created_at"),
         "completed_at": row.get("completed_at"),
     }
@@ -978,12 +992,16 @@ async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
     database = await _resolve_db(db)
     if database is None:
         return []
+    # 046: every PAYABLE kind, not just `agent_invoice`. A producer missing
+    # from this filter mints rows that take real money and are then never
+    # notified, never actuated, and invisible to the owner.
+    placeholders = ",".join("?" for _ in PAYABLE_KINDS)
     rows = await database.fetch_all(
-        """SELECT * FROM x402_payment_requests
-           WHERE status IN ('completed', 'settled_no_tx')
-             AND json_extract(metadata, '$.kind') = ?
-             AND json_extract(metadata, '$.wake_delivered') = 0""",
-        (INVOICE_KIND,),
+        f"""SELECT * FROM x402_payment_requests
+            WHERE status IN ('completed', 'settled_no_tx')
+              AND json_extract(metadata, '$.kind') IN ({placeholders})
+              AND json_extract(metadata, '$.wake_delivered') = 0""",
+        tuple(PAYABLE_KINDS),
     )
     out = []
     for row in rows or []:
@@ -997,6 +1015,9 @@ async def settled_unnotified_invoices(*, db=None) -> List[Dict[str, Any]]:
             "purpose": meta.get("purpose") or "",
             "correspondent_ref": meta.get("correspondent_ref") or None,
             "subscription_id": meta.get("subscription_id") or None,
+            # 046: what this payment BOUGHT, when it bought something.
+            "kind": meta.get("kind") or INVOICE_KIND,
+            "room_action": meta.get("room_action") or None,
         })
     return out
 
@@ -1129,41 +1150,20 @@ async def advance_scan_checkpoint(treasury: str, last_block: int, *, db=None) ->
     )
 
 
-async def match_pending_invoice_by_amount(
-    amount_usd: float, treasury: str, *, chain: Optional[str] = None, db=None,
-) -> Optional[Dict[str, Any]]:
-    """The on-chain settlement-detection ambiguity policy (Task 11): among
-    PENDING agent invoices for this treasury at an EXACT amount match, the
-    OLDEST (``created_at`` ascending) wins — so one detected transfer settles
-    at most one invoice. Not tenant-scoped: an on-chain transfer carries no
-    tenant identity, only the recipient (treasury) address; disambiguating
-    same-amount invoices is what the amount jitter
-    (`x402_invoice_amount_jitter_enabled`) is for.
+# 046: asset resolution and asset-keyed settlement matching live in their own
+# module (the decomposition rule + this file's size ratchet). Re-exported here
+# so every pre-existing caller keeps working unchanged.
+from modules.x402.invoice_assets import (  # noqa: E402,F401
+    atomic_amount, match_pending_invoice, match_pending_invoice_by_amount,
+    resolve_invoice_asset,
+)
 
-    Ties on ``created_at`` (SQLite's ``datetime('now')`` is second-precision,
-    so two invoices created within the same wall-clock second are common) are
-    broken by the table's implicit ``rowid`` — true monotonic insertion order
-    — NOT ``id``, which is a random UUID and carries no chronological
-    meaning."""
-    if not treasury:
-        return None
-    database = await _resolve_db(db)
-    if database is None:
-        return None
-    row = await database.fetch_one(
-        """SELECT * FROM x402_payment_requests
-           WHERE status = 'pending' AND recipient = ? AND amount_usd = ?
-             AND json_extract(metadata, '$.kind') = ?
-           ORDER BY created_at ASC, rowid ASC LIMIT 1""",
-        (normalize_recipient(treasury, chain), round(float(amount_usd), 6),
-         INVOICE_KIND),
-    )
-    if not row:
-        return None
-    meta = _row_metadata(row)
-    return {
-        "request_id": row["id"],
-        "amount_usd": row.get("amount_usd"),
-        "session_id": meta.get("session_id") or "",
-        "user_id": meta.get("tenant_id") or row.get("user_id") or "",
-    }
+
+# 046: the amount-jitter concern lives in its own module (the decomposition rule
+# + this file's size ratchet). Re-exported so every pre-existing caller and test
+# keeps working unchanged.
+from modules.x402.invoice_jitter import (  # noqa: E402,F401
+    _PENDING_AMOUNT_INDEX, _dedupe_amount_for_treasury,
+    _ensure_pending_amount_unique_index, _is_pending_amount_conflict,
+    _treasury_lock,
+)

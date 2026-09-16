@@ -20,7 +20,9 @@ def _reload_server(monkeypatch, multitenant=False):
     return importlib.reload(server)
 
 
-@pytest.mark.parametrize("path", ["/", "/sessions", "/settings"])
+# 043 phase 5: /sessions is deleted (the Chats overlay replaces it), so `/` (now
+# the new chat shell) is the server.py-rendered root that must not leak tenant nav.
+@pytest.mark.parametrize("path", ["/"])
 def test_local_pages_hide_tenant_nav(monkeypatch, path):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
@@ -31,7 +33,9 @@ def test_local_pages_hide_tenant_nav(monkeypatch, path):
     assert 'href="/profile"' not in html, f"{path} leaks Profile link in local posture"
 
 
-@pytest.mark.parametrize("path", ["/memory", "/autonomy", "/identity", "/system"])
+# 043 §9 phase 4: /memory, /identity, /system pages deleted; /pending is the
+# surviving legacy webgate page that passes is_multitenant explicitly.
+@pytest.mark.parametrize("path", ["/pending"])
 def test_local_webgate_pages_still_hide_tenant_nav(monkeypatch, path):
     """The webgate pages pass is_multitenant explicitly — must stay hidden."""
     server = _reload_server(monkeypatch, multitenant=False)
@@ -41,17 +45,12 @@ def test_local_webgate_pages_still_hide_tenant_nav(monkeypatch, path):
     assert 'href="/profile"' not in html
 
 
-def test_multitenant_page_keeps_tenant_nav(monkeypatch):
-    """Multitenant posture must keep the tenant nav on a layout-extending page.
-
-    ``/session/{id}`` is public (view-only) in multitenant and extends
-    layout.html WITHOUT passing ``is_multitenant`` — the posture-global default
-    must show the tenant links there.
-    """
-    server = _reload_server(monkeypatch, multitenant=True)
-    client = TestClient(server._fastapi)
-    r = client.get("/session/nav-posture-test")
-    assert r.status_code == 200
-    html = r.text
-    assert 'href="/profile"' in html
-    assert 'href="/signin"' in html
+# The multitenant tenant-nav "show" case was pinned via ``/session/{id}`` — the
+# one public (view-only, no-auth) layout.html page in multitenant. 043 §9 deletes
+# the legacy session.html view and turns ``/session/{id}`` into a 301 to /c/{id}
+# (that public redirect is covered by
+# test_posture_gating::test_session_page_still_public_in_multitenant), so there
+# is no public layout.html page left to assert the tenant nav on. The hide case
+# stays covered by test_local_pages_hide_tenant_nav above; the tenant-nav default
+# is a legacy layout.html concern the new shell (shell.html + pages_new.NAV)
+# replaces, and phase 5 removes the legacy pages entirely.

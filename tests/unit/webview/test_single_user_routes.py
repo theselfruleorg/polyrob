@@ -56,10 +56,11 @@ def test_auth_router_not_mounted_in_single_user(single_user):
     assert not any(p and p.startswith("/api/auth") for p in paths)
 
 
-def test_task_router_and_settings_stay_mounted_single_user(single_user):
-    # Core surfaces survive in both modes.
+def test_task_router_stays_mounted_single_user(single_user):
+    # Core surfaces survive in both modes. (043 §9 phase 4: the legacy /settings
+    # PAGE is deleted — its panels moved to the new Agent destination — so it is
+    # no longer asserted here.)
     assert single_user.TASK_ROUTER_MOUNTED is True
-    assert "/settings" in _route_paths(single_user)
 
 
 def test_index_reachable_without_auth_single_user(single_user):
@@ -68,8 +69,13 @@ def test_index_reachable_without_auth_single_user(single_user):
 
 
 def test_session_page_reachable_without_auth_single_user(single_user):
+    # 043 §9: the legacy session.html view is deleted; /session/{id} now 301s to
+    # the one bound-session page /c/{id}. The redirect is reachable without auth
+    # in single-user (the path stays public).
     client = TestClient(single_user._fastapi)
-    assert client.get("/session/abc123").status_code == 200
+    resp = client.get("/session/abc123", follow_redirects=False)
+    assert resp.status_code == 301
+    assert resp.headers["location"] == "/c/abc123"
 
 
 # --------------------------------------------------------------------------- #

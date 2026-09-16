@@ -36,6 +36,8 @@ from agents.task.task_agent_support import (  # noqa: F401  (re-exported: existi
     _SELF_WAKE_TASKS,
     _resolve_chat_runtime,
     _resolve_session_runtime,
+    build_session_metadata,
+    room_session_source,
     _spawn_detached,
     task_unavailable_message,
 )
@@ -421,8 +423,11 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         if not session_id:
             session_id = str(uuid.uuid4())
 
-        # Create session via SessionManager
-        actual_id = self.session_manager.create_session(session_id, user_id)
+        # Create session via SessionManager (043 A17: resolve the creator label)
+        from agents.task.agent.session import resolve_creator
+        actual_id = self.session_manager.create_session(
+            session_id, user_id,
+            creator=resolve_creator(kwargs.get("creator"), kwargs.get("session_source")))
 
         # Create orchestrator for this session
         from agents.task.agent.orchestrator import SessionOrchestrator
@@ -443,6 +448,13 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
             on_stream_chunk=stream_callback,
         )
 
+        # 044 C2: stamp PUBLIC from the session SOURCE, before and independently
+        # of the chat bind — `bind_chat_surface` returns early when
+        # SINGULAR_CHAT_ENABLED is off (the default), so stamping only there built
+        # a room session private-shaped. A room's safety flag must never depend on
+        # a transport flag.
+        orchestrator._public_session = room_session_source(kwargs.get("session_source"))
+
         # P1b-2: bind this session's orchestrator to the Singular Chat outbound bus
         # BEFORE initialize() — _register_stream_callback captures the router+key by
         # value, so binding after init would be a permanent no-op. Flag-gated +
@@ -455,41 +467,36 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
                 session_source=kwargs.get("session_source"),
                 chat_session_key=kwargs.get("chat_session_key"),
                 session_id=actual_id, user_id=user_id,
+                # 044 T20: a room SERVICE run binds but must not TAKE OVER the
+                # room's durable chat<->session row (see bind_chat_surface).
+                write_row=kwargs.get("bind_write_row", True),
             )
         except Exception as e:
             logger.debug(f"chat-surface bind skipped: {e}")
 
-        # Initialize orchestrator with tools. A surface may pass an explicit `tool_ids`
-        # override (e.g. the telegram owner-interactive toolset) WITHOUT going through
-        # the request-dict path, so provider/model resolution stays untouched.
+        # Initialize orchestrator with tools. A surface may pass an explicit
+        # `tool_ids` override (e.g. the telegram owner-interactive toolset) WITHOUT
+        # going through the request-dict path, so provider/model resolution stays
+        # untouched. 044 T5 fix round 1: an explicit override is AUTHORITATIVE
+        # including an EMPTY list (`or` treated `[]` as falsy and widened a
+        # locked-down `GROUP_TURN_TOOLS=""` room back to `filesystem` read/write).
+        # Only None — no kwarg at all — falls through to the request-dict toolset.
         tool_ids_override = kwargs.get("tool_ids")
+        effective_tool_ids = (tool_ids_override if tool_ids_override is not None
+                              else session_request.tools)
         await orchestrator.initialize(
-            tool_ids=tool_ids_override or session_request.tools,
+            tool_ids=effective_tool_ids,
             tools_config=session_request.session_config.get('tools_config', {}) if session_request.session_config else {}
         )
 
         # Store orchestrator reference
         self.register_orchestrator(actual_id, orchestrator)
 
-        # Store full session metadata with config for API compatibility
-        self.session_manager.update_session_metadata(actual_id, {
-            'task': session_request.task,
-            'model': session_request.model,
-            'tools': session_request.tools,
-            'config': {
-                'model': session_request.model,
-                'provider': session_request.provider,
-                'tools': session_request.tools,
-                'max_steps': session_request.max_steps,
-                'temperature': session_request.temperature,
-                'use_vision': session_request.use_vision,
-                'tools_config': session_request.session_config.get('tools_config', {}) if session_request.session_config else {}
-            },
-            'request': session_request.__dict__,
-            'created_at': datetime.now().isoformat(),
-            'status': 'created',
-            'orchestrator_ready': True
-        })
+        # Store full session metadata with config for API compatibility. Shape +
+        # the 044 C1 `effective_tools`/`public_session` keys: task_agent_support.
+        self.session_manager.update_session_metadata(actual_id, build_session_metadata(
+            session_request, effective_tool_ids=effective_tool_ids,
+            public_session=orchestrator._public_session))
 
         # Save task to dedicated file for webview (uses SessionManager helper)
         try:
@@ -957,22 +964,3 @@ class TaskAgent(TaskAgentChatMixin, TaskAgentDeliveryMixin, TaskAgentLifecycleMi
         except Exception as e:
             logger.error(f"Failed to get LLM for request: {e}", exc_info=True)
             raise
-
-    # Required abstract methods from BaseAgent
-
-
-    # Additional convenience methods that delegate to SessionManager
-
-
-    
-    # Methods required by API
-    
-    
-
-        # NOTE: Don't call cleanup_session - keep completed sessions in memory
-        # for continuous chat feature. They remain accessible via get_session_by_id()
-        # but the orchestrator is cleaned up to free resources.
-    
-    # API compatibility methods
-    
-

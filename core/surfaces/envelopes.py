@@ -31,6 +31,12 @@ class Identity:
     source: SessionSource
     raw_user_id: Optional[str] = None   # platform id (e.g. tg_id), audit only
     display_name: Optional[str] = None
+    # 044 T16: the per-chat role resolved ONCE at the routing boundary
+    # (core/surfaces/access.py::resolve_access_tier) —
+    # "owner" | "admin" | "member" | "blocked". None = not resolved yet (a DM,
+    # or an inbound that never reached the tier model): every reader falls back
+    # to owner-or-member rather than inventing a privilege.
+    chat_role: Optional[str] = None
 
 
 @dataclass
@@ -46,6 +52,9 @@ class InboundMessage:
     mentions_bot: Optional[bool] = None     # W3 groups: True/False when the surface
                                             # can detect mentions; None = unknown
                                             # (treated as NOT mentioned by the gate)
+    sender_is_bot: bool = False             # 044 T8: the sender is itself a bot
+                                            # (Telegram from.is_bot); default False
+                                            # preserves every existing surface/test
 
 
 @dataclass

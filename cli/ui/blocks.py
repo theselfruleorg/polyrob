@@ -195,13 +195,23 @@ def tool_result_suffix(
     return out
 
 
-def tool_result_line(event: ToolExec) -> Text:
-    """``  ✓ read_file · 0.2s · <scrubbed preview>`` — the result of one tool exec.
+def tool_result_line(event: ToolExec, *, raw: bool = False) -> Text:
+    """``  ✓ read_file · 0.2s · <line>`` — the result of one tool exec (043 A16).
 
-    Pairs (visually, indented) under the ``→ name(args)`` call line. On success
-    shows the action name, duration, and a secret-scrubbed + length-capped result
-    preview; on failure shows the error. Secrets are scrubbed BEFORE the length
-    cap so a token can't survive half-cut.
+    Pairs (visually, indented) under the ``→ name(args)`` call line. On success:
+
+    * When the typed ``tool_result`` event carries a ``{kind, payload}`` render,
+      the trailing segment is the narrated human line — the server-computed
+      ``data.narration`` when present, else the shared ``narrate()`` narrator
+      over the same event (``Read one file in ~/price-watch``). The whole line
+      is capped to ≤ 80 columns.
+    * Without a render (a legacy ``tool_execution`` event), it falls back to the
+      secret-scrubbed + length-capped result preview — byte-identical to before.
+    * ``raw`` (the ``/verbose`` lane) shows the render payload instead of the
+      narrated line.
+
+    On failure it shows the error. Secrets are scrubbed BEFORE the length cap so
+    a token can't survive half-cut.
     """
     line = Text()
     name = event.action_name or event.tool_name or "tool"
@@ -211,11 +221,25 @@ def tool_result_line(event: ToolExec) -> Text:
         meta_parts: List[str] = []
         if event.duration_seconds:
             meta_parts.append(f"{event.duration_seconds:.1f}s")
-        preview = scrub_then_cap(event.result_preview, limit=_RESULT_PREVIEW_CAP)
-        if preview:
-            if event.result_truncated and not preview.endswith("…"):
-                preview += "…"
-            meta_parts.append(preview)
+
+        narrated = None if raw else _narrated_line(event)
+        if raw and event.render is not None:
+            meta_parts.append(scrub_then_cap(render_payload_str(event.render), limit=_RESULT_PREVIEW_CAP))
+        elif narrated:
+            # ≤ 80 columns: cap the narrated segment by the width already used.
+            sep = f" {ICONS.bullet} "
+            head = f"  {ICONS.ok} {name}" + sep
+            if meta_parts:
+                head += sep.join(meta_parts) + sep
+            budget = max(8, 80 - _cell_len(head))
+            meta_parts.append(_summarize(narrated, limit=budget))
+        else:
+            preview = scrub_then_cap(event.result_preview, limit=_RESULT_PREVIEW_CAP)
+            if preview:
+                if event.result_truncated and not preview.endswith("…"):
+                    preview += "…"
+                meta_parts.append(preview)
+
         if meta_parts:
             line.append(f" {ICONS.bullet} ", style=style("meta"))
             line.append(f" {ICONS.bullet} ".join(meta_parts), style=style("meta"))
@@ -226,6 +250,50 @@ def tool_result_line(event: ToolExec) -> Text:
         line.append(f" {ICONS.bullet} ", style=style("meta"))
         line.append(msg, style=style("tool_fail"))
     return line
+
+
+def _narrated_line(event: ToolExec) -> Optional[str]:
+    """The human one-line narration for a tool_result event, or ``None`` (043 A16).
+
+    Prefers the server-computed ``narration`` on the event; falls back to the
+    shared ``narrate()`` narrator over the same event dict when a typed
+    ``render`` is present. Returns ``None`` for a legacy ``tool_execution`` event
+    (no render, no narration) so the caller keeps the scrubbed-preview line —
+    ONE narrator, never a second one here.
+    """
+    if event.narration:
+        text = event.narration.strip()
+        return text or None
+    if event.render is not None:
+        try:
+            from agents.task.telemetry.narrate import narrate
+            text = (narrate(event.raw or {}) or "").strip()
+            return text or None
+        except Exception:
+            return None
+    return None
+
+
+def render_payload_str(render: Dict[str, Any]) -> str:
+    """``kind: {payload}`` — the typed render as one scrubbed line (the /verbose lane)."""
+    import json
+
+    kind = str(render.get("kind", "text"))
+    payload = render.get("payload")
+    try:
+        body = json.dumps(payload, default=str, ensure_ascii=False)
+    except Exception:
+        body = str(payload)
+    return scrub_secrets(f"{kind}: {body}")
+
+
+def _cell_len(text: str) -> int:
+    """Terminal cell width of *text* (falls back to ``len`` if Rich changes)."""
+    try:
+        from rich.cells import cell_len
+        return cell_len(text)
+    except Exception:  # pragma: no cover - defensive
+        return len(text)
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +448,8 @@ def agent_message(text: str) -> RenderableType:
     speaker = Text()
     speaker.append(f"{ICONS.speaker} ", style=style("speaker_dot"))
     speaker.append(agent_display_name(), style=style("speaker_name"))
-    body = Padding(Markdown((text or "").strip()), (0, 0, 0, 2))
+    from cli.ui.literal import literal_text
+    body = Padding(Markdown(literal_text(text or "").strip()), (0, 0, 0, 2))
     # Blank-BEFORE only (transcript rhythm convention): every block separates
     # itself from the previous one; the gap below the last scrollback line is
     # owned by the pinned region's top spacer (app.py), so the input box never
@@ -460,6 +529,7 @@ def turn_summary_line(
     tools: int = 0,
     tokens: int = 0,
     cost: float = 0.0,
+    cost_incomplete: bool = False,
     elapsed_seconds: float = 0.0,
     failed: bool = False,
 ) -> RenderableType:
@@ -468,7 +538,7 @@ def turn_summary_line(
     Leading blank per the blank-BEFORE-only rhythm (it follows the agent bubble).
     """
     parts = dialog.summary_segments(
-        steps=steps, tools=tools, tokens=tokens, cost=cost,
+        steps=steps, tools=tools, tokens=tokens, cost=cost, cost_incomplete=cost_incomplete,
         elapsed_seconds=elapsed_seconds, failed=failed,
     )
     line = Text()

@@ -97,6 +97,7 @@ def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):
     #   3. "" -> Section 4/6 template                  (blank = default "general")
     #   4. "" -> Section 5/6 instance id               (blank = default "rob")
     #   5. "" -> Section 5/6 owner user id             (blank = default = instance id)
+    #   5b. "" -> Section 4/6 give this instance its own character? (No, F0)
     #   6. "n" -> Section 6/6 enable interactive local tools?  (No)
     #   7. "n" -> Section 6/6 enable autonomy?                  (No)
     #   8. "n" -> Section 6/6 apply approval preset?            (No)
@@ -104,6 +105,6 @@ def test_init_wallet_optin_prompt_wired(monkeypatch, tmp_path):
     #  10. "y" -> Optional: agent crypto wallet opt-in          (YES <- checked)
     result = runner.invoke(
         init_mod.init_cmd, ["--skip-keys"],
-        input="\n\n\n\n\nn\nn\nn\n\ny\n")
+        input="\n\n\n\n\n\nn\nn\nn\n\ny\n")
     assert result.exit_code == 0, result.output
     assert called, "wallet init flow was not invoked"

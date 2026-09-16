@@ -8,6 +8,7 @@ DATA-only; unknown senders are denied).
 import json
 import logging
 import os
+import re
 
 import click
 
@@ -69,8 +70,13 @@ _OWNER_HELP_SECTIONS = [
      ["correspondents", "invite", "approve", "allow", "deny", "allowlist",
       "pair", "groups"]),
     ("Pending & asks",
-     ["pending", "show-pending", "promote", "reject", "asks", "fulfill"]),
-    ("Money", ["invoices", "settle", "sub"]),
+     # 043 D1: `inbox` LEADS this section — it is the union the other five are
+     # pieces of, and a person looking for "what needs me" should meet it first.
+     ["inbox", "pending", "show-pending", "promote", "reject", "asks",
+      "fulfill", "missed"]),
+    # 046: `paid` is MONEY — it prices what a room sells and names what the
+    # treasury OWES a payer whose effect never landed.
+    ("Money", ["invoices", "settle", "sub", "paid"]),
     ("Control", ["halt", "resume", "pause-entries", "resume-entries",
                  "pause-streams", "resume-streams", "show"]),
 ]
@@ -211,10 +217,13 @@ def invite(surface, address, session_id, user, thread):
     """
     import os
     os.environ.setdefault("CORRESPONDENT_ACCESS_ENABLED", "true")
-    from core.instance import resolve_owner_principal
     from core.surfaces.seed import maybe_seed_correspondent
 
-    tenant = user or resolve_owner_principal() or "local"
+    # ⚠️ The SAME resolver `pending`/`inbox` read (`_owner_tenant`). It seeded
+    # under `resolve_owner_principal()` until 2026-09-15, so an owner-seeded
+    # invite landed in one tenant and the decision queue read another — a
+    # confident zero over a real item, the 035 P0-3 class.
+    tenant = _owner_tenant(user)
 
     class _C:
         def get_service(self, name):
@@ -230,24 +239,43 @@ def invite(surface, address, session_id, user, thread):
 
 
 def _instance_id() -> str:
-    from core.instance import resolve_instance_id
-    return resolve_instance_id()
+    """035 P0-3: adopt the DEPLOYED instance id, exactly as ``_data_dir()`` adopts
+    the deployed data home.
+
+    Before this, `polyrob owner pending` on the production box resolved the right
+    home under instance "polyrob" (the default) while the service runs instance
+    "rob", and printed a confident "no pending proposals" over four real ones —
+    under a note assuring the owner it had used the deployed home. Never
+    re-implement resolution here; the seam is `core.admin_data_home`.
+    """
+    from core.admin_data_home import admin_instance_id
+    return admin_instance_id()
 
 
 def _owner_tenant(user) -> str:
-    from core.instance import resolve_owner_principal
-    return user or resolve_owner_principal() or "local"
+    """The owner tenant, adopting the deployment's when the shell is silent (035
+    P0-3 — the second axis of the same defect as `_instance_id`).
+
+    `admin_owner_principal` is typed `-> str` and reads the ONE resolver
+    (`core.instance.resolve_owner_user_id`) when nothing is declared, so there is
+    no `or` fallback left to write here."""
+    from core.admin_data_home import admin_owner_principal
+    return user or admin_owner_principal()
 
 
 def _allowlist_tenant(user) -> str:
     """Tenant resolution for the allow/deny/allowlist commands ONLY.
 
     These commands must write under the SAME tenant the `message` action reads at
-    runtime — a local REPL session's user_id is `core.identity.resolve_identity()`
-    (defaults to "local" when no owner is bound), NOT the instance id that
-    `_owner_tenant` defaults to via `resolve_owner_principal(default_to_instance=True)`.
-    Do not reuse `_owner_tenant` here; other owner commands intentionally keep that
-    instance-id default.
+    runtime — a local REPL session's user_id is `core.identity.resolve_identity()`,
+    which since 2026-09-15 delegates to the ONE owner-tenant resolver
+    (`core.instance.resolve_owner_user_id`: bound owner -> `POLYROB_LOCAL_OWNER`
+    -> `local`).
+
+    ⚠️ This is NOT identical to `_owner_tenant`, which additionally adopts the
+    tenant a DEPLOYED env file declares — the two differ only in an owner's SSH
+    shell on a box whose service env it cannot see. The old reason for the split
+    (`_owner_tenant` defaulting to the instance id) is gone.
     """
     from core.identity import resolve_identity
     return user or resolve_identity()
@@ -260,10 +288,10 @@ def _money_tenant(user) -> str:
     The agent's money rows (x402 invoices, subscriptions) are created under the
     runtime session's user_id = ``core.identity.resolve_identity()`` (owner-if-
     bound else "local") — the SAME resolver `polyrob finance` uses. `_owner_tenant`
-    resolves to the instance id when unbound, which reads a DIFFERENT
-    bucket, so the sibling money views disagreed on an unbound install. Use THIS
-    for money listings so finance and `owner sub` agree; print the scope so the
-    owner always sees which tenant a listing is for.
+    resolved to the instance id when unbound, which read a DIFFERENT bucket, so the
+    sibling money views disagreed on an unbound install. Both land on the ONE
+    resolver since 2026-09-15; this stays the money listings' seam so the scope is
+    printed and finance and `owner sub` cannot drift apart again.
     """
     from core.identity import resolve_identity
     return user or resolve_identity()
@@ -275,6 +303,36 @@ def _money_tenant(user) -> str:
 from core.surfaces.owner_admin import (  # noqa: E402
     pending_correspondent_items as _pending_correspondent_items,
 )
+
+
+@owner.command("inbox")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+@click.option("-n", "limit", type=int, default=None,
+              help="Show only the first N of each section.")
+def inbox(user, limit):
+    """Everything waiting on a decision from you, blocking first (043 D1).
+
+    The union `owner pending` never was: self-evolution proposals, queued tool
+    and spend approvals, pending correspondents, OPEN asks and pending apps —
+    composed once (`core.surfaces.inbox`) and rendered by the same function the
+    REPL's `/inbox`, Telegram's `/inbox` and the console's Inbox page use.
+
+    The number is DECISIONS; something listed as "not blocking" is there
+    because you may want to act, not because the agent is stuck. A store that
+    refuses to open is NAMED and the count becomes a floor — this never prints
+    "nothing needs you" over a list it could not read.
+    """
+    from core.surfaces.inbox_render import render_inbox
+    from surfaces.inbox_sources import build_inbox
+    tenant = _owner_tenant(user)
+    try:
+        body = build_inbox(tenant, data_dir=_data_dir(),
+                           instance_id=_instance_id())
+    except Exception as exc:
+        raise click.ClickException(
+            f"the inbox could not be composed ({exc}). That is UNKNOWN, not "
+            f"'nothing needs you'.")
+    click.echo(render_inbox(body, limit=limit))
 
 
 @owner.command("pending")
@@ -289,17 +347,27 @@ def pending(user, as_json):
     change nothing until you `owner promote` (or reject) them.
     """
     from core import self_evolution
-    from tools.controller.approval_queue import list_pending_tool_approvals
+    from tools.controller.approval_queue import all_pending
     tenant = _owner_tenant(user)
-    items = self_evolution.list_pending(tenant, home_dir=_data_dir(),
-                                        instance_id=_instance_id())
-    items = items + list_pending_tool_approvals(_goal_board(), tenant)
-    items = items + _pending_correspondent_items(_registry(_data_dir()), tenant)
+    # 2026-09-15: the ONE union, so this seat and the chat seat list AND decide
+    # over the same set, and an unreadable store is NAMED rather than silently
+    # dropped from the count.
+    pending_set = all_pending(user_id=tenant, home_dir=_data_dir(),
+                              instance_id=_instance_id(), board=_goal_board(),
+                              correspondent_registry=_registry(_data_dir()))
+    items = pending_set.items
     if as_json:
+        # The JSON shape stays the bare list a consumer already parses. An
+        # unreadable source is reported on STDERR instead — honest, and it
+        # cannot break a script that pipes stdout into a parser.
+        if pending_set.unavailable:
+            click.echo(pending_set.degraded_line(), err=True)
         click.echo(json.dumps(items, indent=2, default=str))
         return
     if not items:
-        click.echo(click.style("no pending proposals", dim=True))
+        click.echo(click.style(pending_set.degraded_line() or "no pending proposals",
+                               dim=not pending_set.unavailable,
+                               fg="yellow" if pending_set.unavailable else None))
         return
     click.echo(click.style(f"{len(items)} pending proposal(s) for tenant {tenant}:", bold=True))
     for it in items:
@@ -314,10 +382,18 @@ def pending(user, as_json):
                    f"{click.style(it['kind'] + ':' + str(it['id']), bold=True)}"
                    f"  ({it['chars']} chars)")
         click.echo(f"           {it['preview']}")
+        # 035 P0-5: a pending rule that contradicts an ACTIVE one must be loud —
+        # the 09-08 den directives were silently out-ranked by a stale active doc.
+        for c in (it.get("conflicts") or []):
+            click.echo("           " + click.style(f"⚠ CONFLICT — {c}", fg="red"))
+    if pending_set.unavailable:
+        click.echo(click.style(pending_set.degraded_line(), fg="yellow"))
     click.echo(click.style("\napprove: ", dim=True)
                + "polyrob owner promote <kind> <id>   "
                + click.style("reject: ", dim=True)
-               + "polyrob owner reject <kind> <id>")
+               + "polyrob owner reject <kind> <id>   "
+               + click.style("all: ", dim=True)
+               + "polyrob owner promote all")
 
 
 @owner.command("show-pending")
@@ -341,25 +417,54 @@ def show_pending(kind, item_id, user):
     click.echo(body)
 
 
+def _decide_all_and_echo(approve: bool, tenant: str) -> None:
+    """035 P1-10 — `owner promote all` / `owner reject all`.
+
+    Friction when the queue has grown is exactly the state that produced the
+    09-08 incident (four proposals, none reviewed). This matches the existing
+    `owner approve --all` behavior for correspondents.
+    """
+    from tools.controller.approval_queue import decide_all_pending
+    # 2026-09-15: "all" used to mean the self-evolution THIRD of the queue while
+    # the listing right above it showed all three, so a queued payment approval
+    # or a pending contact survived an "approve all" with no trace. ONE decider.
+    ok_n, fail_n, msgs = decide_all_pending(
+        approve=approve, user_id=tenant, home_dir=_data_dir(),
+        instance_id=_instance_id(), board=_goal_board(),
+        correspondent_registry=_registry(_data_dir()))
+    if not msgs:
+        click.echo(click.style("no pending proposals", dim=True))
+        return
+    for m in msgs:
+        click.echo("  " + click.style(m, fg="green" if m.startswith("✓") else "yellow"))
+    verb = "promoted" if approve else "rejected"
+    click.echo(click.style(f"{ok_n} {verb}, {fail_n} failed", bold=True))
+    if fail_n:
+        raise SystemExit(1)
+
+
 @owner.command("promote")
 @click.argument("kind")
-@click.argument("item_id")
+@click.argument("item_id", required=False)
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def promote(kind, item_id, user):
     """Promote a PENDING proposal to active, or APPROVE a queued tool-approval
     request. KIND is 'self_context', 'skill', or 'tool_approval' (Task 9 / G-2 —
-    ITEM_ID is the tap-<id> shown by `owner pending`)."""
+    ITEM_ID is the tap-<id> shown by `owner pending`). KIND 'all' promotes every
+    pending item at once — proposals, queued approvals AND contacts (035 P1-10;
+    ITEM_ID is then unused)."""
     tenant = _owner_tenant(user)
-    if kind == "tool_approval":
-        from tools.controller.approval_queue import decide_tool_approval
-        ok, msg = decide_tool_approval(_goal_board(), item_id, user_id=tenant, approved=True)
-        click.echo(click.style(msg, fg="green" if ok else "yellow"))
-        if not ok:
-            raise SystemExit(1)
+    if kind == "all":
+        _decide_all_and_echo(True, tenant)
         return
-    from core import self_evolution
-    ok, msg = self_evolution.promote(kind, item_id, user_id=tenant,
-                                     home_dir=_data_dir(), instance_id=_instance_id())
+    # ONE decider for every kind in the queue (2026-09-15) — this seat used to
+    # special-case `tool_approval` and hand every other kind, `correspondent`
+    # included, to the self-evolution promoter, which answered "unknown kind".
+    from tools.controller.approval_queue import decide_pending
+    ok, msg = decide_pending(kind, item_id, approve=True, user_id=tenant,
+                             home_dir=_data_dir(), instance_id=_instance_id(),
+                             board=_goal_board(),
+                             correspondent_registry=_registry(_data_dir()))
     click.echo(click.style(msg, fg="green" if ok else "yellow"))
     if not ok:
         raise SystemExit(1)
@@ -367,23 +472,26 @@ def promote(kind, item_id, user):
 
 @owner.command("reject")
 @click.argument("kind")
-@click.argument("item_id")
+@click.argument("item_id", required=False)
 @click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
 def reject(kind, item_id, user):
     """Reject (archive-then-discard) a PENDING proposal, or DECLINE a queued
     tool-approval request. KIND is 'self_context', 'skill', or 'tool_approval'
-    (Task 9 / G-2 — ITEM_ID is the tap-<id> shown by `owner pending`)."""
+    (Task 9 / G-2 — ITEM_ID is the tap-<id> shown by `owner pending`). KIND 'all'
+    rejects every pending item at once — proposals, queued approvals AND contacts
+    (035 P1-10)."""
     tenant = _owner_tenant(user)
-    if kind == "tool_approval":
-        from tools.controller.approval_queue import decide_tool_approval
-        ok, msg = decide_tool_approval(_goal_board(), item_id, user_id=tenant, approved=False)
-        click.echo(click.style(msg, fg="green" if ok else "yellow"))
-        if not ok:
-            raise SystemExit(1)
+    if kind == "all":
+        _decide_all_and_echo(False, tenant)
         return
-    from core import self_evolution
-    ok, msg = self_evolution.reject(kind, item_id, user_id=tenant,
-                                    home_dir=_data_dir(), instance_id=_instance_id())
+    # ONE decider for every kind in the queue (2026-09-15) — this seat used to
+    # special-case `tool_approval` and hand every other kind, `correspondent`
+    # included, to the self-evolution promoter, which answered "unknown kind".
+    from tools.controller.approval_queue import decide_pending
+    ok, msg = decide_pending(kind, item_id, approve=False, user_id=tenant,
+                             home_dir=_data_dir(), instance_id=_instance_id(),
+                             board=_goal_board(),
+                             correspondent_registry=_registry(_data_dir()))
     click.echo(click.style(msg, fg="green" if ok else "yellow"))
     if not ok:
         raise SystemExit(1)
@@ -442,6 +550,41 @@ def fulfill(ask_id, user):
         raise SystemExit(1)
     click.echo(click.style(
         f"ask {ask_id} fulfilled — {unblocked} goal(s) unblocked", fg="green"))
+
+
+@owner.command("missed")
+@click.option("-n", "count", default=5, type=int,
+              help="How many notices to show (1-20, default 5).")
+@click.option("--user", default=None, help="Tenant user_id (default: bound owner / 'local')")
+def missed(count, user):
+    """Show owner notices the delivery rail could not send live (A7 / A40).
+
+    The rail never silently drops a message it could not deliver — it records
+    a durable ``owner_notice`` instead: suppressed by the daily cap, held by
+    an active owner pause, or undelivered (no live sink / send failed). The
+    SAME rows Telegram `/missed` and the REPL `/missed` read.
+    """
+    from core.surfaces.missed import format_notice_lines, missed_notices
+    n = max(1, min(20, int(count)))
+    tenant = _owner_tenant(user)
+    try:
+        rows = missed_notices(tenant, _data_dir(), n)
+    except Exception as e:
+        raise click.ClickException(f"missed notices unavailable ({type(e).__name__}: {e})")
+    if not rows:
+        click.echo(click.style("no missed owner messages on record", dim=True))
+        return
+    click.echo(click.style(
+        f"Last {len(rows)} missed owner message(s) (newest first):", bold=True))
+    for r in rows:
+        kind = r.get("kind") or "capped"
+        text = str(r.get("text") or "")
+        # Wrapped, never clipped — /missed exists to recover text the owner
+        # never received live (fix round 1, 2026-09-14).
+        for line in format_notice_lines(r.get("ts") or 0, kind, text, gutter="  "):
+            click.echo(line)
+    click.echo(click.style("\nRaise the cap: ", dim=True)
+               + "polyrob config set delivery.daily_cap N --global")
 
 
 def _do_approve_all(registry, user_id=None, surface=None):
@@ -805,49 +948,202 @@ def sub_cancel(subscription_id, user):
 
 
 # --- W3: group-chat ingress allowlist (GROUP_CHAT_ENABLED) ---
+# NOTE (044 C7): there is deliberately no `_group_allowlist()` helper here any
+# more. Every group verb goes through `core.surfaces.group_admin`, which
+# normalizes the `_100…` chat-id alias before it touches a store; a second,
+# un-normalized door into `GroupAllowlist` is exactly what wrote unmatchable rows.
 
-def _group_allowlist():
-    from core.surfaces.group_allowlist import GroupAllowlist
-    import os as _os
-    return GroupAllowlist(_os.path.join(_data_dir(), "group_allowlist.db"))
+
+class _NegativeChatIdGroup(click.Group):
+    """044 T18 fix round 1 (Important 5b): a real Telegram chat id is negative
+    (``-1001234567890``), and Click's own parser treats a leading ``-`` on any
+    positional as an option marker — ``owner groups mode telegram -1001234
+    active`` fails with a bare, confusing ``Error: No such option: -1001234``
+    before any command body ever runs. Catch exactly that shape here (the
+    group's ``invoke`` is the one place both remedies — the ``--`` separator
+    and the safe alias — can be named in the SAME message) and re-raise a
+    ``UsageError`` that actually tells the operator what to do instead. Any
+    other ``NoSuchOption`` (a genuine typo'd flag) is untouched.
+    """
+
+    def invoke(self, ctx):
+        try:
+            return super().invoke(ctx)
+        except click.exceptions.NoSuchOption as e:
+            opt = e.option_name or ""
+            # Click's short-option parser only ever reports the LEADING
+            # `-<digit>` of a longer negative number (e.g. `-1` out of
+            # `-1001234567890`), so the caught `option_name` cannot be
+            # trusted to reconstruct the operator's actual id — name both
+            # remedies with a fixed illustrative example instead.
+            if re.fullmatch(r"-\d+", opt):
+                raise click.UsageError(
+                    "A negative chat id (Telegram's real chat ids are negative, "
+                    f"e.g. -1001234567890) is being parsed as an option ({opt!r}). "
+                    "Either put `--` before it (e.g. `owner groups mode telegram "
+                    "-- -1001234567890 active`) or use the safe alias with a "
+                    "leading underscore instead of the dash "
+                    "(e.g. `_1001234567890`).", ctx=ctx) from e
+            raise
 
 
-@owner.group("groups")
+@owner.group("groups", cls=_NegativeChatIdGroup)
 def groups():
-    """Manage which group/channel chats the agent may join (default-DENY)."""
+    """Manage which group/channel chats the agent may join (default-DENY).
 
+    A real chat id is negative (e.g. ``-1001234567890``) and needs one of two
+    workarounds so Click doesn't parse it as an option: put ``--`` before it
+    (``owner groups mode telegram -- -1001234567890 active``), or use the
+    safe alias with a leading underscore instead of the dash
+    (``owner groups mode telegram _1001234567890 active``).
+    """
+
+
+# 044 T18: allow/deny/list/mode/set/role/tail/service — CLI parity with the
+# Telegram `/groups` seat. Every one of these calls `core.surfaces.group_admin`,
+# the SAME helper set `/groups` renders through, so the two seats can never
+# disagree on what a verb does or how it reports back.
+#
+# ⚠️ 044 C7: allow/deny/list used to talk to `GroupAllowlist` DIRECTLY, bypassing
+# `group_admin`'s `_norm_chat_id` — so the `_1001234567890` alias this very group
+# advertises wrote a row under the LITERAL `_100…` string. That row matched
+# nothing at routing time (which sees the real `-100…`), and `list` then reported
+# it as an active room: the owner was told a room was allowed while the agent
+# went on dropping every line from it.
 
 @groups.command("allow")
 @click.argument("surface")
 @click.argument("chat_id")
 @click.option("--note", default="", help="Label, e.g. 'dev server #general'")
 def groups_allow(surface, chat_id, note):
-    """Allow a group chat: polyrob owner groups allow discord <channel_id>."""
-    _group_allowlist().allow(surface, chat_id, note=note)
-    click.echo(click.style(f"allowed {surface}:{chat_id}", fg="green"))
+    """Allow a group chat: polyrob owner groups allow discord <channel_id>.
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`).
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.allow_here(_group_container(), surface, chat_id, note,
+                                      owner_uid=_group_owner_uid()))
 
 
 @groups.command("deny")
 @click.argument("surface")
 @click.argument("chat_id")
 def groups_deny(surface, chat_id):
-    """Revoke a group chat."""
-    if _group_allowlist().revoke(surface, chat_id):
-        click.echo(click.style(f"revoked {surface}:{chat_id}", fg="green"))
-    else:
-        click.echo(click.style(f"{surface}:{chat_id} was not active", fg="yellow"))
+    """Revoke a group chat.
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`).
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.deny_here(_group_container(), surface, chat_id,
+                                     owner_uid=_group_owner_uid()))
 
 
 @groups.command("list")
 def groups_list():
     """List group-chat allowlist entries."""
-    rows = _group_allowlist().list_all()
-    if not rows:
-        click.echo("no group chats allowed (default-DENY)")
-        return
-    for r in rows:
-        click.echo(f"{r['status']:8} {r['surface']}:{r['chat_id']}"
-                   + (f"  — {r['note']}" if r.get("note") else ""))
+    from core.surfaces import group_admin
+    click.echo(group_admin.list_rooms(_group_container(), _group_owner_uid()))
+
+
+def _group_container():
+    """A minimal `container` for `core.surfaces.group_admin`: just enough for
+    it to resolve `data_dir` — the CLI never installs the surface bus, so
+    `group_admin` falls back to opening its own handle on `surfaces.db`."""
+    import types
+    return types.SimpleNamespace(config=types.SimpleNamespace(data_dir=_data_dir()),
+                                 get_service=lambda name: None)
+
+
+def _group_owner_uid() -> str:
+    """The tenant a room's overlay lives under — the ONE owner-tenant resolver,
+    so this CLI seat and the Telegram `/groups` seat (`group_ops._owner_uid`) and
+    the read side (`chat_policy.load_for_chat`) cannot name different buckets."""
+    from core.instance import resolve_owner_user_id
+    return resolve_owner_user_id()
+
+
+@groups.command("mode")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.argument("mode")
+def groups_mode(surface, chat_id, mode):
+    """Set a room's chat.mode: mention|active|listen|off.
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`).
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.set_mode(_group_container(), _group_owner_uid(),
+                                    surface, chat_id, mode))
+
+
+@groups.command("set")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.argument("key")
+@click.argument("value")
+def groups_set(surface, chat_id, key, value):
+    """Set one chat.* key on a room (value 'unset' or '-' clears it).
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`).
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.set_key(_group_container(), _group_owner_uid(),
+                                   surface, chat_id, key, value))
+
+
+@groups.command("role")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.argument("user_id")
+@click.argument("role")
+def groups_role(surface, chat_id, user_id, role):
+    """Grant a per-chat role: admin|member|blocked.
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`). USER_ID must be the raw
+    numeric platform id (see `/groups admins here` on Telegram) — a handle
+    can never be resolved to one.
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.set_role(_group_container(), surface, chat_id, user_id,
+                                    role, by="cli"))
+
+
+@groups.command("tail")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.option("-n", "--limit", default=30, help="How many lines")
+def groups_tail(surface, chat_id, limit):
+    """Show the last N ledger lines for a room.
+
+    CHAT_ID is negative for Telegram — put `--` before it or use the safe
+    `_` alias (see `polyrob owner groups --help`).
+    """
+    from core.surfaces import group_admin
+    click.echo(group_admin.tail(_group_container(), surface, chat_id, limit))
+
+
+@groups.command("service")
+@click.argument("surface")
+@click.argument("chat_id")
+@click.option("--every", default="30m",
+              help="Cadence, e.g. 30m; 'off' stops the job")
+@click.option("--max", "max_replies", default=3, help="Max replies per run")
+def groups_service(surface, chat_id, every, max_replies):
+    """Start (or, with --every off, stop) the recurring job that services a room.
+
+    The job reads the room's ledger since its own checkpoint and answers only
+    what needs answering; an empty tail costs nothing. CHAT_ID is negative for
+    Telegram — put `--` before it or use the safe `_` alias (see
+    `polyrob owner groups --help`).
+    """
+    from cron.room_service import service as _room_service
+    click.echo(_room_service(_group_container(), _group_owner_uid(),
+                             surface, chat_id, every=every, max_replies=max_replies))
 
 
 # ---------------------------------------------------------------------------
@@ -898,3 +1194,54 @@ def pair_revoke(user_id):
     """Revoke a paired (or pending) user."""
     _pairing_store().revoke(user_id)
     click.echo(click.style(f"revoked {user_id}", fg="green"))
+
+
+# ---------------------------------------------------------------------------
+# 046: paid room actions
+# ---------------------------------------------------------------------------
+
+@owner.group("paid")
+def paid():
+    """Paid room actions — what rooms sell, and what is OWED.
+
+    Renders the SAME `core.surfaces.room_action_admin` helpers the Telegram
+    `/paid` seat does, so the two can never disagree about a room.
+    """
+
+
+@paid.command("list")
+@click.option("--surface", default="telegram", show_default=True)
+@click.option("--chat", "chat_id", default=None,
+              help="a room's chat id; omit to list credits owed across rooms")
+def paid_list(surface, chat_id):
+    """Recent offers in a room, or every credit owed."""
+    from core.surfaces import room_action_admin as adm
+    if chat_id is None:
+        click.echo(adm.render_credits(_group_container()))
+        return
+    from core.surfaces.group_admin import normalize_chat_id
+    click.echo(adm.offers(_group_container(), surface,
+                          normalize_chat_id(chat_id)))
+
+
+@paid.command("show")
+@click.option("--surface", default="telegram", show_default=True)
+@click.argument("chat_id")
+def paid_show(surface, chat_id):
+    """What this room sells, at what price, in what asset."""
+    from core.surfaces import room_action_admin as adm
+    from core.surfaces.group_admin import normalize_chat_id
+    click.echo(adm.status(_group_container(), surface,
+                          normalize_chat_id(chat_id)))
+
+
+@paid.command("cancel")
+@click.argument("offer_id")
+def paid_cancel(offer_id):
+    """Withdraw a PENDING offer.
+
+    A paid offer cannot be cancelled — that case is a credit, not a
+    cancellation.
+    """
+    from core.surfaces import room_action_admin as adm
+    click.echo(adm.cancel(_group_container(), offer_id, by="cli"))

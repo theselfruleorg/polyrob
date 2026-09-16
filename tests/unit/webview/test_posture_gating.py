@@ -105,10 +105,11 @@ def test_screenshot_route_requires_auth_in_own_ops(own_ops_client):
     assert resp.status_code in (302, 303, 401)
 
 
-def test_session_page_still_public_in_multitenant(multitenant_client):
-    # Existing shareable-link behavior is UNCHANGED in multitenant.
+def test_session_page_requires_auth_in_multitenant(multitenant_client):
     resp = multitenant_client.get("/session/some-session-id", follow_redirects=False)
-    assert resp.status_code == 200
+    assert resp.status_code in (302, 303, 401)
+    if resp.status_code != 401:
+        assert "/signin" in resp.headers["location"]
 
 
 def test_unauthenticated_own_ops_redirect_targets_owner_login(own_ops_client):

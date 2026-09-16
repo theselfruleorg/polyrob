@@ -134,6 +134,43 @@ async def test_set_unknown_key_surfaces_validate_pref_suggestion(monkeypatch, tm
 
 
 # ---------------------------------------------------------------------------
+# 044 T17: a `chat.*` key is per-ROOM configuration, not a tenant preference.
+# `validate_pref` answers for that namespace too, so the old
+# `PREF_SCHEMA.get(key) is None -> report validate_pref's error` path reported
+# an EMPTY string for a VALID room key — a silent failure the owner reads as
+# "it worked". Both operations must name the right seat instead.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_set_a_room_key_is_refused_with_a_sentence(monkeypatch, tmp_path):
+    action = _register(monkeypatch, tmp_path)
+    res = await action.function(
+        action.param_model(operation="set", key="chat.name", value="Foo"),
+        execution_context=_ctx())
+    assert res.error, "a valid room key must not fail silently"
+    assert "/groups set" in res.error and "chat.name" in res.error
+
+
+@pytest.mark.asyncio
+async def test_get_a_room_key_is_refused_with_a_sentence(monkeypatch, tmp_path):
+    action = _register(monkeypatch, tmp_path)
+    res = await action.function(
+        action.param_model(operation="get", key="chat.mode"), execution_context=_ctx())
+    assert res.error and "/groups set" in res.error
+
+
+@pytest.mark.asyncio
+async def test_a_room_key_never_reaches_the_tenant_preferences_file(monkeypatch, tmp_path):
+    from core.prefs import load_preferences
+
+    action = _register(monkeypatch, tmp_path)
+    await action.function(
+        action.param_model(operation="set", key="chat.mode", value="active"),
+        execution_context=_ctx())
+    assert "chat.mode" not in load_preferences(tmp_path, "u1")
+
+
+# ---------------------------------------------------------------------------
 # safe set
 # ---------------------------------------------------------------------------
 
@@ -237,44 +274,49 @@ async def test_sub_agent_refuses_set(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_contract_propose_quarantines_for_background_author(monkeypatch, tmp_path):
-    monkeypatch.setenv("CONTRACT_DOC_REQUIRE_REVIEW", "false")
+    # 035 P1-7: contract_propose writes the RULES doc (owner.md) now, and
+    # activation is governed by the ONE rule — OWNER_RULES_IMMEDIATE + a genuine
+    # owner turn — not by a per-doc review flag. CONTRACT_DOC_REQUIRE_REVIEW no
+    # longer decides a write.
+    monkeypatch.setenv("OWNER_RULES_IMMEDIATE", "true")
     action = _register(monkeypatch, tmp_path)
 
-    # Genuine (non-forged) turn, review flag OFF: proposal is ACTIVE immediately.
+    # Genuine (non-forged) owner turn: the rule BINDS immediately.
     genuine_res = await action.function(
         action.param_model(operation="contract_propose",
                           text="Always ask before spending more than $50."),
         execution_context=_ctx())
     assert genuine_res.error is None
-    assert "active" in genuine_res.extracted_content.lower()
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / "contract.md").exists()
+    assert "IN EFFECT NOW" in genuine_res.extracted_content
+    assert (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
 
-    # Forged (self-wake) turn: STILL quarantined, even with the review flag off.
+    # Forged (self-wake) turn: STILL quarantined, even with immediacy ON.
     forged_res = await action.function(
         action.param_model(operation="contract_propose",
                           text="Always double-check math before answering."),
         execution_context=_forged_ctx())
     assert forged_res.error is None
-    assert "pending" in forged_res.extracted_content.lower()
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "contract.md").exists()
+    assert "NOT YET IN EFFECT" in forged_res.extracted_content
+    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
     # The ACTIVE doc from the genuine turn must be untouched by the forged propose.
-    active = (tmp_path / "identity" / "polyrob" / "user_u1" / "contract.md").read_text()
+    active = (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").read_text()
     assert "spending" in active
 
 
 @pytest.mark.asyncio
 async def test_contract_propose_default_review_on_quarantines_genuine_turn_too(monkeypatch, tmp_path):
-    # Default (CONTRACT_DOC_REQUIRE_REVIEW unset -> True): even a genuine turn
-    # quarantines pending owner review.
-    monkeypatch.delenv("CONTRACT_DOC_REQUIRE_REVIEW", raising=False)
+    # Default (OWNER_RULES_IMMEDIATE unset -> False): even a genuine owner turn
+    # quarantines pending review, so the polarity flip stays opt-in for one
+    # release (035 §6).
+    monkeypatch.delenv("OWNER_RULES_IMMEDIATE", raising=False)
     action = _register(monkeypatch, tmp_path)
     res = await action.function(
         action.param_model(operation="contract_propose", text="Keep replies concise."),
         execution_context=_ctx())
     assert res.error is None
-    assert "pending" in res.extracted_content.lower()
-    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "contract.md").exists()
-    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "contract.md").exists()
+    assert "NOT YET IN EFFECT" in res.extracted_content
+    assert not (tmp_path / "identity" / "polyrob" / "user_u1" / "owner.md").exists()
+    assert (tmp_path / "identity" / "polyrob" / "user_u1" / ".pending" / "owner.md").exists()
 
 
 # ---------------------------------------------------------------------------

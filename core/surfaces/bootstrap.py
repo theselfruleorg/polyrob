@@ -86,6 +86,65 @@ def _ensure_correspondent_registry(container, db_path: str) -> None:
         logger.error("correspondent registry install failed: %s", e)
 
 
+def _ensure_room_caps(container, db_path: str):
+    """044 T11: register the bounded-room-traffic store alongside the bus, same
+    surfaces.db (one more table, no new file). Idempotent + fail-open, mirrors
+    ``_ensure_dead_targets``. Returns the store (existing or newly built), or
+    None on construction failure."""
+    try:
+        existing = container.get_service("room_caps")
+        if existing is not None:
+            return existing
+        from core.surfaces.room_caps import RoomCaps
+        caps = RoomCaps(db_path)
+        container.register_service("room_caps", caps)
+        logger.info("surface bus: room caps installed (%s)", db_path)
+        return caps
+    except Exception as e:
+        logger.debug("room caps unavailable: %s", e)
+        return None
+
+
+def _ensure_group_ledger(container, db_path: str):
+    """044 T12: register the room log alongside the bus, same surfaces.db (one
+    more table, no new file). Idempotent + fail-open, mirrors
+    ``_ensure_room_caps``. Returns the store (existing or newly built), or None
+    on construction failure."""
+    try:
+        existing = container.get_service("group_ledger")
+        if existing is not None:
+            return existing
+        from core.surfaces.group_ledger import GroupLedger
+        ledger = GroupLedger(db_path)
+        container.register_service("group_ledger", ledger)
+        logger.info("surface bus: group ledger installed (%s)", db_path)
+        return ledger
+    except Exception as e:
+        logger.debug("group ledger unavailable: %s", e)
+        return None
+
+
+def _ensure_group_roles(container, db_path: str):
+    """044 T16: register the per-chat role store alongside the bus, same
+    surfaces.db (one more table, no new file). Idempotent + fail-open, mirrors
+    ``_ensure_group_ledger``. Returns the store (existing or newly built), or
+    None on construction failure — ``core/surfaces/access.py`` then falls back
+    to opening surfaces.db itself, so a failure here costs a shared handle,
+    never the role."""
+    try:
+        existing = container.get_service("group_roles")
+        if existing is not None:
+            return existing
+        from core.surfaces.group_roles import GroupRoles
+        roles = GroupRoles(db_path)
+        container.register_service("group_roles", roles)
+        logger.info("surface bus: group roles installed (%s)", db_path)
+        return roles
+    except Exception as e:
+        logger.debug("group roles unavailable: %s", e)
+        return None
+
+
 def install_surface_bus(container, db_path: str = None) -> bool:
     """Build SessionChatRegistry + MessageRouter and register them on ``container``.
 
@@ -115,6 +174,13 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         dt = _ensure_dead_targets(container, db_path)
         if dt is not None:
             existing.attach_dead_targets(dt)
+        rc = _ensure_room_caps(container, db_path)
+        if rc is not None and hasattr(existing, "attach_room_caps"):
+            existing.attach_room_caps(rc)
+        gl = _ensure_group_ledger(container, db_path)
+        if gl is not None and hasattr(existing, "attach_room_ledger"):
+            existing.attach_room_ledger(gl)
+        _ensure_group_roles(container, db_path)
         return True
 
     try:
@@ -125,6 +191,17 @@ def install_surface_bus(container, db_path: str = None) -> bool:
         router = MessageRouter(registry)
         container.register_service("session_chat_registry", registry)
         container.register_service("message_router", router)
+        rc = _ensure_room_caps(container, db_path)
+        if rc is not None:
+            router.attach_room_caps(rc)
+        gl = _ensure_group_ledger(container, db_path)
+        if gl is not None:
+            # 2026-09-16: bind the room log to the ROUTER too, so a delivered
+            # room reply is recorded as the agent's own line. Registering the
+            # service alone never did that — `record_inbound_to_ledger` was the
+            # log's only writer, so it held every human line and none of ours.
+            router.attach_room_ledger(gl)
+        _ensure_group_roles(container, db_path)
 
         from core.surfaces.outbound_allowlist import OutboundAllowlist
         container.register_service("outbound_allowlist", OutboundAllowlist(db_path))

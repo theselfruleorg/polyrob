@@ -44,6 +44,16 @@ SIDECAR_DB_NAMES = (
     "wa_dedup.db",       # surfaces/whatsapp/harness.py
     "email_dedup.db",    # surfaces/email/harness.py
     "defi_tokens.db",    # core/wallet/tokens.py (frozen first-seen token metadata)
+    # 037: in-flight cross-chain bridges. MUST be in a backup — an unbacked
+    # in-flight row is an unrecoverable bridge (core/wallet/bridge_guard.py).
+    "bridges.db",        # core/wallet/bridge_guard.py
+    # 046: the assets the treasury may be paid in. An operator grant, and the
+    # only record of the FROZEN decimals every amount comparison reads — losing
+    # it would make every non-USDC invoice unresolvable.
+    "payment_assets.db",   # core/payments/assets.py
+    # 046: paid room-action offers. A PAID, not-yet-applied row is an
+    # OBLIGATION — losing it loses both the effect and the credit owed.
+    "room_actions.db",     # core/surfaces/room_action_store.py
     # T1 (2026-07-16): surface/deploy sidecars that were missing — backup/rollback
     # silently skipped them (second generation of the D11 class; the grep-based
     # contract test in tests/unit/core/test_db_manifest_sidecars.py now guards this).
@@ -69,6 +79,13 @@ SIDECAR_DB_NAMES = (
     # only covers surfaces/, so it stayed invisible until a surface-tier call site
     # appeared.
     "correspondents.db",    # core/surfaces/correspondents.py (CorrespondentRegistry)
+    "token_denylist.db",    # core/token_denylist.py (043 W5: revoked owner-session jtis)
+    "wakes.db",             # core/wake_queue.py (043 W10: cross-process session wakes)
+    "dapp_sessions.db",     # core/dapp_session_store.py (043 A37: durable dapp envelopes)
+    # 043 A35: the rail-written open-position store. Losing it loses the agent's
+    # cost basis for every open position, so the Money Book's profit/loss falls
+    # back to "no entry recorded" — recoverable, but a backup must keep it.
+    "open_positions.db",    # core/open_positions.py (PolicyGate.record writer)
 )
 
 _PathLike = Union[str, Path]

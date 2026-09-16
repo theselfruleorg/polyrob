@@ -285,8 +285,12 @@ def install_git(spec: str, *, user_id: str, ref: Optional[str] = None,
         ref = spec_ref
     if subdir and Path(subdir).is_absolute():
         raise InstallError("invalid subdir")
-    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
-               GIT_CONFIG_GLOBAL="/dev/null")
+    # S2 (2026-09-14): was `dict(os.environ, ...)` — a clone of an attacker-named
+    # repo ran with the agent's whole environment (AGENT_WALLET_MASTER_SEED +
+    # every API key). Same hardening flags, allowlisted inheritance only.
+    from cli.git_child_env import build_git_child_env
+    env = build_git_child_env(GIT_CONFIG_NOSYSTEM="1", GIT_TERMINAL_PROMPT="0",
+                              GIT_CONFIG_GLOBAL="/dev/null")
     with tempfile.TemporaryDirectory(prefix="polyrob-skill-") as tmp:
         clone = Path(tmp) / "clone"
         cmd = ["git", "-c", "core.symlinks=false", "-c", "core.hooksPath=", "clone",
@@ -679,11 +683,12 @@ def remove_skill(skill_id: str, user_id: str) -> bool:
 # --- CLI group -------------------------------------------------------------
 
 def _default_user() -> str:
-    """The local owner id, mirroring `polyrob owner invite`'s resolution."""
+    """The local owner id — the ONE owner-tenant resolver, the same one
+    `polyrob owner …` and the agent's own skill writes resolve."""
     try:
-        from core.instance import resolve_owner_principal
+        from core.instance import resolve_owner_user_id
 
-        return resolve_owner_principal() or "local"
+        return resolve_owner_user_id()
     except Exception:
         return "local"
 

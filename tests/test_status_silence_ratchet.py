@@ -35,7 +35,9 @@ CEILINGS = {
     # `_frozen_values_agree`. Every section-level handler now reports.
     "cli/commands/doctor.py": 3,
     "cli/commands/autonomy.py": 0,
-    "webview/pages.py": 7,
+    # WS-J3: _console_task_agent is a fail-open SERVICE accessor (returns None
+    # when the in-process TaskAgent is absent), not a vanishing status section.
+    "webview/pages.py": 8,
 }
 
 _LOG_NAMES = {"logger", "logging", "log"}

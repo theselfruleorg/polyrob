@@ -15,21 +15,21 @@ import pytest
 
 ENGINE = Path(__file__).resolve().parents[3] / "avatar" / "mindprint.js"
 
-# Pinned baseline captured from the extracted v2 engine (seed "Rob Ottmachin").
+# Pinned baseline captured from the extracted v2 engine (neutral seed "POLYROB").
 # If the engine legitimately changes, bump generator -> mindprint@vN and re-pin here.
-EXPECTED_HEX = "0x1546"
+EXPECTED_HEX = "0x8929"
 EXPECTED_TRAITS = {
-    "tier": "basic", "eyes": "square", "brow": "none", "mouth": "grin",
-    "antenna": "single", "aura": "none", "head": "orb", "mode": "solid",
-    "voice": {"pitch": 1.29, "rate": 1.02, "timbre": 0.78},
+    "tier": "legendary", "eyes": "three", "brow": "angry", "mouth": "zigzag",
+    "antenna": "spiral", "aura": "thirdeye", "head": "android", "mode": "solid",
+    "voice": {"pitch": 1.04, "rate": 1.02, "timbre": 0.47},
 }
 
 _HARNESS = (
     'const fs=require("fs");'
     'const src=fs.readFileSync(process.argv[1],"utf8");'
     'const o=eval(src+"\\n;({'
-    "hex:new Mindprint('Rob Ottmachin').hex,"
-    "traits:new Mindprint('Rob Ottmachin').traitList(),"
+    "hex:new Mindprint('POLYROB').hex,"
+    "traits:new Mindprint('POLYROB').traitList(),"
     "syms:{Mindprint:typeof Mindprint,cyrb128:typeof cyrb128,sfc32:typeof sfc32,"
     "TIERS:typeof TIERS,TRAITS:typeof TRAITS,SHAPES:typeof SHAPES,MODES:typeof MODES}"
     '})");'

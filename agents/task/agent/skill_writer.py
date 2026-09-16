@@ -36,9 +36,12 @@ do nothing until called.
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
-import tempfile
+import stat
+import uuid
+from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional
 
@@ -59,7 +62,8 @@ class SkillWriteResult:
     """Outcome of a write op (mirrors SkillValidationResult's shape, plus location)."""
 
     def __init__(self, skill_id: str, ok: bool, *, errors=None, warnings=None,
-                 pending: bool = False, path: Optional[str] = None):
+                 pending: bool = False, path: Optional[str] = None,
+                 revision: Optional[str] = None):
         self.skill_id = skill_id
         self.is_valid = ok
         self.ok = ok
@@ -67,6 +71,7 @@ class SkillWriteResult:
         self.warnings = warnings or []
         self.pending = pending
         self.path = path
+        self.revision = revision
 
     def __repr__(self):
         state = "pending" if self.pending else ("ok" if self.ok else "rejected")
@@ -81,15 +86,83 @@ class SkillWriterMixin:
         # default; the pre-existing single-root test-override contract if
         # `skills_dir` was redirected) rather than always `self.skills_dir` —
         # so a create/patch/delete survives a `polyrob update` code-swap.
-        return self._user_dirs_root() / f"user_{user_id}"
+        uid = self._require_user(user_id)
+        if uid is None:
+            raise ValueError("unsafe or empty user_id refused (tenant scope)")
+        return self._user_dirs_root() / f"user_{uid}"
 
     @staticmethod
     def _require_user(user_id: Optional[str]) -> Optional[str]:
-        """Return a clean user_id or None (anon-block). Never write under user_/."""
+        """Reject unsafe identifiers; never sanitize two tenants into one path."""
+        from core.instance import is_safe_tenant_id
         if user_id is None:
             return None
         uid = str(user_id).strip()
-        return uid or None
+        return uid if uid and is_safe_tenant_id(uid) else None
+
+    def _read_skill_text(self, path: Path, *, max_bytes: int = 160_000) -> str:
+        from core.security.confined_read import read_confined_bytes
+        from core.security.confined_write import confined_path
+        root = self._user_dirs_root()
+        return read_confined_bytes(confined_path(path, root), root.resolve(), max_bytes).decode("utf-8")
+
+    @staticmethod
+    def _content_revision(content: str) -> str:
+        """Immutable identifier for the exact bytes that were scanned/reviewed."""
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    @contextmanager
+    def _skill_write_lock(self, uid: str):
+        """Exclusive tenant lock, anchored below the trusted skills root.
+
+        Rules and bodies remain separate legacy files, but all writers use this
+        lock. A loader additionally verifies the rule's content hash, so a crash
+        between the two writes makes a skill unavailable rather than loading
+        mismatched instructions. Platforms without POSIX flock refuse mutation.
+        """
+        try:
+            import fcntl
+            from core.security.confined_write import confined_parent
+        except ImportError as exc:
+            raise OSError("safe skill transaction locking is unavailable") from exc
+        lock_path = self._user_root(uid) / ".skill-write.lock"
+        with confined_parent(lock_path, self._user_dirs_root(), create=True) as (parent, name):
+            fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=parent)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+                    raise OSError("unsafe skill transaction lock")
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except OSError as exc:
+                    raise OSError("skill transaction is busy; reload and retry") from exc
+                yield
+            finally:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                os.close(fd)
+
+    def _pending_revision_path(self, uid: str, skill_id: str) -> Path:
+        return self._user_root(uid) / ".pending" / skill_id / "REVISION.json"
+
+    def _read_pending_revision(self, uid: str, skill_id: str, content: str) -> str:
+        """Read a pending version record; lazily backfill safe legacy drafts."""
+        revision = self._content_revision(content)
+        path = self._pending_revision_path(uid, skill_id)
+        try:
+            metadata = json.loads(self._read_skill_text(path, max_bytes=16_384))
+            if (isinstance(metadata, dict) and metadata.get("content_sha256") == revision
+                    and metadata.get("revision") == revision):
+                return revision
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            pass
+        # A legacy pending body had no review binding. Writing a sidecar does not
+        # activate it; promotion will re-scan this exact hash.
+        self._atomic_write(path, json.dumps({"revision": revision,
+                                             "content_sha256": revision}, indent=2))
+        return revision
 
     def _resolve_pending(self, created_by: str, pending: Optional[bool],
                          *, overwriting_active: bool = False) -> bool:
@@ -111,7 +184,8 @@ class SkillWriterMixin:
 
     def create_skill(self, skill_id: str, content: str, *, user_id: str,
                      description: str = "", created_by: str = PROVENANCE_AGENT,
-                     pending: Optional[bool] = None) -> SkillWriteResult:
+                     pending: Optional[bool] = None,
+                     expected_revision: Optional[str] = None) -> SkillWriteResult:
         """Author a new user skill (validated, threat-scanned, atomically written)."""
         uid = self._require_user(user_id)
         if uid is None:
@@ -127,9 +201,7 @@ class SkillWriterMixin:
             return SkillWriteResult(skill_id, False, errors=content_res.errors,
                                     warnings=content_res.warnings)
 
-        # Threat-scan is the injection-persistence tripwire. Fail-OPEN only on an
-        # import error (scanner absent); if the scan itself RAISES we fail-CLOSED
-        # (reject) — a write must not slip past a crashing guard.
+        # An unavailable scanner cannot authorize durable instructions.
         # P1 finalization: scan skill body + description with the composed skill
         # scanner (base injection patterns + invisible/zero-width/bidi unicode) so a
         # hidden instruction set can't be smuggled past the plain-text .pending
@@ -139,7 +211,8 @@ class SkillWriterMixin:
                 is_skill_content_suspicious as is_suspicious,
             )
         except Exception:
-            is_suspicious = None
+            return SkillWriteResult(skill_id, False,
+                                    errors=["threat scanner unavailable (write refused)"])
         # Task 8: a read-only + trusted scope (today: builtin) is exempt from a
         # write-time re-scan — future-proofs e.g. a reindex of the shipped
         # library. `create_skill` ALWAYS targets the writable user scope
@@ -149,7 +222,10 @@ class SkillWriterMixin:
         # `trusted` (trusted describes location provenance, not a license to
         # skip scanning newly-written content).
         _write_scope = skill_store.user_scope()
-        if is_suspicious is not None and not skill_store.scan_exempt(_write_scope):
+        if not callable(is_suspicious):
+            return SkillWriteResult(skill_id, False,
+                                    errors=["threat scanner unavailable (write refused)"])
+        if not skill_store.scan_exempt(_write_scope):
             try:
                 flagged = is_suspicious(content)
             except Exception as e:
@@ -176,26 +252,53 @@ class SkillWriterMixin:
                     return SkillWriteResult(skill_id, False,
                                             errors=["description failed injection threat-scan"])
 
-        active_file = self._user_root(uid) / skill_id / "SKILL.md"
-        overwriting_active = active_file.exists() or (skill_id in getattr(self, "skill_rules", {}))
-        quarantine = self._resolve_pending(created_by, pending,
-                                           overwriting_active=overwriting_active)
-        base = self._user_root(uid) / (".pending" if quarantine else "")
-        skill_dir = base / skill_id
-        skill_file = skill_dir / "SKILL.md"
+        revision = self._content_revision(content)
         try:
-            if skill_file.exists():
-                self._archive_prior_body(uid, skill_id, skill_file)  # non-destructive overwrite
-            self._atomic_write(skill_file, content)
-            if not quarantine:
-                self._upsert_rule(uid, skill_id, description=description,
-                                  created_by=created_by, content=content)
+            with self._skill_write_lock(uid):
+                active_file = self._user_root(uid) / skill_id / "SKILL.md"
+                overwriting_active = active_file.exists() or (skill_id in getattr(self, "skill_rules", {}))
+                quarantine = self._resolve_pending(created_by, pending,
+                                                   overwriting_active=overwriting_active)
+                base = self._user_root(uid) / (".pending" if quarantine else "")
+                skill_dir = base / skill_id
+                skill_file = skill_dir / "SKILL.md"
+                if expected_revision is not None:
+                    try:
+                        current = self._read_skill_text(skill_file)
+                        actual = self._content_revision(current)
+                    except (OSError, UnicodeError):
+                        # A protected active skill is patched by writing a fresh
+                        # pending draft. Its CAS token names the active body the
+                        # editor actually read, not the as-yet-absent draft.
+                        try:
+                            actual = self._content_revision(self._read_skill_text(active_file)) \
+                                if quarantine else None
+                        except (OSError, UnicodeError):
+                            actual = None
+                    if actual != expected_revision:
+                        return SkillWriteResult(skill_id, False,
+                                                errors=["revision conflict; reload before editing"])
+                if skill_file.exists():
+                    self._archive_prior_body(uid, skill_id, skill_file)  # non-destructive overwrite
+                # Body first: until the matching rule is committed, hash-verifying
+                # loaders refuse this active skill rather than consume mixed state.
+                self._atomic_write(skill_file, content)
+                if quarantine:
+                    self._atomic_write(self._pending_revision_path(uid, skill_id), json.dumps({
+                        "revision": revision, "content_sha256": revision,
+                        "description": description, "created_by": created_by,
+                    }, indent=2))
+                else:
+                    self._upsert_rule(uid, skill_id, description=description,
+                                      created_by=created_by, content=content,
+                                      revision=revision)
                 self._invalidate_skill_cache(uid, skill_id)
             self._record_provenance(skill_id, uid, created_by)
             logger.info("authored skill %s/%s (%s)", uid, skill_id,
                         "pending" if quarantine else "active")
             return SkillWriteResult(skill_id, True, pending=quarantine,
-                                    warnings=content_res.warnings, path=str(skill_file))
+                                    warnings=content_res.warnings, path=str(skill_file),
+                                    revision=revision)
         except Exception as e:
             logger.error("skill write failed for %s/%s: %s", uid, skill_id, e, exc_info=True)
             return SkillWriteResult(skill_id, False, errors=[f"write failed: {e}"])
@@ -203,7 +306,8 @@ class SkillWriterMixin:
     def patch_skill(self, skill_id: str, *, user_id: str, old_string: str,
                     new_string: str, replace_all: bool = False,
                     created_by: str = PROVENANCE_AGENT,
-                    pending: Optional[bool] = None) -> SkillWriteResult:
+                    pending: Optional[bool] = None,
+                    expected_revision: Optional[str] = None) -> SkillWriteResult:
         """Exact-match edit of an existing user skill body, re-validated + re-scanned."""
         uid = self._require_user(user_id)
         if uid is None:
@@ -221,9 +325,13 @@ class SkillWriterMixin:
             return SkillWriteResult(skill_id, False,
                                     errors=["a background turn cannot patch an active skill"])
         try:
-            current = skill_file.read_text(encoding="utf-8")
+            current = self._read_skill_text(skill_file)
         except Exception as e:
             return SkillWriteResult(skill_id, False, errors=[f"read failed: {e}"])
+        actual_revision = self._content_revision(current)
+        if expected_revision is not None and expected_revision != actual_revision:
+            return SkillWriteResult(skill_id, False,
+                                    errors=["revision conflict; reload before editing"])
 
         count = current.count(old_string)
         if count == 0:
@@ -236,7 +344,8 @@ class SkillWriterMixin:
 
         # Re-run the full validate+scan gate on the NEW body.
         return self.create_skill(skill_id, updated, user_id=uid, created_by=created_by,
-                                 pending=pending if pending is not None else self._is_pending_path(skill_file))
+                                 pending=pending if pending is not None else self._is_pending_path(skill_file),
+                                 expected_revision=actual_revision)
 
     def delete_skill(self, skill_id: str, *, user_id: str,
                      absorbed_into: Optional[str] = None,
@@ -256,12 +365,12 @@ class SkillWriterMixin:
             logger.info("background turn blocked from deleting active skill %s/%s", uid, skill_id)
             return False
         try:
+            from core.security.confined_write import replace_confined
             archive_dir = self._user_root(uid) / ".archived" / skill_id
-            archive_dir.mkdir(parents=True, exist_ok=True)
             dest = archive_dir / "SKILL.md"
-            os.replace(str(skill_file), str(dest))
+            replace_confined(skill_file, dest, self._user_dirs_root())
             if absorbed_into:
-                (archive_dir / "ABSORBED_INTO").write_text(absorbed_into, encoding="utf-8")
+                self._atomic_write(archive_dir / "ABSORBED_INTO", absorbed_into)
             self._remove_rule(uid, skill_id)
             self.reload_rules()
             logger.info("archived skill %s/%s%s", uid, skill_id,
@@ -272,7 +381,8 @@ class SkillWriterMixin:
             return False
 
     def promote_pending_skill(self, skill_id: str, *, user_id: str,
-                              description: str = "") -> SkillWriteResult:
+                              description: str = "",
+                              expected_revision: Optional[str] = None) -> SkillWriteResult:
         """Move a `.pending/` skill into active use (the human/curator review gate)."""
         uid = self._require_user(user_id)
         if uid is None:
@@ -283,7 +393,21 @@ class SkillWriterMixin:
         pending_file = self._user_root(uid) / ".pending" / skill_id / "SKILL.md"
         if not pending_file.exists():
             return SkillWriteResult(skill_id, False, errors=["no pending skill with that id"])
-        content = pending_file.read_text(encoding="utf-8")
+        try:
+            content = self._read_skill_text(pending_file)
+        except (OSError, UnicodeError) as exc:
+            return SkillWriteResult(skill_id, False, errors=[f"unsafe pending skill: {exc}"])
+        try:
+            with self._skill_write_lock(uid):
+                # This sidecar is the review token. Re-read while locked so a
+                # patch after review cannot be promoted under an old approval.
+                content = self._read_skill_text(pending_file)
+                reviewed_revision = self._read_pending_revision(uid, skill_id, content)
+                if expected_revision is not None and expected_revision != reviewed_revision:
+                    return SkillWriteResult(skill_id, False,
+                                            errors=["revision conflict; pending skill changed after review"])
+        except OSError as exc:
+            return SkillWriteResult(skill_id, False, errors=[f"promotion lock failed: {exc}"])
         # P2-20: read the ORIGINAL author before we re-create. Promote must ACTIVATE the
         # skill (that's the review gate), so we still create it as PROVENANCE_USER —
         # passing the original author (e.g. background_review) would make create_skill's
@@ -309,8 +433,19 @@ class SkillWriterMixin:
                 pass
         if res.ok and not res.pending:
             try:
-                os.remove(str(pending_file))
-                pending_file.parent.rmdir()
+                from core.security.confined_write import unlink_confined
+                # Delete only the exact version that was promoted. A newer draft
+                # left by a concurrent editor remains pending for a fresh review.
+                with self._skill_write_lock(uid):
+                    latest = self._read_skill_text(pending_file)
+                    if self._content_revision(latest) != reviewed_revision:
+                        return res
+                    unlink_confined(pending_file, self._user_dirs_root())
+                    try:
+                        unlink_confined(self._pending_revision_path(uid, skill_id), self._user_dirs_root())
+                    except OSError:
+                        pass
+                unlink_confined(pending_file.parent, self._user_dirs_root(), directory=True)
             except OSError:
                 pass
         return res
@@ -321,15 +456,21 @@ class SkillWriterMixin:
         if uid is None:
             return []
         pending_root = self._user_root(uid) / ".pending"
-        if not pending_root.is_dir():
+        try:
+            from core.security.confined_write import list_confined_directory
+            entries = list_confined_directory(pending_root, self._user_dirs_root())
+        except OSError:
             return []
         out: List[dict] = []
-        for skill_dir in sorted(pending_root.iterdir()):
+        for entry in entries:
+            if not self.validate_skill_id(entry)[0]:
+                continue
+            skill_dir = pending_root / entry
             skill_file = skill_dir / "SKILL.md"
             if not skill_file.is_file():
                 continue
             try:
-                body = skill_file.read_text(encoding="utf-8")
+                body = self._read_skill_text(skill_file)
             except Exception:
                 continue
             preview = body.strip().replace("\n", " ")
@@ -342,6 +483,7 @@ class SkillWriterMixin:
                 "preview": preview,
                 "chars": len(body),
                 "path": str(skill_file),
+                "revision": self._content_revision(body),
             })
         return out
 
@@ -358,11 +500,15 @@ class SkillWriterMixin:
         if not pending_file.exists():
             return False
         try:
+            from core.security.confined_write import replace_confined, unlink_confined
             archive_dir = self._user_root(uid) / ".archived" / skill_id
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            os.replace(str(pending_file), str(archive_dir / "SKILL.md"))
+            replace_confined(pending_file, archive_dir / "SKILL.md", self._user_dirs_root())
             try:
-                pending_file.parent.rmdir()
+                unlink_confined(self._pending_revision_path(uid, skill_id), self._user_dirs_root())
+            except OSError:
+                pass
+            try:
+                unlink_confined(pending_file.parent, self._user_dirs_root(), directory=True)
             except OSError:
                 pass
             logger.info("rejected pending skill %s/%s (archived)", uid, skill_id)
@@ -374,48 +520,29 @@ class SkillWriterMixin:
     # --- internals -----------------------------------------------------------
 
     def _archive_prior_body(self, uid: str, skill_id: str, current_file: Path) -> None:
-        """Copy the body we're about to overwrite into .archived/ (recoverable). Fail-open."""
-        try:
-            archive_dir = self._user_root(uid) / ".archived" / skill_id
-            archive_dir.mkdir(parents=True, exist_ok=True)
-            n = 1 + sum(1 for _ in archive_dir.glob("*-SKILL.md"))
-            dest = archive_dir / f"{n}-SKILL.md"
-            content = current_file.read_text(encoding="utf-8")
-            if dest.exists():
-                # Collision-safe fallback: use a unique temp name in the same dir.
-                fd, _tmp = tempfile.mkstemp(prefix=f"{n}-", suffix="-SKILL.md", dir=str(archive_dir))
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(content)
-            else:
-                dest.write_text(content, encoding="utf-8")
-        except Exception as e:
-            logger.debug("archive-on-overwrite skipped for %s/%s: %s", uid, skill_id, e)
+        """Preserve prior bytes before overwrite; an unsafe archive refuses the write."""
+        archive_dir = self._user_root(uid) / ".archived" / skill_id
+        content = self._read_skill_text(current_file)
+        self._atomic_write(archive_dir / f"{uuid.uuid4().hex}-SKILL.md", content)
 
     def _atomic_write(self, path: Path, content: str) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(content)
-            os.replace(tmp, str(path))
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+        from core.security.confined_write import write_confined_text
+        write_confined_text(path, self._user_dirs_root(), content)
 
     def _find_skill_file(self, uid: str, skill_id: str) -> Optional[Path]:
         # Defense-in-depth: never join an unvalidated id into a path (callers also
         # validate, but a bad id must never traverse out of user_{uid}/).
         ok, _ = self.validate_skill_id(skill_id)
-        if not ok:
+        if not ok or self._require_user(uid) is None:
             return None
         for sub in ("", ".pending"):
             f = self._user_root(uid) / sub / skill_id / "SKILL.md" if sub else \
                 self._user_root(uid) / skill_id / "SKILL.md"
-            if f.exists():
+            try:
+                self._read_skill_text(f)
                 return f
+            except (OSError, UnicodeError):
+                continue
         return None
 
     def _is_pending_path(self, path: Path) -> bool:
@@ -428,13 +555,13 @@ class SkillWriterMixin:
         p = self._user_rules_path(uid)
         if p.exists():
             try:
-                return json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
+                return json.loads(self._read_skill_text(p, max_bytes=1_048_576))
+            except FileNotFoundError:
                 return {}
         return {}
 
     def _upsert_rule(self, uid: str, skill_id: str, *, description: str, created_by: str,
-                     content: str = "") -> None:
+                     content: str = "", revision: str = "") -> None:
         rules = self._load_user_rules_raw(uid)
         entry = rules.get(skill_id, {}) if isinstance(rules.get(skill_id), dict) else {}
         existing_triggers = entry.get("triggers") if isinstance(entry.get("triggers"), dict) else {}
@@ -451,6 +578,12 @@ class SkillWriterMixin:
                 "keywords": self._derive_keywords(skill_id, description, content),
             },
         })
+        if revision:
+            # Loader verifies this against SKILL.md before injecting it. This is
+            # intentionally body-only: metadata/rule edits do not claim to have
+            # reviewed different instruction bytes.
+            entry["revision"] = revision
+            entry["content_sha256"] = revision
         rules[skill_id] = entry
         self._atomic_write(self._user_rules_path(uid), json.dumps(rules, indent=2))
 

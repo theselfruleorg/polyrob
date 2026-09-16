@@ -117,16 +117,41 @@ Handler = Callable[[CommandContext], HandlerResult]
 # ---------------------------------------------------------------------------
 
 
+#: The ten grouped-``/help`` sections (043 A13/A24), in render order — the
+#: specification is ``docs/design/040/cli/help-grouped-80.txt``. A
+#: ``Command.group`` outside this tuple (an ad-hoc test registry that never
+#: sets ``group=``, e.g.) still renders — appended after these ten, in
+#: first-seen order — so a command can never silently vanish from ``/help``.
+GROUP_ORDER: tuple = (
+    "talk",
+    "needs you",
+    "work",
+    "money",
+    "control",
+    "remember",
+    "look",
+    "set up",
+    "display",
+    "leave",
+)
+
+
 @dataclass(frozen=True)
 class Command:
     """A single slash command.
 
     Attributes:
-        name:    Canonical name (no leading slash), e.g. ``"status"``.
-        handler: The handler callable (sync or async).
-        help:    One-line help text shown by ``/help``.
-        aliases: Alternative invocation names (no leading slash).
-        usage:   Optional argument-usage hint shown in ``/help``.
+        name:      Canonical name (no leading slash), e.g. ``"status"``.
+        handler:   The handler callable (sync or async).
+        help:      One-line help text shown by ``/help``.
+        aliases:   Alternative invocation names (no leading slash).
+        usage:     Optional argument-usage hint shown in ``/help``.
+        group:     One of :data:`GROUP_ORDER` — which grouped-``/help``
+                   section this command renders under (043 A13/A24).
+        help_long: Optional elaboration shown by ``/help <verb>`` — wrapped
+                   at the terminal width under the one-line summary.
+        elsewhere: Optional one-line pointer to another seat where the same
+                   control lives, shown by ``/help <verb>`` as ``Elsewhere: …``.
     """
 
     name: str
@@ -134,6 +159,10 @@ class Command:
     help: str = ""
     aliases: tuple = ()
     usage: str = ""
+    group: str = "other"
+    help_long: str = ""
+    elsewhere: str = ""
+    raw_arguments: bool = False
 
 
 class CommandRegistry:
@@ -200,12 +229,18 @@ class CommandRegistry:
             return False
 
         body = line[1:].strip()
-        parts = body.split()
+        name = body.split(maxsplit=1)[0].lower() if body else ""
+        command = self.lookup(name)
+        import shlex
+        try:
+            parts = body.split() if command and command.raw_arguments else shlex.split(body)
+        except ValueError as exc:
+            ctx.emit(f"Invalid command arguments: {exc}. Close or escape quoted text.")
+            return True
         name = parts[0].lower() if parts else ""
         ctx.args = parts[1:]
         ctx.raw = body
 
-        command = self.lookup(name)
         if command is None:
             ctx.emit(f"Unknown command: /{name} — type /help")
             return True

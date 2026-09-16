@@ -45,7 +45,7 @@ curl -X POST http://localhost:9000/api/auth/api-keys \
 #   "prefix": "rob_xxx",
 #   "name": "My Integration",
 #   "expires_at": null,
-#   "created_at": "2026-01-01T00:00:00Z",
+#   "created_at": "2026-09-15T12:00:00Z",
 #   "warning": "Store this key securely — it will not be shown again."
 # }
 ```
@@ -55,6 +55,11 @@ Use the key on subsequent requests:
 ```
 X-API-KEY: rob_xxx...
 ```
+
+Manage them with `GET /api/auth/api-keys` (list, prefixes only) and
+`DELETE /api/auth/api-keys/{key_prefix}` (revoke). `GET /api/auth/me` returns the
+caller the server resolved from whichever credential you sent — the fastest way to
+confirm auth is working.
 
 ### 2. Bearer JWT
 
@@ -76,7 +81,41 @@ Pass the JWT as `Authorization: Bearer <jwt>`.
 
 ### 3. x402 crypto pay-per-request
 
-No account needed — pay per request with USDC on Base or Ethereum. The server returns a `402 Payment Required` response with payment details; include the signed payment in the `X-PAYMENT` header on retry. x402 receiving is off by default (`X402_ENABLED`, see [../CONFIGURATION.md](../CONFIGURATION.md)). See [modules/x402/README.md](../../modules/x402/README.md) for client library details.
+No account needed — pay per request with USDC on Base or Ethereum. The server returns a `402 Payment Required` response with payment details; include the signed payment in the `X-PAYMENT` header on retry. x402 receiving is off by default (`X402_ENABLED`, see [../CONFIGURATION.md](../CONFIGURATION.md)). The paywalled routes are exactly `POST /a2a/rpc`, `POST /a2a/message/stream`, `POST /a2a/tasks` and `POST /v1/chat/completions` — free reads and continuations are never charged. See [payments.md](payments.md) for the money model.
+
+---
+
+## What is mounted
+
+The app assembles itself from routers. Some are always present; some appear only
+when their flag is on, in which case the whole path space is absent rather than
+403 — a missing route is the honest answer to "this deployment does not do that".
+
+| Prefix | What it is | Present when |
+|---|---|---|
+| `/health` | Liveness and component status (`503` when degraded) | always |
+| `/api/task/*` | Sessions: create, status, message, cancel, files | always |
+| `/api/auth/*` | SIWE sign-in, JWTs, API keys | always |
+| `/api/chat/message` | One-shot chat over the task agent (`/api/message` is the legacy alias) | always |
+| `/api/payments/*` | Deposit address, credit balance, transaction history | always (wallet sign-in only — an API-token identity is rejected) |
+| `/api/x402/*` | Public pricing, payment status, and the per-invoice challenge/pay pair | always (info-only until `X402_ENABLED`) |
+| `/api/pricing/*` | Public model pricing and a cost calculator | always |
+| `/api/admin/*` | Tenant administration: users, credits, roles, blocks, billing failures | always (admin role required) |
+| `/api/mcp/*` | Outbound MCP server management | always |
+| `/api/skills/*` | Read, edit, delete and fork a skill | always |
+| `/api/polymarket/*`, `/api/hyperliquid/*` | Venue configuration, read data, and gated execution | always (the venues' own flags gate live trading) |
+| `/a2a/*`, `/.well-known/agent.json` | The A2A protocol surface | always |
+| `/eip8004/*` | ERC-8004 identity, reputation and validation | always (discovery-only until `EIP8004_ENABLED`) |
+| `/webhooks/{surface_id}` | Inbound webhook verify and delivery | always (404 with an empty surface registry) |
+| `/api/kb/*` | Knowledge-base ingest and search | `KB_API_ENABLED` |
+| `/v1/*` | OpenAI-compatible chat and model list | `OPENAI_COMPAT_API_ENABLED` |
+| `/mcp` | POLYROB acting as an MCP server | `MCP_SERVE_ENABLED` |
+
+`GET /docs` is the generated OpenAPI browser and is the authority on request and
+response shapes for everything below.
+
+> The console (`polyrob dashboard`) is a **separate** app on port 5050 with its own
+> routes, including a public `GET /api/status`. See [console.md](console.md).
 
 ---
 
@@ -151,9 +190,39 @@ GET /api/task/sessions/{session_id}/queue-status
 
 Returns the number of queued messages and the agent's current status.
 
+### Files a session produced
+
+```
+GET  /api/task/sessions/{session_id}/documents            # list the workspace with metadata
+POST /api/task/sessions/{session_id}/workspace/upload     # multipart: file=@…
+```
+
+The upload is bounded by the same extension and MIME allow-lists the console
+uses, and both routes refuse a caller who does not own the session.
+
+### Sessions of a user
+
+```
+GET  /api/task/users/{user_id}/sessions
+POST /api/task/users/{user_id}/active_session
+```
+
+List a user's sessions, and switch which one is active. A caller may only read
+their own.
+
+### What this deployment can do
+
+```
+GET /api/task/capabilities   # models and tools this server actually offers
+GET /api/task/metrics        # live resource usage
+```
+
+`capabilities` is the honest answer to "which model may I ask for" — it reflects
+the keys and flags this process resolved, not a static list.
+
 ### Streaming session events (SSE)
 
-Real-time streaming is available via the **A2A layer** (`POST /a2a/message/stream`) or the WebView Socket.IO interface — not as a `/api/task` route. See the [A2A protocol](#a2a-protocol-agent-to-agent) section below.
+Real-time streaming is available via the **A2A layer** (`POST /a2a/message/stream`) or the Console's Socket.IO interface — not as a `/api/task` route. See the [A2A protocol](#a2a-protocol-agent-to-agent) section below.
 
 ---
 
@@ -172,6 +241,9 @@ Returns the Agent Card — polyrob's capabilities, supported methods, and authen
 ```bash
 curl http://localhost:9000/.well-known/agent.json
 ```
+
+`GET /a2a/agent-card` serves the same card at an API path. `GET /a2a/extended-card`
+serves it to an authenticated caller and may add tier-specific metadata.
 
 ### Send a task (JSON-RPC)
 
@@ -209,21 +281,166 @@ approval resolves). `tasks/get` responses carry a `metadata.current_activity`
 snapshot (`{phase, detail, seconds_in_state, step, call_id}`, `null` when
 unknown) describing what the agent is doing right now.
 
+`GET /a2a/tasks/{task_id}/stream` attaches to a task that already exists, and
+`POST /a2a/tasks/resubscribe` reattaches after a dropped connection.
+
+### The REST task surface
+
+The JSON-RPC methods have plain REST twins, for a client that would rather not
+speak JSON-RPC:
+
+```
+POST   /a2a/tasks                        # create (payment-verified)
+GET    /a2a/tasks                        # list, paginated
+GET    /a2a/tasks/{task_id}              # status
+POST   /a2a/tasks/{task_id}/send         # send a message to a running task
+POST   /a2a/tasks/{task_id}/cancel       # cancel
+```
+
+### Push notifications
+
+Instead of holding a stream open, register a callback and let the server call
+you:
+
+```
+POST   /a2a/tasks/{task_id}/push-config
+GET    /a2a/tasks/{task_id}/push-config
+DELETE /a2a/tasks/{task_id}/push-config
+```
+
 ---
 
-## MCP server management
+## MCP server management (outbound)
+
+Manage the MCP servers **this agent connects out to**, per tenant. Ten routes:
 
 ```
-POST /api/mcp/servers                     # Add a custom MCP server
-POST /api/mcp/servers/{server_name}/test  # Test connection
-GET  /api/mcp/available                   # List available MCP servers and their tools
+POST   /api/mcp/servers                     # add a server
+GET    /api/mcp/servers                     # list yours
+GET    /api/mcp/servers/{server_name}       # one server
+PATCH  /api/mcp/servers/{server_name}       # update it
+DELETE /api/mcp/servers/{server_name}       # remove it
+POST   /api/mcp/servers/{server_name}/test  # test the connection
+GET    /api/mcp/available                   # servers and the tools they expose
+GET    /api/mcp/settings                    # your MCP settings
+PATCH  /api/mcp/settings
+GET    /api/mcp/audit                       # what was called, and by whom
 ```
+
+Server secrets are stored encrypted; the read routes never return them.
+
+---
+
+## Knowledge base (`KB_API_ENABLED`, default off)
+
+```
+POST /api/kb/ingest          # {path, session_id, collection, recursive, globs}
+POST /api/kb/ingest/upload   # multipart upload straight into a collection
+POST /api/kb/search          # {query, collection, limit}
+```
+
+The tenant comes from the credential, never from the body, and `path` is
+resolved inside the named session's workspace — a path that escapes it is
+rejected before anything is read.
+
+---
+
+## Skills
+
+```
+GET    /api/skills/{skill_id}        # content and metadata
+PUT    /api/skills/{skill_id}        # edit a user skill (system skills are immutable)
+DELETE /api/skills/{skill_id}
+POST   /api/skills/{skill_id}/fork   # copy a system skill so you can change it
+```
+
+See [skills.md](skills.md) for the format.
+
+---
+
+## Money and pricing
+
+```
+GET  /api/pricing/models                       # public model pricing
+GET  /api/pricing/calculator                   # cost for a given usage
+GET  /api/x402/pricing                         # public: what this server charges per request
+GET  /api/x402/requests/{request_id}           # public: the 402 challenge for an agent invoice
+POST /api/x402/requests/{request_id}/pay       # public: settle that invoice via the facilitator
+GET  /api/x402/verify-status/{nonce}           # payment status by nonce
+GET  /api/x402/payment-history/{wallet}        # payments from one wallet
+GET  /api/payments/deposit-address             # your credit-deposit address
+GET  /api/payments/balance
+GET  /api/payments/transactions
+GET  /api/payments/deposits
+GET  /api/payments/pricing
+```
+
+The `/api/x402/requests/*` pair is public by design — a payer must be able to
+read a challenge and settle without an account — and is rate-limited by a client
+key that cannot be spoofed with `X-Forwarded-For`. The full money model is in
+[payments.md](payments.md).
+
+---
+
+## Trading venues
+
+```
+/api/polymarket/{configure,status,trading-limits,disable,enable,credentials,tools,execute,audit,stats}
+/api/hyperliquid/{configure,status,trading-limits,demo-mode,enabled,credentials,tools,execute,audit,stats}
+/api/hyperliquid/{markets/perpetual,markets/spot,price/{coin},orderbook/{coin},funding/{coin}}
+/api/hyperliquid/{account,balances/spot,orders/open}
+```
+
+These routes configure credentials and read market data. **Mounting them does
+not arm live trading** — an order is validated and returned as a dry run unless
+the master and per-venue trade flags are on and the order is within its cap. See
+[payments.md](payments.md).
+
+---
+
+## ERC-8004 (Trustless Agents)
+
+Always mounted; discovery-only until `EIP8004_ENABLED`.
+
+```
+GET  /eip8004/registration.json                   # this agent's registration file
+GET  /eip8004/config                              # what is configured, and what is not
+POST /eip8004/reputation/{authorize,feedback,query}
+GET  /eip8004/reputation/{agent_id}
+POST /eip8004/validation/{request,respond}
+GET  /eip8004/validation/{status/{hash},summary/{agent_id},pending,validators}
+```
+
+ERC-8004 is a trust and discovery layer, not a payment rail — it composes with
+x402 rather than replacing it. See [payments.md](payments.md).
+
+---
+
+## Inbound webhooks
+
+```
+GET  /webhooks/{surface_id}   # the provider's verification handshake
+POST /webhooks/{surface_id}   # deliver an event to that surface
+```
+
+Always mounted and harmless: with no webhook surface registered, both return
+`404`.
+
+---
+
+## Administration
+
+`/api/admin/*` (admin role required) covers user lookup and search, credit
+add/deduct/read, role and tier changes, block and unblock, per-user audit and
+sessions, instance statistics, and the billing-failure queue
+(`GET /api/admin/billing-failures`, `…/summary`, `POST …/{id}/resolve`). Browse
+the exact shapes at `/docs`.
 
 ---
 
 ## MCP server (inbound)
 
-polyrob can also act as an MCP *server* itself, so an MCP client (Claude Desktop, Cursor) can connect to it as a tool provider. This is distinct from [MCP server management](#mcp-server-management) above, which is the *outbound* side — the agent connecting OUT to external MCP servers. It is **off by default** — enable with `MCP_SERVE_ENABLED=true` (see [../CONFIGURATION.md](../CONFIGURATION.md)).
+polyrob can also act as an MCP *server* itself, so an MCP client (Claude Desktop, Cursor) can connect to it as a tool provider. This is distinct from [MCP server management](#mcp-server-management-outbound) above, which is the *outbound* side — the agent connecting OUT to external MCP servers. It is **off by default** — enable with `MCP_SERVE_ENABLED=true` (see [../CONFIGURATION.md](../CONFIGURATION.md)).
 
 ```
 POST /mcp   # JSON-RPC 2.0: initialize, tools/list, tools/call

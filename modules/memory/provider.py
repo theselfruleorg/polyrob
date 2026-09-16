@@ -123,6 +123,16 @@ class MemoryProvider(ABC):
                               mime: str = "text/plain", created_at: str = None) -> None:
         return None
 
+    async def kb_replace_source(self, *, user_id, collection: str, source_path: str,
+                                source_hash: str, chunks: List[str],
+                                mime: str = "text/plain", created_at: str = None) -> bool:
+        """Atomically publish a complete source. Unsupported providers refuse.
+
+        Implementations must preserve the previous source on failure; composing
+        remove/ingest_chunk calls does not satisfy this contract.
+        """
+        return False
+
     async def kb_search(self, query: str, *, user_id, collection: str = "default",
                         limit: int = 8) -> str:
         return ""

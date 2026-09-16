@@ -4,7 +4,7 @@ TDD coverage:
 - _iter_files: skips .env / id_rsa / binary, includes .md/.py, respects max_files
 - _chunk: honors target/overlap, splits on headings
 - kb_ingest: lands chunks in a fake registry (monkeypatched), dedup, path escape
-- PDF path: _process_pdf mocked → text extracted
+- PDF path: async document-worker adapter mocked → text extracted
 """
 from __future__ import annotations
 
@@ -240,6 +240,20 @@ class FakeRegistry:
         # Track the hash so subsequent calls see it
         self.hashes[source_path] = source_hash
 
+    async def kb_replace_source(self, *, chunks, **kwargs):
+        previous_chunks = list(self.ingested_chunks)
+        previous_hashes = dict(self.hashes)
+        source = kwargs["source_path"]
+        self.ingested_chunks = [row for row in self.ingested_chunks
+                                if row["source_path"] != source]
+        for idx, text in enumerate(chunks):
+            ok = await self.kb_ingest_chunk(chunk_idx=idx, content=text, **kwargs)
+            if ok is False:
+                self.ingested_chunks = previous_chunks
+                self.hashes = previous_hashes
+                return False
+        return True
+
     async def kb_remove(self, *, user_id, collection, source=None):
         self.removed.append({"collection": collection, "source": source})
         if source and source in self.hashes:
@@ -268,7 +282,7 @@ class TestKbIngest:
             )
 
         # Patch the registry routers that kb_ingest imports
-        with patch("modules.memory.registry.kb_ingest_chunk", new=fake_reg.kb_ingest_chunk), \
+        with patch("modules.memory.registry.kb_replace_source", new=fake_reg.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake_reg.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake_reg.kb_source_hash):
             # Also patch the imported names inside kb_ingest's closure
@@ -291,7 +305,7 @@ class TestKbIngest:
             )
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_run())
@@ -314,7 +328,7 @@ class TestKbIngest:
             return await kb_ingest(str(fpath), user_id="u1", session_id="s1")
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             # First ingest
@@ -327,7 +341,7 @@ class TestKbIngest:
             assert r2["ingested"] == 0
 
     def test_reingest_modified_file(self, tmp_path):
-        """Modified file → re-ingested (remove + re-ingest)."""
+        """Modified file replaces its complete source through one provider call."""
         from tools.knowledge_ingest import kb_ingest
         import tools.knowledge_ingest as ki_mod
 
@@ -340,7 +354,7 @@ class TestKbIngest:
             return await kb_ingest(str(fpath), user_id="u1", session_id="s1")
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             r1 = asyncio.run(_ingest())
@@ -351,8 +365,10 @@ class TestKbIngest:
 
             r2 = asyncio.run(_ingest())
             assert r2["ingested"] == 1
-            # kb_remove was called (old chunks removed)
-            assert any(r["source"] == str(fpath) for r in fake.removed)
+            # Replacement never invokes the destructive removal router.
+            assert not fake.removed
+            assert len(fake.ingested_chunks) == 1
+            assert "Modified content" in fake.ingested_chunks[0]["content"]
 
     def test_source_name_override_stores_logical_identity(self, tmp_path):
         """source_name overrides the stored source_path for single-file ingest."""
@@ -371,7 +387,7 @@ class TestKbIngest:
             )
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
@@ -398,7 +414,7 @@ class TestKbIngest:
             )
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             # First upload: temp path A.
@@ -429,7 +445,7 @@ class TestKbIngest:
             )
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
@@ -452,8 +468,9 @@ class TestKbIngest:
         async def _ingest():
             return await kb_ingest(str(tmp_path), user_id="u1", session_id="s1")
 
-        with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+        with patch.object(ki_mod, "_rg_files", return_value=None), \
+             patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
@@ -476,7 +493,7 @@ class TestKbIngest:
             return await kb_ingest(str(fpath), user_id="u1", session_id="s1")
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
@@ -486,8 +503,7 @@ class TestKbIngest:
         assert len(fake.ingested_chunks) == 0
 
     def test_partial_ingest_not_marked_complete(self, tmp_path, monkeypatch):
-        """If a chunk insert fails mid-file, the file is NOT counted as ingested and its
-        source row is removed so a re-run retries (instead of skipping as unchanged)."""
+        """Failed publication is not counted as complete and leaves no partial hash."""
         from tools.knowledge_ingest import kb_ingest
         import tools.knowledge_ingest as ki_mod
 
@@ -518,23 +534,20 @@ class TestKbIngest:
             return await kb_ingest(str(fpath), user_id="u1", session_id="s1")
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
 
         assert result["ingested"] == 0
         assert result.get("failed", 0) >= 1
-        # partial chunks cleared so the file isn't left half-ingested with a current hash
-        assert any(r["source"] == str(fpath) for r in fake.removed)
+        # Failed publication leaves no partial hash/chunks and uses no removal.
+        assert not fake.removed
+        assert not fake.ingested_chunks
         assert str(fpath) not in fake.hashes
 
     def test_pdf_path_mock(self, tmp_path):
-        """PDF path: _process_pdf is mocked (and awaited) → extracted text ingested.
-
-        Exercises the REAL async path: _extract_text awaits _extract_pdf_text which
-        awaits PdfExtractionMixin._process_pdf. No run_coroutine_sync bridge.
-        """
+        """PDF ingestion awaits the bounded worker adapter and stores its text."""
         from tools.knowledge_ingest import kb_ingest
         import tools.knowledge_ingest as ki_mod
 
@@ -543,9 +556,9 @@ class TestKbIngest:
 
         fake = FakeRegistry()
 
-        # AsyncMock for _process_pdf so the `await mixin._process_pdf(...)` path is
-        # exercised end-to-end (the coroutine must be awaited, not bridged).
-        async def fake_process_pdf(self, content):
+        # Replace only the worker adapter; exercise the rest of ingestion.
+        async def fake_process_pdf(kind, content):
+            assert kind == "pdf"
             return {"content": "Extracted PDF content for testing purposes."}
 
         async def _ingest():
@@ -553,17 +566,17 @@ class TestKbIngest:
 
         with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
              patch(
-                 "tools.filesystem_pdf.PdfExtractionMixin._process_pdf",
+                 "tools.document_parser.parse_document_async",
                  new=fake_process_pdf,
              ), \
-             patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+             patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
              patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
              patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
             result = asyncio.run(_ingest())
 
         assert result["ingested"] == 1
         assert result["n_chunks"] >= 1
-        # The ingested chunk content came from the mocked _process_pdf
+        # The ingested chunk content came from the mocked worker
         assert any(
             "Extracted PDF content" in c.get("content", "")
             for c in fake.ingested_chunks
@@ -609,3 +622,44 @@ class TestConfinementRoot:
 
         root = ki_mod._resolve_confinement_root("s1", "u1")
         assert root == tmp_path.resolve()
+
+
+@pytest.mark.asyncio
+async def test_hash_and_extraction_use_one_snapshot(tmp_path, monkeypatch):
+    import hashlib
+    import tools.knowledge_ingest as ki
+    from modules.memory import registry
+    source = tmp_path / 'note.md'
+    original = b'# Safe\nOriginal content before replacement.'
+    source.write_bytes(original)
+    outside = tmp_path.parent / 'private-fixture.txt'
+    outside.write_text('must never enter the knowledge base')
+    stored = []
+    async def hash_lookup(**kwargs):
+        source.unlink()
+        source.symlink_to(outside)
+        return None
+    async def store_chunk(**kwargs):
+        stored.append(kwargs)
+        return True
+    monkeypatch.setattr(ki, '_resolve_confinement_root', lambda *a: tmp_path)
+    monkeypatch.setattr(registry, 'kb_source_hash', hash_lookup)
+    monkeypatch.setattr(registry, 'kb_replace_source', store_chunk)
+    result = await ki.kb_ingest(str(source), user_id='u', session_id='s')
+    assert result['ingested'] == 1
+    assert stored and all(row['source_hash'] == hashlib.sha256(original).hexdigest() for row in stored)
+    assert 'Original content' in stored[0]['chunks'][0]
+    assert all('must never' not in ' '.join(row['chunks']) for row in stored)
+
+
+def test_directory_walk_refuses_secret_aliases(tmp_path, monkeypatch):
+    import tools.knowledge_ingest as ki
+    root = tmp_path / 'workspace'
+    root.mkdir()
+    private = tmp_path / '.env'
+    private.write_text('synthetic fixture')
+    (root / 'ordinary.md').symlink_to(private)
+    monkeypatch.setattr(ki, '_rg_files', lambda root: None)
+    files, skipped = ki._iter_files(root)
+    assert not files
+    assert skipped['unsafe'] == 1

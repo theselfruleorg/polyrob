@@ -16,13 +16,20 @@ import os
 
 import pytest
 
-from core.instance import DEFAULT_INSTANCE_ID
+from core.identity import LocalIdentity
 from core.surfaces.rendering import markdown_to_html, render_for_flavor
 
 TELEGRAM_CAP = 4096
 
 
-def _ws(monkeypatch, tmp_path, session_id="sess-b", user_id=DEFAULT_INSTANCE_ID):
+#: The tenant these fixtures run as. ⚠️ It was ``DEFAULT_INSTANCE_ID`` until
+#: 2026-09-15: the instance id was then also the unbound owner principal, so it
+#: doubled as an owner stand-in. It no longer is one — a workspace or goal keyed
+#: by the instance id is a tenant nothing carries. Use the OWNER tenant.
+_OWNER_TENANT = LocalIdentity.USER_ID
+
+
+def _ws(monkeypatch, tmp_path, session_id="sess-b", user_id=_OWNER_TENANT):
     monkeypatch.setenv("DATA_ROOT", str(tmp_path / "data_root"))
     from agents.task.path import pm
     return pm().get_workspace_dir(session_id, user_id)
@@ -47,7 +54,7 @@ def _many_artifacts(ws, n=20):
 def test_deliverables_block_is_bounded_without_write_descriptors(monkeypatch, tmp_path):
     from agents.task.goals.deliverables import build_deliverables, deliverables_max_lines
     ws = _ws(monkeypatch, tmp_path)
-    _, lines = build_deliverables(_many_artifacts(ws), "sess-b", DEFAULT_INSTANCE_ID)
+    _, lines = build_deliverables(_many_artifacts(ws), "sess-b", _OWNER_TENANT)
     # cap + at most one roll-up line
     assert len(lines) <= deliverables_max_lines() + 1
     assert any(ln.startswith("- (+") and "more file(s)" in ln for ln in lines)
@@ -58,7 +65,7 @@ def test_deliverables_rollup_accounts_for_every_file(monkeypatch, tmp_path):
     import re
     from agents.task.goals.deliverables import build_deliverables
     ws = _ws(monkeypatch, tmp_path)
-    _, lines = build_deliverables(_many_artifacts(ws, n=20), "sess-b", DEFAULT_INSTANCE_ID)
+    _, lines = build_deliverables(_many_artifacts(ws, n=20), "sess-b", _OWNER_TENANT)
     rollup = [ln for ln in lines if ln.startswith("- (+")]
     assert len(rollup) == 1
     hidden = int(re.search(r"\+(\d+) more", rollup[0]).group(1))
@@ -71,7 +78,7 @@ def test_attached_files_are_never_rolled_up(monkeypatch, tmp_path):
     monkeypatch.setenv("DELIVERABLES_MAX_LINES", "2")
     ws = _ws(monkeypatch, tmp_path)
     attachments, lines = build_deliverables(
-        _many_artifacts(ws, n=12), "sess-b", DEFAULT_INSTANCE_ID)
+        _many_artifacts(ws, n=12), "sess-b", _OWNER_TENANT)
     attached_lines = [ln for ln in lines if "attached" in ln]
     assert len(attached_lines) == len(attachments)
     assert attachments, "expected the default attach cap to attach something"
@@ -86,7 +93,7 @@ def test_paths_render_as_code_not_links(monkeypatch, tmp_path):
     to a domain that does not exist. Backticks make the renderer emit <code>."""
     from agents.task.goals.deliverables import build_deliverables
     ws = _ws(monkeypatch, tmp_path)
-    _, lines = build_deliverables(_many_artifacts(ws, n=3), "sess-b", DEFAULT_INSTANCE_ID)
+    _, lines = build_deliverables(_many_artifacts(ws, n=3), "sess-b", _OWNER_TENANT)
     import re
     html = markdown_to_html("\n".join(lines))
     assert "<code>status-2026-08-01.md</code>" in html
@@ -106,7 +113,7 @@ def test_goal_completion_push_fits_one_telegram_message(monkeypatch, tmp_path):
     from agents.task.goals.dispatcher import GoalDispatcher
 
     ws = _ws(monkeypatch, tmp_path)
-    _, lines = build_deliverables(_many_artifacts(ws), "sess-b", DEFAULT_INSTANCE_ID)
+    _, lines = build_deliverables(_many_artifacts(ws), "sess-b", _OWNER_TENANT)
 
     class _Board:
         pass
@@ -116,7 +123,7 @@ def test_goal_completion_push_fits_one_telegram_message(monkeypatch, tmp_path):
 
     disp = GoalDispatcher(_Board(), _Agent())
     text = disp._completion_text(
-        Goal(id="g1", user_id=DEFAULT_INSTANCE_ID, title="nightly status sweep"),
+        Goal(id="g1", user_id=_OWNER_TENANT, title="nightly status sweep"),
         "Wrote the sweep. " * 300,  # a long, realistic result body
         verified="verified",
         deliverable_lines=lines,

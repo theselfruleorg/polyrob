@@ -5,8 +5,9 @@ Security model:
 - Each hop is validated with MCPURLValidator.validate_and_resolve(), which returns a
   pinned IP; the connection is pinned to that IP (Host/SNI preserved) so a DNS rebind
   between validation and connect cannot redirect the socket internally.
-- Hard caps on redirects, total time, and response bytes (read incrementally so a
-  decompression bomb is aborted before it is fully buffered).
+- Hard caps on redirects, total time (including DNS), and response bytes.
+- Request identity encoding and disable automatic decompression; refuse servers
+  that return compressed content, before any payload expansion.
 """
 
 import asyncio
@@ -27,8 +28,10 @@ _REDIRECT_STATUS = {301, 302, 303, 307, 308}
 # An honest, disclosed bot UA. Many sites (e.g. Wikipedia) reject requests with no
 # User-Agent; the "Mozilla/5.0 (compatible; ...)" form is the widely-accepted shape.
 _DEFAULT_HEADERS = {
+	"Accept-Encoding": "identity",
 	"User-Agent": "Mozilla/5.0 (compatible; polyrob-web-fetch/1.0; +https://github.com/theselfruleorg)",
-	"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
+	"Accept": ("text/html,application/xhtml+xml,application/json;q=0.9,"
+	           "application/xml;q=0.8,text/plain;q=0.8,*/*;q=0.5"),
 }
 
 
@@ -70,7 +73,7 @@ def _default_session_factory(pinned_ip: Optional[str], hostname: Optional[str]):
 		connector = aiohttp.TCPConnector(resolver=_PinnedResolver(hostname, pinned_ip), ssl=ssl_ctx)
 	else:
 		connector = aiohttp.TCPConnector(ssl=ssl_ctx)
-	return aiohttp.ClientSession(connector=connector)
+	return aiohttp.ClientSession(connector=connector, auto_decompress=False)
 
 
 async def safe_fetch(
@@ -91,6 +94,20 @@ async def safe_fetch(
 			Defaults to the shared MCP URL validator (allow_http=True). Injectable for tests.
 		session_factory: ``factory(pinned_ip) -> async-context-session`` (injectable for tests).
 	"""
+	if max_bytes < 1 or max_redirects < 0 or timeout_sec <= 0:
+		raise ValueError("fetch limits must be positive (redirect count may be zero)")
+	try:
+		return await asyncio.wait_for(_fetch_hops(
+			url, max_bytes=max_bytes, max_redirects=max_redirects,
+			timeout_sec=timeout_sec, validate=validate, validator=validator,
+			session_factory=session_factory,
+		), timeout=timeout_sec)
+	except asyncio.TimeoutError as exc:
+		raise WebFetchError("fetch exceeded its total time limit") from exc
+
+
+async def _fetch_hops(url, *, max_bytes, max_redirects, timeout_sec,
+                     validate, validator, session_factory):
 	if validate and validator is None:
 		validator = get_url_validator(allow_http=True)
 
@@ -115,7 +132,7 @@ async def safe_fetch(
 			# other session/request on this worker) for the resolver timeout.
 			ok, err, pinned_ip = await asyncio.get_running_loop().run_in_executor(
 				None, validator.validate_and_resolve, current)
-			if not ok:
+			if not ok or not pinned_ip:
 				raise WebFetchError(f"blocked URL ({current}): {err}")
 		hostname = urlparse(current).hostname
 
@@ -133,12 +150,15 @@ async def safe_fetch(
 						raise WebFetchError(f"redirect with no Location ({current})")
 					current = urljoin(current, location)
 					continue
+				encoding = resp.headers.get("Content-Encoding", "identity").strip().lower()
+				if encoding not in ("", "identity"):
+					raise WebFetchError("server ignored identity encoding; compressed response refused")
 				ctype = resp.headers.get("Content-Type", "application/octet-stream")
 				buf = bytearray()
 				async for chunk in resp.content.iter_chunked(8192):
-					buf.extend(chunk)
-					if len(buf) > max_bytes:
+					if len(chunk) > max_bytes - len(buf):
 						raise WebFetchError(f"response exceeds {max_bytes} bytes ({current})")
+					buf.extend(chunk)
 				return FetchResult(final_url=current, status=resp.status,
 				                   content_type=ctype, body=bytes(buf))
 	raise WebFetchError(f"too many redirects (>{max_redirects})")

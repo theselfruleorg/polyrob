@@ -37,10 +37,15 @@ def interactive_tool_ids() -> List[str]:
     if raw is not None:
         ids = [t.strip() for t in raw.split(",") if t.strip()]
         return ids or ["filesystem", "task"]
-    from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
+    from agents.task.constants import autonomous_mode_tools, full_autonomy_enabled
     from agents.task.tool_defaults import with_compute_tools, resolve_toolset
     if full_autonomy_enabled():
-        return with_compute_tools(list(AUTONOMOUS_MODE_TOOLS))
+        # `autonomous_mode_tools()`, not the bare constant: it folds in the defi
+        # rail when the operator has armed DEFI_AGENT_AUTONOMY. Without that, the
+        # OWNER'S OWN CHAT SESSION had no defi tool at all, so asking his agent to
+        # bridge got "no bridge verb in the tool catalog" about a working rail
+        # (live, 2026-09-12).
+        return with_compute_tools(list(autonomous_mode_tools()))
     # Supervised default: the SSOT "owner_interactive" toolset (byte-identical to the
     # historical goal,twitter,web_fetch,filesystem,task string).
     return resolve_toolset("owner_interactive")
@@ -59,3 +64,52 @@ def owner_interactive_tool_ids(user_id: Optional[str], env=None) -> Optional[Lis
     if owner and user_id and str(user_id) == str(owner):
         return interactive_tool_ids()
     return None
+
+
+async def reconcile_owner_toolset(task_agent, user_id, session_id) -> List[str]:
+    """Load whatever the OWNER'S configured grant has that this session lacks.
+
+    A session freezes its toolset at CREATION, so a grant the owner makes later
+    never reaches the chat he is already sitting in — and a MONEY tool can never
+    close that gap on its own, because ``load_tool`` refuses the money set by
+    design (explicit-grant-only). The only escape was ``/new``, which nothing
+    told him.
+
+    Live, 2026-09-12 (prod journal): the owner armed ``DEFI_AGENT_AUTONOMY=true``,
+    ``owner_interactive_tool_ids()`` correctly returned a list containing
+    ``defi_trade``, and his chat still could not bridge. Session 8e8c1d92 had to
+    ``load_tool("defi_data")`` to read a balance — it started without the rail —
+    and ``load_tool("defi_trade")`` was refused. The agent then reported a "hard
+    architectural gate" and told him to type ``/bridge`` himself, which would
+    have failed too.
+
+    This is NOT the agent self-granting. The list comes from the operator's own
+    configuration (:func:`interactive_tool_ids` — ``INTERACTIVE_TOOL_IDS``,
+    ``full_autonomy_enabled``, ``DEFI_AGENT_AUTONOMY``) and the agent cannot
+    influence it; a non-owner gets ``None`` and is never touched. Every gate
+    downstream is unchanged: turn origin, the caps, the simulation and its
+    asserted deltas, the owner queue, and the 031 pause.
+
+    Fail-open — a reconcile problem must never cost the owner his turn.
+    """
+    try:
+        granted = owner_interactive_tool_ids(user_id)
+        if not granted:
+            return []
+        get_orch = getattr(task_agent, "get_orchestrator", None)
+        orch = get_orch(session_id) if get_orch is not None else None
+        controller = getattr(orch, "controller", None) if orch is not None else None
+        if controller is None:
+            return []
+        have = set(controller.list_tools() or ())
+        missing = [t for t in granted if t not in have]
+        if not missing:
+            return []
+        await controller.load_tools_from_container(missing)
+        now = set(controller.list_tools() or ())
+        return [t for t in missing if t in now]
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "owner toolset reconcile skipped (non-fatal)", exc_info=True)
+        return []

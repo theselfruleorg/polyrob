@@ -22,6 +22,29 @@ _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
 # be large; injected instructions target the readable head anyway).
 _SCAN_HEAD_BYTES = 65536
 
+#: The scanner SAW something — a real detection. This is the only reason that
+#: may raise an `injection_flagged` event.
+INJECTION_REASON = "content failed threat scan (injection-shaped text)"
+#: The scanner itself fell over. The file is still refused (fail-closed), but
+#: ⚠️ THIS IS NOT AN ATTACK. Both strings used to contain the substring
+#: "threat scan", and every caller branched on `"threat scan" in reason` — so an
+#: ImportError inside the scanner told the owner the agent was under attack, on
+#: the one signal in the whole rollup that raises a health item.
+SCAN_ERROR_REASON = "threat scan errored (refused fail-closed)"
+
+
+def is_injection_reason(reason: Optional[str]) -> bool:
+    """True only for a genuine detection. Callers MUST use this rather than a
+    substring match — see :data:`SCAN_ERROR_REASON` for why prose matching is
+    how a crashed scanner came to look like a detected injection."""
+    return reason == INJECTION_REASON
+
+
+def is_scan_error_reason(reason: Optional[str]) -> bool:
+    """True when the scan could not run. Worth knowing — it means the screen is
+    blind — but it is a FAULT, not a threat, and must never be reported as one."""
+    return reason == SCAN_ERROR_REASON
+
 
 def attach_max_mb() -> float:
     """Per-file attach cap in MB (Telegram bot API hard limit is 50)."""
@@ -132,8 +155,14 @@ def screen_attachment_path(real_path: str, *, max_mb: Optional[float] = None,
         if scanner is not None and b"\x00" not in head:
             try:
                 if scanner(text):
-                    return "content failed threat scan (injection-shaped text)"
-            except Exception:
-                # fail-CLOSED: a crashing scanner must not wave content through
-                return "threat scan errored (refused fail-closed)"
+                    return INJECTION_REASON
+            except Exception as e:
+                # fail-CLOSED: a crashing scanner must not wave content through.
+                # Its own honest shape — a WARNING naming the fault. It is NOT
+                # an attack and must never reach the injection lane.
+                logger.warning(
+                    "attachment threat scan raised (%s: %s) — refusing %s "
+                    "fail-closed; the screen is BLIND, not under attack",
+                    type(e).__name__, e, os.path.basename(real_path))
+                return SCAN_ERROR_REASON
     return None

@@ -1,0 +1,524 @@
+/* ============================================================================
+   POLYROB console — the five destinations, in the design of record.
+
+   Loaded LAST, after fonts.css → variables.css → components.css → style.css
+   (the same order layout.html has always used). This sheet defines the
+   components the 043 shell and its destination modules use — the nav that
+   rotates axis at 768 px, the ledger, the state pill, the unknown mark, the
+   chat turn, the money books — over the ONE token set in variables.css:
+   `#080808` ground, JetBrains Mono, VT323 for the wordmark, square corners,
+   thin `#1a1a1a` rules, blue / green / red / yellow accents. It introduces no
+   palette, no face and no radius of its own.
+
+   HISTORY: this file was a byte-frozen copy of the interface mockup — an ink-blue,
+   sans-serif, rounded WIREFRAME — while every layout.html page kept the refined
+   terminal design. Mockups are SCHEMAS (information architecture, honest-state
+   behaviour), never the product's stylesheet. The schema is kept; the look is
+   the product's own.
+
+   What the schema contributed and stays: one nav component, two axes; a 3 px
+   ruled left margin that carries state; monospace tabular VALUES; an unknown
+   drawn as deliberately as a number (dashed rule + reason); the sources note;
+   the skip link; a visible focus ring; AA contrast.
+   ========================================================================= */
+
+/* --- the schema's token NAMES, bound to the product's tokens -------------- */
+/* Templates and modules say `var(--s4)`, `var(--surface-1)`, `var(--running)`.
+   Each of those is an alias here, so the markup did not have to change and
+   there is still exactly ONE place a colour is chosen: variables.css. */
+:root{
+  --ground:        var(--color-bg-primary);
+  --surface-1:     var(--color-bg-terminal);
+  --surface-2:     var(--color-bg-secondary);
+  --surface-3:     var(--color-bg-elevated);
+  --rule:          var(--color-border);
+  --rule-strong:   var(--color-bg-elevated);
+  --rule-control:  var(--color-border-strong);
+
+  --ink:           var(--color-text-highlight);
+  --ink-2:         var(--color-text-primary);
+  --ink-3:         var(--color-text-secondary);
+
+  --running:       var(--color-accent-green);
+  --needs-you:     var(--color-accent-yellow);
+  --stopped:       var(--color-accent-red);
+  /* the schema's grey for an unknown. variables.css's muted #555 is 2.3:1 on the
+     ground and fails AA at 11 px (axe, 2026-09-16); secondary is 5.6:1. */
+  --unknown:       var(--color-text-secondary);
+  --accent:        var(--color-accent-blue);
+  --accent-line:   var(--color-accent-blue);
+
+  --running-dim:   var(--color-accent-green-wash-08);
+  --needs-you-dim: var(--color-accent-yellow-wash-10);
+  --stopped-dim:   var(--color-accent-red-wash-08);
+  --accent-dim:    var(--color-accent-blue-wash-08);
+
+  --sans:  var(--font-family-mono);      /* the product has one face: mono */
+  --mono:  var(--font-family-mono);
+  --mark:  var(--font-family-display);   /* VT323: the wordmark, nothing else */
+
+  --t-micro: var(--font-size-xs);  --t-small: var(--font-size-sm);
+  --t-base:  var(--font-size-base); --t-lead: var(--font-size-lg);
+  --t-head:  var(--font-size-xl);  --t-hero: var(--font-size-2xl);
+
+  --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
+  --s5: 24px; --s6: 32px; --s7: 48px; --s8: 64px;
+
+  --radius: var(--border-radius);        /* 0 — square corners, always */
+  --rail: 64px;
+  --bar: 56px;
+  --measure: 72ch;
+}
+
+/* --- ground ---------------------------------------------------------------- */
+/* style.css lays the legacy pages out as a padded flex column; the shell is
+   one grid that owns the viewport. */
+/* style.css sizes boxes content-box; every shell component is padded and
+   100% wide, so border-box is the one sizing that keeps a phone from scrolling
+   sideways. Scoped to the shell so the legacy pages keep their own math. */
+.console-shell *,.console-shell *::before,.console-shell *::after{ box-sizing:border-box }
+body.console-shell{
+  display:block; padding:0; margin:0; min-height:100dvh;
+  background:var(--ground); color:var(--ink-2);
+  font-family:var(--mono); font-size:var(--t-base); line-height:var(--line-height-normal);
+}
+.console-shell h1,.console-shell h2,.console-shell h3,.console-shell p,
+.console-shell ul,.console-shell ol{ margin:0 }
+.console-shell button{ font:inherit; color:inherit; cursor:pointer }
+.console-shell :focus-visible{ outline:2px solid var(--accent); outline-offset:2px }
+
+.skip-link{
+  position:fixed; left:var(--s2); top:var(--s2); z-index:100;
+  transform:translateY(-300%);
+  background:var(--surface-1); color:var(--ink);
+  border:1px solid var(--accent); padding:var(--s2) var(--s4);
+  font-size:var(--t-small); text-transform:uppercase; letter-spacing:.5px;
+  text-decoration:none;
+}
+.skip-link:focus{ transform:none }
+.vh{
+  position:absolute; width:1px; height:1px; margin:-1px; padding:0;
+  overflow:hidden; clip:rect(0 0 0 0); clip-path:inset(50%); white-space:nowrap; border:0;
+}
+
+/* ============================ THE SHELL ================================= */
+.app{
+  min-height:100dvh; display:grid;
+  grid-template-columns:minmax(0,1fr);            /* never wider than the viewport */
+  grid-template-rows:auto 1fr auto;
+  grid-template-areas:"head" "main" "nav";        /* the nav is a bar on a phone */
+}
+.nav { grid-area:nav }
+.head{ grid-area:head }
+.main{ grid-area:main }
+@media (min-width:768px){
+  .app{
+    grid-template-columns:var(--rail) 1fr;
+    grid-template-rows:auto 1fr;
+    grid-template-areas:"nav head" "nav main";    /* the same nav, as a rail */
+  }
+}
+
+/* ---- nav: one component, two axes. Uppercase micro labels, a ruled edge
+        that carries the current destination — the .nav-link idiom. ---------- */
+.nav{
+  display:flex; background:var(--surface-1);
+  border-top:1px solid var(--rule);
+  padding:0; gap:0;
+  position:sticky; bottom:0; z-index:20;
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+.nav-item{
+  flex:1 1 0; min-width:0; position:relative;
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  gap:3px; padding:var(--s2) 2px; min-height:var(--bar);
+  background:none; border:0; border-top:3px solid transparent;
+  color:var(--ink-3); text-decoration:none;
+  transition:color var(--transition-fast), border-color var(--transition-fast);
+}
+.nav-item:hover{ color:var(--accent); background:var(--surface-2) }
+.nav-item[aria-current="page"]{ color:var(--running); border-top-color:var(--running) }
+.nav-glyph{ font-size:16px; line-height:1 }
+.nav-label{ font-size:10px; text-transform:uppercase; letter-spacing:1px }
+.nav-badge{
+  position:absolute; top:6px; left:50%; margin-left:8px;
+  min-width:16px; height:16px; padding:0 4px;
+  background:var(--needs-you); color:var(--ground);
+  font-family:var(--mono); font-size:10px; font-weight:500;
+  display:grid; place-items:center;
+}
+/* "2+" with a dashed edge = at least this many; one source could not be read.
+   The badge may never claim more certainty than the list it stands for. */
+.nav-badge.is-uncertain{
+  background:var(--needs-you-dim); color:var(--needs-you);
+  border:1px dashed var(--needs-you);
+}
+@media (min-width:768px){
+  .nav{
+    flex-direction:column; justify-content:flex-start;
+    border-top:0; border-right:1px solid var(--rule);
+    position:sticky; top:0; height:100dvh;
+    padding:var(--s3) 0; gap:var(--s1);
+  }
+  .nav-item{
+    flex:0 0 auto; min-height:52px; width:100%;
+    border-top:0; border-left:3px solid transparent;
+  }
+  .nav-item[aria-current="page"]{ border-left-color:var(--running) }
+  .nav-badge{ top:4px; left:auto; right:8px; margin:0 }
+}
+
+/* ---- header: the wordmark, one true sentence, search, log out ------------ */
+.head{
+  display:flex; align-items:center; gap:var(--s3);
+  padding:var(--s2) var(--s4);
+  background:var(--surface-1); border-bottom:1px solid var(--rule);
+  position:sticky; top:0; z-index:15; min-height:45px;
+}
+.mark{
+  font-family:var(--mark); font-size:22px; line-height:1;
+  color:var(--running); text-transform:uppercase; letter-spacing:1px;
+}
+.face{                                   /* the Mindprint, standing in */
+  width:28px; height:28px; border-radius:50%; flex:0 0 auto; position:relative;
+  background:
+    radial-gradient(circle at 34% 40%, var(--running) 0 2px, transparent 2.2px),
+    radial-gradient(circle at 66% 40%, var(--running) 0 2px, transparent 2.2px),
+    linear-gradient(160deg, var(--color-bg-elevated), var(--color-bg-primary));
+  border:1px solid var(--rule-strong);
+}
+.face::after{
+  content:""; position:absolute; left:34%; right:34%; top:62%;
+  height:1.5px; background:var(--ink-3);
+}
+.head-truth{ flex:1 1 auto; min-width:0; font-size:var(--t-small); color:var(--ink-3) }
+.head-truth b{ color:var(--ink); font-weight:500 }
+.icon-btn{
+  background:none; border:1px solid var(--rule); color:var(--ink-3);
+  min-width:44px; height:44px; padding:0 10px;
+  display:grid; place-items:center; font-size:var(--t-small);
+  text-decoration:none; text-transform:uppercase; letter-spacing:.5px;
+  transition:all var(--transition-fast);
+}
+.icon-btn .kbd{ display:none; font-family:var(--mono); font-size:var(--t-micro) }
+@media (min-width:768px){
+  .icon-btn{ min-width:34px; height:28px }
+  .icon-btn .kbd{ display:inline }      /* a phone has no command key */
+  .icon-btn .glyph{ display:none }
+}
+.icon-btn:hover{ border-color:var(--accent); color:var(--accent); background:var(--surface-2) }
+.head-logout .kbd{ letter-spacing:.5px }
+
+.main{ min-width:0; display:flex; flex-direction:column }
+.page{ padding:var(--s5) var(--s4); max-width:var(--content-max-width); width:100%; margin:0 auto }
+@media (min-width:768px){ .page{ padding:var(--s6) var(--s5) } }
+
+/* ---- the state pill: a square badge, as .badge / .status-* are ------------ */
+.pill{
+  display:inline-flex; align-items:center; gap:6px;
+  padding:2px 8px; border:1px solid var(--rule);
+  font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.5px;
+  white-space:nowrap; background:transparent; color:var(--ink-3);
+}
+.dot{ width:6px; height:6px; flex:0 0 auto; background:currentColor }
+.pill.is-running  { color:var(--running);   border-color:var(--running) }
+.pill.is-needs-you{ color:var(--needs-you); border-color:var(--needs-you) }
+.pill.is-stopped  { color:var(--stopped);   border-color:var(--stopped) }
+.pill.is-unknown  { color:var(--unknown);   border-color:var(--unknown); border-style:dashed }
+.pill.is-running .dot{ animation:breathe 2.6s ease-in-out infinite }
+@keyframes breathe{ 0%,100%{opacity:1} 50%{opacity:.35} }
+@media (prefers-reduced-motion:reduce){ *{ animation:none !important; transition:none !important } }
+
+/* ---- the ledger: a ruled margin that carries state (the .session-card) --- */
+.ledger{ border:1px solid var(--rule); overflow:hidden }
+.ledger:empty{ display:none }                       /* an empty box is not an entry */
+.entry{
+  display:block; width:100%; text-align:left;
+  background:var(--surface-1); border:0; border-top:1px solid var(--rule);
+  border-left:3px solid var(--rule-strong);
+  padding:var(--s3) var(--s4); color:inherit;
+  transition:background var(--transition-fast), border-color var(--transition-fast);
+}
+.entry:first-child{ border-top:0 }
+.entry:hover{ background:var(--surface-2) }
+a.entry{ text-decoration:none }
+a.entry:hover{ border-left-color:var(--running) }
+.entry.is-running  { border-left-color:var(--running) }
+.entry.is-needs-you{ border-left-color:var(--needs-you) }
+.entry.is-stopped  { border-left-color:var(--stopped) }
+.entry.is-unknown  { border-left-color:var(--unknown); border-left-style:dashed }
+.entry-title{ font-size:var(--t-base); color:var(--ink); line-height:1.4 }
+.entry-body{ color:var(--ink-2); font-size:var(--t-small); max-width:var(--measure); margin-top:var(--s2); line-height:var(--line-height-relaxed); overflow-wrap:anywhere }
+.entry-meta{ margin-top:var(--s2); font-size:var(--t-micro); color:var(--ink-3) }
+.entry-actions{ margin-top:var(--s3); display:flex; flex-wrap:wrap; gap:var(--s2) }
+.entry details summary{ cursor:pointer; color:var(--ink-3); font-size:var(--t-micro); text-transform:uppercase; letter-spacing:.5px }
+/* the sentence a server answered on a card, after a decision */
+.entry-answer[data-ok="true"], .cron-answer, .settle-answer{ color:var(--running) }
+.entry-answer[data-ok="false"]{ color:var(--stopped) }
+
+/* ---- values: mono, tabular, right-comparable ------------------------------ */
+.val{ font-family:var(--mono); font-variant-numeric:tabular-nums }
+.val.is-income{ color:var(--running) }
+.val.is-big{ font-size:var(--t-head); color:var(--ink) }
+
+/* THE UNKNOWN MARK. As deliberate as a number, never a blank, never a zero. */
+.unknown{
+  font-family:var(--mono); color:var(--unknown);
+  border-bottom:1px dashed var(--ink-3); cursor:help;
+}
+.unknown-why{ display:block; font-size:var(--t-micro); color:var(--ink-3) }
+
+/* ---- buttons: components.css .btn is the product's button. Only the quiet
+        variant and the shell's own sizes are added here. ------------------- */
+.console-shell .btn{ height:auto; min-height:var(--button-height); padding:4px var(--s3) }
+.console-shell .btn:hover:not(:disabled){ border-color:var(--accent); color:var(--accent) }
+.btn-quiet{ border-color:transparent; color:var(--ink-3) }
+.btn-quiet:hover:not(:disabled){ border-color:var(--rule); color:var(--ink) }
+.console-shell .btn[disabled]{ opacity:.45; cursor:not-allowed }
+
+/* ---- banner (read-only, paused, partial): the .alert shape ----------------- */
+.banner{
+  display:flex; gap:var(--s3); align-items:flex-start;
+  padding:var(--s3) var(--s4); font-size:var(--t-small);
+  border-bottom:1px solid var(--rule); background:var(--surface-1); color:var(--ink-2);
+  border-left:3px solid var(--accent);
+}
+.banner b{ color:var(--ink); font-weight:500 }
+.banner.is-warn{ border-left-color:var(--needs-you); background:var(--needs-you-dim) }
+.banner.is-stopped{ border-left-color:var(--stopped); background:var(--stopped-dim) }
+
+/* ---- empty & error: a sentence, a reason, an action (the .empty-state) ---- */
+.state{ padding:var(--s7) var(--s4); text-align:center; max-width:56ch; margin:0 auto; color:var(--ink-3) }
+.state-glyph{ font-size:26px; color:var(--ink-3); opacity:.6; margin-bottom:var(--s3) }
+.state-title{ font-size:var(--t-lead); color:var(--ink) }
+.state-body{ color:var(--ink-2); margin-top:var(--s2); font-size:var(--t-small); line-height:var(--line-height-relaxed) }
+.state-actions{ margin-top:var(--s5); display:flex; gap:var(--s2); justify-content:center; flex-wrap:wrap }
+
+/* ============================ CHAT ====================================== */
+.thread{ flex:1 1 auto; min-height:0; padding:var(--s5) var(--s4); max-width:960px; width:100%; margin:0 auto }
+@media (min-width:768px){ .thread{ padding:var(--s6) var(--s5) } }
+
+.turn{ margin-bottom:var(--s5) }
+.turn-you .bubble{
+  background:var(--surface-1); border:1px solid var(--rule); border-left:3px solid var(--accent);
+  padding:var(--s3) var(--s4); font-size:var(--t-small); line-height:var(--line-height-relaxed);
+  margin-left:auto; max-width:min(640px,86%); width:fit-content; white-space:pre-wrap;
+}
+.turn-rob .said{
+  max-width:var(--measure); font-size:var(--t-small); line-height:var(--line-height-relaxed);
+  color:var(--ink-2); border-left:3px solid var(--running); padding-left:var(--s3);
+}
+.turn-rob .said p + p{ margin-top:var(--s3) }
+
+/* narrated action: one line, human-phrased, collapsed */
+.act{
+  display:flex; gap:var(--s3); align-items:baseline;
+  padding:var(--s1) 0 var(--s1) var(--s3);
+  border-left:2px solid var(--rule); color:var(--ink-3); font-size:var(--t-micro);
+}
+.act + .act{ border-top:1px solid var(--rule) }
+.act-what{ flex:1 1 auto; min-width:0 }
+.act-time{ color:var(--unknown) }
+.act.is-stopped{ border-left-color:var(--stopped); color:var(--ink-2) }
+.act.is-running{ border-left-color:var(--running) }
+
+/* the receipt: what the turn cost, one line, quiet */
+.receipt{ margin-top:var(--s3); font-size:var(--t-micro); color:var(--ink-3) }
+.receipt .val{ color:var(--ink-2) }
+
+/* composer: the product's input (dark, 1 px rule, blue on focus) */
+.composer-wrap{
+  position:sticky; bottom:calc(var(--bar) + env(safe-area-inset-bottom,0px));
+  background:linear-gradient(to top,var(--ground) 68%,transparent);
+  padding:var(--s4); padding-top:var(--s6); z-index:16;
+}
+@media (min-width:768px){ .composer-wrap{ bottom:0 } }
+.composer{
+  max-width:960px; margin:0 auto; display:flex; align-items:flex-end; gap:var(--s2);
+  background:var(--surface-1); border:1px solid var(--rule);
+  padding:var(--s2) var(--s2) var(--s2) var(--s3);
+}
+.composer:focus-within{ border-color:var(--accent) }
+.composer-input{
+  flex:1 1 auto; background:none; border:0; color:var(--ink);
+  font:inherit; font-size:var(--t-small); resize:none; padding:var(--s2) 0; min-height:24px; outline:none;
+}
+.composer-input::placeholder{ color:var(--unknown) }
+.send{
+  width:44px; height:44px; flex:0 0 auto;
+  background:transparent; border:1px solid var(--accent); color:var(--accent);
+  display:grid; place-items:center; transition:all var(--transition-fast);
+}
+.send:hover{ background:var(--accent-dim) }
+@media (min-width:768px){ .send{ width:34px; height:34px } }
+.composer-note{ max-width:960px; margin:var(--s2) auto 0; font-size:var(--t-micro); color:var(--unknown) }
+
+/* cold open — the one place boldness is spent */
+.open{ flex:1 1 auto; padding:var(--s7) var(--s4) var(--s5); max-width:960px; margin:0 auto; width:100% }
+.open-face{ width:56px; height:56px; margin-bottom:var(--s4) }
+.open-hero{
+  font-family:var(--mono); font-size:var(--t-hero); line-height:1.35; font-weight:normal;
+  color:var(--ink); max-width:30ch;
+}
+.open-hero .val{ color:var(--running) }
+.open-sub{ margin-top:var(--s4); color:var(--ink-3); max-width:var(--measure); font-size:var(--t-small) }
+.starters{ margin-top:var(--s6); display:flex; flex-direction:column; gap:var(--s2) }
+.starter{
+  text-align:left; background:var(--surface-1); border:1px solid var(--rule);
+  border-left:3px solid var(--accent); padding:var(--s3) var(--s4);
+  color:var(--ink-2); font-size:var(--t-small); transition:all var(--transition-fast);
+}
+.starter:hover{ border-left-color:var(--running); background:var(--surface-2); color:var(--ink); transform:translateX(2px) }
+@media (min-width:768px){ .starters{ display:grid; grid-template-columns:1fr 1fr } }
+
+/* ---- page head ---------------------------------------------------------- */
+.page-head{ display:flex; align-items:baseline; gap:var(--s3); margin-bottom:var(--s5); flex-wrap:wrap;
+            padding-bottom:var(--s2); border-bottom:1px solid var(--rule) }
+.page-title{ font-size:var(--t-head); color:var(--running); text-transform:uppercase; letter-spacing:2px }
+.page-sub{ color:var(--ink-3); font-size:var(--t-small); flex:1 1 100% }
+
+/* ---- a quiet note (the 409 "live in the agent" line) -------------------- */
+.note{
+  font-family:var(--mono); font-size:var(--t-micro); color:var(--ink-3);
+  border-top:1px dashed var(--rule); padding:var(--s3) var(--s4); margin-top:var(--s5);
+}
+
+/* ---- sub-navigation: the product's .tabs / .tab ------------------------- */
+.subnav{
+  display:flex; gap:0; overflow-x:auto; margin-bottom:var(--s5);
+  border-bottom:1px solid var(--rule); scrollbar-width:none;
+}
+.subnav::-webkit-scrollbar{ display:none }
+.subnav a{
+  padding:var(--s2) var(--s4); white-space:nowrap; min-height:var(--touch-target-min);
+  display:flex; align-items:center;
+  color:var(--ink-3); text-decoration:none; font-size:var(--t-small);
+  text-transform:uppercase; letter-spacing:.5px;
+  border-bottom:2px solid transparent; margin-bottom:-1px;
+  transition:all var(--transition-fast);
+}
+.subnav a:hover{ color:var(--ink) }
+.subnav a[aria-current="page"]{ color:var(--running); border-bottom-color:var(--running) }
+
+/* ---- section: a titled block, with a right-hand aside ------------------- */
+.section{ margin-bottom:var(--s6) }
+.section-head{ display:flex; align-items:baseline; gap:var(--s3); margin-bottom:var(--s3);
+               padding-bottom:var(--s1); border-bottom:1px solid var(--rule) }
+.section-title{ font-size:var(--t-small); color:var(--accent); text-transform:uppercase; letter-spacing:1px }
+.section-aside{ margin-left:auto; font-size:var(--t-micro); color:var(--ink-3) }
+
+/* ---- table: components.css .table gives the head row; values align ------ */
+.console-shell .table{ font-size:var(--t-small) }
+.console-shell .table th{ padding:0 var(--s3) var(--s2) 0; background:transparent }
+.console-shell .table td{ padding:var(--s3) var(--s3) var(--s3) 0; vertical-align:baseline }
+.console-shell .table tr:last-child td{ border-bottom:0 }
+.table .num{ text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums }
+.table .what{ color:var(--ink) }
+.table .why{ color:var(--ink-3); display:block; margin-top:2px; font-size:var(--t-micro) }
+.table pre{ font-size:var(--t-micro); color:var(--ink-3); background:var(--surface-1);
+            border:1px solid var(--rule); padding:var(--s2); overflow:auto; margin:var(--s2) 0 0 }
+/* on a phone a wide table becomes stacked rows — same data, same order */
+@media (max-width:639px){
+  .console-shell .table, .console-shell .table tbody, .console-shell .table tr,
+  .console-shell .table td{ display:block; width:100% }
+  .console-shell .table thead{ display:none }
+  .console-shell .table tr{ border-bottom:1px solid var(--rule); padding:var(--s3) 0 }
+  .console-shell .table tr:last-child{ border-bottom:0 }
+  .console-shell .table td{ border:0; padding:2px 0 }
+  .table .num{ text-align:left }
+  .table td[data-label]::before{
+    content:attr(data-label) "  "; color:var(--ink-3); font-size:var(--t-micro);
+    text-transform:uppercase; letter-spacing:.5px;
+  }
+}
+
+/* ---- money: three books that are never summed --------------------------- */
+.books{ display:grid; gap:var(--s4); grid-template-columns:1fr }
+@media (min-width:860px){ .books{ grid-template-columns:repeat(3,1fr) } }
+.book{
+  border:1px solid var(--rule); background:var(--surface-1);
+  padding:var(--s4); border-top:3px solid var(--rule-strong);
+}
+.book.is-earned{ border-top-color:var(--running) }
+.book.is-spent { border-top-color:var(--rule-strong) }
+.book.is-held  { border-top-color:var(--accent) }
+.book-what{ font-size:var(--t-micro); color:var(--ink-3); text-transform:uppercase; letter-spacing:1px }
+.book-whose{ font-size:var(--t-micro); color:var(--unknown); margin-top:2px }
+.book-figure{
+  font-family:var(--mono); font-variant-numeric:tabular-nums;
+  font-size:var(--t-hero); color:var(--ink); margin-top:var(--s3); line-height:1.1;
+}
+.book.is-earned .book-figure{ color:var(--running) }
+.book-lines{ margin-top:var(--s3); border-top:1px solid var(--rule); padding-top:var(--s3) }
+.kv{ display:flex; gap:var(--s3); font-size:var(--t-small); padding:3px 0 }
+.kv dt{ color:var(--ink-3); flex:1 1 auto; min-width:0 }
+.kv dd{ margin:0; font-family:var(--mono); font-variant-numeric:tabular-nums; color:var(--ink) }
+/* the two books are never added up — say so where the sum would go */
+.no-sum{
+  grid-column:1/-1; font-size:var(--t-micro); color:var(--ink-3);
+  border-top:1px dashed var(--rule); padding-top:var(--s3); margin-top:calc(-1 * var(--s2));
+}
+
+/* ---- toggle: a capability or a setting, on or off ------------------------ */
+.switch{
+  width:38px; height:20px; flex:0 0 auto; position:relative;
+  border:1px solid var(--rule-control); background:var(--surface-1);
+}
+.switch::after{
+  content:""; position:absolute; top:2px; left:2px; width:14px; height:14px;
+  background:var(--ink-3);
+}
+.switch.is-on{ border-color:var(--running); background:var(--running-dim) }
+.switch.is-on::after{ left:auto; right:2px; background:var(--running) }
+.switch.is-locked{ opacity:.5 }
+
+/* ---- search-first: nothing renders until you ask ------------------------- */
+.search{
+  display:flex; gap:var(--s2); align-items:center; background:var(--ground);
+  border:1px solid var(--rule); padding:var(--s2) var(--s3); margin-bottom:var(--s4);
+  color:var(--ink-3);
+}
+.search:focus-within{ border-color:var(--accent) }
+.search input{ flex:1 1 auto; background:none; border:0; color:var(--ink); font:inherit; font-size:var(--t-small); outline:none }
+.search input::placeholder{ color:var(--unknown) }
+.chips{ display:flex; flex-wrap:wrap; gap:var(--s2) }
+.chip{
+  background:transparent; border:1px solid var(--rule); padding:3px var(--s3);
+  font-size:var(--t-micro); color:var(--ink-3); text-transform:uppercase; letter-spacing:.5px;
+  transition:all var(--transition-fast);
+}
+.chip:hover{ border-color:var(--accent); color:var(--accent) }
+.chip.is-on,.chip[aria-pressed="true"]{ border-color:var(--running); color:var(--running) }
+
+/* ---- the card strip: every card variant at card size, side by side ------- */
+.strip{ display:grid; gap:var(--s4); grid-template-columns:1fr }
+@media (min-width:760px){ .strip{ grid-template-columns:1fr 1fr } }
+.strip .entry{ border:1px solid var(--rule); border-left-width:3px }
+.strip-label{ font-size:var(--t-micro); color:var(--ink-3); margin-bottom:var(--s2); font-family:var(--mono) }
+
+/* ---- source note: every number names the function behind it ------------- */
+.sources{
+  margin-top:var(--s6); border-top:1px dashed var(--rule); padding-top:var(--s3);
+  font-family:var(--mono); font-size:var(--t-micro); color:var(--unknown); line-height:1.7;
+  overflow-wrap:anywhere;
+}
+.sources b{ color:var(--ink-3); font-weight:400 }
+
+/* ---- the two overlays (Chats, the palette): native <dialog> ------------- */
+.console-shell dialog{ padding:0 }
+.console-shell dialog::backdrop{ background:var(--color-shadow-wash-72) }
+.console-shell dialog .page{ padding:var(--s4) }
+
+/* Schema-driven settings: controls grow within the mobile table cell. */
+.setting-control { min-width:0; max-width:100%; margin-top:var(--s3) }
+.setting-control input, .setting-control select, .setting-control textarea {
+  box-sizing:border-box; max-width:100%; width:100%; min-width:0;
+  background:var(--surface-1); color:var(--ink); border:1px solid var(--rule-control);
+  padding:var(--s2); font:inherit;
+}
+.setting-control .entry-actions { flex-wrap:wrap }
+.setting-control .why { white-space:pre-wrap; overflow-wrap:anywhere }
+.setting-control button.switch { cursor:pointer; min-height:24px; padding:0 }
+[hidden] { display:none !important }
+
+.console-shell[data-show-avatar="false"] .face { display:none }

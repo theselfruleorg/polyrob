@@ -144,12 +144,12 @@ def _pinned_rpc(monkeypatch):
 
 
 def _genuine_ctx():
-    return types.SimpleNamespace(is_sub_agent=False, role="orchestrator",
+    return types.SimpleNamespace(user_id="local", is_sub_agent=False, role="orchestrator",
                                  metadata={}, session_id="t-e2e-genuine")
 
 
 def _leaf_ctx():
-    return types.SimpleNamespace(is_sub_agent=False, role="leaf",
+    return types.SimpleNamespace(user_id="local", is_sub_agent=False, role="leaf",
                                  metadata={}, session_id="t-e2e-leaf")
 
 
@@ -237,7 +237,10 @@ async def test_an_unpinned_second_chain_refuses_against_the_real_guard(monkeypat
         raise AssertionError("simulate must not run without a pinned RPC")
 
     monkeypatch.setattr(simulation, "simulate", _boom)
-    tool, _ = _tool()
+    # A price for ethereum's USDC too: this test is about the RPC pin, and
+    # since S3 an UNPRICEABLE grant is refused by the verb's own pre-check
+    # before the guard is ever consulted (pinned in test_unvalued_grant_verbs).
+    tool, _ = _tool(price_fn=lambda chain, addr: 1.0)
     res = await tool.approve_token(
         ApproveParams(chain="ethereum",
                       token="0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
@@ -356,3 +359,8 @@ async def test_a_swap_hiding_an_approval_to_an_unmeasured_spender_refuses(monkey
     assert "Approval" in content
     assert _Rail.last is None or not _Rail.last.sent
     assert gate.audit_log == []
+
+
+@pytest.fixture(autouse=True)
+def _wallet_owner_identity(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "local")

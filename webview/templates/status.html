@@ -1,14 +1,14 @@
 {% extends "layout.html" %}
 {% block title %}POLYROB — Live{% endblock %}
+{# The public page: no owner nav. What a stranger may see is that the instance
+   is live, its name, its version and its uptime — nothing that names a
+   destination they cannot open (2026-09-16 audit, A). #}
+{% block nav %}{% endblock %}
 {% block content %}
 <div class="status-page" style="max-width: 60ch; margin: 4rem auto; text-align: center;">
   <h1>POLYROB is live</h1>
   <p class="dim">Instance: {{ instance_id }} · Version {{ version }}</p>
   <p class="dim">Uptime: <span id="uptime">—</span></p>
 </div>
-<script>
-  fetch("/api/status").then(r => r.json()).then(d => {
-    document.getElementById("uptime").textContent = d.uptime_seconds + "s";
-  });
-</script>
+<script src="/static/js/status-uptime.js"></script>
 {% endblock %}

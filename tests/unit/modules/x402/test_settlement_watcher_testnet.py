@@ -134,26 +134,40 @@ async def test_unsupported_chain_still_refused(tmp_path, monkeypatch):
 
 # --- W1.3: scan target resolution -------------------------------------------
 
-def test_resolve_base_default_uses_chain_row_and_mainnet_usdc(monkeypatch):
+def test_resolve_base_default_uses_chain_row_rpc(monkeypatch):
     # The chain row is the SSOT for base's RPC (its literal value belongs to
     # core/wallet/chains.py's own test); here we assert the wiring.
+    #
+    # 046: the target no longer carries an ASSET. The token address comes from
+    # the pending invoice's own asset row, because one target could only ever
+    # describe one token — which is why detection on any other asset was
+    # structurally impossible before.
     from core.wallet.onchain import rpc_url_for_chain
-    url, usdc, _cid = _resolve_scan_target("base")
+    url, cid = _resolve_scan_target("base")
     assert url == rpc_url_for_chain("base")
-    assert usdc == USDC_BASE_MAINNET
+    assert cid == 8453
 
 
 def test_resolve_base_honors_defi_evm_rpc_base(monkeypatch):
     monkeypatch.setenv("DEFI_EVM_RPC_BASE", "https://pinned.example/rpc")
-    url, usdc, _cid = _resolve_scan_target("base")
+    url, _cid = _resolve_scan_target("base")
     assert url == "https://pinned.example/rpc"
-    assert usdc == USDC_BASE_MAINNET
 
 
-def test_resolve_sepolia_default_rpc_and_testnet_usdc(monkeypatch):
-    url, usdc, _cid = _resolve_scan_target("base-sepolia")
+def test_resolve_sepolia_default_rpc(monkeypatch):
+    """base-sepolia keeps its OWN branch: the money chain registry carries only
+    chains verified for TRADING, so it has no testnet row, and the x402 module
+    has always owned this RPC and chain id."""
+    url, cid = _resolve_scan_target("base-sepolia")
     assert url == "https://sepolia.base.org"
-    assert usdc == USDC_BASE_SEPOLIA
+    assert cid == 84532
+
+
+def test_the_sepolia_asset_still_resolves_to_the_testnet_usdc():
+    """The address moved OUT of the scan target and INTO the asset registry —
+    it is still pinned, just in the one place that owns asset identity."""
+    from core.payments.assets import resolve
+    assert resolve("usdc-base-sepolia").address == USDC_BASE_SEPOLIA
 
 
 def test_resolve_x402_settlement_rpc_beats_everything(monkeypatch):
@@ -164,5 +178,11 @@ def test_resolve_x402_settlement_rpc_beats_everything(monkeypatch):
 
 
 def test_resolve_unsupported_chain_is_none():
-    assert _resolve_scan_target("polygon") is None
+    """⚠️ 046 WIDENED this. `polygon` used to be unscannable only because the
+    resolver hardcoded base; it is a verified EVM row in the chain registry and
+    is now reachable. What stays unscannable is a chain with NO row (and a
+    non-EVM row, which the EVM pass must never answer for)."""
+    assert _resolve_scan_target("atlantis") is None
     assert _resolve_scan_target("") is None
+    assert _resolve_scan_target("solana") is None
+    assert _resolve_scan_target("polygon") is not None

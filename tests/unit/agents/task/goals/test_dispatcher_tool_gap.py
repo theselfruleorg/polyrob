@@ -59,7 +59,10 @@ def _patch_run(monkeypatch, **kw):
     base.update(kw)
     outcome = RunOutcome(**base)
 
-    async def _fake(task_agent, *, user_id, request, autonomous=False):
+    async def _fake(task_agent, *, user_id, request, autonomous=False, **_kw):
+        # **_kw so a NEW kwarg on the real `run_task_to_outcome` (039 added
+        # `goal_id`, to let an owner-queue ask name the goal it blocks) does
+        # not fail 20 tests that never cared about it.
         return outcome
 
     monkeypatch.setattr("agents.task.goals.dispatcher._run_task_to_outcome", _fake)

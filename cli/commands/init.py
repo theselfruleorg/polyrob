@@ -179,6 +179,16 @@ def _write_env(env_path: Path, updates: dict) -> None:
     env_path.chmod(0o600)
 
 
+def _character_home(profile_name, home_env):
+    """Where a scaffolded character belongs: the profile's home when --profile
+    is given (its .env holds PERSONALITY_DEFAULT_CHARACTER), else the global
+    config home. Resolved at CALL time, never bound at import."""
+    if profile_name:
+        from core.profiles import profile_dir
+        return profile_dir(profile_name) / "characters"
+    return Path(home_env).parent / "characters"
+
+
 @click.command("init")
 @click.option("--anthropic-key", default=None, help="Anthropic API key")
 @click.option("--openai-key", default=None, help="OpenAI API key")
@@ -203,6 +213,12 @@ def _write_env(env_path: Path, updates: dict) -> None:
                    "guardrails) into profile NAME's .env instead of the global "
                    "~/.polyrob/.env; provider keys + default model stay global. "
                    "Creates the profile if it does not exist.")
+@click.option("--character", "character_slug", default=None, metavar="SLUG",
+              help="Give this instance its own character: scaffold "
+                   "<home>/characters/SLUG.character.json and select it with "
+                   "PERSONALITY_DEFAULT_CHARACTER. See `polyrob persona init`.")
+@click.option("--character-from", "character_from", default=None, metavar="NAME",
+              help="Copy an existing character (e.g. writer) for --character.")
 @click.option("--skip-keys", is_flag=True, default=False, hidden=True,
               help="Skip the provider-key section (used by the inline key wizard bridge).")
 def init_cmd(
@@ -218,6 +234,8 @@ def init_cmd(
     owner_user_id,
     instance_id,
     profile_name,
+    character_slug,
+    character_from,
     skip_keys,
 ):
     """Initialize POLYROB for this project (file-first: ~/.polyrob + ./.polyrob)."""
@@ -289,6 +307,30 @@ def init_cmd(
                 "Template", default=default_tpl, show_default=True)
             resolved = resolve_template(chosen_template)
             effective_persona = resolved.name
+
+            # F0: the wizard already owns onboarding and already asks about the
+            # persona here — but only ever wrote POLYROB_PERSONA. A template is
+            # a built-in voice; a CHARACTER is this instance's own. Offer it
+            # here rather than leaving seven manual steps to be inferred.
+            if character_slug is None:
+                from core.instance import DEFAULT_INSTANCE_ID
+                if click.confirm(
+                        "Give this instance its own character (its own voice)?",
+                        default=False):
+                    from agents.personality.persona_resolver import (
+                        is_safe_character_slug,
+                    )
+                    suggested = profile_name or instance_id or DEFAULT_INSTANCE_ID
+                    slug = click.prompt("Character slug", default=suggested,
+                                        show_default=True).strip()
+                    if is_safe_character_slug(slug):
+                        character_slug = slug
+                        character_from = character_from or (click.prompt(
+                            "Copy an existing character (blank for a scaffold)",
+                            default="", show_default=False).strip() or None)
+                    else:
+                        click.echo(f"'{slug}' is not a valid slug — skipping the "
+                                   "character step (`polyrob persona init` later).")
             # If user didn't already pick a toolset explicitly, let the template drive it.
             if not toolset_name and not (not quick):
                 # (already set above — this branch is not reachable but kept for clarity)
@@ -438,6 +480,8 @@ def init_cmd(
         "POLYROB_INSTANCE_ID": instance_id,
         "POLYROB_OWNER_USER_ID": owner_user_id,
     }
+    if character_slug:
+        identity_updates["PERSONALITY_DEFAULT_CHARACTER"] = character_slug
     identity_updates.update(guardrail_updates)
     global_updates = {
         "DEFAULT_MODEL": default_model,
@@ -464,6 +508,20 @@ def init_cmd(
             _write_env(home_env, updates)
     except OSError as exc:
         click.echo(f"Warning: could not write {home_env}: {exc}", err=True)
+
+    # F0: scaffold the character into the same home the identity keys went to,
+    # so PERSONALITY_DEFAULT_CHARACTER and the file it names never split up.
+    if character_slug:
+        try:
+            from cli.commands.persona import scaffold_character
+            target = scaffold_character(
+                character_slug, preset=character_from,
+                characters_dir=_character_home(profile_name, home_env))
+            click.echo(f"Character scaffolded → {target}")
+            click.echo("Edit it, then `polyrob persona show` prints exactly what "
+                       "the model receives.")
+        except Exception as exc:
+            click.echo(f"Warning: could not scaffold the character: {exc}", err=True)
 
     sessions = Path.cwd() / ".polyrob" / "sessions"
     sessions.mkdir(parents=True, exist_ok=True)
@@ -513,6 +571,7 @@ def init_cmd(
     click.echo("  • agent wallet:   polyrob wallet init")
     click.echo("  • avatar:         polyrob pfp generate   (or /pfp in the chat)")
     click.echo("  • surfaces:       polyrob gateway --help  (telegram, email, …)")
+    click.echo("  • character:      polyrob persona init <slug>  (give it its own voice)")
     click.echo("  • identity:       polyrob soul init      (author who this instance is)")
     click.echo("  • health check:   polyrob doctor")
     click.echo('\nAsk me anything about myself — try "what can you do?"')

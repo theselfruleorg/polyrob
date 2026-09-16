@@ -31,12 +31,35 @@ def _plain_ctx(**overrides):
     return ctx, buf
 
 
+_OWNER_KEYS = ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
+               "SURFACE_SUPER_ADMIN_USER_IDS", "POLYROB_LOCAL_OWNER")
+
+
+def _unbind(monkeypatch):
+    """A genuinely UNBOUND install — the state the REPL must disclose.
+
+    ⚠️ Do NOT emulate it by monkeypatching `resolve_owner_principal` to None:
+    since 2026-09-15 the function has no None path (its tier 3 is the owner
+    tenant), so that pins an unreachable state. It is exactly why the REPL
+    silently started printing a bare `local` where `polyrob doctor` printed
+    `(unpaired)`, and no test noticed.
+    """
+    for key in _OWNER_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 def _patch_instance(monkeypatch, *, instance="rob", owner=None, soul="", self_doc=""):
-    """Patch the core.instance loaders as imported by the handler module."""
+    """Patch the core.instance loaders as imported by the handler module.
+
+    ``owner=None`` means "leave the real resolution alone" and callers pair it
+    with :func:`_unbind`; an explicit string binds that owner through the env, so
+    the REAL resolver runs in every case.
+    """
     # The handler does a local ``from core.instance import ...`` at call time, so
     # patching the origin module (core.instance) is what takes effect.
     monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: instance)
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: owner)
+    if owner is not None:
+        monkeypatch.setenv("POLYROB_OWNER_USER_ID", owner)
     monkeypatch.setattr("core.instance.load_self_context", lambda home: soul)
     monkeypatch.setattr("core.instance.load_self_doc", lambda home, uid, iid: self_doc)
 
@@ -81,12 +104,46 @@ def test_self_shows_identity_and_docs(monkeypatch):
     assert "evolving SELF note" in out        # SELF snippet
 
 
-def test_self_unbound_owner_placeholder(monkeypatch):
-    _patch_instance(monkeypatch, owner=None, soul="soul text", self_doc="self text")
+def test_self_says_unpaired_on_a_really_unbound_install(monkeypatch):
+    """The REAL unbound path, and the ONE wording every owner seat shares.
+
+    ⚠️ This read `assert "unbound (local owner)" in out` behind a monkeypatched
+    `None`. When the unbound principal became the owner tenant, `/self` began
+    printing a bare `local` — indistinguishable from an owner explicitly bound to
+    that name — while `polyrob doctor` on the same box said `(unpaired)`. The test
+    could not see it because it never exercised the real resolution.
+    """
+    from core.instance import UNPAIRED_OWNER_LABEL
+    _unbind(monkeypatch)
+    _patch_instance(monkeypatch, soul="soul text", self_doc="self text")
     ctx, buf = _plain_ctx()
     h_self(ctx)
     out = buf.getvalue()
-    assert "unbound (local owner)" in out
+    assert UNPAIRED_OWNER_LABEL in out
+    assert "POLYROB_OWNER_USER_ID" in out          # the remedy is named
+    assert "owner: local" not in out               # never a bare tenant name
+
+
+def test_self_names_a_bound_owner(monkeypatch):
+    _unbind(monkeypatch)
+    _patch_instance(monkeypatch, owner="alice", soul="s", self_doc="d")
+    ctx, buf = _plain_ctx()
+    h_self(ctx)
+    out = buf.getvalue()
+    assert "alice" in out
+    assert "unpaired" not in out
+
+
+def test_self_marks_a_bound_owner_that_is_the_instance_itself(monkeypatch):
+    """Prod's shape (owner `rob` on instance `rob`): named, but marked so it does
+    not read as a second, distinct human owner."""
+    _unbind(monkeypatch)
+    _patch_instance(monkeypatch, instance="rob", owner="rob", soul="s", self_doc="d")
+    ctx, buf = _plain_ctx()
+    h_self(ctx)
+    out = buf.getvalue()
+    assert "this instance's own tenant" in out
+    assert "unpaired" not in out
 
 
 def test_self_truncates_long_soul(monkeypatch):
@@ -151,7 +208,7 @@ def test_self_home_dir_mirrors_container_config(monkeypatch):
     seen = {}
 
     monkeypatch.setattr("core.instance.resolve_instance_id", lambda *a, **k: "rob")
-    monkeypatch.setattr("core.instance.resolve_owner_principal", lambda *a, **k: None)
+    _unbind(monkeypatch)
     monkeypatch.setattr(
         "core.instance.load_self_context",
         lambda home: seen.setdefault("soul_home", home) or "",

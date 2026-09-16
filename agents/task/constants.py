@@ -101,6 +101,13 @@ COMPACTION_AUX_MODEL_MAP = {
     "openai": "gpt-5-mini",
     "gemini": "gemini-flash",
     "google": "gemini-flash",
+    # z.ai GLM seats. `glm-5.3-flash` is served by BOTH the flat-rate Coding Plan
+    # (`zai-coding`, Anthropic transport) and the pay-as-you-go API (`zai`), and it
+    # is ~18x cheaper per token than the 5.3 flagship. Before this row a zai session
+    # resolved every aux task to None, so compaction, the goal-completion judge, the
+    # background skill reviewer and H-MEM reflection all ran on the FLAGSHIP.
+    "zai-coding": "glm-5.3-flash",
+    "zai": "glm-5.3-flash",
 }
 
 # Alias: the generalized router reuses the same cheap-model map for all aux tasks.
@@ -116,6 +123,28 @@ _AUX_TASK_ENV = {
 }
 
 
+def _resolve_aux_model_with_origin(task, provider=None):
+    """``(model, from_cheap_map)`` for aux `task`. See ``resolve_aux_model``.
+
+    The origin flag matters because the cheap-map branch is the only one whose
+    provider is KNOWN (it was keyed by the session provider), and an explicit env
+    can name the very same model string — ``AUX_MODEL_REFLECTION=claude-haiku-4-5``
+    on an anthropic session is byte-identical to that session's map value. Deciding
+    provenance by comparing strings therefore mislabels a deliberate operator
+    override as an auto-route.
+    """
+    explicit = os.getenv(_AUX_TASK_ENV.get(task, ""), "")
+    if explicit:
+        return explicit, False
+    auto = _core_bool_env("AUX_AUTO", False)
+    if task == "compaction":
+        auto = auto or _core_bool_env("COMPACTION_AUTO_AUX", False)
+    if auto and provider:
+        mapped = AUX_MODEL_MAP.get(provider.lower())
+        return mapped, bool(mapped)
+    return None, False
+
+
 def resolve_aux_model(task, provider=None):
     """Which model should aux `task` use? (None => use the main model.)
 
@@ -123,15 +152,7 @@ def resolve_aux_model(task, provider=None):
     2) provider cheap-map default when AUX_AUTO=true (or, for compaction only, the
     legacy COMPACTION_AUTO_AUX=true); 3) None.
     """
-    explicit = os.getenv(_AUX_TASK_ENV.get(task, ""), "")
-    if explicit:
-        return explicit
-    auto = _core_bool_env("AUX_AUTO", False)
-    if task == "compaction":
-        auto = auto or _core_bool_env("COMPACTION_AUTO_AUX", False)
-    if auto and provider:
-        return AUX_MODEL_MAP.get(provider.lower())
-    return None
+    return _resolve_aux_model_with_origin(task, provider)[0]
 
 
 _AUX_SLOTS = ("compaction", "judge", "reflection")
@@ -181,6 +202,7 @@ def resolve_aux_chain(task, provider=None):
         return []
     slot = task.upper()
     inherited_from_compaction = False
+    from_cheap_map = False
     if task == "reflection":
         # Reflection is NOT in _AUX_TASK_ENV, so resolve_aux_model("reflection", ...)'s
         # only possible effect is the global-AUX_AUTO cheap-map early-exit — which
@@ -191,11 +213,16 @@ def resolve_aux_chain(task, provider=None):
         # AUX_AUTO/COMPACTION_AUTO_AUX via resolve_aux_model("compaction", ...).
         primary_model = os.getenv("AUX_MODEL_REFLECTION", "")
         if not primary_model:
-            primary_model = os.getenv("AUX_MODEL_COMPACTION", "") or resolve_aux_model("compaction", provider)
+            primary_model = os.getenv("AUX_MODEL_COMPACTION", "")
+            if not primary_model:
+                primary_model, from_cheap_map = _resolve_aux_model_with_origin(
+                    "compaction", provider)
             if primary_model:
                 inherited_from_compaction = True
     else:
-        primary_model = os.getenv(f"AUX_MODEL_{slot}", "") or resolve_aux_model(task, provider)
+        primary_model = os.getenv(f"AUX_MODEL_{slot}", "")
+        if not primary_model:
+            primary_model, from_cheap_map = _resolve_aux_model_with_origin(task, provider)
     if not primary_model:
         return []
 
@@ -208,6 +235,21 @@ def resolve_aux_chain(task, provider=None):
         primary_provider = primary_provider or os.getenv("AUX_PROVIDER") or None
     else:
         primary_provider = primary_provider or os.getenv("AUX_PROVIDER") or None
+
+    # A cheap-map model must stay on the SESSION's provider. Without this the
+    # candidate carries provider=None, and `_create_llm_from_config_async` then
+    # auto-detects the provider from the model registry — where every GLM id is
+    # owned by `openrouter`. A zai-coding session would have silently moved its aux
+    # calls OFF the flat-rate seat and onto a metered provider. Only pin a provider
+    # the client registry actually knows (specs are the client keys); "google" has
+    # no spec, so that row keeps its legacy auto-detect to `gemini`.
+    if not primary_provider and from_cheap_map:
+        try:
+            from modules.llm.provider_spec import get_spec
+            if get_spec(provider) is not None:
+                primary_provider = provider
+        except Exception:
+            pass  # fail-open: legacy auto-detect
 
     chain = [{"model": primary_model, "provider": primary_provider}]
 
@@ -423,6 +465,59 @@ AUTONOMOUS_MODE_TOOLS = (
     # the MONEY_AND_HOST exclusion invariant (test_autonomous_toolset) is intact.
     "x_browser",
 )
+
+#: The on-chain trading rail, added to the autonomous grant ONLY when the
+#: operator arms it. Default OFF, so the shipped posture is unchanged.
+#:
+#: ⚠️ OWNER DIRECTIVE, 2026-09-12: *"we should GIVE AGENT TOOLS TO DO EVERY DEFI
+#: ACTION WITHOUT USER"* — the "caps not taps" posture asked for repeatedly
+#: (2026-07-15 autonomy-by-default, 2026-08-21 full-autonomy payment posture).
+#:
+#: The failure this fixes was live and total: with defi absent from the grant,
+#: the OWNER'S OWN CHAT SESSION held neither tool, so when he asked his agent to
+#: bridge, it truthfully answered "no bridge verb in the tool catalog" and asked
+#: him to grant `defi_trade` — about a rail that was deployed and working. An
+#: agent that cannot reach the capability its owner is asking about is not
+#: safer; it teaches the owner that a shipped feature is broken.
+#:
+#: What bounds it — the reason arming this is a posture change and not a hole:
+#: every verb simulates and asserts its own deltas before broadcast (`tx_guard`,
+#: and the mirrored guard on the Solana path), the PolicyGate per-tx ceiling and
+#: rolling daily cap apply, the kill-switch and the 031 pause apply, a
+#: correspondent-tainted session can never reach it, and anything over
+#: `DEFI_AUTONOMOUS_MAX_USD` still routes to the owner queue. **The bound on an
+#: injected goal is the CAP, not the toolset** — which is why widening the
+#: toolset while keeping the caps is the right trade and removing the caps would
+#: not be.
+#:
+#: Still excluded even when armed: `x402_pay`, `wallet`, `hyperliquid`,
+#: `polymarket` and every host tool (`MONEY_AND_HOST`). This widens the on-chain
+#: trading rail, not arbitrary payment or host access.
+DEFI_AUTONOMOUS_TOOLS = ("defi_data", "defi_trade")
+
+#: 042: the launchpad and the injected dapp wallet. They ride `DEFI_AGENT_AUTONOMY`
+#: alongside the trading rail — for the SAME reason it exists. An agent asked to
+#: launch a token, or to use a dapp its owner is looking at, that answers "I have
+#: no such tool" about a rail that is deployed and working teaches the owner that
+#: a shipped feature is broken.
+#:
+#: Each is independently flag-gated on top (`LAUNCHPAD_ENABLED`,
+#: `DAPP_BROWSER_ENABLED`, both default OFF), so arming `DEFI_AGENT_AUTONOMY`
+#: alone grants a tool that still refuses every call with its own remedy. Two
+#: deliberate keys, not one: reaching a capability and arming it are different
+#: decisions.
+DEFI_LAUNCH_AUTONOMOUS_TOOLS = ("launchpad", "dapp_browser")
+
+
+def autonomous_mode_tools() -> tuple:
+    """`AUTONOMOUS_MODE_TOOLS`, plus the defi rail when `DEFI_AGENT_AUTONOMY` is
+    armed. Resolved at CALL time so an operator can arm it without a redeploy."""
+    from core.env import bool_env
+    if bool_env("DEFI_AGENT_AUTONOMY", False):
+        return (AUTONOMOUS_MODE_TOOLS + DEFI_AUTONOMOUS_TOOLS
+                + DEFI_LAUNCH_AUTONOMOUS_TOOLS)
+    return AUTONOMOUS_MODE_TOOLS
+
 
 # MCP Tool Throttling (single source of truth)
 # MCP actions (scraping, searches, APIs) are expensive and execute SEQUENTIALLY

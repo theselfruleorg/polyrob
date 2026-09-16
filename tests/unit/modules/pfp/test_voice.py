@@ -58,7 +58,7 @@ def test_no_engine_raises_with_web_pointers():
     with pytest.raises(VoiceUnavailable) as e:
         speak_voice(VOICE, "hi", runner=_Runner(), platform="linux",
                     which=lambda exe: None)
-    assert "/identity" in str(e.value)
+    assert "/agent" in str(e.value)
     assert "studio" in str(e.value)
 
 

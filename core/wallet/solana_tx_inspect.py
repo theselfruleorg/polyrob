@@ -80,16 +80,43 @@ MEMO_PROGRAM_IDS = frozenset({
 #: Top-level programs a Jupiter swap legitimately calls: compute-budget hints,
 #: wrapping SOL (System) and closing the wrapper (Token), creating the
 #: destination associated account, the route itself, and an optional memo.
+#: Relay.link's deposit program (037). Deliberately NOT in
+#: :data:`BASE_ALLOWED_PROGRAMS`: a SWAP that suddenly calls it is exactly the
+#: anomaly the allowlist exists to catch, so only the bridge verb may pass it in
+#: via ``extra_allowed``. PINNED here rather than read from the quote — taking
+#: the program id from the same untrusted payload we are vetting would make the
+#: check vacuous. Verified on mainnet 2026-09-11: exists, ``executable=true``,
+#: owned by the BPF upgradeable loader.
+RELAY_PROGRAM_IDS = frozenset({"99vQwtBwYtrqqD9YSXbdum3KBdxPAVxYTaQ3cfnJSrN2"})
+
 BASE_ALLOWED_PROGRAMS = frozenset(
     {SYSTEM_PROGRAM_ID, COMPUTE_BUDGET_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID}
     | set(SPL_TOKEN_PROGRAMS) | set(JUPITER_PROGRAM_IDS) | set(MEMO_PROGRAM_IDS)
 )
 
-#: `getMultipleAccounts` refuses more than 100 keys, and the pre-state read uses
-#: the SAME address list as the simulation so the two stay index-aligned. Our
-#: own accounts are ordered FIRST, so a truncation can only ever drop a
-#: third-party account — which `parse_deltas` discards anyway.
-MAX_SIM_ADDRESSES = 100
+#: How many accounts the simulation may ask state for.
+#:
+#: ⚠️ Measured, not theoretical (2026-09-11, prod): `getMultipleAccounts` refuses
+#: more than 100 keys, but `simulateTransaction` on the pinned RPC (Alchemy)
+#: refuses more than **5** — `{'code': -32602, 'message': 'Too many accounts
+#: provided; max 5'}`. Asking for more does not truncate, it FAILS the whole
+#: simulation, and a failed simulation refuses the trade outright. A truncated
+#: simulation with the loud warning below is strictly better than none: the
+#: owner and the DECLARED mints are ordered FIRST, so the assertions that bound
+#: the trade are the ones that survive.
+#:
+#: Raise it with `DEFI_SOLANA_SIM_MAX_ACCOUNTS` on an RPC that allows more —
+#: fuller observation is better when the provider will serve it.
+def sim_max_addresses() -> int:
+    """The per-call account cap, resolved at CALL time (never frozen at import
+    so an operator can retune it without a redeploy)."""
+    from core.env import int_env
+    return max(1, int_env("DEFI_SOLANA_SIM_MAX_ACCOUNTS", 5))
+
+
+#: Back-compat alias for the historical constant. Reads the default; every
+#: internal caller uses `sim_max_addresses()`.
+MAX_SIM_ADDRESSES = 5
 
 
 def extra_allowed_programs() -> frozenset:
@@ -225,8 +252,15 @@ class TxInspection:
     unknown_programs: Tuple[str, ...] = ()
 
 
-def inspect_transaction(raw_tx: Any) -> TxInspection:
-    """Decode *raw_tx* and vet its TOP-LEVEL program ids against the allowlist."""
+def inspect_transaction(raw_tx: Any, *,
+                       extra_allowed: frozenset = frozenset()) -> TxInspection:
+    """Decode *raw_tx* and vet its TOP-LEVEL program ids against the allowlist.
+
+    ``extra_allowed`` is a CALLER-scoped widening for a verb that legitimately
+    calls a program the default set excludes (037: the bridge calls Relay's
+    deposit program). It is additive, per-call, and must only ever be passed a
+    PINNED constant — never a value read from the payload being vetted.
+    """
     try:
         from solders.transaction import VersionedTransaction
         tx = VersionedTransaction.from_bytes(bytes(raw_tx))
@@ -248,7 +282,7 @@ def inspect_transaction(raw_tx: Any) -> TxInspection:
         return TxInspection(
             False, f"the transaction bytes could not be decoded ({exc})")
 
-    allowed = allowed_programs()
+    allowed = allowed_programs() | frozenset(extra_allowed or ())
     unknown = tuple(p for p in programs if p not in allowed)
     if unknown:
         return TxInspection(
@@ -269,6 +303,40 @@ def inspect_transaction(raw_tx: Any) -> TxInspection:
 # --------------------------------------------------------------------------
 # The observation set + the simulate call
 # --------------------------------------------------------------------------
+
+def simulation_address_split(owner: str, *, mints: Sequence[str] = (),
+                            rpc: Optional[Callable] = None,
+                            account_keys: Sequence[str] = ()) -> tuple:
+    """``(addresses, ours)`` — every account to fetch state for, and the subset
+    that is OURS.
+
+    ⚠️ These are two different questions and conflating them is a live money
+    bug (found on prod 2026-09-11 by the first bridge dry run). `parse_deltas`
+    sums native lamports across every pubkey it is told is ours; handed the FULL
+    address list, a transfer from the owner INTO a third-party plain account in
+    that list nets to roughly zero, and the SOL-drain assertion passes on a
+    transaction that drained the wallet. Measured: owner −900,005,000, Relay
+    vault +900,000,000, reported native_delta −5,000.
+
+    Swaps never exposed it because an aggregator's route accounts are TOKEN
+    accounts, which the native branch skips as parsed. A native-SOL destination
+    is a plain account, so the bridge is the first path to reach it.
+    """
+    addresses = simulation_addresses(owner, mints=mints, rpc=rpc,
+                                     account_keys=account_keys)
+    ours: List[str] = [owner]
+    for mint in mints:
+        for ata in atas_for_mint(owner, mint, rpc):
+            if ata not in ours:
+                ours.append(ata)
+    if rpc is not None:
+        for account in owned_token_accounts(owner, rpc):
+            if account not in ours:
+                ours.append(account)
+    # Only what actually survived the cap, and only what we actually fetched.
+    kept = set(addresses)
+    return addresses, [a for a in ours if a in kept]
+
 
 def simulation_addresses(owner: str, *, mints: Sequence[str] = (),
                          rpc: Optional[Callable] = None,
@@ -296,8 +364,9 @@ def simulation_addresses(owner: str, *, mints: Sequence[str] = (),
     ours = len(addresses)
     for key in account_keys:
         _add(key)
-    if len(addresses) > MAX_SIM_ADDRESSES:
-        if ours > MAX_SIM_ADDRESSES:
+    cap = sim_max_addresses()
+    if len(addresses) > cap:
+        if ours > cap:
             # Honest, and deliberately loud: the cut is now inside OUR OWN
             # accounts, so some of them genuinely go unobserved this run. Say
             # so rather than implying only third-party keys were dropped.
@@ -307,31 +376,31 @@ def simulation_addresses(owner: str, *, mints: Sequence[str] = (),
                 "observed by this simulation. The declared mints are still "
                 "covered (they are ordered first); consolidate or close unused "
                 "token accounts to restore full coverage.",
-                ours, MAX_SIM_ADDRESSES, ours - MAX_SIM_ADDRESSES)
+                ours, cap, ours - cap)
         else:
             logger.info(
                 "solana: %d candidate accounts exceed the %d-account "
                 "simulation limit — dropping the tail, which is third-party "
                 "keys the delta parser discards anyway",
-                len(addresses), MAX_SIM_ADDRESSES)
-        addresses = addresses[:MAX_SIM_ADDRESSES]
+                len(addresses), cap)
+        addresses = addresses[:cap]
     return addresses
 
 
 def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
-             rpc: Callable) -> SolanaDeltas:
+             rpc: Callable, extra_allowed: frozenset = frozenset()) -> SolanaDeltas:
     """Vet, simulate and parse — the whole pre-broadcast observation.
 
     Fails CLOSED at every step: an undecodable or unrecognized transaction, an
     RPC error, or a simulation that did not run all return ``ok=False``, and
     the caller refuses on that.
     """
-    inspection = inspect_transaction(raw_tx)
+    inspection = inspect_transaction(raw_tx, extra_allowed=extra_allowed)
     if not inspection.ok:
         return SolanaDeltas(False, inspection.reason)
     try:
         import base64
-        addresses = simulation_addresses(
+        addresses, ours = simulation_address_split(
             owner, mints=mints, rpc=rpc, account_keys=inspection.account_keys)
         # The PRE-state, in the SAME order, so parse_deltas has something to
         # compare against — `simulateTransaction` alone returns POST-state only.
@@ -347,4 +416,11 @@ def simulate(raw_tx: Any, *, owner: str, mints: Sequence[str] = (),
         return SolanaDeltas(False, f"simulation failed: {exc}")
     if isinstance(sim, dict):
         sim = {**sim, "_pre": pre}
-    return parse_deltas(sim, owner=owner)
+    # `addresses` is what we FETCHED; `ours` is what is actually OURS. Passing
+    # the former as `owned_pubkeys` made a third-party account's INFLOW cancel
+    # our OUTFLOW inside `parse_deltas`'s native sum — see
+    # `simulation_address_split`. Naming our own accounts is still what lets the
+    # native branch run at all (without it native_delta comes back a
+    # measured-looking 0 and the SOL-drain assertion never fires, prod
+    # 2026-09-08); it just has to be OUR accounts, not every account.
+    return parse_deltas(sim, owner=owner, owned_pubkeys=addresses, ours=ours)

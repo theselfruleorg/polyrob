@@ -77,9 +77,80 @@ def get_user_status(internal_status: str) -> str:
 		"cancelled": "stopped",
 		"failed": "stopped",
 		"suspended": "idle",
-		"error": "stopped",
 	}
-	return status_map.get(internal_status.lower(), "idle")
+	# A26: the "error" key that used to live here was dead — no SessionStatus
+	# enum member ever produces it (the terminal-failure state is "failed").
+	normalized = internal_status.lower()
+	if normalized not in status_map:
+		# Not silent: an unrecognized internal status must not quietly render
+		# as "idle" (= finished, ready for follow-up) with no trace of the
+		# fact that it was unrecognized.
+		logger.warning(
+			f"get_user_status: unrecognized internal status '{internal_status}', "
+			"defaulting to 'idle'"
+		)
+	return status_map.get(normalized, "idle")
+
+
+# 043 A17: the session `creator` label — a DISPLAY SSOT for "who/what started
+# this session", independent of (and reconciled with, never replacing) the two
+# existing markers: `session_source` (a routing fact — which chat surface/key
+# a session is bound to) and `mark_autonomous` (an in-process autonomy-registry
+# flag consumed by the goal tool's self-mutation guard). Persisted once, at
+# genuine creation (see SessionManager.create_session); never touched again by
+# resume/recreation.
+SESSION_CREATOR_KINDS = frozenset({
+    "owner", "goal", "cron", "self_wake", "delegation", "correspondent", "api", "cli",
+})
+
+# Chat surfaces whose NEW sessions are owner-driven by default. A correspondent
+# turn never reaches create_session with a session_source — it is DATA injected
+# into an EXISTING session (inject_correspondent_message / deliver_correspondent_data),
+# never a fresh creation — so this set intentionally has no "unless correspondent"
+# special case today; see resolve_creator's tier/kind hook below for when one lands.
+#
+# ⚠️ 043 T4: `email` is NOT here, deliberately. Owner-by-email is OFF in v1
+# because a `From:` header is forgeable (AGENTS.md, chat-surface access model):
+# EVERY email sender is correspondent-or-denied, so no email turn is ever the
+# owner and a session created from one may not be labelled as if it were. It
+# falls through to `"api"` — "a program" in the console's own words — which is
+# an honest "something outside the owner's chat seats started this", while
+# `"owner"` ("you") was a claim about WHO that nothing had established. The
+# correspondent RESUME path (agents/task/conversation_resume.py) passes
+# `creator="correspondent"` explicitly and is unaffected either way.
+_OWNER_CHAT_SURFACES = frozenset({
+    "telegram", "whatsapp", "discord", "slack", "signal", "x", "webview",
+})
+_CLI_SURFACES = frozenset({"cli", "repl", "local"})
+
+
+def resolve_creator(explicit: Optional[str] = None, session_source: Optional[Any] = None) -> str:
+    """Resolve the session `creator` label. Pure — no container/IO, so this is
+    unit-testable with no SessionManager/TaskAgent instance.
+
+    Resolution order:
+      1. An explicit ``creator=`` kwarg always wins.
+      2. Else derive it from ``session_source`` (duck-typed against
+         ``core.surfaces.envelopes.SessionSource`` — read only, never imported,
+         to keep this module's downward dependency footprint unchanged):
+         a source that itself names a correspondent tier/kind resolves to
+         ``"correspondent"`` (forward-compat hook; today's SessionSource carries
+         none); a CLI/REPL/local surface resolves to ``"cli"``; a known chat
+         surface resolves to ``"owner"``.
+      3. Otherwise ``"api"`` — the HTTP/A2A default.
+    """
+    if explicit:
+        return explicit
+    if session_source is not None:
+        tier = getattr(session_source, "tier", None) or getattr(session_source, "kind", None)
+        if tier == "correspondent":
+            return "correspondent"
+        surface_id = getattr(session_source, "surface_id", None)
+        if surface_id in _CLI_SURFACES:
+            return "cli"
+        if surface_id in _OWNER_CHAT_SURFACES:
+            return "owner"
+    return "api"
 
 
 class SessionManager:
@@ -164,14 +235,18 @@ class SessionManager:
         except Exception as e:
             logger.error(f"Error loading sessions from disk: {e}")
 
-    def create_session(self, session_id: str = None, user_id: Optional[str] = None) -> str:
+    def create_session(self, session_id: str = None, user_id: Optional[str] = None,
+                        creator: str = "api") -> str:
         """
         Create or get a session.
-        
+
         Args:
             session_id: Optional session ID. If not provided, generates a new one.
             user_id: Optional user ID for multi-user support
-            
+            creator: who/what created this session (043 A17 display SSOT — see
+                SESSION_CREATOR_KINDS/resolve_creator above). Set once, at genuine
+                creation; ignored (never overwritten) when session_id already exists.
+
         Returns:
             The cleaned session ID
         """
@@ -179,25 +254,26 @@ class SessionManager:
             # Generate or clean session ID
             if not session_id:
                 session_id = str(uuid.uuid4())
-            
+
             # Always clean the session ID
             session_id = pm().clean_session_id(session_id)
-            
+
             # Use default user if not specified
             user_id = user_id or DEFAULT_USER_ID
-            
+
             # Check if session already exists
             if session_id in self._sessions:
                 self.logger.debug(f"Session {session_id} already exists")
                 return session_id
-            
+
             # Create session info
             session_info = {
                 'id': session_id,
                 'user_id': user_id,
                 'created_at': datetime.now().isoformat(),
                 'status': 'created',  # Use 'created' for consistency
-                'agents': []
+                'agents': [],
+                'creator': creator or "api",
             }
             
             # Store session
@@ -329,6 +405,21 @@ class SessionManager:
 
             # Get previous status for event emission
             previous_status = self._sessions[session_id].get('status')
+
+            # A10: change guard — a session end/cancel can call this method
+            # 2-3x for the SAME status (e.g. cancel calling it three times).
+            # Normalize the incoming status the same way both branches below
+            # would, and skip the save + emit entirely when nothing changed,
+            # so the activity feed never shows the same status 2-3x.
+            normalized_new_status = (
+                status.value if isinstance(status, SessionStatus) else str(status).lower()
+            )
+            if normalized_new_status == previous_status:
+                self.logger.debug(
+                    f"Session {session_id} status unchanged at '{normalized_new_status}'; "
+                    "skipping save and emit"
+                )
+                return
 
             # Convert string to enum if needed
             if isinstance(status, str):

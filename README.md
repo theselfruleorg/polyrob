@@ -17,10 +17,11 @@
 POLYROB is a self-hosted autonomous AI agent that runs on your own machine. You give it a goal in
 plain language and it does the rest — planning the work into steps, browsing the web, reading and
 writing files, running code and shell commands, calling external tools and APIs, and recovering
-from its own errors until the goal is done. It works with every major LLM provider (OpenAI,
-Anthropic, Google, DeepSeek, OpenRouter, NVIDIA NIM) and fails over between them automatically,
-remembers what it learns across sessions, and reaches you wherever you are — your terminal, a web
-dashboard, a REST API, or chat surfaces like Telegram and email. Switch it into personal-agent mode
+from its own errors until the goal is done. It works with every major LLM provider (OpenAI, Anthropic, Google, DeepSeek,
+OpenRouter, NVIDIA NIM, twenty more flat-rate and regional rows, six OAuth subscription plans,
+and any endpoint you declare) and fails over between them automatically,
+remembers what it learns across sessions, and reaches you wherever you are — your terminal, the web
+console, a REST API, or chat surfaces like Telegram and email. Switch it into personal-agent mode
 and it becomes durably autonomous: it keeps a backlog of goals that survives restarts, writes and
 curates its own skills from experience, wakes itself to follow up on unfinished work, and refines
 an evolving model of how you work.
@@ -54,7 +55,7 @@ capability instead of forgetting it when the task ends.
 - **Named profiles** — run several isolated bots on one machine (`polyrob -P scout`), each with its own persona, memory, keys and daemons; export a profile or install one from a git repo. See [docs/guide/profiles.md](docs/guide/profiles.md).
 
 Skills use the open [agentskills.io](https://agentskills.io) `SKILL.md` format — the same format as
-Claude Code, read straight from `~/.claude/skills/`. Install from a local folder, a GitHub repo, or
+Claude Code, discovered straight from `~/.agents/skills/` (and `~/.claude/skills/`). Install from a local folder, a GitHub repo, or
 a `SKILL.md` URL: `polyrob skill install <spec>` threat-scans, quarantines, and waits for your
 explicit approval. See **[docs/guide/skills.md](docs/guide/skills.md)**.
 
@@ -70,16 +71,59 @@ explicit approval. See **[docs/guide/skills.md](docs/guide/skills.md)**.
 
 One agent core, many front doors:
 
-- **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and 20+ slash commands (`/compact`, `/usage`, `/memory`, `/model`, `/self`, `/replay`, `/autonomy`).
-- **Web dashboard** — a real-time Socket.IO console: watch the agent work, browse its workspace, preview files and browser screenshots, inspect memory and the goal board.
+- **Terminal** — run `polyrob` to talk to the agent: live tool transcripts, secret-scrubbed output, resumable sessions, and nearly sixty slash commands (`/inbox`, `/goals`, `/model`, `/memory`, `/pause`, `/autonomy`, `/config`; the full list is in [docs/guide/cli.md](docs/guide/cli.md)).
+- **Web console** — five clear destinations for Chat, Inbox, Work, Money, and Agent. Watch live work, resolve approvals, manage standing jobs and apps, reconcile the agent's ledger, and change its capabilities from one owner surface.
 - **REST API + SSE streaming**, plus a drop-in **OpenAI-compatible `/v1`** endpoint — point any OpenAI SDK at `localhost:9000/v1`.
 - **A2A protocol** — Google's Agent-to-Agent standard (Agent Card discovery, JSON-RPC, SSE) so other agents can discover and delegate to yours.
 - **MCP server** — expose polyrob to Claude Desktop, Cursor, or any MCP client as a read-only tool provider (`POST /mcp`, off by default) — it's an MCP client *and* server.
 - **Chat surfaces** — Telegram (live incremental streaming + voice-note transcription), email (IMAP/SMTP), WhatsApp, Discord, Slack, Signal, and X (Twitter) DMs.
 
+## 🖥️ One console for the whole agent
+
+The POLYROB Console keeps conversation, unattended work, owner decisions, money, and agent policy in
+one place. It uses the same goal board, approval queue, wallet ledger, and configuration primitives as
+the CLI and API, so a decision made in one surface is visible in the others.
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/chat-running.png" alt="POLYROB Console showing a completed autonomous app build and deployment waiting for owner approval" width="100%">
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/inbox-decisions.png" alt="POLYROB Inbox showing owner decisions and non-blocking follow-ups" width="100%"><br>
+      <strong>Inbox</strong> — see only what needs you, with the reason, consequence, and available decision in plain language.
+    </td>
+    <td width="50%" valign="top">
+      <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/work-autonomy.png" alt="POLYROB Work view showing running and queued autonomous work" width="100%"><br>
+      <strong>Work</strong> — follow what is running now, what comes next, scheduled jobs, and delegated helpers.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/money-book.png" alt="POLYROB Money view reconciling its ledger with on-chain positions" width="100%"><br>
+      <strong>Money</strong> — reconcile the agent's book with its chains, inspect cash and invoices, and keep spend limits visible.
+    </td>
+    <td width="50%" valign="top">
+      <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/agent-control.png" alt="POLYROB Agent view showing autonomy controls, capabilities, and health" width="100%"><br>
+      <strong>Agent</strong> — inspect identity, memory, capabilities, health, and the rules that bound autonomous action.
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" valign="top">
+      <img src="https://raw.githubusercontent.com/theselfruleorg/polyrob/main/docs/assets/console/apps.png" alt="POLYROB Work Apps view showing running, staged, and published applications" width="100%"><br>
+      <strong>Apps</strong> — inside Work, review what the agent built, approve a first deployment, read logs, or take an app down.
+    </td>
+  </tr>
+</table>
+
+Run it with <code>polyrob dashboard</code> and open <code>http://localhost:5050</code>. See the
+<strong><a href="docs/guide/console.md">console guide</a></strong> for deployment postures, owner login,
+read-only mode, and the actions each screen exposes.
+
 ## 🧠 Multi-provider intelligence
 
-- **Six providers, one agent** — OpenAI, Anthropic, Google Gemini, DeepSeek, OpenRouter (Grok/Kimi/Qwen/GLM), NVIDIA NIM — behind a native LLM layer with **no third-party agent framework**.
+- **One agent, every provider** — six built-ins plus flat-rate rows, OAuth subscription plans and your own endpoint, behind a native LLM layer with **no third-party agent framework**. The live list and how to pick one: [docs/guide/configuration.md §3](docs/guide/configuration.md#3-providers-and-models).
 - **Bring your own endpoint** — declare any OpenAI- or Anthropic-compatible provider in `~/.polyrob/providers.yaml` with **zero code**: a local Ollama/vLLM/LM Studio, Groq/Together/Fireworks, a z.ai GLM Coding Plan, or a corporate gateway. Declared models list and route like built-ins; hostile rows (secret-exfil `env_key`s, metadata endpoints) are refused at load.
 - **Automatic failover** — a rate-limited or failing provider silently retries on a fallback.
 - **Live model switching** — `/model <provider> <model>` mid-session, or per-request override on the `/v1` surface.
@@ -120,18 +164,20 @@ reports which provider keys resolve, the exact model it will pick, your active m
 workspace isolation.
 
 **Turn on autonomy** to unlock the self-evolving and goal-seeking loops (skills, curator,
-goal board, self-wake, episodic memory). The CLI already runs in personal/local mode
-(`POLYROB_LOCAL`); the self-directed loops need the separate master switch:
+goal board, self-wake, episodic memory):
 
 ```bash
-polyrob config set AUTONOMY_ENABLED true   # or answer "yes" in `polyrob init`
+polyrob autonomy on --global     # writes AUTONOMY_ENABLED=true to ~/.polyrob/.env; `polyrob init` also asks
 ```
 
+The four axes, what each one moves and how to stop it again:
+[docs/guide/configuration.md §5](docs/guide/configuration.md#5-the-autonomy-dial).
+
 <details>
-<summary>Optional: web dashboard & REST API</summary>
+<summary>Optional: web console & REST API</summary>
 
 ```bash
-polyrob dashboard   # single-user web UI  → http://localhost:5050
+polyrob dashboard   # web console         → http://localhost:5050
 polyrob serve       # local REST API      → http://localhost:9000
 polyrob gateway     # run all enabled chat surfaces (Telegram/email/…) in one process
 ```
@@ -173,10 +219,12 @@ Run `polyrob` and you're in the agent. From inside the session, slash commands g
 | `/replay` | Visually replay a past session |
 | `/autonomy` | Inspect goals, cron, and the autonomy loops |
 
-Named toolsets (`minimal · research · coding · browser · full · safe`) let you scope exactly what
-the agent can touch. A handful of management subcommands round it out — `polyrob doctor` (preflight),
-`polyrob kb add/search` (local knowledge base), and `polyrob update --apply` (self-update with
-snapshot → guarded migrate → verify → **auto-rollback** on failure).
+Twelve named toolsets (`minimal`, `safe`, `research`, `coding`, `development`, `browser`, `social`,
+`full` and more) let you scope exactly what the agent can touch. Management subcommands round it
+out — `polyrob doctor` (preflight), `polyrob kb add/search` (local knowledge base), `polyrob auth`
+(provider sign-in), `polyrob keys` (API access), `polyrob profile` (several bots on one machine),
+and `polyrob update` (self-update with snapshot, guarded migration, verify and **auto-rollback**;
+`--apply` for git installs, a hint for pipx).
 
 ---
 
@@ -217,8 +265,8 @@ snapshot → guarded migrate → verify → **auto-rollback** on failure).
 
 | Capability | Detail |
 |---|---|
-| Terminal | `polyrob` opens the agent — live tool transcripts, 20+ slash commands, resumable sessions |
-| Web dashboard | real-time Socket.IO feed, file browser, live screenshots |
+| Terminal | `polyrob` opens the agent — live tool transcripts, ~60 slash commands, resumable sessions |
+| Web console | Chat, Inbox, Work, Money, and Agent over a real-time Socket.IO surface |
 | REST API | session lifecycle + mid-run guidance injection + SSE streaming |
 | OpenAI-compatible | drop-in `/v1/chat/completions` + `/v1/models` |
 | A2A protocol | Agent Card discovery, JSON-RPC, SSE — agent-to-agent delegation |
@@ -242,7 +290,8 @@ skills · **sqlite-vec** + **sentence-transformers** local RAG.
 ## Safe autonomy by design
 
 An autonomous agent that touches the web, your files, and other people needs guardrails. POLYROB
-treats untrusted input as data — never as commands — with the core protections **on by default**:
+marks external content as untrusted data and layers capability, authority, approval, and containment
+checks around it. The core protections below are **on by default**:
 
 | Layer | Protection | Default |
 |-------|------------|---------|
@@ -251,19 +300,22 @@ treats untrusted input as data — never as commands — with the core protectio
 | **Schema sanitization** | Hostile tool-schema constructs fixed before they reach a provider | **On** |
 | **SSRF confinement** | `web_fetch` re-validates every redirect hop; blocks loopback/metadata/private targets | **On** |
 | **Self-modification review** | New skills / identity edits are quarantined and reviewed before taking effect | **On** |
-| **Code-exec isolation** | Subprocess (or hardened Docker) isolation, no inherited API keys | On when code-exec enabled |
+| **Code-exec containment** | Hardened Docker container by default on a server; the local subprocess backend is a convenience, not a sandbox, and a server refuses it; no inherited API keys | On when code-exec enabled |
 | **Run budget** | Cap a session's provider spend; the run halts honestly at the ceiling rather than claiming success | Opt-in (`RUN_BUDGET_USD`) |
-| **3-tier access** | OWNER / CORRESPONDENT / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`) |
+| **Four-tier access** | OWNER / CORRESPONDENT / GROUP MEMBER / DENIED routing for chat surfaces | Opt-in (`CORRESPONDENT_ACCESS_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
+| **Group chats (rooms)** | Allowlisted room + per-chat role; every room turn runs a read-only, audience-bounded toolset (never money/exec/delegation) in a session that carries no owner state | Opt-in (`GROUP_CHAT_ENABLED`; on under `AUTONOMY_MODE=autonomous`) |
 | **Memory threat-scan** | Rejects injected jailbreak/persona-rewrite patterns on write | Opt-in (`MEMORY_THREAT_SCAN`) |
 
-When you expose the agent to other people, the **3-tier access model** keeps a stranger's message as
+When you expose the agent to other people, the **access model** keeps a stranger's message as
 *data*: **OWNER** steers the agent · **CORRESPONDENT** (a third party the agent contacted) can only
-return data, never command · **DENIED** is blocked. A correspondent-tainted session has high-impact
+return data, never command · **GROUP MEMBER** is answered in an allowed room from a read-only toolset ·
+**DENIED** is blocked. A correspondent-tainted session has high-impact
 tools (money, comms, code-exec) gated off until a genuine owner turn.
 
 > **Chat surfaces are off by default for a reason.** When you enable them, treat inbound DMs as
-> untrusted input — use pairing/approval, and never expose public group chats without understanding
-> the risks.
+> untrusted input — use pairing/approval. A public group chat is a documented, supported feature
+> ([docs/guide/groups.md](docs/guide/groups.md)) with its own allowlist, per-chat roles and a
+> read-only room toolset — read that guide before turning `GROUP_CHAT_ENABLED` on.
 
 ---
 
@@ -274,7 +326,7 @@ default:
 
 - **x402 pay-per-request** — USDC micropayments on Base (opt-in Solana settlement) via the x402 protocol; the agent can both charge for its API and pay for external resources, and invoices settle facilitator-free by on-chain detection.
 - **Native agent wallet** — one seed derives per-venue EVM keys *and* a Solana address, with per-transaction and rolling 24h spend caps; testnet by default.
-- **On-chain token sight** — a read-only tool (9 verbs) for token identity, price, liquidity, a safety screen, pool discovery, and the agent's own portfolio across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
+- **On-chain token sight** — a read-only tool (14 verbs, NFTs included) for token identity, price, liquidity, a safety screen, pool discovery, and the agent's own portfolio across Base, Ethereum, Arbitrum, Polygon and Solana — plus `reconcile`, which diffs the agent's position ledger against actual chain balances. Address is the only identity (a ticker is never resolved for you), and unknown is never rendered as zero.
 - **Guarded on-chain trading** — transfers, exact-amount approvals/revokes and swaps (local Uniswap V3 first, opt-in aggregator fallback) go through one choke point that *simulates* the transaction, measures its real asset and allowance deltas, and refuses unless they match a declared intent. `dry_run` by default, fail-closed gates, and anything above a configurable ceiling waits for an owner approval. Solana swaps (Jupiter) run the same guard order with an authority-grant refusal in place of the allowance check.
 - **Venue trading** — Hyperliquid (perps) and Polymarket (prediction markets) tools, dry-run by default behind a master + per-venue live switch and per-venue caps.
 - **ERC-8004 trustless agents** — optional on-chain agent identity + portable reputation.
@@ -296,13 +348,12 @@ ANTHROPIC_API_KEY=sk-ant-...
 OPENAI_API_KEY=sk-...
 GEMINI_API_KEY=...
 
-# Memory backend
-MEMORY_BACKEND=local_vector    # CLI default (hybrid recall; degrades to keyword FTS5
-                               # without the [memory-vector] extra). Server default: sqlite
-# MEMORY_BACKEND=local_vector  # semantic vector recall (pip install "polyrob[memory-vector]")
+# Memory backend: local_vector is the CLI default (hybrid recall; needs the [memory-vector]
+# extra, degrades to keyword FTS5 without it). Server default: sqlite
+MEMORY_BACKEND=local_vector
 
-# Personal-agent mode — turns on skills/curator/goal-board/self-wake as a group
-POLYROB_LOCAL=true
+# The CLI sets POLYROB_LOCAL for you (interactive tools). Autonomy is a second switch:
+# AUTONOMY_ENABLED=true
 ```
 
 POLYROB falls back across providers automatically on billing or rate-limit errors; switch
@@ -324,27 +375,17 @@ tools — is documented end-to-end (all OFF by default) in
 pipx install "polyrob[all]"     # recommended — everything
 pip install polyrob             # core agent + keyword memory + CLI  (~50 MB, zero cloud deps)
 pip install "polyrob[browser]"  # add Playwright browser automation
-pip install "polyrob[server]"   # add FastAPI REST API + WebView
+pip install "polyrob[server]"   # add FastAPI REST API + web console
 ```
 
-| Extra | What it adds |
-|-------|--------------|
-| *(none)* | Core agent, keyword memory, CLI |
-| `server` | FastAPI REST API + WebView (Socket.IO) |
-| `browser` | Playwright browser automation |
-| `memory-vector` | Semantic vector recall (sentence-transformers + sqlite-vec) |
-| `crypto` | Web3, x402 pay-per-request, Hyperliquid |
-| `telegram` | Telegram surface (aiogram) |
-| `twitter` | Twitter/X integration (tweepy) |
-| `voice` | Voice transcription (faster-whisper) |
-| `dev` | Testing, linting, type-checking |
-| `all` | Everything above |
+Every extra, what it adds and what it costs you in disk:
+[docs/guide/getting-started.md](docs/guide/getting-started.md#extras).
 
 ### Self-hosting & deployment
 
 Run it three ways, and the posture auto-derives from how you bind it: **`local`** (loopback, no
 auth — the default), **`own_ops`** (public host with owner login; `--host 0.0.0.0` auto-upgrades to
-this so you can't accidentally expose a no-auth dashboard), or **`multitenant`** (wallet/SIWE +
+this so you can't accidentally expose a no-auth console), or **`multitenant`** (wallet/SIWE +
 billing). One `docker compose up` builds the server + browser + vector memory and persists
 memory/sessions/skills across restarts. See
 **[docs/guide/self-hosting.md](docs/guide/self-hosting.md)**.
@@ -363,7 +404,7 @@ polyrob/
 ├── tools/     # Browser, MCP, Email, Twitter, code-exec
 ├── surfaces/  # Chat-surface adapters (Telegram, Email, WhatsApp, Discord, Slack, Signal, X)
 ├── cron/      # Durable scheduled runs + goal board
-└── webview/   # Optional single-user web dashboard
+└── webview/   # Optional web console
 ```
 
 ```bash
@@ -393,14 +434,20 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 | [docs/guide/cli.md](docs/guide/cli.md) | Terminal agent commands |
 | [docs/guide/skills.md](docs/guide/skills.md) | Skills — install, author, and manage |
 | [docs/guide/api.md](docs/guide/api.md) | REST + A2A + OpenAI-compatible API |
-| [docs/guide/configuration.md](docs/guide/configuration.md) | Configuration guide |
+| [docs/guide/configuration.md](docs/guide/configuration.md) | Configuring the agent — providers, memory, the autonomy dial, tools, surfaces, preferences |
+| [docs/guide/owner-controls.md](docs/guide/owner-controls.md) | Stop, pause and resume from any seat; approvals and the inbox |
+| [docs/guide/groups.md](docs/guide/groups.md) | Group chats (rooms) — allowlist, roles, per-chat policy, the room service job |
+| [docs/guide/profiles.md](docs/guide/profiles.md) | Named profiles — several isolated bots on one machine |
+| [docs/guide/instances.md](docs/guide/instances.md) | Instance identity — SOUL, character, avatar |
+| [docs/guide/upgrading.md](docs/guide/upgrading.md) | Upgrading an existing install |
+| [docs/guide/migration/](docs/guide/migration/README.md) | Migrating from another agent framework |
 | [docs/guide/architecture.md](docs/guide/architecture.md) | Architecture overview |
 | [docs/guide/self-hosting.md](docs/guide/self-hosting.md) | Self-hosting / deployment |
 | [docs/guide/deployment-postures.md](docs/guide/deployment-postures.md) | Deployment postures (local / own_ops / multitenant) |
-| [docs/guide/console.md](docs/guide/console.md) | Web dashboard — capabilities & payments |
+| [docs/guide/console.md](docs/guide/console.md) | Web console — the five destinations, owner actions, posture |
 | [docs/guide/payments.md](docs/guide/payments.md) | Payments, wallet & crypto — the complete money reference |
 | [docs/guide/security-model.md](docs/guide/security-model.md) | Honest trust model — heuristic gates vs. the OS/container boundary |
-| [docs/guide/streams.md](docs/guide/streams.md) | Standing objectives at scale — fair dispatch, the stream manifest |
+| [docs/guide/streams.md](docs/guide/streams.md) | Goals and standing work — the goal board, objectives, fair dispatch, cron |
 | [docs/comparison.md](docs/comparison.md) | Comparison with other frameworks |
 | [docs/examples.md](docs/examples.md) | Real-world usage examples |
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Environment-flag reference (SSOT) |
@@ -422,4 +469,3 @@ Architecture overview → **[docs/guide/architecture.md](docs/guide/architecture
 **POLYROB** — by [The Selfrule Organization](https://theselfrule.org)
 
 </div>
-</content>

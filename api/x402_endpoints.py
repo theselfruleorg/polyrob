@@ -269,9 +269,103 @@ async def get_payment_history(
 
 
 def _invoice_asset_cfg(network: str):
-    """Resolve the default USDC asset config for a network (decimals + EIP-712 name)."""
+    """Resolve the default USDC asset config for a network (decimals + EIP-712 name).
+
+    ⚠️ This is the FACILITATOR rail's asset, and `fastapi_x402` knows exactly
+    one per network it knows — and nothing about a chain it does not. That is
+    why an operator-pinned asset gets a DIFFERENT challenge shape entirely; see
+    `_challenge_for_invoice`.
+    """
     from fastapi_x402.networks import get_default_asset_config
     return get_default_asset_config(network)
+
+
+def _invoice_asset(row):
+    """The `PaymentAsset` this invoice is payable in, or ``None``.
+
+    A pre-046 row carries no ``asset_id`` and means ``usdc-base``, which is what
+    it always meant — so an invoice outstanding across the deploy keeps serving
+    the challenge it always served.
+    """
+    from core.payments.assets import DEFAULT_ASSET_ID, resolve
+    return resolve(dict(row).get("asset_id") or DEFAULT_ASSET_ID)
+
+
+def _challenge_for_invoice(row):
+    """``(body, status)`` for a PENDING invoice, chosen by its asset's RAIL.
+
+    A ``facilitator`` asset keeps the exact ``accepts`` block it always served.
+    An ``onchain_scan`` asset gets a DIRECT-TRANSFER challenge instead: the
+    token, the chain id, the raw amount, the treasury and an EIP-681 URI.
+
+    ⚠️ The direct-transfer shape deliberately omits ``accepts``. That block asks
+    the payer to SIGN a payment authorization; for an asset no facilitator
+    knows, nobody ever verifies that signature — and the payer, having signed
+    it, would reasonably believe they had paid.
+    """
+    from modules.x402.artifact import build_transfer_uri
+    inv = dict(row)
+    # `get_payment_request` returns `request_id`; a raw DB row carries `id`.
+    # Accept both rather than make every caller normalize.
+    inv_id = inv.get("request_id") or inv.get("id") or ""
+    asset = _invoice_asset(inv)
+    if asset is None:
+        return ({"request_id": inv_id, "status": "unpayable",
+                 "reason": f"asset {inv.get('asset_id')!r} is not configured on "
+                           f"this instance — it cannot be paid here"}, 409)
+    if asset.rail == "facilitator":
+        cfg = _invoice_asset_cfg(inv["chain"])
+        from modules.x402.middleware import to_atomic_amount
+        atomic = to_atomic_amount(float(inv["amount_usd"]), cfg.decimals)
+        return ({"x402Version": 1, "amount_usd": inv["amount_usd"], "accepts": [{
+            "scheme": "exact", "network": inv["chain"],
+            "maxAmountRequired": str(atomic),
+            "resource": f"/api/x402/requests/{inv_id}/pay",
+            "description": inv.get("purpose"), "mimeType": "application/json",
+            "payTo": inv["recipient"], "maxTimeoutSeconds": 300,
+            "asset": cfg.address,
+            "extra": {"name": cfg.eip712_name, "version": cfg.eip712_version},
+        }]}, 402)
+
+    from core.wallet import chains as _chains
+    chain_row = _chains.get(asset.chain)
+    uri = build_transfer_uri({
+        "chain": asset.chain, "recipient": inv["recipient"],
+        "amount_usd": inv.get("amount_usd"), "asset_id": asset.asset_id,
+        "asset_address": asset.address, "asset_decimals": asset.decimals,
+        "asset_symbol": asset.symbol, "amount_raw": inv.get("amount_raw"),
+    })
+    return ({
+        "x402Version": 1, "rail": "onchain_scan", "chain": asset.chain,
+        "chain_id": int(chain_row.chain_id) if chain_row else None,
+        "token": asset.address, "symbol": asset.symbol,
+        "decimals": asset.decimals,
+        "amount_raw": str(inv.get("amount_raw") or ""),
+        "amount_usd": inv.get("amount_usd"), "pay_to": inv["recipient"],
+        "description": inv.get("purpose"),
+        "uri": uri,
+        "note": ("Send exactly this amount of this token to pay_to on this "
+                 "chain. Settlement is detected on-chain; do not sign a payment "
+                 "authorization — nothing would verify it."),
+    }, 402)
+
+
+def _facilitator_refusal(row):
+    """A refusal sentence when this invoice is NOT payable via the facilitator,
+    or ``None`` when it is.
+
+    ⚠️ Accepting an ``X-PAYMENT`` header for an ``onchain_scan`` asset would
+    take the payer's signature and do nothing with it.
+    """
+    asset = _invoice_asset(row)
+    if asset is None or asset.rail == "facilitator":
+        return None
+    inv = dict(row)
+    return (f"invoice {inv.get('request_id') or inv.get('id')} is payable by "
+            f"DIRECT TRANSFER "
+            f"(rail={asset.rail}), not through the facilitator — send "
+            f"{inv.get('amount_raw')} raw units of {asset.symbol} to "
+            f"{inv.get('recipient')} on {asset.chain}")
 
 
 @router.get("/requests/{request_id}")
@@ -298,18 +392,8 @@ async def get_invoice_challenge(request_id: str, request: Request = None):
     # lapsed invoice would still invite payment. Report it as expired instead.
     if row.get("deadline") and int(row["deadline"]) < int(time.time()):
         return JSONResponse({"request_id": request_id, "status": "expired"})
-    cfg = _invoice_asset_cfg(row["chain"])
-    from modules.x402.middleware import to_atomic_amount
-    atomic = to_atomic_amount(float(row["amount_usd"]), cfg.decimals)
-    accepts = [{
-        "scheme": "exact", "network": row["chain"], "maxAmountRequired": str(atomic),
-        "resource": f"/api/x402/requests/{request_id}/pay", "description": row["purpose"],
-        "mimeType": "application/json", "payTo": row["recipient"], "maxTimeoutSeconds": 300,
-        "asset": cfg.address, "extra": {"name": cfg.eip712_name, "version": cfg.eip712_version},
-    }]
-    return JSONResponse(
-        {"x402Version": 1, "accepts": accepts, "amount_usd": row["amount_usd"]},
-        status_code=402)
+    body, status = _challenge_for_invoice(row)
+    return JSONResponse(body, status_code=status)
 
 
 @router.post("/requests/{request_id}/pay")
@@ -340,6 +424,11 @@ async def pay_invoice(request_id: str, request: Request):
     # down). Checked BEFORE the claim so a lapsed invoice is never even claimed.
     if row.get("deadline") and int(row["deadline"]) < int(time.time()):
         raise HTTPException(status_code=410, detail="invoice expired")
+    # 046: the facilitator cannot settle an operator-pinned asset, so taking an
+    # X-PAYMENT header for one would take a signature and do nothing with it.
+    refusal = _facilitator_refusal(row)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     payment_header = request.headers.get("X-PAYMENT")
     if not payment_header:
         raise HTTPException(status_code=402, detail="X-PAYMENT header required")

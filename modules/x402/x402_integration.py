@@ -17,6 +17,7 @@ POLYROB's integration layer handles:
 
 import os
 import time
+import json
 import logging
 import hashlib
 from typing import Optional, Dict, Any
@@ -114,6 +115,8 @@ async def record_x402_payment(
     amount_atomic: Optional[str] = None,
     deadline: Optional[int] = None,
     asset: str = "usdc",
+    tenant_id: Optional[str] = None,
+    db=None,
 ) -> bool:
     """Record a settled x402 payment in our database.
 
@@ -122,6 +125,15 @@ async def record_x402_payment(
     a constraint violation that was swallowed -> the agent settled USDC on-chain
     and persisted nothing. This now supplies every NOT NULL column and is
     idempotent on the unique ``nonce`` (a replayed on-chain tx is a no-op).
+
+    043 A20 fix: a machine payer settles under its own derived ``usr_<hex>``
+    ``user_id``, which never matches the unified ledger's tenant predicate
+    (``user_id = ? OR json_extract(metadata, '$.tenant_id') = ?``) for the
+    OWNER tenant — so machine income (A2A / /v1 billed routes) rendered as
+    $0.00 on ``/finance``/``/status`` even though it settled. ``tenant_id``
+    (the bound owner principal) is now stamped into ``metadata`` alongside the
+    payer's own id, the same way agent invoices already carry
+    ``metadata.tenant_id`` — this makes the row match the SAME predicate.
 
     Args:
         payment_id: Unique payment identifier (also the row primary key).
@@ -136,14 +148,20 @@ async def record_x402_payment(
         amount_atomic: Atomic (base-unit) amount string. Defaults to ``amount_usd``.
         deadline: Settlement deadline epoch seconds. Defaults to now.
         asset: Settled asset symbol.
+        tenant_id: Owner tenant this income should be attributed to (the
+            payer's own derived id is NOT a tenant an owner ledger reads).
+            None/"" is stored honestly as "" — the row then matches no tenant's
+            ledger rather than being silently mis-attributed.
+        db: Optional database handle (mirrors ``invoicing.create_payment_request``'s
+            ``db=`` pattern); resolves the container's ``database_manager`` when
+            omitted, so every existing caller is unaffected.
 
     Returns:
         True if recorded (or already recorded), False on error.
     """
     try:
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        db = container.get_service('database_manager')
+        from modules.x402._db import resolve_db
+        db = await resolve_db(db)
 
         if not db:
             logger.warning("Database not available for payment recording")
@@ -161,6 +179,16 @@ async def record_x402_payment(
         resolved_amount = amount_atomic if amount_atomic is not None else str(amount_usd)
         resolved_deadline = deadline if deadline is not None else int(time.time())
 
+        # Same shape as invoicing.create_payment_request's metadata.tenant_id
+        # (kind="agent_invoice" there, "machine_payment" here) -> ONE predicate
+        # (modules/credits/unified_ledger.py::_inbound_leg) reads both kinds of
+        # inbound row the same way.
+        metadata = json.dumps({
+            "kind": "machine_payment",
+            "tenant_id": tenant_id or "",
+            "payer_user_id": user_id,
+        })
+
         # Address normalization goes through THE one chain-aware function —
         # this row shares x402_payment_requests.recipient with invoicing, and a
         # bare .lower() would destroy a base58 (SVM) address the moment this
@@ -174,8 +202,8 @@ async def record_x402_payment(
             INSERT INTO x402_payment_requests (
                 id, user_id, payer_address, amount, amount_usd, asset, chain,
                 recipient, nonce, deadline, status, transaction_hash, payment_id,
-                created_at, completed_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                metadata, created_at, completed_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                       datetime('now'), datetime('now'), datetime('now'))
             ON CONFLICT DO NOTHING
         """, (
@@ -192,6 +220,7 @@ async def record_x402_payment(
             status,
             transaction_hash,
             payment_id,
+            metadata,
         ))
 
         logger.info(f"Recorded x402 payment: {payment_id} (${amount_usd}, {status})")

@@ -57,6 +57,10 @@ def default_runner(cmd, cwd, timeout_sec):
     ``diagnose_file`` that doesn't pass its own ``runner`` pick it up. Runs with
     a scrubbed env (:func:`_checker_env`) so secrets never reach the checker.
     """
+    from core.security.host_execution import host_execution_refusal
+    refusal = host_execution_refusal()
+    if refusal:
+        raise RuntimeError(refusal)
     return subprocess.run(
         cmd, cwd=cwd, timeout=timeout_sec, capture_output=True, text=True, check=False,
         env=_checker_env(),

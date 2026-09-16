@@ -196,7 +196,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user_id="gleb"):
+def _cmd(command, text, user_id="alice"):
     from core.surfaces.dispatcher import RouteDecision, RouteKind
     from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
     from surfaces.telegram.inbound import InboundResult
@@ -210,7 +210,7 @@ def _cmd(command, text, user_id="gleb"):
 
 @pytest.fixture
 def tg_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
@@ -232,7 +232,7 @@ async def test_mode_routes_as_command_end_to_end(tg_env):
     from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
     source = SessionSource(surface_id="telegram", chat_id="1", chat_type="dm")
     inbound = InboundMessage(text="/mode",
-                             identity=Identity(user_id="gleb", source=source))
+                             identity=Identity(user_id="alice", source=source))
     decision = await route_inbound(None, inbound)
     assert decision.kind is RouteKind.COMMAND
     assert decision.command == "/mode"

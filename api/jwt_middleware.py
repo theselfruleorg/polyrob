@@ -1,5 +1,7 @@
 """JWT authentication middleware."""
 
+from core.security.session_tokens import decode_session_token
+
 import logging
 import jwt
 from typing import Callable
@@ -44,7 +46,11 @@ class JWTAuthMiddleware(BaseHTTPMiddleware):
 
         try:
             # Decode JWT
-            payload = jwt.decode(token, self.jwt_secret, algorithms=["HS256"])
+            payload = decode_session_token(token, self.jwt_secret)
+            # 043 W5: refuse a token whose jti /logout revoked.
+            from core.token_denylist import jti_is_revoked
+            if jti_is_revoked(payload):
+                raise jwt.InvalidTokenError("token revoked via /logout")
 
             # Populate request.state via the canonical C4 contract.
             from api.auth_state import set_auth_state

@@ -1,21 +1,20 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme-preference="{{ theme_preference(request) }}">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
-    <meta name="theme-color" content="#080808">
+    <meta name="theme-color" content="">
+    <meta name="color-scheme" content="dark light">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>{% block title %}{{ console_display_name() }}{% endblock %}</title>
     <meta name="ws-url" content="{{ ws_url | default('') }}">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=VT323&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
-    <!-- Design System CSS - Load in order: variables -> components -> main styles -->
-    <link href="/static/css/variables.css?v=20251230" rel="stylesheet">
-    <link href="/static/css/components.css?v=20251230" rel="stylesheet">
-    <link href="/static/css/style.css?v=20251230" rel="stylesheet">
+    <!-- Design System CSS - Load in order: fonts (vendored, offline) -> variables -> components -> main styles -->
+    <link href="/static/css/fonts.css?v=20260916theme" rel="stylesheet">
+    <link href="/static/css/variables.css?v=20260916theme" rel="stylesheet">
+    <link href="/static/css/components.css?v=20260916theme" rel="stylesheet">
+    <link href="/static/css/style.css?v=20260916theme" rel="stylesheet">
     <link href="/static/css/webgate.css?v=20260827" rel="stylesheet">
     <link rel="icon" href="/static/img/favicon.ico">
     
@@ -25,96 +24,47 @@
     <!-- Load constants first so they're available to all scripts -->
     <script src="/static/js/constants.js"></script>
 
-    <!-- Socket.IO setup with reliable fallback -->
-    <script>
-    // Create a promise that resolves when Socket.IO is loaded
-    window.socketIOReady = new Promise((resolve, reject) => {
-        // Function to load the local fallback
-        function loadLocalSocketIO() {
-            console.warn('Using local Socket.IO fallback');
-            const fallbackScript = document.createElement('script');
-            fallbackScript.src = "/static/js/socket.io.min.js";
-            fallbackScript.onload = () => {
-                console.log('Local Socket.IO loaded successfully');
-                resolve(window.io);
-            };
-            fallbackScript.onerror = (err) => {
-                console.error('Failed to load local Socket.IO:', err);
-                reject(new Error('Could not load Socket.IO from any source'));
-            };
-            document.head.appendChild(fallbackScript);
-        }
-        
-        // Only try to load from CDN if window.io is not already defined
-        if (!window.io) {
-            // Try to load from CDN first
-            const cdnScript = document.createElement('script');
-            cdnScript.src = "https://cdn.socket.io/4.6.0/socket.io.min.js";
-            cdnScript.onload = () => {
-                console.log('CDN Socket.IO loaded successfully');
-                resolve(window.io);
-            };
-            cdnScript.onerror = loadLocalSocketIO;
-            document.head.appendChild(cdnScript);
-        } else {
-            // Socket.IO already loaded
-            resolve(window.io);
-        }
-    });
-    </script>
-    
+    <!-- Socket.IO setup with reliable fallback (de-inlined, 043 phase 5 R6) -->
+    <script src="/static/js/socketio-loader.js"></script>
+
     <!-- Additional styles from child templates -->
     {% block head %}{% endblock %}
     <!-- Add syntax highlighting -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<script src="/static/js/theme.js?v=20260916theme"></script>
 </head>
 <body {% block body_attributes %}{% endblock %}>
     <div class="global-header">
         <a href="/" class="terminal-brand">{% block header_title %}{{ console_display_name() }}{% endblock %}</a>
+        {% block nav %}
         <div class="terminal-nav">
-            <!-- Webgate v1 single-user surfaces (core, both modes) -->
-            <a href="/sessions" class="nav-link">Sessions</a>
-            <a href="/" class="nav-link">Chat</a>
-            <a href="/activity" class="nav-link">Activity</a>
-            <a href="/memory" class="nav-link">Memory</a>
-            <a href="/knowledge" class="nav-link">Knowledge</a>
-            <a href="/autonomy" class="nav-link">Autonomy</a>
-            <a href="/finance" class="nav-link">Finance</a>
-            <a href="/positions" class="nav-link">Positions</a>
-            <a href="/apps" class="nav-link">Apps</a>
-            <a href="/preferences" class="nav-link">Preferences</a>
-            <a href="/config" class="nav-link">Config</a>
-            <a href="/pending" class="nav-link">Review</a>
-            <a href="/identity" class="nav-link">Identity</a>
-            <a href="/system" class="nav-link">System</a>
-            <a href="/settings" class="nav-link">Settings</a>
-            {# Multitenant-only links hide in single-user. An explicitly-passed
-               `is_multitenant` wins; pages that don't pass it fall back to the
-               posture SSOT via the `is_multitenant_posture` Jinja global (P0-3 —
-               undefined used to mean "shown", leaking Profile/Sign In into
-               local/own_ops on the server.py-rendered pages). #}
-            {% set _show_tenant = is_multitenant if is_multitenant is defined else is_multitenant_posture() %}
-            {% if _show_tenant %}
-            <a href="/profile" class="nav-link">Profile</a>
-            {% if is_admin %}
-            <a href="/admin" class="nav-link nav-link--admin">Admin</a>
-            {% endif %}
-            {% if is_authenticated %}
-            <a href="/logout" class="nav-link ml-auto">Logout</a>
-            {% else %}
-            <a href="/signin" class="nav-link ml-auto">Sign In</a>
-            {% endif %}
-            {% elif is_own_ops_posture() and request_is_authenticated(request) %}
-            {# own_ops (030 S5): the owner-login cookie lasts 7 days — give the
-               logged-in owner a way to end the session. Auth state comes from
-               request.state via the Jinja global, so no per-route context
-               threading is needed (same pattern as is_multitenant_posture). #}
-            <a href="/logout" class="nav-link ml-auto">Logout</a>
-            {% endif %}
+            {# 043 C8/phase 5 — the shell carries the same five destinations the
+               new console uses (console_nav(), read from pages_new.NAV — one
+               table, not a second copy), so a page still on this template is
+               neither a dead end nor a wall of links to unregistered routes.
+               The WEBVIEW_UI switch and its legacy nav were removed in phase 5.
+               A PUBLIC page (status.html) overrides this block with nothing:
+               a stranger is not shown the owner's five destinations. #}
+            {% for item in console_nav() %}
+            <a href="{{ item.href }}" class="nav-link">{{ item.label }}</a>
+            {% endfor %}
         </div>
+        {% endblock %}
     </div>
-    
+
+    {# 043 W11/N11 — the two facts every page must state before its own content:
+       is autonomy paused, and can you act here. Both come from _page_context, so
+       no page can forget them and none can render a second version. The headline
+       is the SAME sentence Telegram /status and the REPL render (the ONE 031
+       record); an unreadable record renders NOTHING rather than a false
+       "RUNNING". #}
+    {% if pause_headline %}
+    <div class="webgate-pause-headline" role="status">{{ pause_headline }}</div>
+    {% endif %}
+    {% if read_only %}
+    <div class="webgate-readonly-banner" role="status">Read-only console — actions are refused (WEBVIEW_READ_ONLY). You can look, not drive.</div>
+    {% endif %}
+
     <div class="container {% block container_class %}{% endblock %}">
         <div class="main-content">
             {% block content %}{% endblock %}
@@ -123,15 +73,23 @@
     
     <div class="terminal-footer">
         <div class="footer-content">
+            {% if branding().terms_url %}
             <a href="{{ branding().terms_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Terms of Use</a>
             <span class="footer-separator">•</span>
+            {% endif %}
+            {% if branding().privacy_url %}
             <a href="{{ branding().privacy_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">Privacy Policy</a>
             <span class="footer-separator">•</span>
+            {% endif %}
             <span class="footer-center-text">System ver. {{ get_version() }} (c)</span>
+            {% if branding().brand_url %}
             <span class="footer-separator">•</span>
             <a href="{{ branding().brand_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">{{ branding().brand_display }}</a>
+            {% endif %}
+            {% if branding().org_url %}
             <span class="footer-separator">•</span>
             <a href="{{ branding().org_url }}" class="footer-link" target="_blank" rel="noopener noreferrer">{{ branding().org_display }}</a>
+            {% endif %}
         </div>
     </div>
 

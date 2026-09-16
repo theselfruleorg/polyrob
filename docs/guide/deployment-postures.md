@@ -14,11 +14,11 @@ documents the posture model **as built**; the code is the source of truth
 
 ## The three postures
 
-| Posture | Who it's for | Public `/` face | Bind default | Auth |
+| Posture | Who it's for | What `/` shows a visitor | Bind default | Auth |
 |---|---|---|---|---|
-| `local` (Posture 0) | Single-user, own machine | Full dashboard, no gate | `127.0.0.1` (loopback only) | None — the loopback operator *is* the owner |
-| `own_ops` (Posture 1) | You self-host on a public host, for yourself only | Minimal "polyrob is live" status page; console behind login | `0.0.0.0` | Owner username/password login |
-| `multitenant` (Posture 2) | SaaS, multiple paying users | Full marketing/SaaS UI, sign-in required | `0.0.0.0` | Wallet/SIWE JWT + admin/billing pages |
+| `local` (Posture 0) | Single-user, own machine | The console itself, no gate | `127.0.0.1` (loopback only) | None — the loopback operator *is* the owner |
+| `own_ops` (Posture 1) | You self-host on a public host, for yourself only | A minimal "polyrob is live" status page; the console appears after login | `0.0.0.0` | Owner username/password login |
+| `multitenant` (Posture 2) | Several tenants with their own accounts | The same status page until sign-in; account and admin pages exist only here | `0.0.0.0` | Wallet/SIWE JWT + admin pages |
 
 The primitive is `local`: loopback bind, zero auth, every session owned by
 the local user. `own_ops` and `multitenant` are layers on top, gated by
@@ -59,7 +59,7 @@ viewer + chat UI only — it does **not** run the autonomy loops (cron/goals/
 curator). Goals/cron created from its pages execute only when a worker with the
 autonomy runtime is up **and the relevant loop is enabled** (`polyrob serve` /
 `polyrob gateway`, or the REPL under `POLYROB_LOCAL` + `AUTONOMY_ENABLED` — autonomy
-is OFF by default), not from the dashboard process alone.
+is OFF by default), not from the Console process alone.
 
 ### Safe-by-default guarantees
 
@@ -70,27 +70,55 @@ is OFF by default), not from the dashboard process alone.
   which `webgate.posture()` reads for its host-derivation branch — so a bare
   `polyrob dashboard --host 0.0.0.0` binds publicly *and* requires owner
   login, it never silently binds public-with-no-auth.
-- **`own_ops`/`multitenant`, unauthenticated → status page only.** The root
-  handler (`webview/server.py::index`) checks `webgate.posture() != "local"
-  and not is_authenticated(request)`: if true, it renders the minimal
-  `status.html` template ("polyrob is live", instance id, version, uptime)
-  and nothing else — the full dashboard/console only renders once a session
-  is authenticated (owner login, or in `multitenant`, a wallet/SIWE session).
+- **`own_ops`/`multitenant`, unauthenticated → status page only.** On those two
+  postures an unauthenticated request to `/` gets the minimal status page
+  ("polyrob is live", instance id, version) and nothing else. The console renders
+  only once the session is authenticated.
+- **A page you may not see is absent, not denied.** Posture decides which routes
+  are registered at all, so an account or admin page outside its posture answers
+  404 rather than an access-denied screen. Inside `multitenant`, a signed-in
+  non-admin who follows an admin link is redirected to `/`.
 
-### Residual: reverse-proxy deploys must set posture explicitly
+### Behind a reverse proxy, set the posture explicitly
 
-A deployment that fronts polyrob with a reverse proxy (nginx, Caddy, etc.)
-and always binds the app itself to `127.0.0.1` (proxying `0.0.0.0:443` on the
-proxy in front of it) **never passes `--host`/`--posture` to the app process**.
-In that shape, `webgate.posture()` still derives `local` (loopback bind seen
-from inside the process), even though the site is reachable publicly through
-the proxy — Posture 0's "no auth, full dashboard" behavior would be exposed
-to the internet.
+A deployment that fronts polyrob with a reverse proxy (nginx, Caddy) binds the app
+itself to `127.0.0.1`, so posture derivation sees loopback and would answer
+`local` — no auth — for a site the internet can reach. **Set
+`POLYROB_POSTURE=own_ops` (or `multitenant`) in the app's environment** and do not
+rely on host-derivation.
 
-**If you run behind a reverse proxy, set `POLYROB_POSTURE=own_ops` (or
-`multitenant`) explicitly in the app's environment** — don't rely on
-host-derivation, since the proxy hides the real bind address from
-`webgate.posture()`.
+The console does not leave that to trust. At `local` posture it **refuses to
+start** when the deployment looks like a server, and names what it saw:
+
+- `WEBVIEW_PUBLIC_URL` is set — the console has a public address;
+- the process runs with `--proxy-headers` / `--forwarded-allow-ips`;
+- `POLYROB_DATA_DIR` points outside your home directory (a service tree such as
+  `/var/lib/polyrob`).
+
+The refusal aborts the boot with the remedy in the message. If you genuinely
+front the console with your own authentication layer, set
+`WEBVIEW_ALLOW_LOCAL_POSTURE=1`; it is honoured with a warning, never silently.
+A profile's `~/.polyrob/profiles/<name>/data` is deliberately not a signal, so
+`polyrob -P <name> dashboard` on a laptop still works.
+
+### A writable console has two preconditions
+
+`WEBVIEW_READ_ONLY=true` makes the console a monitor; leaving it unset makes it a
+control plane. A **non-`local`** console that can write refuses to boot until both
+of these hold, and it reports every unmet one at once rather than one per restart:
+
+1. **A bound owner** — `POLYROB_OWNER_USER_ID`, set to the same value the agent
+   service uses. Without it the console scopes every read *and write* to the
+   fallback tenant and renders honest-looking empty lists over the owner's real
+   goals, invoices and pending items.
+2. **`SESSION_REGISTRY_BACKEND=sqlite` on both units** — the console carries its
+   own agent, so with the default in-process registry a message sent from here to
+   a live session would resume it in this process: two processes stepping one
+   session, one workspace. With the shared registry the session resolves as remote
+   and the console answers an honest 409 naming the owning process instead.
+
+On a workstation (`local` posture with no server signal) both are warnings rather
+than refusals — one owner, one tree, usually one process.
 
 ---
 
@@ -149,40 +177,27 @@ instance.
 
 ## The honest multi-tenant ceiling
 
-**"Multi-tenant" in this codebase means single-worker process + tenant-scoped
-data — not high-concurrency multi-worker horizontal scaling.** Be precise
-about this when deploying `multitenant` for real users:
+**"Multi-tenant" here means one worker process with tenant-scoped data — not
+horizontal scaling.** Be precise about this before you put paying users on it.
 
-1. **The live orchestrator object cannot cross process boundaries.** The
-   default `SessionRegistry` (`agents/task/session_registry.py`) is a plain
-   in-process dict — an orchestrator created in one worker is invisible to
-   another. Neither it nor its cross-process-aware sibling
-   (`SqliteSessionRegistry`) ever serializes the orchestrator itself, only
-   session-id + `worker_pid`/`owner_boot_id` metadata.
-2. **`UVICORN_WORKERS=1` is the default, and stays the default.** This is a
-   deliberate invariant, not an oversight.
-3. **`workers>1` requires BOTH `SESSION_REGISTRY_BACKEND=sqlite` AND
-   operator-provided sticky load-balancer routing.** The SQLite registry
-   variant gives cross-worker *visibility* (which worker owns a session), not
-   transparent cross-worker *method calls* on a remote orchestrator. Sticky
-   routing — routing a session's requests to the worker that owns it — is
-   infra/load-balancer configuration polyrob does not implement or ship; it
-   only makes that routing decision safe to build on top of.
-4. **A session request that lands on the wrong worker returns an honest 409,
-   not a false 404.** `api/session_routing.py` raises `409` with the owning
-   `owner_pid` and a `Retry-After` header when a session is `REMOTE` to the
-   worker that received the request — diagnosable, not silently missing.
-5. **True cross-worker method forwarding (IPC / a shared serializable
-   orchestrator) remains explicitly out of scope.** There is no flag or
-   partial implementation of it today.
+`UVICORN_WORKERS=1` is the default and stays the default, because a live session's
+orchestrator is an in-process object: it never crosses a process boundary, and no
+registry ever serializes it.
 
-**Conclusion:** a `multitenant` deployment that needs `workers>1` for
-throughput must accept either (a) staying on `UVICORN_WORKERS=1` and scaling
-vertically, or (b) opting into `SESSION_REGISTRY_BACKEND=sqlite` plus your
-own sticky routing — which buys session-affinity safety (no false-404,
-honest 409-with-owner) but **not** actual cross-worker load distribution for
-a single live session; a session's turns always execute on the one worker
-that created it.
+To run `workers>1` you need **both**:
+
+1. `SESSION_REGISTRY_BACKEND=sqlite`, which mirrors *which worker owns which
+   session* across processes. A request for a session another worker holds then
+   gets an honest **409** naming the owning process id, with a `Retry-After` —
+   never a false 404.
+2. **Sticky load-balancer routing** — send a session's requests to the worker that
+   owns it. That is your proxy's configuration; polyrob does not ship it, it only
+   makes the routing decision safe to build on.
+
+Even then, a single session's turns always execute on the one worker that created
+it. Multiple workers buy you concurrent *sessions*, not a faster session. True
+cross-worker forwarding is out of scope, and there is no partial implementation of
+it to discover. For most deployments one worker plus a bigger box is simpler.
 
 ---
 
@@ -197,18 +212,17 @@ This is the shape used for a public single-owner instance behind a reverse proxy
 POLYROB_POSTURE=own_ops          # explicit — do NOT rely on host-derivation behind a proxy
 POLYROB_OWNER_USERNAME=youruser
 POLYROB_OWNER_PASSWORD_HASH='$argon2id$...'   # from the argon2 one-liner above
+POLYROB_OWNER_USER_ID=<your owner tenant>      # the same value the agent service uses
 JWT_SECRET_KEY=<long random secret>            # required — owner-login mint raises without it
 WEBVIEW_DOMAIN=app.example.com                 # SIWE domain + Socket.IO CORS default origin
+WEBVIEW_READ_ONLY=true                         # drop this only after reading the write preconditions above
 ```
 
 ### 2. Bind + reverse proxy
 
-Bind the app to loopback and let nginx (or Caddy) terminate TLS and proxy to
-it — this is the standard shape described in `AGENTS.md`'s deployment notes
-(`polyrob-api.service` / `polyrob-webgate.service` behind nginx, Let's
-Encrypt certs). Because `POLYROB_POSTURE=own_ops` is set explicitly, the app
-enforces owner-login even though it's listening on loopback from its own
-point of view.
+Bind the app to loopback and let nginx (or Caddy) terminate TLS and proxy to it.
+Because `POLYROB_POSTURE=own_ops` is set explicitly, the app enforces owner login
+even though it is listening on loopback from its own point of view.
 
 ```nginx
 server {
@@ -227,11 +241,29 @@ server {
 ### 3. Verify
 
 - `GET https://app.example.com/` should show the minimal "polyrob is live"
-  status page (instance id, version, uptime) — **not** the dashboard —
+  status page (instance id, version, uptime) — **not** the Console —
   until you log in.
 - `GET https://app.example.com/owner-login` should show the login form.
 - After logging in with `POLYROB_OWNER_USERNAME`/password, `/` should show
   the full console.
+
+### Two deployment shapes
+
+The console is a separate process from the agent, so there are two shapes and you
+pick one:
+
+- **Console beside a headless agent.** The agent runs a chat surface
+  (`polyrob telegram`, `polyrob email`) and the console only watches it. Run the
+  console as its own service with `WEBVIEW_READ_ONLY=true`; the owner still logs
+  in to look, and nothing the console can do changes agent state. This is the
+  shape the project's own production instance runs.
+- **Console beside the API.** `polyrob serve` (the FastAPI app) plus the console,
+  both behind one reverse proxy. Use this when you also want the REST, A2A and
+  OpenAI-compatible surfaces — see [api.md](api.md).
+
+Either way the console answers on `:5050` by default. `polyrob dashboard` runs it
+in the foreground; [self-hosting.md](self-hosting.md) covers running it as a
+service.
 
 ### Zero-exposure alternative: VPN / Tailscale tunnel
 
@@ -264,38 +296,47 @@ needs console access is you and you already have a VPN/tailnet set up.
 | `WEBGATE_MULTITENANT` | `false` | Back-compat alias for `POLYROB_POSTURE=multitenant`. |
 | `WEBGATE_HOST` / `WEBVIEW_HOST` | unset | Explicit bind host override; also feeds posture derivation when `POLYROB_POSTURE` is unset. |
 | `WEBGATE_PORT` / `WEBVIEW_PORT` | `5050` | Bind port. |
+| `WEBVIEW_ALLOW_LOCAL_POSTURE` | off | Override the `local`-posture-on-a-server boot refusal. Only if you front the console with your own auth. |
+| `WEBVIEW_READ_ONLY` | `false` | Monitoring-only console: every mutating endpoint returns 403 and the chat input is not rendered. |
+| `POLYROB_CONSOLE_NAME` | `POLYROB Console` | The console's own display name. Naming the instance does not rename the console. |
 | `POLYROB_OWNER_USERNAME` | unset | Owner login username (`own_ops`/`multitenant`). |
 | `POLYROB_OWNER_PASSWORD_HASH` | unset | Argon2 hash of the owner password — never plaintext. |
+| `POLYROB_OWNER_USER_ID` | unset | The owner tenant. Required for a writable non-`local` console. |
 | `JWT_SECRET_KEY` | unset | Signs both the owner-login cookie and wallet/SIWE JWTs. Required for owner login to work. |
 | `WEBVIEW_DOMAIN` | *(the source ships a hardcoded fallback — always set this explicitly for your deployment)* | SIWE domain + default Socket.IO CORS origin. |
 | `ENVIRONMENT` | `production` | When `production`, the owner-login cookie is marked `secure` (HTTPS-only). |
 
-See [../CONFIGURATION.md](../CONFIGURATION.md) for the complete flag reference.
+The complete reference is [../CONFIGURATION.md](../CONFIGURATION.md); on a running
+box, `polyrob doctor --flags --search WEBVIEW` prints the resolved values and where
+each one came from.
 
-## Durable apps (proposal 032)
+## Durable apps
 
 The agent can run a built app as its own hardened container behind
 `https://<slug>.<APP_SERVICE_BASE_DOMAIN>`, surviving session end and restarts. The
-agent only writes a registry row; the owner-owned `polyrob-apps.service` does every
-privileged step. Turn it on with ONE setting:
+agent only writes a registry row; a supervisor you own does every privileged step.
+Turn the agent's half on with one setting:
 
 ```
 AGENT_BUILDER_MODE=ship            # build = static publish + github only; off = nothing
 APP_SERVICE_BASE_DOMAIN=apps.example.com
 ```
 
-`ship` clamps to `build` (with a one-time warning) until the base domain is set and its
-wildcard certificate exists. The serving side is a one-time owner step on the box:
+`ship` clamps back to `build` (with a warning) until the base domain is set and its
+wildcard certificate exists. The serving side is a one-time owner setup on the box:
 
-```
-cd ~/rob_dev && APPS_BASE_DOMAIN=apps.example.com bash scripts/setup_apps_vhost.sh
-```
+1. Obtain a `*.apps.example.com` certificate (DNS-01 — one TXT record).
+2. Point an nginx server block for that wildcard at an include directory the
+   supervisor writes per-app stanzas into.
+3. Run `polyrob apps supervise` as a service under an account that may use docker
+   and reload nginx. The agent never has that privilege.
 
-It obtains the `*.apps.example.com` certificate (manual DNS-01 — you add one TXT
-record), creates the per-app nginx include dir, and installs + enables
-`polyrob-apps.service`. The FIRST deploy of each new slug waits for you
-(`polyrob apps approve <slug>` / `/apps approve <slug>` / the console's Apps page); an
-approved address redeploys unattended within `APP_SERVICE_MAX_LIVE` /
-`APP_SERVICE_DAILY_MAX` / `APP_SERVICE_MIN_INTERVAL_SEC`. `/pause apps` or `/halt` stops
-deploys AND live containers until resume. Egress is deny-by-default per app; no host
-secret ever reaches an app container. Full flag table: [../CONFIGURATION.md](../CONFIGURATION.md).
+The **first** deploy of each new slug waits for you — `polyrob apps approve <slug>`
+or Telegram `/apps approve <slug>`. The default console has no separate Apps page;
+use its Inbox or the `/apps` owner verb ([console.md](console.md#what-you-can-do-here)).
+An approved address
+then redeploys unattended within `APP_SERVICE_MAX_LIVE` / `APP_SERVICE_DAILY_MAX` /
+`APP_SERVICE_MIN_INTERVAL_SEC`. `/pause apps` (or `/halt`) stops new deploys **and**
+tears down live containers until you resume. Egress is deny-by-default per app, and
+no host secret ever reaches an app container. Flags:
+[../CONFIGURATION.md](../CONFIGURATION.md).

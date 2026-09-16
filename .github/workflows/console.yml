@@ -1,0 +1,42 @@
+name: console
+# The console's own gate: the design-system invariants and the accessibility bar.
+#
+# It is SEPARATE from `ci` on purpose. `ci` installs the whole Python package and
+# runs the suite; this job installs node and one browser and checks the interface
+# — one nav, a skip link, and axe-core at 390 x 844 with serious + critical = 0.
+# Nothing here ships in the wheel: webview/dev/ is a dev-only rig over plain HTML
+# and CSS that still has no build step.
+on:
+  pull_request:
+    paths:
+      - "webview/**"
+      - "docs/design/040/**"
+      - ".github/workflows/console.yml"
+  push:
+    branches: [main]
+    paths:
+      - "webview/**"
+      - "docs/design/040/**"
+      - ".github/workflows/console.yml"
+jobs:
+  interface:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webview/dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: webview/dev/package-lock.json
+      - run: npm ci
+      # Only chromium: the bar is one browser at one phone size, not a matrix.
+      - run: npx playwright install --with-deps chromium
+      - name: Design-system invariants (vitest + jsdom)
+        run: npm test
+      # No AXE_BASE_URL → the mockup set, which is the specification. Point it at
+      # a running console with AXE_BASE_URL once the real routes are the target.
+      - name: Accessibility (axe-core, 390x844, serious + critical = 0)
+        run: npm run axe

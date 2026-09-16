@@ -16,7 +16,7 @@ AUTONOMY_POSTURE): how much host/compute capability the agent has (0 confined,
 import pytest
 
 import agents.task.constants as c
-from core.instance import DEFAULT_INSTANCE_ID
+from core.instance import DEFAULT_INSTANCE_ID, resolve_owner_user_id
 from tools.controller.execution_context import ActionExecutionContext
 
 
@@ -47,10 +47,14 @@ def _freeze(monkeypatch, value):
 
 
 def _ctx(**kw):
-    """A genuine owner-steered main-agent context (clean env: owner principal is
-    the instance default DEFAULT_INSTANCE_ID, so that user_id is the owner tenant)."""
+    """A genuine owner-steered main-agent context.
+
+    ⚠️ The owner tenant on a clean env is `local` (`resolve_owner_user_id`), and
+    since 2026-09-15 so is the owner PRINCIPAL the gate compares against — the two
+    axes are one answer. This said DEFAULT_INSTANCE_ID while the principal fell
+    back to the instance id; that tenant is now carried by nothing."""
     defaults = dict(
-        role="orchestrator", is_sub_agent=False, user_id=DEFAULT_INSTANCE_ID,
+        role="orchestrator", is_sub_agent=False, user_id=resolve_owner_user_id(),
         session_id="s1", metadata={"turn_kind": None},
     )
     defaults.update(kw)
@@ -137,17 +141,41 @@ def test_gate_local_bypass_scoped_to_local_operator_tenant(monkeypatch):
     assert c.compute_posture_allows(_ctx(user_id="28436760"), 1) is False
 
 
-def test_gate_local_tenant_denied_without_local_mode(monkeypatch):
+def test_gate_local_tenant_is_the_owner_only_while_unbound(monkeypatch):
+    """⚠️ Reversed 2026-09-15 (043 residue R1), deliberately.
+
+    This pinned "the tenant `local` is denied at posture>=1 unless POLYROB_LOCAL is
+    on". That held only while the owner PRINCIPAL fell back to the INSTANCE id: the
+    two axes now give one answer, so on an UNBOUND install `local` IS the owner
+    principal and passes on the principal branch — not on the local bypass. That is
+    the point of R1: an owner gate was denying the owner its own capability (a
+    console- or goal-driven session on a box without POLYROB_LOCAL).
+
+    What must NOT change, and is what this test now guards:
+    - a BOUND install still denies `local` (the server/multi-tenant case);
+    - a forgeable network sender id is denied either way, bound or not;
+    - AGENT_COMPUTE_POSTURE still defaults to 0, so none of this is reachable
+      until an operator raises the posture deliberately.
+    """
     _freeze(monkeypatch, "1")
+    assert c.compute_posture_allows(_ctx(user_id="local"), 1) is True
+    assert c.compute_posture_allows(_ctx(user_id="28436760"), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id="u_stranger"), 1) is False
+
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "rob")
     assert c.compute_posture_allows(_ctx(user_id="local"), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id="rob"), 1) is True
+    assert c.compute_posture_allows(_ctx(user_id="u_stranger"), 1) is False
 
 
 def test_gate_explicit_owner_principal_binding_wins(monkeypatch):
     _freeze(monkeypatch, "1")
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     assert c.compute_posture_allows(_ctx(user_id="alice"), 1) is True
-    # instance-id default no longer matches once an explicit owner is bound
+    # Neither the instance id nor the UNBOUND default owner tenant matches once an
+    # explicit owner is bound — binding narrows the gate, it never widens it.
     assert c.compute_posture_allows(_ctx(user_id=DEFAULT_INSTANCE_ID), 1) is False
+    assert c.compute_posture_allows(_ctx(user_id="local"), 1) is False
 
 
 def test_gate_allows_owner_tenant_autonomous_session(monkeypatch):

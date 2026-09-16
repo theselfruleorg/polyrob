@@ -17,14 +17,13 @@ annotations`` (module convention).
 import time
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+
+from fastapi.responses import JSONResponse
 
 from webview.pages import (
-    _TEMPLATES,
     _data_dir,
     _effective_user_id,
     _memory_provider,
-    _page_context,
 )
 
 router = APIRouter()
@@ -195,12 +194,12 @@ async def api_knowledge_kb(request: Request, collection: str = ""):
     provider = _memory_provider()
     user_id = _effective_user_id(request)
     if provider is None or not hasattr(provider, "kb_list_sources"):
-        return JSONResponse({"items": [], "count": 0})
+        return JSONResponse({"items": [], "count": None, "error": "memory_provider_unavailable"})
     try:
         items = await provider.kb_list_sources(user_id=user_id,
                                                collection=(collection or None))
-    except Exception:
-        items = []
+    except Exception as exc:
+        return JSONResponse({"items": [], "count": None, "error": str(exc)})
     return JSONResponse({"items": items, "count": len(items)})
 
 
@@ -226,13 +225,6 @@ async def api_knowledge_changes(request: Request, limit: int = 50):
     except Exception:
         items = []
     return JSONResponse({"items": items, "count": len(items)})
-
-
-# --- page ----------------------------------------------------------------- --#
-
-@router.get("/knowledge", response_class=HTMLResponse)
-async def knowledge_page(request: Request):
-    return _TEMPLATES.TemplateResponse(request, "knowledge.html", _page_context(request))
 
 
 __all__ = ["router"]

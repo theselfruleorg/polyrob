@@ -103,7 +103,19 @@ def resolve_tool_status(
             "owner/operator grants it: on a goal THEY seeded (the standing "
             "trading cycle already carries it), or at session creation. If you "
             "have a candidate and no grant, record it where the granted run will "
-            "read it and say so plainly — then escalate ONCE, not every run.")
+            "read it and say so plainly — then escalate ONCE, not every run.\n"
+            "⚠️ AND, when the OWNER is the one asking: the money capability is "
+            "not missing, it is simply not YOURS. It is reachable from their "
+            "seat as a chat verb they type themselves — `/trade <what to do>` "
+            "for a run that carries the money verb, `/bridge <from> <to> "
+            "<amount>` to move native value between chains, `/wallet` for "
+            "balances and caps. Say THAT. Do not answer an owner's 'do X' with "
+            "a list of grants you would need: naming a capability you cannot "
+            "reach as though the system lacked it is a capability DENIAL, and "
+            "the owner then believes a shipped feature is broken (live, "
+            "2026-09-12: the owner was told the bridge 'has not reached my "
+            "toolset' and asked to grant defi_trade, when `/bridge` was "
+            "deployed and working the whole time).")
 
     if is_leaf:
         from tools.controller.delegation import get_blocked_child_tools

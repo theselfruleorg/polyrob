@@ -47,11 +47,11 @@ def _client(monkeypatch, posture, owner_creds=False):
     return TestClient(srv._fastapi)
 
 
-def test_local_activity_page_and_backfill_open(monkeypatch):
+def test_local_backfill_open(monkeypatch):
     client = _client(monkeypatch, "local")
-    page = client.get("/activity")
-    assert page.status_code == 200
-    assert 'id="activity-stream"' in page.text
+    # 043 §9: the /activity PAGE is deleted; only the backfill reader (which
+    # Work › Log consumes) remains, open in local.
+    assert client.get("/activity").status_code == 404
     back = client.get("/api/activity/backfill")
     assert back.status_code == 200
     assert isinstance(back.json()["events"], list)
@@ -73,10 +73,13 @@ def test_own_ops_owner_cookie_allowed(monkeypatch):
     login = client.post("/owner-login",
                         data={"username": "op", "password": "s3cret",
                               "csrf_token": match.group(1) if match else ""},
+                        # 043 W1: a browser states its Origin on a form POST.
+                        headers={"Origin": "http://testserver"},
                         follow_redirects=False)
     assert login.status_code in (302, 303)
-    page = client.get("/activity")
-    assert page.status_code == 200
+    # 043 §9: the /activity PAGE is deleted (404 for an authenticated owner too);
+    # the backfill reader the owner cookie unlocks is what stays.
+    assert client.get("/activity").status_code == 404
     back = client.get("/api/activity/backfill")
     assert back.status_code == 200
 
@@ -90,7 +93,11 @@ def test_flag_off_is_404_even_in_local(monkeypatch):
 
 def test_multitenant_tenant_denied_owner_allowed(monkeypatch):
     """Direct gate check — a plain authenticated tenant must NOT see the
-    global stream; admin tier and the instance owner may."""
+    global stream; admin tier and the instance owner may.
+
+    043 W13: the refusal is 404, not 403 — the cross-tenant stream is not part
+    of a tenant's console at all, and answering 403 where the flag-off case
+    answers 404 turns the pair into an existence oracle."""
     monkeypatch.setenv("POLYROB_POSTURE", "multitenant")
     from fastapi import HTTPException
     import webview.activity as activity
@@ -102,7 +109,7 @@ def test_multitenant_tenant_denied_owner_allowed(monkeypatch):
 
     with pytest.raises(HTTPException) as exc:
         activity._require_activity_access(_req("tenant-b"))
-    assert exc.value.status_code == 403
+    assert exc.value.status_code == 404
 
     activity._require_activity_access(_req("whoever", tier="admin"))  # no raise
     activity._require_activity_access(_req("anyone", is_admin=True))  # no raise

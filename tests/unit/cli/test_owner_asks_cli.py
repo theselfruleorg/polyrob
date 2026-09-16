@@ -6,7 +6,7 @@ from agents.task.goals.board import ASK_FULFILLED, GoalBoard, STATUS_READY
 
 def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
 
 
@@ -25,7 +25,7 @@ def test_asks_empty(tmp_path, monkeypatch):
 def test_asks_lists_open(tmp_path, monkeypatch):
     from cli.commands.owner import owner
     _env(tmp_path, monkeypatch)
-    _board(tmp_path).create_ask(user_id="gleb", what="Grant Twitter write access",
+    _board(tmp_path).create_ask(user_id="alice", what="Grant Twitter write access",
                                 why="X objective needs twitter_post")
     res = CliRunner().invoke(owner, ["asks"])
     assert res.exit_code == 0
@@ -37,12 +37,12 @@ def test_fulfill_unblocks(tmp_path, monkeypatch):
     from cli.commands.owner import owner
     _env(tmp_path, monkeypatch)
     board = _board(tmp_path)
-    g = board.create(user_id="gleb", title="Post the launch thread on X")
+    g = board.create(user_id="alice", title="Post the launch thread on X")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no write access")
     board.claim(g.id, "w", ttl_seconds=60)
     board.record_failure(g.id, error="no write access")  # blocked
-    a = board.create_ask(user_id="gleb", what="Grant Twitter write access",
+    a = board.create_ask(user_id="alice", what="Grant Twitter write access",
                          blocks_goal_ids=[g.id])
     res = CliRunner().invoke(owner, ["fulfill", a.id])
     assert res.exit_code == 0
@@ -64,7 +64,7 @@ def test_asks_excludes_tool_approval_asks(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     board = _board(tmp_path)
     ask = board.create_ask(
-        user_id="gleb", what="Approve x402_request? [feedface]",
+        user_id="alice", what="Approve x402_request? [feedface]",
         extra_payload={"ask_kind": "tool_approval", "request_hash": "feedface"},
         force=True,
     )

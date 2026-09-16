@@ -136,7 +136,7 @@ def _pause_common(ctx, scopes_args, *, force_all: bool = False) -> None:
 
 
 def h_pause(ctx) -> None:
-    """Pause autonomous work now: `/pause [scope…] [for 6h]` (everything by default)."""
+    """Pause work now: `/pause [word…] [for 6h]` (default: everything)."""
     _pause_common(ctx, getattr(ctx, "args", []))
 
 
@@ -146,7 +146,7 @@ def h_halt(ctx) -> None:
 
 
 def h_resume(ctx) -> None:
-    """Lift the pause: `/resume [scope…]` (everything by default).
+    """Lift the pause: `/resume [word…]` (everything by default).
 
     Honest verified-state reporting: never claims RESUMED while the runtime
     still reports a pause (e.g. AUTONOMY_HALT set in the env, which only an
@@ -227,6 +227,45 @@ def h_fulfill(ctx) -> None:
         return
     ctx.emit(f"✅ ask {ask_id} fulfilled — {unblocked} goal(s) unblocked",
              title="fulfill")
+
+
+# ---------------------------------------------------------------------------
+# /missed — owner notices the delivery rail could not send live (A7 / A40)
+# ---------------------------------------------------------------------------
+
+
+def h_missed(ctx) -> None:
+    """`/missed [n]` — owner notices the delivery rail could not send live:
+    suppressed by the daily cap, held by an owner pause, or undelivered (no
+    live sink / send failed). The SAME durable rows Telegram `/missed` and
+    `polyrob owner missed` read."""
+    args = getattr(ctx, "args", []) or []
+    try:
+        n = max(1, min(20, int(args[0]))) if args else 5
+    except (TypeError, ValueError):
+        ctx.emit("usage: /missed [n]  (1-20, default 5)", title="missed")
+        return
+    tenant = _tenant(ctx)
+    try:
+        from core.surfaces.missed import format_notice_lines, missed_notices
+        rows = missed_notices(tenant, _admin_data_dir(ctx), n)
+    except Exception as e:
+        ctx.emit(f"{candy.GUTTER}(missed unavailable: {e})", title="missed")
+        return
+    if not rows:
+        ctx.emit(candy.empty("missed messages", "nothing suppressed", yet=False),
+                 title="missed")
+        return
+    lines = [f"Last {len(rows)} missed owner message(s) (newest first):"]
+    for r in rows:
+        kind = r.get("kind") or "capped"
+        text = str(r.get("text") or "")
+        # Wrapped, never clipped — /missed exists to recover text the owner
+        # never received live (fix round 1, 2026-09-14).
+        lines.extend(format_notice_lines(r.get("ts") or 0, kind, text,
+                                         gutter=candy.GUTTER))
+    lines.append(f"{candy.GUTTER}raise the cap: /config set delivery.daily_cap N")
+    ctx.emit("\n".join(lines), title="missed")
 
 
 # ---------------------------------------------------------------------------

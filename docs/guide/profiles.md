@@ -28,6 +28,14 @@ for existing installs.
 **Profile mode** (a profile selected): config home = the profile dir, data home
 = `<profile>/data`, and the workspace stays in the folder you launched from.
 
+The profile also names the **instance**: `polyrob profile create` pins
+`POLYROB_INSTANCE_ID` in the profile's `.env`, and a hand-assembled profile falls
+back to the profile name. The **owner tenant** is a separate decision and does not
+follow the profile name — it is `POLYROB_OWNER_USER_ID`, else `POLYROB_LOCAL_OWNER`,
+else the single-user tenant `local`. Set one of those in the profile's `.env` when
+the profile runs a surface that has to tell you apart from a stranger. See
+[instances.md](instances.md).
+
 ## Selecting a profile
 
 Strongest first:
@@ -55,8 +63,22 @@ polyrob -P scout                      # run the REPL as scout
 polyrob profile use scout             # make scout sticky for this machine
 polyrob profile list                  # * marks the active profile
 polyrob profile show [scout]          # homes, instance id, characters, sessions
+polyrob profile path [scout]          # just the home dir, for scripts
 polyrob doctor                        # prints the active profile + both homes
 ```
+
+Renaming, removing and aliasing:
+
+```bash
+polyrob profile rename scout recon    # moves the home, repoints the sticky file and the wrappers
+polyrob profile alias scout --as s    # write another wrapper command for the same profile
+polyrob profile delete scout          # deletes the home and everything in it; asks first
+```
+
+`rename` also rewrites `POLYROB_INSTANCE_ID` in the profile's `.env`, but identity
+docs already on disk keep the old instance key — the command says so. `rename`
+and `delete` refuse while the profile's databases look in use; stop its process
+first (`delete --force` overrides, `--yes` skips the prompt).
 
 `create` also writes a `~/.local/bin/scout` wrapper by default, so `scout run
 "…"` works as a real command (`--no-alias` to skip, `POLYROB_BIN_DIR` to move
@@ -127,9 +149,6 @@ daemon runs in legacy mode and writes into the default home. Two rules:
   `POLYROB_PROFILES_ROOT=/var/lib/polyrob/profiles polyrob profile create <name>`.
 - Give each profile its own surface credentials in its `.env` (e.g. its own
   Telegram bot token) — two daemons long-polling one token fight each other.
-
-(The source repo also carries a generic template, `deployment/polyrob@.service`,
-for `systemctl enable polyrob@<name>`-style instancing.)
 
 ## Guard rails
 

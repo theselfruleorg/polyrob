@@ -144,9 +144,6 @@ export class FileAttachmentManager {
         const filesToUpload = Array.from(this.pendingFiles.values());
 
         try {
-            // Get auth token from localStorage
-            const token = localStorage.getItem('auth_token');
-
             for (let i = 0; i < filesToUpload.length; i++) {
                 const fileData = filesToUpload[i];
                 const file = fileData.file;
@@ -158,18 +155,11 @@ export class FileAttachmentManager {
                 const formData = new FormData();
                 formData.append('file', file);
 
-                // Prepare headers with authentication
-                const headers = {};
-                if (token) {
-                    headers['Authorization'] = `Bearer ${token}`;
-                }
-
                 // CRITICAL: Do NOT set Content-Type header!
                 // Browser auto-generates: multipart/form-data; boundary=----WebKitFormBoundary...
                 // Manual setting breaks boundary parameter, causing 400 Bad Request
                 const response = await fetch(`/api/task/sessions/${sessionId}/workspace/upload`, {
                     method: 'POST',
-                    headers: headers,
                     credentials: 'include',
                     body: formData
                 });

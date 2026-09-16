@@ -28,6 +28,7 @@ a fake ``sk-...`` key logged via ``%s`` args AND via a raised exception, through
 NAMED component logger (not root), must never appear in ``bot.log``.
 """
 import logging
+import re
 import sys
 
 import pytest
@@ -290,6 +291,122 @@ def test_markerless_secret_shapes_still_scrub(label, secret):
     f.filter(rec)
     assert secret not in rec.getMessage(), f"{label} leaked through the marker gate"
     assert secret not in str(rec.args), f"{label} leaked through record.args"
+
+
+# ---------------------------------------------------------------------------
+# A12 (2026-09-14): the generic base64-blob catch-all must not eat a path.
+# ---------------------------------------------------------------------------
+
+
+def test_base64_pattern_does_not_eat_a_path_that_reproduces_the_old_bug():
+    """A12 fix round 3 (2026-09-14, review finding): round 2 dropped '/' from
+    the character class to stop the catch-all eating paths — but that also
+    stopped it redacting a REAL secret containing '/' (see the sibling test
+    below: ~47% of random 40-char base64 tokens contain at least one '/',
+    and nothing else in the battery backstops a bare token). The fix keeps
+    '/' in the class and adds lookarounds instead: the lookbehind refuses a
+    match starting right after '/' or a word character, so a match can never
+    start MID-path (every internal path-segment boundary is one of those
+    two). The only vulnerable start is the leading edge of the path's own
+    first homogeneous run (right after the message's own word boundary —
+    here, the space after "at ") — so this is safe only as long as THAT
+    leading run stays under the 32-char floor. This fixture's leading run
+    ("/Users/example/", 15 chars) is short, broken by the underscore in
+    "_Library" before reaching 32 — while a LATER, unbroken run inside the
+    same path ("Library/Caches/ms/playwright/.../libEGL") is long enough to
+    trip the OLD (lookaround-free) pattern, asserted inline below as the
+    "this fixture reproduces the bug" guard (a prior version of this test
+    used a fixture the reviewer found never triggered the old pattern at
+    all — this one does)."""
+    old_unbounded_pattern = re.compile(r'([a-zA-Z0-9+/]{32,}={0,2})')
+    path = (
+        "/Users/example/_Library/Caches/ms/playwright/chromium/Chromium/"
+        "Contents/MacOS/Chromium/Framework/Versions/Current/Libraries/libEGL"
+    )
+    assert old_unbounded_pattern.findall(path), (
+        "fixture doesn't reproduce the bug — the OLD lookaround-free pattern "
+        "must find a match inside the bare path; adjust the fixture until it does"
+    )
+
+    f = SecretScrubbingFilter()
+    scrubbed = f.scrub_message(f"Executable doesn't exist at {path}")
+    assert path in scrubbed, f"path was mangled: {scrubbed!r}"
+    assert "REDACTED" not in scrubbed, f"path was redacted: {scrubbed!r}"
+
+
+def test_base64_pattern_still_redacts_a_slash_containing_standalone_token():
+    """The regression round 3 fixes: round 2's class-narrowing (dropping '/')
+    silently stopped redacting a real secret that happens to contain '/' —
+    a realistic shape (~47% of random 40-char base64 tokens have at least
+    one '/'). '/' is back in the character class; the lookarounds alone
+    carry the path-safety burden (see the sibling test above). A token
+    bounded by whitespace/punctuation — not path separators — on both sides
+    still matches in full, '/' included."""
+    f = SecretScrubbingFilter()
+    token = "x1Fh+zm9tbRkRMgSnMJq8Mt3oa94hHBLzA/qfpIY"
+    assert len(token) == 40
+    scrubbed = f.scrub_message(f"leaked token: {token}")
+    assert token not in scrubbed, f"standalone token survived: {scrubbed!r}"
+
+
+# ---------------------------------------------------------------------------
+# A12 fix round 4 (2026-09-14, review finding): round 3's lookbehind alone
+# still let a match START at a path's own leading '/' — that position is
+# preceded by a space (or is the very start of the message), and neither is
+# blocked by `(?<![/\w])`. A fully HOMOGENEOUS absolute path (no digit,
+# underscore, hyphen, or period anywhere near its start — so nothing breaks
+# the run before the 32-char floor) was still eaten whole from position 0.
+# Fix: `(?!/)` right after the lookbehind — a match may not itself start
+# with '/'. A base64 secret essentially never starts with '/' (~1/64 chance
+# for a random character); every ABSOLUTE path does. That IS the accepted
+# blind spot this round introduces: a secret whose own first character
+# happens to be '/' is not redacted by this pattern — no lookaround can
+# distinguish "a path" from "a secret starting with the path-separator
+# byte" from the leading character alone.
+# ---------------------------------------------------------------------------
+
+
+def test_homogeneous_path_after_a_space_is_not_eaten_from_its_leading_slash():
+    """Round 3's fixture needed an early underscore to break the leading run
+    short. This one has NO such break anywhere in its first 32+ chars — the
+    shape round 3 missed. Preceded by a space (a genuine word-boundary),
+    the OLD round-3 pattern (lookbehind only, no `(?!/)`) matches starting
+    at the path's own leading '/' and eats the whole thing; asserted inline
+    below as the "reproduces the round-3 gap" guard."""
+    round3_pattern = re.compile(r'(?<![/\w])([a-zA-Z0-9+/]{32,}={0,2})(?!\w)')
+    old_unbounded_pattern = re.compile(r'([a-zA-Z0-9+/]{32,}={0,2})')
+    path = "/Users/example/Library/Caches/ms/playwright/chromium/Chromium/Contents"
+
+    assert old_unbounded_pattern.findall(path), "fixture doesn't reproduce the original bug"
+    assert round3_pattern.findall(f"cache at {path}") == [path], (
+        "fixture doesn't reproduce the round-3 gap — round 3's lookbehind-only "
+        "pattern must still eat this path whole for this test to prove anything"
+    )
+
+    f = SecretScrubbingFilter()
+    scrubbed = f.scrub_message(f"cache at {path}")
+    assert path in scrubbed, f"path was mangled: {scrubbed!r}"
+    assert "REDACTED" not in scrubbed, f"path was redacted: {scrubbed!r}"
+
+
+def test_homogeneous_path_at_message_start_is_not_eaten():
+    """Same shape as above, but with NOTHING before the path at all — the
+    other vulnerable position (start-of-string also isn't blocked by the
+    lookbehind, same as a leading space)."""
+    f = SecretScrubbingFilter()
+    path = "/Users/example/Library/Caches/ms/playwright/chromium/Chromium/Contents"
+    scrubbed = f.scrub_message(path)
+    assert scrubbed == path, f"path was mangled: {scrubbed!r}"
+
+
+def test_slash_containing_token_after_a_space_still_redacted_with_the_new_lookahead():
+    """The `(?!/)` lookahead added this round must not blunt the net from
+    the sibling test above: a '/'-containing secret (which does NOT itself
+    start with '/') is still caught in full, preceded by a plain space."""
+    f = SecretScrubbingFilter()
+    token = "x1Fh+zm9tbRkRMgSnMJq8Mt3oa94hHBLzA/qfpIY"
+    scrubbed = f.scrub_message(f"cache at {token} was stale")
+    assert token not in scrubbed, f"standalone token survived: {scrubbed!r}"
 
 
 # ---------------------------------------------------------------------------

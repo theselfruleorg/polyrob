@@ -36,8 +36,11 @@ def test_scan_parses_transfer_logs_with_correct_amount():
         return logs
 
     out = onchain_probe.scan_treasury_transfers(fake_rpc, USDC, TREASURY, 90, 110)
+    # 046 Phase 0 added `amount_raw` — the EXACT integer settlement now matches
+    # on. `amount_usd` is unchanged and is display-only.
     assert out == [{
-        "tx_hash": "0xabc", "from": from_addr, "amount_usd": 12.34, "block": 100,
+        "tx_hash": "0xabc", "from": from_addr, "amount_raw": 12_340000,
+        "amount_usd": 12.34, "block": 100,
     }]
 
 
@@ -97,3 +100,55 @@ def test_get_head_block_rpc_error_returns_none():
 
 def test_get_head_block_empty_result_returns_none():
     assert onchain_probe.get_head_block(lambda m, p: None) is None
+
+
+# --- 046 Phase 0: exact raw integers at the asset's decimals -----------------
+
+def _tlog(value_hex, frm="0x" + "22" * 20, block=5, tx="0xdead"):
+    from modules.x402.onchain_probe import TRANSFER_TOPIC, _pad_address_topic
+    return {
+        "topics": [TRANSFER_TOPIC, _pad_address_topic(frm),
+                   _pad_address_topic("0x" + "11" * 20)],
+        "data": value_hex,
+        "transactionHash": tx,
+        "blockNumber": hex(block),
+    }
+
+
+def test_an_18_decimal_transfer_returns_an_exact_raw_integer():
+    """⚠️ A value no float can hold exactly. Matching on amount_usd was safe
+    only while every asset had 6 decimals."""
+    from modules.x402 import onchain_probe
+    value = 7 * 10 ** 18 + 3
+    rows = onchain_probe.scan_treasury_transfers(
+        lambda m, p: [_tlog(hex(value))], "0x" + "cc" * 20, "0x" + "11" * 20,
+        1, 9, decimals=18)
+    assert rows[0]["amount_raw"] == value
+
+
+def test_the_default_decimals_keep_the_usdc_shape_byte_identical():
+    from modules.x402 import onchain_probe
+    rows = onchain_probe.scan_treasury_transfers(
+        lambda m, p: [_tlog(hex(1_250_000))], "0x" + "cc" * 20,
+        "0x" + "11" * 20, 1, 9)
+    assert rows[0]["amount_usd"] == 1.25
+    assert rows[0]["amount_raw"] == 1_250_000
+
+
+def test_an_rpc_failure_still_returns_none_not_an_empty_list():
+    """⚠️ The return contract is load-bearing: None = NOT scanned (hold the
+    checkpoint), [] = scanned and empty."""
+    from modules.x402 import onchain_probe
+
+    def boom(m, p):
+        raise RuntimeError("rpc down")
+
+    assert onchain_probe.scan_treasury_transfers(
+        boom, "0x" + "cc" * 20, "0x" + "11" * 20, 1, 9, decimals=18) is None
+
+
+def test_a_scanned_empty_range_is_an_empty_list_not_none():
+    from modules.x402 import onchain_probe
+    assert onchain_probe.scan_treasury_transfers(
+        lambda m, p: [], "0x" + "cc" * 20, "0x" + "11" * 20, 1, 9,
+        decimals=18) == []

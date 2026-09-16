@@ -21,7 +21,7 @@ def _inbound(text, user="u_abc"):
     return InboundMessage(text=text, identity=Identity(user_id=user, source=src))
 
 
-def _cmd(command, text, user_id="gleb"):
+def _cmd(command, text, user_id="alice"):
     decision = RouteDecision(kind=RouteKind.COMMAND, session_key="telegram:1",
                              session_id=None, command=command)
     return InboundResult(inbound=_inbound(text, user=user_id), decision=decision)

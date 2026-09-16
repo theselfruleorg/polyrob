@@ -59,6 +59,10 @@ def _run(snap_dir: str, workspace: str, args: List[str], timeout: float = DEFAUL
     callers uniformly treat ``returncode != 0`` (which ``None`` satisfies) as
     "this step failed."
     """
+    from core.security.host_execution import host_execution_refusal
+    refusal = host_execution_refusal()
+    if refusal:
+        return None, "", refusal
     argv = ["git", f"--git-dir={_git_dir(snap_dir)}", f"--work-tree={workspace}"] + list(args)
     try:
         proc = subprocess.run(

@@ -80,10 +80,12 @@ x402>=2.13.0
 
 # File and document processing
 python-docx>=0.8.0
-pypdf>=6.15.0  # CVE-2026-71870, CVE-2026-71852 (unbounded memory/runtime on hostile PDFs)
+pypdf>=6.16.1  # Security floor: hostile PDF resource-exhaustion fixes
 markdown>=3.5.0
 markdownify>=0.11.0
-pillow>=11.0.0
+pillow>=12.3.0
+httplib2>=0.32.0  # Bound response decompression
+pyasn1>=0.6.4  # Bound hostile ASN.1 decoding
 imageio>=2.37.0
 python-magic>=0.4.27  # MIME type detection for file upload security
 qrcode>=7.4  # QR codes for the invoice/presence card compositor (modules/pfp/cards.py)

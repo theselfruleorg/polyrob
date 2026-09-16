@@ -9,7 +9,7 @@ resolution falls through to ``cwd/.polyrob``. So ``polyrob autonomy pause`` run
 from ``~`` on the production box wrote ``AUTONOMY_PAUSE.json`` into
 ``/root/.polyrob/``, read it back from that same wrong place, and printed a
 confident "⏸ Paused everything" the running daemon never saw. Stray
-``goals.db``/``cron.db``/``memory.db`` under ``/root/rob_dev/.polyrob/`` on that
+``goals.db``/``cron.db``/``memory.db`` under a legacy checkout-local ``.polyrob/`` on that
 box are the same accident with a different file name.
 
 031's contract is that every seat reports the VERIFIED state, so an owner-control
@@ -28,7 +28,7 @@ owner``) use; it answers in one of four ways:
 The deployment env file is parsed for exactly ONE key and is never echoed: it
 holds the instance's secrets.
 
-core-tier: stdlib + ``core.runtime_paths`` only.
+core-tier: stdlib + ``core.runtime_paths``/``core.instance`` only (both core).
 """
 from __future__ import annotations
 
@@ -94,12 +94,16 @@ def _local_home() -> str:
     return str(resolve_data_home())
 
 
-def _deployed_data_dir() -> Optional[str]:
-    """``POLYROB_DATA_DIR`` as the deployment's env file declares it, or None.
+def deployed_env_value(key: str) -> Optional[str]:
+    """One key's value as the deployment's env file declares it, or None.
 
     Last assignment wins (shell semantics). Tolerates ``export`` prefixes and
-    quoting. Any read/parse fault answers None — an unreadable file is "cannot
-    determine", which the caller turns into a refusal, never a guess.
+    quoting, and never partial-matches a longer key. Any read/parse fault answers
+    None — an unreadable file is "cannot determine", which the caller turns into a
+    refusal or a fallback, never a guess.
+
+    The file holds the instance's secrets: it is parsed for the requested key
+    only, and is never logged or echoed.
     """
     try:
         with open(DEPLOYED_ENV_FILE, encoding="utf-8", errors="replace") as fh:
@@ -111,15 +115,80 @@ def _deployed_data_dir() -> Optional[str]:
         s = line.strip()
         if s.startswith("export "):
             s = s[len("export "):].lstrip()
-        if not s.startswith("POLYROB_DATA_DIR"):
-            continue
-        key, _, value = s.partition("=")
-        if key.strip() != "POLYROB_DATA_DIR":
+        name, sep, value = s.partition("=")
+        if not sep or name.strip() != key:
             continue
         value = value.strip().strip('"').strip("'").strip()
         if value:
             found = value
     return found
+
+
+def _deployed_data_dir() -> Optional[str]:
+    """``POLYROB_DATA_DIR`` as the deployment's env file declares it, or None."""
+    return deployed_env_value("POLYROB_DATA_DIR")
+
+
+# --- 035 P0-3: the OTHER two axes of an owner-control verb's scope -----------
+#
+# 031 fixed the data home and left the instance id and the owner tenant reading
+# the process environment. On the production box, where systemd exports them from
+# the env file but an owner's SSH shell does not, `polyrob owner pending`
+# therefore resolved the RIGHT home under the WRONG instance/tenant and printed a
+# confident "no pending proposals" over four real ones — beneath a note assuring
+# the owner it had used the deployed home. Same class of defect, same seam, same
+# rule: adopt what the running service reads, or fall back; never a confident
+# wrong answer.
+#
+# Precedence mirrors `resolve_admin_data_home`: an explicit shell value wins
+# (including an active profile's, which pins the env), then the deployment's own
+# declaration, then today's resolution unchanged. A box with nothing deployed is
+# byte-identical and silent.
+
+
+def _shell_has(*keys: str) -> bool:
+    return any((os.environ.get(k) or "").strip() for k in keys)
+
+
+def admin_instance_id() -> str:
+    """The instance id an owner-control verb must act on."""
+    from core.instance import is_safe_tenant_id, resolve_instance_id
+    if _shell_has("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID", "POLYROB_PROFILE"):
+        return resolve_instance_id()
+    for key in ("POLYROB_INSTANCE_ID", "BOT_INSTANCE_ID"):
+        declared = (deployed_env_value(key) or "").strip()
+        # An unsafe id is REFUSED, never rewritten (the profile-name rule): it
+        # would resolve a path outside the identity tier.
+        if declared and is_safe_tenant_id(declared):
+            return declared
+    return resolve_instance_id()
+
+
+def admin_owner_principal() -> str:
+    """The owner tenant an owner-control verb must act on.
+
+    Never ``None``: the fallback is ``resolve_owner_user_id``, which always
+    resolves. A caller needs no ``or "local"`` guard.
+
+    The deployed-env-file lookup is what this function is FOR: an owner's SSH
+    shell carries none of the service's environment, so a box where systemd
+    exports ``POLYROB_OWNER_USER_ID`` must still be read under that tenant.
+
+    ⚠️ It no longer falls back to the ADOPTED INSTANCE id. That branch made
+    ``polyrob owner …`` answer ``rob`` on a box whose REPL, goals and memory all
+    answered ``local`` — an instance id names the identity-doc tier and the
+    avatar, not an owner tenant. With nothing declared anywhere the answer is
+    ``core.instance.resolve_owner_user_id``'s, the same one every other seat
+    reads (see ``docs/guide/upgrading.md``, 2026-09-15).
+    """
+    from core.instance import is_safe_tenant_id, resolve_owner_user_id
+    if _shell_has("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
+        return resolve_owner_user_id()
+    for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
+        declared = (deployed_env_value(key) or "").strip()
+        if declared and is_safe_tenant_id(declared):
+            return declared
+    return resolve_owner_user_id()
 
 
 def _deployment_evidence() -> List[str]:

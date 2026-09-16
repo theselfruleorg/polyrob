@@ -30,6 +30,12 @@ class SendMessageAction(BaseModel):
 		default=300,
 		description="How long to wait for response (if wait_for_response=True)"
 	)
+	reply_to: Optional[str] = Field(
+		default=None,
+		description=("044: in a GROUP room, the message id this reply answers "
+		             "(threads the reply to that line). Omit in a 1:1 chat — a "
+		             "live room turn already answers the line that triggered it.")
+	)
 
 
 class ContactHistoryAction(BaseModel):

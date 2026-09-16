@@ -31,6 +31,8 @@ def _seeded(monkeypatch):
     monkeypatch.delenv("AGENT_WALLET_DERIVATION", raising=False)
     monkeypatch.setenv("AGENT_WALLET_MASTER_SEED", SEED)
     monkeypatch.setenv("AGENT_WALLET_ENABLED", "true")
+    # Never let a real /etc/polyrob/*.env on the test host feed the fallback.
+    monkeypatch.setattr("cli.commands.wallet._SYSTEM_ENV_FILES", ())
     yield
     os.environ.pop("AGENT_WALLET_MASTER_SEED", None)
     os.environ.pop("AGENT_WALLET_ENABLED", None)
@@ -88,3 +90,38 @@ def test_no_agent_action_exposes_wallet_export():
     src = pathlib.Path("tools/controller/action_registration.py").read_text()
     assert "wallet_export" not in src
     assert "export_wallet" not in src
+
+
+def test_export_prints_solana_key_for_full_export(monkeypatch):
+    """The same seed derives the Solana account; a full export must include it in
+    the form Phantom imports (2026-09-14 — the owner could not move the SOL)."""
+    pytest.importorskip("solders")
+    from core.wallet.solana_signer import derive_solana_keypair
+    _force_tty(monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(wallet_cmd, ["export"], input="EXPORT\n")
+    assert result.exit_code == 0, result.output
+    kp = derive_solana_keypair(SEED, 0)
+    assert str(kp.pubkey()) in result.output
+    assert str(kp) in result.output              # base58 64-byte keypair
+    # a venue-scoped export stays EVM-only
+    result = runner.invoke(wallet_cmd, ["export", "--venue", "treasury"], input="EXPORT\n")
+    assert str(kp) not in result.output
+
+
+def test_export_reads_seed_from_system_env_files(monkeypatch, tmp_path):
+    """On a systemd box the seed sits in /etc/polyrob/wallet.env, which the CLI
+    does not load — export reads it itself (root-readable), wallet.env first."""
+    monkeypatch.delenv("AGENT_WALLET_MASTER_SEED", raising=False)
+    wallet_env = tmp_path / "wallet.env"
+    wallet_env.write_text(f"AGENT_WALLET_MASTER_SEED=\"{SEED}\"\n")
+    legacy = tmp_path / "polyrob.env"
+    legacy.write_text("AGENT_WALLET_MASTER_SEED=" + "z" * 40 + "\n")
+    monkeypatch.setattr("cli.commands.wallet._SYSTEM_ENV_FILES", (str(wallet_env), str(legacy)))
+    _force_tty(monkeypatch)
+    runner = CliRunner()
+    result = runner.invoke(wallet_cmd, ["export", "--venue", "treasury"], input="EXPORT\n")
+    assert result.exit_code == 0, result.output
+    from core.wallet import derivation
+    key = derivation.derive_key(SEED, "treasury", "legacy")
+    assert "0x" + key.hex() in result.output

@@ -57,6 +57,16 @@ def chat_id_from_session_key(session_key: str) -> str:
     return _p(session_key)
 
 
+def thread_id_from_session_key(session_key: str) -> Optional[str]:
+    """044 T10: the forum-topic thread id embedded in a room session key
+    (``...:thread:<id>``), or None for a plain (non-topic) chat."""
+    parts = (session_key or "").split(":")
+    if "thread" in parts:
+        i = parts.index("thread")
+        return parts[i + 1] if i + 1 < len(parts) else None
+    return None
+
+
 class TelegramSurface(Surface):
     def __init__(self, bot: Any) -> None:
         super().__init__()
@@ -114,12 +124,17 @@ class TelegramSurface(Surface):
     def _render_chunks(self, text: str) -> list[str]:
         return self.render_outbound(text or "")
 
-    async def send_text(self, chat_id: str, text: str) -> Optional[Any]:
+    async def send_text(self, chat_id: str, text: str, *, reply_to: Optional[str] = None,
+                        thread_id: Optional[str] = None) -> Optional[Any]:
         """The ONE outbound text seam: split, convert to Telegram HTML, send.
 
         Retries a chunk as plain text (the original markdown source) if Telegram rejects
         the markup, so a converter edge case degrades formatting instead of dropping the
-        message. Returns the last message_id. Raises only if BOTH attempts fail.
+        message. ``reply_to``/``thread_id`` thread the reply to the room line it answers
+        and to the forum topic it belongs to (044 T10); a stale ``reply_to`` (the anchor
+        message was deleted/inaccessible) self-heals — the send is retried once without
+        it rather than the reply being lost. Returns the last message_id. Raises only if
+        every attempt fails.
         """
         limit = self.capabilities.max_message_bytes
         rendered = render_for_flavor(text or "", self.capabilities.markdown_flavor, limit)
@@ -129,23 +144,50 @@ class TelegramSurface(Surface):
         if len(sources) != len(rendered):
             sources = rendered
         parse_mode = self._parse_mode()
+        extra: dict = {}
+        if thread_id:
+            try:
+                extra["message_thread_id"] = int(thread_id)
+            except (TypeError, ValueError):
+                logger.debug("TelegramSurface: bad thread_id %r ignored", thread_id)
+        if reply_to:
+            try:
+                extra["reply_to_message_id"] = int(reply_to)
+            except (TypeError, ValueError):
+                logger.debug("TelegramSurface: bad reply_to %r ignored", reply_to)
         last_id = None
         for body, source in zip(rendered, sources):
             try:
-                sent = await self._call_flood_controlled(
-                    chat_id, "send",
-                    lambda b=body: self._bot.send_message(chat_id, b, parse_mode=parse_mode))
+                sent = await self._send_chunk(chat_id, body, parse_mode, extra)
             except Exception as e:
                 # A flood error is NOT a markup error — after bounded retries it
                 # propagates; a plain-text resend would just 429 again (030 L1).
                 if not parse_mode or _retry_after_seconds(e) is not None:
                     raise
                 logger.warning("TelegramSurface: %s rejected, resending as plain text: %s", parse_mode, e)
-                sent = await self._call_flood_controlled(
-                    chat_id, "send",
-                    lambda s=source: self._bot.send_message(chat_id, s, parse_mode=None))
+                sent = await self._send_chunk(chat_id, source, None, extra)
             last_id = getattr(sent, "message_id", None)
         return last_id
+
+    async def _send_chunk(self, chat_id: str, body: str, parse_mode, extra: dict):
+        """One flood-controlled ``send_message`` call, self-healing a stale reply
+        anchor (044 T10): the message this turn answers can be deleted/expired between
+        the trigger and our reply, and Telegram rejects the WHOLE send for it — retry
+        once without ``reply_to_message_id`` rather than losing the message. Mutates
+        ``extra`` in place so later chunks in the same ``send_text`` call don't repeat
+        the failed anchor."""
+        try:
+            return await self._call_flood_controlled(
+                chat_id, "send",
+                lambda: self._bot.send_message(chat_id, body, parse_mode=parse_mode, **extra))
+        except Exception as e:
+            if "reply_to_message_id" in extra and "message to be replied not found" in str(e):
+                logger.info("TelegramSurface: stale reply anchor for %s, resending unthreaded", chat_id)
+                extra.pop("reply_to_message_id", None)
+                return await self._call_flood_controlled(
+                    chat_id, "send",
+                    lambda: self._bot.send_message(chat_id, body, parse_mode=parse_mode, **extra))
+            raise
 
     async def send(self, msg: OutboundMessage) -> SendResult:
         # If this discrete reply finalizes an in-flight streamed bubble, commit it in
@@ -154,7 +196,9 @@ class TelegramSurface(Surface):
             return SendResult(success=True)
         chat_id = chat_id_from_session_key(msg.session_key)
         try:
-            last_id = await self.send_text(chat_id, msg.text or "")
+            last_id = await self.send_text(
+                chat_id, msg.text or "", reply_to=msg.reply_to,
+                thread_id=thread_id_from_session_key(msg.session_key))
             # Media is best-effort ON TOP of the text: a media send failure (missing
             # file, bot rejection, ...) never takes the text down with it — the text
             # above has already landed. See _send_media.

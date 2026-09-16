@@ -333,11 +333,14 @@ class MemoryWriterMixin:
 		# No-op unless an external provider is registered; isolated + fail-open.
 		try:
 			from modules.memory.registry import memory_sync_turn
+			from core.surfaces.room_policy import is_public_session
 			task_str = getattr(self, 'task', '') or ''
 			promoted = []
 			if self.task_context_manager and self.session_id:
 				promoted = self.task_context_manager.drain_promoted_findings(self.session_id)
-			if promoted:
+			# 044 T4: never write a public room's content into tenant cross-session
+			# recall — a stranger's message must not become the owner's future memory.
+			if promoted and not is_public_session(getattr(self, "orchestrator", None)):
 				content = "\n".join(promoted)
 				await memory_sync_turn(task_str, content,
 				                       session_id=self.session_id, user_id=self.user_id)

@@ -12,7 +12,9 @@ import pytest
 
 from core.surfaces.dispatcher import RouteDecision, RouteKind
 from core.surfaces.envelopes import Identity, InboundMessage, SessionSource
-from surfaces.telegram.harness import _OWNER_ADMIN_COMMANDS, act_on_inbound, help_commands
+from surfaces.telegram.harness import (
+    _OWNER_ADMIN_COMMANDS, _help_for, act_on_inbound, help_commands,
+)
 from surfaces.telegram.inbound import InboundResult
 
 
@@ -34,7 +36,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user_id="gleb"):
+def _cmd(command, text, user_id="alice"):
     source = SessionSource(surface_id="telegram", chat_id="1", chat_type="dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user_id, source=source))
@@ -45,7 +47,7 @@ def _cmd(command, text, user_id="gleb"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
@@ -99,7 +101,7 @@ async def test_halt_refused_for_non_owner(env):
 # G10 — /pending shows what the CLI shows
 # ---------------------------------------------------------------------------
 
-def _seed_pending_correspondent(data_dir, tenant="gleb"):
+def _seed_pending_correspondent(data_dir, tenant="alice"):
     from core.surfaces.correspondents import CorrespondentRegistry
     reg = CorrespondentRegistry(os.path.join(str(data_dir), "correspondents.db"))
     reg.seed(surface="email", address="third@party.example", session_id="s-1",
@@ -121,7 +123,7 @@ async def test_approve_activates_a_pending_correspondent(env):
     out = await act_on_inbound(
         _Agent(str(env)), _cmd("/approve", "/approve email:third@party.example"))
     assert "Approved" in out
-    states = {r["state"] for r in reg.list(user_id="gleb")}
+    states = {r["state"] for r in reg.list(user_id="alice")}
     assert states == {"active"}
 
 
@@ -180,8 +182,7 @@ def test_command_menu_covers_every_owner_admin_verb():
     verb the owner has to already know about."""
     menu = {name for name, _ in help_commands()}
     missing = {c.lstrip("/") for c in _OWNER_ADMIN_COMMANDS} - menu
-    # /journey is a deliberate alias of /recap and is not listed twice.
-    assert missing == {"journey"}, f"verbs absent from the /help SSOT: {missing}"
+    assert missing == set(), f"verbs absent from the /help SSOT: {missing}"
 
 
 def test_every_owner_verb_is_routable():
@@ -201,14 +202,15 @@ def test_every_owner_verb_is_routable():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("verb", ["/halt", "/resume", "/cron", "/goal",
-                                  "/wallet", "/invoices", "/settle"])
+                                  "/wallet", "/invoices", "/settle",
+                                  "/groups", "/mute"])
 async def test_owner_verbs_route_as_commands_end_to_end(env, verb):
     """The regression above, through the real router rather than a hand-built
     decision."""
     from core.surfaces.dispatcher import RouteKind, route_inbound
     source = SessionSource(surface_id="telegram", chat_id="1", chat_type="dm")
     inbound = InboundMessage(text=verb,
-                             identity=Identity(user_id="gleb", source=source))
+                             identity=Identity(user_id="alice", source=source))
     decision = await route_inbound(None, inbound)
     assert decision.kind is RouteKind.COMMAND
     assert decision.command == verb
@@ -218,10 +220,35 @@ def test_every_routable_verb_is_discoverable():
     """030 WS-C6: the OTHER direction of the three-lists contract. The original
     guard only pinned handled ⊆ routable; a verb routable but absent from the
     _HELP_BODY SSOT would work yet be invisible in /help AND the setMyCommands
-    menu. Exactly two deliberate exceptions exist."""
+    menu. /journey now has its own help line (A15); /start is a deliberate
+    exception (first-contact welcome, not owner-gated)."""
     from core.surfaces.dispatcher import _COMMANDS
     menu = {f"/{name}" for name, _ in help_commands()}
     hidden = set(_COMMANDS) - menu
-    assert hidden == {"/journey", "/start"}, (
+    assert hidden == {"/start"}, (
         f"routable verbs missing from the /help SSOT (add a _HELP_BODY line, "
         f"or pin a deliberate exception here): {sorted(hidden)}")
+
+
+# ---------------------------------------------------------------------------
+# R24 — every /help-documented verb is reachable (043 A15)
+# ---------------------------------------------------------------------------
+
+def test_every_help_line_is_dispatched_or_lifecycle():
+    """A verb documented in /help but absent from both the owner-admin dispatch
+    tuple and the session-lifecycle set is a verb the owner can read about but
+    never actually run — `/journey` shipped this way once (help mentioned it
+    only as a parenthetical on /recap, with no line of its own to look up)."""
+    lifecycle = {"/task", "/cancel", "/new", "/help", "/start"}
+    known = set(_OWNER_ADMIN_COMMANDS) | lifecycle
+    for name, _ in help_commands():
+        verb = f"/{name}"
+        assert verb in known, f"/help documents {verb} but it dispatches nowhere"
+
+
+def test_help_journey_answers():
+    """`/help journey` used to fall through to the unknown-command suggestion
+    text because /journey had no line of its own in _HELP_BODY."""
+    out = _help_for("journey")
+    assert "Unknown command" not in out
+    assert "journey" in out.lower()

@@ -19,7 +19,7 @@ def _env(tmp_path, monkeypatch):
     # Pin the instance id to the DEFAULT explicitly so an operator env file
     # (load_env inside the command) can never repoint the identity tree.
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
 
 
@@ -32,7 +32,7 @@ def test_pending_empty(tmp_path, monkeypatch):
 
 def test_pending_lists_self_context(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
-    _seed_pending_self(tmp_path, "gleb")
+    _seed_pending_self(tmp_path, "alice")
     res = CliRunner().invoke(owner, ["pending"])
     assert res.exit_code == 0
     assert "self_context" in res.output
@@ -42,16 +42,16 @@ def test_pending_lists_self_context(tmp_path, monkeypatch):
 def test_promote_self_context(tmp_path, monkeypatch):
     from core.instance import load_self_doc
     _env(tmp_path, monkeypatch)
-    _seed_pending_self(tmp_path, "gleb")
-    res = CliRunner().invoke(owner, ["promote", "self_context", "gleb"])
+    _seed_pending_self(tmp_path, "alice")
+    res = CliRunner().invoke(owner, ["promote", "self_context", "alice"])
     assert res.exit_code == 0
-    assert "surface blockers" in load_self_doc(tmp_path, user_id="gleb")
+    assert "surface blockers" in load_self_doc(tmp_path, user_id="alice")
 
 
 def test_reject_self_context(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
-    _seed_pending_self(tmp_path, "gleb")
-    res = CliRunner().invoke(owner, ["reject", "self_context", "gleb"])
+    _seed_pending_self(tmp_path, "alice")
+    res = CliRunner().invoke(owner, ["reject", "self_context", "alice"])
     assert res.exit_code == 0
     # now nothing pending
     res2 = CliRunner().invoke(owner, ["pending"])
@@ -66,7 +66,7 @@ def test_promote_unknown_kind_exits_nonzero(tmp_path, monkeypatch):
 
 # --- Task 9 / G-2: `owner pending`/`promote`/`reject tool_approval` -------------------
 
-def _seed_tool_approval(tmp_path, uid="gleb", tool_name="x402_request"):
+def _seed_tool_approval(tmp_path, uid="alice", tool_name="x402_request"):
     from agents.task.goals.board import GoalBoard
     board = GoalBoard(str(tmp_path / "goals.db"))
     ask = board.create_ask(
@@ -126,9 +126,9 @@ def test_pending_labels_contract_and_pref_change_correctly(tmp_path, monkeypatch
     from core.prefs import propose_pref_change
 
     ContractWriter(tmp_path).propose(
-        "Never spend more than $5 without asking.", user_id="gleb",
+        "Never spend more than $5 without asking.", user_id="alice",
         created_by="user", pending=True)
-    ok, result = propose_pref_change("gleb", "approvals.require", None, tmp_path,
+    ok, result = propose_pref_change("alice", "approvals.require", None, tmp_path,
                                      instance_id=DEFAULT_INSTANCE_ID, op="remove_entry",
                                      entry="git_push")
     assert ok, result

@@ -1,0 +1,216 @@
+{#
+  Money › Book — the ledger beside the chain (043 A34/A35, §3.4).
+
+  Derived from docs/design/040/web/money.html (and its disagree / partial /
+  empty siblings). The five-tab subnav is server-rendered; only Book is built
+  this task, so Moves, Cash and Invoices are stub panes a later task fills, and
+  Limits is a link to Agent, where the caps live. Everything below the subnav is
+  drawn by webview/static/app/money.js from GET /api/webgate/book — the verdict
+  first, the positions the ledger claims beside the chain's reading, the chains
+  Rob checked with the cache age, and the trading run (which lives in Work).
+
+  Every word comes from webview/copy/en.py. No inline script on any 043 template
+  (tests/unit/webview/test_no_new_inline_script.py): the words ride on
+  #money-copy's data attributes and money.js reads them off `dataset`. ⚠️ The
+  names carry an UNDERSCORE, not a hyphen: `dataset` camel-cases a hyphen away,
+  and the JS keys the words by the copy name, which is snake_case.
+#}
+{% extends "shell.html" %}
+{% block body %}
+    <div class="page">
+      <div class="page-head">
+        <h1 class="page-title">{{ t('money.title') }}</h1>
+        <p class="page-sub">{{ t('money.sub') }}</p>
+      </div>
+      <nav class="subnav" aria-label="{{ t('money.title') }}">
+        <a href="#book" data-tab="book" aria-current="page">{{ t('money.tab.book') }}</a>
+        <a href="#moves" data-tab="moves">{{ t('money.tab.moves') }}</a>
+        <a href="#cash" data-tab="cash">{{ t('money.tab.cash') }}</a>
+        <a href="#invoices" data-tab="invoices">{{ t('money.tab.invoices') }}</a>
+        <a href="#limits" data-tab="limits">{{ t('money.tab.limits') }}</a>
+      </nav>
+
+      {# Book — drawn by money.js. The verdict leads. #}
+      <div data-pane="book">
+        <div id="money-book"></div>
+        <section aria-label="{{ t('money.book.holds_title') }}">
+          <div id="money-liquidity"></div>
+          <button type="button" class="btn btn-quiet" id="money-liquidity-recheck">{{ t('money.book.recheck') }}</button>
+        </section>
+        <p class="state-body" id="money-book-state" hidden></p>
+      </div>
+
+      {# Moves — in flight (bridges) + recent moves (wallet_spend) + made
+         (creations). Drawn by money.js from /api/webgate/{bridges,moves,creations}. #}
+      <div data-pane="moves" hidden>
+        <div id="money-moves"></div>
+        <p class="state-body" id="money-moves-state" hidden></p>
+      </div>
+
+      {# Cash — the two ledgers, NEVER summed. Drawn from /api/webgate/ledger. #}
+      <div data-pane="cash" hidden>
+        <div id="money-cash"></div>
+        <p class="state-body" id="money-cash-state" hidden></p>
+      </div>
+
+      {# Invoices — who owes Rob money + the A20 machine-income note. Drawn from
+         /api/webgate/invoices; settle posts to /api/webgate/invoices/{id}/settle. #}
+      <div data-pane="invoices" hidden>
+        <div id="money-invoices"></div>
+        <p class="state-body" id="money-invoices-state" hidden></p>
+      </div>
+
+      {# Limits — today's used/limit from the ledger's caps + a link to Agent. #}
+      <div data-pane="limits" hidden>
+        <div id="money-limits"></div>
+        <p class="state-body" id="money-limits-state" hidden></p>
+      </div>
+
+      <p class="sources">{{ t('money.book.sources')|safe }}</p>
+    </div>
+    {# The words money.js renders, and the states it distinguishes. #}
+    <div id="money-copy" hidden
+         data-clean="{{ t('money.book.clean') }}"
+         data-disagreement="{{ t('money.book.disagreement') }}"
+         data-unverified="{{ t('money.book.unverified') }}"
+         data-no_ledger="{{ t('money.book.no_ledger') }}"
+         data-checked="{{ t('money.book.checked') }}"
+         data-recheck="{{ t('money.book.recheck') }}"
+         data-holds_title="{{ t('money.book.holds_title') }}"
+         data-holds_count="{{ t('money.book.holds_count') }}"
+         data-col_position="{{ t('money.book.col_position') }}"
+         data-col_chain="{{ t('money.book.col_chain') }}"
+         data-col_amount="{{ t('money.book.col_amount') }}"
+         data-col_worth="{{ t('money.book.col_worth') }}"
+         data-col_since="{{ t('money.book.col_since') }}"
+         data-entry_at="{{ t('money.book.entry_at') }}"
+         data-no_positions="{{ t('money.book.no_positions') }}"
+         data-total_label="{{ t('money.book.total_label') }}"
+         data-total_excludes="{{ t('money.book.total_excludes') }}"
+         data-chains_title="{{ t('money.book.chains_title') }}"
+         data-chains_age="{{ t('money.book.chains_age') }}"
+         data-chain_read="{{ t('money.book.chain_read') }}"
+         data-chain_unread="{{ t('money.book.chain_unread') }}"
+         data-chain_unread_why="{{ t('money.book.chain_unread_why') }}"
+         data-run_title="{{ t('money.book.run_title') }}"
+         data-run_aside="{{ t('money.book.run_aside') }}"
+         data-run_body="{{ t('money.book.run_body') }}"
+         data-run_watch="{{ t('money.book.run_watch') }}"
+         data-empty_title="{{ t('money.book.empty_title') }}"
+         data-empty_body="{{ t('money.book.empty_body') }}"
+         data-empty_why="{{ t('money.book.empty_why') }}"
+         data-loading="{{ t('money.book.loading') }}"
+         data-unreadable="{{ t('money.book.unreadable') }}"
+         data-unreadable_why="{{ t('money.book.unreadable_why') }}"
+         data-when_now="{{ t('money.book.when_now') }}"
+         data-when_min="{{ t('money.book.when_min') }}"
+         data-when_hour="{{ t('money.book.when_hour') }}"
+         data-when_day="{{ t('money.book.when_day') }}"
+         data-read_only="{{ 1 if read_only else 0 }}"
+         data-mv_loading="{{ t('money.moves.loading') }}"
+         data-mv_inflight_title="{{ t('money.moves.inflight_title') }}"
+         data-mv_inflight_aside="{{ t('money.moves.inflight_aside') }}"
+         data-mv_inflight_empty="{{ t('money.moves.inflight_empty') }}"
+         data-mv_inflight_unreadable="{{ t('money.moves.inflight_unreadable') }}"
+         data-mv_inflight_unreadable_why="{{ t('money.moves.inflight_unreadable_why') }}"
+         data-mv_bridge_route="{{ t('money.moves.bridge_route') }}"
+         data-mv_bridge_line="{{ t('money.moves.bridge_line') }}"
+         data-mv_bridge_safe="{{ t('money.moves.bridge_safe') }}"
+         data-mv_onchain="{{ t('money.moves.onchain') }}"
+         data-mv_recent_title="{{ t('money.moves.recent_title') }}"
+         data-mv_recent_empty="{{ t('money.moves.recent_empty') }}"
+         data-mv_recent_unreadable="{{ t('money.moves.recent_unreadable') }}"
+         data-mv_recent_unreadable_why="{{ t('money.moves.recent_unreadable_why') }}"
+         data-mv_recent_partial="{{ t('money.moves.recent_partial') }}"
+         data-mv_recent_note="{{ t('money.moves.recent_note') }}"
+         data-mv_col_when="{{ t('money.moves.col_when') }}"
+         data-mv_col_what="{{ t('money.moves.col_what') }}"
+         data-mv_col_chain="{{ t('money.moves.col_chain') }}"
+         data-mv_col_amount="{{ t('money.moves.col_amount') }}"
+         data-mv_no_amount="{{ t('money.moves.no_amount') }}"
+         data-mv_amount_unknown="{{ t('money.moves.amount_unknown') }}"
+         data-mv_made_title="{{ t('money.moves.made_title') }}"
+         data-mv_made_aside="{{ t('money.moves.made_aside') }}"
+         data-mv_made_empty="{{ t('money.moves.made_empty') }}"
+         data-mv_made_unreadable="{{ t('money.moves.made_unreadable') }}"
+         data-mv_made_unreadable_why="{{ t('money.moves.made_unreadable_why') }}"
+         data-mv_made_partial="{{ t('money.moves.made_partial') }}"
+         data-mv_col_token="{{ t('money.moves.col_token') }}"
+         data-mv_col_address="{{ t('money.moves.col_address') }}"
+         data-mv_col_cost="{{ t('money.moves.col_cost') }}"
+         data-cash_loading="{{ t('money.cash.loading') }}"
+         data-wallet_title="{{ t('money.wallet.title') }}"
+         data-wallet_ready="{{ t('money.wallet.ready') }}"
+         data-wallet_public_only="{{ t('money.wallet.public_only') }}"
+         data-wallet_disabled="{{ t('money.wallet.disabled') }}"
+         data-wallet_unavailable="{{ t('money.wallet.unavailable') }}"
+         data-wallet_unavailable_why="{{ t('money.wallet.unavailable_why') }}"
+         data-wallet_network="{{ t('money.wallet.network') }}"
+         data-wallet_signing_ready="{{ t('money.wallet.signing_ready') }}"
+         data-wallet_signing_unavailable="{{ t('money.wallet.signing_unavailable') }}"
+         data-wallet_accounts="{{ t('money.wallet.accounts') }}"
+         data-wallet_balances="{{ t('money.wallet.balances') }}"
+         data-wallet_balances_cached="{{ t('money.wallet.balances_cached') }}"
+         data-wallet_balances_stale="{{ t('money.wallet.balances_stale') }}"
+         data-wallet_balances_unread="{{ t('money.wallet.balances_unread') }}"
+         data-wallet_col_role="{{ t('money.wallet.col_role') }}"
+         data-wallet_col_network="{{ t('money.wallet.col_network') }}"
+         data-wallet_col_address="{{ t('money.wallet.col_address') }}"
+         data-wallet_col_use="{{ t('money.wallet.col_use') }}"
+         data-wallet_col_chain="{{ t('money.wallet.col_chain') }}"
+         data-wallet_col_native="{{ t('money.wallet.col_native') }}"
+         data-wallet_col_usdc="{{ t('money.wallet.col_usdc') }}"
+         data-wallet_receive="{{ t('money.wallet.receive') }}"
+         data-wallet_do_not_fund="{{ t('money.wallet.do_not_fund') }}"
+         data-wallet_balance_unknown="{{ t('money.wallet.balance_unknown') }}"
+         data-wallet_unaccounted="{{ t('money.wallet.unaccounted') }}"
+         data-wallet_unaccounted_body="{{ t('money.wallet.unaccounted_body') }}"
+         data-cash_income_what="{{ t('money.cash.income_what') }}"
+         data-cash_spent_what="{{ t('money.cash.spent_what') }}"
+         data-cash_whose="{{ t('money.cash.whose') }}"
+         data-cash_paid_invoices="{{ t('money.cash.paid_invoices') }}"
+         data-cash_waiting="{{ t('money.cash.waiting') }}"
+         data-cash_balance_now="{{ t('money.cash.balance_now') }}"
+         data-cash_net="{{ t('money.cash.net') }}"
+         data-cash_no_sum="{{ t('money.cash.no_sum') }}"
+         data-cash_runtime_title="{{ t('money.cash.runtime_title') }}"
+         data-cash_runtime_aside="{{ t('money.cash.runtime_aside') }}"
+         data-cash_runtime_window="{{ t('money.cash.runtime_window') }}"
+         data-cash_runtime_total="{{ t('money.cash.runtime_total') }}"
+         data-cash_runtime_calls="{{ t('money.cash.runtime_calls') }}"
+         data-cash_provider_left="{{ t('money.cash.provider_left') }}"
+         data-cash_provider_why="{{ t('money.cash.provider_why') }}"
+         data-cash_unreadable="{{ t('money.cash.unreadable') }}"
+         data-cash_unreadable_why="{{ t('money.cash.unreadable_why') }}"
+         data-cash_dash_why="{{ t('money.cash.dash_why') }}"
+         data-inv_loading="{{ t('money.invoices.loading') }}"
+         data-inv_title="{{ t('money.invoices.title') }}"
+         data-inv_aside="{{ t('money.invoices.aside') }}"
+         data-inv_empty="{{ t('money.invoices.empty') }}"
+         data-inv_unreadable="{{ t('money.invoices.unreadable') }}"
+         data-inv_unreadable_why="{{ t('money.invoices.unreadable_why') }}"
+         data-inv_col_who="{{ t('money.invoices.col_who') }}"
+         data-inv_col_for="{{ t('money.invoices.col_for') }}"
+         data-inv_col_amount="{{ t('money.invoices.col_amount') }}"
+         data-inv_col_state="{{ t('money.invoices.col_state') }}"
+         data-inv_state_pending="{{ t('money.invoices.state_pending') }}"
+         data-inv_state_completed="{{ t('money.invoices.state_completed') }}"
+         data-inv_state_expired="{{ t('money.invoices.state_expired') }}"
+         data-inv_late="{{ t('money.invoices.late') }}"
+         data-inv_settle="{{ t('money.invoices.settle') }}"
+         data-inv_settle_done="{{ t('money.invoices.settle_done') }}"
+         data-inv_settle_failed="{{ t('money.invoices.settle_failed') }}"
+         data-inv_note="{{ t('money.invoices.note') }}"
+         data-inv_machine_title="{{ t('money.invoices.machine_title') }}"
+         data-inv_machine_body="{{ t('money.invoices.machine_body') }}"
+         data-lim_loading="{{ t('money.limits.loading') }}"
+         data-lim_title="{{ t('money.limits.title') }}"
+         data-lim_used="{{ t('money.limits.used') }}"
+         data-lim_left="{{ t('money.limits.left') }}"
+         data-lim_no_cap="{{ t('money.limits.no_cap') }}"
+         data-lim_unknown="{{ t('money.limits.unknown') }}"
+         data-lim_unknown_why="{{ t('money.limits.unknown_why') }}"
+         data-lim_body="{{ t('money.limits.body') }}"
+         data-lim_link="{{ t('money.limits.link') }}"></div>
+    <script src="/static/app/money.js" type="module"></script>
+{% endblock %}

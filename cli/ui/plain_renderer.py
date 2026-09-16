@@ -75,6 +75,9 @@ class PlainRenderer(Renderer):
         # stderr default was a footgun (a forgotten stream split output across fds
         # from the dialog on stdout). D1.
         self._stream: IO[str] = stream if stream is not None else sys.stdout
+        # Follow patch_stdout when this is the process stdout. Captured custom
+        # streams (tests/files) remain explicit. NO_COLOR still uses a live prompt.
+        self._follow_stdout = stream is None or stream is sys.stdout
         self._stream_buffer: list[str] = []
         self._one_shot = one_shot
         # NOTE: _message_bubble_rendered / _last_bubble_text live in Renderer
@@ -86,7 +89,8 @@ class PlainRenderer(Renderer):
 
     def _write(self, line: str) -> None:
         """Write *line* followed by a newline to the output stream."""
-        print(line, file=self._stream)
+        from cli.ui.literal import literal_text
+        print(literal_text(line), file=sys.stdout if self._follow_stdout else self._stream, flush=True)
 
     def _emit_line(self, text: str, *, dim: bool = False) -> None:
         """D2 seam: write one registered-event line (plain, no styling)."""
@@ -120,6 +124,10 @@ class PlainRenderer(Renderer):
 
     def _handle_step(self, event: Step) -> None:
         """Render a step: message text is dialog; scaffolding is trace."""
+        if self._state.is_sub_agent(self._event_agent_identity(event)):
+            if self.verbose:
+                self._write(f"[subagent {self._event_agent_identity(event)}] step {event.step}")
+            return
         if self.verbose:
             self._render_step_trace(event)
         # The `→ name(args)` tool-call line is emitted from the tool_execution handler
@@ -341,6 +349,7 @@ class PlainRenderer(Renderer):
             tools=self.turn_tool_calls(),
             tokens=self.turn_tokens(),
             cost=self.turn_cost(),
+            cost_incomplete=self.turn_cost_incomplete(),
             elapsed_seconds=self.turn_elapsed(),
             failed=self.turn_failed(),
         )
@@ -355,7 +364,10 @@ class PlainRenderer(Renderer):
         elapsed = self._state.elapsed()
         tok_str = self._fmt_tokens()
         cost = self._state.cost_estimate_total
-        cost_str = f" cost=${cost:.6f}" if cost else ""
+        from cli.ui.statusbar import cost_text
+        cost_str = f" cost={cost_text(self._state)}" if self._state.unpriced_calls else (
+            f" cost=${cost:.6f}" if cost else ""
+        )
         ctx = self._state.ctx_percent
         ctx_str = f" ctx={ctx:.0f}%" if ctx else ""
         self._write(

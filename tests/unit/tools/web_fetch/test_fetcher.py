@@ -115,3 +115,9 @@ async def test_redirect_cap():
 	]
 	with pytest.raises(WebFetchError):
 		await safe_fetch("http://example.com/", max_redirects=2, validator=_FakeValidator(), session_factory=_factory(script))
+
+
+def test_accept_header_admits_json():
+	"""A JSON endpoint must not be content-negotiated away to HTML (D1)."""
+	from tools.web_fetch.fetcher import _DEFAULT_HEADERS
+	assert "application/json" in _DEFAULT_HEADERS["Accept"]

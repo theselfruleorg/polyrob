@@ -49,6 +49,18 @@ class InvoiceParams(BaseModel):
                           "(e.g. 'email'/'telegram'); settlement is delivered to you as DATA, not a command")
     payer_address: Optional[str] = Field(
         None, description="The correspondent payer's address/handle on that surface (pairs with payer_surface)")
+    # 046: the asset registry exists; before phase 2 the agent could not reach
+    # it, so every invoice it minted was the default chain's canonical USDC no
+    # matter what the payer could actually pay in.
+    asset_id: Optional[str] = Field(
+        None, description="Which token this invoice is payable in (see `polyrob "
+                          "wallet asset list`). Unset = the chain's canonical "
+                          "USDC. An unknown id is REFUSED with the known ids, "
+                          "never swapped for another asset.")
+    chain: Optional[str] = Field(
+        None, description="Which chain to be paid on (e.g. base, solana). Unset "
+                          "= the instance default. Must match the asset's own "
+                          "chain — paying on the wrong one strands the funds.")
 
 
 class InvoiceListParams(BaseModel):
@@ -122,6 +134,15 @@ class X402InvoiceTool(BaseTool):
         super().__init__(name=name,
                          config=config if config is not None else types.SimpleNamespace(),
                          container=container)
+        # 046 §4.4: if this tool can MINT an invoice it must be able to PRICE
+        # one. `core/` may not import `tools/`, so the quote reaches the mint
+        # path as a container service; registering it here (idempotent,
+        # fail-open) is the tools-tier half of that seam. Without it every
+        # non-stable payable asset refuses — an operator could pin a token with
+        # `polyrob wallet asset add` and never mint an invoice in it.
+        if container is not None:
+            from tools.defi.payment_quote import register_payment_quoter
+            register_payment_quoter(container)
 
     def _ar(self, *, content: str = None, error: str = None, metadata: Optional[Dict[str, Any]] = None):
         from tools.controller.types import ActionResult
@@ -149,6 +170,7 @@ class X402InvoiceTool(BaseTool):
                 payer_contact=params.payer_contact or params.payer_hint,
                 expiry_hours=params.expiry_hours,
                 correspondent_ref=correspondent_ref,
+                asset_id=params.asset_id, chain=params.chain,
             )
         except ValueError as e:
             return self._ar(error=f"x402_request refused: {e}")
@@ -165,6 +187,11 @@ class X402InvoiceTool(BaseTool):
             f"Payment request created.\n"
             f"  request_id: {inv['request_id']}\n"
             f"  amount: ${amount_text} {inv['asset'].upper()} on {inv['chain']}\n"
+            # ⚠️ The EXACT integer the settlement scan matches on. For a
+            # non-6-decimal asset the dollar figure alone does not determine it,
+            # and a same-amount collision is separated by raw units.
+            + (f"  exact amount to send: {inv['amount_raw']} raw units\n"
+               if inv.get("amount_raw") else "") +
             f"  pay to: {inv['recipient']}\n"
             f"  purpose: {inv['purpose']}\n"
             f"  expires: epoch {inv['expires_at_epoch']}\n"

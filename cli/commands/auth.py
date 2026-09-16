@@ -168,7 +168,7 @@ def _oauth_for(provider):
     if spec is None:
         raise click.ClickException(
             f"unknown provider '{provider}' — declare it in ~/.polyrob/providers.yaml "
-            "(see `polyrob doctor` for the providers-file load report)"
+            "(see `polyrob doctor --full` for the providers-file load report)"
         )
     return getattr(spec, "oauth", None)
 
@@ -345,7 +345,7 @@ def add_cmd(provider, validate_opt):
     if spec is None:
         raise click.ClickException(
             f"unknown provider '{provider}' — declare it in ~/.polyrob/providers.yaml "
-            "(see `polyrob doctor` for the providers-file load report)"
+            "(see `polyrob doctor --full` for the providers-file load report)"
         )
     if getattr(spec, "oauth", None) is None:
         if getattr(spec, "env_key", None):

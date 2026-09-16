@@ -7,7 +7,6 @@ Sweeps deposited funds from user addresses to the main treasury
 import asyncio
 import logging
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
 
 from modules.payments.networks import chain_configs, TOKEN_ADDRESSES, ERC20_TRANSFER_ABI
 
@@ -147,13 +146,23 @@ class TreasurySweeper:
                 self.logger.warning(f"Chain {chain_name} not configured")
                 return
 
-            w3 = Web3(Web3.HTTPProvider(chain_config['rpc_url']))
+            from core.wallet import submission_journal
+            if submission_journal.unresolved():
+                raise RuntimeError('Unaccounted submission; reconcile before sweeping')
+
+            w3 = Web3(Web3.HTTPProvider(
+                chain_config['rpc_url'], request_kwargs={'timeout': 15}))
+            if w3.eth.chain_id != chain_config['chain_id']:
+                raise ValueError('Treasury RPC chain does not match configured chain')
             user_address = deposit['user_address']
             token_symbol = deposit['token_symbol']
 
             # Get private key for user's deposit address
             private_key = self.wallet_gen.get_private_key_for_user_id(deposit['user_id'])
             account = w3.eth.account.from_key(private_key)
+            if (account.address.lower() != user_address.lower()
+                    or user_address.lower() != deposit['deposit_address'].lower()):
+                raise ValueError('Deposit address does not match derived signing account')
 
             # Check if ETH or ERC20 token
             if token_symbol == 'ETH':
@@ -167,12 +176,16 @@ class TreasurySweeper:
 
             if tx_hash:
                 # Record the sweep
-                await self.db.execute("""
+                cursor = await self.db.execute("""
                     UPDATE crypto_payments
                     SET swept_at = datetime('now'),
                         sweep_tx_hash = ?
                     WHERE id = ?
                 """, (tx_hash, deposit['id']))
+
+                if cursor.rowcount != 1:
+                    raise RuntimeError('Sweep bookkeeping did not update exactly one deposit')
+                submission_journal.mark_booked(tx_hash)
 
                 self.logger.info(
                     f"✅ Swept deposit {deposit['id']}: "
@@ -210,7 +223,7 @@ class TreasurySweeper:
                 return None
 
             # Estimate gas
-            gas_price = w3.eth.gas_price
+            gas_price = int(w3.eth.gas_price * self.gas_multiplier)
             gas_limit = 21000  # Standard ETH transfer
 
             # Calculate max amount to send (balance minus gas)
@@ -222,21 +235,18 @@ class TreasurySweeper:
                 return None
 
             # Build transaction
-            nonce = w3.eth.get_transaction_count(from_address)
+            nonce = w3.eth.get_transaction_count(from_address, 'pending')
             tx = {
                 'nonce': nonce,
                 'to': self.treasury_address,
                 'value': amount_to_send,
                 'gas': gas_limit,
-                'gasPrice': int(gas_price * self.gas_multiplier),
-                'chainId': w3.eth.chain_id
+                'gasPrice': gas_price,
+                'chainId': self.chains[deposit['chain']]['chain_id']
             }
 
             # Sign and send
-            signed = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-
-            return w3.to_hex(tx_hash)
+            return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
             self.logger.error(f"Error sweeping ETH: {e}")
@@ -282,7 +292,7 @@ class TreasurySweeper:
                 return None
 
             # Build transfer transaction
-            nonce = w3.eth.get_transaction_count(from_address)
+            nonce = w3.eth.get_transaction_count(from_address, 'pending')
             gas_price = w3.eth.gas_price
 
             tx = contract.functions.transfer(
@@ -293,7 +303,7 @@ class TreasurySweeper:
                 'nonce': nonce,
                 'gas': 100000,  # Estimate for ERC20 transfer
                 'gasPrice': int(gas_price * self.gas_multiplier),
-                'chainId': w3.eth.chain_id
+                'chainId': self.chains[chain_name]['chain_id']
             })
 
             # Check ETH balance for gas
@@ -308,14 +318,40 @@ class TreasurySweeper:
                 return None
 
             # Sign and send
-            signed = account.sign_transaction(tx)
-            tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
-
-            return w3.to_hex(tx_hash)
+            return await asyncio.to_thread(self._submit_sweep, w3, account, tx, deposit)
 
         except Exception as e:
             self.logger.error(f"Error sweeping {token_symbol}: {e}")
             return None
+
+    def _submit_sweep(self, w3, account, tx, deposit):
+        """Persist the locally derived hash before broadcast; never retry ambiguity."""
+        from eth_utils import keccak
+        from core.wallet import submission_journal
+
+        expected_chain = self.chains[deposit['chain']]['chain_id']
+        if tx['chainId'] != expected_chain or w3.eth.chain_id != expected_chain:
+            raise ValueError('Treasury RPC chain does not match configured chain')
+        if (account.address.lower() != deposit['user_address'].lower()
+                or account.address.lower() != deposit['deposit_address'].lower()):
+            raise ValueError('Deposit address does not match derived signing account')
+        reference = submission_journal.reserve_signing(
+            'treasury:' + deposit['chain'], account.address, tx['nonce'])
+        signed = account.sign_transaction(tx)
+        raw = getattr(signed, 'raw_transaction', None)
+        if raw is None:  # Older eth-account spelling.
+            raw = signed.rawTransaction
+        tx_hash = '0x' + keccak(bytes(raw)).hex()
+        submission_journal.bind_signed_hash(reference, tx_hash)
+        returned = w3.to_hex(w3.eth.send_raw_transaction(raw))
+        if returned.lower() != tx_hash:
+            raise RuntimeError('Sweep response hash mismatch; reconcile prepared submission')
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60, poll_latency=1)
+        if (receipt.get('status') != 1
+                or w3.to_hex(receipt.get('transactionHash')).lower() != tx_hash):
+            raise RuntimeError('Sweep not confirmed successful; reconcile prepared submission')
+        # Only the caller may release the interlock, after recording the sweep.
+        return tx_hash
 
 
 # Standalone runner for testing

@@ -109,7 +109,7 @@ def test_generate_stock_uses_the_committed_identity(monkeypatch):
     res = CliRunner().invoke(pfp, ["generate", "--stock"])
     assert res.exit_code == 0, res.output
     assert seen["config"]["variant"] == ""               # the stock face, not a roll
-    assert seen["config"]["seed"] == "Rob Ottmachin"
+    assert seen["config"]["seed"] == "POLYROB"
 
 
 def test_generate_variant_pins_the_roll(monkeypatch):

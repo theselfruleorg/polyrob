@@ -121,3 +121,78 @@ async def test_drain_user_messages_does_not_stamp_ordinary_comment(tmp_path, mon
     await h._drain_user_messages()
 
     assert store.get("s1", "deleg_0001")["delivered_at"] is None
+
+
+class _WorkspaceContextNoChanges:
+    def get_workspace_changes(self, **kw):
+        return types.SimpleNamespace(has_changes=lambda: False)
+
+
+@pytest.mark.asyncio
+async def test_drain_sets_turn_reply_to_from_last_message():
+    """044 T10 fix round 1 (finding #1, controller ruling): the room reply-anchor
+    is recomputed from the LAST drained message's metadata on every non-empty
+    drain — never a one-time direct poke that can go stale. Two drained
+    batches with different anchors produce two different values."""
+    h = _Host()
+    h.session_id = "s1"
+    h.user_id = "u1"
+    h.orchestrator = types.SimpleNamespace()
+    h.workspace_context = _WorkspaceContextNoChanges()
+
+    class _HITL:
+        def __init__(self, batch):
+            self._batch = batch
+
+        async def drain_user_messages(self):
+            return self._batch
+
+    h.hitl_manager = _HITL([
+        {"text": "hi", "kind": "comment", "metadata": {"reply_to": "111"}},
+    ])
+    await h._drain_user_messages()
+    assert h.orchestrator._turn_reply_to == "111"
+
+    h.hitl_manager = _HITL([
+        {"text": "hi again", "kind": "comment", "metadata": {"reply_to": "222"}},
+    ])
+    await h._drain_user_messages()
+    assert h.orchestrator._turn_reply_to == "222"
+
+
+@pytest.mark.asyncio
+async def test_drain_clears_turn_reply_to_when_batch_has_none():
+    """A drained batch with no reply_to (a plain STEER message, a self-wake, or
+    an async-delegation reentry) clears any anchor left over from an earlier
+    room trigger — otherwise an autonomous continuation would reuse a stale
+    anchor (the second half of finding #1)."""
+    h = _Host()
+    h.session_id = "s1"
+    h.user_id = "u1"
+    h.orchestrator = types.SimpleNamespace(_turn_reply_to="stale")
+    h.workspace_context = _WorkspaceContextNoChanges()
+
+    class _HITL:
+        async def drain_user_messages(self):
+            return [{"text": "no anchor here", "kind": "comment", "metadata": {}}]
+
+    h.hitl_manager = _HITL()
+    await h._drain_user_messages()
+    assert h.orchestrator._turn_reply_to is None
+
+
+@pytest.mark.asyncio
+async def test_drain_empty_batch_leaves_turn_reply_to_unchanged():
+    """Mirrors _update_forged_turn_marker's own semantics: a mid-turn step with
+    no new queued messages must not touch an anchor set by an earlier drain."""
+    h = _Host()
+    h.orchestrator = types.SimpleNamespace(_turn_reply_to="111")
+
+    class _HITL:
+        async def drain_user_messages(self):
+            return []
+
+    h.hitl_manager = _HITL()
+    messages = await h._drain_user_messages()
+    assert messages == []
+    assert h.orchestrator._turn_reply_to == "111"

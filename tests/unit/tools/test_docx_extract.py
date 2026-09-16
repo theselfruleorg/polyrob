@@ -43,6 +43,20 @@ class FakeRegistry:
         })
         self.hashes[source_path] = source_hash
 
+    async def kb_replace_source(self, *, chunks, **kwargs):
+        previous_chunks = list(self.ingested_chunks)
+        previous_hashes = dict(self.hashes)
+        source = kwargs["source_path"]
+        self.ingested_chunks = [row for row in self.ingested_chunks
+                                if row["source_path"] != source]
+        for idx, text in enumerate(chunks):
+            ok = await self.kb_ingest_chunk(chunk_idx=idx, content=text, **kwargs)
+            if ok is False:
+                self.ingested_chunks = previous_chunks
+                self.hashes = previous_hashes
+                return False
+        return True
+
     async def kb_remove(self, *, user_id, collection, source=None):
         if source and source in self.hashes:
             del self.hashes[source]
@@ -75,7 +89,7 @@ def _run_kb_ingest(path_str: str, tmp_path: Path, fake: FakeRegistry, **kwargs):
         return await ki_mod.kb_ingest(path_str, user_id="u1", session_id="s1", **kwargs)
 
     with patch.object(ki_mod, "_resolve_confinement_root", return_value=tmp_path), \
-         patch("modules.memory.registry.kb_ingest_chunk", new=fake.kb_ingest_chunk), \
+         patch("modules.memory.registry.kb_replace_source", new=fake.kb_replace_source), \
          patch("modules.memory.registry.kb_remove", new=fake.kb_remove), \
          patch("modules.memory.registry.kb_source_hash", new=fake.kb_source_hash):
         return _run(_go())
@@ -148,15 +162,8 @@ class TestExtractDocxAbsent:
         docx_path = tmp_path / "any.docx"
         _make_docx(docx_path, ["content"])
 
-        # Simulate python-docx not installed by making the import raise
-        real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
-
-        def _patched_import(name, *args, **kwargs):
-            if name == "docx":
-                raise ImportError("No module named 'docx'")
-            return real_import(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=_patched_import):
+        # Missing dependencies in the worker surface as a refused parse.
+        with patch("tools.document_parser.parse_document", side_effect=ImportError("docx unavailable")):
             result = _extract_docx(docx_path)
 
         assert result is None
@@ -168,15 +175,7 @@ class TestExtractDocxAbsent:
         docx_path = tmp_path / "any.docx"
         _make_docx(docx_path, ["content"])
 
-        real_import = __builtins__.__import__ if hasattr(__builtins__, "__import__") else __import__
-
-        def _patched_import(name, *args, **kwargs):
-            if name == "docx":
-                raise ImportError("No module named 'docx'")
-            return real_import(name, *args, **kwargs)
-
-        with patch("builtins.__import__", side_effect=_patched_import):
-            # Must not raise
+        with patch("tools.document_parser.parse_document", side_effect=ImportError("docx unavailable")):
             result = _extract_docx(docx_path)
 
         assert result is None
@@ -235,7 +234,7 @@ class TestExtractTextDocxRouting:
         docx_path = tmp_path / "nolib.docx"
         _make_docx(docx_path, ["content"])
 
-        with patch("tools.knowledge_ingest._extract_docx", return_value=None):
+        with patch("tools.document_parser.parse_document_async", side_effect=ImportError("docx unavailable")):
             text, reason = _run(_extract_text(docx_path))
 
         assert text is None
@@ -302,7 +301,7 @@ class TestKbIngestDocxAbsent:
         fake = FakeRegistry()
 
         # Simulate absent library by patching _extract_docx to return None
-        with patch("tools.knowledge_ingest._extract_docx", return_value=None):
+        with patch("tools.document_parser.parse_document_async", side_effect=ImportError("docx unavailable")):
             result = _run_kb_ingest(str(tmp_path), tmp_path, fake)
 
         assert result["ingested"] == 0
@@ -316,7 +315,7 @@ class TestKbIngestDocxAbsent:
 
         fake = FakeRegistry()
 
-        with patch("tools.knowledge_ingest._extract_docx", return_value=None):
+        with patch("tools.document_parser.parse_document_async", side_effect=ImportError("docx unavailable")):
             result = _run_kb_ingest(str(docx_path), tmp_path, fake)
 
         assert "error" not in result

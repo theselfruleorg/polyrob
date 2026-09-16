@@ -113,8 +113,36 @@ class SecretScrubbingFilter(logging.Filter):
         re.compile(r'claude-[a-zA-Z0-9_-]{20,}'),  # Anthropic keys
         re.compile(r'pc-[a-zA-Z0-9]{32}'),  # Pinecone keys
 
-        # Generic base64-looking strings that might be keys
-        re.compile(r'([a-zA-Z0-9+/]{32,}={0,2})'),
+        # Generic base64-looking strings that might be keys. A12 fix round 3
+        # (2026-09-14, review finding): the character class KEEPS '/' — a
+        # real base64 secret can contain '/' internally (e.g. roughly half
+        # of random 40-char tokens do), and no other pattern in this battery
+        # backstops a bare token, so dropping '/' from the class (the
+        # round-2 attempt) silently stopped redacting real secrets. Only
+        # lookarounds were added: the lookbehind refuses a match starting
+        # right after '/' or a word character (a path's every INTERNAL
+        # segment boundary is one of those two, so a match can never start
+        # mid-path), and the lookahead refuses a match ending right before a
+        # word character. A token bounded by whitespace/punctuation on both
+        # sides — '/' included in its body — still matches in full.
+        #
+        # A12 fix round 4 (2026-09-14, review finding): round 3's lookbehind
+        # alone still let a match START at a path's own leading '/' — that
+        # position is preceded by a space (or is the very start of the
+        # message), neither of which the lookbehind blocks. A homogeneous
+        # absolute path (no digit/underscore/hyphen/period near its start)
+        # was still eaten whole from position 0. Added `(?!/)` right after
+        # the lookbehind: a match may not itself START with '/'. Since every
+        # ABSOLUTE path starts with '/', this closes the gap; a match that's
+        # merely blocked from starting AT the '/' can't restart one
+        # character later either, because that position is now preceded by
+        # '/' — caught by the existing lookbehind. Accepted blind spot: a
+        # secret that itself happens to start with '/' (~1/64 chance for a
+        # random base64 character) is not redacted by this pattern — no
+        # simple lookaround can distinguish "a path" from "a secret that
+        # starts with the path-separator byte" from the leading character
+        # alone.
+        re.compile(r'(?<![/\w])(?!/)([a-zA-Z0-9+/]{32,}={0,2})(?!\w)'),
     ]
 
     # Back-compat / introspection: the full combined pattern list (SSOT ∪ legacy).

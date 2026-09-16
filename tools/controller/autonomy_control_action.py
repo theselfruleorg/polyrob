@@ -30,7 +30,12 @@ from core.runtime_paths import data_dir_or_home
 
 logger = logging.getLogger(__name__)
 
-_SCOPE = Literal["all", "trading", "streams", "planner", "cron", "social", "oversight", "pings"]
+#: ⚠️ These ARE ``core.autonomy_control.SCOPES``, and
+#: ``tests/unit/tools/controller/test_autonomy_action_scopes.py`` pins the two
+#: together: a scope the record accepts but this Literal rejects is a pause the
+#: owner can write from every seat EXCEPT by asking the agent.
+_SCOPE = Literal["all", "trading", "streams", "planner", "cron", "social",
+                 "oversight", "pings", "apps"]
 
 
 class AutonomyControlAction(BaseModel):
@@ -45,19 +50,20 @@ def register_autonomy_control_action(controller) -> None:
 	"""Register `autonomy_control` on *controller*'s registry (unconditional)."""
 
 	@controller.registry.action(
-		"Pause or resume your own autonomous work (goal dispatch, planner, stream "
-		"seeding, cron, self-wake, social posting, the dev/ops loops) — the owner's "
-		"stop switch, durable across restarts. Call this FIRST when the owner asks you "
-		"to stop, pause, halt or resume, then quote the result verbatim. scopes narrows "
-		"it (default all); duration_minutes makes it temporary; cancel_goals=true also "
-		"cancels the ready goal rows the pause held. Cancelling goals alone is NOT a stop.",
+		"Stop your own autonomous work (goal dispatch, planner, stream seeding, cron, "
+		"self-wake, social posts, the dev/ops loops) — durable across restarts. Call "
+		"this FIRST when the owner asks you to stop, pause or halt anything, then quote "
+		"the result verbatim. scopes narrows it (default all); duration_minutes makes it "
+		"temporary; cancel_goals=true also cancels the ready goal rows the pause held. "
+		"Cancelling goals alone is NOT a stop. You cannot lift a pause — only the owner "
+		"can, with /resume; if they ask you to start again, tell them that.",
 		param_model=AutonomyControlAction,
 	)
 	async def autonomy_control(params: AutonomyControlAction, execution_context=None) -> ActionResult:
 		from core.config_policy import local_mode_enabled
 		from core.instance import is_owner_local_safe, resolve_owner_principal
-		from core.surfaces.owner_admin import (pause_autonomy, pause_state, render_pause_result,
-		                                       render_resume_result, resume_autonomy_scopes)
+		from core.surfaces.owner_admin import (pause_autonomy, pause_state,
+		                                       render_pause_result)
 		from tools.controller.turn_origin import _is_forged_or_autonomous_turn
 
 		user_id = getattr(execution_context, "user_id", None) or getattr(controller, "user_id", None)
@@ -84,22 +90,31 @@ def register_autonomy_control_action(controller) -> None:
 			from core.status_render import pause_headline_from
 			return ActionResult(
 				extracted_content=pause_headline_from(
-					pause_state(data_dir).to_dict(), resume_hint="autonomy_control(resume)",
+					pause_state(data_dir).to_dict(), resume_hint="/resume (owner only)",
 					pause_hint="autonomy_control(pause)"),
 				include_in_memory=True)
 
 		if params.action == "resume":
-			res = resume_autonomy_scopes(
-				data_dir, scopes=None if "all" in params.scopes else tuple(params.scopes),
-				via="agent")
+			# 034 §11.2: an owner SEAT lifts a pause, never the agent's reading of a
+			# turn. On 2026-09-09 the owner's `/halt` was undone by this branch on
+			# the words "a b and c approve" — an approval of three BRIDGE paths,
+			# read as consent to resume everything — and a goal he had cancelled the
+			# day before spent money 28 minutes later. The gate was on WHO and never
+			# on WHAT. `pause` and `status` stay: stopping itself and reporting the
+			# state are things the agent should be able to do.
+			state = pause_state(data_dir)
+			scope_txt = ", ".join(state.scopes) if state.paused else "nothing"
 			return ActionResult(
-				extracted_content=render_resume_result(res, halt_hint="autonomy_control(pause)"),
+				extracted_content=(
+					f"Refused: I cannot resume autonomy — only you can. Currently paused: "
+					f"{scope_txt}.\nSend `/resume` (or `/resume <scope>`) when you want it "
+					f"back. I can still pause myself and report the state."),
 				include_in_memory=True)
 
 		res = pause_autonomy(data_dir, scopes=tuple(params.scopes),
 		                     duration_minutes=params.duration_minutes,
 		                     reason=(params.reason or "").strip(), via="agent")
-		text = render_pause_result(res, resume_hint="autonomy_control(resume)",
+		text = render_pause_result(res, resume_hint="/resume (owner only)",
 		                           status_hint="autonomy_control(status)", chat=False)
 		if params.cancel_goals and res.effective:
 			try:

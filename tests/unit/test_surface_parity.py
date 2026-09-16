@@ -21,7 +21,9 @@ import pytest
 #                owner-gated in surfaces.telegram.harness._OWNER_ADMIN_COMMANDS
 CAPABILITY_MATRIX = {
     "prefs-view":     ("config",    "config",   "/api/webgate/preferences", "/prefs"),
-    "prefs-page":     (None,        None,       "/preferences",             None),
+    # 043 §9 phase 4: the dedicated /preferences PAGE is deleted; its panel is now
+    # the Agent destination's Settings tab (page /agent).
+    "prefs-page":     (None,        None,       "/agent",                   None),
     "pending-review": ("owner",     "pending",  "/api/webgate/pending",     "/pending"),
     "pending-decide": ("owner",     "pending",  "/api/webgate/pending/{kind}/{item_id}/promote",
                        "/approve"),
@@ -32,7 +34,7 @@ CAPABILITY_MATRIX = {
     "recap-alias":    (None,        "recap",    None,                       "/journey"),
     "status":         (None,        "status",   "/api/webgate/doctor",      "/status"),
     "memory-search":  (None,        "memory",   "/api/webgate/memory",      None),
-    "knowledge":      ("knowledge", "kb",       "/knowledge",               None),
+    "knowledge":      ("knowledge", "kb",       "/agent",                   None),
     "identity":       (None,        "self",     "/api/webgate/identity",    None),
     "wallet-caps":    ("wallet",    None,       None,                       None),
     "approval-gates": ("approvals", "approve",  None,                       None),
@@ -53,17 +55,117 @@ CAPABILITY_MATRIX = {
     "invoices-settle":    ("owner", "settle",    None,                      "/settle"),
     # 032: the durable app service — approve an address / kill on every owner seat
     "apps":               ("apps",  "apps",      "/api/webgate/apps",       "/apps"),
+    # Capability inventory: every standing surface must remain represented here.
+    # every row below is a seat that EXISTS in the tree today. A row pins reach,
+    # never policy — the gates (tx_guard, caps, owner-only, the 031 pause) are
+    # pinned by their own tests. `None` means "no seat today", not "not wanted";
+    # the 043 home for each row is in CAPABILITY_HOME.
+    "wallet":             ("wallet",   "wallet",    None,                       "/wallet"),
+    "trade-launch":       (None,       "trade",     None,                       "/trade"),
+    "bridge":             ("wallet",   "bridge",    None,                       "/bridge"),
+    "token-launch":       ("wallet",   "launch",    None,                       "/launch"),
+    "token-deploy":       ("wallet",   "deploy",    None,                       "/deploy"),
+    "book-positions":     (None,       None,        "/api/webgate/positions",   None),
+    # 2026-09-15: the instance's own face/voice. The identity exists on every
+    # seat now -- CLI, REPL, the console's live canvas and the phone -- so a
+    # surface dropping it fails here instead of going quietly dark, which is
+    # exactly what it did for two months.
+    "avatar":             ("pfp",      "avatar",    "/pfp.json",                "/avatar"),
+    "goal-steer":         ("goals",    "goal",      "/api/webgate/goals/{goal_id}/{verb}", "/goal"),
+    "cron-cancel":        ("cron",     None,        "/api/webgate/cron/{job_id}/cancel",   "/cron"),
+    "pending-reject":     ("owner",    "reject",    "/api/webgate/pending/{kind}/{item_id}/reject", "/reject"),
+    "mcp-admin":          (None,       "mcp",       None,                       "/mcp"),
+    "config":             ("config",   "config",    "/api/webgate/config",      "/config"),
+    "kb":                 ("kb",       "kb",        "/api/webgate/knowledge/kb", "/kb"),
+    "skills":             ("skills",   "skills",    "/api/webgate/knowledge/skills", None),
+    "self-context":       ("soul",     "self",      "/api/webgate/identity",    None),
+    "doctor":             ("doctor",   "doctor",    "/api/webgate/doctor",      None),
+    "autonomy-status":    ("autonomy", "autonomy",  None,                       "/mode"),
+    "missed":             (None,       None,        None,                       "/missed"),
+    "files":              (None,       "files",     None,                       "/files"),
+    "dev-rail":           (None,       "dev",       None,                       "/dev"),
+    "telemetry":          (None,       "telemetry", None,                       None),
+    # WS-K deleted /activity; the classified stream is now Work › Log (page
+    # /work in pages_new, reader /api/webgate/log). The scanned routers include
+    # pages_new but not worklog_api, so the page /work is the registered seat.
+    "activity-log":       (None,       None,        "/work",                    None),
+    "system-page":        (None,       None,        "/agent",                   None),
+    "session-admin":      ("session",  "session",   None,                       None),
+    "subagents":          ("subagents","subagents", None,                       None),
+    "todos":              ("todos",    "todos",     None,                       None),
+    "tools-catalog":      ("tools",    "tools",     None,                       None),
+    "profile-home":       ("profile",  "profile",   None,                       None),
+    "x-account":          ("x-account",None,        None,                       None),
+    "surface-status":     ("surface",  None,        None,                       None),
+    "memory-page":        (None,       "memory",    "/agent",                   None),
+    # 043 D1: the ONE list of what is waiting on an owner decision, and the ONE
+    # read of the ledger against every money chain. Both reach all four seats,
+    # and all four render from the same composer + the same renderer
+    # (core.surfaces.inbox / core.surfaces.inbox_render), which is what the row
+    # is really pinning: not that a verb exists, but that a seat cannot quietly
+    # stop having it.
+    "inbox":              ("owner",    "inbox",     "/api/webgate/inbox",       "/inbox"),
+    "book":               ("wallet",   "book",      "/api/webgate/book",        "/book"),
 }
+
+# The destination for every capability row
+# §2.3/§2.4 + the 2026-09-14 inventory §2). A destination is one of the five
+# console slots, a CLI group, or "shell" (frame furniture). R7 of 043 §10: every
+# capability has a home, and the home is one of these.
+CAPABILITY_HOME = {
+    "prefs-view": "Agent › Settings", "prefs-page": "Agent › Settings",
+    "pending-review": "Inbox", "pending-decide": "Inbox", "pending-reject": "Inbox",
+    "finance": "Money › Cash", "invoices": "Money › Invoices", "invoices-settle": "Money › Invoices",
+    "goals": "Work › Now & next", "goal-steer": "Work › Now & next", "cron": "Work › On a clock",
+    "cron-cancel": "Work › On a clock", "recap": "Work › Log", "recap-alias": "Work › Log",
+    "avatar": "Agent › Overview",
+    "status": "Agent › Overview", "doctor": "Agent › Advanced › Diagnostics",
+    "system-page": "Agent › Advanced › Diagnostics", "memory-search": "Agent › Memory",
+    "memory-page": "Agent › Memory", "knowledge": "Agent › Memory", "kb": "Agent › Memory",
+    "identity": "Agent › Identity", "self-context": "Agent › Identity",
+    "wallet-caps": "Agent › Settings › Limits", "wallet": "Money › Book",
+    "approval-gates": "Agent › Settings", "surfaces-admin": "Agent › Overview",
+    "surface-status": "Agent › Overview", "kill-switch-halt": "shell", "kill-switch-resume": "shell",
+    "owner-pause": "shell", "asks": "Inbox", "asks-fulfill": "Inbox",
+    "outbound-allow": "Agent › Settings", "outbound-deny": "Agent › Settings",
+    "outbound-allowlist": "Agent › Settings", "apps": "Work › Apps",
+    "trade-launch": "Money › Book", "bridge": "Money › Moves", "token-launch": "Money › Moves",
+    "token-deploy": "Money › Moves", "book-positions": "Money › Book",
+    "mcp-admin": "Agent › Capabilities", "config": "Agent › Settings › Advanced",
+    "skills": "Agent › Capabilities", "autonomy-status": "Agent › Overview",
+    "missed": "Work › Log", "files": "Work › Apps", "dev-rail": "Work › Log",
+    "telemetry": "Work › Log", "activity-log": "Work › Log",
+    "session-admin": "Chat", "subagents": "Agent › Capabilities", "todos": "Work › Now & next",
+    "tools-catalog": "Agent › Capabilities", "profile-home": "CLI › Owner", "x-account": "CLI › Surfaces",
+    "inbox": "Inbox", "book": "Money › Book",
+}
+DESTINATIONS = ("Chat", "Inbox", "Work", "Money", "Agent", "shell", "CLI")
 
 
 def _webview_paths():
+    """Every path the console's routers register.
+
+    ``webview.inbox`` and ``webview.pages_new`` are the 043 console; they are
+    registered from ``pages_new.mount`` rather than from ``server.py``'s
+    include block, so a scan that only knew the four v1 routers would report
+    the Inbox as having no web seat.
+    """
+    import webview.activity as activity
     import webview.apps_routes as apps_routes
+    import webview.inbox as inbox
     import webview.knowledge as knowledge
     import webview.pages as pages
+    import webview.pages_new as pages_new
     paths = set()
-    for router in (pages.router, knowledge.router, apps_routes.router):
+    for router in (pages.router, knowledge.router, apps_routes.router,
+                   activity.router, inbox.router, pages_new.router):
         for route in router.routes:
             paths.add(route.path)
+    # 043 phase 5: the WEBVIEW_UI legacy switch and webview.legacy are removed.
+    # /sessions is deleted; /pending is a normal route on pages.router now (so it
+    # is already in the set above). The memory/knowledge/preferences/config/
+    # identity/system/settings pages were DELETED (043 §9) and their capability
+    # rows point at the new Agent destination (/agent, from pages_new).
     return paths
 
 
@@ -108,3 +210,17 @@ def test_matrix_covers_the_review_gaps():
     ever deleted wholesale, this fails and points at the review doc."""
     for cap in ("prefs-page", "pending-decide", "finance", "cron", "recap-alias"):
         assert cap in CAPABILITY_MATRIX
+
+
+def test_every_capability_has_one_home():
+    """043 §10 R7 — the capability × seat × destination matrix: every row in
+    CAPABILITY_MATRIX names exactly one 043 destination, and that destination is
+    one of the five console slots, a CLI group, or the shell. A capability with
+    no home is the failure mode the 2026-09-14 inventory was built to catch."""
+    missing = sorted(set(CAPABILITY_MATRIX) - set(CAPABILITY_HOME))
+    assert not missing, f"capabilities with NO 043 home: {missing}"
+    stray = sorted(set(CAPABILITY_HOME) - set(CAPABILITY_MATRIX))
+    assert not stray, f"homes for capabilities that are not in the matrix: {stray}"
+    bad = {c: h for c, h in CAPABILITY_HOME.items()
+           if not h.startswith(DESTINATIONS)}
+    assert not bad, f"homes outside the five destinations / CLI / shell: {bad}"

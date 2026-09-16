@@ -62,29 +62,100 @@ def _known_swap_router_addresses(chain: str) -> frozenset:
 #: The name is kept: `settlement_watcher` re-exports it.
 _redact_rpc = redact_url
 def _resolve_scan_target(chain: str):
-    """(rpc_url, usdc_addr, expected_chain_id) for a scannable chain, or None
-    when the chain is not scannable. Precedence (W1.3): `X402_SETTLEMENT_RPC`
-    (watcher-specific pin, any chain) > `DEFI_EVM_RPC_BASE` via
-    `rpc_url_for_chain` (mainnet only — parity with balance reads, which
-    already honored it while the scan did not) > built-in default.
+    """``(rpc_url, expected_chain_id)`` for a scannable EVM chain, or ``None``.
 
-    The chain id travels with the target because the URL and the USDC address
-    come from DIFFERENT sources (an env pin vs the configured chain name) and
-    nothing else would catch them disagreeing — see `_verify_scan_network`.
+    ⚠️ ASSET-FREE since 046. It used to answer for ``base``/``base-sepolia``
+    ONLY, with a hardcoded USDC address baked into the return — so detection on
+    every other chain was a one-warning no-op, forever. The token address now
+    comes from the PENDING INVOICE's own asset row, and the chain's RPC and
+    chain id come from `core/wallet/chains.py`, which already pins both.
+
+    Precedence for the URL is unchanged: ``X402_SETTLEMENT_RPC`` (any chain) >
+    the chain's pinned RPC > the chain row's public fallback.
+
+    ⚠️ ``base-sepolia`` keeps its OWN branch. The money chain registry
+    deliberately carries only chains verified for TRADING, so it has no testnet
+    row; the x402 module has always owned the sepolia RPC and chain id and
+    continues to.
     """
     import os
-    from core.wallet.onchain import (USDC_BASE_MAINNET, USDC_BASE_SEPOLIA,
-                                     rpc_url_for_chain)
-    from modules.x402.artifact import (_BASE_CHAIN_ID, _BASE_SEPOLIA_CHAIN_ID,
-                                       _is_sepolia_chain)
+    from modules.x402.artifact import _BASE_SEPOLIA_CHAIN_ID, _is_sepolia_chain
     override = os.getenv("X402_SETTLEMENT_RPC", "").strip()
-    if chain == _MAINNET_CHAIN:
-        url = override or rpc_url_for_chain(_MAINNET_CHAIN)
-        return (url, USDC_BASE_MAINNET, _BASE_CHAIN_ID) if url else None
+    chain = (chain or "").strip().lower()
     if _is_sepolia_chain(chain):
-        return (override or _SEPOLIA_RPC_DEFAULT, USDC_BASE_SEPOLIA,
-                _BASE_SEPOLIA_CHAIN_ID)
-    return None
+        return (override or _SEPOLIA_RPC_DEFAULT, _BASE_SEPOLIA_CHAIN_ID)
+    from core.wallet import chains as _chains
+    row = _chains.get(chain)
+    if row is None or row.family != "evm" or not row.chain_id:
+        return None
+    from core.wallet.onchain import rpc_url_for_chain
+    url = override or rpc_url_for_chain(row.name) or row.public_rpc
+    if not url:
+        return None
+    return (url, int(row.chain_id))
+
+
+def scan_key(treasury: str, chain: str, asset_address) -> str:
+    """The `settlement_scan` checkpoint key for one ``(treasury, chain, asset)``.
+
+    ⚠️ The DEFAULT asset keeps the BARE treasury key. That table is keyed on a
+    single ``treasury`` column, and a key change re-seeds the checkpoint near
+    head on the next tick — which scans NOTHING and silently skips every
+    transfer in the gap. Continuity for the live USDC rail is worth the special
+    case.
+    """
+    from core.payments.assets import DEFAULT_ASSET_ID, resolve
+    default = resolve(DEFAULT_ASSET_ID)
+    addr = (asset_address or "").strip().lower()
+    if (default is not None and (chain or "").strip().lower() == default.chain
+            and addr == (default.address or "").lower()):
+        return treasury
+    return f"{treasury}|{(chain or '').strip().lower()}|{addr}"
+
+
+async def pending_scan_groups(treasury: str, *, db=None):
+    """``[(chain, asset_address, decimals, asset_id), ...]`` — one row per
+    DISTINCT asset that has a PENDING invoice at this treasury.
+
+    Scanning is driven by what is actually OWED, not by a configured list: an
+    asset nobody is waiting on costs no ``eth_getLogs`` call, and a newly pinned
+    asset needs no scanner configuration at all.
+
+    A legacy row (NULL asset columns) contributes the DEFAULT asset's group, so
+    an invoice outstanding across the deploy keeps being scanned. A non-EVM row
+    contributes nothing — its settlement is the reference pass, which asks a
+    different question of a different chain.
+    """
+    from core.payments.assets import DEFAULT_ASSET_ID, resolve
+    from modules.x402 import invoicing
+    database = await invoicing._resolve_db(db)
+    if database is None:
+        return []
+    rows = await database.fetch_all(
+        """SELECT DISTINCT chain, asset_address, asset_decimals, asset_id
+           FROM x402_payment_requests
+           WHERE status = 'pending' AND recipient = ?""",
+        (invoicing.normalize_recipient(treasury),)) or []
+    default = resolve(DEFAULT_ASSET_ID)
+    out = []
+    for r in rows:
+        chain = str(r["chain"] or "").strip().lower()
+        addr = (r["asset_address"] or "").strip().lower()
+        if not addr:
+            if default is None:
+                continue
+            group = (default.chain, (default.address or "").lower(),
+                     default.decimals, default.asset_id)
+        else:
+            if _resolve_scan_target(chain) is None:
+                continue          # non-EVM, or a chain we cannot reach
+            group = (chain, addr, int(r["asset_decimals"] or 6),
+                     str(r["asset_id"] or DEFAULT_ASSET_ID))
+        if group not in out:
+            out.append(group)
+    return out
+
+
 def solana_settle_enabled() -> bool:
     """Its OWN flag, ANDed with the master detection switch.
 
@@ -160,12 +231,19 @@ class SettlementScanMixin:
         cache[rpc_url] = True
         return True
     async def _scan_onchain(self) -> tuple:
-        """Task 11 (Phase 2): scan the treasury for new USDC transfers and
-        auto-settle any exact-amount match. Returns (settled_count,
-        unmatched_count) — always (0, 0) when detection is off, the chain
-        isn't scannable, no treasury is configured, or the RPC is unreachable
-        (fail-open at every step; nothing here ever raises past this method,
-        and the caller wraps it again defensively)."""
+        """Scan the treasury for new transfers of every OWED asset and
+        auto-settle any exact-amount match. Returns (settled, unmatched).
+
+        ⚠️ ONE ``eth_getLogs`` per ``(chain, asset)`` that actually has a pending
+        invoice (046). Before this the pass scanned exactly one contract on
+        exactly one chain, so an invoice in any other asset could never settle
+        however correctly it was minted.
+
+        Always (0, 0) when detection is off, no treasury is configured, nothing
+        is owed, or the RPC is unreachable — fail-open at every step; nothing
+        here ever raises past this method, and the caller wraps it again
+        defensively.
+        """
         from modules.x402 import invoicing
         if not invoicing.x402_settle_onchain_detect_enabled():
             return 0, 0
@@ -173,58 +251,164 @@ class SettlementScanMixin:
         from modules.x402.x402_integration import get_x402_config
         cfg = get_x402_config()
         treasury = (cfg.get("pay_to") or "").strip()
-        chain = (cfg.get("network") or "").strip().lower()
         if not treasury:
             return 0, 0
-        target = _resolve_scan_target(chain)
-        if target is None:
-            # Detection is ON but the chain can't be scanned — never a silent
-            # no-op (the pre-W1.2 sepolia trap): say so once per watcher.
-            if not getattr(self, "_scan_target_warned", False):
-                self._scan_target_warned = True
-                logger.warning(
-                    "X402_SETTLE_ONCHAIN_DETECT is on but X402_DEFAULT_CHAIN=%r "
-                    "is not a scannable chain (supported: base, base-sepolia) — "
-                    "on-chain detection is inactive", chain)
-            return 0, 0
-        rpc_url, default_usdc, expected_chain_id = target
-        if not getattr(self, "_scan_target_logged", False):
-            self._scan_target_logged = True
-            logger.info("x402 on-chain detection active: chain=%s rpc=%s",
-                        chain, _redact_rpc(rpc_url))
         treasury_key = treasury.lower()
 
+        # ⚠️ The CONFIGURED chain's own asset is scanned EVERY tick, owed or
+        # not. Scanning only what is owed would be cheaper and would silence
+        # `payment_unmatched` — the event that tells an owner money arrived
+        # which nothing accounted for. "No unmatched payments" must never come
+        # to mean "I was not looking". Every OTHER asset is owed-driven: an
+        # asset nobody is waiting on costs no eth_getLogs call.
+        groups = await pending_scan_groups(treasury_key, db=self._db)
+        default_group = await self._default_scan_group(cfg)
+        if default_group is not None and default_group not in groups:
+            groups = [default_group] + groups
+        if not groups:
+            # The configured chain is unscannable AND nothing is owed elsewhere.
+            return 0, 0
+
+        settled = unmatched = 0
+        for chain, asset_address, decimals, asset_id in groups:
+            try:
+                s, u = await self._scan_one_asset(
+                    treasury, treasury_key, chain, asset_address, decimals,
+                    asset_id)
+                settled += s
+                unmatched += u
+            except Exception:
+                # One asset's RPC failing must never stop the others. Its own
+                # checkpoint is untouched, so the range retries next tick.
+                logger.warning(
+                    "x402 settlement scan: asset %s on %s failed this tick "
+                    "(its checkpoint is held; other assets continue)",
+                    asset_id, chain, exc_info=True)
+        return settled, unmatched
+
+
+    async def _default_scan_group(self, cfg):
+        """The ``(chain, asset_address, decimals, asset_id)`` of the configured
+        chain's own payable asset, or ``None`` when that chain is not scannable.
+
+        This is the group whose checkpoint must exist BEFORE the first invoice,
+        not after it.
+        """
+        chain = (cfg.get("network") or "").strip().lower()
+        if not chain or _resolve_scan_target(chain) is None:
+            return None
+        try:
+            from modules.x402.invoicing import resolve_invoice_asset
+            asset = resolve_invoice_asset(chain, None)
+        except Exception:
+            return None
+        return (chain, (asset.address or "").lower(), asset.decimals,
+                asset.asset_id)
+
+    async def _seed_only(self, treasury, treasury_key, chain, asset_address,
+                         decimals, asset_id) -> None:
+        """Create this asset's checkpoint near head if it has none. No scan."""
+        from modules.x402 import invoicing, onchain_probe
+
+        token_addr = self._usdc_addr or asset_address
+        key = scan_key(treasury_key, chain, token_addr)
+        if await invoicing.get_scan_checkpoint(key, db=self._db) is not None:
+            return
+        target = _resolve_scan_target(chain)
+        if target is None:
+            return
+        rpc_url, expected_chain_id = target
         call = self._rpc_call
-        usdc_addr = self._usdc_addr
-        if usdc_addr is None:
-            usdc_addr = default_usdc
+        if call is None:
+            from core.wallet.onchain import _rpc
+
+            def call(method, params, _url=rpc_url):
+                return _rpc(_url, method, params)
+        if not await self._verify_scan_network(call, expected_chain_id, rpc_url,
+                                               chain):
+            return
+        head = await asyncio.to_thread(onchain_probe.get_head_block, call)
+        if head is None:
+            return
+        await invoicing.advance_scan_checkpoint(
+            key, max(0, head - _scan_confirmations()), db=self._db)
+
+    async def _scan_one_asset(self, treasury, treasury_key, chain,
+                              asset_address, decimals, asset_id) -> tuple:
+        """One ``(chain, asset)`` sweep, with its OWN checkpoint.
+
+        Every pre-046 guard is preserved inside this loop body: the chain-id
+        verification, the never-sweep-from-genesis first-run seed, the
+        confirmations buffer, the per-tick span cap, and — the one that matters
+        most — HOLDING the cursor when the probe returns ``None`` (the range was
+        not scanned), because advancing past an unread range burns it forever.
+        """
+        from modules.x402 import invoicing, onchain_probe
+
+        target = _resolve_scan_target(chain)
+        if target is None:
+            # Something is OWED in an asset on a chain we cannot reach. Never a
+            # silent no-op (the pre-W1.2 sepolia trap): say so once per chain.
+            warned = getattr(self, "_scan_target_warned", None)
+            if warned is None:
+                warned = self._scan_target_warned = set()
+            if chain not in warned:
+                warned.add(chain)
+                logger.warning(
+                    "x402 on-chain detection: %s invoice(s) are pending in "
+                    "asset %s on chain %r, which is not scannable — those "
+                    "invoices cannot settle on-chain", asset_id, asset_id, chain)
+            return 0, 0
+        rpc_url, expected_chain_id = target
+
+        logged = getattr(self, "_scan_target_logged", None)
+        if logged is None:
+            logged = self._scan_target_logged = set()
+        if (chain, asset_id) not in logged:
+            logged.add((chain, asset_id))
+            logger.info("x402 on-chain detection active: chain=%s asset=%s rpc=%s",
+                        chain, asset_id, _redact_rpc(rpc_url))
+
+        call = self._rpc_call
+        # `_usdc_addr` is the pre-046 test seam: an explicit override still wins,
+        # for the one asset a legacy test pins.
+        token_addr = self._usdc_addr or asset_address
         if call is None:
             from core.wallet.onchain import _rpc
 
             def call(method, params, _url=rpc_url):
                 return _rpc(_url, method, params)
 
-        if not await self._verify_scan_network(call, expected_chain_id, rpc_url, chain):
+        if not await self._verify_scan_network(call, expected_chain_id, rpc_url,
+                                               chain):
             return 0, 0
 
-        from modules.x402 import onchain_probe
-        # M9: the probe does synchronous urllib I/O (eth_getLogs/eth_blockNumber
-        # over up to 5000 blocks, up to a 4s timeout). Running it inline froze
-        # the whole agent/API event loop every tick — offload to a thread so the
-        # loop keeps serving /pay and other work during the RPC round-trip.
+        # M9: the probe does synchronous urllib I/O. Running it inline froze the
+        # whole agent/API event loop every tick — offload to a thread.
         head = await asyncio.to_thread(onchain_probe.get_head_block, call)
         if head is None:
             return 0, 0
 
-        confirmations = _scan_confirmations()
-        safe_head = head - confirmations
-        last = await invoicing.get_scan_checkpoint(treasury_key, db=self._db)
+        key = scan_key(treasury_key, chain, token_addr)
+        safe_head = head - _scan_confirmations()
+        last = await invoicing.get_scan_checkpoint(key, db=self._db)
         if last is None:
-            # First run: seed the checkpoint near the head and scan NOTHING
-            # this tick — never sweep from genesis. Detection picks up from
-            # the NEXT tick onward.
-            seed = max(0, safe_head)
-            await invoicing.advance_scan_checkpoint(treasury_key, seed, db=self._db)
+            # First run for THIS asset: seed near the head and scan NOTHING this
+            # tick — never sweep from genesis.
+            #
+            # ⚠️ A payment that landed BEFORE this seed is not enumerated. For
+            # the configured chain's own asset that window does not exist (it is
+            # seeded every tick, owed or not). For a NEWLY pinned asset it does,
+            # so say it out loud rather than let an operator discover it by
+            # losing a payment.
+            logger.warning(
+                "x402 on-chain detection: first sight of asset %s on %s — "
+                "seeding the checkpoint at block %s and scanning nothing this "
+                "tick. A transfer of this token that ALREADY landed will not be "
+                "detected; pin an asset before inviting payment in it.",
+                asset_id, chain, max(0, safe_head))
+            await invoicing.advance_scan_checkpoint(key, max(0, safe_head),
+                                                    db=self._db)
             return 0, 0
 
         from_block = last + 1
@@ -232,27 +416,29 @@ class SettlementScanMixin:
             return 0, 0  # nothing new past the confirmations buffer yet
         to_block = min(safe_head, from_block + _scan_max_span() - 1)
 
-        # M9: same blocking-urllib offload as get_head_block above.
         transfers = await asyncio.to_thread(
             onchain_probe.scan_treasury_transfers,
-            call, usdc_addr, treasury, from_block, to_block)
+            call, token_addr, treasury, from_block, to_block, decimals=decimals)
         if transfers is None:
             # The range was NOT scanned (RPC error). Hold the cursor so the next
             # tick retries it — advancing here would burn the range forever,
-            # since advance_scan_checkpoint refuses to regress. A payer's real
-            # transfer inside it would never be enumerated, so not even
-            # payment_unmatched would fire (audit 2026-08-07 #1, Critical).
+            # since advance_scan_checkpoint refuses to regress, and a payer's
+            # real transfer inside it would never be enumerated (audit
+            # 2026-08-07 #1, Critical).
             logger.warning(
-                "x402 settlement scan: blocks %s..%s UNSCANNED (rpc failure) — "
-                "checkpoint held at %s, will retry next tick",
-                from_block, to_block, last)
+                "x402 settlement scan: %s blocks %s..%s UNSCANNED (rpc failure) "
+                "— checkpoint held at %s, will retry next tick",
+                asset_id, from_block, to_block, last)
             return 0, 0
-        settled, unmatched = await self._settle_or_flag(transfers, treasury_key, chain)
-        # Advance the checkpoint for the fully-processed range regardless of
-        # match outcome — an unmatched/failed-settle transfer is recorded via
-        # payment_unmatched, not by holding the scan cursor back.
-        await invoicing.advance_scan_checkpoint(treasury_key, to_block, db=self._db)
+        settled, unmatched = await self._settle_or_flag(
+            transfers, treasury_key, chain, asset_address=token_addr,
+            decimals=decimals)
+        # Advance for the fully-processed range regardless of match outcome — an
+        # unmatched transfer is recorded via payment_unmatched, not by holding
+        # the cursor back.
+        await invoicing.advance_scan_checkpoint(key, to_block, db=self._db)
         return settled, unmatched
+
     async def _scan_solana(self) -> tuple:
         """Phase 4: settle Solana invoices by REFERENCE. Returns (settled, unmatched).
 
@@ -361,7 +547,8 @@ class SettlementScanMixin:
                         pass
         return settled, unmatched
     async def _settle_or_flag(self, transfers: list, treasury: str,
-                               chain: str = "") -> tuple:
+                               chain: str = "", *, asset_address=None,
+                               decimals: int = 6) -> tuple:
         """Task 11 review fix C2: EACH transfer is isolated in its own
         try/except so one failure can never block the rest of the batch NOR
         the scan checkpoint advance (which happens in the caller,
@@ -408,8 +595,27 @@ class SettlementScanMixin:
                         "settlement watcher: tx %s already settled an "
                         "invoice — skipping (replay guard)", tx_hash)
                     continue
-                match = await invoicing.match_pending_invoice_by_amount(
-                    transfer.get("amount_usd"), treasury, db=self._db)
+                # 046: ASSET-KEYED integer match. Matching a float amount_usd
+                # treasury-wide would let a transfer of one token settle an
+                # invoice denominated in another.
+                #
+                # The pre-046 DIRECT-call shape (a transfer dict carrying only
+                # `amount_usd`, and no asset) is still supported — several tests
+                # and any out-of-tree caller use it — by routing through the
+                # back-compat shim, which resolves the default asset.
+                raw = transfer.get("amount_raw")
+                if raw is None or asset_address is None:
+                    match = await invoicing.match_pending_invoice_by_amount(
+                        transfer.get("amount_usd"), treasury, chain=chain or None,
+                        db=self._db)
+                else:
+                    match = await invoicing.match_pending_invoice(
+                        treasury, asset_address, raw,
+                        chain=chain, decimals=decimals,
+                        # 046: every PAYABLE kind. Without `room_action` here a
+                        # paid offer sits pending forever with the money
+                        # already received.
+                        kinds=tuple(invoicing.PAYABLE_KINDS), db=self._db)
                 if not match:
                     # A router-sourced transfer is skipped ONLY when it
                     # correlates to a trade we ourselves broadcast. The address
@@ -502,8 +708,8 @@ class SettlementScanMixin:
 
         owner = ""
         try:
-            from core.instance import resolve_owner_principal
-            owner = resolve_owner_principal() or ""
+            from core.instance import resolve_owner_user_id
+            owner = resolve_owner_user_id()
         except Exception:
             owner = ""
         try:
@@ -533,8 +739,8 @@ class SettlementScanMixin:
 
         owner = ""
         try:
-            from core.instance import resolve_owner_principal
-            owner = resolve_owner_principal() or ""
+            from core.instance import resolve_owner_user_id
+            owner = resolve_owner_user_id()
         except Exception:
             owner = ""
         _emit("payment_unmatched", user_id=owner, session_id="", attrs={
@@ -557,8 +763,41 @@ class SettlementScanMixin:
         await self._push_owner_notice(owner, (
             f"Unmatched on-chain payment: {amt_str} from {transfer.get('from')} "
             f"landed in the treasury (tx {transfer.get('tx_hash')}) but matched NO "
-            f"pending invoice. Nothing was auto-settled; please reconcile."),
+            f"pending invoice. Nothing was auto-settled; please reconcile."
+            + self._open_room_offer_hint()),
             source="payment_unmatched")
+
+    def _open_room_offer_hint(self) -> str:
+        """Name the rooms with an open paid-action offer, when there are any.
+
+        ⚠️ Deliberately a HINT to the owner and NOT a message posted into a
+        room. An on-chain transfer carries no room identity, so "this payment
+        was probably yours" would be a guess published to strangers — but an
+        unmatched payment while an offer is open is almost always a member who
+        sent the wrong amount, and the owner cannot act on a notice that does
+        not say so. Fail-open: an unreadable store adds nothing.
+        """
+        try:
+            import os as _os
+
+            from core.runtime_paths import data_dir_or_home
+            from core.surfaces.room_action_store import OfferStore, store_path
+            container = (getattr(self, "_room_container", None)
+                         or getattr(getattr(self, "task_agent", None),
+                                    "container", None))
+            cfg = getattr(container, "config", None) if container else None
+            home = data_dir_or_home(getattr(cfg, "data_dir", None))
+            path = store_path(home)
+            if not _os.path.exists(path):
+                return ""
+            rooms = OfferStore(path).pending_rooms()
+            if not rooms:
+                return ""
+            named = ", ".join(f"{s}:{c}" for s, c in rooms[:3])
+            return (f" There is an open paid-action offer in {named} — if the "
+                    f"amount is close, a member likely sent the wrong one.")
+        except Exception:
+            return ""
     async def _sweep_stale_settling(self) -> int:
         """H7 stale-'settling' reaper: revert invoices stranded in 'settling'
         past 10 minutes back to 'pending' and notify the owner. A settle

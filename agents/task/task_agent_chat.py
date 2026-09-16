@@ -139,7 +139,7 @@ class TaskAgentChatMixin:
 
             # No existing session or failed to resume - create new session
             logger.info(f"🆕 Creating new session for user {user_id}")
-            session = await self.create_session(user_id, text)
+            session = await self.create_session(user_id, text, creator="owner")
 
             # Run in background
             _spawn_detached(self.run_session(user_id, session['id']))
@@ -235,6 +235,22 @@ class TaskAgentChatMixin:
             # priority-2 then returned the P2-16 placeholder AIMessage).
             hist = getattr(agent, 'history', None)
             from agents.task.runtime.run_outcome import FRAMEWORK_PLACEHOLDER_TEXTS
+
+            # 0) C3: the reply this turn actually spoke, recorded where it was
+            # published. This outranks done() — F4: preferring done's text meant
+            # every unbound path (raw API, chat_once, /v1, a surface without the
+            # bus) delivered the third-person bookkeeping recap INSTEAD of the
+            # answer. Ordering over history cannot fix it, because done writes
+            # "✅ Task Complete\n\n<text>" and so IS the last AIMessage.
+            try:
+                from core.surfaces.turn_reply import last_reply_text
+                spoken = last_reply_text(orch)
+                if spoken and not self._looks_like_brain_state(spoken) \
+                        and spoken.strip() not in FRAMEWORK_PLACEHOLDER_TEXTS:
+                    return spoken.strip()
+            except Exception:
+                # Fail-open: fall through to the legacy history scan.
+                pass
 
             # 1) clean done() output
             try:
@@ -469,6 +485,7 @@ class TaskAgentChatMixin:
             info = await self.create_session(
                 user_id, req, chat_session_key=key,
                 skip_credit_check=CHAT_SKIP_CREDIT_CHECK,
+                creator="owner",
             )
             session_id = info['id']
             self._chat_sessions[key] = session_id

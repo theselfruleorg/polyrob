@@ -442,7 +442,12 @@ class EmailTool(BaseTool):
             from tools.controller.turn_origin import _autonomous_owner_resend_cooldown_refusal
             cooldown_refusal = _autonomous_owner_resend_cooldown_refusal(
                 execution_context, None, container=self.container, user_id=user_id,
-                surface="email", target=params.to, owner_targets=owner_targets)
+                surface="email", target=params.to, owner_targets=owner_targets,
+                # The BODY alone — `store.record_outbound` below writes exactly
+                # this, and the gate compares content hashes. Passing
+                # subject+body made the hashes unmatchable, which does not
+                # loosen the gate, it kills it while it still looks present.
+                text=params.body)
             if cooldown_refusal is not None:
                 return cooldown_refusal
         except Exception:

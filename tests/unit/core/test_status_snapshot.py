@@ -137,7 +137,7 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert any(k.startswith("objective_budget:") for k in keys)
     assert "delivery_capped" in keys
     assert "tool_timeouts" in keys
-    assert "loop_heartbeat:cron" in keys and "loop_heartbeat:goals" in keys
+    assert "loop_silent:cron" in keys and "loop_silent:goals" in keys
     text = render_status_text(snap)
     # health first, ranked: the critical sentinel line precedes every warning
     lines = text.splitlines()
@@ -206,6 +206,80 @@ def test_corrupt_telemetry_makes_delivery_unavailable(degraded, monkeypatch):
     text = render_status_text(snap)
     assert "Delivery: unavailable (" in text
     assert "0 suppressed" not in text
+
+
+def test_dead_started_loop_is_a_health_item(tmp_path):
+    """043 A8/A42 — the runtime's `autonomy_started` record names every loop it
+    actually started (not just cron/goals); a started loop with no heartbeat
+    at all is silent and must be flagged."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("autonomy_started", user_id="", source="runtime", attrs={"loops": ["cron", "settlement"]})
+    log.record("autonomy_tick", user_id="", source="runtime", attrs={"loop": "cron", "alive": True})
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    keys = {h.key for h in snap.health}
+    assert "loop_silent:settlement" in keys
+
+
+def test_live_started_loop_has_no_silent_item(tmp_path):
+    """The companion to the dead-loop test above: a started loop with a fresh
+    alive heartbeat must never render as silent."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("autonomy_started", user_id="", source="runtime", attrs={"loops": ["cron"]})
+    log.record("autonomy_tick", user_id="", source="runtime", attrs={"loop": "cron", "alive": True})
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    keys = {h.key for h in snap.health}
+    assert not any(k.startswith("loop_silent:") for k in keys)
+
+
+def test_old_started_row_is_still_read_past_the_24h_telemetry_window(tmp_path):
+    """043 A8/A42 fix round 1 (Critical) — `autonomy_started` is written ONCE
+    per process start, so after 24h of uptime (prod's normal state) it falls
+    out of the windowed `tele` read the OTHER loop-section queries use. The
+    expected-loop set must come from an UNBOUNDED read, or the whole feature
+    silently decays back to cron/goals with no signal that anything narrowed."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import build_status_snapshot
+    now = time.time()
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("autonomy_started", user_id="", source="runtime",
+               attrs={"loops": ["cron", "settlement"]}, ts=now - 3 * 86400)
+    log.record("autonomy_tick", user_id="", source="runtime",
+               attrs={"loop": "cron", "alive": True}, ts=now)
+    snap = build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    keys = {h.key for h in snap.health}
+    assert "loop_silent:settlement" in keys
+
+
+def test_unreadable_autonomy_started_falls_back_and_warns(tmp_path, monkeypatch):
+    """An unreadable autonomy_started read must never silently narrow the
+    liveness set — it falls back to the gate-derived cron/goals pair AND
+    raises a `loops_expected_unreadable` health item naming the narrowing."""
+    import core.status_snapshot as ss
+    from core.event_log import TelemetryEventLog
+    monkeypatch.setenv("CRON_ENABLED", "true")
+    monkeypatch.setenv("GOALS_ENABLED", "true")
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("autonomy_tick", user_id="", source="runtime", attrs={"loop": "cron", "alive": True})
+    log.record("autonomy_tick", user_id="", source="runtime", attrs={"loop": "goals", "alive": True})
+
+    orig_rows = ss._rows
+
+    def _boom(db_path, sql, params=()):
+        if ss._K_AUTONOMY_STARTED in params:
+            raise RuntimeError("simulated read failure")
+        return orig_rows(db_path, sql, params)
+
+    monkeypatch.setattr(ss, "_rows", _boom)
+    snap = ss.build_status_snapshot("u1", data_dir=str(tmp_path), include_money=False)
+    keys = {h.key for h in snap.health}
+    assert "loops_expected_unreadable" in keys
+    # the fallback still ran: cron/goals are both fresh-alive, so no dead-loop
+    # item, only the "we could not check the full set" warning.
+    assert not any(k.startswith("loop_silent:") for k in keys)
 
 
 def test_clean_fixture_is_ok_with_evidence(tmp_path, monkeypatch):
@@ -317,6 +391,8 @@ def test_literals_match_owning_modules():
         ek.USER_DELIVERY, ek.OWNER_NOTICE, ek.CREDIT_SENTINEL, ek.CRON_RUN, ek.GOAL_RUN,
         ek.SELF_WAKE, ek.TOOL_TIMEOUT, ek.TOOL_DENIED, ek.RUN_OUTCOME_DEGRADED, "autonomy_tick")
     assert (ss._K_SOCIAL_WRITE, ss._K_WALLET_SPEND) == (ek.SOCIAL_WRITE, ek.WALLET_SPEND)
+    assert ss._K_AUTONOMY_STARTED == ek.AUTONOMY_STARTED
+    assert ss._K_SURFACE_POLL_ERROR == ek.SURFACE_POLL_ERROR
     # the rail's suppression marker (user_delivery.py) is what /missed and the
     # delivery section grep for
     import inspect
@@ -329,3 +405,45 @@ def test_objective_budget_mirrors_board_rule(monkeypatch):
     assert _objective_budget({}) == 25
     assert _objective_budget({"goal_budget": 12}) == 12
     assert _objective_budget({"stream_id": "treasury-trading", "goal_budget": 12}) == 0
+
+
+# --- spend record carries the chain (043 A36) --------------------------------
+
+def test_section_titles_cover_every_section():
+    """A section printed under its raw dict key (e.g. `creations`/`wallet`
+    instead of `Made`/`Wallet`) on every status seat is the symptom of a
+    section joining SECTION_ORDER without a matching title."""
+    from core.status_render import _SECTION_TITLES
+    assert set(SECTION_ORDER) <= set(_SECTION_TITLES)
+
+
+def test_creations_row_renders_its_chain(tmp_path):
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import _creations_section
+
+    data_dir = str(tmp_path)
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    log.record("wallet_spend", user_id=OWNER, source="wallet",
+               attrs={"venue": "defi", "action": "launchpad_launch",
+                      "counterparty": "0xTOKEN", "amount_usd": 1.0,
+                      "result_ref": "0xtx", "chain": "robinhood"})
+    sec = _creations_section(OWNER, data_dir)
+    assert sec.data["creations"][0]["chain"] == "robinhood"
+    assert any("on robinhood" in ln for ln in sec.lines)
+
+
+def test_creations_row_carries_its_explorer_link(tmp_path):
+    """043 A38/A5 — a creation on a chain with a pinned explorer renders a
+    link, so the owner can verify the token without leaving the status seat."""
+    from core.event_log import TelemetryEventLog
+    from core.status_snapshot import _creations_section
+
+    data_dir = str(tmp_path)
+    log = TelemetryEventLog(os.path.join(data_dir, "telemetry_events.db"))
+    log.record("wallet_spend", user_id=OWNER, source="wallet",
+               attrs={"venue": "defi", "action": "deploy_token",
+                      "counterparty": "0xTOKEN", "amount_usd": 1.0,
+                      "result_ref": "0xtx", "chain": "base"})
+    sec = _creations_section(OWNER, data_dir)
+    assert sec.data["creations"][0]["url"] == "https://basescan.org/token/0xTOKEN"
+    assert any("https://basescan.org/token/" in ln for ln in sec.lines)

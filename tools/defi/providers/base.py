@@ -61,6 +61,78 @@ class ScreenVerdict:
     available: bool
     checks: Dict[str, str] = field(default_factory=dict)
     flags: List[str] = field(default_factory=list)
+    #: Checks this screener knows about that did NOT run on this token/chain.
+    #: A screener can answer a chain PARTIALLY (GoPlus covers Robinhood 4663 but
+    #: sends no is_honeypot, no holders and empty taxes), and rendering that as
+    #: "no risk flags raised" makes a partial screen read exactly like a clean
+    #: one. Naming the absent checks is the difference.
+    missing: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class HolderRow:
+    """One holder line as the screener reports it.
+
+    ``percent`` is a FRACTION (0.30 = 30%), which is how GoPlus sends it. Every
+    field is Optional because a missing figure must render "unknown", never 0 —
+    "this wallet holds 0%" and "the screener did not say" are different facts.
+    """
+    address: str
+    percent: Optional[float] = None
+    is_contract: Optional[bool] = None
+    is_locked: Optional[bool] = None
+    tag: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class HolderReport:
+    """Who owns a token, and whether they can pull the floor out.
+
+    This is the concentration answer — the thing a holder-cluster map is read
+    for. It fails CLOSED like a screen, not open like a price: ``available=False``
+    with a stated ``reason`` means nobody told us, which is NOT "well
+    distributed". An empty ``top_holders`` on an available report would read as
+    "nobody holds this", so the two states are kept distinct.
+
+    ``top_percent`` is the sum of the reported top holders INCLUDING contracts
+    (a pool contract is usually the largest single line). ``top_percent_wallets``
+    excludes rows the screener marked as contracts, because a locked pool is not
+    a person who can sell.
+    """
+    available: bool
+    reason: Optional[str] = None
+    holder_count: Optional[int] = None
+    total_supply: Optional[float] = None
+    top_holders: List[HolderRow] = field(default_factory=list)
+    lp_holders: List[HolderRow] = field(default_factory=list)
+    lp_holder_count: Optional[int] = None
+    lp_total_supply: Optional[float] = None
+    creator_address: Optional[str] = None
+    creator_percent: Optional[float] = None
+    owner_address: Optional[str] = None
+    owner_percent: Optional[float] = None
+    honeypot_with_same_creator: Optional[bool] = None
+
+    @property
+    def top_percent(self) -> Optional[float]:
+        known = [h.percent for h in self.top_holders if h.percent is not None]
+        return sum(known) if known else None
+
+    @property
+    def top_percent_wallets(self) -> Optional[float]:
+        known = [h.percent for h in self.top_holders
+                 if h.percent is not None and h.is_contract is not True]
+        return sum(known) if known else None
+
+    @property
+    def lp_locked_percent(self) -> Optional[float]:
+        """Share of the LP supply held in rows the screener marks as locked or
+        burned. Unknown when no LP holder row carries a percent."""
+        known = [h.percent for h in self.lp_holders if h.percent is not None]
+        if not known:
+            return None
+        return sum(h.percent for h in self.lp_holders
+                   if h.percent is not None and h.is_locked is True)
 
 
 @runtime_checkable

@@ -124,8 +124,43 @@ def invoice_card_enabled() -> bool:
     `tools/x402/invoice_tool.py` catches any card-render error, logs one WARN,
     and returns the text-only result unchanged (the invoice itself already
     succeeded by the time this is consulted).
+
+    ⚠️ 046 phase 2 ORs in "this instance invoices at all". The local-group
+    default alone meant a SERVER — the only posture that actually bills a
+    stranger — never rendered a card, so the payer got an address to retype by
+    hand and no QR at all. An instance with `X402_INVOICE_ENABLED` on has
+    already decided to ask people for money; making the ask legible is not a
+    separate decision. An explicit `INVOICE_CARD_ENABLED` still wins.
+
+    ⚠️ The x402 enablement is recomputed HERE rather than imported from
+    `modules.x402.invoicing` (its SSOT): `core` may not import `modules`, and
+    the layering ratchet reads imports statically. `core/autonomy_runtime.py`
+    duplicates the same guarded-OR for the same reason.
     """
-    return _bool_env("INVOICE_CARD_ENABLED", _safe_autonomy_default("INVOICE_CARD_ENABLED"))
+    try:
+        x402_on = _bool_env("X402_INVOICE_ENABLED",
+                            _mode_capability_default("X402_INVOICE_ENABLED"))
+    except Exception:
+        x402_on = False
+    return _bool_env("INVOICE_CARD_ENABLED",
+                     _safe_autonomy_default("INVOICE_CARD_ENABLED") or x402_on)
+
+
+def room_action_card_enabled() -> bool:
+    """Whether a 046 paid-room-action OFFER also carries a payment card (QR).
+
+    Defaults to :func:`room_actions_enabled` — a room that sells actions wants
+    its offers legible, and the payer is a stranger in a chat window.
+
+    ⚠️ Deliberately NOT `INVOICE_CARD_ENABLED`, which defaults to
+    `local_mode_enabled()` and is therefore OFF on every server: reusing it
+    would have meant that no deployment that can actually host a room ever
+    rendered a QR. Render failures are fail-open at the call site
+    (`surfaces/telegram/group_ops.py::_offer_card`) — a card is a picture of
+    facts the text already carries.
+    """
+    from core.surfaces.room_actions import room_actions_enabled
+    return _bool_env("ROOM_ACTION_CARD_ENABLED", room_actions_enabled())
 
 
 def eip8004_payment_feedback_enabled() -> bool:

@@ -167,3 +167,39 @@ def test_render_survives_missing_avatar_entirely(tmp_path, monkeypatch):
     monkeypatch.setattr(cards, "_resolve_avatar_path", lambda instance_id: None)
     out = cards.render_invoice_card(_INVOICE, _ARTIFACT_NO_QR, tmp_path / "no_avatar.png")
     assert out.exists()
+
+
+# --- 046 Phase 0: the card names the ACTUAL token ---------------------------
+
+def test_a_usdc_card_is_unchanged(tmp_path, monkeypatch):
+    drawn = _spy_draw_text(monkeypatch)
+    cards.render_invoice_card(_INVOICE, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("$12.34 USDC" in str(t) for t in drawn)
+
+
+def test_a_non_usdc_card_leads_with_the_token_amount(tmp_path, monkeypatch):
+    """⚠️ A ROB invoice rendered as "$0.50 USDC" tells the payer to send the
+    wrong asset — money they do not get back. The token amount leads because it
+    is what they must actually send."""
+    drawn = _spy_draw_text(monkeypatch)
+    invoice = dict(_INVOICE, amount_usd=0.5, asset="rob", chain="robinhood",
+                   asset_id="rob", asset_symbol="ROB",
+                   asset_address="0x" + "bb" * 20, asset_decimals=18,
+                   amount_raw=7 * 10 ** 18)
+    cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("ROB" in str(t) for t in drawn)
+    assert any(str(t).startswith("7 ") for t in drawn)
+    assert any("≈ $0.5" in str(t) for t in drawn)
+    assert not any("USDC" in str(t) for t in drawn if "ROB" not in str(t)
+                   and str(t).startswith("$"))
+
+
+def test_a_sub_unit_token_amount_is_never_rounded_to_nothing(tmp_path, monkeypatch):
+    """⚠️ The two-decimal money format rendered every memecoin price as $0.00.
+    A payer who sends what the card shows would send nothing."""
+    drawn = _spy_draw_text(monkeypatch)
+    invoice = dict(_INVOICE, amount_usd=0.01, asset_id="rob",
+                   asset_symbol="ROB", asset_address="0x" + "bb" * 20,
+                   asset_decimals=18, amount_raw=1_234_000_000_000_000)
+    cards.render_invoice_card(invoice, _ARTIFACT_WITH_QR, tmp_path / "c.png")
+    assert any("0.001234" in str(t) for t in drawn)

@@ -11,7 +11,7 @@ Fix: ``RichRenderer(live_allowed=False)`` (set by the REPL) keeps the activity
 line dormant and the response box in buffer-only mode, so the pinned
 ``bottom_toolbar`` is the sole in-flight indicator and the finalized answer is
 printed exactly once as a newline-terminated block. ``rob run`` (no
-patch_stdout) keeps ``live_allowed=True`` and the live boxes.
+patch_stdout) keeps ``live_allowed=True`` for the activity line only.
 """
 
 from __future__ import annotations
@@ -101,13 +101,17 @@ def test_repl_answer_printed_once_at_turn_end():
     assert out.count("the answer") == 1
 
 
-def test_one_shot_stream_delta_opens_live_box():
-    console, _ = _tty_console()
+def test_one_shot_raw_stream_keeps_activity_without_painting_internal_state():
+    console, buffer = _tty_console()
     r = _renderer(console, live_allowed=True)
     r.on_turn_start("do work")
-    r.on_stream_delta("chunk")
-    assert r._box is not None and r._box.is_live
-    r.on_turn_end("chunk")
+    r.on_stream_delta('{"current_state": {"reasoning": "private partial')
+    assert r._box is not None and not r._box.is_live
+    assert r._activity is not None and r._activity.is_live
+    assert "private partial" not in buffer.getvalue()
+    r.on_turn_end("Finished")
+    assert "private partial" not in buffer.getvalue()
+    assert buffer.getvalue().count("Finished") == 1
 
 
 # ---------------------------------------------------------------------------

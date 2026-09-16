@@ -61,9 +61,15 @@ def owner_address(container: Any, surface_id: str, user_id: str = "") -> Optiona
     if sid == "email":
         try:
             from core.instance import resolve_owner_email
-            addr = resolve_owner_email(container)
+            # resolve_owner_email(env=None) reads os.environ — `container` is a
+            # DependencyContainer (or a bare stand-in), never an env mapping,
+            # so it must not be passed through (A7 / A40: this call used to
+            # pass `container`, an AttributeError on `.get` swallowed by the
+            # blanket except, silently killing the owner's email target).
+            addr = resolve_owner_email(None)
             return str(addr) if addr else None
         except Exception:
+            logger.debug("owner_address: email resolution failed", exc_info=True)
             return None
     env_key = _ENV_BY_SURFACE.get(sid)
     if env_key:

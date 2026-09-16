@@ -202,7 +202,7 @@ def test_trade_turn_refusal_genuine_owner_allows(monkeypatch):
     monkeypatch.delenv("AUTONOMY_HALT", raising=False)
     from tools.crypto_trade_gate import trade_turn_refusal
     from tools.controller.execution_context import ActionExecutionContext
-    ctx = ActionExecutionContext(role="orchestrator")
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")
     assert trade_turn_refusal(ctx, object()) is None
 
 
@@ -220,7 +220,7 @@ def test_trade_turn_refusal_halt_overrides_genuine_owner(monkeypatch):
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from tools.crypto_trade_gate import trade_turn_refusal
     from tools.controller.execution_context import ActionExecutionContext
-    r = trade_turn_refusal(ActionExecutionContext(role="orchestrator"), object())
+    r = trade_turn_refusal(ActionExecutionContext(user_id="local", role="orchestrator"), object())
     assert r and "halt" in r.lower()
 
 
@@ -246,7 +246,7 @@ def test_trade_turn_refusal_forged_probe_fails_closed(monkeypatch):
     monkeypatch.setattr(ar, "_is_forged_or_autonomous_turn", _boom)
     from tools.crypto_trade_gate import trade_turn_refusal
     from tools.controller.execution_context import ActionExecutionContext
-    r = trade_turn_refusal(ActionExecutionContext(role="orchestrator"), object())
+    r = trade_turn_refusal(ActionExecutionContext(user_id="local", role="orchestrator"), object())
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())
 
 
@@ -360,7 +360,7 @@ def test_trade_turn_refusal_genuine_agent_turn_risk_reducing_STILL_blocked_by_ha
     monkeypatch.setenv("AUTONOMY_HALT", "1")
     from tools.crypto_trade_gate import trade_turn_refusal
     from tools.controller.execution_context import ActionExecutionContext
-    ctx = ActionExecutionContext(role="orchestrator")  # genuine owner-turn, NOT forged
+    ctx = ActionExecutionContext(user_id="local", role="orchestrator")  # genuine owner-turn, NOT forged
     r = trade_turn_refusal(ctx, object(), risk_reducing=True)
     assert r and "halt" in r.lower()
 
@@ -374,3 +374,8 @@ def test_trade_turn_refusal_risk_reducing_still_blocks_forged_turn(monkeypatch):
     ctx = ActionExecutionContext()  # role defaults to "leaf" == forged
     r = trade_turn_refusal(ctx, object(), risk_reducing=True)
     assert r and ("forged" in r.lower() or "owner must drive" in r.lower())
+
+
+@pytest.fixture(autouse=True)
+def _wallet_owner_identity(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "local")

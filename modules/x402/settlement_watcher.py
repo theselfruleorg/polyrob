@@ -121,7 +121,7 @@ class SettlementWatcher(SettlementScanMixin, SettlementNotifyMixin,
         ERC-8004 `ReputationManager` the payment-feedback-authorization hook
         uses (`_maybe_offer_payment_feedback`). Production lazily builds a
         real one (`modules.eip8004.reputation.ReputationManager`), sharing
-        this watcher's `db`."""
+        this watcher's `db`. 046's room seams live on the notify mixin."""
         self.task_agent = task_agent
         self._db = db
         self.interval_seconds = interval_seconds

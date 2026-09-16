@@ -6,12 +6,14 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
+from webview import webgate
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.post("/api/internal/emit")
+@router.post("/api/internal/emit", dependencies=webgate.MUTATION_DEPS)
 async def internal_emit(request: Request) -> Response:
     """Internal endpoint for direct event emission from telemetry service.
 

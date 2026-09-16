@@ -1,7 +1,9 @@
 """Console seat for the durable app service (032): read the registry, approve /
 reject / kill, and the Apps page. Mounted next to the webgate pages router."""
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import JSONResponse
+
+from webview import webgate
 
 router = APIRouter()
 
@@ -33,7 +35,6 @@ async def api_apps(request: Request):
 async def _decide(request: Request, slug: str, verb: str):
     from core.app_service import owner_ops
     pages = _p()
-    pages._mutation_refused()
     pages._owner_console_required()
     user_id = pages._effective_user_id(request)
     fn = {"approve": owner_ops.approve, "reject": owner_ops.reject, "kill": owner_ops.kill}[verb]
@@ -43,17 +44,17 @@ async def _decide(request: Request, slug: str, verb: str):
     return JSONResponse({"ok": True, "message": msg})
 
 
-@router.post("/api/webgate/apps/{slug}/approve")
+@router.post("/api/webgate/apps/{slug}/approve", dependencies=webgate.MUTATION_DEPS)
 async def api_apps_approve(request: Request, slug: str):
     return await _decide(request, slug, "approve")
 
 
-@router.post("/api/webgate/apps/{slug}/reject")
+@router.post("/api/webgate/apps/{slug}/reject", dependencies=webgate.MUTATION_DEPS)
 async def api_apps_reject(request: Request, slug: str):
     return await _decide(request, slug, "reject")
 
 
-@router.post("/api/webgate/apps/{slug}/kill")
+@router.post("/api/webgate/apps/{slug}/kill", dependencies=webgate.MUTATION_DEPS)
 async def api_apps_kill(request: Request, slug: str):
     return await _decide(request, slug, "kill")
 
@@ -73,9 +74,3 @@ async def api_apps_logs(request: Request, slug: str, n: int = 100):
     if _registry().get(slug, user_id) is None:
         raise HTTPException(status_code=404, detail=f"no app {slug!r} for this tenant")
     return JSONResponse({"slug": slug, "logs": logs_tail(pages._data_dir(), user_id, slug, n)})
-
-
-@router.get("/apps", response_class=HTMLResponse)
-async def apps_page(request: Request):
-    pages = _p()
-    return pages._TEMPLATES.TemplateResponse(request, "apps.html", pages._page_context(request))

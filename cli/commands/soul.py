@@ -52,7 +52,16 @@ def soul():
 @soul.command("init")
 @click.option("--force", is_flag=True, help="Overwrite existing SOUL docs.")
 @click.option("--no-edit", is_flag=True, help="Skip opening $EDITOR after scaffolding.")
-def soul_init_cmd(force, no_edit):
+@click.option("--name", "name_opt", default=None, metavar="NAME",
+              help="Instance name (skips the prompt).")
+@click.option("--mission", "mission_opt", default=None, metavar="TEXT",
+              help="One-line mission (skips the prompt).")
+@click.option("--no-prompt", "--non-interactive", "no_prompt", is_flag=True,
+              default=False,
+              help="Never prompt; take --name/--mission or their defaults. "
+                   "Matches `polyrob init`'s flag vocabulary so the SOUL step "
+                   "can be scripted, containerised, or shipped in a profile.")
+def soul_init_cmd(force, no_edit, name_opt, mission_opt, no_prompt):
     """Scaffold identity/identity.md + operating.md and open your editor."""
     base = _data_home() / "identity"
     identity_p, operating_p = base / "identity.md", base / "operating.md"
@@ -60,10 +69,16 @@ def soul_init_cmd(force, no_edit):
         raise click.ClickException(
             f"{identity_p} already exists — edit it directly or re-run with --force")
     from core.instance import resolve_instance_id
-    name = click.prompt("Instance name", default=resolve_instance_id(),
-                        show_default=True)
-    mission = click.prompt("One-line mission", default="be genuinely useful",
-                           show_default=True)
+    default_name, default_mission = resolve_instance_id(), "be genuinely useful"
+    if no_prompt:
+        name = name_opt or default_name
+        mission = mission_opt or default_mission
+        no_edit = True  # a scripted run must never block on $EDITOR
+    else:
+        name = name_opt or click.prompt("Instance name", default=default_name,
+                                        show_default=True)
+        mission = mission_opt or click.prompt(
+            "One-line mission", default=default_mission, show_default=True)
     base.mkdir(parents=True, exist_ok=True)
     identity_p.write_text(_IDENTITY_TEMPLATE.format(name=name, mission=mission),
                           encoding="utf-8")

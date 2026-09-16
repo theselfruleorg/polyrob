@@ -1,6 +1,7 @@
 import pytest
 from core.surfaces.dead_targets import DeadTargetStore
 from core.surfaces.message_router import MessageRouter
+from core.surfaces.room_caps import RoomCaps
 from core.surfaces.session_chat_registry import SessionChatRegistry
 from core.surfaces.envelopes import OutboundMessage, SendResult, SurfaceCapabilities
 from core.surfaces.surface import Surface
@@ -410,3 +411,68 @@ async def test_publish_mark_fault_not_misattributed_to_surface(router, tmp_path,
     assert not any("surface" in rec.getMessage() and "raised" in rec.getMessage()
                    for rec in caplog.records)
     assert any("dead-target mark failed" in rec.getMessage() for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_publish_room_reply_not_recorded_on_send_failure(tmp_path):
+    """Fix round 1, finding #2: record_reply must fire only on a SUCCESSFUL
+    delivery — a failed send into a room chat must not consume the hourly cap."""
+    reg = SessionChatRegistry(str(tmp_path / "chat.db"))
+    reg.bind("agent:main:telegram:group:-100", "sess_1", "u_abc", "telegram", "-100")
+    r = MessageRouter(reg)
+    caps = RoomCaps(str(tmp_path / "caps.db"))
+    r.attach_room_caps(caps)
+
+    class _Failing(_RecordingSurface):
+        async def send(self, msg):
+            self.sent.append(msg)
+            return SendResult(success=False, error="boom")
+
+    surf = _Failing()
+    r.subscribe("telegram", surf)
+    await r.publish(OutboundMessage(
+        session_key="agent:main:telegram:group:-100", text="hi", partial=False))
+
+    assert len(surf.sent) == 1
+    assert caps._count("telegram", "-100", "reply", 0.0) == 0
+    ok, _ = caps.may_reply("telegram", "-100")
+    assert ok
+
+
+@pytest.mark.asyncio
+async def test_publish_room_reply_recorded_on_send_success(tmp_path):
+    """The success-path mirror of the above: a delivered room reply DOES count
+    against the hourly cap."""
+    reg = SessionChatRegistry(str(tmp_path / "chat.db"))
+    reg.bind("agent:main:telegram:group:-100", "sess_1", "u_abc", "telegram", "-100")
+    r = MessageRouter(reg)
+    caps = RoomCaps(str(tmp_path / "caps.db"))
+    r.attach_room_caps(caps)
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+
+    await r.publish(OutboundMessage(
+        session_key="agent:main:telegram:group:-100", text="hi", partial=False))
+
+    assert len(surf.sent) == 1
+    assert caps._count("telegram", "-100", "reply", 0.0) == 1
+
+
+@pytest.mark.asyncio
+async def test_publish_room_reply_denied_over_cap(tmp_path, monkeypatch):
+    """The router actually consults RoomCaps.may_reply before sending — over
+    cap, the surface is never even called."""
+    monkeypatch.setenv("GROUP_REPLY_CAP_PER_HOUR", "1")
+    reg = SessionChatRegistry(str(tmp_path / "chat.db"))
+    reg.bind("agent:main:telegram:group:-100", "sess_1", "u_abc", "telegram", "-100")
+    r = MessageRouter(reg)
+    caps = RoomCaps(str(tmp_path / "caps.db"))
+    r.attach_room_caps(caps)
+    caps.record_reply("telegram", "-100")
+    surf = _RecordingSurface()
+    r.subscribe("telegram", surf)
+
+    await r.publish(OutboundMessage(
+        session_key="agent:main:telegram:group:-100", text="hi", partial=False))
+
+    assert len(surf.sent) == 0

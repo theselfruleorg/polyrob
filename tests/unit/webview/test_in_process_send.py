@@ -152,6 +152,77 @@ def test_no_in_process_agent_falls_back_to_proxy(monkeypatch):
     assert "127.0.0.1:9000" in seen["url"]
 
 
+def test_proxy_forwards_console_cookie_as_bearer(monkeypatch):
+    """The second service validates the same owner credential; dropping it was
+    the chat composer's misleading `Invalid token` failure."""
+    srv, client = _local_client(monkeypatch)
+    _install_fake_agent(monkeypatch, None)
+    seen = {}
+
+    class _FakeResp:
+        status_code = 200
+        text = "ok"
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def post(self, url, **kw):
+            seen.update(kw)
+            return _FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+    client.cookies.set("auth_token", "owner.jwt.value")
+    response = client.post("/api/session/sess-abc/messages", json={"text": "hi"},
+                           headers={"Origin": "http://testserver"})
+    assert response.status_code == 200
+    assert seen["headers"] == {"Authorization": "Bearer owner.jwt.value"}
+
+
+def test_proxy_uses_api_key_when_console_has_no_session_token(monkeypatch):
+    srv, client = _local_client(monkeypatch)
+    _install_fake_agent(monkeypatch, None)
+    monkeypatch.setenv("API_AUTH_TOKEN", "service-secret")
+    seen = {}
+
+    class _FakeResp:
+        status_code = 200
+        text = "ok"
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def post(self, url, **kw):
+            seen.update(kw)
+            return _FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+    assert client.post("/api/session/sess-abc/messages", json={"text": "hi"}).status_code == 200
+    assert seen["headers"] == {"X-API-KEY": "service-secret"}
+
+
+def test_proxy_returns_upstream_error_without_raw_json(monkeypatch):
+    srv, client = _local_client(monkeypatch)
+    _install_fake_agent(monkeypatch, None)
+
+    class _FakeResp:
+        status_code = 401
+        text = '{"error":"Session expired"}'
+        def json(self): return {"error": "Session expired"}
+
+    class _FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def post(self, url, **kw): return _FakeResp()
+
+    import httpx
+    monkeypatch.setattr(httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+    response = client.post("/api/session/sess-abc/messages", json={"text": "hi"})
+    assert response.status_code == 401
+    assert response.json()["error"] == "Session expired"
+
+
 def test_queue_status_uses_in_process_handler(monkeypatch):
     srv, client = _local_client(monkeypatch)
     _install_fake_agent(monkeypatch, MagicMock(name="task_agent"))

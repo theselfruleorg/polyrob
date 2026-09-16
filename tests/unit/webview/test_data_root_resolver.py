@@ -90,6 +90,17 @@ def _stub_heavy_startup(monkeypatch):
         return None
 
     monkeypatch.setattr(core.initialization, "initialize_core", _noop)
+    # S8 (2026-09-14): startup now refuses `local` posture on a server-shaped
+    # deployment, and POLYROB_DATA_DIR outside $HOME (a pytest tmp_path) is one
+    # of the signals. These tests are about the pm() install, not the posture —
+    # take the documented override rather than weakening the guard.
+    monkeypatch.setenv("WEBVIEW_ALLOW_LOCAL_POSTURE", "1")
+    # 043 W7/W8: the same override means this is a `local` posture on a
+    # SERVER-shaped box, so the writable-console preconditions apply (a
+    # workstation is exempt, a waved-through server is not). These tests are
+    # about the pm() install — satisfy them rather than weaken the guard.
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u-owner")
+    monkeypatch.setenv("SESSION_REGISTRY_BACKEND", "sqlite")
     import webview.server as server
     monkeypatch.setattr(server, "_startup_late_services", _noop)
     return server

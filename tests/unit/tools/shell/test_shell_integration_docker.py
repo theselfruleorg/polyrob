@@ -48,8 +48,9 @@ def _process(monkeypatch, tmp_path, registry):
 
 
 def _ctx(sid):
+    # The owner tenant — see the note in test_shell_tool.py::_owner_ctx.
     return ActionExecutionContext(role="orchestrator", is_sub_agent=False,
-                                  user_id="polyrob", session_id=sid, metadata={"turn_kind": None})
+                                  user_id="local", session_id=sid, metadata={"turn_kind": None})
 
 
 @pytest.fixture(autouse=True)

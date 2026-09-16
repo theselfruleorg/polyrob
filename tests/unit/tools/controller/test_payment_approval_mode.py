@@ -27,6 +27,7 @@ import tools.controller.approval_queue  # noqa: F401 — pre-import so its modul
 # registration AFTER the monkeypatch and clobber the test's spy provider back to
 # the real OwnerQueueApprover.
 from tools.controller.types import ActionResult
+from tools.controller.execution_context import ActionExecutionContext
 
 
 def _make_controller(tmp_path, user_id="u1", tainted=False):
@@ -41,6 +42,11 @@ def _make_controller(tmp_path, user_id="u1", tainted=False):
     return Controller(container=container, orchestrator=orch)
 
 
+def _owner_ctx():
+    return ActionExecutionContext(
+        session_id="s1", user_id="u1", role="orchestrator", is_sub_agent=False)
+
+
 class _SpyProvider(approval.ApprovalProvider):
     calls = []
     outcome = True
@@ -53,8 +59,9 @@ class _SpyProvider(approval.ApprovalProvider):
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
     for k in ("PAYMENT_APPROVAL_MODE", "APPROVAL_REQUIRED_TOOLS", "APPROVAL_PROVIDER",
-              "APPROVAL_TIMEOUT_SEC"):
+              "APPROVAL_TIMEOUT_SEC", "POLYROB_OWNER_USER_ID"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
     constants._refreeze_compute_posture_for_tests()
     approval._refreeze_approval_flags_for_tests()
     constants._refreeze_payment_approval_flags_for_tests()
@@ -79,7 +86,7 @@ def test_mode_approve_routes_x402_request_through_owner_queue(tmp_path, monkeypa
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is None  # the spy provider approved
     assert _SpyProvider.calls == [("x402_invoice_x402_request", {"amount_usd": 5})]
@@ -102,7 +109,8 @@ def test_mode_approve_wires_the_money_specific_timeout(tmp_path, monkeypatch):
     c = _make_controller(tmp_path)
 
     reason = asyncio.run(asyncio.wait_for(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None), timeout=2))
+        c._run_pre_tool_call_hooks(
+            "x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()), timeout=2))
 
     assert reason is not None and "timeout" in reason.lower()
 
@@ -115,7 +123,7 @@ def test_mode_approve_denies_when_owner_queue_denies(tmp_path, monkeypatch):
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is not None and "x402_invoice_x402_request" in reason
 
@@ -158,7 +166,7 @@ def test_mode_auto_does_not_queue_x402_request(tmp_path, monkeypatch):
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is None
     assert _SpyProvider.calls == []  # never queued through owner_queue
@@ -232,7 +240,41 @@ _SPEND_VERBS = (
     "polymarket_place_limit_order", "polymarket_place_market_order",
     "defi_trade_transfer", "defi_trade_swap", "defi_trade_solana_swap",
     "defi_trade_approve_token", "defi_trade_revoke_approval",
+    # ⚠️ `defi_trade_bridge` is deliberately ABSENT (039). It owns its gate inside
+    # the verb (VERB_OWNED_APPROVAL_GATES), because the verb's ask knows the
+    # recipient, the USD value, the arrival floor and the Relay request id. Riding
+    # this hook AS WELL meant two taps for one bridge from two prompts describing
+    # the same transaction differently — the 2026-09-12 session.
     "x402_pay_x402_fetch",
+    # 2026-09-13: the wrap verb. On the SPEND lane like its siblings; the tiered
+    # lane below the ceiling is what keeps a routine wrap from needing a tap.
+    "defi_trade_wrap",
+    # 042: deployment + the generic contract call, all SPEND-side.
+    "defi_trade_deploy_token",
+    "defi_trade_deploy_contract",
+    "defi_trade_call",
+    "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
+    "defi_trade_solana_deploy_token",
+    # 2026-09-15: the non-fungible verbs, both SPEND-side. `nft_transfer` is
+    # additionally in ALWAYS_OWNER_APPROVED_VERBS, so the tiered lane can never
+    # exempt it -- an NFT has no price any cap could bound.
+    "defi_trade_nft_transfer",
+    "defi_trade_nft_revoke_approval",
+    # 046: the ERC-8004 identity verbs, SPEND-side on the same reasoning.
+    "defi_trade_register_agent",
+    "defi_trade_set_agent_uri",
+    # 042: the launchpad writes, all SPEND-side.
+    "launchpad_launch",
+    "launchpad_buy",
+    "launchpad_sell",
+    # 2026-09-14: the claim. It RECEIVES rather than spends, but it is a signed
+    # transaction against a money contract from the treasury wallet, and "not
+    # really a spend" is the reasoning that left solana_swap and x402_fetch
+    # ungoverned. Its cost is the fee, so the tiered lane clears it without a tap.
+    "launchpad_claim",
+    # 2026-09-14: the inverse of wrap, on the same lane for the same reason.
+    "defi_trade_unwrap",
+    "dapp_browser_dapp_connect",
 )
 
 
@@ -247,7 +289,7 @@ def test_mode_auto_still_queues_trade_verbs_through_owner_queue(tmp_path, monkey
     live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
     for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
-        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), None))
+        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), _owner_ctx()))
         assert reason is None, verb  # the spy (owner_queue) approved
         assert (verb, live) in _SpyProvider.calls, verb
 
@@ -260,7 +302,7 @@ def test_mode_auto_trade_verb_denied_when_owner_queue_denies(tmp_path, monkeypat
 
     c = _make_controller(tmp_path)
     reason = asyncio.run(c._run_pre_tool_call_hooks(
-        "hyperliquid_place_limit_order", {"amount_usd": 5}, None))
+        "hyperliquid_place_limit_order", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is not None and "hyperliquid_place_limit_order" in reason
 
@@ -283,7 +325,7 @@ def test_mode_auto_trade_verb_wires_the_money_specific_timeout(tmp_path, monkeyp
 
     reason = asyncio.run(asyncio.wait_for(
         c._run_pre_tool_call_hooks(
-            "hyperliquid_place_market_order", {"amount_usd": 5}, None), timeout=2))
+            "hyperliquid_place_market_order", {"amount_usd": 5}, _owner_ctx()), timeout=2))
 
     assert reason is not None and "timeout" in reason.lower()
 
@@ -299,7 +341,7 @@ def test_mode_approve_also_queues_trade_verbs_unchanged(tmp_path, monkeypatch):
     live = {"amount_usd": 5, "dry_run": False, "max_spend_usd": 5}
     for verb in _SPEND_VERBS:
         _SpyProvider.calls = []
-        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), None))
+        reason = asyncio.run(c._run_pre_tool_call_hooks(verb, dict(live), _owner_ctx()))
         assert reason is None, verb
         assert (verb, live) in _SpyProvider.calls, verb
 
@@ -356,7 +398,7 @@ def test_correspondent_tainted_turn_still_cannot_create_payment_request(tmp_path
     c.register_pre_tool_call_hook(gate, fail_mode="closed")
 
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is not None
     assert "untrusted correspondent" in reason or "blocked" in reason.lower()
@@ -509,7 +551,7 @@ def test_owner_queue_wiring_unaffected_when_orchestrator_untainted(tmp_path, mon
 
     c = _make_controller(tmp_path, tainted=False)
     reason = asyncio.run(
-        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, None))
+        c._run_pre_tool_call_hooks("x402_invoice_x402_request", {"amount_usd": 5}, _owner_ctx()))
 
     assert reason is None  # the spy provider approved
     assert _SpyProvider.calls == [("x402_invoice_x402_request", {"amount_usd": 5})]
@@ -559,7 +601,7 @@ def test_defi_dry_run_never_reaches_owner_queue(tmp_path, monkeypatch):
     for verb in _DEFI_SPEND_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(
-            verb, {"dry_run": True, "max_spend_usd": 999}, None))
+            verb, {"dry_run": True, "max_spend_usd": 999}, _owner_ctx()))
         assert reason is None, verb
         assert _SpyProvider.calls == [], verb
 
@@ -575,7 +617,7 @@ def test_tiered_lane_off_keeps_every_live_defi_spend_queued(tmp_path, monkeypatc
     for verb in _DEFI_SPEND_VERBS:
         _SpyProvider.calls = []
         asyncio.run(c._run_pre_tool_call_hooks(
-            verb, {"dry_run": False, "max_spend_usd": 0.5}, None))
+            verb, {"dry_run": False, "max_spend_usd": 0.5}, _owner_ctx()))
         assert _SpyProvider.calls, f"{verb} must still queue while the flag is off"
 
 
@@ -590,13 +632,13 @@ def test_tiered_lane_on_executes_within_ceiling_and_queues_above(tmp_path, monke
     for verb in _DEFI_SPEND_VERBS:
         _SpyProvider.calls = []
         reason = asyncio.run(c._run_pre_tool_call_hooks(
-            verb, {"dry_run": False, "max_spend_usd": 0.9}, None))
+            verb, {"dry_run": False, "max_spend_usd": 0.9}, _owner_ctx()))
         assert reason is None, verb
         assert _SpyProvider.calls == [], f"{verb} within ceiling must not queue"
 
         _SpyProvider.calls = []
         asyncio.run(c._run_pre_tool_call_hooks(
-            verb, {"dry_run": False, "max_spend_usd": 1.5}, None))
+            verb, {"dry_run": False, "max_spend_usd": 1.5}, _owner_ctx()))
         assert _SpyProvider.calls, f"{verb} above ceiling must still queue"
 
 
@@ -613,5 +655,6 @@ def test_tiered_lane_never_loosens_the_venue_order_verbs(tmp_path, monkeypatch):
     for verb in _VENUE_ORDER_VERBS:
         _SpyProvider.calls = []
         asyncio.run(c._run_pre_tool_call_hooks(
-            verb, {"dry_run": True, "max_spend_usd": 0.01, "amount_usd": 0.01}, None))
+            verb, {"dry_run": True, "max_spend_usd": 0.01, "amount_usd": 0.01},
+            _owner_ctx()))
         assert _SpyProvider.calls, f"{verb} must always queue"

@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 
 QUOTE_URL = "https://li.quest/v1/quote"
 
+#: How LI.FI names the native gas asset on the wire. Measured 2026-09-13 on
+#: Robinhood (4663): this and 0xEeee…EEeE return an identical quote, so the zero
+#: form is used as the unambiguous one. Confined to this module — our own rail
+#: passes the `routes.NATIVE` word, never an address, so no magic 0x value ever
+#: reaches the checksum/pin machinery.
+_LIFI_NATIVE = "0x0000000000000000000000000000000000000000"
+
 #: Deliberately short. An aggregator quote is more perishable than a pool read,
 #: and a slow route is a stale price, so waiting longer buys a worse trade.
 TIMEOUT_SEC = 12.0
@@ -92,11 +99,19 @@ class LifiRouteProvider:
         # checksummed value, and the spender/target that comes BACK is still
         # validated against the chain's pin. Never do this for base58 (Solana),
         # where case is data rather than presentation.
+        # NATIVE-in: translate our sentinel to LI.FI's zero address at the edge.
+        # Measured live on Robinhood 2026-09-13: LI.FI accepts BOTH 0x000…0 and
+        # 0xEee…EEeE for native and returns an identical quote, so the zero form
+        # is chosen as the one that is unambiguous on every chain. `token_out`
+        # is never a sentinel — this rail buys a specific contract.
+        from tools.defi.providers.routes import is_native
+        from_token = (_LIFI_NATIVE if is_native(token_in) else token_in.lower())
+
         params = {
             "fromChain": str(row.chain_id),
             # Same-chain ONLY. See the module docstring: bridging is out of scope.
             "toChain": str(row.chain_id),
-            "fromToken": token_in.lower(),
+            "fromToken": from_token,
             "toToken": token_out.lower(),
             "fromAmount": str(int(amount_in_raw)),
             "fromAddress": holder.lower(),
@@ -140,7 +155,16 @@ class LifiRouteProvider:
             value_raw = int(tx["value"], 16)
         # An ERC-20 -> ERC-20 swap moves no native value. A non-zero value here
         # would be an unasserted native outflow riding along with the trade.
-        if value_raw:
+        #
+        # ⚠️ "Unasserted" was the whole objection, and for a NATIVE-in swap it no
+        # longer holds: `tx_guard` learned to declare and assert a native send in
+        # 039 B1 (`TxIntent.token=None` measures the native delta and refuses a
+        # short or long move against the same pinned dust tolerance). So a native
+        # quote carries value by definition and is passed through with the value
+        # INTACT — `best_route` then holds it to exactly `amount_in_raw`. Keeping
+        # the blanket refusal here is what forced every entry through WETH, and
+        # therefore through an allowance the registry says is unnecessary.
+        if value_raw and not is_native(token_in):
             logger.error("lifi: quote carries native value %s on an ERC-20 swap "
                          "— REFUSED", value_raw)
             return None
@@ -150,6 +174,9 @@ class LifiRouteProvider:
             chain=chain, token_in=token_in, token_out=token_out,
             amount_in_raw=amount_in_raw, amount_out_raw=amount_out,
             amount_out_min_raw=_int(estimate.get("toAmountMin")),
-            spender=spender, to=to, calldata=calldata, value_raw=0,
+            spender=spender, to=to, calldata=calldata,
+            # Zero for an ERC-20 swap (asserted above); the native amount for a
+            # native-in swap, which `best_route` holds to `amount_in_raw`.
+            value_raw=(value_raw if is_native(token_in) else 0),
             venue=f"lifi:{tool}", quoted_at=time.time(),
             locally_built=False)

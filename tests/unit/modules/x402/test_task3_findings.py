@@ -191,7 +191,9 @@ async def test_m5_index_retries_jitter_on_cross_process_collision(tmp_path, monk
             user_id="rob", session_id="s1", amount_usd=7.5, purpose="a", db=db)
         assert first["amount_usd"] == 7.5
 
-        async def blind_dedupe(amount_usd, recipient, cap, database):
+        # 046: the dedupe is now asset- and kind-scoped; the fake takes the
+        # same shape so it still stands in for the real one.
+        async def blind_dedupe(amount_usd, recipient, cap, database, **kw):
             return round(float(amount_usd), 6)  # pretend no collision (cross-process race)
 
         monkeypatch.setattr(invoicing, "_dedupe_amount_for_treasury", blind_dedupe)

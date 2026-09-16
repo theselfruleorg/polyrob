@@ -39,7 +39,7 @@ def test_load_pfp_meta_none_when_absent(tmp_path):
 def test_load_pfp_meta_parses_written_json(tmp_path):
     d = tmp_path / "identity" / "rob" / "pfp"
     d.mkdir(parents=True)
-    blob = {"generator": "mindprint@v2", "seed": "Rob Ottmachin",
+    blob = {"generator": "mindprint@v2", "seed": "POLYROB",
             "voice": {"pitch": 1.1, "rate": 1.02, "timbre": 0.42}}
     (d / "pfp.json").write_text(json.dumps(blob), encoding="utf-8")
     assert load_pfp_meta(tmp_path, "rob") == blob

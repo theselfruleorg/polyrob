@@ -18,6 +18,14 @@ from core.surfaces.act import InboundResult  # noqa: F401 — canonical home sin
 from core.surfaces.dispatcher import route_inbound, RouteDecision
 from core.surfaces.envelopes import InboundMessage, Identity, SessionSource
 from core.surfaces.media import Media
+# 044 fix round 1 (minor): triggers.py has no internal deps, so this is hoisted
+# to a module-level import instead of three separate inline imports.
+from surfaces.telegram.triggers import (
+    effective_thread_id,
+    is_reply_to_bot,
+    message_mentions_bot,
+    sender_is_bot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -30,60 +38,59 @@ VOICE_TRANSCRIPT_PREFIX = "[voice message, auto-transcribed] "
 
 
 def _chat_type(tg_type: Optional[str]) -> str:
-    """Map Telegram chat.type -> our SessionSource.chat_type."""
-    return "dm" if tg_type == "private" else "group"
+    """Telegram chat.type -> SessionSource.chat_type. Every non-private value is a
+    ROOM for the dispatcher; the exact value is kept for the session key and the
+    room paragraph."""
+    if tg_type == "private":
+        return "dm"
+    return tg_type if tg_type in ("group", "supergroup", "channel") else "group"
 
 
-def _detect_bot_mention(msg: dict, text: str, bot_username: Optional[str]) -> Optional[bool]:
+def _detect_bot_mention(msg: dict, text: str, bot_username: Optional[str],
+                        bot_id: Optional[int] = None) -> Optional[bool]:
     """W3 groups (2026-07-14): does this GROUP message address OUR bot?
 
-    True  = an @mention entity resolving to @<bot_username> (case-insensitive), a
-            ``text_mention`` entity pointing at the bot user, or a reply to one of
-            the bot's own messages.
-    False = bot_username is known and nothing addressed the bot.
-    None  = bot_username unknown (the dispatcher gate treats None as NOT mentioned,
-            preserving the fail-closed default) or not a group chat.
+    044 T8: delegates to ``surfaces.telegram.triggers`` — entity-authoritative
+    (mention/text_mention/bot_command, caption entities, UTF-16 offsets) instead
+    of the ad-hoc text-slice match this used to do.
+
+    True  = an @mention/text_mention/`/cmd@bot` entity (text or caption) resolving
+            to this bot, or a reply to one of the bot's own messages.
+    False = bot identity is known and nothing addressed the bot.
+    None  = bot identity unknown (the dispatcher gate treats None as NOT
+            mentioned, preserving the fail-closed default).
 
     Without this the telegram surface never set ``mentions_bot`` and the
     GROUP_CHAT_ENABLED mention gate silently denied EVERY group message —
     including the owner's @mentions and replies.
     """
-    if not bot_username:
+    hit = message_mentions_bot(msg, bot_username=bot_username, bot_id=bot_id)
+    if hit is None:
         return None
-    uname = bot_username.lower()
-    for ent in msg.get("entities") or []:
-        etype = ent.get("type")
-        if etype == "mention":
-            try:
-                offset, length = int(ent.get("offset", 0)), int(ent.get("length", 0))
-                if text[offset:offset + length].lower() == f"@{uname}":
-                    return True
-            except (TypeError, ValueError):
-                continue
-        elif etype == "text_mention":
-            if str(((ent.get("user") or {}).get("username") or "")).lower() == uname:
-                return True
-    reply_from = (msg.get("reply_to_message") or {}).get("from") or {}
-    if reply_from.get("is_bot") and str(reply_from.get("username") or "").lower() == uname:
-        return True
-    return False
+    return hit or is_reply_to_bot(msg, bot_username=bot_username, bot_id=bot_id)
 
 
 def build_inbound_message(update: dict, user_directory: Any,
-                          bot_username: Optional[str] = None) -> Optional[InboundMessage]:
+                          bot_username: Optional[str] = None,
+                          bot_id: Optional[int] = None) -> Optional[InboundMessage]:
     """Build a normalized InboundMessage from a raw Telegram update, identifying the
     user to an INTERNAL user_id. Returns None for updates with no routable message.
 
-    ``bot_username`` (no ``@``) enables group mention/reply detection; when omitted,
-    ``mentions_bot`` stays None (gate-safe unknown).
+    ``bot_username`` (no ``@``) and/or ``bot_id`` enable group mention/reply
+    detection (``triggers.message_mentions_bot`` accepts either or both); when
+    both are omitted, ``mentions_bot`` stays None (gate-safe unknown).
     """
-    msg = update.get("message") or update.get("edited_message") or {}
+    msg = (update.get("message") or update.get("edited_message")
+           or update.get("channel_post") or update.get("edited_channel_post") or {})
     chat = msg.get("chat") or {}
     from_user = msg.get("from") or {}
     chat_id = chat.get("id")
     if chat_id is None:
         return None
-    text = msg.get("text") or ""
+    # A photo/document arrives with a CAPTION, never `text`. Reading only `text`
+    # was half of the 2026-09-13 dropped-image bug: even a captioned image routed
+    # as text="" and was discarded by the empty-content guard.
+    text = msg.get("text") or msg.get("caption") or ""
     tg_id = str(from_user.get("id")) if from_user.get("id") is not None else str(chat_id)
 
     # Owner alias: an authenticated Telegram owner operates as the instance OWNER
@@ -98,17 +105,25 @@ def build_inbound_message(update: dict, user_directory: Any,
         surface_id="telegram",
         chat_id=str(chat_id),
         chat_type=_chat_type(chat.get("type")),
+        thread_id=effective_thread_id(msg),
     )
     update_id = update.get("update_id")
 
-    # Populate media with a voice Media when the update carries voice/audio.
-    # Bytes are fetched lazily by the harness (transport-specific); we only record
-    # kind + mime here so the core voice_needs_guard seam can inspect media instead
-    # of reaching back into the raw Telegram update dict.
+    # Populate media from every attachment the update carries. Bytes are fetched
+    # lazily by the harness (transport-specific); we only record kind/mime/ref here
+    # so the core voice_needs_guard seam can inspect media instead of reaching back
+    # into the raw Telegram update dict.
+    #
+    # Voice keeps its dedicated, ref-less shape: voice_guard and voice_echo have
+    # always read `media[0]`, and the transcription path (not the attachment path)
+    # owns a voice note. Everything ELSE goes through extract_media.
     from surfaces.telegram.voice import extract_voice_file_id
+    from surfaces.telegram.media import extract_media
     media: list = []
     if extract_voice_file_id(update):
         media = [Media(kind="voice", mime="audio/ogg")]
+    else:
+        media = extract_media(update)
 
     # W3 groups: mention/reply detection so the dispatcher's group gate can pass
     # addressed messages instead of silently denying everything (2026-07-14 fix).
@@ -117,8 +132,11 @@ def build_inbound_message(update: dict, user_directory: Any,
     reply_msg = msg.get("reply_to_message") or {}
     if reply_msg.get("message_id") is not None:
         reply_to = str(reply_msg["message_id"])
-    if _chat_type(chat.get("type")) == "group":
-        mentions_bot = _detect_bot_mention(msg, text, bot_username)
+    # 044 T9: _chat_type now differentiates group/supergroup/channel (it used to
+    # collapse every non-private type to "group"); mention detection must fire for
+    # every ROOM, not just the literal "group" value.
+    if _chat_type(chat.get("type")) != "dm":
+        mentions_bot = _detect_bot_mention(msg, text, bot_username, bot_id=bot_id)
 
     return InboundMessage(
         text=text,
@@ -131,6 +149,7 @@ def build_inbound_message(update: dict, user_directory: Any,
         media=media,
         reply_to=reply_to,
         mentions_bot=mentions_bot,
+        sender_is_bot=sender_is_bot(msg),
     )
 
 
@@ -144,6 +163,7 @@ async def process_update(
     transcribe_voice=None,
     now: Optional[float] = None,
     bot_username: Optional[str] = None,
+    bot_id: Optional[int] = None,
 ) -> Optional[InboundResult]:
     """Dedup -> [voice transcription] -> identify -> route. Returns None if the update
     is a redelivery or has no routable message; otherwise an InboundResult the webhook
@@ -179,7 +199,8 @@ async def process_update(
             logger.debug("telegram voice transcription skipped: %s", e)
 
     # 2) IDENTIFY.
-    inbound = build_inbound_message(update, user_directory, bot_username=bot_username)
+    inbound = build_inbound_message(update, user_directory, bot_username=bot_username,
+                                    bot_id=bot_id)
     if inbound is None:
         return None
     # Stamp the transcript onto the voice Media so the surface can echo it (voice_echo).

@@ -291,16 +291,32 @@ class X402PayTool(BaseTool):
                 return self._ar(error=f"x402_fetch failed: {e}")
             if res.paid:
                 # Reuse the same idem key check() used so replay-protection correlates.
-                wallet.policy.record(venue="x402", action="pay", amount_usd=res.amount_usd,
+                # `X402Result` carries no settled network/chain field (only
+                # `pay_to`/`tx_hash`/`amount_usd`) — `cfg.network` is the wallet's
+                # "mainnet"/"testnet" MODE, not a chain id, and mapping it to the
+                # actual settled chain (base/base-sepolia) belongs to a future
+                # X402Result field, not a guess here. chain=None until then.
+                # A merchant-controlled settlement header cannot discount the
+                # amount of the authorization we actually signed.
+                cap_charge = max(res.amount_usd, getattr(res, "authorized_amount_usd", None) or 0.0)
+                wallet.policy.record(venue="x402", action="pay", amount_usd=cap_charge,
                                      counterparty=res.pay_to, idempotency_key=idem,
-                                     result_ref=res.tx_hash)
+                                     result_ref=res.tx_hash, chain=None,
+                                     submission_ref=getattr(res, "submission_ref", None))
                 # Finding 2 (Task 4 review, cheap-related): amount_is_estimate was
                 # captured on X402Result but never surfaced — the audit/user trail
                 # couldn't tell a confirmed-settled figure from a pre-settlement
                 # estimate. Mark it in the header so that distinction is visible.
                 estimate_marker = " (estimated)" if res.amount_is_estimate else ""
                 header = f"[paid ${res.amount_usd:.4f}{estimate_marker} to {res.pay_to}, tx {res.tx_hash}]\n"
+                if cap_charge > res.amount_usd:
+                    header += f"[Spend cap charged ${cap_charge:.4f}, the signed authorization ceiling.]\n"
             else:
+                if getattr(res, "submission_ref", None):
+                    return self._ar(error=(
+                        "Payment authorization was prepared but settlement is unconfirmed; "
+                        "reconcile the pending submission before retrying. "
+                        f"Reference: {res.submission_ref}"))
                 # 2026-07-19 fabrication incident: this branch used to emit an
                 # EMPTY header, so an unpaid fetch was indistinguishable from a
                 # paid one — and when the body was empty too, the whole content

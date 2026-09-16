@@ -107,6 +107,7 @@ def test_interactive_piped_input_writes_toolset(tmp_path, monkeypatch):
         "",         # model (blank)
         "research", # toolset
         "research", # template
+        "n",        # keep the stock character
         "",         # owner pairing: instance id (default rob)
         "",         # owner pairing: owner user id (default rob)
         "",         # 5/5 guardrails: local mode (default No)
@@ -183,6 +184,7 @@ def test_default_provider_inferred_interactive(tmp_path, monkeypatch):
         "gpt-5.1",    # model → owned by openai
         "",           # toolset (default)
         "",           # template (default)
+        "n",          # keep the stock character
         "",           # owner pairing: instance id (default rob)
         "",           # owner pairing: owner user id (default rob)
         "",           # 5/5 guardrails: local mode (default No)

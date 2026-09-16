@@ -33,10 +33,17 @@ RpcCall = Callable[[str, list], Any]
 # is needed to compute it at runtime.
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-# USDC is always 6 decimals — the treasury only ever expects canonical USDC
-# (same asset-pin reasoning tools/x402/real_client.py already applies on the
-# paying side), so this is a safe constant, not an assumption per-transfer.
-_USDC_DECIMALS = 6
+#: The decimals a caller gets when it does not say. 6 = USDC, which is what
+#: every pre-046 caller meant.
+#:
+#: ⚠️ It is a DEFAULT, not an assumption. An asset row
+#: (`core/payments/assets.py`) is the authority, and a caller that has one MUST
+#: pass it — an 18-decimal value divided by 10**6 is not a price, it is a
+#: number a thousand billion times too large.
+DEFAULT_DECIMALS = 6
+
+#: Back-compat alias for the pre-046 name.
+_USDC_DECIMALS = DEFAULT_DECIMALS
 
 
 def _pad_address_topic(address: str) -> str:
@@ -63,20 +70,24 @@ def get_head_block(rpc: RpcCall) -> Optional[int]:
 
 def scan_treasury_transfers(
     rpc: RpcCall,
-    usdc_addr: str,
+    token_addr: str,
     treasury: str,
     from_block: int,
     to_block: int,
+    *,
+    decimals: int = DEFAULT_DECIMALS,
 ) -> Optional[List[Dict[str, Any]]]:
-    """USDC ``Transfer(from, to=treasury, value)`` logs in
+    """ERC-20 ``Transfer(from, to=treasury, value)`` logs for ONE token in
     ``[from_block, to_block]`` (inclusive), fetched via `eth_getLogs`
     filtered server-side on the `to` topic — only transfers INTO the
     treasury are ever returned.
 
-    Returns ``[{tx_hash, from, amount_usd, block}, ...]``; ``amount_usd`` is
-    ``value / 10**6`` rounded to 6 decimals (USDC's own precision) so it
-    compares exactly against the ``amount_usd`` REAL column on the invoice
-    table.
+    Returns ``[{tx_hash, from, amount_raw, amount_usd, block}, ...]``.
+
+    ⚠️ ``amount_raw`` is the EXACT integer from the log and is what settlement
+    matches on. ``amount_usd`` is ``value / 10**decimals`` and is for DISPLAY
+    only. Matching on the float was safe only while every asset had 6 decimals;
+    an 18-decimal value does not survive the round trip (proposal 046 §4.3).
 
     **Return contract (audit 2026-08-07 #1).** ``None`` means the range was NOT
     scanned (RPC error/timeout) — the caller MUST NOT advance its checkpoint
@@ -91,7 +102,7 @@ def scan_treasury_transfers(
         params = [{
             "fromBlock": hex(int(from_block)),
             "toBlock": hex(int(to_block)),
-            "address": usdc_addr,
+            "address": token_addr,
             "topics": [TRANSFER_TOPIC, None, _pad_address_topic(treasury)],
         }]
         logs = rpc("eth_getLogs", params)
@@ -119,7 +130,8 @@ def scan_treasury_transfers(
             out.append({
                 "tx_hash": log.get("transactionHash"),
                 "from": _topic_to_address(topics[1]),
-                "amount_usd": round(value / (10 ** _USDC_DECIMALS), _USDC_DECIMALS),
+                "amount_raw": value,
+                "amount_usd": round(value / (10 ** int(decimals)), 6),
                 "block": int(log.get("blockNumber") or "0x0", 16),
             })
         except Exception:

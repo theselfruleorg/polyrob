@@ -60,42 +60,41 @@ def subagents_info(as_json: bool):
             click.echo(f"  Blocked tools: {', '.join(info['blocked_tools'])}")
 
 
+def _delegations(session_id=None, delegation_id=None):
+    from cli.delegation_receipts import read_delegations
+    from core.identity import resolve_identity
+    from agents.task.agent.autonomy_state import default_autonomy_state_db
+    return read_delegations(default_autonomy_state_db(), resolve_identity(), session_id, delegation_id)
+
+
 @subagents.command("list")
-@click.option("--session-id", help="Session to inspect (requires live session or persisted data).")
+@click.option("--session-id", help="Filter durable receipts by full session ID.")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def subagents_list(session_id: Optional[str], as_json: bool):
-    """List subagents/delegations.
-
-    Note: Delegations are currently in-memory and session-scoped. Without a live
-    session connection, this can only show persisted records (future work).
-    """
+    """List persisted background delegation receipts, newest first."""
+    rows = _delegations(session_id)
     if as_json:
-        click.echo(json.dumps({
-            "supported": False, "delegations": [],
-            "reason": "CLI delegation introspection is not yet persisted; "
-                      "use /subagents in a live REPL session.",
-        }, indent=2))
-        return
-    if session_id:
-        click.echo(click.style("[polyrob] ", fg="yellow") +
-                   "Live session introspection requires API/WebView connection")
-        click.echo("CLI will support persisted delegation records in a future update")
+        click.echo(json.dumps({"supported": True, "delegations": rows}, indent=2))
+    elif not rows:
+        click.echo("No persisted background delegations. Live synchronous children are visible through /subagents.")
     else:
-        click.echo("Use /subagents in an active REPL session, or specify --session-id for persisted records")
+        for row in rows:
+            click.echo(f"{row['delegation_id']}  {row['status']}  session={row['session_id']}  {row.get('goal') or ''}")
 
 
 @subagents.command("show")
 @click.argument("delegation_id")
+@click.option("--session-id", help="Disambiguate a delegation ID reused in multiple sessions.")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def subagents_show(delegation_id: str, as_json: bool):
-    """Show details for a specific delegation."""
+def subagents_show(delegation_id: str, as_json: bool, session_id=None):
+    """Show a persisted background delegation and its result."""
+    rows = _delegations(session_id, delegation_id)
+    if not rows:
+        raise click.ClickException("Delegation not found. Use polyrob subagents list.")
+    if len(rows) > 1:
+        raise click.ClickException("Delegation ID is ambiguous; specify --session-id: " + ", ".join(r["session_id"] for r in rows))
     if as_json:
-        click.echo(json.dumps({
-            "supported": False, "delegation_id": delegation_id,
-            "reason": "CLI delegation introspection is not yet persisted; "
-                      "use /subagents in a live REPL session.",
-        }, indent=2))
-        return
-    click.echo(click.style("[polyrob] ", fg="yellow") +
-               "Live delegation introspection requires API/WebView connection")
-    click.echo("CLI will support persisted delegation records in a future update")
+        click.echo(json.dumps(rows[0], indent=2))
+    else:
+        for key, value in rows[0].items():
+            click.echo(f"{key}: {value}")

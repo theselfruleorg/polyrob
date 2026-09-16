@@ -88,12 +88,11 @@ def _require_session_owner(req: Request, resource_owner: Optional[str]) -> None:
     Mirrors the ownership-check pattern already correct at the
     workspace/upload endpoint (api/task_http_api.py ~1554-1564) — applied
     consistently across the session read/write endpoints that were missing it
-    (E8 / A6 gap 4). No-op when resource_owner is falsy (nothing recorded to
-    compare against — matches the pre-existing upload-endpoint convention).
+    (E8 / A6 gap 4). Missing ownership is a refusal, never public access.
     """
     from utils.auth_utils import get_authenticated_user_id
     caller_id = get_authenticated_user_id(req)
-    if resource_owner and caller_id != resource_owner:
+    if not caller_id or not resource_owner or caller_id != resource_owner:
         raise HTTPException(status_code=403, detail="Access denied - session owned by a different user")
 
 # Dependency to get TaskAgent instance
@@ -621,6 +620,13 @@ async def cancel_session(
         # OPTIMIZATION: Clean session ID once at API entry
         session_id = clean_session_id_at_entry(session_id)
 
+        # A32: a cross-process Stop must be an honest 409 (with owner_pid), NOT a
+        # silent no-op — cancel_session_by_id can't reach a session owned by
+        # another worker, so without this guard a remote Stop returns success and
+        # cancels nothing. Mirrors send_user_message's guard_remote; no-op for the
+        # in-process registry (LOCAL/MISSING pass through to the logic below).
+        guard_remote(agent, session_id)
+
         session_info = await agent.get_session_by_id(session_id)
         if not session_info:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
@@ -891,6 +897,12 @@ async def switch_active_session(
         session_id = request.get("session_id")
         if not session_id:
             raise HTTPException(status_code=400, detail="session_id is required")
+
+        session_id = clean_session_id_at_entry(session_id)
+        session_info = await agent.get_session_by_id(session_id)
+        if not session_info:
+            raise HTTPException(status_code=404, detail="Session not found")
+        _require_session_owner(req, session_info.get("user_id"))
 
         # Set active session through agent
         if hasattr(agent, 'user_sessions'):
@@ -1221,7 +1233,8 @@ async def create_session(
             session_info = await agent.create_session(
                 user_id,
                 session_request,
-                session_id=session_id
+                session_id=session_id,
+                creator="api",  # 043 A17: the generic HTTP session-creation endpoint
             )
         except SessionOwnershipError as owner_error:
             # C4: client-supplied session_id belongs to another user.
@@ -1504,124 +1517,20 @@ async def inject_file_content_to_message(
 ) -> tuple[str, Optional[List[Dict[str, Any]]]]:
     """Smart content injection with IMAGE support for vision.
 
-    Returns both updated text and optional image attachments for vision models.
-
-    Small text files (< 30KB): Inject full content inline
-    Large text files (>= 30KB): Just mention with metadata
-    Images: Convert to base64 for vision models
-
-    Args:
-        file_path: Path to file in workspace
-        message_text: User's message text
-        session_id: Session ID for path resolution
-        user_id: User ID for path resolution
+    Thin wrapper over ``core.surfaces.inbound_attachments.inject_file_content`` —
+    the seam Telegram and email also use (2026-09-13). Kept as a named coroutine
+    because the console's two call sites above await it; the only work done here
+    is resolving the session workspace.
 
     Returns:
         tuple: (combined_message_text, image_attachments)
-        - combined_message_text: Text with file references
-        - image_attachments: List of image data dicts for vision (None if no images)
     """
-    from pathlib import Path
     from agents.task.path import pm
-    import base64
+    from core.surfaces.inbound_attachments import inject_file_content
 
-    # Get full file path
-    workspace_dir = pm().get_workspace_dir(session_id, user_id)
-    full_path = workspace_dir / file_path
+    workspace_dir = str(pm().get_workspace_dir(session_id, user_id))
+    return inject_file_content(workspace_dir, str(file_path), message_text)
 
-    if not full_path.exists():
-        return (f"{message_text}\n\n[Error: Attached file not found: {file_path}]", None)
-
-    file_size = full_path.stat().st_size
-    file_ext = full_path.suffix.lower()
-
-    # IMAGE HANDLING (NEW): Convert to base64 for vision
-    IMAGE_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
-    if file_ext in IMAGE_EXTENSIONS:
-        try:
-            # Validate image size (10MB max, same as upload limit)
-            MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
-            if file_size > MAX_IMAGE_SIZE:
-                size_mb = file_size / 1024 / 1024
-                return (
-                    f"{message_text}\n\n[Error: Image too large ({size_mb:.1f}MB). Max: 10MB for vision processing]",
-                    None
-                )
-
-            # Read image as binary and convert to base64
-            # Using synchronous I/O (FastAPI handles blocking ops via thread pool)
-            with open(full_path, 'rb') as f:
-                image_bytes = f.read()
-
-            image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-
-            # Determine MIME type
-            mime_map = {
-                '.png': 'image/png',
-                '.jpg': 'image/jpeg',
-                '.jpeg': 'image/jpeg',
-                '.gif': 'image/gif',
-                '.webp': 'image/webp'
-            }
-            mime_type = mime_map.get(file_ext, 'image/png')
-
-            # Return text + image data for multimodal message
-            size_kb = file_size / 1024
-            size_str = f"{size_kb:.1f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
-
-            updated_text = f"{message_text}\n\n[Attached image: {full_path.name} ({size_str})]\nPath in workspace: {file_path}"
-            image_data = {
-                'type': 'image_url',
-                'image_url': {
-                    'url': f'data:{mime_type};base64,{image_base64}'
-                }
-            }
-
-            logger.info(f"📷 Image attached for vision: {full_path.name} ({size_str})")
-            return (updated_text, [image_data])
-
-        except Exception as e:
-            logger.error(f"Failed to process image {full_path.name}: {e}")
-            return (
-                f"{message_text}\n\n[Error: Failed to process image {full_path.name}: {str(e)}]",
-                None
-            )
-
-    # TEXT FILE HANDLING (existing logic)
-    INJECT_SIZE_THRESHOLD = 30 * 1024  # 30KB
-
-    if file_size < INJECT_SIZE_THRESHOLD:
-        # Small file - inject full content
-        if file_ext in ['.txt', '.md', '.csv', '.json', '.xml', '.py', '.js', '.html', '.css']:
-            try:
-                # Using synchronous I/O (FastAPI handles blocking ops via thread pool)
-                with open(full_path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-
-                combined_text = f"""{message_text}
-
-[Attached file: {full_path.name} ({file_size/1024:.1f}KB)]
---- File Content Start ---
-{content}
---- File Content End ---"""
-                return (combined_text, None)
-            except UnicodeDecodeError:
-                # Fall through to large file handling
-                pass
-
-    # Large file or binary - just reference
-    size_kb = file_size / 1024
-    size_str = f"{size_kb:.1f}KB" if size_kb < 1024 else f"{size_kb/1024:.1f}MB"
-
-    reference_text = f"""{message_text}
-
-[Attached large file: {full_path.name} ({size_str})]
-File type: {file_ext}
-Path in workspace: {file_path}
-
-To read this file, use: filesystem_read_file(path="{file_path}")"""
-
-    return (reference_text, None)
 
 @router.post("/sessions/{session_id}/workspace/upload")
 async def upload_document(
@@ -1632,14 +1541,17 @@ async def upload_document(
 ):
     """Upload a file to session workspace.
 
-    Supports: 
-    - Documents: PDF, DOCX, DOC, TXT, MD, CSV, JSON, XML
-    - Images: PNG, JPG, JPEG, GIF, WEBP (for vision)
-    
-    Max size: 10MB per file
+    The allowed extensions, the MIME allowlist and the per-file cap all come from
+    ``core.surfaces.inbound_attachments`` — the same SSOT the console template's
+    ``accept=`` attribute and the chat-surface media rail read (2026-09-13). They
+    used to be three hand-maintained lists, and the template already offered
+    .doc/.docx that this endpoint's MIME allowlist rejected.
     """
     from pathlib import Path
     from agents.task.path import pm
+    from core.surfaces.inbound_attachments import (
+        UPLOAD_EXTENSIONS, UPLOAD_MIME_TYPES, upload_max_mb,
+    )
 
     try:
         # 1. Clean session ID
@@ -1662,18 +1574,18 @@ async def upload_document(
             logger.warning(f"[Upload Auth FAILED] Access denied - user {user_id} tried to upload to session owned by {session_owner}")
             raise HTTPException(status_code=403, detail=f"Access denied - session owned by different user")
 
-        # 4. Validate file type (documents + images for vision)
-        ALLOWED_EXTENSIONS = {'.pdf', '.docx', '.doc', '.txt', '.md', '.csv', '.json', '.xml', '.png', '.jpg', '.jpeg', '.gif', '.webp'}
+        # 4. Validate file type (documents + images for vision + audio/video/archives)
+        ALLOWED_EXTENSIONS = UPLOAD_EXTENSIONS
         file_ext = Path(file.filename).suffix.lower()
 
         if file_ext not in ALLOWED_EXTENSIONS:
             raise HTTPException(
                 status_code=400,
-                detail=f"File type {file_ext} not allowed. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+                detail=f"File type {file_ext} not allowed. Allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))}"
             )
 
-        # 5. Validate file size (10MB limit)
-        MAX_SIZE = 10 * 1024 * 1024  # 10MB
+        # 5. Validate file size (INBOUND_MEDIA_MAX_MB — one cap for both doors)
+        MAX_SIZE = int(upload_max_mb() * 1024 * 1024)
         file_content = await file.read()
         if len(file_content) > MAX_SIZE:
             raise HTTPException(
@@ -1682,22 +1594,7 @@ async def upload_document(
             )
 
         # 6. Validate MIME type (security: prevent file type spoofing)
-        ALLOWED_MIME_TYPES = {
-            'application/pdf',
-            'application/vnd.openxmlformats-officedocument.wordprocessingml.document',  # .docx
-            'application/msword',  # .doc
-            'text/plain',
-            'text/markdown',
-            'text/csv',
-            'application/json',
-            'application/xml',
-            'text/xml',
-            # Image types for vision
-            'image/png',
-            'image/jpeg',
-            'image/gif',
-            'image/webp'
-        }
+        ALLOWED_MIME_TYPES = UPLOAD_MIME_TYPES
 
         try:
             import magic
@@ -1708,7 +1605,7 @@ async def upload_document(
                 logger.warning(f"Rejected file with MIME type {detected_mime}: {file.filename}")
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid file type detected: {detected_mime}. Allowed types: PDF, DOCX, DOC, TXT, MD, CSV, JSON, XML, PNG, JPG, JPEG, GIF, WEBP"
+                    detail=f"Invalid file type detected: {detected_mime}."
                 )
 
             logger.info(f"File MIME type validated: {detected_mime} for {file.filename}")

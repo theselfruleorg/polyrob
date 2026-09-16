@@ -1570,12 +1570,15 @@ class PolymarketTool(BaseTool):
                 )
 
                 # Create and post order
+                from core.wallet.submission_journal import prepare_attempt
+                submission_ref = prepare_attempt("polymarket", self._user_id, params.size_usd)
                 result = client.create_and_post_order(order_args)
 
                 policy.record(
                     venue="polymarket", action="place_limit_order",
                     amount_usd=params.size_usd, counterparty=params.market_id,
                     idempotency_key=None, result_ref=str(result.get("orderID"))[:80],
+                    chain="polygon", submission_ref=submission_ref,
                 )
 
                 # Log to audit

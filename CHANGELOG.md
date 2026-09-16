@@ -6,6 +6,181 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-09-16
+
+POLYROB 1.0 is the first stable public release. It brings the terminal, web
+console, chat surfaces, autonomy runtime, tool system and optional wallet rails
+under one documented control model, with explicit owner authority and
+fail-closed boundaries around credentials, sessions and money.
+
+### Agent, CLI and operator control
+
+- The terminal client now supports interactive chat and one-shot runs with
+  task files or stdin, file and image attachments, JSON/JSONL results,
+  profile-scoped history, persistent background delegation receipts and full
+  session identifiers.
+- Safe controls can pause, steer or stop a busy session at step boundaries.
+  Cross-process controls are acknowledged, keyless stops are supported, and
+  update/rollback refuses while a live process owns a database unless the
+  operator explicitly forces it.
+- Status, doctor, owner, wallet, session and REPL views share the same typed
+  runtime snapshot. Provider fallback updates the displayed provider/model only
+  after the main agent actually switches.
+- A turn commits one user-facing reply. Completion bookkeeping no longer
+  produces a second chat message, and workspace paths resolve to attachments,
+  console links or an honest server-only state.
+
+### Web console
+
+- The console now has one responsive five-destination shell for Chat, Work,
+  Money, Inbox and Agent. The legacy page set and `WEBVIEW_UI` switch are
+  removed.
+- Work shows running goals, schedules, cron jobs and live sessions, and can
+  create goals and schedules through the same guarded writers used elsewhere.
+  Money presents typed positions, movements, invoices and limits. Agent exposes
+  identity, memory, skills, capabilities and permitted configuration controls.
+- The console includes durable light/dark/automatic themes, a shared command
+  palette, live Socket.IO refresh, paginated chat summaries, typed artifacts
+  and narrated tool activity.
+- Inline scripts were removed from the console CSP. Owner routes, session
+  transcripts, files and event streams are tenant-scoped; logout revokes the
+  active token and authentication storage failures deny access.
+- Console mutations rely on the HttpOnly session cookie. The standalone proxy
+  forwards authenticated identity to the task API and renders structured
+  refusals. Money includes an owner-scoped, read-only wallet view with safety
+  labels, trusted cached balances and unresolved-submission warnings.
+
+### Autonomy, groups and owner authority
+
+- Telegram groups have a public-session profile, per-chat roles and policy,
+  bounded toolsets, reply threading, a room ledger and owner-only administration
+  from direct messages. Denied room turns do not leak owner facts or private
+  notices into the room.
+- Optional paid room actions use expiring offers, asset-aware x402 invoices,
+  settlement verification, effect receipts and credits when a paid effect
+  cannot be applied.
+- Owner stop instructions persist across restarts. Paused streams stay paused,
+  only an owner can resume global autonomy, and owner rules distinguish
+  restrictive instructions from permission-granting changes.
+- Delivery suppression is observable and recoverable: missed notices, caps,
+  quiet-hour holds and unavailable producers are represented in status rather
+  than silently counted as delivery.
+
+### Skills, memory, models and identity
+
+- Curated character profiles ship in wheel and source distributions. Persona
+  selection, authoring and inspection are available from the CLI, REPL and
+  console, and the neutral stock avatar now ships without instance-specific
+  identity.
+- Skill triggers, action names and tool IDs are checked against the runtime
+  index. Trading, token assessment and verified-tooling guidance cover the
+  capabilities exposed by the current tool catalog.
+- Owners can add, test and remove HTTPS MCP servers from the CLI, REPL or
+  Telegram. Persisted servers reload per tenant; stdio entries remain local
+  configuration and are refused in wallet-custody processes.
+- Model profiles and auxiliary routing were expanded, while prompt catalogs and
+  recent context are kept within model size ceilings.
+
+### Optional wallet, payments and on-chain tools
+
+- The optional wallet stack supports guarded EVM and Solana swaps, bridges,
+  token deployment, contract calls, launchpads, dapp sessions, NFT inspection
+  and transfer, revenue collection, ERC-8004 identity, asset-aware x402
+  settlement and initial Uniswap v3 liquidity reads and writes.
+- Money tools remain disabled until their feature flags, tool grants, owner
+  approval and spend policy all allow the action. Unpriced approvals and
+  undeclared token or NFT movement are refused; submitted and confirmed effects
+  are recorded separately.
+- Durable spend reservations are serialized across processes. Corrupt or
+  unreadable accounting blocks further spending, chain and venue attribution is
+  retained, and receipt reconciliation checks the landed effect before marking
+  an action complete.
+- Token assessment adds resolver fallbacks, holder concentration, price history,
+  new-pool discovery and composite screening with explicit partial/unknown
+  states. These rails remain experimental and off by default.
+
+### Security and release integrity
+
+- Evaluation runs default to reviewed fixture scenarios with sealed run,
+  configuration and source identity. Missing, unknown, drifted or mismatched
+  evidence fails scoring, and unbudgeted live evaluation seeding is disabled.
+
+- Child processes receive a credential-scrubbed environment. Managed RPC URLs,
+  bearer tokens and provider keys are masked in configuration, logs, stored
+  results and terminal output.
+- Browser and fetch paths enforce URL and redirect checks, block protected
+  network ranges, reject compressed responses, pin validated addresses and use
+  one deadline across DNS and redirect hops. Untrusted content is framed at
+  model and browser-render boundaries.
+- Host execution is refused when wallet custody or a payment/deposit master seed
+  requires a sandbox, including when the agent wallet itself is disabled.
+- Session tokens require finite expiry and revocation identifiers. API request
+  bodies, command output and concurrent reads are bounded; cancelled host and
+  container processes are reaped.
+- External payment, exchange and treasury submissions journal their local
+  intent, signature or transaction hash before broadcast. Ambiguous outcomes
+  keep the spend interlock held until reconciliation, preventing a blind retry.
+- EVM and treasury sends reserve before signing. Submission-journal identity and
+  high-water checks refuse missing or truncated history; venue attempts cannot
+  be released by smaller charges or charges for another venue. A read-only
+  recovery diagnostic checks EVM/Solana chain evidence while retaining every
+  reservation. Shared urllib RPC replies have raw byte and encoding limits;
+  malformed or unrelated EVM receipts remain pending.
+- Treasury sweeps verify the configured chain and derived signing address,
+  reserve the signed gas cost, use pending nonces and require a matching
+  successful receipt before bookkeeping can complete.
+- Chromium launches with sandboxing enabled. Sandbox opt-out is restricted to
+  local non-custody development, failed startup reaps the driver, and remote
+  browser credentials are redacted from connection errors.
+- Package manifests now carry the migrations, console assets, avatar engine,
+  character library, contract sources, browser DOM helper and bundled fonts
+  used at runtime. Release checks install the wheel into a bare environment and
+  exercise version, help, doctor and migration commands before publication.
+- Knowledge ingestion reads bounded, descriptor-relative snapshots; rejects
+  symlinks, hard-link aliases and special files; and hashes the same bytes it
+  parses. DOCX admission bounds archive expansion, part and table counts, XML
+  structure and extracted text, while failed replacements preserve existing
+  knowledge.
+- Upload capacity remains reserved until temporary request storage is consumed
+  or closed, binary sniffing is bounded, and mismatched content lengths are
+  rejected.
+- Wallet audit locks are reusable only by the asyncio task that owns the spend
+  reservation; unrelated tasks and worker threads cannot borrow another task's
+  reservation.
+- Package builds now require setuptools 83.0 or newer.
+- Skill writes and promotions validate tenant identifiers, refuse linked paths,
+  use descriptor-relative atomic writes and archives, and fail closed when the
+  threat scanner is unavailable. Project-context snapshots are bounded.
+- Acceptance declarations are validated before execution or goal creation. File
+  probes are confined, artifact IDs bind to their goal and session, hash/content
+  checks use one snapshot, and HTTP probes pin public addresses and revalidate
+  redirects.
+- Provider recovery adopts the shared model state, restores the requested native
+  tool mode and refreshes capability catalogs before each step. Source precedence
+  separates current owner intent from factual evidence.
+- Short untrusted tool strings are framed, final action evidence survives long
+  runs, test verification requires real comparable results, and memory corrections
+  do not delete nonidentical facts solely from embedding similarity.
+- Knowledge sources publish chunks and hash/count metadata atomically, preserving
+  the previous source on failure and excluding stale vector-cache content.
+- Directory discovery is bounded by output, entry count, depth and elapsed time.
+  PDF and DOCX parsing runs in admitted subprocesses with cancellation cleanup;
+  Linux adds an address-space limit.
+
+### Breaking changes and migration
+
+- The version advances directly from 0.13.0 to 1.0.0; no 0.14.0 release was
+  published.
+- The legacy console routes and `WEBVIEW_UI` selector are removed. Use the five
+  destination console and `/api/webgate/*` endpoints.
+- Public group sessions no longer inherit owner memory, project context or
+  owner-only tools. Deployments that relied on broad group access must configure
+  explicit per-chat policy and tool grants.
+- Review the [upgrading guide](docs/guide/upgrading.md),
+  [configuration reference](docs/CONFIGURATION.md) and
+  [security model](docs/guide/security-model.md) before enabling autonomy,
+  wallet custody, code execution or public chat surfaces.
+
 ## [0.13.0] — 2026-09-08
 
 ### Two-week release audit — money, autonomy and app-service hardening (2026-09-08)
@@ -1151,7 +1326,7 @@ Proposal 030 — UI & surface unification, implemented the same day.
     `provider_cache_strategy` reports `in_client` for
     `ANTHROPIC_MESSAGES`-transport rows (they inherit the `cache_control`
     breakpoints; previously mislabeled `none`).
-  - `rob_dev` now carries a compact `polyrob.md` (~1.1K tokens) that wins the
+  - The development tree now carries a compact `polyrob.md` (~1.1K tokens) that wins the
     project-context precedence over the ~20K-token `AGENTS.md` auto-load.
 
 - **Flag configurability P0+P1 wave (proposal 026)** — writes take effect and
@@ -2645,16 +2820,11 @@ secret rotation).
   exists), restorable via `polyrob update --rollback`.
 - **In-use guard portable (U8)** — the process scan is `/proc` → psutil → `ps`, so
   macOS `--apply`/`--rollback` no longer bypasses the guard silently.
-- **Prod venv rebuild procedure (D12)** — DEPLOYMENT.md documents the
-  requirements.txt-first rebuild (bare `pip install -e .` loses the extras-only
-  tweepy/eth-account that run on prod); a guard test pins both in requirements.txt.
 - **Init polish (O2/O3/O4)** — consistent 1/6..6/6 wizard numbering; the closing
   "no usable key" check reads every env layer `polyrob run` honors; DeepSeek's key
   prompt says it can't bootstrap alone.
 - **Pairing approvable (O5)** — `polyrob owner pair {pending,approve,revoke}` ships;
   `core/pairing.py` no longer documents a phantom command.
-- **Portal workflow self-gating (D11)** — skips deploy (green) when Cloudflare
-  secrets are unconfigured, for whenever Actions is re-enabled.
 
 ### Update / infra / migration-guide / onboarding fix wave (2026-07-14)
 

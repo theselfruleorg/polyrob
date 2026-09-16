@@ -42,16 +42,27 @@ class CapabilityClaim:
 
 
 def _no_nft_marketplace_integration() -> bool:
-    """True while defi_trade has no NFT/marketplace verb and no dedicated
-    NFT tool module exists. Deliberately checks the ABSENCE of the capability
-    (method-name substring + file glob) rather than any specific future
-    implementation shape, since we can't know that shape in advance."""
+    """True while nothing can BUY or SELL an NFT.
+
+    ⚠️ Re-scoped 2026-09-15. This predicate used to fire on any method whose
+    name contained "nft" and on any `tools/**/nft*.py` file, so the moment the
+    hold/see/send/revoke verbs shipped it reported the claim false — even though
+    the claim it guards ("no rail yet" to a PURCHASE) was still perfectly true.
+    A guard that fires on the wrong capability teaches people to edit the guard.
+
+    The claim is about a MARKETPLACE: buying, selling, listing, bidding. Those
+    are what `defi_trade` still cannot do, and they are what this now checks.
+    Holding, transferring and revoking are shipped and are not evidence of it.
+    """
     import tools.defi.trade_tool as trade_tool
-    methods = (n for n in dir(trade_tool.DefiTradeTool) if not n.startswith("_"))
-    if any("nft" in n.lower() for n in methods):
+    methods = [n.lower() for n in dir(trade_tool.DefiTradeTool)
+               if not n.startswith("_")]
+    trade_words = ("buy", "sell", "list", "bid", "offer", "sweep")
+    if any("nft" in m and any(w in m for w in trade_words) for m in methods):
         return False
     tools_dir = ROOT / "tools"
-    for pattern in ("**/nft*.py", "**/marketplace*.py", "**/seaport*.py", "**/reservoir*.py"):
+    for pattern in ("**/marketplace*.py", "**/seaport*.py", "**/reservoir*.py",
+                    "**/opensea*.py", "**/blur*.py"):
         if any(tools_dir.glob(pattern)):
             return False
     return True
@@ -80,8 +91,10 @@ CLAIMS = (
         file="data/prompts/skills/treasury-trading/SKILL.md",
         phrase="no rail yet",
         still_true=_no_nft_marketplace_integration,
-        why="an NFT/marketplace verb (Seaport, Reservoir, or similar) would need to "
-            "ship on defi_trade or a new tool for this claim to become false",
+        why="a MARKETPLACE verb (Seaport, Reservoir, or similar buy/sell/list) "
+            "would need to ship on defi_trade or a new tool for this claim to "
+            "become false. The 2026-09-15 hold/see/send/revoke verbs do NOT "
+            "make it false -- they are not a purchase rail",
     ),
     CapabilityClaim(
         id="goal-create-excludes-money-tools",

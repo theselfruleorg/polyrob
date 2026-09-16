@@ -38,7 +38,7 @@
             <div class="user-header" id="user-header">
                 <div class="user-identity">
                     <h2 id="user-wallet">Loading...</h2>
-                    <div class="user-id" id="user-id-display">User ID: {{ target_user_id }}</div>
+                    <div class="user-id" id="user-id-display" data-user-id="{{ target_user_id }}">User ID: {{ target_user_id }}</div>
                     <div class="user-badges" id="user-badges"></div>
                 </div>
                 <div class="user-actions">
@@ -216,10 +216,6 @@
     </div>
 </div>
 
-<script>
-    // Pass the target user ID to JavaScript
-    window.TARGET_USER_ID = "{{ target_user_id }}";
-</script>
 {% endblock %}
 
 {% block scripts %}

@@ -160,8 +160,18 @@ class SessionCleanupMixin:
             # Fail-open: a memory error must NEVER block session teardown.
             try:
                 from agents.task.goals.autonomy_marker import is_autonomous
+                from core.surfaces.room_policy import is_public_session
                 _episode_session_id = getattr(self, "session_id", None)
-                if not is_autonomous(_episode_session_id):
+                # 044 C5: a PUBLIC (room) session writes NO episode. The episodic
+                # store is owner-tenant state — it is read back by the
+                # session-start digest, the continuity bridge and the recap, all
+                # of which run in the owner's DM. A room session runs AS the owner
+                # tenant (whoever opened it), so without this guard a stranger's
+                # room conversation became a row in the owner's own history, and
+                # `skip_memory` for a room was only ever half true.
+                if is_public_session(self):
+                    self.logger.debug("public (room) session: no episodic write")
+                elif not is_autonomous(_episode_session_id):
                     outcome = _CLEANUP_STATUS_TO_OUTCOME.get((status or "").lower())
                     if outcome is not None:
                         from modules.memory.episodic import finalize_episode

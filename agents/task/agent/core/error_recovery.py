@@ -537,9 +537,12 @@ class ErrorRecoveryMixin:
 				# Store original for telemetry
 				original_model = self.model_name
 
-				# Switch to fallback
-				self.llm = fallback_llm
-				self.model_name = getattr(fallback_llm, 'model_name', 'fallback')
+				# Adopt every runtime view together, including identity and compaction.
+				from modules.llm.usage_extract import resolve_serving_provider
+				fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
+				self.adopt_active_llm(
+					fallback_llm, fallback_model,
+					resolve_serving_provider(fallback_llm, fallback_model))
 
 				self.logger.info(f"✅ Switched LLM: {original_model} → {self.model_name}")
 
@@ -651,4 +654,3 @@ class ErrorRecoveryMixin:
 				self.telemetry_manager.capture_event(event)
 		except Exception as e:
 			self.logger.debug(f"Failed to emit fallback success telemetry: {e}")
-

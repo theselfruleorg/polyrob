@@ -43,3 +43,37 @@ async def test_fetch_url_blocked_is_clean_message(monkeypatch):
 	monkeypatch.setattr("tools.web_fetch.tool.safe_fetch", fake_safe_fetch)
 	out = await tool.fetch_url(WebFetchAction(url="http://10.0.0.1/"))
 	assert "could not fetch" in out.lower() or "blocked" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_returns_json_body_verbatim(monkeypatch):
+	"""A JSON API answer is data the agent can read, not a refusal.
+
+	D1: web_fetch used to classify application/json as binary and answer
+	"cannot render as markdown", which is why prod routed every keyless JSON
+	API through r.jina.ai or code_execution.
+	"""
+	tool = WebFetchTool(name="web_fetch", config=BotConfig())
+	payload = '{"pairs":[{"baseToken":{"symbol":"CASHCAT"},"liquidity":{"usd":2230000}}]}'
+
+	async def fake_safe_fetch(url, **kw):
+		return FetchResult(final_url=url, status=200,
+		                   content_type="application/json", body=payload.encode())
+
+	monkeypatch.setattr("tools.web_fetch.tool.safe_fetch", fake_safe_fetch)
+	out = await tool.fetch_url(WebFetchAction(url="https://api.dexscreener.com/latest/dex/search?q=CASHCAT"))
+	assert "CASHCAT" in out and "2230000" in out
+	assert "cannot render as markdown" not in out
+
+
+@pytest.mark.asyncio
+async def test_fetch_url_image_is_still_refused(monkeypatch):
+	tool = WebFetchTool(name="web_fetch", config=BotConfig())
+
+	async def fake_safe_fetch(url, **kw):
+		return FetchResult(final_url=url, status=200,
+		                   content_type="image/png", body=b"\x89PNG\r\n\x1a\n")
+
+	monkeypatch.setattr("tools.web_fetch.tool.safe_fetch", fake_safe_fetch)
+	out = await tool.fetch_url(WebFetchAction(url="http://example.com/x.png"))
+	assert "non-HTML content" in out

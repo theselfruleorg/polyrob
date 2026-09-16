@@ -17,7 +17,7 @@ from typing import List, Optional
 
 from core.status_snapshot import (
     OVERALL_DEGRADED, OVERALL_OK, OVERALL_PARTIAL, SECTION_ORDER, SEVERITY_CRIT,
-    STATE_UNAVAILABLE, StatusSnapshot,
+    STATE_DEGRADED, STATE_UNAVAILABLE, StatusSnapshot,
 )
 
 _CHECKED = ("credit sentinel", "live provider", "open asks", "blocked goals",
@@ -32,7 +32,15 @@ _SECTION_TITLES = {
     "loops": "Loops",
     "delivery": "Delivery",
     "posture": "Posture",
+    "security": "Security",
+    "identity": "Identity",
     "apps": "Apps",
+    "groups": "Groups",
+    "room_actions": "Paid room actions",
+    "creations": "Made",
+    "collectibles": "Collectibles",
+    "liquidity": "Liquidity",
+    "wallet": "Wallet",
     "money": "Money",
 }
 
@@ -167,14 +175,44 @@ def render_status_text(snap: StatusSnapshot, *, title: str = "Status:",
                                                    health_limit=health_limit))
 
 
+def wallet_note_lines(snap: StatusSnapshot) -> List[str]:
+    """The agent's own balances, for the per-turn note (039 Unit D).
+
+    The agent could always LOOK (`defi_data.portfolio`). What it could not do was
+    KNOW without being asked to check — so "how much ETH do I have?" was answered
+    from whatever happened to be in context. On 2026-08-28 that produced a
+    published claim that the book was flat over three open positions.
+
+    Gated `WALLET_CONTEXT_VISIBLE` (default ON). Every figure is cache-backed, so
+    this costs the turn nothing; an unread chain says `unknown` rather than
+    disappearing, because a missing row reads as an empty wallet.
+    """
+    from core.env import bool_env
+    if not bool_env("WALLET_CONTEXT_VISIBLE", True):
+        return []
+    sec = snap.sections.get("wallet")
+    if sec is None:
+        return []
+    if sec.state == STATE_UNAVAILABLE:
+        return [f"- wallet: unavailable ({sec.reason}) — say so; do not state a "
+                f"balance you have not read"]
+    out = [f"- {line.strip()}" if i == 0 else f"  {line.strip()}"
+           for i, line in enumerate(sec.lines)]
+    if sec.state == STATE_DEGRADED:
+        out.append("  ⚠ treat any `unknown` above as UNKNOWN, never as zero")
+    return out
+
+
 def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8) -> str:
     """Compact, per-turn note for the AGENT (injected as a control message):
     what is degraded right now, so "how are you doing?" is answered from the
     same facts the owner's /status shows — never from stale context."""
     lines = [f"Live health as of {_stamp(snap)} (same source as the owner's /status):"]
     lines.append(health_headline(snap))
-    # the agent's own verb is the action, never a surface slash command
-    lines.append(pause_headline(snap, resume_hint="autonomy_control(resume)",
+    # The agent's own verb is the action for PAUSE. There is no agent resume verb
+    # (034 §11.2) — only an owner seat lifts a pause, so the note names /resume and
+    # the agent relays that instead of trying a call that refuses.
+    lines.append(pause_headline(snap, resume_hint="/resume (owner only)",
                                 pause_hint="autonomy_control(pause)"))
     for h in snap.health[:max_items]:
         mark = "CRITICAL" if h.severity == SEVERITY_CRIT else "warn"
@@ -189,6 +227,7 @@ def render_agent_health_note(snap: StatusSnapshot, *, max_items: int = 8) -> str
             lines.append(f"- {name}: unavailable ({sec.reason})")
         elif sec.lines:
             lines.append(f"- {name}: {sec.lines[0]}")
+    lines.extend(wallet_note_lines(snap))
     lines.append("If asked how things are going, state these facts first; do not claim "
                  "a clean state that this note contradicts.")
     return "\n".join(lines)

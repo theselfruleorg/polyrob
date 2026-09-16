@@ -104,13 +104,23 @@ class _WakeAgent:
 def test_resolve_scan_target_carries_the_expected_chain_id():
     # Assert against the chain registry rather than a literal URL: which RPC
     # `base` maps to is the registry's contract (and its own test's), while
-    # THIS test owns the asset+chain-id pairing.
+    # THIS test owns the chain-id pairing.
+    #
+    # 046: the target is (rpc_url, chain_id) — ASSET-FREE. The token address
+    # comes from the pending invoice's own asset row, because one target could
+    # only ever describe ONE token, which is why detection in any other asset
+    # was structurally impossible. The chain-id pairing this test exists for is
+    # unchanged, and the addresses are still pinned — in the asset registry.
+    from core.payments.assets import resolve
     from core.wallet.onchain import rpc_url_for_chain
-    assert _resolve_scan_target("base") == (rpc_url_for_chain("base"),
-                                            USDC_BASE_MAINNET, BASE_ID)
+    assert _resolve_scan_target("base") == (rpc_url_for_chain("base"), BASE_ID)
     assert _resolve_scan_target("base-sepolia") == ("https://sepolia.base.org",
-                                                    USDC_BASE_SEPOLIA, SEPOLIA_ID)
-    assert _resolve_scan_target("polygon") is None
+                                                    SEPOLIA_ID)
+    assert resolve("usdc-base").address == USDC_BASE_MAINNET
+    assert resolve("usdc-base-sepolia").address == USDC_BASE_SEPOLIA
+    # A chain with NO registry row stays unscannable. `polygon` HAS one and is
+    # now reachable — that widening is the point of 046.
+    assert _resolve_scan_target("atlantis") is None
 
 
 @pytest.mark.asyncio

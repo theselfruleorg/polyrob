@@ -29,12 +29,14 @@ Key mapping (formatters.py → RenderEvent field):
     data.agent_id         → SessionStart.agent_id
     data.use_vision       → SessionStart.use_vision
 
-  tool_execution
+  tool_execution / tool_result  (043 A16)
     data.tool_name        → ToolExec.tool_name
     data.action_name      → ToolExec.action_name
     data.success          → ToolExec.success
     data.duration_seconds → ToolExec.duration_seconds
     data.error            → ToolExec.error
+    data.render           → ToolExec.render      (the typed {kind, payload}, tool_result only)
+    data.narration        → ToolExec.narration   (server-computed human line, when present)
 
   tool_started / llm_started / awaiting_approval / approval_resolved  (019)
     span/wait events from RunEventFormatter (flat data envelope) →
@@ -143,6 +145,12 @@ class ToolExec:
     result_preview: Optional[str] = None
     result_truncated: bool = False
     call_id: Optional[str] = None  # 019 span join key (pairs with ToolStarted)
+    # 043 A16: the typed ``tool_result`` event carries a ``{kind, payload}``
+    # render and (when the server computed one) a human ``narration`` line. Both
+    # are None on a legacy ``tool_execution`` event, so the renderer falls back
+    # to the scrubbed result preview — byte-identical to the pre-A16 line.
+    render: Optional[Dict[str, Any]] = None
+    narration: Optional[str] = None
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -186,6 +194,7 @@ class ApprovalPending:
     action_name: str = ""
     ask_id: Optional[str] = None
     timeout_sec: Optional[float] = None
+    provider: str = ""
     raw: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -401,23 +410,12 @@ def _normalize_inner(feed_dict: Dict[str, Any]) -> RenderEvent:
             raw=feed_dict,
         )
 
-    if event_type == "tool_execution":
-        raw_params = data.get("parameters")
-        params = raw_params if isinstance(raw_params, dict) else {}
-        preview = data.get("result_preview")
-        return ToolExec(
-            step=int(feed_dict.get("step", 0)),
-            tool_name=data.get("tool_name", ""),
-            action_name=data.get("action_name", ""),
-            success=bool(data.get("success", True)),
-            duration_seconds=float(data.get("duration_seconds") or 0.0),
-            error=data.get("error"),
-            parameters=params,
-            result_preview=str(preview) if preview is not None else None,
-            result_truncated=bool(data.get("result_truncated", False)),
-            call_id=data.get("call_id"),
-            raw=feed_dict,
-        )
+    # 043 A16: ``tool_result`` is the typed twin of ``tool_execution`` — same
+    # ToolExec dataclass (so the existing renderer path handles it), plus the
+    # ``{kind, payload}`` render and the human ``narration`` line. The legacy
+    # ``tool_execution`` event has neither, so it stays byte-identical.
+    if event_type in ("tool_execution", "tool_result"):
+        return _tool_exec_from_data(data, feed_dict)
 
     if event_type == "tool_started":
         raw_params = data.get("parameters")
@@ -447,6 +445,7 @@ def _normalize_inner(feed_dict: Dict[str, Any]) -> RenderEvent:
             action_name=data.get("action_name", ""),
             ask_id=data.get("ask_id"),
             timeout_sec=float(timeout_raw) if timeout_raw is not None else None,
+            provider=str(data.get("provider") or ""),
             raw=feed_dict,
         )
 
@@ -528,6 +527,35 @@ def _normalize_inner(feed_dict: Dict[str, Any]) -> RenderEvent:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _tool_exec_from_data(data: Dict[str, Any], feed_dict: Dict[str, Any]) -> ToolExec:
+    """Build a ``ToolExec`` from a ``tool_execution`` or ``tool_result`` payload.
+
+    Shared by both feed types (043 A16): ``render`` / ``narration`` are read when
+    present (``tool_result`` only) and default to ``None`` otherwise, so a legacy
+    ``tool_execution`` event normalises byte-identically to before.
+    """
+    raw_params = data.get("parameters")
+    params = raw_params if isinstance(raw_params, dict) else {}
+    preview = data.get("result_preview")
+    render = data.get("render")
+    narration = data.get("narration")
+    return ToolExec(
+        step=int(feed_dict.get("step", data.get("step", 0)) or 0),
+        tool_name=data.get("tool_name", ""),
+        action_name=data.get("action_name", ""),
+        success=bool(data.get("success", True)),
+        duration_seconds=float(data.get("duration_seconds") or 0.0),
+        error=data.get("error"),
+        parameters=params,
+        result_preview=str(preview) if preview is not None else None,
+        result_truncated=bool(data.get("result_truncated", False)),
+        call_id=data.get("call_id"),
+        render=render if isinstance(render, dict) else None,
+        narration=str(narration) if narration else None,
+        raw=feed_dict,
+    )
 
 
 def _int_or_none(value: Any) -> Optional[int]:

@@ -12,7 +12,7 @@ raising a file's count — fails.
 
 Known baked-in non-violations kept in the baseline rather than special-cased:
 ``webview/server.py`` (a ``"data" not in entry`` dict-key check). ``core/runtime_paths.py``'s
-``_LEGACY_SESSIONS_DEFAULT`` and ``core/wallet/audit_sink.py``'s loudly-logged legacy
+``_LEGACY_SESSIONS_DEFAULT`` and the remaining loudly-logged legacy
 return are deliberate. ``core/config.py`` Field defaults are anchored to the data home by
 bootstrap; ``core/bootstrap.py``'s DATA_ROOT path_manager default and the messages/
 telemetry DB axis are location MOVES needing a migration (deferred, WS-3 notes).
@@ -49,13 +49,15 @@ BASELINE = {
     # docstring mention of the OLD behaviour) went with the admin_data_home fix.
     # cli/commands/* + persona/h_self swept through data_dir_or_home() 2026-07-16;
     # the data/characters mirror moved to persona_resolver.character_search_dirs
-    # (2026-08-20) — handlers.py keeps 1 remaining hit.
-    "cli/ui/commands/handlers.py": 1,
+    # (2026-08-20). cli/ui/commands/handlers.py: row DROPPED 2026-09-09 — its
+    # last violation was /persona's bio column reading a cwd-relative
+    # Path("data")/"characters", which resolved only from the repo root and was
+    # blank for every row in a real profile (F3); it now reads
+    # character_search_dirs(), the same union the names come from.
     "core/bootstrap.py": 1,           # DATA_ROOT path_manager default (location move, deferred)
     "core/config.py": 2,              # Field defaults, anchored by bootstrap
     "core/credit_sentinel.py": 1,     # T3-fixed; "data" only in the last-resort except
     "core/runtime_paths.py": 1,       # _LEGACY_SESSIONS_DEFAULT (deliberate terminal fallback)
-    "core/wallet/audit_sink.py": 1,   # loud legacy return on the money path (deliberate)
     "webview/repair_sessions.py": 1,
     "webview/server.py": 1,           # false positive: '"data" not in entry'
 }

@@ -32,7 +32,11 @@ jobs:
       - name: Run gitleaks (full history)
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
-          ./gitleaks git --no-banner --redact --config .gitleaks.toml .
+          ./gitleaks git --no-banner --redact --config .gitleaks.toml \
+            --report-format json --report-path /tmp/gitleaks.json . || {
+            jq 'map({RuleID, File, StartLine, Commit})' /tmp/gitleaks.json
+            exit 1
+          }
   # NOTE: the bundled skills are validated by POLYROB's own strict validator
   # (agents/task/agent/skill_validation.py::validate_authored), exercised by
   # tests/unit/agents/task/test_library_invariants.py in the `test` job above — that

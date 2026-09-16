@@ -75,3 +75,44 @@ def test_inactive_bodiless_rule_not_pruned(tmp_path):
     )
     sm._ensure_rules_loaded()
     assert "manual-skill" in sm.skill_rules
+
+
+def test_rules_json_triggers_match_the_skill_frontmatter():
+    """`rules.json` is what SkillManager LOADS; SKILL.md frontmatter is what a
+    human edits. They drifted, silently, and the drift disabled real doctrine.
+
+    Measured on live prod 2026-09-12 with the trading rail fully granted:
+    "should I hunt on robinhood chain today" -> NO SKILLS, "reconcile the
+    ledger" -> NO SKILLS, "bridge SOL to robinhood" -> NO SKILLS. The
+    treasury-trading body had reached v7 with a Robinhood section, a Solana
+    section and a reconcile step; rules.json still carried the v-something
+    triggers, so none of it was reachable by name.
+
+    Note `scripts/skills_frontmatter_sync.py` syncs rules.json -> frontmatter and
+    hardcodes `polyrob-version: "1"`, so it is a one-time normalizer, NOT a
+    maintenance tool — running it resets every skill's version. Edit both, or fix
+    the script first.
+    """
+    import json
+    import re
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[4] / "data" / "prompts" / "skills"
+    rules = json.loads((base / "rules.json").read_text())
+
+    drifted = {}
+    for sid, rule in rules.items():
+        md = base / sid / "SKILL.md"
+        if not md.exists():
+            continue
+        m = re.search(r"polyrob-triggers: '(.+?)'\n", md.read_text(), re.S)
+        if not m:
+            continue
+        fm = json.loads(m.group(1))
+        for key in ("keywords", "task_patterns", "action_names", "tool_ids"):
+            if sorted(fm.get(key) or []) != sorted(rule.get("triggers", {}).get(key) or []):
+                drifted.setdefault(sid, []).append(key)
+
+    assert not drifted, (
+        "SKILL.md frontmatter and rules.json triggers disagree — rules.json is "
+        f"what actually loads, so the frontmatter half is dead: {drifted}")

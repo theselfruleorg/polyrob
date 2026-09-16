@@ -1,8 +1,14 @@
 graft data/prompts
-graft data/streams
+graft data/characters
 graft webview/static
 graft webview/templates
+prune webview/templates/__pycache__
 graft avatar
+# The invoice/PFP card fonts. modules/pfp/cards.py reads assets/fonts/dejavu/*.ttf
+# by path at runtime; without this the sdist omits them and card rendering
+# degrades to PIL's default font. The wheel already carried them via
+# package-data; the sdist did not.
+graft assets
 recursive-include agents/personality/characters *.json
 include config/*.template
 include README.md LICENSE
@@ -12,3 +18,6 @@ include README.md LICENSE
 # data/prompts/skills/polyrob-user-guide/.)
 graft docs/guide
 include docs/CONFIGURATION.md
+# 042: the audited token template's source, beside its compiled bytes.
+include core/wallet/contracts/*.sol
+global-exclude *.pyc *.pyo

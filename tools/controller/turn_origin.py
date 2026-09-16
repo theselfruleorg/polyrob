@@ -8,6 +8,7 @@ first-param-annotation introspection never sees this module. External callers
 monkeypatches keep working.
 """
 import logging
+from typing import Optional
 
 from core.security.forged_turns import FORGED_TURN_KINDS as _FORGED_TURN_KINDS
 
@@ -38,7 +39,9 @@ def _is_forged_or_autonomous_turn(execution_context, controller_self):
 	if is_sub or role == 'leaf':
 		return True
 	metadata = getattr(execution_context, 'metadata', None) or {}
-	if metadata.get('turn_kind') in _FORGED_TURN_KINDS:
+	# 044 T5: a room-bound (group) turn is forged too — whoever spoke, it must
+	# never auto-activate/promote content the way a genuine owner turn can.
+	if metadata.get('turn_kind') in _FORGED_TURN_KINDS or metadata.get('turn_kind') == 'group':
 		return True
 	try:
 		from agents.task.goals.autonomy_marker import is_autonomous
@@ -141,13 +144,14 @@ def _autonomous_message_refusal(execution_context, controller_self):
 
 def _autonomous_owner_resend_cooldown_refusal(
 		execution_context, controller_self, *, container, user_id: str,
-		surface: str, target: str, owner_targets: dict):
+		surface: str, target: str, owner_targets: dict,
+		text: Optional[str] = None, event_log=...):
 	"""2026-08-27 dedup-guard fix: an autonomous/forged turn proactively
 	messaging the OWNER is rate-limited against resending within
-	``owner_message_cooldown_seconds()`` of the last real send to the SAME
-	owner address on the SAME surface — checked against the durable
-	conversation store's actual send history, never the model's own
-	self-report of elapsed time.
+	``owner_message_cooldown_seconds()`` of a real send to the SAME owner
+	address on the SAME surface — checked against the durable conversation
+	store's actual send history, never the model's own self-report of elapsed
+	time.
 
 	Confirmed live pattern this closes: a fresh goal session has no
 	visibility into a SIBLING session's send from ~2h earlier, so each retry
@@ -156,6 +160,29 @@ def _autonomous_owner_resend_cooldown_refusal(
 	Telegram within ~4 hours, each with the goal's own narrative FALSELY
 	claiming "24h cadence respected" (observed 2026-08-27).
 
+	**The gate reads CONTENT** (2026-09-15 prod review, C5). It used to be a
+	bare COUNT of any owner send in the window, which refused a materially NEW
+	report because something unrelated had gone out within 2h. Prod, verbatim:
+
+	    contact_history checked: last owner sends were 09:12 (telegram),
+	    08:14, 07:35 (email) — ALL predate the guard-blocker discovery
+	    (~09:40). The blocker is materially new, so the retry is justified per
+	    the dedup guard's own guidance.
+	    … Retried owner notice; suppressed again by the 2h Telegram dedup
+	    despite being new content. … Ending BLOCKED.
+
+	The agent followed the refusal's own instructions and was refused anyway;
+	32 refusals in 7 days and the goal ended BLOCKED with the owner never
+	told. So *text* is compared against the bodies actually sent in the
+	window: a repeat is refused, a materially different report proceeds.
+	Omitting *text* (or a store with no body reader) keeps the legacy
+	count-only gate, so no caller silently loses its guard.
+
+	A refusal is DURABLY RECORDED — a marked ``owner_notice`` plus a
+	``user_delivery`` row with outcome ``cooldown`` — because this path
+	bypasses the delivery rail entirely and so left no trace anywhere: the
+	suppression was invisible to `/missed`, to the digest and to telemetry.
+
 	Returns a refusal ActionResult, or None when the send may proceed.
 	A genuine owner-initiated interactive turn is NEVER gated here — only
 	forged/autonomous turns. Fail-open: any error here must never block a
@@ -163,6 +190,7 @@ def _autonomous_owner_resend_cooldown_refusal(
 	"""
 	if not _is_forged_or_autonomous_turn(execution_context, controller_self):
 		return None
+	body = (text or "").strip()
 	try:
 		from core.config_policy import owner_message_cooldown_seconds
 		cooldown = owner_message_cooldown_seconds()
@@ -178,23 +206,64 @@ def _autonomous_owner_resend_cooldown_refusal(
 		store = container.get_service("conversation_store") if container else None
 		if store is None:
 			return None
-		count = store.outbound_count_since(user_id or "", surface, owner_addr, cooldown)
-		if count <= 0:
-			return None
+		reader = getattr(store, "outbound_bodies_since", None) if body else None
+		if reader is not None:
+			from core.surfaces.user_delivery import content_hash
+			h = content_hash(body)
+			if not any(content_hash((b or "").strip()) == h for b in (reader(
+					user_id or "", surface, owner_addr, cooldown) or [])):
+				return None   # materially new — the owner has not seen this
+		else:
+			count = store.outbound_count_since(user_id or "", surface, owner_addr,
+			                                   cooldown)
+			if count <= 0:
+				return None
 	except Exception:
 		logger.debug(
 			"owner resend cooldown check failed (fail-open)", exc_info=True)
 		return None
+	_record_cooldown_suppression(event_log, user_id, surface, body)
 	from tools.controller.types import ActionResult
 	hours = cooldown / 3600
+	repeat = " This exact text" if body else " An autonomous message"
 	return ActionResult(
 		extracted_content=(
-			f"message: an autonomous message already reached the owner on "
-			f"{surface} within the last {hours:.1f}h. Call `contact_history` "
+			f"message:{repeat} already reached the owner on {surface} within "
+			f"the last {hours:.1f}h. Call `contact_history` "
 			f"(surface={surface!r}, address=<the owner address>) to see what "
-			f"was already sent — if nothing materially changed, skip this "
+			f"was already sent — say something materially new, or skip this "
 			f"send entirely rather than repeating it."),
 		include_in_memory=True)
+
+
+def _record_cooldown_suppression(event_log, user_id: str, surface: str,
+                                 body: str) -> None:
+	"""Durable trace for a cooldown refusal, in the SAME two places every other
+	suppression shape writes to, so `/missed` and telemetry can see it.
+
+	Fail-open and silent: an unrecordable refusal is still a refusal, and this
+	must never raise into the `message` action.
+	"""
+	try:
+		from core.event_kinds import OWNER_NOTICE, USER_DELIVERY
+		from core.surfaces.user_delivery import NOTICE_MARKERS, content_hash
+		log = event_log
+		if log is ...:
+			from core.event_log import event_log_enabled, get_event_log
+			log = get_event_log() if event_log_enabled() else None
+		if log is None:
+			return
+		uid = str(user_id or "")
+		if body:
+			log.record(OWNER_NOTICE, user_id=uid, source="message_tool",
+			           attrs={"text": f"{NOTICE_MARKERS[4]}; surface={surface}] "
+			                          f"{body}"[:2000]})
+		log.record(USER_DELIVERY, user_id=uid, source="message_tool",
+		           attrs={"outcome": "cooldown", "lane": "normal",
+		                  "content_hash": content_hash(body) if body else "",
+		                  "text": body[:500]})
+	except Exception:
+		logger.debug("cooldown suppression record failed", exc_info=True)
 
 
 _MESSAGE_TEXT_PREVIEW_CHARS = 200

@@ -137,13 +137,44 @@ def test_live_health_note_matches_the_owner_view(degraded):
     assert "credit sentinel TRIPPED for openrouter" in note
 
 
+def _request(path: str = "/api/webgate/doctor"):
+    """A REAL ``starlette.requests.Request``.
+
+    ⚠️ 043 W13 gave ``api_doctor`` a ``request`` parameter so the snapshot is
+    built for the CALLER's tenant rather than always the instance owner's — a
+    multitenant leak. This test called it with none and broke; passing a real
+    Request rather than a stub is what keeps it exercising the actual signature,
+    including the ``_effective_user_id`` resolution W13 added.
+    """
+    from starlette.requests import Request
+    return Request({"type": "http", "method": "GET", "path": path,
+                    "headers": [], "query_string": b""})
+
+
 @pytest.mark.asyncio
 async def test_webview_doctor_endpoint_carries_health(degraded, monkeypatch):
     from webview import pages
     monkeypatch.setattr(pages.webgate, "local_owner_id", lambda: OWNER)
     monkeypatch.setattr(pages, "_data_dir", lambda: degraded)
-    resp = await pages.api_doctor()
+    resp = await pages.api_doctor(_request())
     body = json.loads(resp.body)
     assert body["health"]["overall"] == "degraded"
     assert body["health"]["lines"][0].startswith("Health: DEGRADED")
     assert any("Goals:" in ln for ln in body["status_lines"])
+
+
+@pytest.mark.asyncio
+async def test_the_doctor_endpoint_builds_for_the_CALLERS_tenant(degraded,
+                                                                  monkeypatch):
+    """The reason W13 added the parameter: before it, an authenticated
+    multitenant tenant was served the INSTANCE OWNER's health, goals, cron and
+    money. Pinned here so the argument cannot quietly become decorative."""
+    from webview import pages
+    seen = []
+    monkeypatch.setattr(pages, "_data_dir", lambda: degraded)
+    monkeypatch.setattr(pages, "_effective_user_id",
+                        lambda request: seen.append(request) or OWNER)
+    resp = await pages.api_doctor(_request())
+    assert len(seen) == 1
+    assert seen[0].url.path == "/api/webgate/doctor"
+    assert json.loads(resp.body)["health"]["overall"] == "degraded"

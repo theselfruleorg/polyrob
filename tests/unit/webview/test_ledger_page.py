@@ -15,6 +15,13 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _wallet_owner(monkeypatch):
+    """The split ledger is the process wallet's book, so happy-path readers
+    run as the bound owner; customer denial has its own boundary tests."""
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+
+
 def _router_client():
     import webview.pages as pages
     app = FastAPI()
@@ -249,17 +256,41 @@ def test_ledger_caps_daily_cap_misconfigured_state_never_looks_like_a_cap(monkey
     assert body["caps"]["wallet_daily_cap_state"] != "disabled"
 
 
-def test_finance_page_renders_200(monkeypatch):
-    monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
-    monkeypatch.setenv("ENV", "development")
-    import webview.server as server
-    server = importlib.reload(server)
-    client = TestClient(server._fastapi)
-    r = client.get("/finance")
-    assert r.status_code == 200
-    assert "Finance" in r.text
-    # terminology is income/spend — "earned" is retired everywhere, incl. blurbs.
-    assert "earned" not in r.text.lower()
+def test_ledger_caps_wallet_cap_uses_ledger_value_when_it_diverges_from_env(monkeypatch):
+    """Fix round 1 (review of A6, Important 2): `wallet_daily_cap_usd` used to
+    come from the separate env-only `_wallet_daily_cap_display()` parser
+    while `daily_used_usd`/`daily_left_usd` came from `ledger["caps"]` (the
+    real `PolicyGate`, which can apply a per-user pref on top of the env
+    default) — when the owner tightened the cap via prefs, the page showed
+    `used + left != cap`. The ledger's own `daily_cap_usd` must now be the
+    DISPLAYED cap whenever it's known, so the three numbers always agree."""
+    import modules.credits.unified_ledger as ul
+    from tests.unit.modules.credits.test_unified_ledger_split import FakeDB
+
+    client, pages = _router_client()
+    monkeypatch.setattr(pages, "_effective_user_id", lambda req: "u1")
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "100")  # env says 100...
+
+    class G:  # ...but the real gate (prefs-aware) says 50
+        daily_cap_usd = 50.0
+        per_tx_cap_usd = 25.0
+
+        def rolling_24h_spend_usd(self):
+            return 10.0
+
+    monkeypatch.setattr(ul, "_policy_gate", lambda: G())
+
+    async def _real_build_ledger(user_id, *, days=7, db=None, include_balances=False):
+        # Route through the REAL build_ledger (not the _fake_ledger seam)
+        # so ledger["caps"] is actually computed via _caps_block()/
+        # _policy_gate() — the divergence this test guards against only
+        # exists on that real path.
+        return await ul.build_ledger(user_id, days=days, db=FakeDB())
+
+    monkeypatch.setattr(pages, "build_ledger", _real_build_ledger)
+    body = _get_ledger(client)
+    assert body["caps"]["wallet_daily_cap_usd"] == 50.0
+    assert body["caps"]["daily_used_usd"] + body["caps"]["daily_left_usd"] == 50.0
 
 
 @pytest.fixture(autouse=True)

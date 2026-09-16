@@ -1,14 +1,12 @@
 # Architecture
 
-This document describes polyrob's high-level architecture. It is intended for developers extending the framework or building their own instances.
+This document describes polyrob's high-level architecture. It is intended for
+developers extending the framework or building their own instances.
 
----
-
-## Framework vs instance
-
-**polyrob** is the framework — the package, CLI, and agent runtime.
-
-**rob** is the default instance shipped with the framework. An instance is a named deployment (`POLYROB_INSTANCE_ID`) with its own self-identity and owner principal; give it a separate data home (`POLYROB_DATA_DIR`) too if you want its memory, skills, and scheduled work fully isolated from other instances. You can run multiple named instances on the same machine or server. See [instances.md](instances.md).
+**polyrob** is the framework; a running deployment is one **instance** of it,
+named `polyrob` by default. Naming an instance and isolating its data are two
+separate decisions — see [instances.md](instances.md), and
+[profiles.md](profiles.md) for the one-command way to do both.
 
 ---
 
@@ -28,7 +26,10 @@ Everything is resolved from the container; subsystems do not import each other d
 
 polyrob has a **native multi-provider LLM layer** — no third-party agent framework (LangChain etc.) is used at runtime.
 
-Supported providers: **OpenAI**, **Anthropic**, **Google Gemini**, **DeepSeek**, **OpenRouter** (Grok, GLM, Qwen, and other models it hosts), and **NVIDIA NIM**. Each provider has a native adapter implementing a common `BaseChatModel` interface. The factory (`llm_factory.create_chat_model`) selects the adapter based on the configured provider.
+Six providers are built in, each with a native adapter behind one
+`BaseChatModel` interface, alongside flat-rate rows, OAuth subscription plans and
+any endpoint you declare as data in `providers.yaml` with no code. Which six, and
+how one is chosen: [configuration.md §3](configuration.md#3-providers-and-models).
 
 Key behaviors:
 - **Native tool calling** — uses each provider's structured function-call protocol; no JSON parsing hacks.
@@ -77,8 +78,10 @@ Tools are registered with the Controller and exposed to the LLM as callable func
 | Filesystem / docs | Create, read, edit files in the session workspace |
 | AnySite (`tools/anysite/`) | Structured data from 200+ external sites and platforms via the `anysite` CLI (needs `ANYSITE_API_KEY`) |
 | MCP (`tools/mcp/`) | Model Context Protocol — connect any MCP-compatible server (filesystem, GitHub, Slack, or your own); none are configured out of the box |
-| Crypto / x402 (`core/wallet/`, `tools/x402/`) | Native agent wallet pays for external resources via x402 — opt-in (`X402_CLIENT_ENABLED`); Hyperliquid trading — opt-in (`HYPERLIQUID_TRADING_ENABLED`) |
-| Code execution (`tools/code_exec/`) | Runs code in a local subprocess — a convenience, not a security sandbox; opt-in (`CODE_EXEC_ENABLED`), never loaded by default |
+| Crypto / x402 (`core/wallet/`, `tools/x402/`) | A native agent wallet that pays for external resources over x402 — opt-in (`X402_CLIENT_ENABLED`) |
+| DeFi and on-chain (`tools/defi/`, `tools/launchpad/`, `tools/dapp_browser/`, `tools/polymarket/`, `tools/hyperliquid/`) | Reading a chain, swapping, bridging, deploying a token, launching one, and driving a web dapp with the agent's own wallet — every verb off by default and separately armed; see [payments.md](payments.md) |
+| Durable apps (`tools/app_service/`) | Runs an app the agent built as a supervised container behind a public URL — opt-in (`AGENT_BUILDER_MODE=ship`); see [deployment-postures.md](deployment-postures.md) |
+| Code execution (`tools/code_exec/`) | Runs code in a subprocess or a hardened container; opt-in (`CODE_EXEC_ENABLED`), never loaded by default |
 
 ---
 
@@ -95,61 +98,74 @@ The memory flow within a session:
 2. After each step, new findings are **synced** to the store.
 3. The agent can also **search** memory explicitly with the `session_search` action.
 
-An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short summary of each completed run (chat, goal, or cron job), so a new session can pick up with a brief "what happened last time" instead of starting cold. Off by default on the server; on under `POLYROB_LOCAL`.
+An optional episodic activity log (`EPISODIC_MEMORY_ENABLED`) records a short summary of each completed run (chat, goal, or cron job), so a new session can pick up with a brief "what happened last time" instead of starting cold. It belongs to the autonomy group: off unless `POLYROB_LOCAL` and `AUTONOMY_ENABLED` are both on, or an `AUTONOMY_POSTURE` moves its default.
 
 ---
 
 ## Surfaces
 
-All interaction surfaces implement a common **Surface contract** — a unified interface for receiving user input and sending agent output. This means the same agent core powers every surface.
+Every surface implements one **Surface contract** for receiving input and sending
+output, so the same agent core powers all of them. Seven chat surfaces, plus two
+programmatic ones:
 
-| Surface | Description |
-|---------|-------------|
-| CLI | Interactive REPL (`polyrob`) and non-interactive runner (`polyrob run`) |
-| Web console | Real-time Socket.IO browser interface (`polyrob dashboard`, aliased `polyrob webgate`) — watch sessions live, send guidance. See [console.md](console.md) |
-| Telegram | Telegram bot surface via aiogram (optional `telegram` extra); run with `polyrob telegram` |
-| WhatsApp | WhatsApp Cloud API webhook surface (needs Meta credentials); run with `polyrob whatsapp` |
-| Email | IMAP-poll inbound + SMTP outbound surface (`surfaces/email/`, `EMAIL_SURFACE_ENABLED`); run with `polyrob email` |
-| REST API | HTTP endpoints for programmatic access — see [api.md](api.md) |
+| Surface | Start it with | Notes |
+|---------|---------------|-------|
+| CLI | `polyrob` / `polyrob run` | Interactive REPL and one-shot runner |
+| Telegram | `polyrob telegram` | aiogram; needs the `telegram` extra |
+| WhatsApp | `polyrob whatsapp` | WhatsApp Cloud API webhook; needs Meta credentials |
+| Email | `polyrob email` | IMAP poll in, SMTP out |
+| Discord | `polyrob discord` | |
+| Slack | `polyrob slack` | |
+| Signal | `polyrob signal` | |
+| X | `polyrob x` | Direct messages |
+| Web console | `polyrob dashboard` | Socket.IO browser interface. See [console.md](console.md) |
+| REST / A2A / `/v1` | `polyrob serve` | Programmatic access. See [api.md](api.md) |
 
-Telegram, WhatsApp, and Email are off by default. When enabled, messages from anyone other than the bound owner are treated as untrusted correspondent data, not steering input — manage this with `polyrob owner` (see the "Chat-surface access model" section of [AGENTS.md](../../AGENTS.md) for the full model). Run every enabled chat surface together with `polyrob gateway`.
+Every chat surface is off until you enable it. `polyrob gateway` runs all the
+enabled ones in one process.
 
-### Chat-surface owner commands
+### Who may talk to it
 
-Every chat surface (Telegram, WhatsApp, Discord, Slack, Signal, X DMs, Email)
-dispatches through the SAME decision executor
-(`surfaces/telegram/harness.py::act_on_inbound`), so the bound owner gets one
-identical set of in-chat admin verbs regardless of which surface they're
-typing into — a decision made from a phone is the same primitive as
-`polyrob owner` on the CLI or the REPL's slash commands. A non-owner sender
-gets a `🔒 Owner only.` refusal and none of these touch anything:
+Inbound access has four tiers, resolved once at the routing boundary: the **owner**
+steers the agent; a **correspondent** the agent contacted first has its replies
+delivered as data, never as instructions; a **group member** speaks in a room you
+allowed, from a read-only room toolset; anyone else is **denied**. Rooms have their
+own regime — per-room roles, policy, caps and quiet hours: see
+[groups.md](groups.md). What each tier may reach is in
+[security-model.md](security-model.md).
 
-| Command | Description |
-|---------|-------------|
-| `/status` | Session + autonomy snapshot: bound-session state (idle/running, model, context %), open/running goal counts, next cron run, cost over the trailing 24h |
-| `/recap [window]` (alias `/journey`) | Timeline recap: what the agent did, learned, earned, changed — default `24h`, also accepts `30m`/`7d`/a bare number of seconds |
-| `/goals` | Goal board summary: counts by status plus up to 5 most recent open/running goals |
-| `/prefs` | Effective preferences (read-only) — the same schema/values `/config` and the Console's `/preferences` page show |
-| `/pending`, `/approve <id>`, `/reject <id>` | Review and decide the agent's pending self-evolution proposals (skills, identity notes, guarded preference changes) |
-| `/asks`, `/fulfill <id>` | What's blocking the agent on you, and marking one fulfilled |
-| `/allow`, `/deny`, `/allowlist` | Manage outbound messaging permissions |
-| `/task`, `/cancel`, `/new`, `/help` | Start/stop/reset the active task session; list all commands |
+### The decision plane
+
+One function decides what an inbound message is —
+`core/surfaces/dispatcher.py::route_inbound` — and one executor carries it out for
+every surface, `surfaces/telegram/harness.py::act_on_inbound` (the module name is
+historical; it is not Telegram-specific). That is why the owner gets the same
+in-chat verbs everywhere, and why a decision made from a phone is the same
+primitive as the CLI's. The verb list and what each one does live in
+[owner-controls.md](owner-controls.md) and [cli.md](cli.md).
 
 ---
 
 ## Autonomy loops
 
-Background loops run independently of active sessions, enabling goal-directed behavior:
+Background loops run independently of active sessions, so the agent can pursue work
+between your messages:
 
 | Loop | Description | Flag |
 |------|-------------|------|
-| Cron | Schedule recurring tasks | `CRON_ENABLED` |
-| Goals | Durable goal board — agent pursues queued goals when idle | `GOALS_ENABLED` |
-| Curator | Archives stale authored skills, reactivates on reuse | `CURATOR_ENABLED` |
-| Background review | Aux-model reviews work after productive turns | `BACKGROUND_REVIEW_ENABLED` |
-| Self-wake | Re-enters idle sessions when a goal or async result arrives | `SELF_WAKE_ENABLED` |
+| Goals | Durable goal board — the agent pursues queued goals when idle | `GOALS_ENABLED` |
+| Self-wake | Re-enters an idle session when a goal or a background result arrives | `SELF_WAKE_ENABLED` |
+| Background review | An aux model reviews the work after productive turns | `BACKGROUND_REVIEW_ENABLED` |
+| Curator | Archives stale authored skills, reactivates them on reuse | `CURATOR_ENABLED` |
+| Cron | Scheduled runs | `CRON_ENABLED` |
 
-All loops are **default-off** on the server. Setting `POLYROB_LOCAL=true` enables the safe subset for single-user local installs.
+**They are all off by default, everywhere.** The first four turn on as a group only
+when `POLYROB_LOCAL` **and** `AUTONOMY_ENABLED` are both set — `POLYROB_LOCAL` alone
+turns on the *interactive* tools (coding, git, knowledge base, project context) and
+nothing self-directed. `CRON_ENABLED` is not in that group at all: set it yourself,
+or set `AUTONOMY_POSTURE=full`, which moves its default. The dial, its four axes and
+how to stop it are in [configuration.md](configuration.md#5-the-autonomy-dial) and
+[owner-controls.md](owner-controls.md).
 
 ---
 

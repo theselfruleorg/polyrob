@@ -10,7 +10,7 @@ NFT service. No crypto here.
 |---|---|
 | `mindprint.js` | **The engine — SSOT for pixels.** A classic script (sets `window.Mindprint` + `SHAPES`/`MODES`/`TIERS`/`TRAITS`/`cyrb128`/`sfc32`/`hsl2rgb`). Extracted verbatim; **do not edit casually** — a change alters every existing face (bump the `generator` string and re-render). Guarded by `tests/unit/avatar/` (Node determinism + portal-copy equality). |
 | `studio.html` | The 4-step browser picker (① name ② look ③ voice ④ save). Loads `mindprint.js`; **Copy config JSON** emits the frozen blob. Open via `polyrob pfp studio`. |
-| `config/rob.json` | The frozen STOCK identity blob (Rob #1's face; reproducibility SSOT): `{generator, seed, variant, size, override, ...}`. `pfp generate --stock` / `--config` reproduce it — the default `generate` mints a RANDOM identity instead. |
+| `config/rob.json` | The frozen neutral STOCK identity blob (reproducibility SSOT): `{generator, seed, variant, size, override, ...}`. `pfp generate --stock` / `--config` reproduce it — the default `generate` mints a RANDOM identity instead. |
 | `renders/rob.png` | Committed reference still of the STOCK identity — the last-resort fallback for `pfp generate --stock` and the drift golden. `rob.meta.json` carries its traits/voice. Never substituted for a randomized identity (the native mesh renderer covers headless). |
 | `webview/avatar-live.js` | Read-only live embed for the console (fetch `/pfp.json` → animate the canvas). |
 
@@ -29,7 +29,7 @@ is deleting the instance `identity/{id}/pfp/` directory by hand). `push` require
 kept identity. A pre-lock-era `pfp.json` (no `locked` key) is treated as kept.
 
 ```bash
-polyrob pfp generate                 # start setup: mint a RANDOM draft (--stock for Rob #1's face)
+polyrob pfp generate                 # start setup: mint a RANDOM draft (--stock for the neutral face)
 polyrob pfp randomize [face|voice]   # re-roll the draft: everything / face-only / voice-only
 polyrob pfp say [text]               # HEAR the voice signature (native TTS: say / espeak / SAPI)
 polyrob pfp keep                     # accept — freeze the identity forever

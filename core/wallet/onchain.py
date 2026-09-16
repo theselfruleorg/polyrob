@@ -207,12 +207,15 @@ def rpc_url_for_chain(chain: str) -> str:
 
 
 def _rpc(url: str, method: str, params: list, timeout: float = 4.0):
+    import time
+    from core.wallet.rpc_response import read_response
+    deadline = time.monotonic() + timeout
     body = _json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
     # Cloudflare-fronted public RPCs 403 the default python-urllib UA — send a normal one.
     req = urllib.request.Request(url, data=body, headers={
-        "content-type": "application/json", "user-agent": "polyrob-wallet/1.0"})
+        "content-type": "application/json", "user-agent": "polyrob-wallet/1.0", "accept-encoding": "identity"})
     with urllib.request.urlopen(req, timeout=timeout) as r:  # nosec - public read-only RPC
-        payload = _json.loads(r.read())
+        payload = read_response(r, deadline=deadline)
     if isinstance(payload, dict) and payload.get("error") is not None:
         raise RpcError(f"{method}: {payload['error']}")
     if not isinstance(payload, dict) or "result" not in payload:

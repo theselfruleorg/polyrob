@@ -212,7 +212,10 @@ def _outcome(**kw) -> RunOutcome:
 def _patch_run(monkeypatch, outcome=None, exc=None):
     """Replace the shared run helper so the test controls the RunOutcome/raise."""
 
-    async def _fake(task_agent, *, user_id, request, autonomous=False):
+    async def _fake(task_agent, *, user_id, request, autonomous=False, **_kw):
+        # **_kw so a NEW kwarg on the real `run_task_to_outcome` (039 added
+        # `goal_id`, to let an owner-queue ask name the goal it blocks) does
+        # not fail 20 tests that never cared about it.
         if exc is not None:
             raise exc
         return outcome
@@ -387,7 +390,7 @@ def test_planner_outage_logs_marker_and_skips_escalation(monkeypatch, caplog):
     import agents.task.goals.planner as planner
     import core.credit_sentinel as cs
 
-    async def fake_run(task_agent, *, user_id, request, autonomous):
+    async def fake_run(task_agent, *, user_id, request, autonomous, **_kw):
         return "sess-outage", None
 
     monkeypatch.setattr(disp, "_run_task_as_session", fake_run)
@@ -413,7 +416,7 @@ def test_planner_normal_run_still_escalates(monkeypatch, caplog):
     import agents.task.goals.planner as planner
     import core.credit_sentinel as cs
 
-    async def fake_run(task_agent, *, user_id, request, autonomous):
+    async def fake_run(task_agent, *, user_id, request, autonomous, **_kw):
         return "sess-ok", "queued 2 goals"
 
     monkeypatch.setattr(disp, "_run_task_as_session", fake_run)

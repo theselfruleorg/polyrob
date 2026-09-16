@@ -28,8 +28,12 @@ shadowed** by an external skill of the same name.
 | **user** | `<data_home>/skills/user_<uid>/` (local CLI: `./.polyrob/skills/user_<uid>/`, or `$POLYROB_DATA_DIR`) | yes | `polyrob skill install`, or the agent authoring a skill |
 | **external (discovered)** | `~/.agents/skills/`, `~/.claude/skills/` (user), and per-repo `./.agents/skills/`, `./.claude/skills/` (project) | no (loaded in place) | drop a skill folder in and it's auto-discovered |
 
-User and installed skills live under your **data home**, not the package tree, so they
-**survive `polyrob update`** (the updater snapshots `<data_home>/skills`).
+Builtin skills ship inside the installed package (`data/prompts/skills/`) and are
+replaced wholesale by an update. User and installed skills live under your **data
+home**, not the package tree, so they **survive `polyrob update`** — the updater
+snapshots `<data_home>/skills` first, and `polyrob update --rollback` restores it
+(data only; the code is not reverted — see
+[upgrading.md](upgrading.md#the-safety-net)).
 
 ---
 
@@ -114,23 +118,15 @@ Review the quarantined skill (it's just files under `.pending/<name>/`) before a
 
 ## Managing skills
 
-```bash
-# CATALOG / AUTHORING (the `skills` group)
-polyrob skills list                    # list the skill IDs the agent can load
-polyrob skills validate [skill-id]     # check authored skills against the SKILL.md standard
-polyrob skills export <skill-id> [--to DIR]   # copy a skill out to ~/.agents/skills (portable)
+There are **two command groups**, and `polyrob --help` prints them as one row,
+`skills (alias: skill)`:
 
-# INSTALL PIPELINE (the `skill` group)
-polyrob skill install <spec> [...]     # install (see above)
-polyrob skill approve <name>           # activate a quarantined skill
-polyrob skill list                     # every scope + status (builtin/user/external × active/pending/archived)
-polyrob skill info <skill-id>          # frontmatter + provenance + usage stats
-polyrob skill remove <skill-id>        # archive a user skill (recoverable, never hard-deleted)
-```
+- **`polyrob skills`** — the read/authoring surface: `list`, `validate`, `export`.
+- **`polyrob skill`** — the install pipeline: `install`, `approve`, `list`, `info`,
+  `remove`.
 
-> There are two command groups by design: **`polyrob skills`** (the read/authoring
-> surface — list, validate, export) and **`polyrob skill`** (the install pipeline —
-> install, approve, list, info, remove). Run either with `--help` for the full surface.
+Both names always work. Run either with `--help`, or see [cli.md](cli.md) for the
+full command reference.
 
 Inside the interactive REPL (`polyrob chat` / `polyrob run`) the same operations are
 available as slash commands:
@@ -179,11 +175,9 @@ enforces, all fail-closed:
 
 ```markdown
 ---
-name: pdf-processing                 # required; ≤64 chars; must match the folder name
-description: Extract and analyze PDF text. Use when handling PDF files.   # required, ≤1024
-license: MIT                         # optional
-metadata:                            # optional; string→string map
-  polyrob-priority: "3"
+name: pdf-processing                 # required; must match the folder name
+description: Extract and analyze PDF text. Use when handling PDF files.   # required
+metadata:                            # optional; POLYROB settings live here
   polyrob-auto-activate: "true"
   polyrob-triggers: '{"keywords": ["pdf", "extract"]}'
 ---
@@ -193,12 +187,13 @@ metadata:                            # optional; string→string map
 Step-by-step instructions the agent follows once this skill is loaded…
 ```
 
-- Only the agentskills.io top-level fields are allowed (`name`, `description`, `license`,
-  `compatibility`, `metadata`, `allowed-tools`); POLYROB-specific settings go under
-  `metadata` as flat `polyrob-*` string keys, so the file stays portable to other agents.
-- Body size: accepted up to 40,000 chars on disk; a warning is logged above ~20,000
-  (~5,000 tokens) since that's the injected-body size the standard recommends.
-- Full authoring rules and safety conventions: [`docs/SKILL_AUTHORING_STANDARD.md`](../SKILL_AUTHORING_STANDARD.md).
+Only the agentskills.io top-level fields are allowed (`name`, `description`,
+`license`, `compatibility`, `metadata`, `allowed-tools`), so the file stays
+portable to other agents; POLYROB settings go under `metadata` as flat
+`polyrob-*` string keys. Field limits, trigger syntax and the safety
+conventions are in
+[`docs/SKILL_AUTHORING_STANDARD.md`](../SKILL_AUTHORING_STANDARD.md) — write to
+that, and check your work with `polyrob skills validate`.
 
 ---
 
@@ -211,5 +206,11 @@ skills:
 
 - `POLYROB_TRUST_PROJECT_SKILLS` — trust per-repo `./.agents/skills/` (local default on;
   server forced off).
-- `SKILLS_WRITABLE` — let the agent author its own skills (on under `POLYROB_LOCAL`).
+- `SKILLS_WRITABLE` — let the agent author its own skills. It is on by default only
+  when `POLYROB_LOCAL` **and** `AUTONOMY_ENABLED` are both on (it belongs to the
+  autonomy group, not the interactive one — see
+  [configuration.md](configuration.md#5-the-autonomy-dial)). What the agent writes
+  is quarantined for your review; `polyrob owner pending` lists it.
 - `POLYROB_DATA_DIR` — where user/installed skills are stored.
+
+Run `polyrob doctor --flags --group skills` for the live values on your box.

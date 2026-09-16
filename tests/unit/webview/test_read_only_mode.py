@@ -25,10 +25,15 @@ def _local_client(monkeypatch, read_only: bool):
 
 
 def test_messages_post_refused_when_read_only(monkeypatch):
+    """Since 043 W3 the refusal comes from the ONE dependency
+    (``webgate.read_only_guard``), so the body is FastAPI's ``{"detail": …}``
+    rather than the handler's old ``{"success": false, "error": …}`` — the
+    handler never runs at all now."""
     client = _local_client(monkeypatch, read_only=True)
     resp = client.post("/api/session/sess-1/messages", json={"message": "hi"})
     assert resp.status_code == 403
-    assert "read-only" in resp.json()["error"].lower()
+    assert "read-only" in resp.json()["detail"].lower()
+    assert "WEBVIEW_READ_ONLY" in resp.json()["detail"]
 
 
 def test_messages_post_not_blocked_by_flag_when_off(monkeypatch):
@@ -40,30 +45,10 @@ def test_messages_post_not_blocked_by_flag_when_off(monkeypatch):
     assert "read-only" not in str(body.get("error", "")).lower()
 
 
-def test_dashboard_hides_chat_input_when_read_only(monkeypatch):
-    client = _local_client(monkeypatch, read_only=True)
-    page = client.get("/")
-    assert page.status_code == 200
-    assert 'id="chat-input"' not in page.text
-    assert "read-only monitoring mode" in page.text
-
-    client2 = _local_client(monkeypatch, read_only=False)
-    page2 = client2.get("/")
-    assert 'id="chat-input"' in page2.text
-
-
-def test_dashboard_hides_config_pickers_when_read_only(monkeypatch):
-    """P2-15 (2026-07-06 UX handoff): the model/tools pickers can't start
-    sessions in a read-only console — the empty state must lead with the
-    monitoring hint instead of a dead config panel."""
-    client = _local_client(monkeypatch, read_only=True)
-    page = client.get("/")
-    assert page.status_code == 200
-    assert 'id="config-model"' not in page.text
-    assert 'id="tools-group"' not in page.text
-    assert 'href="/activity"' in page.text  # the hint points somewhere useful
-
-    client2 = _local_client(monkeypatch, read_only=False)
-    page2 = client2.get("/")
-    assert 'id="config-model"' in page2.text
-    assert "Pick a model and send a message" in page2.text  # P2-14 empty-state hint
+# The read-only DASHBOARD-chrome tests (chat input / model+tools pickers hidden,
+# the "read-only monitoring mode" banner) were removed in 043 phase 2 (§9): they
+# asserted markers of the deleted session.html dashboard, which no longer renders
+# at `/`. The server-side read-only ENFORCEMENT — the real guarantee — stays
+# covered above by test_messages_post_refused_when_read_only. Re-covering the
+# read-only chat page's hidden composer is the new shell's test to write (the
+# webview conftest documents this KNOWN GAP for the C6 `/` replacement).

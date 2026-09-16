@@ -14,7 +14,7 @@ import modules.pfp.still as still_mod
 from modules.pfp.renderer import PfpRenderUnavailable, RenderResult
 from core.instance import pfp_path, pfp_dir, load_pfp_meta
 
-CFG = {"generator": "mindprint@v2", "seed": "Rob Ottmachin", "variant": "",
+CFG = {"generator": "mindprint@v2", "seed": "POLYROB", "variant": "",
        "size": 256, "override": {}}
 RANDOM_CFG = {**CFG, "variant": "#zq9k3"}
 PNG = b"\x89PNG\r\n\x1a\n" + b"fakepngbytes"
@@ -40,9 +40,9 @@ def test_generate_writes_png_and_meta(tmp_path, monkeypatch):
     meta = store.generate_pfp(tmp_path, "rob", config=CFG)
     assert pfp_path(tmp_path, "rob").read_bytes() == PNG
     assert meta["rendered_by"] == "playwright-chromium"
-    assert meta["seed_hex"] == "0x1546"
+    assert meta["seed_hex"] == "0x8929"
     assert set(meta["voice"]) == {"pitch", "rate", "timbre"}   # from mesh, engine-agnostic
-    assert meta["traits"]["eyes"] == "square"
+    assert meta["traits"]["eyes"] == "three"
     assert (pfp_dir(tmp_path, "rob") / "pfp.json").is_file()
 
 

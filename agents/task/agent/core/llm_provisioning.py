@@ -210,7 +210,9 @@ class LLMProvisioningMixin:
 
         Returns the effective (reconciled) value.
         """
-        user_wants_native = getattr(self, 'use_native_tools', True)
+        if not hasattr(self, '_requested_native_tools'):
+            self._requested_native_tools = getattr(self, 'use_native_tools', True)
+        user_wants_native = self._requested_native_tools
         # Use Controller's high-level API instead of directly accessing registry
         provider_supports_native = self.controller.supports_native_tools(provider)
         effective = user_wants_native and provider_supports_native
@@ -222,6 +224,9 @@ class LLMProvisioningMixin:
 
         # Keep the agent's own flag aligned with what MessageManager will use.
         self.use_native_tools = effective
+        manager = getattr(self, 'message_manager', None)
+        if manager is not None:
+            manager.use_native_tools = effective
         return effective
 
     def set_tool_calling_method(self, tool_calling_method: Optional[str]) -> Optional[str]:

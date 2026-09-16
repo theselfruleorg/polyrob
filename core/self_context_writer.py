@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 import tempfile
 from pathlib import Path
 from typing import List, Optional
@@ -256,6 +257,62 @@ class SelfContextWriter:
             "path": str(pending_f),
         }
 
+    def read_active(self, user_id: str) -> str:
+        """The ACTIVE doc's raw text, or "" (035 P1-11 needs it for the change
+        summary; the ``core.instance`` loaders apply a [BLOCKED] placeholder and
+        a load cap, which would corrupt a diff)."""
+        uid = self._require_user(user_id)
+        if uid is None:
+            return ""
+        try:
+            f = self._active_file(uid)
+            return f.read_text(encoding="utf-8") if f.is_file() else ""
+        except OSError:
+            return ""
+
+    def retire_pending(self, *, user_id: str) -> bool:
+        """Archive + remove a draft the ACTIVE doc has now superseded (035 P1-6).
+
+        Leaving it behind would show the owner a `/pending` proposal that is
+        already law. Archive-never-delete still applies. Fail-open.
+        """
+        uid = self._require_user(user_id)
+        if uid is None:
+            return False
+        pending_f = self._pending_file(uid)
+        if not pending_f.is_file():
+            return False
+        try:
+            self._archive_pending(uid, pending_f)
+            os.remove(str(pending_f))
+            return True
+        except OSError:
+            logger.debug("%s %s: superseded draft not removed", self._LOG_LABEL, uid)
+            return False
+
+    def apply_now(self, content: str, *, user_id: str,
+                  created_by: str = PROVENANCE_AGENT) -> SelfContextWriteResult:
+        """Write the ACTIVE doc and retire any draft it supersedes (035 P1-6).
+
+        Routes through :meth:`propose` with ``pending=False``, so the full gate
+        still runs — cap, safety scan, archive-before-overwrite, atomic write —
+        and ``_resolve_pending``'s hard rule still quarantines a non-user author
+        regardless of what this asks for. That layering is deliberate: the
+        immediacy decision belongs to the CALLER (is this an owner turn?), the
+        forged-author refusal belongs HERE, and neither can be bypassed by the
+        other.
+
+        Retiring the superseded draft matters for honesty: leaving it behind
+        would show the owner a `/pending` proposal that is already law.
+        """
+        uid = self._require_user(user_id)
+        if uid is None:
+            return SelfContextWriteResult(False, errors=["empty user_id refused"])
+        res = self.propose(content, user_id=uid, created_by=created_by, pending=False)
+        if res.ok and not res.pending:
+            self.retire_pending(user_id=uid)
+        return res
+
     def reject(self, *, user_id: str) -> SelfContextWriteResult:
         """Discard a pending self-doc draft (owner rejects the proposal).
 
@@ -316,9 +373,34 @@ class SelfContextWriter:
             n += 1
         try:
             import shutil
-            shutil.copy2(str(active), str(archive_dir / f"{self._ARCHIVE_PREFIX}.{n}.md"))
+            name = f"{self._ARCHIVE_PREFIX}.{n}.md"
+            shutil.copy2(str(active), str(archive_dir / name))
+            try:
+                self._note_archive(uid, name,
+                                   f"superseded by a new active {self._CAP_NOUN}")
+            except Exception:
+                logger.debug("%s %s: archive index not updated", self._LOG_LABEL, uid)
         except Exception:
             pass  # archival is best-effort; never block a write on it
+
+    def _note_archive(self, uid: str, archived_name: str, reason: str) -> None:
+        """Append one provenance line to ``.archived/INDEX.md`` (035 P2-14).
+
+        A directory of ``self.0.md``/``self.1.md`` says WHAT was archived and
+        nothing about WHY or what replaced it — so a superseded rule could not be
+        traced back to the decision that superseded it, which is exactly the
+        question the 09-08 den incident raised. Append-only, best-effort: the
+        caller must never fail a write because provenance could not be recorded.
+        """
+        index = self._root(uid) / ".archived" / "INDEX.md"
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        line = f"- {stamp}  {archived_name}  — {reason}\n"
+        index.parent.mkdir(parents=True, exist_ok=True)
+        header = "" if index.exists() else (
+            "# Archived identity documents\n\n"
+            "One line per archived version: when, which file, and why.\n\n")
+        with open(index, "a", encoding="utf-8") as fh:
+            fh.write(header + line)
 
     def _archive_pending(self, uid: str, pending_f: Path) -> None:
         """Back up a rejected pending draft (best-effort, recoverable rollback)."""
@@ -329,7 +411,13 @@ class SelfContextWriter:
             n += 1
         try:
             import shutil
-            shutil.copy2(str(pending_f), str(archive_dir / f"{self._REJECTED_PREFIX}.{n}.md"))
+            name = f"{self._REJECTED_PREFIX}.{n}.md"
+            shutil.copy2(str(pending_f), str(archive_dir / name))
+            try:
+                self._note_archive(uid, name,
+                                   f"pending {self._CAP_NOUN} draft rejected or superseded")
+            except Exception:
+                logger.debug("%s %s: archive index not updated", self._LOG_LABEL, uid)
         except Exception:
             pass  # archival is best-effort; never block a reject on it
 

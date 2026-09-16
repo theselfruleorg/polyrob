@@ -127,6 +127,7 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		tool_ids: Optional[List[str]] = None,  # Session's loaded tool_ids for config-aware prompt gating
 		include_vision: bool = True,  # T1-06: session's use_vision → gates the vision prompt section
 		surface_profile: Optional[dict] = None,  # G6: bound chat surface -> <surface> block
+		verbosity: Optional[str] = None,  # C2: style.verbosity -> <message-shape> budget
 	):
 		# S1 (chat consolidation): persona text forwarded to the SystemPrompt class
 		# when this manager builds the system message itself (no prebuilt profile
@@ -136,6 +137,9 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# the agent knows the message cap / media capability it writes for.
 		# None => surface-agnostic, prompt unchanged.
 		self._surface_profile = surface_profile
+		# C2: the owner's resolved style.verbosity, or None to take the prompt's
+		# "normal" default. Resolved once at construction => cache-stable.
+		self._verbosity = verbosity
 		# Set up logger with session ID
 		from agents.task.logging_config import get_task_logger
 		self.logger = get_task_logger("messages", session_id)
@@ -355,6 +359,10 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 			# system_prompt_class implementations stay byte-identical.
 			if self._surface_profile:
 				_prompt_kwargs["surface"] = self._surface_profile
+			# C2: only passed when a pref is actually set, so a custom
+			# system_prompt_class and the default-verbosity build stay unchanged.
+			if self._verbosity:
+				_prompt_kwargs["verbosity"] = self._verbosity
 			prompt_instance = self.system_prompt_class(
 				self.action_descriptions,
 				**_prompt_kwargs,
@@ -700,6 +708,9 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		Keeps the system prompt stable for prompt caching. Set at session start;
 		pass falsy content to clear (the inert default when the flag is off).
 		"""
+		if content == getattr(self, '_tool_catalog_source', None):
+			return
+		self._tool_catalog_source = content
 		if content and content.strip():
 			self._tool_catalog_message = make_control_message(content, MessageOrigin.TOOL_CATALOG)
 			self._tool_catalog_tokens = self._count_message_tokens(self._tool_catalog_message)
@@ -829,4 +840,3 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		if plan:
 			msg = AIMessage(content=plan)
 			self._add_message_with_tokens(msg, position, _internal=True)
-

@@ -15,14 +15,17 @@ registered, OUTSIDE core.
 from __future__ import annotations
 
 import asyncio
-import glob
+import hashlib
+import inspect
 import logging
 import os
+import stat
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-MAX_CHECKS = 10
+from agents.task.runtime.acceptance_schema import MAX_CHECKS, validate_acceptance_checks
 DEFAULT_TIMEOUT_SEC = 10.0
 # Bounded read for file_contains — no shared read-cap constant exists nearby
 # (proposal 016), so cap at 1 MB; an oversized file fails the check, never crashes.
@@ -32,25 +35,41 @@ FILE_CONTAINS_MAX_BYTES = 1024 * 1024
 CheckFn = Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[Tuple[bool, str]]]
 
 
-def _http_status(url: str, timeout: float) -> int:
-    """Blocking GET returning the HTTP status (module-level for test injection)."""
-    import urllib.request
-    req = urllib.request.Request(url, method="GET",
-                                 headers={"User-Agent": "polyrob-acceptance-check"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec - operator/agent
-        return int(getattr(resp, "status", 0) or resp.getcode())
+async def _http_status(url: str, timeout: float) -> int:
+    """Anonymous, SSRF-protected status probe (module-level for test injection)."""
+    from core.security.http_probe import http_status
+    return await http_status(url, timeout)
 
 
 async def _check_artifact_glob(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[bool, str]:
     pattern = str(check.get("pattern") or check.get("arg") or "").strip()
     if not pattern:
         return False, "artifact_glob: no pattern"
-    base = str(check.get("workspace_dir") or ctx.get("workspace_dir") or "")
+    base = str(ctx.get("workspace_dir") or "")
     if not base or not os.path.isdir(base):
         return False, f"artifact_glob: workspace dir unavailable ({base or 'unset'})"
-    matches = glob.glob(os.path.join(base, "**", pattern), recursive=True)
-    if matches:
-        return True, f"artifact_glob: {len(matches)} match(es), e.g. {os.path.relpath(matches[0], base)}"
+    # Never descend through symlinks; stat the match via the walked directory
+    # descriptor so a swapped path cannot turn an external file into evidence.
+    def find_match():
+        visited = 0
+        for root, dirs, files, directory in os.fwalk(base, follow_symlinks=False):
+            visited += len(files) + len(dirs)
+            if visited > 20000:
+                raise ValueError("artifact_glob: workspace scan exceeds 20000 entries")
+            for name in files:
+                relative = os.path.relpath(os.path.join(root, name), base)
+                patterns = [pattern]
+                while patterns[-1].startswith("**/"):
+                    patterns.append(patterns[-1][3:])
+                if not any(Path(relative).match(item) for item in patterns):
+                    continue
+                info = os.stat(name, dir_fd=directory, follow_symlinks=False)
+                if stat.S_ISREG(info.st_mode) and info.st_nlink == 1:
+                    return relative
+        return None
+    match = await asyncio.to_thread(find_match)
+    if match:
+        return True, f"artifact_glob: match {match}"
     return False, f"artifact_glob: no file matching {pattern!r} under workspace"
 
 
@@ -79,8 +98,7 @@ async def _check_artifact(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[b
     if not (artifact_id or name):
         return False, "artifact: neither 'id' nor 'name' given"
 
-    from core.artifacts import (VERIFY_CHANGED, VERIFY_MISSING, VERIFY_OK,
-                                get_artifact_ledger)
+    from core.artifacts import get_artifact_ledger
     ledger = get_artifact_ledger()
 
     row = None
@@ -102,22 +120,29 @@ async def _check_artifact(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[b
         if row is None:
             return False, f"artifact: no artifact named {name!r} was produced by this run"
 
-    verdict = ledger.verify(row.id, user_id)
-    if verdict == VERIFY_MISSING:
+    goal_id, session_id = ctx.get("goal_id"), ctx.get("session_id")
+    if not goal_id and not session_id:
+        return False, "artifact: no goal or session scope in trusted context"
+    if ((goal_id and row.goal_id != goal_id)
+            or (session_id and row.session_id != session_id)):
+        return False, "artifact: record belongs to a different goal or session"
+    # Hash and substring checks consume the SAME bounded snapshot. A successful
+    # hash of one revision must not authorize reading another revision afterward.
+    from core.security.confined_read import read_confined_bytes
+    recorded_path = Path(row.path)
+    try:
+        snapshot = await asyncio.to_thread(read_confined_bytes, recorded_path,
+                                          recorded_path.parent, FILE_CONTAINS_MAX_BYTES)
+    except FileNotFoundError:
         return False, f"artifact: {name or row.id} was produced but is now missing from disk"
-    if verdict == VERIFY_CHANGED:
+    except OSError as exc:
+        return False, f"artifact: unreadable or oversized ({str(exc)[:100]})"
+    if hashlib.sha256(snapshot).hexdigest() != row.sha256:
         return False, f"artifact: {name or row.id} changed since it was recorded"
-    if verdict != VERIFY_OK:
-        return False, f"artifact: {name or row.id} unknown to the ledger"
-
     needles = [str(x) for x in (check.get("contains") or []) if str(x)]
     if not needles:
         return True, f"artifact: {name or row.id} ok ({row.bytes} bytes)"
-    try:
-        with open(row.path, "r", encoding="utf-8", errors="replace") as f:
-            body = f.read(FILE_CONTAINS_MAX_BYTES)
-    except OSError as e:
-        return False, f"artifact: unreadable ({str(e)[:100]})"
+    body = snapshot.decode("utf-8", errors="replace")
     mode = str(check.get("mode") or "all").lower()
     # Case-insensitive for the same reason as file_contains below — a natural-
     # language "contains" check on the goal's own report, not an exact-literal
@@ -135,18 +160,20 @@ async def _check_http_ok(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[bo
         return False, f"http_ok: not an http(s) url ({url[:80]!r})"
     timeout = float(ctx.get("timeout_sec") or DEFAULT_TIMEOUT_SEC)
     try:
-        status = await asyncio.to_thread(_http_status, url, timeout)
+        status = _http_status(url, timeout)
+        if inspect.isawaitable(status):
+            status = await status
     except Exception as e:
         return False, f"http_ok: request failed ({str(e)[:120]})"
-    ok = 200 <= status < 400
+    ok = 200 <= status < 300
     return ok, f"http_ok: {url[:120]} -> {status}"
 
 
 async def _check_file_contains(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tuple[bool, str]:
     """{"type":"file_contains","path":"...","contains":["A","B"],"mode":"all"|"any"}
 
-    Workspace-relative path resolution mirrors ``artifact_glob`` (joined under
-    the check/ctx ``workspace_dir``); bounded read; substring match. Missing
+    Workspace-relative path resolution uses ONLY trusted run context, never a
+    check-supplied root; bounded no-link snapshot and substring match. Missing
     file / missing substring / oversized file → ok=False with a clear detail.
     """
     path = str(check.get("path") or check.get("arg") or "").strip()
@@ -158,28 +185,19 @@ async def _check_file_contains(check: Dict[str, Any], ctx: Dict[str, Any]) -> Tu
     needles = [str(s) for s in (contains or []) if str(s)]
     if not needles:
         return False, "file_contains: no substrings given ('contains' empty)"
-    base = str(check.get("workspace_dir") or ctx.get("workspace_dir") or "")
+    base = str(ctx.get("workspace_dir") or "")
     if not base or not os.path.isdir(base):
         return False, f"file_contains: workspace dir unavailable ({base or 'unset'})"
-    full = os.path.join(base, path)  # same workspace-relative semantics as artifact_glob
-    if not os.path.isfile(full):
+    from core.security.confined_read import read_confined_bytes
+    try:
+        root = Path(base).resolve()
+        snapshot = await asyncio.to_thread(read_confined_bytes, root / path, root,
+                                          FILE_CONTAINS_MAX_BYTES)
+        text = snapshot.decode("utf-8", errors="replace")
+    except FileNotFoundError:
         return False, f"file_contains: file not found ({path!r} under workspace)"
-    try:
-        size = os.path.getsize(full)
     except OSError as e:
-        return False, f"file_contains: cannot stat {path!r} ({str(e)[:80]})"
-    if size > FILE_CONTAINS_MAX_BYTES:
-        return False, (f"file_contains: file too large ({size} bytes > "
-                       f"{FILE_CONTAINS_MAX_BYTES} byte cap)")
-
-    def _read() -> str:
-        with open(full, "r", encoding="utf-8", errors="replace") as f:
-            return f.read(FILE_CONTAINS_MAX_BYTES)
-
-    try:
-        text = await asyncio.to_thread(_read)
-    except OSError as e:
-        return False, f"file_contains: read failed ({str(e)[:80]})"
+        return False, f"file_contains: read failed or file too large ({str(e)[:80]})"
     mode = str(check.get("mode") or "all").strip().lower()
     # Case-insensitive on purpose (2026-08-28, third recurrence of the same
     # false-negative): these checks assert a natural-language report DISCUSSES
@@ -219,6 +237,11 @@ def register_check_type(name: str, fn: CheckFn) -> None:
     _CHECK_TYPES[str(name)] = fn
 
 
+def validate_checks(checks):
+    """Shared creation/run-time contract, including registered extensions."""
+    return validate_acceptance_checks(checks, _CHECK_TYPES)
+
+
 async def run_acceptance_checks(checks: List[Dict[str, Any]], *,
                                 workspace_dir: Optional[str] = None,
                                 timeout_sec: float = DEFAULT_TIMEOUT_SEC,
@@ -233,7 +256,11 @@ async def run_acceptance_checks(checks: List[Dict[str, Any]], *,
     results: List[Dict[str, Any]] = []
     ctx = {"workspace_dir": workspace_dir, "timeout_sec": timeout_sec,
            "user_id": user_id, "goal_id": goal_id, "session_id": session_id}
-    for check in list(checks or [])[:MAX_CHECKS]:
+    try:
+        validated = validate_checks(checks if checks is not None else [])
+    except (ValueError, TypeError) as exc:
+        return [{"type": "validation", "ok": False, "detail": str(exc)[:300]}]
+    for check in validated:
         if not isinstance(check, dict):
             results.append({"type": "?", "ok": False, "detail": "malformed check (not a dict)"})
             continue

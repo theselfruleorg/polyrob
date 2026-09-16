@@ -1,22 +1,29 @@
 """WS-A access-tier resolver — classify one inbound's sender into a trust tier.
 
-Three tiers, resolved ONCE at the routing boundary and carried into the dispatcher:
+Four tiers, resolved ONCE at the routing boundary and carried into the dispatcher:
 
 - **OWNER** — the bound owner principal, the local single-user operator, or a paired
   user. May command the agent (steering turn).
 - **CORRESPONDENT** — a third party the agent INITIATED contact with, i.e. an ACTIVE
   binding in the correspondent registry. Their inbound is DATA delivered only to the
   originating session; it can never command the agent.
-- **DENIED** — anonymous, unknown, group/multi-party, or anything that isn't clearly
-  one of the above.
+- **GROUP_MEMBER** (044) — a non-owner sender inside an allowlisted room
+  (``GROUP_CHAT_ENABLED`` + ``core/surfaces/group_allowlist.py``). Rooms: allowlisted
+  chat + per-chat role; tool power bounded by the audience
+  (``core/surfaces/room_policy.py``) — never thread membership, never the correspondent
+  DATA rail. See ``docs/guide/groups.md``.
+- **DENIED** — anonymous, unknown, ``blocked`` in a room, or anything that isn't
+  clearly one of the above.
 
 Invariants:
 - **Tier = authenticated sender**, never thread membership (the registry keys on the
   sender address; ``thread_id`` only disambiguates among that sender's own sessions).
 - **Fail-closed on the CORRESPONDENT→OWNER boundary**: any fault degrades toward
   DENIED and never UPGRADES a sender to OWNER.
-- **Groups/channels are DENIED in v1** — the envelope is single-principal, so there is
-  no safe per-author tiering inside a multi-party chat yet.
+- **Groups/channels** are DENIED unless the operator opted in (``GROUP_CHAT_ENABLED``)
+  AND the chat is allowlisted. Inside an allowed room the sender carries a per-chat
+  ROLE (044 T16, ``core/surfaces/group_roles.py``): the owner principal is OWNER,
+  ``blocked`` is DENIED, and admin/member are both ``GROUP_MEMBER``.
 
 Pure decision function; no surface/transport imports. Reads ``POLYROB_LOCAL`` directly
 (like ``core/pairing``) to stay on the core side of the core→agents boundary.
@@ -43,7 +50,13 @@ _LOCAL_OWNER_SURFACES = {"cli", "local", "repl"}
 class AccessTier(str, Enum):
     OWNER = "owner"
     CORRESPONDENT = "correspondent"
-    GROUP_PARTICIPANT = "group_participant"  # W3: non-owner in an allowlisted group
+    GROUP_MEMBER = "group_member"  # W3: non-owner in an allowlisted group
+    #: 044 T16 renamed GROUP_PARTICIPANT -> GROUP_MEMBER (the room vocabulary is
+    #: owner/admin/member/blocked, and "participant" named none of them). Same
+    #: VALUE, so Enum makes this an alias: `AccessTier.GROUP_PARTICIPANT is
+    #: AccessTier.GROUP_MEMBER`. Kept for one release so an out-of-tree caller
+    #: does not break; new code uses GROUP_MEMBER.
+    GROUP_PARTICIPANT = "group_member"
     DENIED = "denied"
 
 
@@ -53,6 +66,13 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
 
     ``allow_local`` gates the single-user local-owner bypass: it is only honoured for a
     trusted local surface (never a network surface — see ``_LOCAL_OWNER_SURFACES``).
+
+    ⚠️ That surface condition is INERT on an UNBOUND install: the owner principal is
+    then the local tenant itself, so a uid of ``local`` is owner by PRINCIPAL on any
+    surface and never reaches the ``local`` branch. It is not a hole — a network
+    sender is hashed to a ``u_…`` id and can never present ``local`` — but the
+    scoping stops doing work until an owner is bound. See
+    ``core.instance.is_owner_local_safe`` for the same caveat.
     """
     try:
         from core.instance import is_owner, resolve_owner_principal
@@ -92,6 +112,70 @@ def _group_chat_mode_default() -> bool:
         return False
 
 
+def _is_owner_principal(uid: str, env: Mapping[str, str]) -> bool:
+    """True only for the BOUND owner principal — no pairing, no local bypass.
+
+    The room half of the owner check (044 T16 fix round 1). Fail-closed: any
+    fault reads as not-the-owner.
+    """
+    try:
+        from core.instance import is_owner, resolve_owner_principal
+        return bool(is_owner(uid, owner_principal=resolve_owner_principal(env),
+                             local=False))
+    except Exception as e:  # never let an owner-check fault grant or crash
+        logger.debug("room owner check failed (fail-closed): %s", e)
+        return False
+
+
+def is_room_owner(uid: Any, env: Optional[Mapping[str, str]] = None) -> bool:
+    """PUBLIC probe for "is this the bound owner principal", room rules.
+
+    The same answer :func:`resolve_access_tier` uses inside a room — no pairing,
+    no local bypass, fail-closed. Exported because the dispatcher must ask it
+    BEFORE the allowlist for one narrow case (044 C6: the owner's `/groups allow
+    here` in a room that is not yet allowlisted), and reaching for the private
+    name across modules is how two owner checks start disagreeing.
+    """
+    return _is_owner_principal(str(uid or ""), os.environ if env is None else env)
+
+
+def _chat_role(container: Any, surface: str, chat_id: str, member_id: str) -> str:
+    """The speaker's per-chat role (044 T16). Fail-open to ``member``.
+
+    Prefers the container's registered ``group_roles`` service (installed beside
+    the rest of the surface bus in ``core/surfaces/bootstrap.py``) and falls back
+    to opening ``surfaces.db`` directly, because ``resolve_access_tier`` is also
+    called from seats that never installed the bus.
+
+    Fail-open here means the LEAST privilege, not the most: an unreadable store
+    makes everyone a ``member``, whose line is DATA — never an ``admin``, whose
+    line is a steer.
+    """
+    try:
+        store = container.get_service("group_roles") if container else None
+        if store is None:
+            from core.runtime_paths import data_dir_or_home
+            from core.surfaces.group_roles import GroupRoles
+            cfg = getattr(container, "config", None) if container else None
+            data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+            store = GroupRoles(os.path.join(data_dir, "surfaces.db"))
+        return store.role(surface, chat_id, member_id, is_owner=False)
+    except Exception as e:
+        logger.debug("group role probe failed (reading as member): %s", e)
+        return "member"
+
+
+def _stamp_role(identity: Any, role: str) -> None:
+    """Carry the resolved role OUT on the envelope so every downstream reader
+    (the harness, the ledger, the room turn) uses the SAME answer instead of
+    re-deriving a second one. Never raises — a role that cannot be stamped costs
+    a label, never a routing decision."""
+    try:
+        identity.chat_role = role
+    except Exception:  # pragma: no cover - a frozen/exotic identity shape
+        logger.debug("chat_role could not be stamped on the identity")
+
+
 def _group_chat_allowed(container: Any, surface: str, chat_id: str) -> bool:
     """Default-DENY group allowlist check. Fail-closed: any fault -> False."""
     try:
@@ -127,7 +211,7 @@ def resolve_access_tier(
         # Multi-party chats: DENIED unless the operator opted into group chat
         # (GROUP_CHAT_ENABLED, W3). When on: the chat must be allowlisted
         # (default-DENY GroupAllowlist), the owner keeps OWNER, and everyone
-        # else in an allowed chat becomes GROUP_PARTICIPANT (their messages are
+        # else in an allowed chat becomes GROUP_MEMBER (their messages are
         # mention-gated DATA at the dispatcher — never a command/steer turn).
         if chat_type != "dm":
             raw_group = src.get("GROUP_CHAT_ENABLED", "")
@@ -143,11 +227,28 @@ def resolve_access_tier(
             chat_id = str(getattr(source, "chat_id", "") or "")
             if not chat_id or not _group_chat_allowed(container, surface, chat_id):
                 return AccessTier.DENIED
-            # Inside a group, the local-owner bypass is NEVER honoured — group
-            # senders are network principals even on a locally-launched surface.
-            if _is_owner_or_paired(container, uid, src, allow_local=False):
+            # Inside a group the owner is the bound PRINCIPAL and nobody else.
+            # The local-owner bypass is never honoured (a group sender is a
+            # network principal even on a locally-launched surface), and
+            # neither is PAIRING: a pairing row says "this person may talk to
+            # the agent", which is a DM-scoped grant. Reading it as room
+            # ownership would hand any paired user the steer frame, media
+            # absorption, the lifecycle verbs and immunity to `blocked` in
+            # every allowlisted room (044 T16 fix round 1). A paired non-owner
+            # falls through and reads `member` unless a row grants `admin`.
+            if _is_owner_principal(uid, src):
+                _stamp_role(identity, "owner")
                 return AccessTier.OWNER
-            return AccessTier.GROUP_PARTICIPANT
+            # 044 T16: everyone else carries a per-chat ROLE. `blocked` is the
+            # only per-member deny; admin and member are both GROUP_MEMBER at the
+            # tier level (what separates them is whether their line STEERS, which
+            # the harness decides from the stamped role).
+            role = _chat_role(container, surface, chat_id,
+                              getattr(identity, "raw_user_id", None) or uid)
+            _stamp_role(identity, role)
+            if role == "blocked":
+                return AccessTier.DENIED
+            return AccessTier.GROUP_MEMBER
 
         if _is_owner_or_paired(container, uid, src,
                                allow_local=surface in _LOCAL_OWNER_SURFACES):

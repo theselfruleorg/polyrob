@@ -94,7 +94,9 @@ class TestPosture1OwnOps:
         page = c.get("/owner-login")
         m = _re.search(r'name="csrf_token" value="([0-9a-f]+)"', page.text)
         c.post("/owner-login", data={"username": "op", "password": "s3cret",
-                                     "csrf_token": m.group(1) if m else ""})
+                                     "csrf_token": m.group(1) if m else ""},
+               # 043 W1: a browser states its Origin on a form POST.
+               headers={"Origin": "http://testserver"})
         resp = c.get("/")
         assert "POLYROB is live" not in resp.text
 

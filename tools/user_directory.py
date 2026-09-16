@@ -6,7 +6,7 @@ and provides the reverse / email lookups that out-of-band delivery
 (``cron/delivery.py``) needs — keyed on the internal id, sync.
 
 Ported (reused, not forked) from the old Telegram-only bot
-(../rob_dev_telegram_version):
+from the earlier Telegram adapter:
 - ``modules/database/user_profiles.py`` — the ``user_profiles`` table shape
   (``user_id TEXT PK`` + ``tg_user_id TEXT UNIQUE``), ``get_or_create_by_tg_id``,
   and the SHA256 ``generate_user_id`` derivation.

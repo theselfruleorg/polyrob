@@ -54,8 +54,16 @@ def test_single_user_startup_does_not_require_jwt(monkeypatch, _stub_core):
 
 
 def test_multitenant_startup_still_requires_jwt(monkeypatch, _stub_core):
-    """WEBGATE_MULTITENANT ON + no JWT → startup still raises (layer-on-top intact)."""
+    """WEBGATE_MULTITENANT ON + no JWT → startup still raises (layer-on-top intact).
+
+    The writable-console preconditions are satisfied here so the branch under
+    test is the JWT one: since 043 W7/W8 a writable NON-local console also
+    refuses to boot with no bound owner or an unshared session registry, and
+    that refusal runs first (see test_owner_bound_at_boot.py and
+    test_writable_requires_sqlite_registry.py)."""
     monkeypatch.setenv("WEBGATE_MULTITENANT", "true")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u-owner")
+    monkeypatch.setenv("SESSION_REGISTRY_BACKEND", "sqlite")
     monkeypatch.delenv("JWT_SECRET_KEY", raising=False)
     with pytest.raises(RuntimeError, match="JWT_SECRET_KEY"):
         asyncio.run(_jwt_startup_handler()())

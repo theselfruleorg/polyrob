@@ -115,12 +115,35 @@ def _amount(info: Dict[str, Any]) -> Optional[int]:
 
 
 def parse_deltas(sim: Any, *, owner: str,
-                 owned_pubkeys: Optional[Sequence[str]] = None) -> SolanaDeltas:
+                 owned_pubkeys: Sequence[str],
+                 ours: Optional[Sequence[str]] = None) -> SolanaDeltas:
     """Turn a ``simulateTransaction`` result into asserted deltas.
 
     Pure: the caller supplies the RPC result and the pre-state, so this is
     testable without a network. ``sim["_pre"]`` carries the pre-state account
     list in the same order as the post-state ``value.accounts``.
+
+    ⚠️ ``owned_pubkeys`` is REQUIRED, not optional, and that is deliberate.
+    Native lamport accounting only runs for accounts the caller names as ours,
+    so an omitted list does not degrade the answer — it silently returns
+    ``native_delta = 0``, which every downstream check reads as a MEASURED
+    "no SOL moved". `simulate()` omitted it, so on prod (2026-09-08) every SOL
+    sell refused with "no SOL leaving" while `is_plausible_rent(0)` returned
+    True on every transaction, leaving the drain assertion permanently
+    disarmed. That is the EVM bug this port was supposed to avoid — see
+    ``core/wallet/simulation.py``: "dead code shaped like a defense". Passing
+    an EMPTY list is still allowed, but now it has to be typed on purpose.
+
+    ⚠️ ``owned_pubkeys`` is INDEX-ALIGNED with ``_pre``/``value.accounts`` — it
+    names WHICH account each position is. ``ours`` says which of those are the
+    wallet's. They are different questions, and conflating them was a live money
+    bug (prod 2026-09-11, found by the first bridge dry run): the native sum ran
+    for every position as long as the list was non-empty, so a transfer from the
+    owner INTO a counterparty account in the same list cancelled itself. Owner
+    -900,005,000 plus Relay vault +900,000,000 was reported as -5,000 — "only
+    the fee moved" about a transaction moving 0.9 SOL, with the drain assertion
+    passing. ``ours=None`` keeps the old behaviour (every named account counts)
+    so existing callers are unchanged.
     """
     if not isinstance(sim, dict):
         return SolanaDeltas(False, "no simulation result")
@@ -133,6 +156,8 @@ def parse_deltas(sim: Any, *, owner: str,
     pre: List[Any] = list(sim.get("_pre") or [])
     post: List[Any] = list(value.get("accounts") or [])
     owned = set(owned_pubkeys or ())
+    aligned: List[str] = list(owned_pubkeys or ())
+    ours_set = owned if ours is None else set(ours)
 
     native_delta = 0
     token_deltas: Dict[str, int] = {}
@@ -142,7 +167,12 @@ def parse_deltas(sim: Any, *, owner: str,
         before = pre[index] if index < len(pre) else None
 
         # --- native lamports, for accounts the caller says are ours ---------
-        if owned and isinstance(before, dict) and isinstance(after, dict):
+        # The position must map to one of OUR pubkeys. Without this the sum ran
+        # for every account in the list and a counterparty's inflow cancelled
+        # our outflow (see the docstring).
+        _addr = aligned[index] if index < len(aligned) else None
+        if owned and _addr in ours_set and \
+                isinstance(before, dict) and isinstance(after, dict):
             if _parsed(before) is None and _parsed(after) is None:
                 try:
                     native_delta += int(after.get("lamports", 0)) - int(before.get("lamports", 0))

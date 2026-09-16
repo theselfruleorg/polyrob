@@ -39,6 +39,9 @@ ENFORCEMENT_ADVISORY = "advisory"
 # on load too (the bad entry is dropped), not only at write time.
 _QUIET_HOURS_RE = re.compile(r"^(\d{1,2})-(\d{1,2})$")
 _LANGUAGE_RE = re.compile(r"^[A-Za-z][A-Za-z-]{0,31}$")
+#: Characters that would break a value rendered INLINE into a prompt block
+#: (the room name lands in an XML-ish attribute and in one prose sentence).
+_CTRL_CHARS = re.compile(r"[\r\n\t\x00-\x1f\x7f]+")
 
 # APPROVAL_PROVIDER strictness ladder for the stricter_provider merge.
 # `auto_notify` (013 T4: allow + audit + owner notify — the act-and-report default
@@ -75,6 +78,9 @@ def _spec(key: str, type: str, sensitivity: str, merge: str, applies: str,
 
 
 PREF_SCHEMA: dict[str, PrefSpec] = dict((
+    _spec("ui.theme", "enum", SENSITIVITY_SAFE, "override", "live",
+          enum_values=("auto", "dark", "light"), default_display="auto",
+          description="Console appearance: follow the system, dark, or light"),
     _spec("approvals.require", "list", SENSITIVITY_GUARDED, "union", "next-session",
           "APPROVAL_REQUIRED_TOOLS",
           description="Action names that need owner approval (add=safe, remove=guarded)"),
@@ -92,6 +98,16 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
           "AGENT_WALLET_MAX_PER_TX_USD", min_value=0.0,
           description="Wallet per-transaction cap; effective = min(pref, env), wired "
                       "into PolicyGate via load_wallet_config() (G-13)"),
+    # NOT min-merged, unlike the two wallet caps above, and deliberately so.
+    # This is not a loss ceiling -- it is how much runs WITHOUT interrupting the
+    # owner, and the catastrophic backstop (AGENT_WALLET_MAX_PER_TX_USD) still
+    # binds above it. Raising it cannot widen maximum loss, only reduce how
+    # often the owner is asked, so the owner may raise it from any seat. The
+    # clamp lives at the read site (tx_guard.autonomous_max_usd).
+    _spec("budget.defi_autonomous_usd", "float", SENSITIVITY_GUARDED, "override", "live",
+          "DEFI_AUTONOMOUS_MAX_USD", min_value=0.0,
+          description="Spend that executes without owner approval; effective = "
+                      "min(pref or env, wallet per-tx ceiling)"),
     _spec("goals.daily_quota", "int", SENSITIVITY_SAFE, "min", "live",
           "GOAL_DAILY_QUOTA", min_value=1, max_value=100,
           description="Autonomous goal runs per day (capped by env)"),
@@ -123,10 +139,14 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
                       "['ghosts', 'bots'] (a multi-word entry is split into words)"),
     _spec("delivery.rate_per_hour", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_RATE_PER_HOUR", min_value=1,
-          description="Proactive messages/hour; effective = min(pref, env)"),
+          description="Proactive messages/hour; the pref WINS unless the operator "
+                      "set USER_DELIVERY_RATE_PER_HOUR, in which case that is a "
+                      "ceiling and effective = min(pref, env)"),
     _spec("delivery.daily_cap", "int", SENSITIVITY_SAFE, "min", "live",
           "USER_DELIVERY_DAILY_CAP", min_value=1,
-          description="Proactive messages/day; effective = min(pref, env)"),
+          description="Proactive messages/day; the pref WINS unless the operator "
+                      "set USER_DELIVERY_DAILY_CAP, in which case that is a "
+                      "ceiling and effective = min(pref, env)"),
     _spec("style.verbosity", "enum", SENSITIVITY_SAFE, "override", "next-turn",
           enum_values=("terse", "normal", "detailed"),
           enforcement=ENFORCEMENT_ADVISORY,
@@ -176,6 +196,177 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
 ))
 
 
+# --- 044 T17: the per-CHAT overlay (`chat.*`) --------------------------------
+#
+# A room's behaviour is configuration the owner writes, so it is validated by
+# the SAME machinery (`validate_pref`/`_coerce`) as a tenant preference. It is
+# deliberately NOT a member of PREF_SCHEMA: a `chat.*` value lives in a per-chat
+# file (`chat_preferences_path`, read by `core/surfaces/chat_policy.py`), never
+# in `preferences.toml`. Putting these rows in PREF_SCHEMA would list them on
+# `/config`, `polyrob config` and the webview panel as tenant prefs and let
+# `write_preference` store them where NOTHING reads them — the write-only trap
+# `tests/unit/core/test_prefs_no_dead_keys_ratchet.py` exists to prevent. The
+# same ratchet covers these rows through their own consumer proof.
+CHAT_PREF_SCHEMA: dict[str, PrefSpec] = dict((
+    _spec("chat.mode", "enum", SENSITIVITY_SAFE, "override", "next-turn",
+          enum_values=("mention", "active", "listen", "off"),
+          default_display="mention",
+          description="When the agent answers in this room: mention (an addressed "
+                      "line from anyone — the owner included), active (every "
+                      "message), listen (an addressed owner/admin only), off "
+                      "(never). Addressed = an @mention, a reply to the agent, "
+                      "or a chat.wake_words hit"),
+    _spec("chat.name", "str", SENSITIVITY_SAFE, "override", "next-turn",
+          default_display="",
+          description="What this room is CALLED in the agent's context block "
+                      "(max 64 chars); empty = the chat title, else the chat id"),
+    _spec("chat.instructions", "str", SENSITIVITY_SAFE, "override", "next-turn",
+          enforcement=ENFORCEMENT_ADVISORY, default_display="",
+          description="Standing instructions for this room, rendered into the "
+                      "<surface> block (threat-scanned at write, capped 1500 chars)"),
+    _spec("chat.verbosity", "enum", SENSITIVITY_SAFE, "override", "next-turn",
+          enum_values=("terse", "normal", "detailed"),
+          enforcement=ENFORCEMENT_ADVISORY, default_display="",
+          description="Reply verbosity in this room (overrides the tenant's "
+                      "style.verbosity for the room session)"),
+    _spec("chat.tone", "str", SENSITIVITY_SAFE, "override", "next-turn",
+          enforcement=ENFORCEMENT_ADVISORY, default_display="",
+          description="Free-text tone hint for this room (threat-scanned at "
+                      "write, capped 200 chars)"),
+    _spec("chat.language", "str", SENSITIVITY_SAFE, "override", "next-turn",
+          enforcement=ENFORCEMENT_ADVISORY, default_display="",
+          description="Reply language for this room (letters/hyphens, max 32 "
+                      "chars), e.g. 'en' or 'pt-BR'"),
+    _spec("chat.wake_words", "list", SENSITIVITY_SAFE, "override", "next-turn",
+          default_display=[],
+          description="Extra case-insensitive regex patterns that address the "
+                      "agent in this room without an @mention, e.g. ['hey rob']. "
+                      "Matched with re.search anywhere in the line, so anchor a "
+                      "whole word with \\b (['\\brob\\b']) or 'problem' wakes it. "
+                      "At most 10 patterns, each at most 64 chars"),
+    _spec("chat.context_lines", "int", SENSITIVITY_SAFE, "override", "next-turn",
+          min_value=0, max_value=100, default_display=30,
+          description="How many unanswered room lines the agent is shown as "
+                      "<group-context>; 0 = answer with no room context"),
+    _spec("chat.reply_cap_per_hour", "int", SENSITIVITY_SAFE, "override", "next-turn",
+          min_value=0, max_value=200, default_display=20,
+          description="Max replies the agent sends into THIS room per rolling "
+                      "hour (overrides GROUP_REPLY_CAP_PER_HOUR)"),
+    _spec("chat.member_cooldown_sec", "int", SENSITIVITY_SAFE, "override", "next-turn",
+          min_value=0, max_value=600, default_display=20,
+          description="Minimum seconds between two triggers from the same member "
+                      "in THIS room (overrides GROUP_MEMBER_COOLDOWN_SEC)"),
+    _spec("chat.quiet_hours", "str", SENSITIVITY_SAFE, "override", "next-turn",
+          default_display="",
+          description="Hours this room is owner/admin-only, as HH-HH (0-23, "
+                      "local time), e.g. '23-08'"),
+    _spec("chat.mute_until", "float", SENSITIVITY_SAFE, "override", "next-turn",
+          min_value=0.0, default_display=0,
+          description="Unix epoch until which this room is owner/admin-only "
+                      "(written by /mute); 0 = not muted"),
+    _spec("chat.member_verbs", "list", SENSITIVITY_SAFE, "override", "live",
+          default_display=["help"],
+          description="Slash verbs a PLAIN MEMBER may invoke in this room "
+                      "(046). Only verbs in the closed grantable set are "
+                      "honoured — today `help`, `mute`, `unmute`, `ban` and "
+                      "`unban`; everything else is ordinary room chatter. "
+                      "Granting one is what lets a member BUY it (a member "
+                      "pays; an owner or room admin acts free). See chat.paid_*"),
+    # --- 046: paid room actions -------------------------------------------
+    # ⚠️ FLAT names, not dotted. `chat_policy.load()` computes
+    # `field = key.split(".", 1)[1]` and skips anything that is not a flat
+    # ChatPolicy dataclass field, so `chat.paid.mute.price_usd` would validate,
+    # write, and then be SILENTLY DROPPED at load — a setting an owner can
+    # change and nothing reads.
+    #
+    # SAFE, like every other chat key, even though these price money. In this
+    # schema `guarded` means one thing: `core/config_service.py` and the webview
+    # panel demand an explicit confirm before writing a TENANT preference. The
+    # chat overlay does not go through either — `chat_policy.set` never reads
+    # `sensitivity` at all — so `guarded` here would be decoration that READS as
+    # protection. The real authority gate is the SEAT: `/groups set` is
+    # owner-only and `/paid` is owner-or-room-admin.
+    _spec("chat.paid_enabled", "bool", SENSITIVITY_SAFE, "override", "live",
+          default_display=False,
+          description="Offer PAID moderation actions in this room (046). OFF "
+                      "means a member's /mute is refused, not priced"),
+    _spec("chat.paid_asset", "str", SENSITIVITY_SAFE, "override", "live",
+          default_display="",
+          description="The asset_id members pay in (see `polyrob wallet asset "
+                      "list`); empty = the instance default"),
+    _spec("chat.paid_mute_usd", "float", SENSITIVITY_SAFE, "override", "live",
+          min_value=0.0, default_display=0.0,
+          description="Price of a paid mute in this room (USD, sized into the "
+                      "asset at mint)"),
+    _spec("chat.paid_mute_min_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Floor of the band the agent's chosen price is clamped to"),
+    _spec("chat.paid_mute_max_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Ceiling of the band the agent's chosen price is clamped to"),
+    _spec("chat.paid_mute_max_duration", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="24h",
+          description="Longest mute this room sells, e.g. 30m/2h/7d (never "
+                      "above the catalog cap of 30d)"),
+    _spec("chat.paid_unmute_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Counter-pay price: what the TARGET pays to end a mute "
+                      "early"),
+    _spec("chat.paid_ban_usd", "float", SENSITIVITY_SAFE, "override", "live",
+          min_value=0.0, default_display=0.0,
+          description="Price of a paid ban in this room (USD, sized into the "
+                      "asset at mint). Unset = ban is not for sale here"),
+    _spec("chat.paid_ban_min_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Floor of the ban price band"),
+    _spec("chat.paid_ban_max_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Ceiling of the ban price band"),
+    _spec("chat.paid_ban_max_duration", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="24h",
+          description="Longest ban this room sells, e.g. 30m/2h/7d (never "
+                      "above the catalog cap of 30d)"),
+    _spec("chat.paid_unban_usd", "float", SENSITIVITY_SAFE, "override",
+          "live", min_value=0.0, default_display=0.0,
+          description="Counter-pay price: what the TARGET pays to end a ban "
+                      "early"),
+    _spec("chat.paid_mute_units", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="",
+          description="Price of a mute in TOKEN units of the room's asset "
+                      "(e.g. 1500). Set, it decides the amount and no price "
+                      "quote is needed; the USD price stays the declared value"),
+    _spec("chat.paid_ban_units", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="",
+          description="Price of a ban in TOKEN units of the room's asset "
+                      "(e.g. 1500). Set, it decides the amount and no price "
+                      "quote is needed; the USD price stays the declared value"),
+    _spec("chat.paid_unmute_units", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="",
+          description="Price of ending a mute early in TOKEN units of the room's asset "
+                      "(e.g. 1500). Set, it decides the amount and no price "
+                      "quote is needed; the USD price stays the declared value"),
+    _spec("chat.paid_unban_units", "str", SENSITIVITY_SAFE, "override",
+          "live", default_display="",
+          description="Price of ending a ban early in TOKEN units of the room's asset "
+                      "(e.g. 1500). Set, it decides the amount and no price "
+                      "quote is needed; the USD price stays the declared value"),
+    _spec("chat.paid_max_per_payer_day", "int", SENSITIVITY_SAFE, "override",
+          "live", min_value=0, max_value=100, default_display=3,
+          description="Paid actions one payer may buy in this room per day"),
+    _spec("chat.paid_max_per_target_day", "int", SENSITIVITY_SAFE, "override",
+          "live", min_value=0, max_value=100, default_display=2,
+          description="Times one member may be targeted in this room per day"),
+    _spec("chat.paid_offer_ttl", "str", SENSITIVITY_SAFE, "override", "live",
+          default_display="30m",
+          description="How long an unpaid offer stays payable, e.g. 30m/2h"),
+))
+
+
+def _spec_for(key: str) -> PrefSpec | None:
+    """The spec for a tenant preference OR a ``chat.*`` overlay key."""
+    return PREF_SCHEMA.get(key) or CHAT_PREF_SCHEMA.get(key)
+
+
 def _redacted_repr(value: object) -> str:
     """``repr(value)`` for a validation-error message, but never echo a long
     string verbatim (owner-UX P1 final review, item 6): ``find_invalid_preferences``/
@@ -221,26 +412,49 @@ def _coerce(spec: PrefSpec, value: object) -> tuple[bool, object, str]:
             items = [str(v).strip() for v in value if str(v).strip()]
         else:
             items = [p.strip() for p in str(value).split(",") if p.strip()]
+        if spec.key == "chat.wake_words":
+            # Every pattern is re.search-ed against every line of a busy room,
+            # so the list is bounded HERE — at the writer AND at load-time
+            # re-validation, which is what stops a hand-edited file from
+            # carrying 500 patterns past the writer's back.
+            if len(items) > 10:
+                return False, None, "chat.wake_words: at most 10 patterns"
+            if any(len(w) > 64 for w in items):
+                return False, None, "chat.wake_words: each pattern is capped at 64 chars"
         return True, items, ""
     # str
     s = str(value).strip()
-    if spec.key == "style.tone" and len(s) > 200:
-        return False, None, "style.tone: capped at 200 chars"
-    if spec.key == "digest.quiet_hours":
+    if spec.key in ("style.tone", "chat.tone") and len(s) > 200:
+        return False, None, f"{spec.key}: capped at 200 chars"
+    if spec.key == "chat.instructions" and len(s) > 1500:
+        return False, None, "chat.instructions: capped at 1500 chars"
+    if spec.key == "chat.name":
+        # A room NAME is rendered inline (the <group-context> head attribute and
+        # the <surface> paragraph), so a control character would forge a second
+        # line. Coerced to one line rather than refused — the owner typed a
+        # name, not a policy value.
+        s = _CTRL_CHARS.sub(" ", s).strip()[:64]
+    if spec.key in ("digest.quiet_hours", "chat.quiet_hours"):
         m = _QUIET_HOURS_RE.fullmatch(s)
         if not m or not (0 <= int(m.group(1)) <= 23 and 0 <= int(m.group(2)) <= 23):
-            return False, None, "digest.quiet_hours: expected HH-HH (0-23), e.g. 23-08"
-    if spec.key == "style.language" and not _LANGUAGE_RE.fullmatch(s):
-        return False, None, ("style.language: expected a language name/tag "
+            return False, None, f"{spec.key}: expected HH-HH (0-23), e.g. 23-08"
+    if spec.key in ("style.language", "chat.language") and not _LANGUAGE_RE.fullmatch(s):
+        return False, None, (f"{spec.key}: expected a language name/tag "
                              "(letters/hyphens, max 32 chars), e.g. 'en' or 'en-GB'")
     return True, s, ""
 
 
 def validate_pref(key: str, value: object) -> tuple[bool, object, str]:
-    """Validate + coerce a preference. Unknown keys get a closest-match hint."""
-    spec = PREF_SCHEMA.get(key)
+    """Validate + coerce a preference (tenant or ``chat.*``).
+
+    Unknown keys get a closest-match hint drawn from BOTH namespaces, so a
+    mistyped ``chat.mod`` is told about ``chat.mode`` rather than being sent
+    looking for a tenant preference that does not exist.
+    """
+    spec = _spec_for(key)
     if spec is None:
-        hint = difflib.get_close_matches(key, PREF_SCHEMA.keys(), n=1)
+        pool = list(PREF_SCHEMA.keys()) + list(CHAT_PREF_SCHEMA.keys())
+        hint = difflib.get_close_matches(key, pool, n=1)
         suffix = f" (did you mean {hint[0]}?)" if hint else ""
         return False, None, f"unknown preference key: {key}{suffix}"
     return _coerce(spec, value)
@@ -270,7 +484,11 @@ _CACHE: dict[str, tuple[int, dict]] = {}
 # on a scan hit, a scan error, or the scanner being unavailable at all. Kept
 # OFF the hot path for every other (non-prompt, non-str, or str-but-not-listed)
 # key — this is not a blanket str-value scan.
-_THREAT_SCANNED_PREF_KEYS = frozenset({"style.tone", "session.persona"})
+_THREAT_SCANNED_PREF_KEYS = frozenset({"style.tone", "session.persona",
+                                       # 044 T17: both land verbatim in a room
+                                       # session's prompt, exactly like their
+                                       # style.* twins.
+                                       "chat.tone", "chat.instructions"})
 
 
 def preferences_path(home_dir: Path | str, user_id: Optional[str],
@@ -289,6 +507,27 @@ def preferences_path(home_dir: Path | str, user_id: Optional[str],
     if not uid or not is_safe_tenant_id(uid):
         return None
     return self_tier_root(home_dir, uid, instance_id) / _PREFS_NAME
+
+
+def chat_preferences_path(home_dir: Path | str, user_id: Optional[str],
+                          surface: str, chat_id: object,
+                          instance_id: Optional[str] = None) -> Optional[Path]:
+    """Path to ONE room's ``chat.*`` overlay, under the OWNER tenant.
+
+    ``identity/{instance}/user_{uid}/chats/{surface}_{chat_id}.toml``. The chat
+    id arrives from the network and NAMES A FILE, so every character outside
+    ``[A-Za-z0-9_-]`` is replaced — a traversal attempt becomes an ordinary
+    (ugly) name rather than a path. Returns None for an empty or unsafe tenant
+    id, exactly like :func:`preferences_path`.
+    """
+    instance_id = instance_id or resolve_instance_id()
+    uid = (user_id or "").strip()
+    if not uid or not is_safe_tenant_id(uid):
+        return None
+    safe_surface = re.sub(r"[^A-Za-z0-9_-]", "_", str(surface or "")) or "unknown"
+    safe_chat = re.sub(r"[^A-Za-z0-9_-]", "_", str(chat_id))
+    return self_tier_root(home_dir, uid, instance_id) / "chats" / \
+        f"{safe_surface}_{safe_chat}.toml"
 
 
 def _flatten(nested: dict, prefix: str = "") -> dict[str, object]:
@@ -324,6 +563,14 @@ def load_preferences(home_dir: Path | str, user_id: Optional[str],
         return {}
     prefs: dict[str, object] = {}
     for dotted, value in _flatten(raw).items():
+        # 044 T17: a `chat.*` key is per-ROOM configuration. It validates through
+        # the same machinery, but it belongs in a per-chat file that
+        # core/surfaces/chat_policy.py reads — accepting one here would hand the
+        # resolver a value no enforcement site ever looks at.
+        if dotted in CHAT_PREF_SCHEMA and dotted not in PREF_SCHEMA:
+            logger.warning("preferences.toml: dropping %s (per-room configuration, "
+                           "not a tenant preference)", dotted)
+            continue
         ok, coerced, err = validate_pref(dotted, value)
         if ok:
             prefs[dotted] = coerced
@@ -372,6 +619,35 @@ def _render_toml(flat: dict[str, object]) -> str:
     return "\n".join(out)
 
 
+def _refuse_room_key(key: str) -> str:
+    """One sentence when a ``chat.*`` key is aimed at the TENANT store.
+
+    ``preferences.toml`` is not where a room's behaviour lives, and writing it
+    there would succeed, display, and change nothing. Returns "" for any key
+    that genuinely belongs in the tenant store.
+    """
+    if key in CHAT_PREF_SCHEMA and key not in PREF_SCHEMA:
+        return (f"{key} is per-room configuration, not a tenant preference — "
+                f"set it on the room instead (`/groups set <room> {key} <value>`)")
+    return ""
+
+
+def unknown_pref_error(key: str, value: object = None) -> str:
+    """The ONE sentence a TENANT-pref surface gives for a key it cannot act on.
+
+    Never empty. ``validate_pref`` now answers for the ``chat.*`` namespace too,
+    so a caller that did ``PREF_SCHEMA.get(key) is None`` and then reported
+    ``validate_pref``'s error string got ``""`` for a valid room key — a silent
+    failure the owner reads as "it worked" (044 T16/17 fix round 1). This names
+    the right seat for a room key and falls back to the closest-match hint.
+    """
+    refusal = _refuse_room_key(key)
+    if refusal:
+        return refusal
+    _ok, _coerced, err = validate_pref(key, value)
+    return err or f"unknown preference key: {key}"
+
+
 def _threat_scan_pref_value(key: str, value: object) -> tuple[bool, str]:
     """Identity-scan a threat-scanned prompt pref value; fail-CLOSED.
 
@@ -409,6 +685,9 @@ def write_preference(home_dir: Path | str, user_id: Optional[str], key: str,
     path = preferences_path(home_dir, user_id, instance_id)
     if path is None:
         return False, "empty or unsafe user_id refused (tenant scope)"
+    refusal = _refuse_room_key(key)
+    if refusal:
+        return False, refusal
     ok, coerced, err = validate_pref(key, value)
     if not ok:
         return False, err
@@ -992,6 +1271,9 @@ def propose_pref_change(user_id: Optional[str], key: str, value: object,
         coerced = None  # the value is recomputed at promote time, never stored
         entry = entry.strip()
     else:
+        refusal = _refuse_room_key(key)
+        if refusal:
+            return False, refusal
         ok, coerced, err = validate_pref(key, value)
         if not ok:
             return False, err

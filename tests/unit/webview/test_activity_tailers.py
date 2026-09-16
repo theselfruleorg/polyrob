@@ -101,3 +101,77 @@ def test_feed_path_info_rejects_non_feed_paths(tmp_path):
     assert feed_path_info(f"{root}/rob/sess-1/feed/x.tmp", root) is None
     assert feed_path_info(f"{root}/rob/feed/x.json", root) is None  # missing session level
     assert feed_path_info("/elsewhere/rob/s/feed/x.json", root) is None
+
+
+# --- the goal tail carries the goal's TENANT ------------------------------ #
+# ``goal_events`` rows have no ``user_id`` column and their payloads do not carry
+# one, so ``normalize_db_event("goal", …)`` stamped every goal event ``user_id=""``
+# and the tenant-scoped Work › Log (``worklog_api.py``) dropped the whole goal
+# board. The tenant is one join away, on ``goals.user_id``.
+
+def _goal_db_with_owner(tmp_path):
+    db = tmp_path / "goals.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        """CREATE TABLE goal_events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+               goal_id TEXT, kind TEXT, payload TEXT, created_at REAL)"""
+    )
+    con.execute(
+        """CREATE TABLE goals (id TEXT PRIMARY KEY, user_id TEXT, title TEXT,
+               status TEXT)"""
+    )
+    con.execute("INSERT INTO goals VALUES ('g1', 'rob', 'Engage the den', 'running')")
+    con.execute(
+        "INSERT INTO goal_events (goal_id, kind, payload, created_at) "
+        "VALUES ('g1','claimed','{}',5.0)"
+    )
+    con.execute(
+        "INSERT INTO goal_events (goal_id, kind, payload, created_at) "
+        "VALUES ('orphan','created','{\"user_id\": \"u2\"}',6.0)"
+    )
+    con.commit()
+    con.close()
+    return db
+
+
+def test_goal_tail_stamps_the_goal_owner_as_the_event_tenant(tmp_path):
+    from webview.activity import goal_events_tail
+    tail = goal_events_tail(str(_goal_db_with_owner(tmp_path)))
+    rows = tail.poll()
+    assert [r["id"] for r in rows] == [1, 2]
+    ev = normalize_db_event("goal", rows[0])
+    assert ev["user_id"] == "rob"
+    assert ev["payload"].get("title") == "Engage the den"
+    # A payload that names its own tenant still wins over the join.
+    assert normalize_db_event("goal", rows[1])["user_id"] == "u2"
+    # The cursor advanced on the joined rows too.
+    assert tail.cursor == 2 and tail.poll() == []
+
+
+def test_goal_tail_cold_backfill_uses_the_same_join(tmp_path):
+    from webview.activity import goal_events_tail
+    tail = goal_events_tail(str(_goal_db_with_owner(tmp_path)))
+    rows = tail.recent(10)
+    assert [r["id"] for r in rows] == [2, 1]
+    assert rows[1]["goal_user_id"] == "rob"
+
+
+def test_goal_tail_without_a_goals_table_still_delivers_untenanted(tmp_path):
+    """A DB with no ``goals`` table (legacy / test fixture) must not silence the
+    stream: the join is dropped and the row arrives with an empty tenant."""
+    from webview.activity import goal_events_tail
+    db = tmp_path / "goals.db"
+    con = sqlite3.connect(db)
+    con.execute(
+        """CREATE TABLE goal_events (id INTEGER PRIMARY KEY AUTOINCREMENT,
+               goal_id TEXT, kind TEXT, payload TEXT, created_at REAL)"""
+    )
+    con.execute("INSERT INTO goal_events (goal_id, kind, payload, created_at) "
+                "VALUES ('g1','created','{}',1.0)")
+    con.commit()
+    con.close()
+    tail = goal_events_tail(str(db))
+    rows = tail.poll()
+    assert len(rows) == 1 and tail.cursor == 1
+    assert normalize_db_event("goal", rows[0])["user_id"] == ""
+    assert len(tail.recent(5)) == 1

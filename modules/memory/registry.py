@@ -208,6 +208,23 @@ async def kb_ingest_chunk(*, user_id: Optional[str] = None, collection: str,
         return False
 
 
+async def kb_replace_source(*, user_id: Optional[str] = None, collection: str,
+                            source_path: str, source_hash: str, chunks: list[str],
+                            mime: str = "text/plain", created_at: str = None) -> bool:
+    """Publish one complete source; refuse absent/nontransactional providers."""
+    provider = get_memory_registry().active()
+    if provider is None:
+        return False
+    try:
+        return bool(await provider.kb_replace_source(
+            user_id=user_id, collection=collection, source_path=source_path,
+            source_hash=source_hash, chunks=chunks, mime=mime, created_at=created_at,
+        ))
+    except Exception as e:
+        logger.warning("kb_replace_source failed: %s", e)
+        return False
+
+
 async def kb_source_hash(*, user_id: Optional[str] = None, collection: str,
                          source_path: str) -> Optional[str]:
     """Route a KB source-hash lookup through the active provider. None on error."""

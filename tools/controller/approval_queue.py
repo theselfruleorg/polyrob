@@ -141,6 +141,257 @@ def list_pending_tool_approvals(board: Any, user_id: str) -> List[Dict[str, Any]
     return out
 
 
+class PendingSet:
+    """The owner's whole approval queue, plus what could not be read.
+
+    ``items`` is the union every owner seat lists AND decides over.
+    ``unavailable`` names each source that failed, so a partial queue is
+    reported as partial. A status surface may be incomplete; it may not be
+    confident and wrong. A queue that silently drops the source holding the
+    owner's payment approval is the second kind.
+    """
+
+    __slots__ = ("items", "unavailable")
+
+    def __init__(self, items: List[Dict[str, Any]], unavailable: List[str]):
+        self.items = items
+        self.unavailable = unavailable
+
+    def __len__(self) -> int:
+        return len(self.items)
+
+    def __iter__(self):
+        return iter(self.items)
+
+    def __bool__(self) -> bool:
+        return bool(self.items) or bool(self.unavailable)
+
+    def degraded_line(self) -> str:
+        """One line naming the unreadable sources, or ``""`` when all were read."""
+        if not self.unavailable:
+            return ""
+        return ("\u26a0 I could not read " + ", ".join(self.unavailable)
+                + " \u2014 there may be more waiting than this list shows.")
+
+
+def all_pending(*, user_id: str, home_dir: Any, instance_id: str,
+                board: Any = None, correspondent_registry: Any = None,
+                skill_manager: Any = None) -> PendingSet:
+    """The ONE pending union: self-evolution proposals + queued tool/spend
+    approvals + pending correspondent bindings.
+
+    2026-09-15. Three seats built this join by hand (``polyrob owner pending``,
+    Telegram ``/pending``, the webview review page) and a fourth \u2014 the bare
+    ``/approve`` shortcut and ``/approve all`` \u2014 read only the FIRST source.
+    So with three skills and one payment ask waiting, ``/approve`` offered three
+    and hid the payment; with only a payment ask waiting it answered "Nothing
+    pending \u2014 there is nothing waiting on you", a confident lie over real work;
+    and ``/approve all``, advertised as "everything at once", left two queues
+    untouched. Listing and deciding now read the same function.
+
+    Each source is read in its own try: one unreadable store must not hide the
+    other two. What failed is NAMED in ``PendingSet.unavailable``, never dropped.
+    """
+    import os
+
+    from core import self_evolution
+
+    items: List[Dict[str, Any]] = []
+    unavailable: List[str] = []
+
+    try:
+        items += self_evolution.list_pending(user_id, home_dir=home_dir,
+                                             instance_id=instance_id,
+                                             skill_manager=skill_manager)
+    except Exception:
+        logger.warning("all_pending: self-evolution proposals unreadable", exc_info=True)
+        unavailable.append("my own proposals")
+
+    try:
+        if board is None:
+            from agents.task.goals.board import GoalBoard
+            board = GoalBoard(_goals_db_path(home_dir))
+        items += list_pending_tool_approvals(board, user_id)
+    except Exception:
+        logger.warning("all_pending: tool approvals unreadable", exc_info=True)
+        unavailable.append("queued tool + spend approvals")
+
+    try:
+        from core.surfaces.owner_admin import pending_correspondent_items
+        if correspondent_registry is None:
+            from core.surfaces.correspondents import CorrespondentRegistry
+            correspondent_registry = CorrespondentRegistry(
+                os.path.join(str(home_dir), "correspondents.db"))
+        items += pending_correspondent_items(correspondent_registry, user_id)
+    except Exception:
+        logger.warning("all_pending: correspondent bindings unreadable", exc_info=True)
+        unavailable.append("pending contacts")
+
+    return PendingSet(items, unavailable)
+
+
+def resolve_pending_target(target: str, pending: Any) -> Optional[Dict[str, Any]]:
+    """Map what the owner tapped or typed back to ONE item of the live queue.
+
+    Accepts the tappable alias (``p-a1b2c3``), the displayed id, or a
+    ``kind:id`` pair. Returns ``None`` when it names none or more than one \u2014
+    refusing is the only honest answer, because acting on either of two matches
+    decides a proposal the owner never looked at.
+    """
+    from core.self_evolution import resolve_pending_alias
+
+    items = list(getattr(pending, "items", pending) or [])
+    want = str(target or "").strip()
+    if not want:
+        return None
+    hit = resolve_pending_alias(want, items)
+    if hit is not None:
+        return hit
+    exact = [it for it in items if str(it.get("id", "")) == want]
+    if len(exact) == 1:
+        return exact[0]
+    qualified = [it for it in items
+                 if f"{it.get('kind', '')}:{it.get('id', '')}" == want]
+    return qualified[0] if len(qualified) == 1 else None
+
+
+def decide_pending(kind: str, item_id: Any, *, approve: bool, user_id: str,
+                   home_dir: Any, instance_id: str, board: Any = None,
+                   correspondent_registry: Any = None,
+                   task_agent: Any = None) -> tuple:
+    """Record the owner's decision on ONE item of the union. ``(ok, message)``.
+
+    The union holds three kinds of thing and each has its own decider. Routing
+    lives HERE so no seat can disagree with another about what a decision
+    means — which they did: the REPL's own Inbox advertised
+    ``/pending approve tool_approval <id>``, and its handler passed that kind
+    straight to the self-evolution promoter, which answered "unknown pending
+    kind". The remedy pointed at a command the seat could not run.
+    """
+    import os
+
+    from core import self_evolution
+
+    item_id = str(item_id or "")
+    if kind == TOOL_APPROVAL_ASK_KIND:
+        if board is None:
+            from agents.task.goals.board import GoalBoard
+            board = GoalBoard(_goals_db_path(home_dir))
+        # 030 WS-E3: pass the live agent so an approval wakes the originating
+        # session (resume-on-grant) instead of waiting for a byte-identical
+        # retry to happen by luck.
+        return decide_tool_approval(board, item_id, user_id=user_id,
+                                    approved=approve, task_agent=task_agent)
+    if kind == "correspondent":
+        surface, _, address = item_id.partition(":")
+        if not surface or not address:
+            return False, f"'{item_id}' is not a <surface>:<address> contact"
+        if correspondent_registry is None:
+            from core.surfaces.correspondents import CorrespondentRegistry
+            correspondent_registry = CorrespondentRegistry(
+                os.path.join(str(home_dir), "correspondents.db"))
+        try:
+            ok = bool(correspondent_registry.approve(surface=surface, address=address,
+                                                     user_id=user_id)
+                      if approve else
+                      correspondent_registry.reject(surface=surface, address=address,
+                                                    user_id=user_id))
+        except Exception as e:
+            return False, f"contact {item_id} could not be decided: {e}"
+        if not ok:
+            return False, f"no pending contact {item_id}"
+        return True, (f"contact {item_id} approved — their replies now reach me as data"
+                      if approve else
+                      f"contact {item_id} rejected — the binding is tombstoned")
+    fn = self_evolution.promote if approve else self_evolution.reject
+    return fn(kind, item_id, user_id=user_id, home_dir=home_dir,
+              instance_id=instance_id)
+
+
+def decide_all_pending(*, approve: bool, user_id: str, home_dir: Any,
+                       instance_id: str, board: Any = None,
+                       correspondent_registry: Any = None,
+                       task_agent: Any = None) -> tuple:
+    """Decide the WHOLE queue. ``(ok_count, fail_count, messages)``.
+
+    "All" used to mean the self-evolution third of it on every seat, while the
+    listing directly above showed all three — so a queued payment approval or a
+    pending contact survived an "approve all" with no trace.
+
+    Iterates a SNAPSHOT: deciding a single-slot kind mutates the live set.
+    """
+    pending = all_pending(user_id=user_id, home_dir=home_dir,
+                          instance_id=instance_id, board=board,
+                          correspondent_registry=correspondent_registry)
+    msgs: List[str] = []
+    ok_n = fail_n = 0
+    for it in list(pending.items):
+        kind, item_id = it.get("kind", ""), it.get("id")
+        try:
+            ok, msg = decide_pending(kind, item_id, approve=approve, user_id=user_id,
+                                     home_dir=home_dir, instance_id=instance_id,
+                                     board=board,
+                                     correspondent_registry=correspondent_registry,
+                                     task_agent=task_agent)
+        except Exception as e:  # one bad item must not abandon the rest
+            ok, msg = False, f"{kind}:{item_id} failed: {e}"
+        ok_n, fail_n = (ok_n + 1, fail_n) if ok else (ok_n, fail_n + 1)
+        # \u26a0\ufe0f The mark is bound OUTSIDE the f-string: a backslash escape inside an
+        # f-string expression is a SyntaxError before 3.12, and pyproject floors
+        # this project at 3.11.
+        mark = "\u2713" if ok else "\u2717"
+        msgs.append(f"{mark} {kind}:{item_id} \u2014 {msg}")
+    if pending.unavailable:
+        msgs.append(pending.degraded_line())
+    return ok_n, fail_n, msgs
+
+
+def _approval_wake_text(tool_name: str, display_id: str) -> str:
+    """The ONE resume-on-grant wake message (in-process AND cross-process rails
+    read it — extracted so the two cannot drift). It promises a live grant, never
+    a retry a money verb would refuse on a forged turn."""
+    return (f"Owner approved {tool_name} ({display_id}). The one-shot grant is "
+            f"live for the next identical attempt. If this turn is a self-wake and "
+            f"{tool_name} moves money, the guard will still refuse it — say the "
+            f"grant is live and wait for the owner's own request. Do not retry in "
+            f"a loop.")
+
+
+def _owns_session_locally(task_agent: Any, session_id: str) -> bool:
+    """True iff ``task_agent`` lives in THIS process AND the session's
+    orchestrator is RESIDENT here — the only case an in-process self-wake is
+    correct. On prod the console holds a monitoring ``TaskAgent`` but the session
+    is owned by the SEPARATE agent process (not resident here) -> False -> a
+    durable cross-process wake row instead. Backend-independent:
+    ``route_session().is_local`` means resident-here for both the in-process and
+    the sqlite session registries. Fail-CLOSED to False (durable row): reaching
+    the owning process is always safe; recreating a remote session in the wrong
+    process is the hazard the ruling forbids."""
+    if task_agent is None:
+        return False
+    route_fn = getattr(task_agent, "route_session", None)
+    if not callable(route_fn):
+        return False
+    try:
+        return bool(getattr(route_fn(session_id), "is_local", False))
+    except Exception:
+        return False
+
+
+def _wake_queue_for_board(board: Any):
+    """The durable wake queue that lives BESIDE this board's ``goals.db`` (the
+    same data home), so the deciding process and the owning process resolve the
+    SAME file (and a tmp board keeps tests isolated)."""
+    import os
+
+    from core.wake_queue import get_wake_queue
+    db_path = getattr(board, "db_path", None)
+    if db_path:
+        return get_wake_queue(
+            os.path.join(os.path.dirname(os.path.abspath(db_path)), "wakes.db"))
+    return get_wake_queue()
+
+
 def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
                          approved: bool, task_agent: Any = None) -> tuple:
     """Resolve a (possibly ``tap-``-prefixed) ask id back to the real ask id and
@@ -148,12 +399,19 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
     behind Telegram `/approve` `/reject` and `polyrob owner promote/reject
     tool_approval`.
 
-    030 WS-E3 (resume-on-grant): a POST-timeout approval used to rely on the
-    agent happening to retry a byte-identical call within the grant TTL. When
-    the deciding seat runs in the agent process (``task_agent`` passed), an
-    approval now wakes the originating session via the self-wake rail so the
-    grant is redeemed immediately. Fire-and-forget, fail-open; seats without a
-    live agent (the CLI) simply skip it and the one-shot grant still applies.
+    030 WS-E3 / 043 W10 (resume-on-grant): a POST-timeout approval used to rely
+    on the agent happening to retry a byte-identical call within the grant TTL.
+    Now an approval wakes the originating session so the grant is redeemed
+    immediately, through the session's OWNING process:
+      * same process (``task_agent`` passed) -> wake in-process via the self-wake
+        rail, fire-and-forget;
+      * a DIFFERENT process (prod: the CONSOLE decides, the AGENT owns the
+        session) -> a durable wake row (``core/wake_queue.py``) the owning
+        process's autonomy tick drains — ``deliver_self_wake`` refuses a remote
+        session, so the wake must run where the session lives, not here.
+    A goal-blocking approval writes NO wake either way (``decide_ask`` re-arms the
+    goal and the dispatcher redeems it — a forged wake turn may not spend). The
+    ask row flips regardless; both wake paths are fail-open niceties.
     """
     real_id = strip_tap_prefix(display_id) or display_id
     row = None
@@ -165,28 +423,89 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
     if not ok:
         return False, f"no open tool-approval request '{display_id}'"
     verb = "approved" if approved else "rejected"
-    if approved and task_agent is not None and row is not None:
+    # W10 (043): resume-on-grant wakes the session that asked. The wake MUST
+    # re-enter through the session's OWNING process — `deliver_self_wake` refuses
+    # a remote session by design. So: same process (a live `task_agent`) -> wake
+    # in-process now; a DIFFERENT process (prod Rob #1: the console decides, the
+    # agent owns the session) -> write a DURABLE wake row the owning process's
+    # autonomy tick drains. Either way the ask row already flipped above (d).
+    if approved and row is not None:
         try:
             payload = getattr(row, "payload", None) or {}
             session_id = payload.get("session_id")
             tool_name = payload.get("tool_name") or "the gated action"
-            deliver = getattr(task_agent, "deliver_self_wake", None)
-            if session_id and callable(deliver):
-                import asyncio
-                text = (f"Owner approved {tool_name} ({display_id}). Retry it "
-                        f"now — the one-shot grant applies to the next "
-                        f"identical attempt.")
-                try:
-                    loop = asyncio.get_running_loop()
-                except RuntimeError:
-                    loop = None
-                if loop is not None:
-                    loop.create_task(deliver(session_id, user_id, text,
-                                             metadata={"kind": "approval_granted",
-                                                       "ask_id": display_id}))
+            if payload.get("blocks_goal_ids"):
+                # ⚠️ DO NOT wake when a goal is being re-armed (carve-out, both
+                # rails).
+                #
+                # Live on prod 2026-09-12: the owner approved a bridge, a self-wake
+                # said "Retry it now", and `tx_guard` step 2 refused it —
+                # "forged/autonomous turns cannot move funds, even with the grant".
+                # A self-wake turn is structurally barred from spending, so
+                # resume-on-grant instructed the agent to do the one thing that
+                # turn cannot do, and burned the attempt doing it.
+                #
+                # `decide_ask` above has ALREADY flipped the goal back to ready.
+                # The dispatcher will run it as a genuine autonomous goal turn,
+                # which MAY spend and WILL redeem the grant. That is the redemption
+                # path; a wake here (in ANY process) only races it with a turn that
+                # cannot finish, and risks stamping `turn_kind=self_wake` onto the
+                # goal run's own session when the message drains there.
+                logger.info(
+                    "owner_queue: %s approved — leaving redemption to the re-armed "
+                    "goal(s) %s; no wake (a forged turn may not spend)",
+                    display_id, payload.get("blocks_goal_ids"))
+            elif session_id:
+                # No goal to re-arm (an interactive ask). The wake still helps for
+                # a non-money action, but it must NOT promise a retry a money verb
+                # would refuse on this turn — that promise is what produced a loop
+                # of "approved, but blocked" reports.
+                text = _approval_wake_text(tool_name, display_id)
+                meta = {"kind": "approval_granted", "ask_id": display_id}
+                delivered = False
+                if _owns_session_locally(task_agent, session_id):
+                    # THIS process owns the session (resident here) -> wake it
+                    # in-process now. Fire-and-forget, fail-open.
+                    deliver = getattr(task_agent, "deliver_self_wake", None)
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        loop = None
+                    if loop is not None and callable(deliver):
+                        loop.create_task(deliver(session_id, user_id, text,
+                                                 metadata=meta))
+                        delivered = True
+                if not delivered:
+                    # The deciding process does NOT own the session (prod: the
+                    # console decides, the agent owns it). A durable wake row ->
+                    # the OWNING process's wake-drain tick delivers it in-process
+                    # (survives a restart of either service, no new port).
+                    # `deliver_self_wake` refuses a remote session, so the wake
+                    # MUST run where the session lives, not here.
+                    _wake_queue_for_board(board).enqueue(
+                        session_id, user_id, text, metadata=meta)
         except Exception:
             logger.debug("resume-on-grant wake skipped (fail-open)", exc_info=True)
     return True, f"tool-approval request {display_id} {verb}"
+
+
+def _blocked_goal_ids(session_id: str) -> list:
+    """``[goal_id]`` when this session is running one, else ``[]``.
+
+    Fail-open to empty: a missing mapping must never stop an ask being created.
+    An ask that exists but does not auto-re-arm is recoverable by hand
+    (`polyrob goals retry`); an ask that was never created is the dead end 039
+    exists to close.
+    """
+    try:
+        from agents.task.goals.autonomy_marker import goal_for_session
+        gid = goal_for_session(session_id)
+        return [gid] if gid else []
+    except Exception:
+        logger.debug("owner_queue: goal-for-session lookup failed (fail-open)",
+                     exc_info=True)
+        return []
 
 
 async def _push_owner_notification(container: Any, user_id: str, text: str) -> None:
@@ -232,7 +551,8 @@ def _auto_approval_text(tool_name: str, request_id: Optional[str], amount: Any,
 
 def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
                                   taint_probe: Optional[Callable[[], bool]] = None,
-                                  skip_fn: Optional[Callable[[str, Any], bool]] = None):
+                                  skip_fn: Optional[Callable[[str, Any], bool]] = None,
+                                  audit_only: bool = False):
     """PAYMENT_APPROVAL_MODE=auto: a payment-creation action is NOT queued through
     `owner_queue` — this post-tool-call hook instead fires ONE owner notification +
     a first-class ``payment_auto_approved`` audit event for every WITHIN-CAP
@@ -248,6 +568,16 @@ def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
     would already short-circuit the line above), but that hook is wired later, in
     agent construction — this keeps the auto-notify path honest even if the gate is
     ever unregistered/reordered.
+
+    ``audit_only`` (039 Unit A): keep the ``payment_auto_approved`` event, drop the
+    owner MESSAGE. The on-chain spend verbs now report through
+    ``core/wallet/tx_notify.py``, which knows the chain, the amounts, the hash, the
+    cap headroom and the settled outcome. This hook only ever knew the action name,
+    and it said "Auto-approved payment request … (within caps;
+    PAYMENT_APPROVAL_MODE=auto)" — which on 2026-09-12 the owner read about a
+    bridge he had approved by hand twice. Two notices about one transaction, one of
+    them wrong, is worse than one right one. The audit event is a real fact and
+    stays.
     """
     tools_set = {t for t in (payment_tools or []) if t}
 
@@ -288,6 +618,8 @@ def make_payment_auto_notify_hook(container: Any, payment_tools: Iterable[str],
         amount = meta.get("amount_usd")
         purpose = meta.get("purpose")
         _emit_payment_auto_approved(user_id, session_id, action_name, request_id, amount, purpose)
+        if audit_only:
+            return
         await _push_owner_notification(
             container, user_id,
             _auto_approval_text(action_name, request_id, amount, purpose))
@@ -443,8 +775,27 @@ class OwnerQueueApprover(ApprovalProvider):
 
     # -- ApprovalProvider ---------------------------------------------------------
 
-    async def request(self, action_name: str, params: Dict[str, Any], context: Any) -> bool:
+    async def request(self, action_name: str, params: Dict[str, Any], context: Any,
+                      *, hash_params: Optional[Dict[str, Any]] = None) -> bool:
+        """Ask the owner. ``params`` is what he SEES; ``hash_params`` is what the
+        grant is keyed on, when the two must differ.
+
+        They must differ whenever the displayed figures are re-derived per attempt.
+        A bridge re-quotes before every try, so `min_out`/`usd`/`request_id` move
+        each time — and keying the grant on them meant every attempt minted a NEW
+        tap (the owner answered three for one bridge on 2026-09-12) and no
+        approval could ever be redeemed by a later run, because the later run's
+        hash did not match the one he approved.
+
+        The key is therefore the stable INTENT. The price is not left unguarded by
+        that: the arrival floor, the simulation, the per-transaction ceiling, the
+        rolling daily cap and `tx_guard` all re-assert against the FRESH quote at
+        execution, and the grant itself expires (``approval_grant_ttl_hours``).
+        """
         user_id = getattr(context, "user_id", None) or self._default_user_id or ""
+        from core.wallet.authority import money_action, owner_refusal
+        if money_action(action_name) and owner_refusal(user_id):
+            return False
         session_id = getattr(context, "session_id", None) or ""
 
         # Defense in depth: a forged/leaf/sub-agent/autonomous-reentry turn never
@@ -455,18 +806,39 @@ class OwnerQueueApprover(ApprovalProvider):
         # not fail-open into creating a durable ask + owner notification + a 300s
         # poll block for what may be a forged/autonomous turn.
         try:
-            from tools.controller.action_registration import _is_forged_or_autonomous_turn
+            from tools.controller.action_registration import (
+                _is_autonomous_goal_turn, _is_forged_or_autonomous_turn)
             forged = _is_forged_or_autonomous_turn(context, None)
+            # 039: ONE forged-shaped origin may ASK — a goal/cron-dispatched run on
+            # the MAIN agent. Live dead end found on prod 2026-09-12: the bridge
+            # runs on caps-not-taps, so an autonomous run reaches it, and above
+            # DEFI_AUTONOMOUS_MAX_USD it escalates to HERE — which denied it
+            # outright, created no ask, and never reached `_consume_grant`. So an
+            # above-ceiling autonomous spend was unapprovable by ANY route: no tap
+            # to press, and an approval given earlier could not be redeemed later
+            # either. Holding no tap id, the agent told its owner to
+            # `/approve <relay-request-id>` — a handle that does not exist.
+            #
+            # This grants NO new authority. The run still cannot self-approve; it
+            # may only ASK, and redeem what the owner already granted. The detector
+            # is the strict one (`turn_origin._is_autonomous_goal_turn`): main
+            # agent, orchestrator role, not a sub-agent, not a self-wake or
+            # delegation-result re-entry, live autonomy marker, fail-closed on any
+            # raise. Leaf, self-wake and tainted turns are untouched below.
+            goal_turn = bool(forged and _is_autonomous_goal_turn(context, None))
         except Exception:
             logger.debug(
                 "owner_queue: forged-turn probe raised — treating as forged "
                 "(fail-closed, deny, no ask)", exc_info=True)
-            forged = True
-        if forged:
+            forged, goal_turn = True, False
+        if forged and not goal_turn:
             logger.info(
                 "owner_queue: forged/leaf/autonomous turn denied for '%s' "
                 "(no ask created)", action_name,
             )
+            from core.security.refusals import record_refusal
+            record_refusal("approval_denied", tool=action_name, user_id=user_id,
+                           detail="owner_queue: no ask")
             return False
 
         # fix pass 1 (Finding 1): defense in depth — a correspondent-TAINTED turn
@@ -504,7 +876,9 @@ class OwnerQueueApprover(ApprovalProvider):
             return False
 
         norm_params = _normalize_params(params)
-        req_hash = compute_request_hash(action_name, norm_params, user_id)
+        req_hash = compute_request_hash(
+            action_name, _normalize_params(hash_params) if hash_params else norm_params,
+            user_id)
 
         if self._consume_grant(board, user_id, req_hash):
             logger.info("owner_queue: one-shot grant consumed for %s (hash=%s)",
@@ -520,6 +894,12 @@ class OwnerQueueApprover(ApprovalProvider):
 
         ask = self._find_open_ask(board, user_id, req_hash)
         created_new = ask is None
+        if ask is not None:
+            # REUSING an open ask: widen the goal list rather than leaving it as
+            # first created. Without this, an approval raised again by a later
+            # goal run re-arms whatever the FIRST run happened to stamp — which,
+            # for every ask created before 039, is nothing at all.
+            board.add_ask_blocked_goals(ask.id, _blocked_goal_ids(session_id))
         if ask is None:
             summary = _params_summary(norm_params)
             ask = board.create_ask(
@@ -534,6 +914,14 @@ class OwnerQueueApprover(ApprovalProvider):
                     "session_id": session_id,
                     "grant_consumed": False,
                 },
+                # 039: name the goal this ask blocks, so `decide_ask`'s EXISTING
+                # unblock hop re-arms it on approval. Without it the owner
+                # presses /approve and nothing happens — the grant sits
+                # unredeemed and the goal stays blocked, which is the same
+                # "owner intent does not stick" failure one layer down. Empty
+                # for an interactive turn and for a cron/planner run with no
+                # goal row; both are real answers, not failures.
+                blocks_goal_ids=_blocked_goal_ids(session_id),
                 force=True,  # exact-hash dedup above already did the real work
             )
         if created_new:
@@ -557,6 +945,16 @@ class OwnerQueueApprover(ApprovalProvider):
                         f"Reply /approve {tap_display_id(ask.id)} or "
                         f"/reject {tap_display_id(ask.id)}")
             await _push_owner_notification(self._resolve_container(), user_id, card)
+
+        if goal_turn:
+            # Return rather than poll. A goal run that sits on a dispatcher slot
+            # for the whole timeout starves every other goal, and the wait buys
+            # nothing: the ask is durable and the grant outlives this run, so the
+            # owner answers whenever and the next dispatch redeems it above.
+            logger.info(
+                "owner_queue: autonomous goal run asked for '%s' and released the "
+                "slot (ask %s); the next run redeems the grant", action_name, ask.id)
+            return False
 
         self._active_polls += 1
         try:

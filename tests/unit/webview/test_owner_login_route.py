@@ -14,6 +14,10 @@ def _login_post(client, username, password, follow_redirects=True):
         "/owner-login",
         data={"username": username, "password": password, "csrf_token": token},
         follow_redirects=follow_redirects,
+        # 043 W1: a browser attaches Origin to a same-origin form POST; this
+        # client must too, or the CSRF guard refuses a cookie-bearing request
+        # that states no origin.
+        headers={"Origin": "http://testserver"},
     )
 
 
@@ -66,10 +70,12 @@ def test_owner_login_then_root_shows_dashboard(own_ops_owner_client):
     the "owner logs in -> dashboard" round-trip works end to end."""
     login = _login_post(own_ops_owner_client, "op", "s3cret")
     assert login.status_code == 200  # after following the redirect
-    root = own_ops_owner_client.get("/")
+    # 043 §9: the legacy session.html dashboard is deleted; under WEBVIEW_UI=legacy
+    # `/` (authenticated) 302-redirects to the session catalog. The B4 round-trip
+    # still holds — an authenticated owner reaches an authenticated surface, NOT
+    # the public status page (an unauthenticated owner would be sent to
+    # /owner-login instead).
+    root = own_ops_owner_client.get("/")  # TestClient follows the redirect
     assert root.status_code == 200
-    assert "POLYROB is live" not in root.text  # dashboard, not the status page
-    # Positive confirmation this is actually the dashboard (session.html),
-    # not merely "some other page that happens to lack that string" — mirrors
-    # test_public_status.py's own-ops-unauthenticated DOM-marker check.
-    assert 'id="chat-input"' in root.text
+    assert "POLYROB is live" not in root.text  # not the public status page
+    assert "status-page" not in root.text

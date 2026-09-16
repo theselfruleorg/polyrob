@@ -139,10 +139,19 @@ class CuratedNotesStoreMixin:
         except Exception as e:
             logger.warning("note_create failed: %s", e)
             return None
+    #: The status values a note may hold (schema comment on the column). A
+    #: `pending` note comes from a forged/autonomous turn (see
+    #: ``action_registration.py``) and stays dark until an owner promotes it to
+    #: `active`; `archived` is the reject / soft-delete sink (A27).
+    _NOTE_STATUSES = ("active", "pending", "archived")
+
     async def note_update(self, user_id, note_id, *, content: str = None,
-                          title: str = None, tags=None) -> bool:
-        """Update a note's content/title/tags (tenant-scoped). Content updates
-        recompute links. Returns False when the note isn't this tenant's."""
+                          title: str = None, tags=None, status: str = None) -> bool:
+        """Update a note's content/title/tags/status (tenant-scoped). Content
+        updates recompute links. ``status`` (A27) promotes a pending note to
+        ``active`` or archives it — only ``active``|``pending``|``archived`` are
+        accepted; an unknown value is refused. Returns False when the note isn't
+        this tenant's (or the status is invalid)."""
         if self._anon_blocked(user_id):
             return False
         sets, args = ["updated_ts = ?"], [int(time.time())]
@@ -159,6 +168,10 @@ class CuratedNotesStoreMixin:
             sets.append("title = ?"); args.append(title.strip() or None)
         if tags is not None:
             sets.append("tags = ?"); args.append(json.dumps(self._tags_list(tags)))
+        if status is not None:
+            if status not in self._NOTE_STATUSES:
+                return False
+            sets.append("status = ?"); args.append(status)
         try:
             n = execute_retry(
                 self.db_path,

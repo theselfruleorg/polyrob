@@ -60,8 +60,10 @@ def test_require_session_owner_denies_mismatch():
     assert ei.value.status_code == 403
 
 
-def test_require_session_owner_allows_when_no_owner_recorded():
-    thp._require_session_owner(_FakeRequest("tenant-b"), None)  # must not raise
+def test_require_session_owner_denies_when_no_owner_recorded():
+    with pytest.raises(HTTPException) as exc:
+        thp._require_session_owner(_FakeRequest("tenant-b"), None)
+    assert exc.value.status_code == 403
 
 
 # ── POST /sessions/{id}/messages ───────────────────────────────────────────
@@ -157,3 +159,21 @@ async def test_cross_tenant_cannot_hijack_another_users_active_session():
             "tenant-a", {"session_id": "evil-session"}, attacker_req, agent=agent
         )
     assert ei.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_cannot_bind_own_pointer_to_foreign_session():
+    agent = _FakeAgent(session_owner="tenant-a")
+    with pytest.raises(HTTPException) as exc:
+        await thp.switch_active_session("tenant-b", {"session_id": "shared-session-id"},
+                                       _FakeRequest("tenant-b"), agent=agent)
+    assert exc.value.status_code == 403
+    assert agent.user_sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_owner_can_bind_own_pointer_to_own_session():
+    agent = _FakeAgent(session_owner="tenant-a")
+    await thp.switch_active_session("tenant-a", {"session_id": "shared-session-id"},
+                                   _FakeRequest("tenant-a"), agent=agent)
+    assert agent.user_sessions == {"tenant-a": "shared-session-id"}

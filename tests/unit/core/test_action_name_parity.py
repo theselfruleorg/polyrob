@@ -40,6 +40,7 @@ _DIRECT_ACTION_MODULES = (
     "tools/controller/agent_status_action.py",  # extracted 2026-08-28 (status SSOT)
     "tools/controller/autonomy_control_action.py",  # 031: owner pause/resume (extracted)
     "tools/controller/doc_authoring.py",  # self_context_manage/owner_doc_manage (extracted 2026-09-08)
+    "tools/controller/room_read_action.py",  # gated direct action; still a real runtime name
 )
 
 
@@ -75,6 +76,8 @@ def _register_every_optional_tool() -> None:
         ("tools.cronjob_tools", "register_cronjob_tool"),
         ("tools.goal_tools", "register_goal_tool"),
         ("tools.x_browser", "register_x_browser_tool"),
+        ("tools.launchpad", "register_launchpad_tool"),
+        ("tools.dapp_browser", "register_dapp_browser_tool"),
     )
     for mod_name, fn_name in registrars:
         try:

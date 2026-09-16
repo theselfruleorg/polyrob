@@ -118,3 +118,68 @@ def test_bounds_are_defined_and_match_the_prober():
     from tools.x402.discovery import MAX_PROBE_BYTES
     assert net_guard.MAX_X402_BODY_BYTES == MAX_PROBE_BYTES
     assert net_guard.X402_HTTP_TIMEOUT_SEC > 0
+
+
+@pytest.mark.asyncio
+async def test_transport_caps_stream_and_preserves_settlement_headers(monkeypatch):
+    import httpx
+    monkeypatch.setattr(net_guard, 'MAX_X402_BODY_BYTES', 8)
+    closed = []
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b'123456'
+            yield b'789abc'
+            pytest.fail('must stop reading after the byte cap')
+        async def aclose(self):
+            closed.append(True)
+    class Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            assert request.headers['Accept-Encoding'] == 'identity'
+            return httpx.Response(200, headers={'PAYMENT-RESPONSE': 'settled', 'Content-Length': '999'},
+                                  stream=Stream())
+    response = await net_guard.BoundedAsyncTransport(Inner()).handle_async_request(
+        httpx.Request('GET', 'https://example.com/paid'))
+    assert response.content == b'12345678'
+    assert response.headers['PAYMENT-RESPONSE'] == 'settled'
+    assert response.extensions['polyrob_body_truncated']
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_compression_refused_without_consuming_payload():
+    import httpx
+    closed = []
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            pytest.fail('compressed content must not be consumed')
+            yield b''
+        async def aclose(self):
+            closed.append(True)
+    class Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            return httpx.Response(200, headers={'Content-Encoding': 'gzip'}, stream=Stream())
+    with pytest.raises(ValueError, match='compressed'):
+        await net_guard.BoundedAsyncTransport(Inner()).handle_async_request(
+            httpx.Request('GET', 'https://example.com/paid'))
+    assert closed
+
+
+@pytest.mark.asyncio
+async def test_total_stream_deadline_closes_slow_response(monkeypatch):
+    import asyncio
+    import httpx
+    monkeypatch.setattr(net_guard, 'X402_HTTP_TIMEOUT_SEC', 0.01)
+    closed = []
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            await asyncio.sleep(10)
+            yield b'data'
+        async def aclose(self):
+            closed.append(True)
+    class Inner(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            return httpx.Response(200, stream=Stream())
+    with pytest.raises(asyncio.TimeoutError):
+        await net_guard.BoundedAsyncTransport(Inner()).handle_async_request(
+            httpx.Request('GET', 'https://example.com/paid'))
+    assert closed

@@ -1,0 +1,160 @@
+{#
+  THE shell. One nav, one head, one skip link, one <main>.
+
+  Derived once from docs/design/040/_build.py::nav() + head() + page(), which
+  exist in the mockup set for exactly this reason: so the frame stays
+  byte-identical across screens and the claim is checkable rather than promised.
+  Rule 1 of the design system is "one nav component; it rotates axis at 768 px;
+  it never forks" — the rotation is pure CSS (app.css, @media 768px), so there
+  is one markup here and there will never be a second. The LOOK is the design
+  of record (webview/static/css, loaded below); the mockups are its schema.
+
+  A screen extends this and fills {% block body %}. It does not restate the
+  frame, and it must not introduce a second <nav>, a second <main>, or a heading
+  above its own h1.
+
+  Context (built by webview/pages_new.py::_shell_context):
+    nav_items       the five destinations, one table, one place
+    nav_current     "new" | "inbox" | "work" | "money" | "agent"
+    page_title      the <title>, already resolved through the copy layer
+    wordmark        this instance's own name
+    pause_headline  the first half of the head truth, or "" when unknown
+    waiting_line    the second half: what needs a person, or that nothing does
+    inbox_badge     the badge glyph ("2", "1+") or "" for no badge
+    inbox_aria      the Inbox link's label, which carries the count
+    inbox_partial   True when a source could not be read, so the count is a
+                    FLOOR and is drawn dashed. The badge may never claim more
+                    certainty than the list behind it.
+    read_only       webgate.read_only()
+#}
+<!doctype html>
+<html lang="en" data-theme-preference="{{ theme_preference(request) }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>{% block title %}{{ page_title }}{% endblock %}</title>
+{# The design of record, in the order layout.html has always loaded it, then the
+   destinations' own components (app.css) over the same tokens. One stylesheet
+   family for every console page — the 2026-09-16 audit found two. #}
+<link rel="stylesheet" href="/static/css/fonts.css?v=20260916theme">
+<link rel="stylesheet" href="/static/css/variables.css?v=20260916theme">
+<link rel="stylesheet" href="/static/css/components.css?v=20260916theme">
+<link rel="stylesheet" href="/static/css/style.css?v=20260916theme">
+<link rel="stylesheet" href="/static/app/app.css?v=20260916theme">
+<link rel="icon" href="/static/img/favicon.ico">
+<script src="/static/js/theme.js?v=20260916theme"></script>
+</head>
+<body class="console-shell" data-show-avatar="{{ 'true' if show_avatar(request) else 'false' }}"{% block body_attrs %}{% endblock %}>
+<a class="skip-link" href="#main">{{ t('shell.skip') }}</a>
+<div class="app">
+  <nav class="nav" aria-label="Main">
+{%- for item in nav_items %}
+    <a class="nav-item" href="{{ item.href }}"{% if item.key == nav_current %} aria-current="page"{% endif %}{% if item.key == 'inbox' and inbox_aria %} aria-label="{{ inbox_aria }}"{% endif %}>{% if item.key == 'inbox' and inbox_badge %}<span class="nav-badge{% if inbox_partial %} is-uncertain{% endif %}" aria-hidden="true">{{ inbox_badge }}</span>{% endif %}<span class="nav-glyph" aria-hidden="true">{{ item.glyph }}</span><span class="nav-label">{{ t(item.label) }}</span></a>
+{%- endfor %}
+  </nav>
+  <header class="head">
+    <div class="face" aria-hidden="true"></div>
+    <span class="mark">{{ wordmark }}</span>
+    <p class="head-truth">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
+    <button class="icon-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="kbd">&#8984;K</span></button>
+{%- if show_logout %}
+    {# own_ops / multitenant only (043 §9 residue, closed 2026-09-16): the
+       owner's ≤24 h session ends here. `local` has no login, so no link. #}
+    <a class="icon-btn head-logout" href="/logout" aria-label="{{ t('shell.logout') }}"><span class="glyph" aria-hidden="true">&#9211;</span><span class="kbd">{{ t('shell.logout') }}</span></a>
+{%- endif %}
+  </header>
+  <main class="main" id="main">
+{%- if read_only %}
+    <div class="banner"><span aria-hidden="true">&#128065;</span>
+      <span><b>{{ t('shell.read_only.lead') }}</b> {{ t('shell.read_only.body') }}</span></div>
+{%- endif %}
+{% block body %}{% endblock %}
+  </main>
+</div>
+{#
+  The Chats overlay. A native <dialog> so the focus trap, the backdrop and
+  Escape come from the platform and the overlay needs no CSS of its own. The
+  two inline declarations resolve through app.css's token aliases (--surface-1,
+  --ink, --rule, --radius are the product's own values); `style-src
+  'unsafe-inline'` is already the console's CSP.
+
+  #chats-copy is how a STRING crosses from the copy layer into JS: no 043
+  template carries an inline script (tests/unit/webview/test_no_new_inline_script.py),
+  so the words ride on data attributes and chats.js reads them off `dataset`.
+  ⚠️ The names carry an UNDERSCORE, not a hyphen: `dataset` camel-cases a
+  hyphen away (`data-creator-owner` -> `creatorOwner`), and the JS keys the
+  words by the creator/status value itself, which is snake_case.
+#}
+<dialog id="chats-dialog" aria-label="{{ t('chats.title') }}"
+        style="background:var(--surface-1);color:var(--ink);border:1px solid var(--rule);border-radius:var(--radius);max-width:min(560px,92vw);width:100%">
+  <div class="page">
+    <div class="page-head"><h2 class="page-title">{{ t('chats.title') }}</h2></div>
+    <div class="ledger" id="chats-list"></div>
+    <p class="state-body" id="chats-state" hidden></p>
+    <div class="state-actions"><button class="btn btn-quiet" id="chats-close" type="button">{{ t('chats.close') }}</button></div>
+  </div>
+</dialog>
+<div id="chats-copy" hidden data-more="{{ t('chats.more') }}"
+     data-title="{{ t('chats.title') }}"
+     data-loading="{{ t('chats.loading') }}"
+     data-empty="{{ t('chats.empty') }}"
+     data-unreadable="{{ t('chats.unreadable') }}"
+     data-untitled="{{ t('chats.untitled') }}"
+     data-creator_owner="{{ t('chats.creator_owner') }}"
+     data-creator_cli="{{ t('chats.creator_cli') }}"
+     data-creator_api="{{ t('chats.creator_api') }}"
+     data-creator_cron="{{ t('chats.creator_cron') }}"
+     data-creator_goal="{{ t('chats.creator_goal') }}"
+     data-creator_correspondent="{{ t('chats.creator_correspondent') }}"
+     data-creator_unknown="{{ t('chats.creator_unknown') }}"
+     data-status_running="{{ t('chats.status_running') }}"
+     data-status_done="{{ t('chats.status_done') }}"
+     data-status_stopped="{{ t('chats.status_stopped') }}"
+     data-status_unknown="{{ t('chats.status_unknown') }}"
+     data-live_at_agent="{{ t('chats.live_at_agent') }}"></div>
+<script src="/static/app/chats.js" type="module"></script>
+{#
+  The command palette (043 A23). A second native <dialog>, for the same reasons
+  the Chats overlay is one: the platform brings the focus trap, the backdrop and
+  Escape. The inline styles use the shared design tokens; `style-src 'unsafe-inline'` is already
+  the CSP.
+
+  It opens on ⌘⇧P from anywhere and on `/` typed into an empty composer — NOT
+  ⌘K, which is the Chats overlay and stays it. The verbs it lists come from the
+  generated verbs.en.json (emitted from core/verbs.py); only the frame's own
+  words cross here, on #palette-copy's data attributes, the same way chats.js
+  reads #chats-copy — no 043 template carries an inline script.
+#}
+<dialog id="palette-dialog" aria-label="{{ t('palette.title') }}"
+        style="background:var(--surface-1);color:var(--ink);border:1px solid var(--rule);border-radius:var(--radius);max-width:min(640px,92vw);width:100%">
+  <div class="page">
+    <div class="page-head"><h2 class="page-title">{{ t('palette.title') }}</h2></div>
+    <div class="search"><span aria-hidden="true">&#8981;</span>
+      <input id="palette-input" type="text" autocomplete="off" spellcheck="false"
+             aria-label="{{ t('palette.placeholder') }}"
+             placeholder="{{ t('palette.placeholder') }}"></div>
+    <p class="entry-meta">{{ t('palette.narrow') }}</p>
+    <div id="palette-results" class="ledger"></div>
+    <p class="entry-meta">{{ t('palette.plainwords') }}</p>
+    <div class="state-actions"><button class="btn btn-quiet" id="palette-close" type="button">{{ t('palette.close') }}</button></div>
+  </div>
+</dialog>
+{#
+  Only the two words the JS renders itself cross here — the "not a command" line
+  and the no-match line. The title, placeholder, hint and close text are
+  rendered by the template above (aria-labels, the placeholder, the button), so
+  handing them to JS as well would be dead data.
+#}
+<div id="palette-copy" hidden
+     data-unknown="{{ t('palette.unknown') }}"
+     data-empty="{{ t('palette.empty') }}"></div>
+<script src="/static/app/palette.js" type="module"></script>
+{#
+  live.js joins the activity room and refreshes the head line + the Inbox badge
+  from /api/webgate/head (the same Python that rendered them), and re-dispatches
+  every activity event on `document` so Work redraws itself. Words: none.
+#}
+<script src="/static/app/live.js" type="module"></script>
+</body>
+</html>

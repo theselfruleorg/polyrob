@@ -18,8 +18,13 @@ def extract_voice_file_id(update: dict) -> Optional[str]:
     return None
 
 
-async def download_voice_bytes(bot: Any, file_id: str) -> Optional[bytes]:
-    """Resolve + download a Telegram file's bytes via the bot. Fail-open -> None."""
+async def download_file_bytes(bot: Any, file_id: str) -> Optional[bytes]:
+    """Resolve + download ANY Telegram file's bytes via the bot. Fail-open -> None.
+
+    Nothing here is voice-specific — the 2026-09-13 media rail downloads photos and
+    documents through the same call. ``download_voice_bytes`` stays as its original
+    name so the transcription call sites read as before.
+    """
     try:
         f = await bot.get_file(file_id)
         file_path = getattr(f, "file_path", None)
@@ -32,8 +37,14 @@ async def download_voice_bytes(bot: Any, file_id: str) -> Optional[bytes]:
             return data.read()
         return bytes(data)
     except Exception as e:
-        logger.debug("telegram voice download failed for %s: %s", file_id, e)
+        logger.debug("telegram file download failed for %s: %s", file_id, e)
         return None
+
+
+
+
+#: Original name, kept for the transcription call sites.
+download_voice_bytes = download_file_bytes
 
 
 async def transcribe_telegram_voice(bot: Any, update: dict, transcriber: Any) -> Optional[str]:
@@ -41,7 +52,7 @@ async def transcribe_telegram_voice(bot: Any, update: dict, transcriber: Any) ->
     file_id = extract_voice_file_id(update)
     if not file_id:
         return None
-    audio = await download_voice_bytes(bot, file_id)
+    audio = await download_file_bytes(bot, file_id)
     if not audio:
         return None
     try:

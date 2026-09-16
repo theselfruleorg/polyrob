@@ -42,7 +42,7 @@ def _ctx(args=(), user_id="local", container=None):
 
 
 NEW_VERBS = ("halt", "resume", "asks", "fulfill", "allow", "deny",
-             "allowlist", "invoices", "settle")
+             "allowlist", "invoices", "settle", "missed")
 
 
 # ---------------------------------------------------------------------------
@@ -326,3 +326,82 @@ def test_settle_usage_line_on_missing_args():
     ctx, rec = _ctx()
     h_settle(ctx)
     assert "usage: /settle" in rec.text
+
+
+# ---------------------------------------------------------------------------
+# /missed — owner notices the delivery rail could not send live (A7 / A40)
+# ---------------------------------------------------------------------------
+
+
+def test_missed_renders_three_kinds(tmp_path, monkeypatch):
+    from core.event_log import TelemetryEventLog
+    from cli.ui.commands.h_owner import h_missed
+
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    for t in ("[suppressed by daily proactive-message cap; source=a] capped one",
+              "[held by owner pause; source=b] paused one",
+              "[undelivered; source=c] undelivered one"):
+        log.record("owner_notice", user_id="u1", source="user_delivery", attrs={"text": t})
+    ctx, rec = _ctx(user_id="u1")
+    h_missed(ctx)
+    assert "[capped] capped one" in rec.text
+    assert "[paused] paused one" in rec.text
+    assert "[undelivered] undelivered one" in rec.text
+    assert "delivery.daily_cap" in rec.text
+
+
+def test_missed_empty_is_honest(tmp_path, monkeypatch):
+    from core.event_log import TelemetryEventLog
+    from cli.ui.commands.h_owner import h_missed
+
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    ctx, rec = _ctx(user_id="u1")
+    h_missed(ctx)
+    assert "no missed messages" in rec.text.lower()
+
+
+def test_missed_bad_arg_is_honest(tmp_path, monkeypatch):
+    from cli.ui.commands.h_owner import h_missed
+
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ctx, rec = _ctx(args=["abc"], user_id="u1")
+    h_missed(ctx)
+    assert "usage: /missed" in rec.text
+
+
+def test_missed_wraps_long_text_without_clipping(tmp_path, monkeypatch):
+    """Fix round 1 (2026-09-14): wrapped, never clipped — see the CLI sibling
+    test in tests/unit/cli/test_owner_missed_cli.py."""
+    import time
+
+    from core.event_log import TelemetryEventLog
+    from cli.ui.commands.h_owner import h_missed
+
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    ts = 1_700_000_000.0
+    words = [f"word{i:03d}" for i in range(40)]
+    long_text = " ".join(words)
+    assert len(long_text) >= 300
+    log = TelemetryEventLog(str(tmp_path / "telemetry_events.db"))
+    log.record("owner_notice", user_id="u1", source="user_delivery", ts=ts,
+               attrs={"text": f"[undelivered; source=a] {long_text}"})
+    ctx, rec = _ctx(user_id="u1")
+    h_missed(ctx)
+
+    lines = rec.text.splitlines()
+    assert lines, "expected output"
+    assert all(len(line) <= 80 for line in lines)  # (a) every line fits 80 cols
+
+    stamp = time.strftime("%m-%d %H:%M", time.gmtime(ts))
+    prefix = f"  {stamp}Z — [undelivered] "
+    indent = " " * len(prefix)
+    chunks = []
+    for line in lines:
+        if line.startswith(prefix):
+            chunks.append(line[len(prefix):])
+        elif chunks and line.startswith(indent) and line.strip():
+            chunks.append(line[len(indent):])
+    # (b) the full 300+ char notice survives across the wrapped lines
+    assert " ".join(chunks) == long_text

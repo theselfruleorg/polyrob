@@ -9,8 +9,8 @@ def _pyproject_version() -> str:
     assert m, "no version = in pyproject.toml"
     return m.group(1)
 
-def test_pyproject_is_0_13_0():
-    assert _pyproject_version() == "0.13.0"
+def test_pyproject_is_1_0_0():
+    assert _pyproject_version() == "1.0.0"
 
 def test_core_version_accessor_matches_pyproject():
     from core.version import get_version
@@ -23,11 +23,11 @@ def test_core_dunder_version_is_accessor():
     assert cv.__version__ == cv.get_version()
 
 def test_source_pyproject_wins_over_stale_installed_metadata(monkeypatch):
-    """A stale editable/wheel install (e.g. polyrob pinned at an old 1.0.0) must NOT
+    """A stale editable/wheel install (e.g. polyrob pinned at an old 0.13.0) must NOT
     shadow the source version — running `polyrob` from this checkout must report the
     checkout's version. This is the reported 'CLI provides wrong version' bug."""
     import core.version as cv
-    monkeypatch.setattr(cv, "_pkg_version", lambda name: "1.0.0")  # stale install
+    monkeypatch.setattr(cv, "_pkg_version", lambda name: "0.13.0")  # stale install
     assert cv.get_version() == _pyproject_version()  # source pyproject wins
 
 def test_falls_back_to_installed_metadata_without_source(monkeypatch):
@@ -86,8 +86,9 @@ def test_no_stray_project_version_literal():
         "migrations/version_manager.py",         # DB schema version (independent)
     }
 
+    version_literal = re.escape(_pyproject_version())
     out = subprocess.run(
-        ["git", "grep", "-nE", r"['\"]1\.0\.0['\"]",
+        ["git", "grep", "-nE", rf"['\"]{version_literal}['\"]",
          "--", "agents", "api", "cli", "core", "modules", "surfaces",
          "tools", "utils", "webview"],
         cwd=Path(__file__).resolve().parents[1],
@@ -101,5 +102,9 @@ def test_no_stray_project_version_literal():
         # clientInfo version and any endpoint version — must route through
         # get_version(), so no other file may hardcode the old project literal.
         and "schema.sql" not in ln
+        # A npm lockfile pins third-party package versions ("delayed-stream":
+        # such as 1.0.0), none of which is the project version. The dev rig's lockfile
+        # (webview/dev, 043 C1) is the one such file under a scanned dir.
+        and not ln.startswith("webview/dev/package-lock.json")
     ]
     assert not offenders, "stray project-version literal:\n" + "\n".join(offenders)

@@ -209,6 +209,11 @@ class SessionExecutionMixin:
             if self._on_stream_chunk is not None:
                 await self._register_stream_callback(agent)
 
+            # 044 T14: the room's <group-context> block, if one was queued before
+            # this agent existed (a cold room start). Separate buffer from the
+            # pending USER messages below — it is an ephemeral, not a turn.
+            await self._flush_pending_room_context(agent, agent_id)
+
             # CRITICAL FIX: Flush pending messages to newly created agent
             # This ensures messages queued before agent existed are delivered
             # SECURITY FIX: Use lock to prevent race with submit_user_message
@@ -236,6 +241,45 @@ class SessionExecutionMixin:
         except Exception as e:
             self.logger.error(f"Failed to create agent '{agent_name}': {e}")
             raise
+
+    async def _flush_pending_room_context(self, agent, agent_id: str) -> int:
+        """044 T14: deliver room context queued BEFORE this agent existed.
+
+        A room's COLD start has nowhere to push an ephemeral: ``create_session``
+        builds and initializes the orchestrator, but ``create_agent`` runs inside
+        ``run_session``. The block is buffered on the orchestrator
+        (``_pending_room_context``, the same discipline ``_pending_messages``
+        uses) and delivered here as a one-shot EPHEMERAL — one LLM call, never
+        history, never a user turn (044 §4.4). Returns how many were delivered.
+
+        A separate method (not inlined in ``create_agent``) so the rail is
+        testable without building a whole agent. Fail-open: a flush fault costs
+        the room's recent lines, never the turn.
+        """
+        async with self._pending_messages_lock:
+            pending = getattr(self, '_pending_room_context', None)
+            if not pending:
+                return 0
+            mm = getattr(agent, 'message_manager', None)
+            if mm is None or not hasattr(mm, 'push_ephemeral_message'):
+                self.logger.warning(
+                    f"room context dropped for agent {agent_id}: no message manager")
+                pending.clear()
+                return 0
+            count = 0
+            try:
+                from modules.llm.messages import MessageOrigin, make_control_message
+                for block in pending:
+                    mm.push_ephemeral_message(
+                        make_control_message(block, MessageOrigin.GROUP_CONTEXT))
+                count = len(pending)
+            except Exception as e:
+                self.logger.warning(f"room context flush failed for {agent_id}: {e}")
+            pending.clear()
+            if count:
+                self.logger.info(
+                    f"📦 Flushed {count} room context block(s) to agent {agent_id}")
+            return count
 
     async def execute_session(self,
                             agent_sequence: List[str],
@@ -363,8 +407,11 @@ class SessionExecutionMixin:
 
                                     if fallback_llm:
                                         self.logger.info(f"🔄 Retrying agent {agent_id} with fallback LLM")
-                                        agent.llm = fallback_llm
-                                        agent.model_name = getattr(fallback_llm, 'model_name', 'fallback')
+                                        from modules.llm.usage_extract import resolve_serving_provider
+                                        fallback_model = getattr(fallback_llm, 'model_name', 'fallback')
+                                        agent.adopt_active_llm(
+                                            fallback_llm, fallback_model,
+                                            resolve_serving_provider(fallback_llm, fallback_model))
 
                                         # Retry execution
                                         retry_start = time.time()
@@ -408,5 +455,4 @@ class SessionExecutionMixin:
             self.logger.error(f"Session execution failed: {e}")
             # NOTE: Don't update status here - let caller (task_agent_lite) handle it
             raise
-
 

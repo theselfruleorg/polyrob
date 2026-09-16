@@ -8,7 +8,63 @@ stack — it only ever receives a ``str``. The chat front door renders the
 shared (surviving) CharacterManager's default character to text at the call
 boundary and hands that string in.
 """
+import logging
 from typing import Any, Mapping, Optional
+
+logger = logging.getLogger(__name__)
+
+# --- the rendered/stored-only split (F5) -----------------------------------
+# An operator writes `postExamples` and `messageExamples` — the two fields that
+# most obviously teach a voice — and gets NOTHING: they are parsed, stored on
+# Character and populated by every shipped preset, but no path consumes them.
+# The silent no-op on an authored field is the defect. These two tuples are the
+# SSOT for the split (pinned by tests/unit/agents/personality/test_persona_render.py),
+# they drive the one-time warning below, and they are the table in
+# docs/guide/instances.md. Folding the stored-only fields INTO the block is a
+# product call, deliberately not taken here.
+RENDERED_FIELDS = ("name", "adjectives", "bio", "lore", "topics", "style")
+RENDERED_STYLE_BUCKETS = ("all", "chat", "speaking")
+STORED_ONLY_FIELDS = ("knowledge", "messageExamples", "postExamples", "style.writing")
+
+# (character name, dropped fields) already warned about — the renderer runs per
+# session, and this must never become per-turn noise.
+_warned_ignored_fields: set = set()
+
+
+def ignored_populated_fields(character: Optional[Mapping[str, Any]]) -> list:
+    """The STORED_ONLY_FIELDS this character populates but the block drops."""
+    if not character or not isinstance(character, Mapping):
+        return []
+    found = []
+    for field in STORED_ONLY_FIELDS:
+        if "." in field:
+            parent, child = field.split(".", 1)
+            container = character.get(parent) or {}
+            value = container.get(child) if isinstance(container, Mapping) else None
+        else:
+            value = character.get(field)
+        if value:
+            found.append(field)
+    return found
+
+
+def _warn_ignored_fields(character: Mapping[str, Any]) -> None:
+    """Say ONCE, per character, which authored fields never reach the model."""
+    dropped = ignored_populated_fields(character)
+    if not dropped:
+        return
+    key = (str(character.get("name") or ""), tuple(dropped))
+    if key in _warned_ignored_fields:
+        return
+    _warned_ignored_fields.add(key)
+    logger.warning(
+        "character %r populates %s, which the persona block does NOT render "
+        "(rendered fields: %s + style.%s). Those values are stored but never "
+        "reach the model — move the voice you want into bio/lore/style.",
+        key[0] or "<unnamed>", ", ".join(dropped),
+        ", ".join(f for f in RENDERED_FIELDS if f != "style"),
+        "/style.".join(RENDERED_STYLE_BUCKETS),
+    )
 
 
 def _as_lines(value: Any) -> list:
@@ -31,6 +87,12 @@ def render_persona_block(character: Optional[Mapping[str, Any]]) -> str:
     if not character or not isinstance(character, Mapping):
         return ""
 
+    # Log-only; the returned block is byte-identical either way (F5).
+    try:
+        _warn_ignored_fields(character)
+    except Exception:  # pragma: no cover - a warning must never break a session
+        pass
+
     name = str(character.get("name") or "").strip()
     bio = " ".join(_as_lines(character.get("bio"))).strip()
     adjectives = [a.strip() for a in _as_lines(character.get("adjectives")) if a.strip()]
@@ -39,7 +101,7 @@ def render_persona_block(character: Optional[Mapping[str, Any]]) -> str:
     style = character.get("style") or {}
     style_lines: list = []
     if isinstance(style, Mapping):
-        for key in ("all", "chat", "speaking"):
+        for key in RENDERED_STYLE_BUCKETS:
             style_lines.extend(_as_lines(style.get(key)))
     else:
         style_lines.extend(_as_lines(style))

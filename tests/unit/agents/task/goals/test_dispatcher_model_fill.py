@@ -22,7 +22,7 @@ async def test_run_goal_fills_default_model_when_payload_has_none(tmp_path):
 
     captured = {}
 
-    async def _fake_run(task_agent, *, user_id, request, autonomous=False):
+    async def _fake_run(task_agent, *, user_id, request, autonomous=False, **_kw):
         captured.update(request)
         from agents.task.runtime.run_outcome import RunOutcome
         return RunOutcome(session_id="sess-1", status="ok")

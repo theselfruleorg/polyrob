@@ -43,6 +43,10 @@ def test_own_ops_root_is_status_page_when_unauthenticated(own_ops_client):
     assert 'id="new-session-btn"' not in resp.text
     # Positive confirmation this response is actually the status page.
     assert "status-page" in resp.text
+    # 2026-09-16 audit (A): a stranger is not shown the owner's destinations.
+    assert 'class="nav-link"' not in resp.text
+    for href in ('href="/inbox"', 'href="/work"', 'href="/money"', 'href="/agent"'):
+        assert href not in resp.text, href
 
 
 def test_own_ops_status_json_endpoint(own_ops_client):

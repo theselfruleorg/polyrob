@@ -80,6 +80,32 @@ def _update_forged_turn_marker(orchestrator, messages: List[Dict[str, Any]]) -> 
             pass
 
 
+def _update_turn_reply_to(orchestrator, messages: List[Dict[str, Any]]) -> None:
+    """044 T10 fix round 1: recompute the room reply-anchor from this drained
+    batch, at the SAME per-drain seam the forged-turn marker (above) and the
+    reply latch (``core.surfaces.turn_reply.reset_turn``) are recomputed at —
+    never "set once, cleared somewhere else", so no path can leave a stale
+    anchor behind.
+
+    The anchor rides ON THE MESSAGE (``metadata['reply_to']``, stamped by the
+    harness only onto a message that actually entered the queue — a rejected
+    "queue full" submission never reaches here, so a busy-path race can never
+    set a stale anchor). A plain STEER message with no anchor, a self-wake, or
+    an async-delegation reentry (none of which carry ``reply_to``) therefore
+    CLEARS any anchor left over from an earlier room trigger — closing both
+    "persists indefinitely" and "an autonomous continuation reuses it".
+
+    An empty batch changes nothing (mirrors ``_update_forged_turn_marker``:
+    a mid-turn step with no new messages keeps whatever the turn already had).
+    Fail-open: an unreadable orchestrator/messages shape just leaves the
+    anchor as it was.
+    """
+    if orchestrator is None or not messages:
+        return
+    last_meta = messages[-1].get("metadata") or {}
+    orchestrator._turn_reply_to = last_meta.get("reply_to")
+
+
 def _stamp_delegation_deliveries(agent, messages: List[Dict[str, Any]]) -> None:
     """T1.6 review fix (CRITICAL finding): stamp ``delivered_at`` for any
     drained message that is an async-delegation completion or a cold-start
@@ -138,6 +164,25 @@ class UserIngressMixin:
             _update_forged_turn_marker(getattr(self, 'orchestrator', None), messages)
         except Exception:
             pass
+
+        # C1 (communication contract): a drained batch IS the start of a turn, so
+        # clear the per-turn reply latch here — the same seam, and for the same
+        # reason, as the forged-turn marker above: recomputed at the drain rather
+        # than "set once and cleared somewhere else", so no exception path can
+        # leave a stale latch that silences the next turn's `done`. Fail-open.
+        if messages:
+            try:
+                from core.surfaces.turn_reply import reset_turn
+                reset_turn(getattr(self, 'orchestrator', None))
+            except Exception:
+                pass
+
+            # 044 T10 fix round 1: recompute the room reply-anchor from this
+            # batch, fail-open (never let this break message delivery).
+            try:
+                _update_turn_reply_to(getattr(self, 'orchestrator', None), messages)
+            except Exception:
+                pass
 
         # T1.6 review fix: stamp delivered_at for any drained delegation-result /
         # completed-undelivered-recovery message. Must run here (the drain

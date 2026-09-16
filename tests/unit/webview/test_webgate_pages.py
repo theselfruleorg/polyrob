@@ -22,6 +22,8 @@ def _router_client():
     import webview.pages as pages
     app = FastAPI()
     app.include_router(pages.router)
+    # 043 phase 5: pages.router carries the /api/webgate/* endpoints (and the one
+    # surviving page, /pending). The WEBVIEW_UI legacy switch was removed.
     return TestClient(app), pages
 
 
@@ -87,10 +89,12 @@ def test_memory_endpoint_fail_open_no_provider(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Goals endpoint — reuses GoalBoard.list()
+# Goals endpoint — reuses GoalBoard.list_recent()/status_counts()/asks()
+# (A16/B1: never GoalBoard.list() — the dispatcher's priority-ordered claim
+# queue, forbidden as a "what is on my board" view per AGENTS.md).
 # --------------------------------------------------------------------------- #
 
-def test_goals_endpoint_calls_goalboard_list(monkeypatch):
+def test_goals_endpoint_calls_goalboard_list_recent(monkeypatch):
     client, pages = _router_client()
     monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: True))
 
@@ -102,9 +106,20 @@ def test_goals_endpoint_calls_goalboard_list(monkeypatch):
         def __init__(self, db_path, **kw):
             listed["db_path"] = db_path
 
-        def list(self, *, user_id=None, status=None, limit=100):
+        def list(self, *a, **k):
+            raise AssertionError("GoalBoard.list() must never back a view (B1/B2)")
+
+        def list_recent(self, *, user_id=None, statuses=None, limit=30):
             listed["user_id"] = user_id
             return [Goal(id="g1", user_id=user_id or "rob", title="ship it", status="ready")]
+
+        def status_counts(self, *, user_id=None):
+            listed["counts_user_id"] = user_id
+            return {"ready": 1}
+
+        def asks(self, *, user_id=None, status=None):
+            listed["asks_status"] = status
+            return []
 
     monkeypatch.setattr(pages, "GoalBoard", FakeBoard)
     r = client.get("/api/webgate/goals")
@@ -113,8 +128,11 @@ def test_goals_endpoint_calls_goalboard_list(monkeypatch):
     assert body["enabled"] is True
     assert body["goals"][0]["id"] == "g1"
     assert body["goals"][0]["title"] == "ship it"
+    assert body["counts"] == {"ready": 1}
+    assert body["asks"] == []
     assert listed["user_id"]  # tenant-scoped
     assert listed["db_path"].endswith("goals.db")
+    assert listed["asks_status"] == "open"
 
 
 def test_goals_endpoint_disabled_flag(monkeypatch):
@@ -211,36 +229,23 @@ def test_cron_endpoint_reports_read_error(monkeypatch):
     assert "cron.db unreadable" in body["error"]
 
 
-def test_memory_page_shows_backend_error_banner(monkeypatch):
-    """A failed backend CONSTRUCTION renders "memory backend unavailable:
-    <reason>" on the page instead of an indistinguishable empty list."""
+def test_goals_endpoint_reports_read_error(monkeypatch):
+    """A raising goal board yields enabled:True, goals/counts/asks empty PLUS
+    ``error`` — mirrors ``test_cron_endpoint_reports_read_error`` (B1/B2)."""
     client, pages = _router_client()
-    monkeypatch.setattr(pages, "_memory_provider_status",
-                        lambda: (None, "sqlite-vec missing"))
-    r = client.get("/memory")
+    monkeypatch.setattr(pages.AutonomyConfig, "goals_enabled", staticmethod(lambda: True))
+    monkeypatch.setattr(pages, "GoalBoard", _boom("goals.db unreadable"))
+    r = client.get("/api/webgate/goals")
     assert r.status_code == 200
-    assert "memory backend unavailable" in r.text
-    assert "sqlite-vec missing" in r.text
+    body = r.json()
+    assert body["enabled"] is True
+    assert body["goals"] == [] and body["counts"] == {} and body["asks"] == []
+    assert "goals.db unreadable" in body["error"]
 
 
-def test_memory_page_no_banner_when_backend_ok(monkeypatch):
-    client, pages = _router_client()
-    monkeypatch.setattr(pages, "_memory_provider_status", lambda: (None, None))
-    r = client.get("/memory")
-    assert r.status_code == 200
-    assert "memory backend unavailable" not in r.text
-
-
-def test_autonomy_page_shows_cron_check_error(monkeypatch):
-    """A raising cron-enablement CHECK renders "cron check unavailable" on the
-    page instead of the (false) "Cron disabled" empty state."""
-    client, pages = _router_client()
-    monkeypatch.setattr(pages, "_cron_enabled_status",
-                        lambda: (False, "ImportError: tools.cronjob_tools"))
-    r = client.get("/autonomy")
-    assert r.status_code == 200
-    assert "cron check unavailable" in r.text
-    assert "tools.cronjob_tools" in r.text
+# 043 §9 phase 4: the /memory PAGE (and its backend-error banner) is deleted —
+# recall now lives on the new Agent destination's Memory tab over
+# /api/webgate/memory + /api/webgate/memory/search (unchanged, tested below).
 
 
 # --------------------------------------------------------------------------- #
@@ -272,29 +277,10 @@ def test_identity_endpoint_null_when_absent(monkeypatch):
     assert body["self"] is None
 
 
-def test_identity_page_shows_avatar_by_default(monkeypatch, tmp_path):
-    """No preferences.toml at all -> fail-open default True -> avatar block renders."""
-    client, pages = _router_client()
-    monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(pages, "_effective_user_id", lambda request: "u1")
-    r = client.get("/identity")
-    assert r.status_code == 200
-    assert 'id="agent-avatar"' in r.text
-
-
-def test_identity_page_hides_avatar_when_pref_false(monkeypatch, tmp_path):
-    """Task 8: ui.show_avatar=false (owner-UX prefs) removes the avatar block
-    (and its probe script) from the rendered identity page entirely."""
-    from core import prefs
-    client, pages = _router_client()
-    monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
-    monkeypatch.setattr(pages, "_effective_user_id", lambda request: "u1")
-    ok, err = prefs.write_preference(tmp_path, "u1", "ui.show_avatar", False, "polyrob")
-    assert ok, err
-    r = client.get("/identity")
-    assert r.status_code == 200
-    assert 'id="agent-avatar"' not in r.text
-    assert "/pfp.json" not in r.text
+# 043 §9 phase 4: the /identity PAGE (and its avatar block / ui.show_avatar
+# gating) is deleted — the persona/avatar now render on the new Agent
+# destination's Identity tab over /api/webgate/identity + /pfp.json (the endpoint
+# tests above stay). The read-only-endpoint invariant below is unchanged.
 
 
 def test_identity_has_no_write_path(monkeypatch):
@@ -343,7 +329,9 @@ def test_doctor_endpoint_matches_real_report():
 # Pages render 200 in single-user mode (via the real server, P1 reload pattern)
 # --------------------------------------------------------------------------- #
 
-@pytest.mark.parametrize("path", ["/memory", "/autonomy", "/identity", "/system"])
+# 043 §9 phase 4: /memory, /identity, /system pages deleted; /pending is the
+# surviving legacy webgate page that renders on the real server.
+@pytest.mark.parametrize("path", ["/pending"])
 def test_pages_render_200_single_user(monkeypatch, path):
     server = _reload_server(monkeypatch, multitenant=False)
     client = TestClient(server._fastapi)
@@ -364,7 +352,7 @@ def test_api_endpoints_mounted_on_server(monkeypatch):
     client = TestClient(server._fastapi)
     for p in ("/api/webgate/memory", "/api/webgate/goals", "/api/webgate/cron",
               "/api/webgate/identity", "/api/webgate/doctor",
-              "/memory", "/autonomy", "/identity", "/system"):
+              "/pending"):
         assert client.get(p).status_code != 404, f"{p} not mounted on _fastapi"
 
 

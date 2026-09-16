@@ -165,9 +165,13 @@ def test_goal_unknown_verb_lists_the_verbs(env):
 # /wallet — read-only by design
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _bound_wallet_owner(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
+
 def test_wallet_disabled_says_so(monkeypatch):
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
-    out = owner_ops.wallet_reply([])
+    out = owner_ops.wallet_reply(["balances"], user_id="u1")
     assert "not enabled" in out.lower() or "unavailable" in out.lower()
 
 
@@ -187,7 +191,7 @@ def test_wallet_reply_never_writes_caps(monkeypatch):
         address = "0xabc"
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
-    out = owner_ops.wallet_reply([])
+    out = owner_ops.wallet_reply(["balances"], user_id="u1")
     assert "$2.00/tx" in out and "$100.00" in out
     assert "/config set budget.wallet_daily_usd" in out
     assert "set-cap" not in out
@@ -206,7 +210,7 @@ def test_wallet_flags_an_unlimited_daily_cap(monkeypatch):
         address = "0xabc"
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
-    out = owner_ops.wallet_reply([])
+    out = owner_ops.wallet_reply(["balances"], user_id="u1")
     assert "UNLIMITED" in out and "catastrophic-loss ceiling" in out
 
 
@@ -231,9 +235,9 @@ def test_wallet_skips_network_reads_unless_asked(monkeypatch):
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
     monkeypatch.setattr("core.wallet.onchain.balances", lambda a, c, **k: (1.0, 2.0))
-    owner_ops.wallet_reply([])
+    owner_ops.wallet_reply([], user_id="u1")
     assert probes == []
-    owner_ops.wallet_reply(["balances"])
+    owner_ops.wallet_reply(["balances"], user_id="u1")
     assert probes == ["treasury", "x402"]
 
 
@@ -249,8 +253,8 @@ async def test_invoices_empty_names_the_tenant_it_searched(monkeypatch):
         return []
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _none)
-    out = await owner_ops.invoices_reply("gleb", [])
-    assert "No invoices" in out and "gleb" in out
+    out = await owner_ops.invoices_reply("alice", [])
+    assert "No invoices" in out and "alice" in out
 
 
 @pytest.mark.asyncio
@@ -263,7 +267,7 @@ async def test_invoices_lists_and_caps(monkeypatch):
         return rows
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
-    out = await owner_ops.invoices_reply("gleb", [])
+    out = await owner_ops.invoices_reply("alice", [])
     assert "25 invoice(s)" in out
     assert out.count("• ") == owner_ops._LIST_LIMIT
     assert "+15 more" in out
@@ -272,7 +276,7 @@ async def test_invoices_lists_and_caps(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_invoices_rejects_an_unknown_status(monkeypatch):
-    out = await owner_ops.invoices_reply("gleb", ["paid"])
+    out = await owner_ops.invoices_reply("alice", ["paid"])
     assert "Usage:" in out
 
 
@@ -291,7 +295,7 @@ async def test_settle_resolves_a_short_id_and_settles(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
-    out = await owner_ops.settle_reply("gleb", ["inv-abc", "0xdeadbeef"])
+    out = await owner_ops.settle_reply("alice", ["inv-abc", "0xdeadbeef"])
     assert "Settled" in out
     assert settled == {"id": "inv-abc123", "tx": "0xdeadbeef"}
 
@@ -302,7 +306,7 @@ async def test_settle_only_sees_this_tenants_pending_rows(monkeypatch):
         return []
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
-    out = await owner_ops.settle_reply("gleb", ["inv-abc"])
+    out = await owner_ops.settle_reply("alice", ["inv-abc"])
     assert "no match" in out and "PENDING" in out
 
 
@@ -316,5 +320,5 @@ async def test_settle_reports_a_refused_transition(monkeypatch):
 
     monkeypatch.setattr("modules.x402.invoicing.list_payment_requests", _rows)
     monkeypatch.setattr("modules.x402.invoicing.settle_payment_request", _settle)
-    out = await owner_ops.settle_reply("gleb", ["inv-1"])
+    out = await owner_ops.settle_reply("alice", ["inv-1"])
     assert "not settled" in out

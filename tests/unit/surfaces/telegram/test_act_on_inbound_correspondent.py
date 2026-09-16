@@ -18,7 +18,7 @@ class _TaskAgent:
         self.started = []
 
     async def deliver_correspondent_data(self, session_id, source, text, metadata=None,
-                                         *, surface=None):
+                                         *, surface=None, group=False):
         self.calls.append((session_id, source, text, surface))
         return True
 

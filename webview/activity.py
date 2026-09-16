@@ -31,8 +31,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.templating import Jinja2Templates
+from fastapi.responses import JSONResponse
 
 from core import event_kinds as ek
 from webview import webgate
@@ -41,39 +40,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
-def _templates() -> Jinja2Templates:
-    """Same asset base as server.py/pages.py (packaged dir, repo fallback)."""
-    try:
-        from core.assets import webgate_asset_dir
-        templates_dir = webgate_asset_dir() / "templates"
-    except Exception:  # fail-open to the repo checkout
-        templates_dir = Path(__file__).resolve().parent / "templates"
-    return Jinja2Templates(directory=str(templates_dir))
-
-
-_TEMPLATES = _templates()
-_TEMPLATES.env.globals["console_display_name"] = webgate.console_display_name
-_TEMPLATES.env.globals["branding"] = webgate.branding_config
-# Posture default for the layout's tenant-nav block (P0-3) — same global as
-# server.py's/pages.py's envs.
-_TEMPLATES.env.globals["is_multitenant_posture"] = webgate.is_multitenant
-try:
-    from core.version import get_version
-    _TEMPLATES.env.globals["get_version"] = get_version
-except Exception:
-    _TEMPLATES.env.globals["get_version"] = lambda: ""
-# Own-ops Logout visibility (030 S5) — same globals as server.py's/pages.py's
-# envs: the layout shows a Logout link for the authenticated own_ops owner.
-# Defensive import matching this module's standalone-friendly style; the
-# fallback reads the same request.state field the helper does (C4 contract).
-_TEMPLATES.env.globals["is_own_ops_posture"] = webgate.is_own_ops
-try:
-    from utils.auth_utils import is_authenticated as _request_is_authenticated
-except Exception:
-    def _request_is_authenticated(request) -> bool:
-        return getattr(getattr(request, "state", None), "authenticated", False)
-_TEMPLATES.env.globals["request_is_authenticated"] = _request_is_authenticated
 
 # Feed kinds that are pure token-stream noise in a global terminal. They stay
 # visible in the per-session view; the global stream drops them.
@@ -288,13 +254,17 @@ def normalize_db_event(source: str, row: Dict[str, Any]) -> Dict[str, Any]:
     if source == "goal":
         payload = _parse_json_field(row.get("payload"))
         payload.setdefault("goal_id", row.get("goal_id"))
+        if row.get("goal_title") and not payload.get("title"):
+            payload["title"] = row.get("goal_title")
         _ensure_goal_title(payload)
         kind = f"goal_{row.get('kind', 'event')}"
         return {
             "id": f"goal:{row.get('id')}",
             "ts": float(row.get("created_at") or 0.0),
             "source": "goal",
-            "user_id": str(payload.get("user_id") or ""),
+            # The payload's own tenant first; else the joined goal owner
+            # (``goal_events_tail``). An empty tenant is dropped by the Log.
+            "user_id": str(payload.get("user_id") or row.get("goal_user_id") or ""),
             "session_id": str(payload.get("session_id") or ""),
             "kind": kind,
             "summary": summarize(kind, payload),
@@ -343,10 +313,17 @@ class SqliteTail:
     starts delivering when the file appears.
     """
 
-    def __init__(self, db_path: str, table: str, id_col: str = "id"):
+    def __init__(self, db_path: str, table: str, id_col: str = "id",
+                 select: Optional[str] = None, where_col: Optional[str] = None):
+        """``select`` is an optional ``SELECT … FROM …`` head (no WHERE / ORDER)
+        so a tail can JOIN the row's owner in — ``goal_events`` carries no
+        ``user_id`` and the tenant lives on ``goals``. ``where_col`` qualifies
+        the id column for that head (``e.id``); the row KEY stays ``id_col``."""
         self.db_path = str(db_path)
         self.table = table
         self.id_col = id_col
+        self.select = select or f"SELECT * FROM {table}"
+        self.where_col = where_col or id_col
         self.cursor = 0
 
     def _query(self, sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
@@ -364,18 +341,49 @@ class SqliteTail:
         except Exception:
             self.cursor = 0
 
-    def poll(self, limit: int = 500) -> List[Dict[str, Any]]:
+    def _select(self, tail_sql: str, params: tuple) -> List[Dict[str, Any]]:
+        """Run the tail's select; when a JOINED select fails (the joined table
+        is absent on this DB), fall back to the plain table so the tail still
+        delivers. A missing DB/table is an empty list, never an error."""
+        plain = f"SELECT * FROM {self.table}"
         try:
-            rows = self._query(
-                f"SELECT * FROM {self.table} WHERE {self.id_col} > ? "
-                f"ORDER BY {self.id_col} ASC LIMIT ?",
-                (self.cursor, limit),
-            )
+            return self._query(f"{self.select} {tail_sql}", params)
+        except Exception:
+            if self.select == plain:
+                return []
+        try:
+            return self._query(
+                f"{plain} {tail_sql.replace(self.where_col, self.id_col)}", params)
         except Exception:
             return []
+
+    def poll(self, limit: int = 500) -> List[Dict[str, Any]]:
+        rows = self._select(
+            f"WHERE {self.where_col} > ? ORDER BY {self.where_col} ASC LIMIT ?",
+            (self.cursor, limit))
         if rows:
             self.cursor = int(rows[-1][self.id_col])
         return rows
+
+    def recent(self, limit: int) -> List[Dict[str, Any]]:
+        """The newest *limit* rows, newest first — the cold-backfill read, over
+        the SAME select the live tail uses so both carry the same columns."""
+        return self._select(f"ORDER BY {self.where_col} DESC LIMIT ?", (limit,))
+
+
+def goal_events_tail(db_path: str) -> SqliteTail:
+    """The ``goals.db::goal_events`` tail, with the goal's OWNER joined in.
+
+    ``goal_events`` has no ``user_id`` column and its payloads do not carry one,
+    so without this join every goal event normalised to ``user_id=""`` and the
+    tenant-scoped Work › Log dropped the whole goal board (2026-09-16 audit, B2).
+    ``goal_title`` rides along so the summary needs no second lookup."""
+    return SqliteTail(
+        db_path, "goal_events", "id",
+        select=("SELECT e.*, g.user_id AS goal_user_id, g.title AS goal_title "
+                "FROM goal_events e LEFT JOIN goals g ON g.id = e.goal_id"),
+        where_col="e.id",
+    )
 
 
 def _data_dir() -> str:
@@ -406,7 +414,7 @@ def activity_db_sources() -> List[Tuple[str, SqliteTail]]:
     )
     return [
         ("telemetry", SqliteTail(tel, "telemetry_events")),
-        ("goal", SqliteTail(os.path.join(_data_dir(), "goals.db"), "goal_events")),
+        ("goal", goal_events_tail(os.path.join(_data_dir(), "goals.db"))),
         ("skill", SqliteTail(os.path.join(_data_dir(), "skill_usage.db"), "skill_install_audit")),
     ]
 
@@ -584,7 +592,13 @@ def _require_activity_access(request: Request) -> None:
     - own_ops → the auth middleware already required the single owner's
       cookie for any non-public path, which /activity is — nothing extra;
     - multitenant → admin tier / is_admin / the instance owner ONLY. A plain
-      authenticated tenant is refused: this page shows everyone's activity.
+      authenticated tenant gets **404**: this page shows everyone's activity, so
+      for a tenant it is not a page they may not USE, it is a page that is not
+      part of their console at all. 403 said "it exists, you are not allowed" —
+      the console's own posture rule (043 W13, and every posture-gated page in
+      ``posture_routes.py``) is that an out-of-posture surface is ABSENT, and
+      the answer must not differ from the flag-off one either, or the pair
+      becomes an existence oracle.
     """
     if not webgate.activity_enabled():
         raise HTTPException(status_code=404, detail="Activity stream disabled")
@@ -597,7 +611,7 @@ def _require_activity_access(request: Request) -> None:
         is_admin = bool(getattr(state, "is_admin", False))
         if is_admin or tier == "admin" or (user_id and user_id == webgate.local_owner_id()):
             return
-        raise HTTPException(status_code=403, detail="Owner/admin access required")
+        raise HTTPException(status_code=404, detail="Activity stream disabled")
     return  # own_ops: single-owner model (H2b)
 
 
@@ -648,25 +662,11 @@ def _cold_backfill(limit: int) -> List[Dict[str, Any]]:
     """Backfill when the hub buffer is cold: recent DB rows + recent feeds."""
     events: List[Dict[str, Any]] = []
     for source, tail in activity_db_sources():
-        try:
-            rows = tail._query(
-                f"SELECT * FROM {tail.table} ORDER BY {tail.id_col} DESC LIMIT ?",
-                (min(limit, 100),),
-            )
-        except Exception:
-            continue
+        rows = tail.recent(min(limit, 100))
         events.extend(normalize_db_event(source, row) for row in reversed(rows))
     events.extend(_recent_feed_events())
     events.sort(key=lambda ev: ev.get("ts", 0.0))
     return events[-limit:]
-
-
-@router.get("/activity", response_class=HTMLResponse)
-async def activity_page(request: Request) -> Any:
-    _require_activity_access(request)
-    return _TEMPLATES.TemplateResponse(request, "activity.html",
-        {"request": request, "read_only": webgate.read_only()},
-    )
 
 
 @router.get("/api/activity/backfill")

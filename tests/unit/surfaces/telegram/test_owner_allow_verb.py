@@ -32,7 +32,7 @@ class _Agent:
         self.container = _Container(data_dir)
 
 
-def _cmd(command, text, user="gleb"):
+def _cmd(command, text, user="alice"):
     src = SessionSource("telegram", "555", "dm")
     inbound = InboundMessage(text=text,
                              identity=Identity(user_id=user, source=src, raw_user_id="555"))
@@ -42,7 +42,7 @@ def _cmd(command, text, user="gleb"):
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
     return tmp_path
@@ -59,7 +59,7 @@ async def test_allow_refused_for_non_owner(env):
                                _cmd("/allow", "/allow telegram 555", user="u_stranger"))
     assert "owner" in out.lower()
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    assert store.is_allowed("gleb", "telegram", "555") is False
+    assert store.is_allowed("alice", "telegram", "555") is False
     assert store.is_allowed("u_stranger", "telegram", "555") is False
 
 
@@ -68,32 +68,32 @@ async def test_allow_by_owner_grants_target(env):
     out = await act_on_inbound(_Agent(str(env)), _cmd("/allow", "/allow telegram 555"))
     assert "allow" in out.lower()
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    assert store.is_allowed("gleb", "telegram", "555") is True
+    assert store.is_allowed("alice", "telegram", "555") is True
 
 
 @pytest.mark.asyncio
 async def test_deny_by_owner_revokes_target(env):
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    store.allow("gleb", "telegram", "555")
+    store.allow("alice", "telegram", "555")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/deny", "/deny telegram 555"))
     assert "denied" in out.lower() or "revoked" in out.lower()
-    assert store.is_allowed("gleb", "telegram", "555") is False
+    assert store.is_allowed("alice", "telegram", "555") is False
 
 
 @pytest.mark.asyncio
 async def test_deny_refused_for_non_owner(env):
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    store.allow("gleb", "telegram", "555")
+    store.allow("alice", "telegram", "555")
     out = await act_on_inbound(_Agent(str(env)),
                                _cmd("/deny", "/deny telegram 555", user="u_stranger"))
     assert "owner" in out.lower()
-    assert store.is_allowed("gleb", "telegram", "555") is True
+    assert store.is_allowed("alice", "telegram", "555") is True
 
 
 @pytest.mark.asyncio
 async def test_allowlist_lists_for_owner(env):
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    store.allow("gleb", "telegram", "555", note="team")
+    store.allow("alice", "telegram", "555", note="team")
     out = await act_on_inbound(_Agent(str(env)), _cmd("/allowlist", "/allowlist"))
     assert "555" in out
 
@@ -107,7 +107,7 @@ async def test_allowlist_empty_for_owner(env):
 @pytest.mark.asyncio
 async def test_allowlist_refused_for_non_owner(env):
     store = OutboundAllowlist(os.path.join(str(env), "surfaces.db"))
-    store.allow("gleb", "telegram", "555")
+    store.allow("alice", "telegram", "555")
     out = await act_on_inbound(_Agent(str(env)),
                                _cmd("/allowlist", "/allowlist", user="u_stranger"))
     assert "owner" in out.lower()

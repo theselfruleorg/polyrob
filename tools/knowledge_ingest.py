@@ -13,9 +13,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -30,6 +28,7 @@ from core.security.secret_guard import (
     estimate_tokens_rough,
 )
 from core.path_safety import is_within_root
+from core.security.confined_read import read_confined_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +101,7 @@ def _iter_files(
 
     Returns ``(files, skipped)`` where ``skipped`` maps reason→count.
     Prefers ``rg --files`` for gitignore-aware traversal; falls back to
-    ``os.walk`` skipping hidden dirs and ``__pycache__``.
+    bounded ``scandir`` traversal skipping hidden dirs and ``__pycache__``.
 
     Hard-skips:
     - ``is_secret_path`` (credentials / env files)
@@ -113,34 +112,18 @@ def _iter_files(
     skipped: Dict[str, int] = {
         "secret": 0,
         "binary": 0,
+        "unsafe": 0,
         "max_files": 0,
         "max_bytes": 0,
     }
 
-    # Collect candidate paths ------------------------------------------------
-    candidates: List[Path] = []
+    from tools.knowledge_inventory import walk_files
 
-    if recursive:
-        # Try rg --files for .gitignore awareness
-        rg_paths = _rg_files(root)
-        if rg_paths is not None:
-            candidates = rg_paths
-        else:
-            # Fallback: os.walk, skip hidden dirs + __pycache__
-            for dirpath, dirnames, filenames in os.walk(str(root)):
-                # Prune hidden dirs and __pycache__ in-place
-                dirnames[:] = [
-                    d for d in dirnames
-                    if not d.startswith(".") and d != "__pycache__"
-                ]
-                for fname in filenames:
-                    candidates.append(Path(dirpath) / fname)
-    else:
-        # Non-recursive: direct children only
-        try:
-            candidates = [p for p in root.iterdir() if p.is_file()]
-        except OSError:
-            pass
+    inventory = _rg_files(root) if recursive else None
+    if inventory is None:
+        inventory = walk_files(root, recursive=recursive)
+    candidates, capped = inventory
+    skipped["inventory_limit"] = int(capped)
 
     # Apply glob filters if requested ----------------------------------------
     if globs:
@@ -157,17 +140,15 @@ def _iter_files(
     total_bytes = 0
 
     for path in candidates:
+        if path.is_symlink():
+            skipped['unsafe'] += 1
+            continue
         if not path.is_file():
             continue
 
         # Secret hard-skip
         if is_secret_path(path, root=root):
             skipped["secret"] += 1
-            continue
-
-        # Binary hard-skip (don't hard-skip .pdf — extractable)
-        if is_binary_file(path):
-            skipped["binary"] += 1
             continue
 
         # File count cap
@@ -184,51 +165,47 @@ def _iter_files(
             skipped["max_bytes"] += 1
             continue
 
+        try:
+            snapshot = read_confined_bytes(path, root, max_bytes - total_bytes)
+        except OSError:
+            skipped['unsafe'] += 1
+            continue
+        # Binary candidates consume the read budget too; otherwise a directory
+        # of rejected files could cause unbounded aggregate I/O.
+        total_bytes += len(snapshot)
+        if is_binary_file(path, sample=snapshot):
+            skipped['binary'] += 1
+            continue
         collected.append(path)
-        total_bytes += fsize
 
     return collected, skipped
 
 
-def _rg_files(root: Path) -> Optional[List[Path]]:
-    """Run ``rg --files <root>`` and return the paths, or None if unavailable."""
-    try:
-        result = subprocess.run(
-            ["rg", "--files", str(root)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        if result.returncode != 0:
-            return None
-        paths = []
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if line:
-                p = Path(line)
-                if not p.is_absolute():
-                    p = root / p
-                paths.append(p)
-        return paths
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return None
+def _rg_files(root: Path):
+    from tools.knowledge_inventory import rg_files
+    return rg_files(root)
 
 
-async def _extract_text(path: Path) -> Tuple[Optional[str], Optional[str]]:
+async def _extract_text(path: Path, content: Optional[bytes] = None) -> Tuple[Optional[str], Optional[str]]:
     """Extract text from *path*.
 
     Returns ``(text, skip_reason)`` — exactly one of the two is ``None``.
 
-    - ``.pdf`` → direct ``await PdfExtractionMixin._process_pdf(content)``
-      (sync ``_extract_pdf_direct`` fallback only if the mixin raises / imports fail)
-    - text / code extensions → ``path.read_text(errors='replace')``
+    - PDF/DOCX → bounded parser subprocess; no in-process fallback
+    - text / code extensions → decode the bounded byte snapshot
     - office formats → ``(None, "office-skip")`` — no parser yet (Task 19)
     """
+    if content is None:
+        content = read_confined_bytes(path, path.parent, _kb_max_bytes())
     suffix = path.suffix.lower()
 
     # .docx — extract via python-docx (fail-open: if lib absent → skip-with-note)
     if suffix == _DOCX_EXTENSION:
-        text = _extract_docx(path)
+        from tools.document_parser import parse_document_async
+        try:
+            text = (await parse_document_async('docx', content))['content']
+        except Exception:
+            text = None
         if text is None:
             return None, f"office-skip:{suffix}"
         return text, None
@@ -240,8 +217,7 @@ async def _extract_text(path: Path) -> Tuple[Optional[str], Optional[str]]:
     # PDF extraction (async — directly await the mixin, no sync-from-async bridge)
     if suffix == ".pdf":
         try:
-            content_bytes = path.read_bytes()
-            text = await _extract_pdf_text(content_bytes)
+            text = await _extract_pdf_text(content)
             if text:
                 return text, None
             return None, "pdf-empty"
@@ -251,95 +227,25 @@ async def _extract_text(path: Path) -> Tuple[Optional[str], Optional[str]]:
 
     # Plain text / code
     try:
-        text = path.read_text(errors="replace")
+        text = content.decode("utf-8", errors="replace")
         return text, None
     except OSError as e:
         return None, f"read-error:{type(e).__name__}"
 
 
 async def _extract_pdf_text(content_bytes: bytes) -> str:
-    """Async adapter over ``PdfExtractionMixin._process_pdf``.
+    from tools.document_parser import parse_document_async
+    return (await parse_document_async('pdf', content_bytes))['content']
 
-    Directly ``await``s the (async) mixin from within the running loop — no
-    ``run_coroutine_sync`` bridge.  Falls back to the SYNC ``_extract_pdf_direct``
-    only if the mixin raises or its import fails.
-    """
+
+def _extract_docx(path: Path, content: Optional[bytes] = None) -> Optional[str]:
+    """Compatibility sync adapter, using the same bounded document worker."""
+    from tools.document_parser import parse_document
     try:
-        from tools.filesystem_pdf import PdfExtractionMixin
-        mixin = PdfExtractionMixin()
-        # _process_pdf reads self.logger / self.container — provide minimal stand-ins.
-        mixin.logger = logging.getLogger("knowledge_ingest.pdf")  # type: ignore[attr-defined]
-        mixin.container = None  # type: ignore[attr-defined]
-        result = await mixin._process_pdf(content_bytes)
-        return result.get("content", "")
-    except Exception as e:
-        logger.debug("PDF mixin extraction failed, using direct fallback: %s", e)
-        return _extract_pdf_direct(content_bytes)
-
-
-def _extract_pdf_direct(content_bytes: bytes) -> str:
-    """SYNC-only fallback PDF extraction using pypdf directly.
-
-    Used only when ``_process_pdf`` raises or its import fails.  No event-loop
-    detection, no ``run_coroutine_sync``.
-    """
-    try:
-        import pypdf  # type: ignore
-        from io import BytesIO
-        reader = pypdf.PdfReader(BytesIO(content_bytes), strict=False)
-        texts = []
-        for page in reader.pages:
-            try:
-                t = page.extract_text()
-                if t:
-                    texts.append(t)
-            except Exception:
-                pass
-        return "\n\n".join(texts)
-    except Exception as e:
-        logger.debug("Direct PDF extraction failed: %s", e)
-        return ""
-
-
-def _extract_docx(path: Path) -> Optional[str]:
-    """Extract plain text from a ``.docx`` file via ``python-docx``.
-
-    Lazy import — if ``python-docx`` is not installed, returns ``None`` so
-    the caller skips the file with-note (fail-open, never an error).
-
-    Paragraph text is joined with ``\\n``; table cell text is appended after
-    paragraphs so tables aren't silently dropped.
-
-    Any extraction error (corrupt file, unexpected docx layout) also returns
-    ``None`` (fail-open, logged at DEBUG).
-    """
-    try:
-        import docx as _docx  # python-docx; import name is 'docx'
-    except ImportError:
-        logger.debug("python-docx not installed; skipping %s", path)
-        return None
-
-    try:
-        doc = _docx.Document(str(path))
-        parts: list[str] = []
-
-        # Body paragraphs
-        for para in doc.paragraphs:
-            text = para.text
-            if text.strip():
-                parts.append(text)
-
-        # Table cells (flattened, row-major)
-        for table in doc.tables:
-            for row in table.rows:
-                for cell in row.cells:
-                    cell_text = cell.text.strip()
-                    if cell_text:
-                        parts.append(cell_text)
-
-        return "\n".join(parts) if parts else ""
-    except Exception as e:
-        logger.debug("docx extraction failed for %s: %s", path, e)
+        if content is None:
+            content = read_confined_bytes(path, path.parent, _kb_max_bytes())
+        return parse_document('docx', content)['content']
+    except Exception:
         return None
 
 
@@ -537,8 +443,7 @@ async def kb_ingest(
     ``None`` the behavior is byte-identical to before (on-disk path is the source).
     """
     from modules.memory.registry import (
-        kb_ingest_chunk as _kb_ingest_chunk,
-        kb_remove as _kb_remove,
+        kb_replace_source as _kb_replace_source,
         kb_source_hash as _kb_source_hash,
     )
 
@@ -575,9 +480,6 @@ async def kb_ingest(
         if is_secret_path(resolved, root=allowed_root):
             walk_skipped["secret"] += 1
             files = []
-        elif is_binary_file(resolved):
-            walk_skipped["binary"] += 1
-            files = []
         else:
             # Byte cap also applies to a single file — never read an unbounded file
             # into memory (the directory walk caps cumulative size; this caps the
@@ -589,8 +491,8 @@ async def kb_ingest(
             except OSError:
                 files = []
     elif resolved.is_dir():
-        files, walk_skipped = _iter_files(
-            resolved,
+        files, walk_skipped = await asyncio.to_thread(
+            _iter_files, resolved,
             recursive=recursive,
             globs=globs,
             max_files=_kb_max_files(),
@@ -621,7 +523,8 @@ async def kb_ingest(
         "skipped_office": 0,
         # oversized single file ("too_large") + oversized files in a dir walk ("max_bytes")
         "skipped_too_large": walk_skipped.get("too_large", 0) + walk_skipped.get("max_bytes", 0),
-        "failed": 0,
+        "failed": walk_skipped.get("unsafe", 0),
+        "inventory_limited": walk_skipped.get("inventory_limit", 0),
     }
 
     target_tokens = _kb_chunk_tokens()
@@ -631,6 +534,7 @@ async def kb_ingest(
     # walk has many distinct sources). Ignore it for multi-file walks.
     use_source_name = source_name if (source_name and len(files) == 1) else None
 
+    remaining_bytes = _kb_max_bytes()
     for fpath in files:
         source_path_str = use_source_name or str(fpath)
 
@@ -638,9 +542,19 @@ async def kb_ingest(
         # synchronous CPU/IO that would otherwise stall every other session during a
         # bulk ingest.
         try:
-            file_hash = await asyncio.to_thread(_read_and_hash, fpath)
+            if is_secret_path(fpath, root=allowed_root):
+                counts['skipped_secret'] += 1
+                continue
+            snapshot = await asyncio.to_thread(
+                read_confined_bytes, fpath, allowed_root, remaining_bytes)
+            remaining_bytes -= len(snapshot)
+            if is_binary_file(fpath, sample=snapshot):
+                counts['skipped_binary'] += 1
+                continue
+            file_hash = hashlib.sha256(snapshot).hexdigest()
         except OSError as e:
             logger.warning("Cannot read %s: %s", fpath, e)
+            counts["failed"] += 1
             continue
 
         # Check existing hash via registry
@@ -654,16 +568,8 @@ async def kb_ingest(
             counts["unchanged"] += 1
             continue
 
-        # If changed (or new): remove old chunks, re-ingest
-        if existing_hash is not None:
-            await _kb_remove(
-                user_id=user_id,
-                collection=collection,
-                source=source_path_str,
-            )
-
         # Extract text
-        text, skip_reason = await _extract_text(fpath)
+        text, skip_reason = await _extract_text(fpath, content=snapshot)
         if text is None:
             if skip_reason and skip_reason.startswith("office-skip"):
                 counts["skipped_office"] += 1
@@ -678,40 +584,15 @@ async def kb_ingest(
         if not chunks:
             continue
 
-        # Ingest each chunk
+        # The provider publishes chunks + hash/count atomically. Never remove
+        # the last good source before a replacement transaction commits.
         mime = "application/pdf" if fpath.suffix.lower() == ".pdf" else "text/plain"
-        created_at = datetime.now(timezone.utc).isoformat()
-
-        file_ok = True
-        for idx, chunk_text in enumerate(chunks):
-            ok = await _kb_ingest_chunk(
-                user_id=user_id,
-                collection=collection,
-                source_path=source_path_str,
-                source_hash=file_hash,
-                chunk_idx=idx,
-                content=chunk_text,
-                mime=mime,
-                created_at=created_at,
-            )
-            # A provider that returns False signals a real write failure (None from a
-            # legacy/no-op provider is treated as success — unchanged behavior).
-            if ok is False:
-                file_ok = False
-                break
-
-        if not file_ok:
-            # Don't leave the file half-ingested with a current source hash (a re-run
-            # would skip it as "unchanged" and never recover the dropped chunks).
-            # Remove the partial source so the next ingest retries from scratch.
-            try:
-                await _kb_remove(
-                    user_id=user_id,
-                    collection=collection,
-                    source=source_path_str,
-                )
-            except Exception as e:
-                logger.debug("partial-ingest cleanup failed for %s: %s", fpath, e)
+        ok = await _kb_replace_source(
+            user_id=user_id, collection=collection, source_path=source_path_str,
+            source_hash=file_hash, chunks=chunks, mime=mime,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if not ok:
             counts["failed"] += 1
             continue
 
@@ -719,11 +600,6 @@ async def kb_ingest(
         counts["n_chunks"] += len(chunks)
 
     return counts
-
-
-def _read_and_hash(path: Path) -> str:
-    """Read file bytes and return their sha256 hex digest (runs in a worker thread)."""
-    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def _resolve_confinement_root(session_id: str, user_id: str) -> Path:

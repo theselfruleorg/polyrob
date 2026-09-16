@@ -171,7 +171,7 @@ def test_dash_y_shorthand_everywhere_yes_exists():
 def owner_env(monkeypatch, tmp_path):
     from core.instance import DEFAULT_INSTANCE_ID
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "gleb")
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", DEFAULT_INSTANCE_ID)
     return tmp_path
 
@@ -185,7 +185,7 @@ def test_owner_pending_json(owner_env):
 
     SelfContextWriter(owner_env).propose(
         "Learned: surface blockers to the owner proactively.",
-        user_id="gleb", created_by=PROVENANCE_AGENT, pending=True)
+        user_id="alice", created_by=PROVENANCE_AGENT, pending=True)
     res = _run(owner, ["pending", "--json"])
     items = json.loads(res.stdout)
     assert len(items) == 1
@@ -200,7 +200,7 @@ def test_owner_asks_json(owner_env):
     assert json.loads(res.stdout) == []
 
     board = GoalBoard(str(owner_env / "goals.db"))
-    board.create_ask(user_id="gleb", what="Need an API key for X",
+    board.create_ask(user_id="alice", what="Need an API key for X",
                      why="blocked on credentials", force=True)
     res = _run(owner, ["asks", "--json"])
     rows = json.loads(res.stdout)

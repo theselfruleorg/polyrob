@@ -12,6 +12,17 @@ import time
 logger = logging.getLogger("modules.x402.settlement_watcher")
 
 class SettlementNotifyMixin:
+    #: 046 Phase 1 seams for the room-action branch, declared HERE because this
+    #: is what uses them. A settled ``room_action`` invoice bought an EFFECT,
+    #: not a session's attention, so it routes to
+    #: `core.surfaces.room_actions.apply` instead of a self-wake — which needs a
+    #: container (for the offer store) and an async performer (for the chat
+    #: call). Assigned after construction by whoever wires the watcher.
+    #:
+    #: ⚠️ Absent, the branch records a CREDIT rather than pretending it applied.
+    _room_container: Any = None
+    _room_moderator: Any = None
+
     async def _deliver_session_notice(self, inv: dict, text: str, kind_hint: str) -> bool:
         """Session-side delivery shared by settlement and expiry (B10, 2026-08-29).
 
@@ -65,6 +76,13 @@ class SettlementNotifyMixin:
                   "amount_usd": inv.get("amount_usd"),
                   "transaction_hash": inv.get("transaction_hash"),
               })
+        # 046: a room-action invoice bought an EFFECT, not a session's
+        # attention. There is no session to wake and no owner to prompt to
+        # "continue the work this payment was for" — actuate it instead.
+        if (inv.get("kind") or "") == "room_action":
+            await self._apply_room_action(inv)
+            return
+
         amount = float(inv.get("amount_usd") or 0)
         text = (
             f"Payment request {inv['request_id']} has SETTLED: "
@@ -94,6 +112,139 @@ class SettlementNotifyMixin:
         await self._push_owner_notice(inv.get("user_id") or "", owner_text,
                                       source="x402_invoice",
                                       session_id=inv.get("session_id") or None)
+
+    async def _apply_room_action(self, inv: dict) -> None:
+        """Actuate what a settled room-action invoice bought (046 Phase 1).
+
+        ⚠️ Fail-open, and never silent. The money HAS arrived, so the offer is
+        marked ``paid`` FIRST — if this process dies before the effect lands,
+        the row still says paid and the obligation is visible rather than lost.
+        A failure inside `apply` writes a CREDIT of its own; a failure to reach
+        `apply` at all leaves the row at ``paid``, which the status snapshot and
+        the next tick can both still see.
+        """
+        from modules.x402.invoicing import _emit
+
+        offer_id = str((inv.get("room_action") or {}).get("offer_id") or "")
+        _emit("payment_settled", user_id=inv.get("user_id") or "",
+              session_id="", attrs={
+                  "request_id": inv["request_id"],
+                  "amount_usd": inv.get("amount_usd"),
+                  "transaction_hash": inv.get("transaction_hash"),
+                  "kind": "room_action", "offer_id": offer_id})
+        if not offer_id:
+            logger.warning("settlement watcher: room_action invoice %s carries "
+                           "no offer_id — the payment is recorded but nothing "
+                           "names what it bought", inv.get("request_id"))
+            return
+        container = getattr(self, "_room_container", None)
+        if container is None:
+            container = getattr(getattr(self, "task_agent", None),
+                                "container", None)
+        try:
+            from core.surfaces import room_actions
+            if not room_actions.mark_settled(container, offer_id):
+                # ⚠️ `mark_settled` is now `pending -> paid` and ONLY that. A
+                # payment against an EXPIRED (or withdrawn) offer used to
+                # resurrect the row and apply an effect we had already told the
+                # payer would not happen. Report it instead of acting on it.
+                await self._report_late_room_payment(inv, offer_id)
+                return
+            result = await room_actions.apply(
+                container, offer_id,
+                perform_fn=getattr(self, "_room_moderator", None))
+        except Exception:
+            logger.warning("settlement watcher: room action %s could not be "
+                           "applied (the offer stays PAID and shows as owed)",
+                           offer_id, exc_info=True)
+            return
+        await self._deliver_room_action_result(inv, offer_id, result)
+
+    async def _report_late_room_payment(self, inv: dict, offer_id: str) -> None:
+        """A payment arrived for an offer that is no longer open.
+
+        ⚠️ Money we now HOLD against nothing. It is an owner notice, and it is
+        also said in the ROOM — the payer is in the room, not in the owner's DM,
+        and silence would read as "it worked".
+        """
+        text = (f"⚠️ A payment arrived for offer {offer_id}, which is no longer "
+                f"open. Nothing was applied. The owner has been notified and "
+                f"will sort it out.")
+        await self._post_to_room(offer_id, text)
+        await self._push_owner_notice(
+            inv.get("user_id") or "",
+            f"Paid room action {offer_id} was PAID after it stopped being open "
+            f"(invoice {inv.get('request_id')}). Nothing was applied and the "
+            f"money is held.", source="room_actions", session_id=None)
+
+    async def _post_to_room(self, offer_id: str, text: str) -> bool:
+        """Put *text* in the room the offer belongs to. Never raises.
+
+        ⚠️ This is the link that did not exist: a SUCCESSFUL effect was only
+        `logger.info`, so the room — and the payer, who is only in the room —
+        learned nothing at all. Rides the ONE outbound rail
+        (`message_router`), cap-exempt because a receipt for money already
+        taken is an obligation, not chatter.
+        """
+        try:
+            container = (getattr(self, "_room_container", None)
+                         or getattr(getattr(self, "task_agent", None),
+                                    "container", None))
+            if container is None:
+                return False
+            from core.surfaces.room_action_store import OfferStore, store_path
+            from core.surfaces.room_actions import _data_dir
+            row = OfferStore(store_path(_data_dir(container))).get(offer_id)
+            if row is None:
+                return False
+            router = container.get_service("message_router")
+            if router is None:
+                logger.warning("room action %s: no message_router — the room "
+                               "cannot be told (%s)", offer_id, text[:80])
+                return False
+            # ⚠️ Addressed by (surface, chat_id), NOT by a synthesized session
+            # key. A room's live key carries its real `chat_type` (`supergroup`
+            # for most Telegram rooms), so a key built here would miss the
+            # binding — and this is out-of-band delivery anyway, the same shape
+            # `cron/delivery.py` uses, which also means it is not subject to the
+            # room's hourly reply cap. A receipt for money already taken is an
+            # obligation, not chatter.
+            ok = await router.send_message(str(row.chat_id), text,
+                                           surface_id=row.surface)
+            if not ok:
+                logger.warning("room action %s: the room could not be told",
+                               offer_id)
+            return bool(ok)
+        except Exception:
+            logger.warning("room action %s: posting to the room failed",
+                           offer_id, exc_info=True)
+            return False
+
+    async def _deliver_room_action_result(self, inv: dict, offer_id: str,
+                                          result) -> None:
+        """Put the receipt (or the honest failure) where the room can read it,
+        and raise a failure to the owner.
+
+        ⚠️ A credit is money we HOLD against an undelivered service, so it is an
+        owner notice, not a log line.
+        """
+        try:
+            text = getattr(result, "text", "") or ""
+            # ⚠️ Both outcomes go to the ROOM. A success used to be a log line
+            # only, so nobody present ever learned the effect landed; a failure
+            # went to the OWNER, who is not the person owed a service.
+            await self._post_to_room(offer_id, text)
+            if getattr(result, "ok", False):
+                logger.info("room action %s applied: %s", offer_id, text)
+                return
+            await self._push_owner_notice(
+                inv.get("user_id") or "",
+                f"Paid room action {offer_id} could not be applied — a credit "
+                f"is owed. {text}", source="room_actions", session_id=None)
+        except Exception:
+            logger.warning("settlement watcher: could not deliver the room "
+                           "action outcome for %s", offer_id, exc_info=True)
+
     async def _notify_expired(self, inv: dict) -> None:
         """Non-payment escalation (G-22): the session-side notice (correspondent
         DATA or an owner self-wake — the SAME rails :meth:`_notify` uses) PLUS an

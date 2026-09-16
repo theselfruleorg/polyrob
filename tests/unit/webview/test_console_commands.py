@@ -67,3 +67,56 @@ def test_session_creating_verbs_pass_through(srv, monkeypatch, tmp_path):
 def test_no_in_process_agent_passes_through(srv, monkeypatch):
     monkeypatch.setattr(srv, "_in_process_task_agent", lambda: None)
     assert asyncio.run(srv._maybe_handle_console_command("s", "rob", "/status")) is None
+
+
+# ---------------------------------------------------------------------------
+# 043 A10/A45: the console's own /help does not advertise verbs it can't run
+# (the chat box short-circuits /task and /new to None — see the test above —
+# so /help listing them would just move the dead end into the help text).
+# ---------------------------------------------------------------------------
+
+def test_console_help_excludes_task_and_new(srv, monkeypatch, tmp_path):
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help"))
+    assert reply is not None
+    assert "/task <goal>" not in reply
+    for line in reply.splitlines():
+        assert not line.startswith("/new ")
+
+
+def test_console_help_new_answers_not_available(srv, monkeypatch, tmp_path):
+    from webview.console_commands import _CONSOLE_HELP_UNAVAILABLE
+
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help new"))
+    assert reply == _CONSOLE_HELP_UNAVAILABLE
+
+
+def test_console_help_task_answers_not_available(srv, monkeypatch, tmp_path):
+    from webview.console_commands import _CONSOLE_HELP_UNAVAILABLE
+
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: _Agent(str(tmp_path)))
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "rob", "/help task"))
+    assert reply == _CONSOLE_HELP_UNAVAILABLE
+
+
+def test_console_cancel_permitted_for_a_non_owner_on_their_own_session(srv, monkeypatch, tmp_path):
+    """A10: the shared /cancel gate must not regress the console's existing
+    contract — the mutating route already checked `current_user_id ==
+    session_owner_id` before ``_maybe_handle_console_command`` is ever
+    reached (webview/server.py), so a non-owner here is always acting on
+    their OWN session and must still be able to cancel it."""
+    class _AgentWithCancel(_Agent):
+        def __init__(self, d):
+            super().__init__(d)
+            self.cancelled = []
+
+        async def cancel_session_by_id(self, session_id, force=False):
+            self.cancelled.append(session_id)
+            return True
+
+    fake = _AgentWithCancel(str(tmp_path))
+    monkeypatch.setattr(srv, "_in_process_task_agent", lambda: fake)
+    reply = asyncio.run(srv._maybe_handle_console_command("sess1", "u_stranger", "/cancel"))
+    assert reply == "Task cancelled."
+    assert fake.cancelled == ["sess1"]

@@ -77,7 +77,7 @@ def test_mcp_enabled_default_on_under_autonomous(monkeypatch):
 
     from modules.eip8004.registration import build_registration_file
     reg = build_registration_file(base_url="http://localhost:9000")
-    names = {ep.name for ep in reg.endpoints}
+    names = {ep.name for ep in reg.services}
     assert "MCP" in names
 
 
@@ -86,7 +86,7 @@ def test_mcp_enabled_stays_off_supervised(monkeypatch):
     monkeypatch.delenv("MCP_ENABLED", raising=False)
     from modules.eip8004.registration import build_registration_file
     reg = build_registration_file(base_url="http://localhost:9000")
-    names = {ep.name for ep in reg.endpoints}
+    names = {ep.name for ep in reg.services}
     assert "MCP" not in names
 
 

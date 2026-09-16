@@ -208,11 +208,11 @@
 }
 
 .model-dropdown-option:hover {
-    background: rgba(86, 194, 255, 0.08);
+    background: var(--color-accent-blue-wash-08);
 }
 
 .model-dropdown-option.selected {
-    background: rgba(86, 194, 255, 0.12);
+    background: var(--color-accent-blue-wash-12);
     color: var(--color-accent-blue);
     position: relative;
     padding-left: 24px;
@@ -255,14 +255,14 @@
 
 .model-indicator-price {
     color: var(--color-accent-yellow);
-    background: rgba(226, 192, 112, 0.2);
-    border: 1px solid rgba(226, 192, 112, 0.3);
+    background: var(--color-accent-yellow-wash-20);
+    border: 1px solid var(--color-accent-yellow-wash-30);
 }
 
 .model-indicator-context {
     color: var(--color-accent-purple);
-    background: rgba(213, 128, 255, 0.2);
-    border: 1px solid rgba(213, 128, 255, 0.3);
+    background: var(--color-accent-purple-wash-20);
+    border: 1px solid var(--color-accent-purple-wash-30);
 }
 
 /* Selected model display */
@@ -437,7 +437,7 @@
 }
 
 .config-advanced-header:hover {
-    background: rgba(86, 194, 255, 0.05);
+    background: var(--color-accent-blue-wash-05);
 }
 
 .config-advanced-title {
@@ -490,7 +490,7 @@
 
 .config-advanced-body .config-checkbox-item:hover {
     border-color: var(--color-accent-blue);
-    background: rgba(86, 194, 255, 0.05);
+    background: var(--color-accent-blue-wash-05);
 }
 
 .config-advanced-body .config-checkbox-item input[type="checkbox"] {
@@ -570,7 +570,7 @@
 
 /* Error Display */
 .config-error {
-    background: rgba(239, 68, 68, 0.1);
+    background: var(--color-accent-red-wash-10);
     border: 1px solid var(--color-accent-red);
     border-radius: 4px;
     padding: 12px;

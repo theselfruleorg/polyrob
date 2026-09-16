@@ -23,8 +23,8 @@ body {
     right: 0;
     height: 24px;
     overflow: hidden;
-    background: #000;
-    border-bottom: 1px solid rgba(86, 226, 194, 0.15);
+    background: var(--color-bg-primary);
+    border-bottom: 1px solid var(--color-accent-green-wash-15);
     z-index: 100;
 }
 
@@ -37,7 +37,7 @@ body {
 }
 
 .ticker-track span {
-    color: #555;
+    color: var(--color-border-strong);
     font-size: 10px;
     letter-spacing: 1px;
 }
@@ -97,14 +97,14 @@ body {
     margin-bottom: 4px;
 }
 
-.logo-ottmachin {
+.logo-wordmark {
     font-size: 7px;
 }
 
 /* Character press effect */
 .char {
     display: inline-block;
-    text-shadow: 1px 1px 0 rgba(0, 30, 25, 1);
+    text-shadow: 1px 1px 0 var(--color-bg-elevated);
     transition: transform 50ms, text-shadow 50ms, opacity 50ms;
 }
 
@@ -125,7 +125,7 @@ body {
 
 .features li {
     font-size: 11px;
-    color: #666;
+    color: var(--color-text-secondary);
     letter-spacing: 1px;
     position: relative;
     padding-left: 14px;
@@ -159,7 +159,7 @@ body {
 
 .btn-connect:hover:not(:disabled) {
     background: var(--color-accent-green);
-    color: #000;
+    color: var(--color-on-accent);
 }
 
 .btn-connect:active:not(:disabled) {
@@ -175,7 +175,7 @@ body {
 .spinner {
     width: 10px;
     height: 10px;
-    border: 2px solid rgba(86, 226, 194, 0.3);
+    border: 2px solid var(--color-accent-green-wash-30);
     border-top-color: var(--color-accent-green);
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
@@ -197,27 +197,27 @@ body {
 .status:empty { display: none; }
 
 .status--error {
-    background: rgba(255, 80, 80, 0.08);
-    border: 1px solid rgba(255, 80, 80, 0.25);
-    color: #f66;
+    background: var(--color-accent-red-wash-08);
+    border: 1px solid var(--color-accent-red-wash-25);
+    color: var(--color-accent-red);
 }
 
 .status--success {
-    background: rgba(86, 226, 194, 0.08);
-    border: 1px solid rgba(86, 226, 194, 0.25);
+    background: var(--color-accent-green-wash-08);
+    border: 1px solid var(--color-accent-green-wash-25);
     color: var(--color-accent-green);
 }
 
 .status--info {
-    background: rgba(86, 180, 255, 0.08);
-    border: 1px solid rgba(86, 180, 255, 0.25);
-    color: #6af;
+    background: var(--color-accent-blue-wash-08);
+    border: 1px solid var(--color-accent-blue-wash-25);
+    color: var(--color-accent-blue);
 }
 
 /* === FOOTER === */
 .terminal-footer {
     flex-shrink: 0;
-    background: rgba(40, 45, 50, 0.8);
+    background: var(--color-surface-tint-wash-80);
     color: var(--color-text-secondary);
     padding: 2px 15px;
     padding-bottom: calc(2px + env(safe-area-inset-bottom));
@@ -236,22 +236,22 @@ body {
 }
 
 .footer-link {
-    color: #666;
+    color: var(--color-text-secondary);
     text-decoration: none;
     transition: color 150ms;
 }
 
 .footer-link:hover { color: var(--color-accent-blue); }
 
-.footer-separator { color: #444; }
-.footer-center-text { color: #555; }
+.footer-separator { color: var(--color-border-strong); }
+.footer-center-text { color: var(--color-border-strong); }
 
 /* =============================================================================
    TABLET - smaller logo
    ============================================================================= */
 @media (max-width: 1024px) {
     .logo-rob { font-size: 14px; }
-    .logo-ottmachin { font-size: 6px; }
+    .logo-wordmark { font-size: 6px; }
     .hero { gap: 32px; }
 }
 
@@ -278,7 +278,7 @@ body {
         margin-bottom: 8px;
     }
 
-    .logo-ottmachin {
+    .logo-wordmark {
         font-size: 5px;
     }
 
@@ -305,12 +305,12 @@ body {
 /* Large phones - bigger POLYROB */
 @media (min-width: 400px) and (max-width: 768px) {
     .logo-rob { font-size: 16px; }
-    .logo-ottmachin { font-size: 6px; }
+    .logo-wordmark { font-size: 6px; }
 }
 
 /* Small phones */
 @media (max-width: 380px) {
     .logo-rob { font-size: 12px; }
-    .logo-ottmachin { font-size: 4px; }
+    .logo-wordmark { font-size: 4px; }
     .features li { font-size: 9px; }
 }

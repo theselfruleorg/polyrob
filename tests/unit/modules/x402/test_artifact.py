@@ -101,3 +101,82 @@ def test_zero_amount_atomic_is_zero(monkeypatch):
     inv = dict(_INVOICE, amount_usd=0)
     art = build_payment_artifact(inv)
     assert "uint256=0" in art["pay_uri"]
+
+
+# --- 046 Phase 0: the URI and the pay text read the invoice's own asset ------
+
+def _inv(**kw):
+    base = dict(request_id="inv_1", amount_usd=1.25, chain="base",
+                recipient="0x" + "11" * 20, purpose="p",
+                expires_at_epoch=9_999_999_999)
+    base.update(kw)
+    return base
+
+
+def test_the_eip681_uri_names_the_invoices_own_token_and_chain_id(monkeypatch):
+    monkeypatch.setenv("INVOICE_QR_STYLE", "eip681")
+    from modules.x402.artifact import build_payment_artifact
+    uri = build_payment_artifact(_inv(
+        chain="robinhood", asset_id="rob", asset_address="0x" + "bb" * 20,
+        asset_decimals=18, amount_raw=7 * 10 ** 18, amount_usd=0.5,
+    ))["pay_uri"]
+    assert uri.startswith("ethereum:0x" + "bb" * 20)
+    assert "@4663" in uri
+    assert f"uint256={7 * 10 ** 18}" in uri
+    assert ("address=0x" + "11" * 20) in uri
+
+
+def test_a_usdc_base_invoice_produces_the_uri_it_always_did(monkeypatch):
+    monkeypatch.setenv("INVOICE_QR_STYLE", "eip681")
+    from core.wallet.onchain import USDC_BASE_MAINNET
+    from modules.x402.artifact import build_payment_artifact
+    uri = build_payment_artifact(_inv(
+        asset_id="usdc-base", asset_address=USDC_BASE_MAINNET,
+        asset_decimals=6, amount_raw=1_250_000,
+    ))["pay_uri"]
+    assert uri == (f"ethereum:{USDC_BASE_MAINNET}@8453/transfer"
+                   f"?address={'0x' + '11' * 20}&uint256=1250000")
+
+
+def test_a_legacy_invoice_with_no_asset_columns_still_resolves_usdc(monkeypatch):
+    """⚠️ A pre-046 invoice dict has no asset keys. It must keep producing the
+    same URI, or an outstanding invoice's QR changes meaning mid-flight."""
+    monkeypatch.setenv("INVOICE_QR_STYLE", "eip681")
+    from core.wallet.onchain import USDC_BASE_MAINNET
+    from modules.x402.artifact import build_payment_artifact
+    uri = build_payment_artifact(_inv())["pay_uri"]
+    assert uri.startswith(f"ethereum:{USDC_BASE_MAINNET}@8453")
+    assert "uint256=1250000" in uri
+
+
+def test_the_address_style_is_unchanged_and_never_an_eip681_uri(monkeypatch):
+    monkeypatch.setenv("INVOICE_QR_STYLE", "address")
+    from modules.x402.artifact import build_payment_artifact
+    assert build_payment_artifact(_inv())["pay_uri"] == "0x" + "11" * 20
+
+
+def test_a_non_evm_invoice_falls_back_to_the_bare_address(monkeypatch):
+    """⚠️ EIP-681 is an EVM URI. Emitting one for a Solana invoice would hand a
+    payer a wallet link that resolves to nothing."""
+    monkeypatch.setenv("INVOICE_QR_STYLE", "eip681")
+    from modules.x402.artifact import build_payment_artifact
+    uri = build_payment_artifact(_inv(
+        chain="solana", recipient="SoLaNaAddr11111111111111111111111111111111",
+        asset_id="usdc-solana", asset_address="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        asset_decimals=6, amount_raw=1_250_000,
+    ))["pay_uri"]
+    assert uri == "SoLaNaAddr11111111111111111111111111111111"
+
+
+def test_the_pay_text_names_the_actual_token_not_always_usdc():
+    """⚠️ A ROB invoice that reads 'Pay $0.50 USDC' tells the payer to send the
+    wrong token."""
+    from modules.x402.artifact import build_payment_artifact
+    text = build_payment_artifact(_inv(
+        chain="robinhood", asset_id="rob", asset_symbol="ROB",
+        asset_address="0x" + "bb" * 20, asset_decimals=18,
+        amount_raw=7 * 10 ** 18, amount_usd=0.5,
+    ))["pay_text"]
+    assert "ROB" in text
+    assert "USDC" not in text
+    assert "7" in text          # the token amount, not only the USD figure

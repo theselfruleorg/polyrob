@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def _client(monkeypatch, tmp_path, user_id="gleb"):
+def _client(monkeypatch, tmp_path, user_id="alice"):
     import webview.pages as pages
     monkeypatch.setattr(pages, "_effective_user_id", lambda req: user_id)
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
@@ -21,7 +21,7 @@ def _client(monkeypatch, tmp_path, user_id="gleb"):
     return TestClient(app), pages
 
 
-def _seed_tool_approval_ask(tmp_path, user_id="gleb"):
+def _seed_tool_approval_ask(tmp_path, user_id="alice"):
     from agents.task.goals.board import GoalBoard
     board = GoalBoard(os.path.join(str(tmp_path), "goals.db"))
     ask = board.create_ask(
@@ -34,7 +34,7 @@ def _seed_tool_approval_ask(tmp_path, user_id="gleb"):
     return ask.id
 
 
-def _seed_pending_correspondent(tmp_path, user_id="gleb", surface="email",
+def _seed_pending_correspondent(tmp_path, user_id="alice", surface="email",
                                 address="third.party@example.com"):
     from core.surfaces.correspondents import CorrespondentRegistry
     registry = CorrespondentRegistry(os.path.join(str(tmp_path), "correspondents.db"))
@@ -102,7 +102,7 @@ def test_promote_correspondent_approves_via_registry(monkeypatch, tmp_path):
     r = client.post("/api/webgate/pending/correspondent/email:third.party@example.com/promote")
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    rows = registry.list(user_id="gleb")
+    rows = registry.list(user_id="alice")
     assert rows[0]["state"] == "active"
 
 
@@ -116,7 +116,7 @@ def test_reject_correspondent_flips_the_row_via_registry(monkeypatch, tmp_path):
     r = client.post("/api/webgate/pending/correspondent/email:third.party@example.com/reject")
     assert r.status_code == 200
     assert r.json()["ok"] is True
-    rows = registry.list(user_id="gleb")
+    rows = registry.list(user_id="alice")
     assert rows[0]["state"] == "expired"
 
 

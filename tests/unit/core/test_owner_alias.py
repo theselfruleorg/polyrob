@@ -97,18 +97,26 @@ def test_whatsapp_never_aliased_even_for_owner_value():
     assert owner_surface_alias(OWNER_TG, "whatsapp", env=OWNER_ENV) is None
 
 
-def test_alias_uses_instance_default_when_no_explicit_principal():
-    # Auto-derive: with ONLY the owner tg id configured (no explicit POLYROB_OWNER_USER_ID),
-    # the principal falls back to the instance id (DEFAULT_INSTANCE_ID), so the owner is
-    # still aliased. This is the whole point — the operator sets only POLYROB_OWNER_TELEGRAM_ID.
-    from core.instance import DEFAULT_INSTANCE_ID
+def test_alias_uses_the_owner_tenant_when_no_explicit_principal():
+    """Auto-derive: with ONLY the owner tg id configured (no explicit
+    POLYROB_OWNER_USER_ID) the owner is still aliased — that is the whole point, the
+    operator sets only POLYROB_OWNER_TELEGRAM_ID.
+
+    ⚠️ It aliases onto the owner TENANT (`local`) since 2026-09-15; it was the
+    INSTANCE id before, which meant the owner's Telegram DM ran under `polyrob` while
+    the REPL, goals, memory and console on the same box used `local` — the owner
+    talking to their own agent from the seat prod actually uses, in a tenant nothing
+    else read."""
+    from core.instance import resolve_owner_user_id
     env = {"POLYROB_OWNER_TELEGRAM_ID": OWNER_TG}
-    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == DEFAULT_INSTANCE_ID
+    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "local"
+    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == resolve_owner_user_id(env)
 
 
-def test_alias_uses_custom_instance_default():
+def test_alias_is_not_moved_by_a_named_instance():
+    """An instance name is not an owner tenant, so it must not re-key the owner's DM."""
     env = {"POLYROB_OWNER_TELEGRAM_ID": OWNER_TG, "POLYROB_INSTANCE_ID": "acme"}
-    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "acme"
+    assert owner_surface_alias(OWNER_TG, "telegram", env=env) == "local"
 
 
 def test_no_alias_without_owner_tg_id():

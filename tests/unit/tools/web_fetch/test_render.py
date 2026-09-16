@@ -36,3 +36,50 @@ def test_classify_html():
 
 def test_classify_binary():
 	assert classify_content("image/png", b"\x89PNG\r\n") == "binary"
+
+
+# --- D1: a JSON API answer is DATA, not "binary". -------------------------
+# Before this, classify_content mapped application/json to "binary" and the tool
+# answered "cannot render as markdown", so every keyless JSON API had to be
+# reached through a third-party text proxy (r.jina.ai) or through code_execution.
+
+def test_classify_json_is_text():
+	assert classify_content("application/json", b'{"a":1}') == "text"
+
+
+def test_classify_json_with_charset_is_text():
+	assert classify_content("application/json; charset=utf-8", b'{"a":1}') == "text"
+
+
+def test_classify_json_api_subtype_is_text():
+	assert classify_content("application/vnd.api+json", b'{"a":1}') == "text"
+
+
+def test_classify_plain_text_is_text_not_html():
+	# Plain text used to be routed through markdownify, which mangles it.
+	assert classify_content("text/plain; charset=utf-8", b"hello") == "text"
+
+
+def test_classify_csv_is_text():
+	assert classify_content("text/csv", b"a,b\n1,2") == "text"
+
+
+def test_classify_xml_is_text():
+	assert classify_content("application/xml", b"<rss/>") == "text"
+
+
+def test_classify_image_is_still_binary():
+	assert classify_content("image/png", b"\x89PNG\r\n") == "binary"
+
+
+def test_render_text_passes_body_through_verbatim():
+	from tools.web_fetch.render import render_text
+	body = '{"pairs":[{"liquidity":{"usd":123.45}}]}'
+	assert render_text(body) == body
+
+
+def test_render_text_truncates_with_the_same_marker():
+	from tools.web_fetch.render import render_text
+	out = render_text("x" * 1000, max_chars=100)
+	assert out.startswith("x" * 100)
+	assert "900 chars truncated" in out

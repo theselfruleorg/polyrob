@@ -228,6 +228,97 @@ class AgentConstructionMixin:
 			self.logger.debug(f"surface profile unresolved (non-fatal): {e}")
 			return None
 
+	def _room_policy(self):
+		"""The bound ROOM's ``chat.*`` overlay (044 T17), or None off a room.
+
+		A room's style is the ROOM's, not the owner's: his private
+		``style.tone``/``style.verbosity`` describe how he wants to be spoken to
+		in his DM, and a public room full of other humans is a different
+		audience. Resolved once at construction (session-stable, so the prompt
+		cache holds) and fail-open — an unreadable policy costs the room its
+		style, never the session.
+		"""
+		cached = getattr(self, "_room_policy_resolved", False)
+		if cached:
+			return self._room_policy_value
+		self._room_policy_resolved = True
+		self._room_policy_value = None
+		orch = getattr(self, "orchestrator", None)
+		try:
+			from core.surfaces.room_policy import is_public_session
+			if not is_public_session(orch):
+				return None
+			from core.runtime_paths import data_dir_or_home
+			from core.surfaces.binding import surface_profile
+			from core.surfaces.chat_policy import load_for_chat
+			profile = surface_profile(orch) or {}
+			chat_id = str(profile.get("chat_id") or "")
+			if not chat_id:
+				return None
+			_cfg = getattr(getattr(orch, "container", None), "config", None)
+			self._room_policy_value = load_for_chat(
+				data_dir_or_home(getattr(_cfg, "data_dir", None)),
+				str(profile.get("surface_id") or ""), chat_id)
+			return self._room_policy_value
+		except Exception as e:
+			self.logger.debug(f"room policy unresolved (non-fatal): {e}")
+			return None
+
+	def _room_style_block(self) -> str:
+		"""The ROOM's style line for SELF_CONTEXT (044 T17), or "".
+
+		A public session deliberately carries none of the owner's private
+		contract or style (they describe his DM, not a room full of other
+		humans), which left a room with no style line at all. This gives the room
+		its own — rendered by the SAME `core.prefs.render_style_line`, so a room
+		tone is validated, threat-scanned and formatted exactly like the owner's.
+		"""
+		policy = self._room_policy()
+		if policy is None:
+			return ""
+		try:
+			from core.prefs import render_style_line
+			fields = {}
+			if policy.verbosity:
+				fields["style.verbosity"] = policy.verbosity
+			if policy.language:
+				fields["style.language"] = policy.language
+			if policy.tone:
+				fields["style.tone"] = policy.tone
+			return render_style_line(fields) if fields else ""
+		except Exception as e:
+			self.logger.debug(f"room style line unresolved (non-fatal): {e}")
+			return ""
+
+	def _resolve_verbosity(self):
+		"""The reply-length budget for the <message-shape> block (C2).
+
+		In a ROOM the room's own ``chat.verbosity`` decides; everywhere else the
+		owner's ``style.verbosity`` pref does. ``core.prefs`` is the SSOT for the
+		VALUE in both cases; the prompt owns how it is spoken to the model.
+		Resolved once here (session-stable) so the system prompt stays
+		byte-identical across steps and the prompt cache holds. Returns None when
+		nothing is set — the prompt then uses its "normal" default and the build
+		is unchanged. Fail-open: a prefs fault must never break agent construction.
+		"""
+		try:
+			room = self._room_policy()
+			if room is not None and room.verbosity:
+				return str(room.verbosity)
+			from core.instance import resolve_instance_id
+			from core.prefs import load_preferences
+			from core.runtime_paths import data_dir_or_home
+			_container = getattr(getattr(self, "orchestrator", None), "container", None)
+			_cfg = getattr(_container, "config", None)
+			_data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
+			_uid = getattr(getattr(self, "orchestrator", None), "user_id", None)
+			prefs = load_preferences(_data_dir, _uid, resolve_instance_id())
+			value = prefs.get("style.verbosity")
+			return str(value) if value else None
+		except Exception as e:
+			self.logger.debug(f"verbosity pref unresolved (non-fatal): {e}")
+			return None
+
 	def _load_project_context(self) -> None:
 		"""Auto-load the frozen PROJECT_CONTEXT foundation message (C9, P7 finalization:
 		extracted from __init__).
@@ -236,6 +327,9 @@ class AgentConstructionMixin:
 		  - Server: loaded ONLY under project_context_server_mode(), then injected
 		    UNTRUSTED-WRAPPED (framed as DATA) since the repo may be one merely opened.
 		Fully fail-open — any error loads nothing. Server byte-identical by default."""
+		from core.surfaces.room_policy import is_public_session
+		if is_public_session(getattr(self, "orchestrator", None)):
+			return
 		try:
 			from agents.task.constants import AutonomyConfig, local_mode_enabled
 			from agents.task.agent.core.project_context import build_project_context_message
@@ -626,6 +720,7 @@ class AgentConstructionMixin:
 		self.agent_type = self.__class__.__name__
 		
 		self.use_native_tools = use_native_tools
+		self._requested_native_tools = use_native_tools
 		# Store timeout configuration with validation
 		self.step_timeout_seconds = step_timeout_seconds or 600
 		self.stall_timeout_seconds = stall_timeout_seconds or 600
@@ -719,6 +814,18 @@ class AgentConstructionMixin:
 					lambda: getattr(_orch, "container", None),
 					lambda: getattr(_orch, "user_id", "") or ""))
 			self.controller.register_pre_tool_call_hook(_gate, fail_mode="closed")
+
+		# 044 T5: the room gate — registered for EVERY session, decides per call
+		# from the orchestrator's PUBLIC flag, so a session that becomes room-bound
+		# is gated without a rebuild. Fail-closed.
+		if self.controller is not None and hasattr(self.controller, "register_pre_tool_call_hook"):
+			from core.surfaces.room_policy import is_public_session, make_room_gate_hook
+			from agents.task.agent.core.correspondent_gate import build_tool_resolver
+			_orch_room = self.orchestrator
+			self.controller.register_pre_tool_call_hook(
+				make_room_gate_hook(lambda: is_public_session(_orch_room),
+				                    resolve_tool=build_tool_resolver(self.controller)),
+				fail_mode="closed")
 
 		# ToolCallAdapter removed - functionality integrated into MessageManager and Registry
 		# (tool calls now flow through ToolCallBuilder + Registry).
@@ -1024,6 +1131,9 @@ class AgentConstructionMixin:
 			# G6: the bound chat surface's message cap / media capability, so the
 			# agent writes for the reader it actually has. None off a chat surface.
 			surface_profile=self._resolve_surface_profile(),
+			# C2: the owner's style.verbosity drives the ONE message-length budget
+			# in <message-shape>. None => the prompt's "normal" default.
+			verbosity=self._resolve_verbosity(),
 		)
 
 		# Agent-level provider label SSOT. The step-loop billing path reads
@@ -1073,20 +1183,24 @@ class AgentConstructionMixin:
 		try:
 			from core.instance import (load_self_context, load_self_doc,
 										load_owner_doc, resolve_instance_id)
+			from core.surfaces.room_policy import is_public_session
 			_container = getattr(getattr(self, "orchestrator", None), "container", None)
 			_cfg = getattr(_container, "config", None)
 			from core.runtime_paths import data_dir_or_home
 			_data_dir = data_dir_or_home(getattr(_cfg, "data_dir", None))
+			# 044 T4: a PUBLIC (room) session carries none of the owner tenant's
+			# private state — no SOUL, no owner facts, no evolving SELF doc.
+			_public = is_public_session(getattr(self, "orchestrator", None))
 			# SOUL tier (operator-only, instance-global) + the evolving SELF tier
 			# (agent-writable, per-(instance,user)). Both frozen at session start.
 			# load_self_doc applies the load-side [BLOCKED] guard; empty => omitted.
-			_soul = load_self_context(_data_dir)
+			_soul = "" if _public else load_self_context(_data_dir)
 			_uid = self.orchestrator.user_id if hasattr(self.orchestrator, "user_id") else None
-			_self_doc = load_self_doc(_data_dir, _uid, resolve_instance_id())
+			_self_doc = "" if _public else load_self_doc(_data_dir, _uid, resolve_instance_id())
 			# Bounded owner-facts doc (agent-maintained, per-(instance,user)): durable
 			# facts/preferences about the OWNER, injected after SOUL and before the
 			# evolving SELF doc. Load-side [BLOCKED] guard applies; empty => omitted.
-			_owner_doc = load_owner_doc(_data_dir, _uid, resolve_instance_id())
+			_owner_doc = "" if _public else load_owner_doc(_data_dir, _uid, resolve_instance_id())
 			if _owner_doc:
 				_owner_doc = "## Owner facts\n\n" + _owner_doc
 			# Owner-UX Phase 2: the owner-authored operating-contract doc
@@ -1098,7 +1212,7 @@ class AgentConstructionMixin:
 			_contract_block = ""
 			try:
 				from agents.task.constants import AutonomyConfig as _ContractAC
-				if _ContractAC.contract_doc_enabled():
+				if not _public and _ContractAC.contract_doc_enabled():
 					from core.instance import load_contract_doc
 					_contract_doc = load_contract_doc(_data_dir, _uid, resolve_instance_id())
 					if _contract_doc:
@@ -1109,6 +1223,9 @@ class AgentConstructionMixin:
 					_contract_block = "\n\n".join(p for p in (_contract_doc, _style_line) if p)
 			except Exception:
 				_contract_block = ""
+			# 044 T17: a ROOM gets the ROOM's style, never the owner's private one.
+			if _public:
+				_contract_block = self._room_style_block()
 			# WS-A + T1-13: the owner clause ("You act on behalf of OWNER X") renders
 			# whenever a DISTINCT owner principal resolves; the correspondent-DATA frame
 			# sentence stays gated on the three-tier access model being on. With no
@@ -1154,15 +1271,21 @@ class AgentConstructionMixin:
 		# only; a plain multi-tenant server session gets None => inert. Fail-open.
 		try:
 			from agents.task.agent.core.env_context import build_environment_context
+			from core.surfaces.room_policy import is_public_session
+			# 044 I5: a PUBLIC (room) session gets NO <environment> block. It names
+			# the host, the workspace path, the posture axes and the host
+			# executables — owner-tenant facts about the machine, pinned into the
+			# foundation of a session whose audience is a public room.
 			# `self` (the Agent) has no `tool_ids` attribute — only SystemPrompt and
 			# MessageManager do — so this read was always None and the
 			# "Tools loaded this session:" line has never once rendered. The loaded
 			# set comes from the controller, as it does everywhere else in this file.
-			_env_block = build_environment_context(
-				self.orchestrator.session_id,
-				getattr(self.orchestrator, "user_id", None),
-				tool_ids=(self.controller.list_tools() if self.controller else None),
-			)
+			_env_block = None if is_public_session(getattr(self, "orchestrator", None)) else \
+				build_environment_context(
+					self.orchestrator.session_id,
+					getattr(self.orchestrator, "user_id", None),
+					tool_ids=(self.controller.list_tools() if self.controller else None),
+				)
 			if _env_block:
 				self.message_manager.set_environment_message(_env_block)
 		except Exception as e:
@@ -1352,5 +1475,4 @@ class AgentConstructionMixin:
 			log_dir.mkdir(parents=True, exist_ok=True)
 			self.tool_output_log_path = log_dir / "tool_outputs.jsonl"
 			self.logger.debug(f"Tool output logging enabled: {self.tool_output_log_path}")
-
 

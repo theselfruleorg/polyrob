@@ -45,7 +45,7 @@ _AUTO_MIGRATE_NOTE = "(schema migrations apply automatically on the next start)"
 _MANUAL_STEPS = {
     EDITABLE_GIT: f"git pull --ff-only && pip install -e . && {_MIGRATE}",
     GIT: f"git pull --ff-only && pip install . && {_MIGRATE}",
-    PIP: f'pip install -U "polyrob[all]"  {_AUTO_MIGRATE_NOTE}',
+    PIP: f"python -m pip install -U polyrob  {_AUTO_MIGRATE_NOTE}",
     PIPX: f"pipx upgrade polyrob  {_AUTO_MIGRATE_NOTE}",
     DOCKER: "docker compose pull && docker compose up -d --build",
     UNKNOWN: "update via the package manager you installed POLYROB with "
@@ -238,9 +238,13 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     """Automated apply: snapshot → install → guarded-migrate → verify → auto-rollback."""
     ctx = detect_install()
     status = resolve_status(channel=channel, fetch=_http_get, source=_source_for(ctx))
+    if status.error is not None or status.latest is None:
+        msg = f"Cannot apply: {status.human_note}."
+        click.echo(_json.dumps({"applied": False, "reason": "check_failed",
+                               **status.as_dict()}) if as_json else msg)
+        sys.exit(EXIT_ERROR)
     if not status.update_available:
-        msg = ("Already up to date." if status.latest is not None
-               else f"Cannot apply: {status.human_note}.")
+        msg = "Already up to date."
         click.echo(_json.dumps({"applied": False, "reason": "no_update", **status.as_dict()})
                    if as_json else msg)
         sys.exit(EXIT_UP_TO_DATE)
@@ -306,7 +310,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
 
 @click.command("update")
 @click.option("--check", "check_only", is_flag=True,
-              help="Report current vs latest and exit (0 up-to-date, 10 if newer).")
+              help="Report current vs latest and exit (0 up-to-date, 10 newer, 1 unknown/error).")
 @click.option("--dry-run", is_flag=True, help="Print the update plan without changing anything.")
 @click.option("--channel", type=click.Choice(["stable", "pre", "git"]), default="stable",
               help="stable=latest release, pre=include prereleases, git=track branch.")
@@ -373,6 +377,8 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
 
     # --check: pure status, CI exit code.
     if check_only:
+        if status.error is not None or status.latest is None:
+            sys.exit(EXIT_ERROR)
         sys.exit(EXIT_UPDATE_AVAILABLE if status.update_available else EXIT_UP_TO_DATE)
 
     # Point at the automated path where it exists (git/editable installs have real

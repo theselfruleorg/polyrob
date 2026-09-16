@@ -347,6 +347,45 @@ class ToolExecutionFormatter(BaseFeedFormatter):
         }
 
 
+class ToolResultFormatter(BaseFeedFormatter):
+    """Formatter for the typed ``tool_result`` feed event (043 A16/A28).
+
+    The canonical shape for a ``tool_result`` event: a ``{kind, payload}`` render
+    + the artifact id, alongside the legacy ``result_preview``/``result_size``/
+    ``result_truncated``/``call_id`` the model and CLI fallback read. Registered so
+    a ``tool_result`` never falls through to ``GenericEventFormatter``. NOTE: the
+    hot path in ``tools/controller/execution.py`` writes this event straight to the
+    feed via ``SessionManager.add_to_feed`` (so ``?event_type=tool_result`` finds a
+    ``tool_result_*.json`` file); this formatter is the registry's SSOT for the
+    shape and formats the same event should it ever flow through the telemetry
+    service.
+    """
+
+    def format(self, event: BaseTelemetryEvent) -> Dict[str, Any]:
+        """Format a tool_result event for the feed."""
+        props = event.properties
+        return {
+            'type': 'tool_result',
+            'timestamp': time.time(),
+            'datetime': datetime.now().isoformat(),
+            'step': props.get('step', 0),
+            'data': {
+                'tool_name': props.get('tool_name', 'Unknown'),
+                'action_name': props.get('action_name', 'Unknown'),
+                'success': props.get('success', False),
+                'duration_seconds': props.get('duration_seconds', 0),
+                'error': props.get('error'),
+                'result_size': props.get('result_size'),
+                'result_truncated': props.get('result_truncated', False),
+                'result_preview': props.get('result_preview'),
+                'call_id': props.get('call_id'),
+                # A16: the typed render + the artifact link
+                'render': props.get('render'),
+                'artifact_id': props.get('artifact_id'),
+            }
+        }
+
+
 class RunEventFormatter(BaseFeedFormatter):
     """Formatter for 019 run-state span/wait events.
 
@@ -566,6 +605,7 @@ class FeedFormatterRegistry:
             'session_completion': SessionCompletionFormatter(),
             'controller_registered_functions': ControllerRegisteredFunctionsFormatter(),
             'tool_execution': ToolExecutionFormatter(),
+            'tool_result': ToolResultFormatter(),
             'error': ErrorFormatter(),
             # User message and queue status formatters for chat UI
             'user_message': UserMessageFormatter(),

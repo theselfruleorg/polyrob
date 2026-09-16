@@ -22,6 +22,12 @@ async def test_lifecycle_ping_is_held_while_paused(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_held_ping_is_durably_recorded(tmp_path, monkeypatch):
+    """A held LIFECYCLE ping is recorded on its attempt row, not in `/missed`.
+
+    2026-09-15 (C3): `/missed` is the owner's recovery channel for content they
+    still need; `▶ goal started` is ephemeral status and filled 822 of the 899
+    rows there. The attempt row carries the full text, so nothing is dropped.
+    """
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
     from core import autonomy_control as ac
@@ -29,10 +35,27 @@ async def test_held_ping_is_durably_recorded(tmp_path, monkeypatch):
     from core.surfaces.user_delivery import deliver_user_message
     ac.pause(str(tmp_path), scopes=("pings",), via="test")
     log = TelemetryEventLog(str(tmp_path / "t.db"))
-    out = await deliver_user_message(None, "rob", "▶ goal started", source="self_evolution",
+    out = await deliver_user_message(None, "rob", "▶ goal started", source="lifecycle",
                                      event_log=log)
     assert out == "paused"
-    notices = log.query(kind="owner_notice", user_id="rob")
-    assert notices and "[held by owner pause; source=self_evolution]" in (notices[0]["attrs"].get("text") or "")
+    assert log.query(kind="owner_notice", user_id="rob") == []
     deliveries = log.query(kind="user_delivery", user_id="rob")
     assert deliveries and deliveries[0]["attrs"]["outcome"] == "paused"
+    assert deliveries[0]["attrs"]["text"] == "▶ goal started"
+
+
+@pytest.mark.asyncio
+async def test_held_escalation_is_readable_in_missed(tmp_path, monkeypatch):
+    """A non-lifecycle hold still writes the owner_notice `/missed` renders."""
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr("core.runtime_paths.resolve_data_home", lambda: tmp_path)
+    from core import autonomy_control as ac
+    from core.event_log import TelemetryEventLog
+    from core.surfaces.user_delivery import deliver_user_message
+    ac.pause(str(tmp_path), scopes=("pings",), via="test")
+    log = TelemetryEventLog(str(tmp_path / "t.db"))
+    out = await deliver_user_message(None, "rob", "ask: need an API key",
+                                     source="goal_blocked", event_log=log)
+    assert out == "paused"
+    notices = log.query(kind="owner_notice", user_id="rob")
+    assert notices and "ask: need an API key" in (notices[0]["attrs"].get("text") or "")

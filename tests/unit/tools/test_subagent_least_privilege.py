@@ -43,9 +43,39 @@ def test_blocklist_env_empty_keeps_default(monkeypatch):
     assert get_blocked_child_tools() == DELEGATE_BLOCKED_TOOLS
 
 
-def test_blocklist_env_replaces(monkeypatch):
+def test_blocklist_env_only_adds(monkeypatch):
+    """M5 (2026-09-14): the env can ADD to the blocklist, never replace it.
+
+    It used to replace, so `DELEGATE_BLOCKED_TOOLS=my_tool` — which reads like
+    "also block this" — unblocked every money tool for a delegated leaf."""
     monkeypatch.setenv("DELEGATE_BLOCKED_TOOLS", " foo , bar ,")
-    assert get_blocked_child_tools() == frozenset({"foo", "bar"})
+    resolved = get_blocked_child_tools()
+    assert {"foo", "bar"} <= resolved
+    assert DELEGATE_BLOCKED_TOOLS <= resolved
+
+
+def test_money_tools_survive_an_env_override(monkeypatch):
+    """The invariant `MONEY_TOOLS <= blocklist` (test_gate_set_consistency)
+    must hold for the RESOLVED set, not just the constant — a replacing
+    override was the one way to break it at runtime with the suite green."""
+    from agents.task.runtime.metering_gate import MONEY_TOOLS
+    monkeypatch.setenv("DELEGATE_BLOCKED_TOOLS", "some_new_tool")
+    resolved = get_blocked_child_tools()
+    assert set(MONEY_TOOLS) <= set(resolved), (
+        "a delegated sub-agent can reach a money tool via an env override: "
+        f"{sorted(set(MONEY_TOOLS) - set(resolved))}")
+    for tool_id in ("code_execution", "shell", "self_env", "x402_pay"):
+        assert tool_id in resolved, tool_id
+
+
+def test_narrow_child_tools_still_drops_money_under_an_env_override(monkeypatch):
+    monkeypatch.setenv("DELEGATE_BLOCKED_TOOLS", "some_new_tool")
+    out = narrow_child_tools(
+        parent_tools=["filesystem", "x402_pay", "code_execution", "some_new_tool"],
+        requested_tools=None,
+        child_role=LEAF,
+    )
+    assert out == ["filesystem"]
 
 
 # --- pure: narrow_child_tools ------------------------------------------------

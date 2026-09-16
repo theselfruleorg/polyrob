@@ -89,6 +89,90 @@ def schedule(task: str, schedule_spec: str, user: Optional[str], max_duration: i
     _warn_if_cron_off()
 
 
+#: The digest job's task string is a MARKER, never a prompt — `cron/runner.py`
+#: routes `payload.digest` to `cron/digest.py`, which composes the message
+#: deterministically from the ledger, the event log and the open asks. No model
+#: call, no cost.
+_DIGEST_TASK = "[owner-daily-digest]"
+
+
+def _digest_jobs(svc, tenant: str) -> list:
+    return [j for j in svc.list_jobs(user_id=tenant)
+            if (j.payload or {}).get("digest") and j.status != "cancelled"]
+
+
+@cron.command("digest")
+@click.argument("schedule_spec", required=False)
+@click.option("--off", is_flag=True, default=False, help="Cancel the digest job.")
+@click.option("--deliver", default="telegram", help="Surface to deliver on (default telegram).")
+@click.option("--days", default=1, type=int, help="Days of activity to summarize.")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+def digest(schedule_spec: Optional[str], off: bool, deliver: str, days: int,
+           user: Optional[str]):
+    """Schedule the owner daily digest on SCHEDULE_SPEC (e.g. 'every day 08:00').
+
+    The digest is the roll-up for everything the delivery rail could not send
+    you live. `OWNER_DIGEST_ENABLED` turning it on is not enough — a job has to
+    run it, and until this verb existed the only way to create one was a script
+    that is not part of the published package.
+
+    Calling it again MOVES the schedule rather than adding a second digest.
+    """
+    from cron.schedule import ScheduleError
+
+    svc = _service()
+    tenant = _tenant(user)
+    existing = _digest_jobs(svc, tenant)
+    if off:
+        if not existing:
+            click.echo(click.style("no digest job scheduled", dim=True))
+            return
+        for job in existing:
+            svc.cancel(job.id, user_id=tenant)
+        click.echo(f"cancelled {len(existing)} digest job(s)")
+        return
+    if not schedule_spec:
+        if not existing:
+            click.echo(click.style("no digest job scheduled", dim=True))
+            click.echo("schedule one:  polyrob cron digest 'every day 08:00'")
+            return
+        for job in existing:
+            click.echo(_fmt(job))
+        return
+    try:
+        job = svc.schedule(
+            task=_DIGEST_TASK, schedule_spec=schedule_spec, user_id=tenant,
+            payload={"digest": True, "wake_agent": False,
+                     "deliver": deliver, "days": max(1, int(days))})
+    except ScheduleError as e:
+        raise click.ClickException(f"invalid schedule: {e}")
+    # AFTER the new one is persisted: a failed reschedule must not leave the
+    # owner with no digest at all.
+    for old in existing:
+        svc.cancel(old.id, user_id=tenant)
+    nxt = job.next_run_at.strftime("%Y-%m-%d %H:%M") if job.next_run_at else "-"
+    click.echo(f"digest scheduled {click.style(job.id, bold=True)} — next run {nxt}")
+    _warn_if_digest_off()
+    _warn_if_cron_off()
+
+
+def _warn_if_digest_off() -> None:
+    """A scheduled job that the runtime will skip is worth one line now."""
+    try:
+        from core.config_policy import AutonomyConfig
+        from core.env import bool_env
+        if not AutonomyConfig.owner_digest_enabled():
+            click.echo(click.style(
+                "  note: OWNER_DIGEST_ENABLED is off — the job will not compose",
+                fg="yellow"))
+        if not bool_env("CRON_DELIVERY_ENABLED", False):
+            click.echo(click.style(
+                "  note: CRON_DELIVERY_ENABLED is off — the digest will not be sent",
+                fg="yellow"))
+    except Exception:
+        click.echo(click.style("  note: could not read the digest flags", dim=True))
+
+
 @cron.command("list")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
 @click.option("--all", "all_tenants", is_flag=True, default=False,

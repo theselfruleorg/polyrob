@@ -31,11 +31,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import io
+import re
 
 import pytest
 from rich.console import Console
 
-# Rich emits ``\x1b[1;32m`` (ESC + SGR) for the bold-green speaker dot. Two
+# Rich emits a bold SGR for the speaker dot (current Rich versions split the
+# nested green/bold spans, so the stable signature is the bold dot itself). Two
 # signatures distinguish a fixed render from the bug — note the prompt_toolkit
 # Application ALWAYS emits its own framing escapes (real ``\x1b[`` cursor/mode
 # sequences), so we must match the styled Rich CONTENT specifically, not the
@@ -43,8 +45,8 @@ from rich.console import Console
 #   _REAL_SGR — the interpreted form (ESC preserved): the fix.
 #   _LEAKED_SGR — the leaked form (ESC rewritten to '?' by output.write): the bug
 #                 signature, exactly the screenshot ``?[1;32m●?[0m``.
-_REAL_SGR = "\x1b[1;32m"
-_LEAKED_SGR = "?[1;32m"
+_REAL_SGR = re.compile(r"\x1b\[1(?:;32)?m●")
+_LEAKED_SGR = re.compile(r"\?\[1(?:;32)?m●")
 
 
 async def _styled_print_under_patch_stdout(raw: bool) -> str:
@@ -106,8 +108,8 @@ async def test_styled_output_survives_as_real_ansi_under_raw_patch_stdout():
     """raw=True (the shipped fix): the styled Rich content reaches the sink as a
     real ESC-prefixed SGR, and the leaked ``?[1;32m`` form is absent."""
     out = await _styled_print_under_patch_stdout(raw=True)
-    assert _REAL_SGR in out, "styled Rich content did not reach the sink as real ANSI"
-    assert _LEAKED_SGR not in out, "ANSI leaked as literal text even under raw=True"
+    assert _REAL_SGR.search(out), "styled Rich content did not reach the sink as real ANSI"
+    assert not _LEAKED_SGR.search(out), "ANSI leaked as literal text even under raw=True"
 
 
 @pytest.mark.asyncio
@@ -118,9 +120,9 @@ async def test_default_patch_stdout_escapes_ansi_documents_the_bug():
     out = await _styled_print_under_patch_stdout(raw=False)
     # The styled content's ESC was rewritten to '?', leaving the bare SGR as
     # literal, visible text (the screenshot leak) ...
-    assert _LEAKED_SGR in out
+    assert _LEAKED_SGR.search(out)
     # ... and the interpreted form never reaches the sink for that content.
-    assert _REAL_SGR not in out
+    assert not _REAL_SGR.search(out)
 
 
 def test_persistent_repl_wires_patch_stdout_raw_true():

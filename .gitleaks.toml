@@ -22,6 +22,11 @@ paths = [
     '''tests/unit/cli/test_quick_key_setup\.py''',
     '''tests/unit/core/test_credential_scrub\.py''',
     '''tests/unit/core/test_env_key_backfill\.py''',
+    '''tests/unit/core/test_public_address_not_a_credential\.py''',
+    # Managed-RPC redaction battery: every value is an intentionally synthetic
+    # Alchemy/Infura/QuickNode/Helius-shaped credential and the assertions prove
+    # that the shared scrubber removes it.
+    '''tests/unit/core/test_rpc_url_credential_masking\.py''',
     '''tests/unit/core/test_redaction_predicate\.py''',
     '''tests/config/test_agent_server_config_split\.py''',
     '''tests/unit/core/test_security_logging_filter\.py''',
@@ -55,6 +60,14 @@ regexes = [
     # Base USDC token contract — used by the solana_swap test that asserts an EVM
     # address is REFUSED on Solana
     '''0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913''',
+    # Public on-chain addresses used by the launchpad and liquidity fixtures.
+    # Gitleaks' generic-api-key rule mistakes mixed-case EIP-55 addresses for
+    # credentials; these values identify public contracts/tokens, not secrets.
+    '''0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73''',
+    '''0x020bfC650A365f8BB26819deAAbF3E21291018b4''',
+    '''0xD8c32C1585758Bd7505F9ceA9C977a4294873ab2''',
+    '''0x5FC5360d0400a0fd4F2Af552aDD042d716f1d168''',
+    '''0xC37160175A9Bac1Cf480AC7a0dE75c8D97c9aE6A''',
     # documented example API key placeholder in docstrings
     '''rob_abc123\.\.\.''',
     # a Python identifier, not a credential: the shared ERC-20 ABI fragment

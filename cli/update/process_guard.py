@@ -33,6 +33,10 @@ class UpdateLockHeld(RuntimeError):
     """Raised when another update/rollback process already holds ``update.lock``."""
 
 
+class ProcessScanUnavailable(RuntimeError):
+    """Exclusive access cannot be established when process enumeration fails."""
+
+
 # Intra-process serialisation: POSIX advisory locks (fcntl) do NOT self-conflict
 # within a single process, so the flock alone can't stop a second same-process
 # acquisition. This registry makes the guard deterministic in-process; the flock
@@ -107,7 +111,8 @@ def workspace_lock_busy(lock_dir: Optional[Path] = None) -> bool:
 # write-lock probe nor an open-fd scan catches an idle-but-live server; only detecting
 # the PROCESS does). `update` is deliberately excluded so a sibling `polyrob update`
 # never counts as a server.
-_SERVER_SUBCOMMANDS = frozenset({"telegram", "email", "serve", "api", "run", "chat"})
+_SERVER_SUBCOMMANDS = frozenset({"telegram", "email", "serve", "api", "run", "chat", "gateway",
+    "discord", "slack", "signal", "whatsapp", "x", "dashboard", "webgate"})
 
 
 def _iter_proc_cmdlines():
@@ -194,7 +199,9 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
     against an idle-but-running service.
     """
     me = exclude_pid if exclude_pid is not None else os.getpid()
-    src = _cmdlines if _cmdlines is not None else _iter_cmdlines()
+    src = _cmdlines if _cmdlines is not None else list(_iter_cmdlines())
+    if _cmdlines is None and not src:
+        raise ProcessScanUnavailable("Process inspection is unavailable; cannot verify that POLYROB is stopped.")
     try:
         for pid, parts in src:
             if pid == me:
@@ -211,11 +218,18 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
                 continue
             if "update" in tokens:  # a sibling `polyrob update …`, not a server
                 continue
-            if (set(tokens) & _SERVER_SUBCOMMANDS) or "uvicorn" in tokens \
+            # Bare polyrob (possibly with root options) is the resident REPL.
+            try:
+                from cli.polyrob import _LAZY_SUBCOMMANDS
+                known_commands = set(_LAZY_SUBCOMMANDS) | {"chat", "version"}
+            except ImportError:
+                known_commands = set(_SERVER_SUBCOMMANDS) | {"update"}
+            bare_repl = not (set(tokens) & known_commands) and "--help" not in tokens and "--version" not in tokens
+            if bare_repl or (set(tokens) & _SERVER_SUBCOMMANDS) or "uvicorn" in tokens \
                     or "api.app" in joined or any(t.endswith("main.py") for t in tokens):
                 return True
-    except Exception:
-        return False
+    except Exception as exc:
+        raise ProcessScanUnavailable(f"Process inspection failed: {exc}") from exc
     return False
 
 
@@ -228,8 +242,11 @@ def active_use_reasons(
         reasons.append(f"database in use by another process: {p.name} ({p})")
     if workspace_lock_busy(lock_dir):
         reasons.append("a POLYROB session/turn is running (workspace.turn.lock held)")
-    if server_process_alive():
-        reasons.append("a POLYROB server/agent process is running (stop it before rollback)")
+    try:
+        if server_process_alive():
+            reasons.append("a POLYROB server/agent process is running (stop it before rollback)")
+    except ProcessScanUnavailable as exc:
+        reasons.append(str(exc))
     return reasons
 
 

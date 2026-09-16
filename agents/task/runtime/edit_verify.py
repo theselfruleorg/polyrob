@@ -9,21 +9,20 @@ reasons about arbitrary goal *outcomes* via an LLM; this check reasons about ONE
 narrow, mechanical fact — was a code-editing action's ledger entry newer than the
 last clean test run — with no LLM at all).
 
-Derives the signal entirely from the EXISTING action ledger
-(``runtime/evidence.py::_walk_ledger`` — the same walker ``build_evidence`` and
-``goals/completion_judge.py``'s evidence builder already read) rather than adding
-new session-timestamp state: no ``last_edit_ts``/``last_green_test_ts``, no
-workspace-digest stamping. Deterministic, bounded, fail-open — a ledger-walk
-error (or no orchestrator at all) must never block a finish.
+Uses action history and harness-owned execution receipts. Legacy sequence is
+comparable within one agent only; cross-agent verification needs a matching
+clock, session, workspace, and a test START after the edit FINISH. Missing
+results never prove test success. Whole-ledger introspection failures remain
+fail-open for compatibility; this is not an artifact-digest verification gate.
 """
 from __future__ import annotations  # OK here: this is NOT an action-registration module
 
 from typing import Any
 
-from agents.task.runtime.evidence import _walk_ledger
+from agents.task.runtime.evidence import walk_action_events
 
 # Names come from tools/coding/tool.py's registered actions.
-_EDIT_ACTIONS = frozenset({"str_replace", "apply_patch", "create_file", "move_file", "delete_file"})
+_EDIT_ACTIONS = frozenset({"str_replace", "apply_patch", "create_file", "move_file", "delete_file", "self_env_patch_source"})
 _TEST_ACTIONS = frozenset({"run_tests"})
 
 # Public contract name (R-4): external consumers (tools/hf_deploy/digest.py's
@@ -32,28 +31,35 @@ TEST_ACTIONS = _TEST_ACTIONS
 
 
 def edited_since_last_test(orchestrator: Any) -> bool:
-    """True when the ledger shows a successful code-edit action more recently
-    than the last successful ``run_tests`` — or when there was never a
-    successful ``run_tests`` at all but at least one successful edit happened.
+    """True if an edit lacks a subsequent, successful test in comparable scope.
 
-    Whole-session ledger scope (v1): walks every step of every agent
-    (`_walk_ledger` already labels sub-agent steps, but this check does not
-    special-case them — an edit made by a delegated sub-agent still leaves the
-    session unverified). Only SUCCESSFUL actions move the watermarks: an
-    errored edit didn't really change anything, and ``tools/coding/tool.py``'s
-    ``run_tests`` returns an error result on a non-zero exit (failing suite),
-    not just on a framework-level crash — so an errored ``run_tests`` entry
-    correctly does NOT count as "tests are green".
+    Missing edit results are uncertain and need verification. Explicitly errored
+    edits retain the legacy no-change assumption; partial-write error semantics
+    and digest-bound tests require the later effect-receipt contract.
     """
-    last_edit = last_test = -1
     try:
-        for i, (_label, name, _action, result) in enumerate(_walk_ledger(orchestrator)):
-            if getattr(result, "error", None):
-                continue
-            if name in _EDIT_ACTIONS:
-                last_edit = i
-            elif name in _TEST_ACTIONS:
-                last_test = i
+        events = list(walk_action_events(orchestrator))
+        edits = [event for event in events if event.name in _EDIT_ACTIONS
+                 and not getattr(event.result, "error", None)]
+        tests = [event for event in events if event.name in _TEST_ACTIONS
+                 and event.result is not None and not getattr(event.result, "error", None)
+                 and event.receipt.get("ok", True)]
+        for edit in edits:
+            def verifies(test):
+                e, t = edit.receipt, test.receipt
+                if e or t:
+                    # Unknown/mixed clock domains, scopes, or missing times do
+                    # not prove an edit preceded the verification's START.
+                    return bool(e.get("clock_id") and e.get("clock_id") == t.get("clock_id")
+                                and e.get("workspace") and e.get("workspace") == t.get("workspace")
+                                and e.get("session_id") == t.get("session_id")
+                                and isinstance(e.get("finished_ns"), int)
+                                and isinstance(t.get("started_ns"), int)
+                                and e["finished_ns"] <= t["started_ns"])
+                # Legacy histories prove sequence ONLY within their own agent.
+                return edit.agent_id == test.agent_id and edit.sequence < test.sequence
+            if not any(verifies(test) for test in tests):
+                return True
     except Exception:
         return False  # fail-open: never block a finish on an introspection miss
-    return last_edit > last_test
+    return False

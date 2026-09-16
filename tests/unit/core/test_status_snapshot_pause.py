@@ -28,8 +28,12 @@ def test_pause_renders_first_and_as_health(home):
     assert head.startswith("⏸ PAUSED (everything)") and "owner via test" in head
     assert render_status_lines(snap)[0] == head
     note = render_agent_health_note(snap)
-    assert "⏸ PAUSED (everything)" in note and "autonomy_control(resume)" in note
-    assert "/resume" not in note  # the agent's note names its own verb, never a slash command
+    # 034 §11.2: the agent has no resume verb; the note must name the owner seat.
+    assert "⏸ PAUSED (everything)" in note and "/resume (owner only)" in note
+    assert "autonomy_control(resume)" not in note
+    # 034 §11.2 reverses the pre-034 rule for RESUME only: the agent has no resume
+    # verb, so its note must name the owner seat instead of a call that refuses.
+    # (The pause hint is not rendered here — the state IS paused.)
 
 
 def test_violation_after_pause_is_critical(home):

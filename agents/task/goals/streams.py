@@ -18,9 +18,14 @@ can never aim the seeder at a file it wrote itself.
 """
 from __future__ import annotations
 
+import logging
 import os
+import shutil
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 #: Statuses that mean "this stream still has work in flight". Includes
 #: "blocked": blocked is NOT a terminal status in POLYROB — a
@@ -42,6 +47,12 @@ from typing import Any, Dict, List, Optional, Tuple
 #: ``goal_unblock`` EACH blocked leg (unblocking only the head leaves the rest
 #: blocked behind it).
 LIVE_STATUSES = frozenset({"triage", "waiting", "ready", "running", "blocked"})
+
+#: The only objective status under which a stream seeds. A literal, not an
+#: import, because `board` imports are lazy everywhere else in this module;
+#: `tests/unit/agents/task/goals/test_streams_pause.py` pins it to
+#: `board.OBJ_ACTIVE` so the two cannot drift apart.
+_OBJ_ACTIVE = "active"
 
 #: Default hours between two seeds of one stream, when the manifest omits it.
 DEFAULT_CADENCE_HOURS = 4
@@ -65,19 +76,106 @@ SEEDER_GRACE_SEC = 75 * 60
 _FORBIDDEN_FRAGMENTS = (os.sep + "sessions" + os.sep, os.sep + "workspace" + os.sep)
 
 
-def default_manifest_path() -> str:
-    """``data/streams/streams.yaml`` inside the install tree, env-overridable.
+def shipped_manifest_path() -> str:
+    """The manifest that SHIPS with the code: ``<install>/data/streams/streams.yaml``.
 
     Lives under ``data/`` rather than ``config/`` because ``scripts/deploy_prod.sh``
     syncs ``data/prompts`` and ``data/characters`` as bundled content and does NOT
     sync ``config/`` at all — a manifest under ``config/`` would never reach the box.
+
+    This is the DEFAULT a fresh install starts from, not the file that is read at
+    runtime. See :func:`default_manifest_path`.
+    """
+    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))))
+    return os.path.join(here, "data", "streams", "streams.yaml")
+
+
+def home_manifest_path() -> Optional[str]:
+    """``<data_home>/streams/streams.yaml`` — the OWNER-editable copy, or ``None``
+    when the data home cannot be resolved. Does not check that it exists.
+
+    Never binds the data home at import time (``tests/test_home_binding_ratchet.py``).
+    """
+    try:
+        from core.runtime_paths import resolve_data_home
+        return str(Path(resolve_data_home()) / "streams" / "streams.yaml")
+    except Exception:
+        logger.debug("stream manifest: data home unresolvable (fail-open)", exc_info=True)
+        return None
+
+
+def default_manifest_path() -> str:
+    """The manifest actually read at runtime. **Pure — never writes.**
+
+    034 §12.3. This used to resolve inside the install tree, and
+    ``scripts/deploy_prod.sh`` rsyncs ``data/streams`` from ``git archive HEAD`` —
+    so an owner edit made on the box was silently reverted by the next deploy.
+    That makes any "edit the manifest from chat" verb a lie that takes hours to
+    notice, which is why the owner's seat moves the file rather than the file
+    moving the owner.
+
+    Resolution order:
+
+    1. ``POLYROB_STREAMS_MANIFEST`` — an explicit operator override always wins.
+    2. ``<data_home>/streams/streams.yaml`` **if it exists** — a deploy cannot
+       reach it, so an owner edit survives.
+    3. The shipped copy — byte-identical to the pre-034 behaviour.
+
+    Purity is load-bearing: the first cut seeded from inside this function, and
+    three existing tests that call it without isolation immediately wrote into the
+    developer's real data home. :func:`ensure_manifest_seeded` is the one writer.
+
+    The ``streams/`` path segment is preserved deliberately: it is what
+    ``secret_guard.is_protected_config_path`` matches on, so the manifest stays
+    unreachable from every AGENT-writable file surface at its new location. The
+    guarantee that protects is "never a SELF-grant", not "never editable" — an
+    owner editing it from an authenticated seat IS the operator grant.
     """
     env = os.environ.get("POLYROB_STREAMS_MANIFEST")
     if env:
         return env
-    here = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))))
-    return os.path.join(here, "data", "streams", "streams.yaml")
+    home = home_manifest_path()
+    if home and os.path.isfile(home):
+        return home
+    return shipped_manifest_path()
+
+
+def ensure_manifest_seeded() -> str:
+    """Seed the owner-editable copy from the shipped one ONCE; return the effective
+    path. The only writer.
+
+    Idempotent by existence, never by content: a later call — a reboot, an hourly
+    seeder tick — must never clobber an owner edit, which is the entire point of
+    moving the file out of the deploy's reach. Fail-open: an unresolvable or
+    unwritable data home returns the shipped path, i.e. pre-034 behaviour, rather
+    than raising.
+
+    Called from the hourly stream seeder, so the data-home copy appears on the
+    first tick of a fresh install and :func:`default_manifest_path` prefers it
+    from then on.
+    """
+    env = os.environ.get("POLYROB_STREAMS_MANIFEST")
+    if env:
+        return env
+    shipped = shipped_manifest_path()
+    home = home_manifest_path()
+    if not home:
+        return shipped
+    if os.path.isfile(home):
+        return home
+    if not os.path.isfile(shipped):
+        return shipped  # nothing to seed from; keep legacy behaviour
+    try:
+        Path(home).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(shipped, home)
+    except Exception:
+        logger.warning("stream manifest: could not seed the data-home copy, using the "
+                       "shipped one (an owner edit there will NOT survive a deploy)",
+                       exc_info=True)
+        return shipped
+    logger.info("stream manifest seeded into the data home: %s", home)
+    return home
 
 
 def load_manifest(path: str) -> List[Dict[str, Any]]:
@@ -171,6 +269,33 @@ def stream_live_goals(board, user_id: str, stream_id: str) -> int:
                if getattr(row, "status", None) in LIVE_STATUSES)
 
 
+def stream_objective_status(board, user_id: str, stream: Dict[str, Any]) -> Optional[str]:
+    """This stream's objective status, or ``None`` when it has no objective yet.
+
+    Identity matches :func:`ensure_objective` exactly — ``payload.stream_id`` first,
+    then an exact title — so the "may I seed?" throttle and the "which objective is
+    mine?" lookup can never disagree about which row a stream owns. Reads
+    ``board.objectives`` (kind-filtered, tenant-scoped, unbounded), never a
+    ``board.list`` window. Fail-open: an unreadable board returns ``None`` and the
+    other throttles still apply.
+    """
+    sid = str(stream["id"])
+    title = str((stream.get("objective") or {}).get("title") or "").strip()
+    try:
+        rows = board.objectives(user_id=user_id) or []
+    except Exception:
+        logger.debug("stream objective status read failed (fail-open)", exc_info=True)
+        return None
+    for r in rows:
+        if _payload_of(r).get("stream_id") == sid:
+            return getattr(r, "status", None)
+    if title:
+        for r in rows:
+            if (getattr(r, "title", "") or "").strip() == title:
+                return getattr(r, "status", None)
+    return None
+
+
 def stream_last_seeded_at(board, user_id: str, stream_id: str) -> Optional[float]:
     """Newest ``created_at`` among this stream's goals; ``None`` if never seeded.
 
@@ -198,6 +323,9 @@ def declared_objective_payload(stream: Dict[str, Any]) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"stream_id": str(stream["id"])}
     spec = stream["objective"]
     # B26 (S9, 2026-08-29): the manifest prose version this row last followed.
+    # ⚠️ Correct ONLY on CREATE, where the row is written FROM this prose. On an
+    # existing row the caller must go through `_prose_stamp_for_sync` instead —
+    # see the freeze bug documented there.
     payload["manifest_prose_hash"] = _prose_hash(spec.get("title"), spec.get("body"))
     if spec.get("success_criteria"):
         payload["success_criteria"] = str(spec["success_criteria"])
@@ -231,6 +359,53 @@ def _sync_prose(board, row, spec: Dict[str, Any]) -> bool:
         return False  # owner-edited prose — leave it alone
     return bool(board.update_fields(
         row.id, title=str(spec["title"]).strip(), body=str(spec.get("body") or "")))
+
+
+def _declared_for_existing_row(row, spec: Dict[str, Any], declared: Dict[str, Any],
+                               *, adopting: bool = False) -> Dict[str, Any]:
+    """*declared*, with the prose stamp corrected for an EXISTING row.
+
+    The stamp means "the manifest version whose prose this row currently holds",
+    and `_sync_prose` reads it to tell a manifest edit (apply it) from an owner
+    edit (never overwrite it). That only works while the stamp and the prose
+    move together.
+
+    They did not. `declared_objective_payload` always carried the CURRENT
+    manifest's hash and `_sync_declared_payload` wrote it on every tick — even
+    on the adopt-by-title path, which never calls `_sync_prose` at all. So a
+    legacy objective adopted by title kept its old body under the new manifest's
+    stamp; from the next tick `row_hash != stored` read as "the owner edited
+    this", and the manifest could never reach the row again. Nobody had edited
+    anything.
+
+    Reproduced by the tests, not by an incident: prod's live streams were
+    checked on 2026-09-10 and were consistent. The exposure is any objective
+    that enters through adoption rather than creation, which is the documented
+    migration path for a stream whose objective predates its manifest entry.
+
+    Two rules, and the difference between them is the whole fix:
+
+    * **Ordinary tick** — advance the stamp only when the row's prose IS the
+      manifest's prose. Otherwise drop the key so ``merge_payload`` preserves
+      what was there, which keeps a genuine owner edit frozen against the
+      manifest, permanently and by design.
+    * **Adoption, or a row with no stamp at all** — stamp with the row's OWN
+      prose. Both are the moment a row comes under manifest control, so it is
+      tracked from what it currently holds; the next tick then reads
+      ``row_hash == stored``, recognises a manifest edit rather than an owner
+      one, and syncs. Deliberately NOT a rewrite in the same breath: taking
+      ownership and replacing the owner's words at once is the failure this
+      stamp exists to prevent. Stamping from the MANIFEST here instead is what
+      froze prod — it claims the row followed prose it never held.
+    """
+    row_hash = _prose_hash(getattr(row, "title", ""), getattr(row, "body", ""))
+    if adopting or not _payload_of(row).get("manifest_prose_hash"):
+        return {**declared, "manifest_prose_hash": row_hash}
+    if row_hash == _prose_hash(spec.get("title"), spec.get("body")):
+        return declared
+    out = dict(declared)
+    out.pop("manifest_prose_hash", None)
+    return out
 
 
 def _sync_declared_payload(board, row, declared: Dict[str, Any]) -> bool:
@@ -284,7 +459,12 @@ def ensure_objective(board, user_id: str, stream: Dict[str, Any]) -> Tuple[str, 
     for r in rows:
         if _payload_of(r).get("stream_id") == sid:
             prose = _sync_prose(board, r, spec)
-            fields = _sync_declared_payload(board, r, declared)
+            if prose:
+                # _sync_prose wrote through the board, so the in-memory row is
+                # stale — and it is exactly the prose the stamp decision reads.
+                r = board.get(r.id) or r
+            fields = _sync_declared_payload(
+                board, r, _declared_for_existing_row(r, spec, declared))
             if prose:
                 return r.id, f"objective already active, manifest prose re-synced: {r.id}"
             if fields:
@@ -292,7 +472,8 @@ def ensure_objective(board, user_id: str, stream: Dict[str, Any]) -> Tuple[str, 
             return r.id, f"objective already active: {r.id}"
     for r in rows:
         if (getattr(r, "title", "") or "").strip() == title:
-            _sync_declared_payload(board, r, declared)
+            _sync_declared_payload(
+                board, r, _declared_for_existing_row(r, spec, declared, adopting=True))
             return r.id, f"objective adopted by title and stamped from the manifest: {r.id}"
 
     payload: Dict[str, Any] = dict(declared)
@@ -403,6 +584,14 @@ def stream_is_due(board, user_id: str, stream: Dict[str, Any],
     _dec = allows("seed_stream")
     if not _dec.allowed:
         return False, f"stream seeding {_dec.reason}"
+    # 034 §11.4: an objective the owner switched OFF stops its stream. This was the
+    # gap that made `/goal objective pause` a no-op: `ensure_objective` refused to
+    # create a DUPLICATE objective but returned the paused row's id, and
+    # `scripts/seed_streams.py` seeded under it because nothing here read the
+    # objective's status. The owner's only per-stream off switch did nothing.
+    _obj_status = stream_objective_status(board, user_id, stream)
+    if _obj_status is not None and _obj_status != _OBJ_ACTIVE:
+        return False, f"objective is {_obj_status} by the owner (/goal objective activate to re-arm)"
     # `is None`, not `or`: an explicit `max_live_goals: 0` means the operator
     # wants the stream disabled (0 ever live), which is a real, meaningful
     # value — `or len(...)` would treat it as falsy/"unset" and silently

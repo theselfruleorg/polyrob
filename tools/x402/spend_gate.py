@@ -35,6 +35,10 @@ def x402_spend_refusal(execution_context, tool_self) -> Optional[str]:
     Fails CLOSED on any probe error: if we cannot prove the turn is genuine, we
     refuse.
     """
+    from core.wallet.authority import turn_refusal
+    principal_error = turn_refusal(execution_context)
+    if principal_error:
+        return principal_error
     if execution_context is None:
         return None
     try:

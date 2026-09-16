@@ -134,5 +134,51 @@ class SolanaSigner:
                 f"required signer is someone else is not ours to sign.")
         return VersionedTransaction(tx.message, [self.__keypair])
 
+    def sign_transaction_with(self, tx: "VersionedTransaction", extra_keypairs):
+        """Sign *tx* with this key PLUS *extra_keypairs* (042b).
+
+        The same perimeter, widened for exactly one shape: a transaction that
+        creates a NEW ACCOUNT, which on Solana must sign its own creation. An
+        SPL mint is the case — two required signers, the payer and the mint —
+        and ``sign_transaction`` hands solders one keypair, so it raises
+        ``SignerError: not enough signers``.
+
+        ⚠️ What is NOT relaxed: the fee payer must still be this address, so a
+        payload naming someone else is still refused; and every extra keypair
+        must be a signer the MESSAGE actually requires, so a caller cannot slip
+        a signature onto a transaction that never asked for one. Together those
+        mean this can only ever co-sign for an account created in the same
+        transaction — which is the whole reason it exists.
+
+        solders matches keypairs to slots by PUBKEY, not by list position, so
+        the order here does not matter.
+        """
+        from solders.transaction import VersionedTransaction
+
+        payer = tx.message.account_keys[0]
+        if str(payer) != self.address:
+            raise ValueError(
+                f"refusing to sign: the transaction's fee payer is {payer}, not "
+                f"this signer ({self.address}). A transaction whose first "
+                f"required signer is someone else is not ours to sign.")
+
+        required = {str(k) for k in
+                    tx.message.account_keys[:tx.message.header.num_required_signatures]}
+        extras = list(extra_keypairs or ())
+        for keypair in extras:
+            who = str(keypair.pubkey())
+            if who not in required:
+                raise ValueError(
+                    f"refusing to sign: {who} is not a required signer of this "
+                    f"transaction. A signature nobody asked for is a signature "
+                    f"that belongs somewhere else.")
+        provided = {self.address} | {str(k.pubkey()) for k in extras}
+        missing = required - provided
+        if missing:
+            raise ValueError(
+                f"refusing to sign: the transaction requires signatures from "
+                f"{sorted(missing)}, which this call cannot provide")
+        return VersionedTransaction(tx.message, [self.__keypair] + extras)
+
     def __repr__(self) -> str:                       # never leak the key
         return f"<SolanaSigner address={self.address}>"

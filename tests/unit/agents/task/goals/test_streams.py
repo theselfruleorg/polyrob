@@ -8,14 +8,10 @@ import yaml
 from agents.task.goals.board import GoalBoard
 from agents.task.goals import streams as S
 
-# The shipped manifest is operator-authored instance data (the ONE place a money
-# verb may be granted to an autonomous goal), deliberately excluded from the
-# public framework export. Only the three tests that read it are conditional;
-# every other test here builds its own manifest inline and always runs.
-_requires_shipped_manifest = pytest.mark.skipif(
-    not os.path.isfile(S.default_manifest_path()),
-    reason="data/streams/streams.yaml is operator data, absent from the public tree",
-)
+# 2026-09-11 (036): the shipped manifest is GONE — the harness ships no standing
+# work. Every test here builds its own manifest inline; the four that asserted the
+# content of data/streams/streams.yaml were deleted with the file rather than left
+# permanently skipped.
 
 
 @pytest.fixture
@@ -235,14 +231,6 @@ def test_merge_payload_preserves_other_keys(board):
     assert board.merge_payload(g.id, {"stream": "demo"}) is True
     p = board.get(g.id).payload
     assert p["tools"] == ["task"] and p["stream"] == "demo"
-
-
-@_requires_shipped_manifest
-def test_the_shipped_manifest_parses():
-    """A malformed shipped manifest silently stops every stream — catch it in CI."""
-    got = S.load_manifest(S.default_manifest_path())
-    assert got, "the shipped manifest declares no streams"
-    assert "treasury-trading" in {s["id"] for s in got}
 
 
 # --- final-review regressions ------------------------------------------------
@@ -475,45 +463,3 @@ def test_a_clean_run_closes_a_standing_stream_failure_ask(board):
     S.record_stream_failure(board, "rob", "demo-stream", RuntimeError("boom"))
     S.clear_stream_failure(board, "rob", "demo-stream")
     assert board.asks(user_id="rob", status="open") == []
-
-
-# --- 2026-08-29: standing missions are streams, not bounded projects ----------
-
-@_requires_shipped_manifest
-def test_the_shipped_manifest_carries_the_two_standing_missions_without_money():
-    """"Promote POLYROB … build-in-public" and "Build and ship real software
-    artifacts" hit the 25-goal lifetime budget on prod (2026-08-28) and stalled the
-    planner for a day: they are standing work modelled as bounded projects. As
-    manifest streams they are uncapped by cadence, and — safety — grant no money
-    verb (only the trading stream may)."""
-    from core.tool_capabilities import ids_with
-    MONEY_TOOLS = ids_with("money")
-    got = {s["id"]: s for s in S.load_manifest(S.default_manifest_path())}
-    assert "promote-build-in-public" in got and "ship-software" in got
-    for sid in ("promote-build-in-public", "ship-software"):
-        stream = got[sid]
-        assert float(stream.get("cadence_hours") or 0) >= 12
-        for g in stream["goals"]:
-            assert not (set(g["tools"]) & set(MONEY_TOOLS)), (sid, g["title"])
-    # exact-title adoption of the live objectives on prod
-    assert got["promote-build-in-public"]["objective"]["title"] == \
-        "Promote POLYROB and yourself in public — build-in-public"
-    assert got["ship-software"]["objective"]["title"] == \
-        "Build and ship real software artifacts"
-
-
-@_requires_shipped_manifest
-def test_ship_software_stream_can_actually_ship():
-    """Publishing & app-deployment evaluation 2026-09-05 (Wave 1): the goal body told
-    the agent to run servers via the process tool while the grant omitted
-    ``shell``/``process``, and the success criterion was satisfied by a curl against
-    127.0.0.1 inside the container (91 green tests, 0 of 336 artifacts with a URL).
-    The grant must carry the ship verbs and the criterion must demand a URL the
-    owner can open — or a named reason it cannot be."""
-    got = {s["id"]: s for s in S.load_manifest(S.default_manifest_path())}
-    stream = got["ship-software"]
-    for g in stream["goals"]:
-        assert {"publish", "shell", "process"} <= set(g["tools"]), g["title"]
-    crit = stream["objective"]["success_criteria"]
-    assert "URL" in crit and "reason" in crit.lower()
-    assert "HTTP-verified" not in crit

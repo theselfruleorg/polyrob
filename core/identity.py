@@ -73,21 +73,22 @@ def resolve_identity() -> str:
 
     Used by the terminal-native surfaces (``polyrob goals``/``cron``, the REPL
     ``/goals`` handler, and CLI chat sessions — which route through this via
-    ``ConstantIdentity``) to scope the data home + board to the operator. Prefers an
-    explicitly-bound owner principal (``POLYROB_OWNER_USER_ID`` / ``BOT_OWNER_USER_ID``
-    / ``SURFACE_SUPER_ADMIN_USER_IDS`` — see core.instance.resolve_owner_principal);
-    otherwise the single-user local tenant ``'local'``. Never returns the anonymous
-    bucket. Lazy import keeps core.identity free of a core.instance module cycle.
+    ``ConstantIdentity``) to scope the data home + board to the operator.
+
+    Delegates to ``core.instance.resolve_owner_user_id`` — the ONE owner-tenant
+    resolver (bound owner -> ``POLYROB_LOCAL_OWNER`` -> ``'local'``), so the REPL,
+    the console, ``polyrob owner …`` and the x402 income stamp cannot name
+    different tenants on the same install. The "never the anonymous bucket"
+    guarantee is kept BY that resolver (:func:`is_anonymous` is applied to every
+    tier there, so a sentinel binding falls through to ``'local'`` for every seat
+    rather than only for this one). This wrapper adds the never-raise contract:
+    an unreadable environment degrades to ``'local'``. Lazy import keeps
+    core.identity free of a core.instance module cycle.
     """
     try:
-        from core.instance import resolve_owner_principal
-        # STRICT resolution (default_to_instance=False): None unless an owner is
-        # EXPLICITLY bound. The default `default_to_instance=True` behavior falls
-        # back to the instance id (DEFAULT_INSTANCE_ID = "polyrob"), which is never
-        # anonymous — that would make the "local" fallback below unreachable and
-        # contradict this function's own contract (owner-if-bound else "local").
-        owner = resolve_owner_principal(default_to_instance=False)
-        if owner and not is_anonymous(owner):
+        from core.instance import resolve_owner_user_id
+        owner = resolve_owner_user_id()
+        if owner:
             return owner
     except Exception:
         pass

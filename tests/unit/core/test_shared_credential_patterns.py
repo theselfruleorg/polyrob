@@ -29,6 +29,8 @@ def test_battery_covers_every_documented_shape():
         "rob": "rob_abcdefghijklmnop1234",
         "aws": "AKIAABCDEFGHIJKLMNOP",
         "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJyb2IifQ.c2ln",
+        # S10: the API key is the URL PATH — no `=`, no prefix, no Bearer.
+        "rpc_path_key": "https://base-mainnet.g.alchemy.com/v2/Kx8Jd92abcdefghijklmnopqrstuv",
     }
     for name, sample in samples.items():
         out = shared.apply_ssot_shapes(f"x {sample} y")

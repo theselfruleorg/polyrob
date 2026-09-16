@@ -37,6 +37,33 @@ def chat_id_from_session_key(session_key: str) -> str:
     return parts[-1] if parts else session_key
 
 
+def row_from_session_key(session_key: str) -> Optional[dict]:
+    """The binding a chat-scoped key IMPLIES — for when no durable row exists.
+
+    044 T20 fix round 2 (N1): ``bind_chat_surface`` is the ONLY writer of
+    ``session_chat_map``, so a room the agent has been allowlisted into but that
+    has never triggered a LIVE turn has no row at all. A service run in that room
+    found work, paid for the model call, and then had every reply dropped at
+    DEBUG by ``MessageRouter.publish`` because ``resolve`` returned None — while
+    the checkpoint advanced, so the lines were gone.
+
+    The key is not a lookup token, it is an ADDRESS:
+    ``agent:main:{surface}:{chat_type}:{chat_id}[…]`` (see
+    :func:`build_session_key`). Reading it back is exact and needs no write.
+    Returns None for anything that is not a chat-scoped key of that shape —
+    never a guess.
+    """
+    parts = str(session_key or "").split(":")
+    if len(parts) < 5 or ":".join(parts[:2]) != _PREFIX:
+        return None
+    surface_id, chat_type = parts[2].strip(), parts[3].strip()
+    chat_id = chat_id_from_session_key(session_key)
+    if not surface_id or not chat_type or not str(chat_id or "").strip():
+        return None
+    return {"surface_id": surface_id, "chat_id": str(chat_id),
+            "chat_type": chat_type, "session_id": None, "user_id": None}
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS session_chat_map (
     session_key TEXT PRIMARY KEY,

@@ -18,6 +18,7 @@ Precedence ladder:
 ``cli_store_default`` and the first-key fallback — NEVER to an explicit or pinned
 provider (a user who types ``-p anthropic`` gets anthropic + a clean auth error).
 """
+import logging
 import os as _os
 
 from modules.llm.profiles import (
@@ -27,6 +28,8 @@ from modules.llm.profiles import (
     providers_with_keys,  # noqa: F401  (re-exported for callers)
     usable_providers_with_credentials,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def resolve_runtime_config(
@@ -136,6 +139,31 @@ def resolve_session_runtime(provider=None, model=None, env=None):
     """
     env = _os.environ if env is None else env
     try:
+        # A STORED pin is a preference, not a life sentence. A chat session
+        # persists its provider/model into metadata.json and SessionManager
+        # loads that record back on every restart, so a session created months
+        # ago keeps asking a dead account forever while newly-created sessions
+        # use the operator's current pin. Live prod 2026-09-16: the owner's
+        # session (created 09-11) held zai-coding/glm-5 through that account's
+        # weekly-quota exhaustion; the box had already been re-pinned to a
+        # funded provider, and the agent answered nothing while reporting
+        # itself online. Same class `resolve_live_provider` was written for —
+        # it was wired into goal dispatch and the status snapshot but not into
+        # the path every chat turn takes.
+        #
+        # The stale MODEL travels with the stale provider: carrying `glm-5` to
+        # OpenRouter is not a recovery, it is a different (metered) model via
+        # the registry's pattern fallback. Drop both and let the ladder below
+        # fill them for the provider that can actually serve.
+        if provider and _sentinel_active(provider):
+            live = resolve_live_provider(provider, env=env)
+            if live and live != canonicalize_provider(provider):
+                logger.warning(
+                    "session pin %s is credit-dead — re-routing this turn to %s "
+                    "(stored model %r dropped; it belongs to the dead provider)",
+                    provider, live, model)
+                provider, model = None, None
+
         # CHAT_ before DEFAULT_, mirroring operator_provider_pin's order — the
         # pin pair is read as a unit, so a CHAT_PROVIDER/CHAT_MODEL operator is
         # not silently served the registry default for their pinned provider.

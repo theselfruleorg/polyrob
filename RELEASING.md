@@ -1,104 +1,106 @@
 # Releasing POLYROB
 
-This runbook walks a maintainer through building, validating, and publishing a new release.
+POLYROB releases are cut from a reviewed commit on `main`. A version tag starts
+the GitHub Actions release workflow, which validates the tag, builds the wheel
+and source archive, smoke-tests the wheel, publishes to PyPI when the repository
+publisher is configured, and attaches the artifacts to a GitHub Release.
 
----
+## Prepare the release PR
 
-## Prerequisites
+Choose a Semantic Versioning number and update these files together:
+
+- `pyproject.toml`: project version (the build source of truth)
+- `core/version.py`: source-tree fallback
+- `tests/test_version_consistency.py`: literal release pin and test name
+- `CHANGELOG.md`: a dated `## [X.Y.Z] — YYYY-MM-DD` section with a fresh,
+  empty `## [Unreleased]` section above it
+- `cli/ui/banner.py`: example versions in docstrings
+
+Do not change the database schema version merely to match the application
+version. Schema migrations have their own version sequence.
+
+Run the release-alignment checks from the repository root:
 
 ```bash
-pip install build twine
+pytest tests/test_version_consistency.py tests/test_changelog_release.py tests/unit/core/test_flags.py
+python scripts/gen_flags_catalog.py --check  # when the operator tooling is available
+pytest tests/unit/test_no_stray_rob_env.py \
+  tests/unit/agents/task/test_skill_rules_integrity.py \
+  tests/unit/agents/task/test_toolsets.py
+pytest tests/install/
+pytest -q -p no:randomly
 ```
 
-Ensure you have:
-- PyPI credentials (or a `~/.pypirc` configured for TestPyPI and PyPI).
-- A clean working tree on `main` with all changes committed and tests green.
+The release PR must pass every required GitHub check. Do not tag a commit whose
+release PR is still open or whose checks are red.
 
----
+## Build and smoke-test locally
 
-## Build & validate
+Build from a clean checkout of the exact release commit:
 
 ```bash
-# 1. Build source + wheel distributions
 python -m build
+python -m twine check dist/*
 
-# 2. Check metadata and long-description rendering
-twine check dist/*
-
-# 3. Smoke-test the wheel in a fresh venv
-python -m venv /tmp/v && /tmp/v/bin/pip install "dist/"*.whl[all]
-/tmp/v/bin/python -c "import cron, surfaces, core"
+python -m venv /tmp/polyrob-release-venv
+/tmp/polyrob-release-venv/bin/pip install dist/polyrob-X.Y.Z-py3-none-any.whl
+cd "$(mktemp -d)"
+/tmp/polyrob-release-venv/bin/polyrob version
+/tmp/polyrob-release-venv/bin/polyrob --help
+/tmp/polyrob-release-venv/bin/polyrob doctor
+(cd /tmp && POLYROB_DATA_DIR=/tmp/polyrob-release-data \
+  /tmp/polyrob-release-venv/bin/python -m migrations.migrate status)
 ```
 
-If any step fails, fix the issue before continuing.
+`polyrob doctor` must leave the empty temporary directory unchanged. Repeat the
+smoke test with relevant optional extras when the release changes those extras.
+On a fresh data directory, migration status may exit 1 after successfully
+reporting that the database needs its baseline; any crash or other exit code is
+a release failure.
 
----
+## Tag and publish
 
-## Publish
-
-```bash
-# 4. Upload to TestPyPI first and verify the package page
-twine upload -r testpypi dist/*
-
-# 5. Install from TestPyPI and run a quick sanity check
-pip install -i https://test.pypi.org/simple/ polyrob
-
-# 6. Upload to the real PyPI
-twine upload dist/*
-```
-
----
-
-## Tag & push
+After the release PR is merged, update local `main`, verify the commit SHA, and
+push one annotated version tag:
 
 ```bash
-# 7. Create an annotated tag (replace X.Y.Z with the version)
+git switch main
+git pull --ff-only
 git tag -a vX.Y.Z -m "POLYROB vX.Y.Z"
-git push --tags
+git push origin vX.Y.Z
 ```
 
-Then create a GitHub Release from the tag and paste the relevant `CHANGELOG.md`
-section as the release notes.
+Watch the `Release` workflow to completion. It rejects a tag that does not match
+`pyproject.toml`. When publishing is configured, the workflow uploads the
+artifacts to PyPI and creates or updates the GitHub Release.
 
----
+Check PyPI before attempting any fallback upload. PyPI filenames are immutable,
+so retrying an artifact that CI already published returns an error and cannot
+replace the existing file. Use a manual upload only when the workflow failed
+before publishing and the version is absent from PyPI.
 
-## NEVER-PUBLISH LIST
+Verify the published artifacts in fresh environments:
 
-The following must **never** appear in the public repository or a published package:
+```bash
+python -m venv /tmp/polyrob-pypi-base
+/tmp/polyrob-pypi-base/bin/pip install "polyrob==X.Y.Z"
+/tmp/polyrob-pypi-base/bin/python -c \
+  "import cron, surfaces, core, tools.defi, core.llm_auth; from core.version import get_version; print(get_version())"
+/tmp/polyrob-pypi-base/bin/polyrob version
 
-| Path / pattern | Reason |
-|---|---|
-| `.superpowers/` | Internal subagent-driven-development working artifacts (gitignored) |
-| `config/.env*` (non-template) | Secrets / API keys — only commit `*.env.example` templates |
-| Any file containing real API keys, wallet keys, SSH keys, or server IPs | Credentials |
+python -m venv /tmp/polyrob-pypi-crypto
+/tmp/polyrob-pypi-crypto/bin/pip install "polyrob[crypto]==X.Y.Z"
+/tmp/polyrob-pypi-crypto/bin/python -c \
+  "import core.wallet.tx_guard, modules.payments.networks; print('crypto extra ok')"
+```
 
-> **`AGENTS.md` and its `CLAUDE.md` pointer DO ship** — `AGENTS.md` is the canonical
-> deep architecture + contributor guide for AI agents and humans alike (vendor-neutral;
-> all per-layer READMEs reference it). It contains no secrets (infra is placeholdered).
->
-> **`deployment/` scripts do NOT ship** — they are instance-specific (real domains,
-> admin email, server layout) and sit on the publish denylist
-> (`scripts/private_paths.txt`) along with `deploy_unified.sh` and `DEPLOYMENT.md`.
-> The public self-hosting story lives in `docs/guide/self-hosting.md`.
+## Public-release boundary
 
-> Internal planning, review, and live-test docs are not tracked in this repo — the `docs/` gitignore block ships only the public guide and
-> reference docs. Only `docs/guide/`, `docs/CONFIGURATION.md`,
-> `docs/SKILL_AUTHORING_STANDARD.md`, `docs/comparison.md`, and `docs/examples.md`
-> are published.
+Only reviewed product source, tests, user documentation, templates, and community
+files belong in a public release. Exclude credentials, real environment files,
+runtime data, operator identity, deployment-specific configuration, unpublished
+plans and reviews, and infrastructure details. Run secret scanning over the exact
+tree that will be tagged, and treat any finding as a release blocker.
 
-The public repository is published as a **fresh squashed history** to ensure no
-internal history leaks into the open-source release.
-
-The boundary is enforced mechanically, not by memory:
-
-- `scripts/public_manifest.txt` — allowlist of paths that ship (everything else is
-  private by default).
-- `scripts/private_paths.txt` — denylist patterns; matching paths are stripped even
-  when a manifest directory contains them.
-- `scripts/scrub_gate.sh <tree>` — fail-closed gate: denylist check, no real `.env`,
-  `gitleaks` (with `.gitleaks.toml` allowlist) = 0, infra-marker grep = 0.
-- `scripts/publish_snapshot.sh` — the one-time seed pipeline: stage manifest → strip
-  denylist → scrub gate → fresh repo → single squashed commit + version tag. The
-  final `git push` to the public remote is a deliberate manual step.
-- `scripts/publish_pr.sh <exp-branch> <slug>` — clean-room export of later private
-  work into a public PR (cut from `public/main`, contents only, scrub-gated).
+Release notes describe shipped user behavior. They must not link to unpublished
+documents or narrate internal development and operations.

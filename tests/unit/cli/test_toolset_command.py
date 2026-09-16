@@ -35,7 +35,7 @@ def test_run_toolset_option_parses(monkeypatch):
     captured = {}
 
     async def fake_run_session(task, model, provider, tools, toolset, max_steps, plain,
-                               verbose, resume_id=None):
+                               verbose, resume_id=None, **kwargs):
         captured["tools"] = tools
         captured["toolset"] = toolset
 

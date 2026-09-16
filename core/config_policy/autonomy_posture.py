@@ -79,8 +79,15 @@ _POSTURE_OWNER_VISIBLE_FLAGS = frozenset({
 })
 
 
+# NOTE: AUTONOMY_START_NOTICE was a member here until 2026-09-15 and is now OFF
+# in every posture (the owner opts in explicitly). Measured on prod over
+# 2026-09-08..15: the `self_evolution` lifecycle source made 223 delivery
+# attempts and 29 reached the owner — 87% produced only to be suppressed, and
+# `▶ goal started` was the single largest occupant of the owner's `/missed`
+# store. "A run began" is already on the goal board and the console; a chat ping
+# per start is volume, not information. Completion notices are untouched.
 _POSTURE_FULL_FLAGS = _POSTURE_OWNER_VISIBLE_FLAGS | {
-    "CRON_ENABLED", "WAKE_CHANGE_GATE", "AUTONOMY_START_NOTICE",
+    "CRON_ENABLED", "WAKE_CHANGE_GATE",
 }
 
 

@@ -85,9 +85,13 @@ class Renderer(ABC):
         self.show_tools: bool = True
         # Per-turn bookkeeping (reset in on_turn_start).
         self._turn_events: List[RenderEvent] = []
+        self._turn_step_count = 0
+        self._turn_tool_count = 0
+        self._turn_had_error = False
         self._turn_started_at: float = time.monotonic()
         self._turn_tokens0: int = 0
         self._turn_cost0: float = 0.0
+        self._turn_unpriced0 = 0
         # Bubble-dedup state (R2 backstop): track whether a send_message bubble
         # was already rendered this turn and what its text was.  Both
         # PlainRenderer and RichRenderer share this state via the base so the
@@ -128,6 +132,28 @@ class Renderer(ABC):
     # Core event handling (template method + leaf dispatch)
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _event_agent_identity(event: Step) -> str:
+        """Return the best available agent identity string for a step event.
+
+        Preference order (real formatter shape):
+          1. ``data.agent_name``   — always present in live feed
+          2. top-level ``agent_name`` — backwards-compat duplicate
+          3. ``data.agent_id``     — never emitted by current formatter, kept
+                                     for defensive forwards-compat
+          4. top-level ``agent_id``
+
+        Returns "" when none of the above are present.
+        """
+        data = event.raw.get("data", {}) or {}
+        return str(
+            data.get("agent_name")
+            or event.raw.get("agent_name")
+            or data.get("agent_id")
+            or event.raw.get("agent_id")
+            or ""
+        )
+
     def on_event(self, event: RenderEvent) -> None:
         """Buffer one normalised feed event and dispatch to the leaf handler.
 
@@ -137,8 +163,21 @@ class Renderer(ABC):
         Called for every event after ``state.update(event)`` has already been
         called, so the state reflects the latest values.
         """
-        if len(self._turn_events) < _TURN_BUFFER_MAX:
-            self._turn_events.append(event)
+        # Metrics must survive the bounded trace buffer and exclude child steps.
+        if isinstance(event, Step) and not self._state.is_sub_agent(self._event_agent_identity(event)):
+            self._turn_step_count += 1
+            self._turn_tool_count += sum(
+                not dialog.is_dialog_action_name(action.get("action_type") or action.get("name") or "")
+                for action in event.actions
+            )
+        if isinstance(event, ErrorEvent):
+            self._turn_had_error = True
+        elif isinstance(event, SessionDone):
+            # A terminal success can confirm recovery from an earlier error.
+            self._turn_had_error = not event.success
+        self._turn_events.append(event)
+        if len(self._turn_events) > _TURN_BUFFER_MAX:
+            del self._turn_events[0]
         try:
             self._render_event(event)
         except Exception:  # pragma: no cover - render must not crash the loop
@@ -275,9 +314,12 @@ class Renderer(ABC):
         idle is the exact failure 019 exists to kill).
         """
         tail = f" (times out in {event.timeout_sec:.0f}s)" if event.timeout_sec else ""
+        remedy = ("answer the approval prompt in this terminal"
+                  if event.provider == "InteractiveCLIApprover"
+                  else "approve queued requests via /pending or `polyrob owner pending`")
         self._emit_line(
             f"{ICONS.pause} awaiting approval: {event.action_name or 'action'}"
-            f" — approve via /pending or `polyrob owner pending`{tail}"
+            f" — {remedy}{tail}"
         )
 
     def _handle_approval_decision(self, event: ApprovalDecision) -> None:
@@ -367,9 +409,15 @@ class Renderer(ABC):
             turn_text: The user's message for this turn.
         """
         self._turn_events = []
+        self._turn_step_count = 0
+        self._turn_tool_count = 0
+        self._turn_had_error = False
+        self._state.last_tool = ""
+        self._state._clear_activity()
         self._turn_started_at = time.monotonic()
         self._turn_tokens0 = self._state.tokens_total
         self._turn_cost0 = self._state.cost_estimate_total
+        self._turn_unpriced0 = self._state.unpriced_calls
         # Reset bubble-dedup state for the new turn.
         self._message_bubble_rendered = False
         self._last_bubble_text = ""
@@ -384,12 +432,12 @@ class Renderer(ABC):
         """
 
     # ------------------------------------------------------------------
-    # Per-turn metrics (derived from the ring buffer + state snapshots)
+    # Per-turn metrics (counters independent of bounded trace storage)
     # ------------------------------------------------------------------
 
     def turn_steps(self) -> int:
         """Number of main-agent step events seen this turn."""
-        return sum(1 for e in self._turn_events if isinstance(e, Step))
+        return self._turn_step_count
 
     def turn_tool_calls(self) -> int:
         """Tool calls this turn, excluding the message channel itself.
@@ -399,15 +447,7 @@ class Renderer(ABC):
         ``send_message``/``done`` are how the agent talks, not work it did —
         counting them would make every chat turn look like tool activity.
         """
-        count = 0
-        for e in self._turn_events:
-            if isinstance(e, Step):
-                for action in e.actions:
-                    if not dialog.is_send_message_action(action) and (
-                        action.get("action_type") != "done"
-                    ):
-                        count += 1
-        return count
+        return self._turn_tool_count
 
     def turn_tokens(self) -> int:
         """Tokens consumed this turn (state delta since on_turn_start)."""
@@ -416,6 +456,9 @@ class Renderer(ABC):
     def turn_cost(self) -> float:
         """Estimated cost of this turn (state delta since on_turn_start)."""
         return max(0.0, self._state.cost_estimate_total - self._turn_cost0)
+
+    def turn_cost_incomplete(self) -> bool:
+        return self._state.unpriced_calls > self._turn_unpriced0
 
     def turn_elapsed(self) -> float:
         """Seconds since on_turn_start."""
@@ -428,17 +471,12 @@ class Renderer(ABC):
     def turn_failed(self) -> bool:
         """True when this turn saw an error or a failed session-done.
 
-        Derived from the per-turn event buffer (not ``state.status``, which is now
-        a lifecycle projection that has reset by summary time). Covers both the
+        Accumulated independently of the trace buffer and lifecycle status.
+        Covers both the
         feed-failure path (``SessionDone`` not success) and the exception path
         (``_render_error`` injects an ``ErrorEvent`` before ``on_turn_end``).
         """
-        for e in self._turn_events:
-            if isinstance(e, ErrorEvent):
-                return True
-            if isinstance(e, SessionDone) and not e.success:
-                return True
-        return False
+        return self._turn_had_error
 
     # ------------------------------------------------------------------
     # Trace on demand (/steps)

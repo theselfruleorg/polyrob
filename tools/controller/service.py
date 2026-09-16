@@ -192,6 +192,9 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 				fail_mode="closed",  # a crashing guardrail must DENY, not silently allow
 			)
 
+		from tools.controller.wallet_authority import make_wallet_authority_hook
+		self.register_pre_tool_call_hook(make_wallet_authority_hook(self), fail_mode="closed")
+
 		# Approval seam (Item 7E): gate the resolved action set through an
 		# ApprovalProvider (default AutoApprover = allow). Empty set => no-op.
 		# owner-UX P2 T4: the full composition — the FROZEN env+posture set
@@ -469,12 +472,18 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 							taint_probe=lambda: bool(
 								getattr(_orch, "_correspondent_tainted", False)),
 							skip_fn=lambda _a, params: bool(params.get("dry_run", True)),
+							# 039 Unit A: audit event only. The owner MESSAGE now comes
+							# from core/wallet/tx_notify.py, which knows the chain, the
+							# amounts, the hash, the cap headroom and the settled
+							# outcome. This hook only ever knew the action name.
+							audit_only=True,
 						),
 						fail_mode="open",  # a notify failure must never break the caller
 					)
 					self.logger.info(
 						f"💳 Tiered spend lane ON: {sorted(_tiered_notify)} execute below "
-						f"${autonomous_ceiling_usd():.2f} -> post-execution owner notify"
+						f"${autonomous_ceiling_usd():.2f} -> payment_auto_approved audit "
+						f"(owner message via tx_notify)"
 					)
 				except Exception as e:
 					self.logger.error(f"Failed to wire tiered spend-lane notify: {e}")
@@ -485,6 +494,16 @@ class Controller(ExecutionMixin, ToolManagementMixin, IntrospectionMixin, Action
 		# in its own module (action_registration.py is at its size ceiling).
 		from tools.controller.autonomy_control_action import register_autonomy_control_action
 		register_autonomy_control_action(self)
+		# 2026-09-15: the agent's own face/voice (read + workspace attach), gated
+		# AVATAR_TOOL_ENABLED. Same reason it lives here rather than in
+		# action_registration.py: that file is AT its size ceiling.
+		from tools.controller.avatar_action import register_avatar_action
+		register_avatar_action(self)
+		# 2026-09-15 (owner rail "fix tg chat reading"): read-only access to the
+		# group ledger for allowlisted rooms, gated GROUP_CHAT_ENABLED. Same
+		# action_registration.py size-ceiling escape hatch.
+		from tools.controller.room_read_action import register_room_read_action
+		register_room_read_action(self)
 
 		# NOTE: Backward compat aliases are registered LAZILY after task tool loads
 		# NOT here in __init__ - aliases to non-existent actions cause confusion

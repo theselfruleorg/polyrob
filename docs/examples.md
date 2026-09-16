@@ -1,680 +1,313 @@
-# POLYROB Examples & Use Cases
+# Examples
 
-Real-world examples of what you can build with POLYROB, organized by complexity and domain.
+Worked examples, in roughly the order a new install grows into them: one-off tasks
+first, then scheduled work, then the things that need a decision from you.
 
----
-
-## Table of Contents
-
-- [Quick Examples](#quick-examples)
-- [Web Automation](#web-automation)
-- [Data Extraction & Research](#data-extraction--research)
-- [File Operations & Code](#file-operations--code)
-- [Business Workflows](#business-workflows)
-- [Scheduled Tasks](#scheduled-tasks)
-- [Integrations](#integrations)
-- [Advanced Workflows](#advanced-workflows)
-- [Payments & Crypto](#payments--crypto)
-- [Cost control, goal dependencies & remote execution](#cost-control-goal-dependencies--remote-execution)
-- [Tips for Best Results](#tips-for-best-results)
-- [Getting Help](#getting-help)
+Every command here is real. Flags are named but not explained — that is
+[`docs/CONFIGURATION.md`](CONFIGURATION.md)'s job, and
+[guide/configuration.md](guide/configuration.md) explains how they resolve.
 
 ---
 
-## Quick Examples
-
-### One-Liners
+## 1. One task, right now
 
 ```bash
-# Summarize a webpage
 polyrob run "summarize https://example.com/article"
-
-# Screenshot a site
 polyrob run "take a screenshot of https://github.com and save it"
-
-# Quick research
-polyrob run "search for the latest Python 3.12 release notes and summarize"
-
-# File operations
-polyrob run "create a markdown file with today's date as a todo list"
+polyrob run "read ./src and write architecture.md: modules, dependencies, data flow"
+polyrob run -t browser,filesystem "find the top 3 launches on Product Hunt today and save them as markdown"
 ```
 
-### Interactive Chat
+`-t` picks an explicit tool list, `--toolset` picks a named one, `--max-steps` bounds
+the run. `polyrob run --resume <session_id>` continues a session instead of starting
+one.
+
+The REPL is the same agent with a conversation around it:
 
 ```bash
 polyrob chat
-
-> You: Go to Product Hunt and find the top 3 AI tools launched today. Create a markdown file with descriptions and links.
-
-> You: Monitor amazon.com for this product's price daily and alert me when it drops below $500.
-
-> You: Analyze the code in ./src/ and find potential security issues.
+> Analyse the code in ./src and find the three riskiest input paths.
+> Now write pytest cases for the first one.
+> /memory        # which recall provider is live
+> /inbox         # anything waiting on a decision from me
 ```
+
+**Be specific about the artifact.** "Research AI companies" gives you prose;
+"search for AI automation companies founded after 2020 with over $10M raised,
+extract name, funding, investors and product focus, and write a comparison table to
+`competitors.md`" gives you a file you can check.
 
 ---
 
-## Web Automation
+## 2. Work on a schedule
 
-### Job Application Automation
-
-**Task:** Fill out job application forms using resume data.
+Cron is POLYROB's durable scheduler: jobs survive restarts and are tenant-scoped.
+It needs `CRON_ENABLED=true` (on by itself at `AUTONOMY_POSTURE=full`).
 
 ```bash
-polyrob run "
-Navigate to linkedin.com/jobs.
-Search for 'Senior Python Engineer' roles in 'Berlin'.
-For the top 5 matches:
-  - Extract company name, job title, and requirements
-  - Navigate to the company's application page
-  - Fill out the form using my resume data from ~/resume.json
-  - Save the application URL to job_applications.md
-"
+polyrob cron schedule "Check https://example.com/product/12345 and tell me if it is under $500" "every day 09:00"
+polyrob cron schedule "Review error logs for new patterns and summarise" "every sunday 03:00"
+polyrob cron schedule "Re-run the smoke suite" "30m"
+polyrob cron list
+polyrob cron show <id>
+polyrob cron cancel <id>
 ```
 
-**What POLYROB does:**
-1. Opens LinkedIn Jobs search
-2. Parses job listings
-3. Extracts key information
-4. Navigates to each application
-5. Fills forms (name, email, experience, etc.)
-6. Logs progress and saves results
+Schedule formats and the per-run cap: [guide/streams.md](guide/streams.md#on-a-clock--cron).
+
+The same thing in chat, in plain words — the agent calls its own cron tool and tells
+you the job id and the next run:
+
+```
+> Every weekday at 8am, check security@company.com for new alerts and email me a
+> summary if anything is critical.
+```
+
+That is the whole cron story; the rest of this page assumes it.
 
 ---
 
-### Price Monitoring
+## 3. Work that is not on a clock
 
-**Task:** Monitor a product page and alert on price drops.
-
-```bash
-polyrob run "
-Go to https://www.example.com/product/12345
-Extract the current price from the page
-If price < $500:
-  - Send an email to me@example.com with subject 'Price Alert: Product is now $PRICE'
-  - Take a screenshot of the page
-Save the price history to price_history.json
-"
-```
-
-**Made recurring:** ask the agent to schedule it as a cron job (durable across
-restarts; needs `CRON_ENABLED=true` — see [CONFIGURATION.md](CONFIGURATION.md#tools--code-exec--cron--approvals)):
+A **goal** is durable background work with no schedule. It needs a dispatcher:
+`AUTONOMY_ENABLED` (plus `POLYROB_LOCAL`, which the CLI sets for you).
 
 ```bash
-polyrob chat
-> Schedule a recurring cron job: every day at 9am, check
-> https://www.example.com/product/12345 and alert me if the price is under $500.
+polyrob autonomy on
+polyrob goals create "Pricing comparison" \
+  -b "Scrape the five competitor pricing pages, normalise, write the table." \
+  --acceptance "a file at reports/pricing.md with five rows" -p 7
+polyrob goals list --status ready
+polyrob goals tree
 ```
 
-The agent calls its `cronjob_schedule` tool and confirms the job id and next run time.
+Goals can wait on each other. The dependency edges are set through the agent's own
+goal tool, so ask for them:
+
+```
+> Create three goals: scrape competitor pricing pages, normalise the data into a
+> table, and write the comparison report — each depending on the one before it.
+```
+
+An **objective** is a standing mission the planner keeps feeding:
+
+```bash
+polyrob goals objective add "Grow the newsletter" \
+  --success-criteria "list size and open rate trending up, judged monthly" \
+  --goal-budget 20
+```
+
+Full treatment, including fair dispatch and the knobs that matter as the board
+grows: [guide/streams.md](guide/streams.md).
 
 ---
 
-### Account Reconciliation
+## 4. The decision loop
 
-**Task:** Log into multiple accounts and compile a report.
+Autonomous work stops when it needs you. One command shows everything that does:
 
 ```bash
-polyrob run "
-Log into my bank at bank.example.com using credentials from ~/.bank_creds
-Download the monthly statement for June 2026
-Log into my credit card portal at cards.example.com
-Download the monthly statement for June 2026
-Compare transactions and create a reconciliation report:
-  - Match transactions by date and amount
-  - Flag discrepancies over $10
-  - Save to reconciliation_june_2026.md
-"
+polyrob owner inbox          # blocking items first, across every store
+polyrob owner asks           # what the agent needs to unblock work
+polyrob owner fulfill <id>   # supply it; the blocked goals go back to ready
+polyrob owner pending        # the agent's own proposals, waiting for promotion
+polyrob owner promote <kind> <id>   # kind: self_context | skill | tool_approval | all
 ```
+
+`/inbox` in the REPL and on Telegram render the same composition. A store that
+refuses to open is **named**, and the count becomes a floor — this never prints
+"nothing needs you" over a list it could not read.
+
+Money and high-impact actions wait here too. Under `PAYMENT_APPROVAL_MODE=approve`
+an outward payment is a durable ask you can answer from your phone.
 
 ---
 
-## Data Extraction & Research
-
-### Competitor Analysis
-
-**Task:** Research competitors and compile comparisons.
+## 5. Let people reach it
 
 ```bash
-polyrob run "
-Search for 'AI automation platforms 2026'
-For the top 10 results:
-  - Visit each company's website
-  - Extract: pricing, key features, target customers
-  - Note any unique differentiators
-Create a comparison table in competitor_analysis.md with:
-  - Company name
-  - Pricing model
-  - Key features
-  - Differentiation
-  - Strengths vs POLYROB
-  - Weaknesses vs POLYROB
-"
+polyrob gateway        # every enabled surface in one process
+polyrob telegram       # or one at a time
+polyrob email
+polyrob serve          # the REST/A2A/OpenAI-compatible API
+polyrob dashboard      # the web console
 ```
 
-**Output example:** `competitor_analysis.md`
-```markdown
-# AI Automation Platforms Comparison (2026-06-28)
-
-| Company | Pricing | Key Features | Differentiation | Strengths | Weaknesses |
-|---------|---------|--------------|-----------------|----------|------------|
-| POLYROB | Self-hosted, per-API cost | Multi-provider, durable goals | Provider failover | No vendor lock-in | Requires hosting |
-| Competitor A | $99/month | Single-provider UI | Ease of use | Simple setup | Locked into one provider |
-| Competitor B | Custom enterprise | Multi-agent workflows | Enterprise features | Expensive | Overkill for small teams |
-...
-```
-
----
-
-### Market Research
-
-**Task:** Aggregate market data from multiple sources.
+An enabled surface with missing credentials is warned about and skipped, so read the
+startup output. Bind yourself as owner before exposing anything:
 
 ```bash
-polyrob run "
-Research the 'AI agents for developers' market:
-1. Search G2 and Capterra for products in this category
-2. For each product found:
-   - Extract pricing, user count, rating
-   - Note key features and target users
-3. Search Google for recent news (past 30 days)
-4. Search Crunchbase for funding information
-5. Compile a market report with:
-   - Market size estimate
-   - Key players and positioning
-   - Pricing trends
-   - Recent funding and M&A
-   - Growth opportunities
-Save as market_research_agents_2026.md
-"
+polyrob config set POLYROB_OWNER_TELEGRAM_ID 123456789
+polyrob config set ALLOWED_TELEGRAM_USER_IDS 123456789
+polyrob owner show
 ```
 
----
-
-### Academic Research
-
-**Task:** Gather papers and synthesize findings.
-
-```bash
-polyrob run "
-Search arxiv.org for 'large language model agent orchestration' papers from 2025-2026
-For the top 10 papers:
-  - Download the PDF
-  - Extract title, authors, abstract, key contributions
-  - Summarize the methodology
-  - Note citation count if available
-Create a literature review with:
-  - Thematic grouping of papers
-  - Method comparison table
-  - Gaps and future work
-Save to lit_review_agent_orchestration_2026.md
-"
-```
-
----
-
-## File Operations & Code
-
-### Codebase Analysis
-
-**Task:** Analyze a codebase and generate documentation.
-
-```bash
-polyrob run "
-Analyze the code in ./src/:
-1. List all Python files
-2. For each file:
-   - Extract function signatures and docstrings
-   - Identify dependencies and imports
-   - Note any TODO comments or FIXME markers
-3. Generate API documentation:
-   - Group functions by module
-   - Include type signatures
-   - Add usage examples
-4. Create architecture.md with:
-   - Module dependency graph
-   - Data flow description
-   - Key design patterns
-Save all output to docs/generated/
-"
-```
-
----
-
-### Security Audit
-
-**Task:** Scan code for security issues.
-
-```bash
-polyrob run "
-Perform a security audit of ./src/:
-1. Search for common vulnerabilities:
-   - SQL injection patterns
-   - Hard-coded credentials (API keys, passwords)
-   - Unsafe deserialization
-   - Shell injection risks
-2. Check dependency versions for known CVEs
-3. Review authentication and authorization logic
-4. Examine input validation and sanitization
-Create security_report.md with:
-  - Severity classification (Critical/High/Medium/Low)
-  - Code location and line number
-  - Description of the vulnerability
-  - Recommended fix
-  - Code example of safe implementation
-"
-```
-
----
-
-### Test Generation
-
-**Task:** Generate tests for existing code.
-
-```bash
-polyrob run "
-For each module in ./src/:
-1. Parse the module and extract:
-   - All function signatures
-   - Class definitions and methods
-   - Exception handling
-2. Generate pytest test cases:
-   - Unit tests for each function
-   - Edge cases and boundary conditions
-   - Error handling scenarios
-3. Create test files at tests/test_<module>.py
-4. Ensure tests follow pytest fixtures and conventions
-Run the generated tests and report coverage
-"
-```
-
----
-
-## Business Workflows
-
-### Invoice Processing
-
-**Task:** Process invoices and update accounting records.
-
-```bash
-polyrob run "
-Monitor emails@company.com for invoices:
-1. For each new email with 'invoice' in subject:
-   - Download the PDF attachment
-   - Extract: vendor, invoice number, date, amount, line items
-   - Validate against purchase order if exists
-   - Classify by expense category
-2. Update accounting_records.csv with new entries
-3. For invoices over $5000:
-   - Flag for manager approval
-   - Send notification to accounting@company.com
-4. Generate weekly summary report every Monday at 9am
-"
-```
-
-**Made recurring:**
-```bash
-polyrob chat
-> Schedule a recurring cron job: every Monday at 9am, process new invoices
-> from emails@company.com, validate them, update accounting_records.csv,
-> and send a weekly summary.
-```
-
----
-
-### Customer Onboarding
-
-**Task:** Automate new customer setup.
-
-```bash
-polyrob run "
-For each new customer signup from webhook:
-1. Extract customer information
-2. Perform setup tasks:
-   - Create user account in database
-   - Provision cloud resources (AWS/Azure)
-   - Generate API keys
-   - Send welcome email with getting-started guide
-3. Create customer record in CRM
-4. Schedule follow-up tasks:
-   - Day 3: Check if customer has completed setup
-   - Day 7: Send satisfaction survey
-   - Day 30: Check usage and offer optimization tips
-Log all actions to customer_onboarding.log
-"
-```
-
----
-
-### Social Media Management
-
-**Task:** Curate and post content.
-
-```bash
-polyrob run "
-Daily content curation:
-1. Search for industry news in 'AI automation'
-2. Extract top 5 most shared articles
-3. Generate:
-   - Twitter thread summarizing key points
-   - LinkedIn post with insights
-   - Internal Slack digest for team
-4. Schedule posts for optimal times:
-   - Twitter: 9am, 2pm, 7pm EST
-   - LinkedIn: 8am, 5pm EST
-5. Track engagement metrics
-6. Weekly report: top performing content, follower growth
-"
-```
-
----
-
-## Scheduled Tasks
-
-Recurring work is handled by the agent's cron tool, not a special CLI flag: ask for
-it in natural language and the agent calls `cronjob_schedule` itself, which
-persists to a durable job store and survives restarts. Requires `CRON_ENABLED=true`
-(off by default — see [CONFIGURATION.md](CONFIGURATION.md#tools--code-exec--cron--approvals)).
-`/cron` in the REPL lists scheduled jobs (read-only); ask the agent to cancel one
-and it uses its `cronjob_cancel` tool.
-
-### Daily Reports
-
-**Task:** Generate and deliver daily summaries.
-
-```bash
-polyrob chat
-> Schedule a recurring cron job: every weekday at 8am, check
-> security@company.com for new alerts, scan cloud logs for anomalies, check
-> dependency CVE feeds, and email a summary to security-team@company.com if
-> anything critical is found.
-```
-
-### Weekly Maintenance
-
-**Task:** Perform regular system maintenance.
-
-```bash
-polyrob chat
-> Schedule a recurring cron job: every Sunday at 3am, check disk space,
-> review error logs for patterns, test backup integrity, check SSL
-> certificate expiry, and generate a maintenance report with any action
-> items.
-```
-
-### Monthly Audits
-
-**Task:** Monthly compliance and audit reports.
-
-```bash
-polyrob chat
-> Schedule a recurring cron job: on the 1st of every month, review access
-> logs for unauthorized access, check data retention compliance, verify
-> encryption status for sensitive data, and generate a compliance report.
-```
-
----
-
-## Integrations
-
-### Slack Bot Integration
-
-**Task:** POLYROB as a Slack bot.
-
-```python
-# In your Slack bot app. Uses the OpenAI-compatible /v1 endpoint — a synchronous
-# request/reply surface, enabled with OPENAI_COMPAT_API_ENABLED=true (see
-# docs/guide/api.md). Session-based /api/task/sessions is fire-and-forget and
-# not a fit for a bot that needs an immediate reply.
-import requests
-
-POLYROB_API = "http://localhost:9000"
-
-def handle_slack_message(event):
-    """Route a Slack message to POLYROB and get a synchronous reply."""
-    user_message = event["text"]
-    user_id = event["user"]
-
-    response = requests.post(
-        f"{POLYROB_API}/v1/chat/completions",
-        json={
-            "model": "gpt-5",
-            "messages": [{"role": "user", "content": user_message}],
-            "user": user_id,
-        },
-        headers={"X-API-KEY": POLYROB_API_KEY},
-    )
-    return response.json()["choices"][0]["message"]["content"]
-```
-
-**Example Slack interactions:**
-```
-User: @polyrob summarize the Jira board for Project X
-POLYROB: [Analyzes Jira, returns summary]
-
-User: @polyrob create a sprint report for last 2 weeks
-POLYROB: [Generates and posts report]
-
-User: @polyrob who worked on ticket PROJ-123?
-POLYROB: [Looks up ticket, assigns and reports]
-```
-
----
-
-### Email Integration
-
-**Task:** Let the agent send and receive email as a correspondent.
-
-v1 email is Gmail-only (IMAP + SMTP via an app password, polled every
-`EMAIL_IMAP_POLL_SEC` seconds — default 60) and **correspondent-only**: a reply
-routes back as data into the session that first reached out, never as a command
-a stranger can send. See [CONFIGURATION.md](CONFIGURATION.md) for the full flag list.
+**Email gives the agent its own address.** Set `AGENTMAIL_API_KEY` and it provisions
+a managed inbox on first run — no IMAP or SMTP setup. The legacy path still works:
 
 ```bash
 EMAIL_SURFACE_ENABLED=true
-GMAIL_EMAIL=bot@gmail.com
+GMAIL_EMAIL=bot@example.com
 GMAIL_APP_PASSWORD=your-16-char-app-password
-
-polyrob email   # starts the IMAP-poll + SMTP surface in the foreground
+polyrob email
 ```
 
-With the surface running, give the agent a task that emails someone (it uses its
-`email` tool) and any reply from that address routes back into the same session:
+Email is **correspondent-only**: a reply routes back as data into the session that
+reached out first, never as a command a stranger can send.
 
 ```bash
 polyrob run "Email finance@company.com asking for this month's invoice totals"
 ```
 
----
+### A group room
 
-### Webhook Integration
-
-**Task:** Respond to webhooks from other services.
-
-```python
-# webhook_handler.py
-from fastapi import FastAPI, Request
-import requests
-
-app = FastAPI()
-POLYROB_API = "http://localhost:9000"
-
-@app.post("/webhook/github")
-async def github_webhook(request: Request):
-    """Kick off a POLYROB session to analyze a newly opened PR."""
-    payload = await request.json()
-
-    if payload["action"] == "opened":
-        pr_url = payload["pull_request"]["url"]
-        response = requests.post(
-            f"{POLYROB_API}/api/task/sessions",
-            json={
-                "task": f"Analyze this PR: {pr_url} and post a summary as a comment on it.",
-                "user_id": "github_bot",
-            },
-            headers={"X-API-KEY": POLYROB_API_KEY},
-        )
-        # Session creation is fire-and-forget — it returns a session_id immediately,
-        # not the analysis. Poll GET /api/task/sessions/{session_id} (or
-        # `polyrob session show <id>`) for progress. Posting the PR comment itself
-        # needs the optional `github` tool (GITHUB_TOOL_ENABLED=true + GITHUB_TOKEN);
-        # PR comments are high-impact and approval-gated.
-        return {"status": "started", "session_id": response.json()["session_id"]}
-```
-
----
-
-### GitHub Actions Integration
-
-**Task:** Use POLYROB in CI/CD pipelines.
-
-```yaml
-# .github/workflows/polyrob-analysis.yml
-name: POLYROB Code Analysis
-
-on:
-  pull_request:
-    types: [opened, synchronize]
-
-jobs:
-  analyze:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run POLYROB analysis
-        env:
-          GITHUB_TOOL_ENABLED: "true"   # opt-in: lets the agent post the PR comment itself
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          polyrob run "
-          Analyze the changes in PR #${{ github.event.pull_request.number }} of
-          ${{ github.repository }}:
-          - Review the diff for security issues
-          - Check for breaking changes
-          - Validate API compatibility
-          - Suggest improvements
-          Post your findings as a comment on the PR.
-          " --tools github,filesystem
-```
-
----
-
-### Expose polyrob to Claude Desktop / Cursor (MCP server)
-
-polyrob can act as an MCP *server* so an MCP client — Claude Desktop, Cursor, or any
-HTTP MCP client — can call it as a read-only tool provider. It's off by default:
+A room is a different regime from a DM: the agent answers anyone in a room you have
+allowed, from a read-only toolset, under a policy you set per room.
 
 ```bash
-MCP_SERVE_ENABLED=true
-polyrob serve            # REST + MCP server on http://localhost:9000
+polyrob config set GROUP_CHAT_ENABLED true
 ```
 
-Point your MCP client's HTTP config at the `/mcp` endpoint with a polyrob API key
-(create one with `POST /api/auth/api-keys` — see [guide/api.md](guide/api.md)):
+Then, from inside the room (owner only, confirmed by DM):
 
-```json
-{
-  "mcpServers": {
-    "polyrob": {
-      "url": "http://localhost:9000/mcp",
-      "headers": { "X-API-KEY": "rob_xxx..." }
-    }
-  }
-}
+```
+/groups allow here
+/groups set here chat.mode active
+/groups set here chat.reply_cap_per_hour 10
+/groups service here every 30m        # a recurring catch-up pass over the room
 ```
 
-v1 exposes five read-only, tenant-scoped tools — `rob_usage_summary`, `rob_goals_list`,
-`rob_goal_show`, `rob_conversations`, `rob_pending_approvals` — over a JSON-RPC-over-POST
-`/mcp` endpoint. (The exact field names in the client config vary by MCP client.)
+Nothing is answered in a room you have not allowed. The Telegram privacy-mode step
+and the full policy list are in [guide/groups.md](guide/groups.md).
 
 ---
 
-## Advanced Workflows
+## 6. Several bots on one machine
 
-### Multi-Agent Research
-
-**Task:** Coordinate multiple specialized agents.
+A profile is a whole isolated home — env, characters, skills, memory, goals,
+sessions:
 
 ```bash
-polyrob chat
-> Delegate research on 'quantum computing in AI' to 3 parallel sub-agents:
->   - Agent 1: Focus on hardware advances
->   - Agent 2: Focus on algorithms and software
->   - Agent 3: Focus on commercial applications
->
-> Synthesize findings into a comprehensive report with:
->   - Executive summary
->   - Technical deep-dive
->   - Market analysis
->   - Investment recommendations
+polyrob profile create scout --description "research bot"
+polyrob -P scout                      # run the REPL as scout
+polyrob -P scout telegram             # scout's own daemon, its own bot token
+polyrob profile use scout             # make it sticky on this machine
+polyrob profile list
+polyrob profile export scout -o scout.tar.gz   # credentials never travel
 ```
+
+`polyrob profile install https://github.com/you/scout-profile#v1.2` installs a
+shared identity; your `.env`, wallet and `data/` are never touched by an update.
+See [guide/profiles.md](guide/profiles.md).
 
 ---
 
-### Continuous Learning
+## 7. Ship something that stays up
 
-**Task:** Let the agent turn what it learns into reusable skills, on its own.
-
-`POLYROB_LOCAL=true` already turns on `SKILLS_WRITABLE` and `BACKGROUND_REVIEW_ENABLED`
-by default, so no manual scheduling is needed — a background reviewer forks off
-every `BG_REVIEW_INTERVAL` productive turns (default 10) and can author or patch a
-skill from what worked, staged for your review (`/skills` or `polyrob skill list`).
+An app the agent builds can outlive its session, behind a public URL, without the
+agent ever holding the privilege to do it.
 
 ```bash
-polyrob chat
+polyrob config set AGENT_BUILDER_MODE ship     # PUBLISH_ENABLED + APP_SERVICE_* on
+polyrob config set APP_SERVICE_BASE_DOMAIN apps.example.com
 ```
 
-If you'd rather have it run a deliberate nightly pass instead of (or in addition to)
-the automatic reviewer, ask for a cron job:
+The agent deploys into a **pending** row; that row *is* the ask. You decide:
 
 ```bash
-> Schedule a recurring cron job: every day at 11pm, review today's conversations,
-> extract patterns that worked, and update or create skills for them.
+polyrob apps list             # status, URL, last health
+polyrob apps show <slug>
+polyrob apps approve <slug>   # the owner decision the agent cannot make
+polyrob apps logs <slug>
+polyrob apps kill <slug>
 ```
+
+`/apps` on Telegram and in the REPL render the same thing. Approval binds to the
+address **and** the approved configuration, so a code bump redeploys unattended
+while a changed command, port or environment-key set comes back to you naming what
+changed. Without a base domain and a certificate, `ship` clamps to `build` and apps
+run on loopback only — `apps list` says so rather than showing a URL that does not
+work.
 
 ---
 
-### Cross-Platform Coordination
-
-**Task:** Coordinate work across multiple platforms.
+## 8. Bound what a run can cost
 
 ```bash
-polyrob run "
-Start a project launch:
-1. Create GitHub repository with template
-2. Set up Jira board with sprint template
-3. Create Slack channels for team
-4. Send calendar invites for kick-off
-5. Generate project wiki in Confluence
-6. Post announcement to LinkedIn
-7. Monitor all channels for responses
-8. Compile feedback into project plan
-"
+RUN_BUDGET_USD=0.50 polyrob run "Research the top 20 vector databases and compare them"
 ```
+
+The run stops **honestly** the moment its real provider cost reaches the cap —
+reported as stopped, never as a fabricated "done". The remaining budget is shown to
+the agent so it can pace itself, and sub-agents share the parent's.
 
 ---
 
-## Payments & Crypto
+## 9. Run code somewhere that is not your laptop
 
-> ⚠️ These features are **unaudited, OFF by default, and move real value on
-> mainnet**. Validate on testnets first. The complete reference — every flag,
-> gate and cap — is [guide/payments.md](guide/payments.md).
+Code execution is off by default and is never in a default toolset.
 
-### The Full Money Loop
+```bash
+CODE_EXEC_ENABLED=true
+CODE_EXEC_BACKEND=docker         # the hardened container
+```
 
-**Task:** Walk the whole shipped loop once, end to end: create a wallet, screen a
-token, run a guarded swap, reconcile the book, invoice a client, and watch the
-payment settle on-chain.
+Or a remote host over your system `ssh`:
 
-**1. Create the wallet** (operator, once — prints the mnemonic a single time):
+```bash
+CODE_EXEC_BACKEND=ssh
+CODE_EXEC_SSH_HOST=build-box.internal
+CODE_EXEC_SSH_USER=agent
+CODE_EXEC_SSH_KEY=~/.ssh/agent_id_ed25519
+CODE_EXEC_SSH_SANDBOXED=true     # your attestation that the host is disposable
+```
+
+⚠️ The `ssh` backend is **not a sandbox**: agent code runs with the SSH user's full
+privileges. A server refuses it without that attestation, and refuses
+`local_subprocess` outright. Read
+[guide/security-model.md](guide/security-model.md) before enabling any of this on a
+shared machine.
+
+---
+
+## 10. Let it learn from its own work
+
+`AUTONOMY_ENABLED` (with `POLYROB_LOCAL`) turns on `SKILLS_WRITABLE` and
+`BACKGROUND_REVIEW_ENABLED` as a group. A background reviewer then forks off every
+`BG_REVIEW_INTERVAL` productive turns (default 10) and can author or patch a skill
+from what worked — staged for your review, never silently active:
+
+```bash
+polyrob autonomy on
+polyrob skill list          # builtin / user / external, with provenance
+polyrob skill approve <id>  # activate a quarantined one
+```
+
+A skill from someone else goes through the managed path, which threat-scans every
+file and quarantines it:
+
+```bash
+polyrob skill install owner/repo
+```
+
+See [guide/skills.md](guide/skills.md).
+
+---
+
+## 11. Money, end to end
+
+> ⚠️ Unaudited, off by default, and it moves real value on mainnet. Validate on a
+> testnet first. Every flag, gate and cap:
+> [guide/payments.md](guide/payments.md).
+
+**1. Create the wallet** (once; prints the mnemonic a single time):
 
 ```bash
 polyrob wallet init
-polyrob wallet          # every address: per-venue EVM + the Solana address, balances, caps
+polyrob wallet          # every address, balances, caps
 ```
 
-**2. Enable sight + guarded trading** (in your env file; see
-[CONFIGURATION.md](CONFIGURATION.md#defi--on-chain-trading)):
+**2. Arm sight, then spend:**
 
 ```bash
 DEFI_DATA_ENABLED=true
@@ -685,191 +318,137 @@ WALLET_DAILY_CAP_USD=25
 PAYMENT_APPROVAL_MODE=approve
 ```
 
-**3. Screen, then trade — address-first, dry-run-first:**
+**3. Screen first, address-first, dry-run-first:**
 
 ```bash
 polyrob run "
 Resolve the ticker TOSHI with defi_data.token_resolve and show me every candidate
 contract address with its liquidity — do not pick one for me.
-Then run defi_data.token_info on 0x8544FE9D190fD7EC52860abBf45088E81Ee24a8c
-and report the safety screen verbatim.
-If the screen is clean, quote a $2 swap from USDC into it with swap_quote,
-then run defi_trade.swap with max_spend_usd=2 as a DRY RUN and show me the
-guard's verdict, the simulated deltas, and the lane.
+Then run defi_data.token_info on the address I name and report the safety screen
+verbatim. If the screen is clean, quote a \$2 swap from USDC into it with
+swap_quote, then run defi_trade.swap with max_spend_usd=2 as a DRY RUN and show me
+the guard's verdict, the simulated deltas, and the lane.
 "
 ```
 
-The agent calls `token_resolve` → `token_info` → `swap_quote` → `defi_trade.swap`
-(`dry_run=true`). Re-running the swap with `dry_run=false` broadcasts only after
-the same guard passes; above `DEFI_AUTONOMOUS_MAX_USD` it queues for your
-`/approve` tap instead of executing.
+Re-running with `dry_run=false` broadcasts only after the same guard passes; above
+`DEFI_AUTONOMOUS_MAX_USD` it waits on the owner queue instead.
 
-**4. Reconcile the book against the chain** (the anti-"phantom position" check):
+**4. Check the book against the chain** — the anti-phantom-position check:
 
 ```bash
-polyrob run "
-Run defi_data.reconcile for chain base against project/position-ledger.md and
-report every disagreement in both directions. If the verdict is DISAGREEMENT,
-update the ledger's Open positions table to match the chain and say what changed.
-"
+polyrob wallet book      # every money chain, one verdict, then what disagrees
 ```
 
-**5. Invoice a client and let the chain settle it:**
+**5. Invoice, and let the chain settle it:**
 
 ```bash
 X402_INVOICE_ENABLED=true
-X402_SETTLE_ONCHAIN_DETECT=true       # facilitator-free: a plain USDC transfer settles it
-INVOICE_CARD_ENABLED=true             # branded QR card attached to the delivery
+X402_SETTLE_ONCHAIN_DETECT=true       # a plain USDC transfer settles it, no facilitator
+INVOICE_CARD_ENABLED=true             # a branded QR card is attached to the delivery
 ```
 
 ```bash
 polyrob run "
 Create a \$5 invoice for 'site audit — example.com' billed to
-'Alice <alice@example.com>' with x402_request, and send her the invoice card
-by email.
+'Alice <alice@example.com>' with x402_request, and send her the invoice card by email.
 "
 ```
 
-The agent calls `x402_request` (owner-approved under `approve` mode), renders the
-QR card, and emails it. When Alice sends USDC to the treasury address, the
-settlement watcher matches the exact amount, marks the invoice `completed`, wakes
-the originating session, and the payment appears under Income in `polyrob finance`
-and the console's `/finance` page — never summed with your compute costs.
+When Alice sends USDC to the treasury address, the settlement watcher matches the
+exact amount, marks the invoice completed, wakes the originating session, and the
+payment appears as income in `polyrob finance` — never summed with your compute
+cost.
 
-**Solana variant:** arm `SOLANA_TRADE_ENABLED=true` + pin `DEFI_SOLANA_RPC`, fund
-the Solana address shown by `polyrob wallet` with SOL for fees, and ask for a swap
-by **mint address** — the agent uses `defi_trade.solana_swap` (Jupiter route,
-simulated and asserted, same caps and audit; `dry_run` by default). Invoices can
-settle on Solana too (`X402_SOLANA_SETTLE=true`, reference-key matching).
+**Solana:** arm `SOLANA_TRADE_ENABLED=true`, pin `DEFI_SOLANA_RPC`, fund the Solana
+address shown by `polyrob wallet` with SOL for fees, and ask for a swap by **mint
+address**.
 
 ---
 
-## Cost control, goal dependencies & remote execution
+## 12. Call it from your own software
 
-### Cap what a single run can spend
+Start the API with `polyrob serve` and mint a key at `POST /api/auth/api-keys`. The
+whole route surface, the auth methods and the MCP-server setup for Claude Desktop or
+Cursor are in [guide/api.md](guide/api.md).
 
-Set a per-session dollar ceiling and a run stops **honestly** the moment its real
-provider cost reaches the cap — reported as a stopped run, never a fabricated "done":
+**A chat bot** wants a synchronous reply, so use the OpenAI-compatible surface
+(`OPENAI_COMPAT_API_ENABLED=true`) rather than session creation, which is
+fire-and-forget:
 
-```bash
-RUN_BUDGET_USD=0.50 polyrob run "Research the top 20 vector databases and write a comparison"
+```python
+import requests
+
+def ask(text: str, user_id: str) -> str:
+    r = requests.post(
+        "http://localhost:9000/v1/chat/completions",
+        json={"model": "gpt-5",
+              "messages": [{"role": "user", "content": text}],
+              "user": user_id},
+        headers={"X-API-KEY": API_KEY},
+    )
+    return r.json()["choices"][0]["message"]["content"]
 ```
 
-The remaining budget is surfaced to the agent so it can prioritize; sub-agents share
-the parent run's budget.
+**A webhook** wants to start work and walk away, so use a session:
 
-### Dependency-ordered goals
-
-The durable goal board lets one goal wait for others. Ask the agent to create goals
-with dependencies and it wires them through its `goal_create` tool (`depends_on`), so a
-dependent goal only becomes eligible once its prerequisites finish:
-
-```bash
-polyrob chat
-> Create three goals: (1) "Scrape competitor pricing pages", (2) "Normalize the
-> pricing data into a table", and (3) "Write the pricing comparison report" — make
-> goal 2 depend on goal 1, and goal 3 depend on goal 2.
+```python
+@app.post("/webhook/github")
+async def github_webhook(request):
+    payload = await request.json()
+    if payload["action"] != "opened":
+        return {"status": "ignored"}
+    r = requests.post(
+        "http://localhost:9000/api/task/sessions",
+        json={"task": f"Review this PR and comment on it: {payload['pull_request']['url']}"},
+        headers={"X-API-KEY": API_KEY},
+    )
+    # Returns a session_id immediately, not the review. Poll
+    # GET /api/task/sessions/{id}, or watch it in the console.
+    return {"session_id": r.json()["session_id"]}
 ```
 
-The `polyrob goals create` CLI command sets title / body / priority / parent; the
-dependency *edges* are set through the agent's goal tool as above. Requires
-`GOALS_ENABLED=true` (on by default under `POLYROB_LOCAL`).
+Posting the comment itself needs the optional `github` tool
+(`GITHUB_TOOL_ENABLED=true` + `GITHUB_TOKEN`); PR comments are high-impact and
+approval-gated.
 
-### Run code on a remote host (ssh backend)
+**In CI**, run it as a command:
 
-Point code execution at a remote machine over your system `ssh` binary:
-
-```bash
-CODE_EXEC_ENABLED=true
-CODE_EXEC_BACKEND=ssh
-CODE_EXEC_SSH_HOST=build-box.internal
-CODE_EXEC_SSH_USER=agent
-CODE_EXEC_SSH_KEY=~/.ssh/agent_id_ed25519
-
-# The ssh backend is NOT a sandbox by default — agent code runs with the SSH user's
-# full privileges. On a server it is refused unless you attest the host is
-# hardened/disposable:
-CODE_EXEC_SSH_SANDBOXED=true
-```
-
-See [guide/security-model.md](guide/security-model.md) before enabling code execution
-anywhere shared.
-
----
-
-## Tips for Best Results
-
-### Be Specific
-
-❌ **Vague:**
-```
-"Research AI companies"
-```
-
-✅ **Specific:**
-```
-"Search for 'AI automation platform' companies founded after 2020 with funding over $10M.
-For each, extract: company name, funding amount, key investors, product focus.
-Create a markdown report with a comparison table."
-```
-
-### Break Down Complex Tasks
-
-❌ **Too complex:**
-```
-"Build a complete e-commerce site with payment processing"
-```
-
-✅ **Broken down:**
-```
-"Phase 1: Create a product catalog markdown file with 10 sample products.
-Phase 2: Design the checkout flow as a flowchart.
-Phase 3: Research Stripe payment integration.
-Phase 4: Create a technical specification document."
-```
-
-### Use Goals and Cron for Ongoing Work
-
-```bash
-# One-time task — runs now, done when it's done
-polyrob run "Check system logs and report errors"
-
-# Durable, cross-session goal — survives restarts, no schedule attached
-polyrob goals create "Log monitor" -b "Check logs for errors, alert if critical issues found" -p 7
-
-# Truly recurring — ask the agent to schedule a cron job (needs CRON_ENABLED=true)
-polyrob chat
-> Schedule a recurring cron job: every day at 6am, check logs for errors and
-> alert me if anything critical is found.
-```
-
-### Leverage Memory
-
-```bash
-polyrob chat
-> Remember: Our API pricing is $0.01 per request for the first 10k, then $0.005
->
-> New task: Generate a pricing calculator based on the pricing I just told you
+```yaml
+- name: Review the diff
+  env:
+    GITHUB_TOOL_ENABLED: "true"
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  run: |
+    polyrob run --tools github,filesystem "
+    Review PR #${{ github.event.pull_request.number }} of ${{ github.repository }}
+    for security issues, breaking changes and API compatibility, and post your
+    findings as a comment.
+    "
 ```
 
 ---
 
-## Getting Help
+## When something does not work
 
-- **Documentation:** See [docs/guide/](guide/)
-- **Configuration:** See [docs/CONFIGURATION.md](CONFIGURATION.md)
-- **Architecture:** See [docs/guide/architecture.md](guide/architecture.md)
-- **Community:** [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions)
-- **Issues:** [GitHub Issues](https://github.com/theselfruleorg/polyrob/issues)
+| Symptom | Check |
+|---|---|
+| A goal sits there forever | `polyrob autonomy status` — the master switch, the posture, and whether a pause is active |
+| "no dispatcher will pick goals up" | `polyrob autonomy on` |
+| The agent refuses a tool | `polyrob tools status` names the gate and the remedy |
+| A flag seems to do nothing | `polyrob doctor --flags --search NAME`, then `polyrob config check` |
+| It stopped answering in a room | `/groups set here chat.mode active`, and check the room is still allowed |
+| Nothing is happening at all | a pause is in force: `polyrob autonomy resume` |
 
 ---
 
-## Contributing Examples
+## More
 
-Have an interesting use case? We'd love to add it!
+- [guide/getting-started.md](guide/getting-started.md) · [guide/cli.md](guide/cli.md) · [guide/api.md](guide/api.md)
+- [guide/configuration.md](guide/configuration.md) · [`docs/CONFIGURATION.md`](CONFIGURATION.md)
+- [guide/security-model.md](guide/security-model.md) · [guide/payments.md](guide/payments.md)
+- [GitHub Discussions](https://github.com/theselfruleorg/polyrob/discussions) ·
+  [Issues](https://github.com/theselfruleorg/polyrob/issues)
 
-1. Fork the repository
-2. Add your example to `docs/examples.md`
-3. Submit a pull request with description
-
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for guidelines.
+Have a use case worth adding? Open a pull request against this file — see
+[CONTRIBUTING.md](../CONTRIBUTING.md).

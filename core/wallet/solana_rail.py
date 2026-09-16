@@ -21,10 +21,8 @@ of `size_gas` — the compute-unit LIMIT comes from the simulation instead.
 """
 from __future__ import annotations
 
-import json
 import logging
 import time
-import urllib.request
 from typing import Callable, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -69,16 +67,28 @@ class SolanaRail:
     def _rpc(self, method: str, params: list, timeout: float = 10.0):
         if self._rpc_fn is not None:
             return self._rpc_fn(method, params)
-        from core.wallet.solana_onchain import rpc_url
-        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
-                           "params": params}).encode()
-        req = urllib.request.Request(rpc_url(), data=body, headers={
-            "content-type": "application/json", "user-agent": "polyrob-wallet/1.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            payload = json.loads(r.read())
-        if isinstance(payload, dict) and payload.get("error") is not None:
-            raise SolanaBroadcastError(f"{method}: {payload['error']}")
-        return (payload or {}).get("result")
+        from core.wallet.solana_onchain import _rpc
+        try:
+            return _rpc(method, params, timeout)
+        except Exception as exc:
+            raise SolanaBroadcastError(f'{method}: RPC failed ({type(exc).__name__})') from exc
+
+    #: The commitment the blockhash is read at, AND the one preflight must
+    #: simulate against. ⚠️ ONE constant on purpose: these are not two settings,
+    #: they are the same setting read twice, and letting them drift is the bug.
+    #:
+    #: Live 2026-09-13: the blockhash was fetched at `confirmed` while
+    #: `sendTransaction` omitted `preflightCommitment`, whose RPC default is
+    #: `finalized`. Preflight therefore simulated against a bank ~31 slots
+    #: (~12s) older than the blockhash it was handed, so the node answered
+    #: `BlockhashNotFound` about a blockhash it had issued seconds earlier.
+    #: Measured on the pinned RPC that day: isBlockhashValid(@confirmed)=True,
+    #: isBlockhashValid(@finalized)=False for the same hash.
+    #:
+    #: Two SOL->Base bridge broadcasts died on this, one second after the fetch
+    #: -- far too fast for the expiry the error text implies, which is why it
+    #: read as a flaky network and got retried instead of fixed.
+    COMMITMENT = "confirmed"
 
     # -- build -------------------------------------------------------------
     def recent_blockhash(self) -> str:
@@ -88,7 +98,7 @@ class SolanaRail:
         that can never land, and it hides the RPC outage that caused it.
         """
         try:
-            res = self._rpc("getLatestBlockhash", [{"commitment": "confirmed"}])
+            res = self._rpc("getLatestBlockhash", [{"commitment": self.COMMITMENT}])
         except SolanaBroadcastError:
             raise
         except Exception as exc:
@@ -107,17 +117,37 @@ class SolanaRail:
         if not raw:
             raise SolanaBroadcastError("refusing to send an empty/unsigned transaction")
         import base64
+        # Derive the public recovery identifier BEFORE contacting an RPC. A lost
+        # response must never erase evidence of a possibly accepted submission.
+        try:
+            from solders.transaction import VersionedTransaction
+            transaction = VersionedTransaction.from_bytes(bytes(raw))
+            transaction.verify_and_hash_message()
+            signature = str(transaction.signatures[0])
+            blockhash = str(transaction.message.recent_blockhash)
+        except Exception as exc:
+            raise SolanaBroadcastError("refusing malformed or unsigned transaction") from exc
+        from core.wallet.submission_journal import prepare
+        prepare(signature, "solana", self._signer.address, blockhash)
         encoded = base64.b64encode(bytes(raw)).decode()
         try:
             sig = self._rpc("sendTransaction",
                             [encoded, {"encoding": "base64",
                                        "skipPreflight": False,
+                                       # Preflight stays ON -- it is the last
+                                       # check before a live send. It simply has
+                                       # to simulate against the SAME bank the
+                                       # blockhash came from; see COMMITMENT.
+                                       "preflightCommitment": self.COMMITMENT,
                                        "maxRetries": 0}])
         except Exception as exc:
-            raise SolanaBroadcastError(f"sendTransaction failed: {exc}") from exc
-        if not sig:
-            raise SolanaBroadcastError("sendTransaction returned no signature")
-        return str(sig)
+            raise SolanaBroadcastError(
+                f"submission outcome unknown for {signature}; reconcile before retrying"
+            ) from exc
+        if str(sig) != signature:
+            raise SolanaBroadcastError(
+                f"RPC did not confirm the expected signature {signature}; reconcile before retrying")
+        return signature
 
     def confirm(self, signature: str, *, attempts: int = 30,
                 delay: float = 2.0) -> Tuple[bool, str]:

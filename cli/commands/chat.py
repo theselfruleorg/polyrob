@@ -97,17 +97,11 @@ async def _conversation_loop(
                 continue
             # not a recognized slash → fall through and treat as a turn
 
-        # C1: expand @file/@folder/@diff/@url references in real user turns (opt-in).
-        # Confined to CWD; fails soft — an expansion error leaves the line unchanged.
+        from cli.ui.input_policy import prepare_text
         try:
-            from agents.task.constants import AutonomyConfig
-            if AutonomyConfig.context_references_enabled():
-                from agents.task.agent.messages.context_references import (
-                    preprocess_context_references,
-                )
-                line = preprocess_context_references(line, root=os.getcwd(), confine_to_root=True)
-        except Exception:
-            pass  # fail-soft: leave line unchanged
+            line = prepare_text(line)
+        except Exception as exc:
+            click.echo(f"Context references could not be expanded; using original text: {exc}", err=True)
 
         # Turn boundary drives the TurnLifecycle (begin on submit → end on
         # deliver/error/cancel), guarded by try/finally + a token so end_turn fires
@@ -196,6 +190,8 @@ async def _conversation_loop(
                     pass
 
             if renderer is not None:
+                if getattr(renderer, "turn_failed", lambda: False)():
+                    _outcome = TurnOutcome.ERROR
                 renderer.on_turn_end(answer or "")
             elif answer:
                 click.echo(answer)
@@ -289,6 +285,7 @@ async def _run_persistent_app(
     *,
     completer=None,
     background_poll=None,
+    owner_gate=None,
 ):
     """Run the persistent bottom-anchored Application loop (POLYROB_PERSISTENT_INPUT).
 
@@ -306,12 +303,21 @@ async def _run_persistent_app(
     from cli.ui.app import build_app
     from cli.ui.persistent_loop import TurnController, run_turn
 
+    from cli.ui.approval_prompt import ApprovalPrompt
+    from core.approval_input import terminal_approval_input
+    approval = ApprovalPrompt(renderer.print_block)
     holder: dict = {}
 
-    def _on_submit(text: str) -> None:
+    def _on_submit(text: str) -> bool:
+        if approval.submit(text):
+            return True
+        if owner_gate is not None and not text.startswith("/"):
+            reply = owner_gate(text)
+            if reply is not None:
+                renderer.print_block(reply)
+                return True
         ctrl = holder.get("ctrl")
-        if ctrl is not None:
-            ctrl.submit(text)
+        return ctrl.submit(text) if ctrl is not None else False
 
     def _on_interrupt() -> None:
         ctrl = holder.get("ctrl")
@@ -340,6 +346,8 @@ async def _run_persistent_app(
     holder["ctrl"] = TurnController(
         run_coro_factory=_factory,
         schedule=lambda coro: app.create_background_task(coro),
+        control_factory=_factory,
+        rejected=renderer.print_block,
     )
 
     if background_poll is not None:
@@ -367,8 +375,11 @@ async def _run_persistent_app(
         # speaker line / markdown leaked as literal "?[1;32m…" text above the
         # pinned box. raw mode uses output.write_raw → ANSI passes through and the
         # terminal interprets it.
-        with patch_stdout(raw=True):
-            await app.run_async()
+        try:
+            with terminal_approval_input(approval.request), patch_stdout(raw=True):
+                await app.run_async()
+        finally:
+            approval.close()
     except EOFError:
         pass  # Ctrl-D exit
     finally:
@@ -502,6 +513,11 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         return
     clear_start_notice(_start_out, _start_transient)
     _logging.disable(_logging.NOTSET)
+    # 027 WP3 / A12: run-time errors stay one line (mirrors run.py:154-156;
+    # unlike `polyrob run`, the REPL has no --verbose flag to opt back into
+    # full tracebacks).
+    from cli.ui.log_squelch import apply_single_line_errors
+    apply_single_line_errors()
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -697,6 +713,10 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                     user_id=user_id,
                     request=request,
                     skip_credit_check=True,
+                    # 043 A17: the REPL is a terminal-native session, same
+                    # `creator` bucket as one-shot `polyrob run` (not "owner" —
+                    # that label is reserved for chat-SURFACE turns).
+                    creator="cli",
                 )
         except Exception as e:
             from cli.commands._errors import echo_create_session_error
@@ -852,6 +872,17 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 _autonomy_on = _ae()
             except Exception:
                 _autonomy_on = None
+            # F13: name the persona when the operator chose one; "" keeps the
+            # neutral packaged default off the banner (it carries no signal).
+            try:
+                from agents.personality.persona_resolver import DEFAULT_CHARACTER_NAME
+                from cli.persona import describe_active_persona
+                _p = describe_active_persona(user_id, _data_home)
+                _character = _p["name"] if (
+                    _p["gate"] and _p["kind"] in ("character", "template")
+                    and _p["name"] != DEFAULT_CHARACTER_NAME) else ""
+            except Exception:
+                _character = ""
             print_banner(
                 _renderer,
                 version=_ROB_VERSION,
@@ -866,6 +897,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                 user_id=user_id,
                 memory_backend=_memory_backend,
                 autonomy_on=_autonomy_on,
+                character=_character,
             )
         except Exception:
             pass
@@ -926,8 +958,8 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # and live during a turn. Set the flag to 0/off to fall through to the legacy
         # ephemeral prompt_async path.
         from cli.ui.app import persistent_input_enabled as _persistent_enabled
-        from cli.ui.theme import is_tty as _is_tty
-        if _persistent_enabled() and _is_tty(sys.stdin) and not plain:
+        from cli.ui.theme import supports_cursor_ui
+        if _persistent_enabled() and supports_cursor_ui() and not plain:
             try:
                 from cli.ui.commands import build_completer, default_registry
 
@@ -959,6 +991,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
                     convo, _ui_state, _renderer, _slash_dispatch, _poll_usage,
                     completer=_completer_p,
                     background_poll=_autonomy_poll,
+                    owner_gate=lambda text: _owner_pause_gate(text, container),
                 )
                 return
             except Exception as e:
@@ -972,7 +1005,7 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         # still works headlessly.
         read_line = None
         _patch_stdout_cm = contextlib.nullcontext()
-        if _is_tty(sys.stdin) and not plain:
+        if supports_cursor_ui() and not plain:
             try:
                 from prompt_toolkit.patch_stdout import patch_stdout
 

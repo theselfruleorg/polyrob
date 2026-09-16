@@ -2,7 +2,7 @@
 from modules.pfp.mesh import Mesh
 
 
-def _cfg(seed="Rob Ottmachin", **over):
+def _cfg(seed="POLYROB", **over):
     return {"generator": "mindprint@v2", "seed": seed, "variant": "", "override": over}
 
 

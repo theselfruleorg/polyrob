@@ -12,6 +12,7 @@ sticky file, and the wrapper-bin dir.
 """
 import os
 import shutil
+import sys
 from datetime import date
 from pathlib import Path
 
@@ -98,20 +99,41 @@ def _live_db_sidecars(home: Path) -> list:
     return out
 
 
+def _polyrob_executable() -> str:
+    """The ABSOLUTE polyrob beside the interpreter that is writing the wrapper.
+
+    F11: the wrapper used to be a bare ``exec polyrob``, resolved through PATH at
+    CALL time. On a machine with more than one install (a venv + an editable
+    checkout + pipx) that binds the alias to whichever polyrob PATH happens to
+    resolve — not the one the operator used to create it. Falls back to the bare
+    name only when no console script sits beside this interpreter (e.g. a
+    ``python -m`` invocation), where a bare name is still a working wrapper and
+    an absolute guess would be a broken one.
+    """
+    exe = "polyrob.exe" if os.name == "nt" else "polyrob"
+    candidate = Path(sys.executable).parent / exe
+    return str(candidate) if candidate.is_file() else "polyrob"
+
+
 def _write_wrapper(alias_name: str, profile_name: str) -> Path:
-    """Write ``<bin>/<alias>`` -> ``exec polyrob -P <profile> "$@"``.
+    """Write ``<bin>/<alias>`` -> ``exec <polyrob> -P <profile> "$@"``.
 
     Refuses to overwrite a file that is not one of our wrappers (marker check).
     """
     bin_dir = _bin_dir()
     bin_dir.mkdir(parents=True, exist_ok=True)
+    polyrob_bin = _polyrob_executable()
+    # Quote only an absolute path (it may contain spaces); the bare-name
+    # fallback stays the byte-identical legacy form.
+    quoted = f'"{polyrob_bin}"' if os.path.isabs(polyrob_bin) else polyrob_bin
     if os.name == "nt":  # pragma: no cover - windows
         target = bin_dir / f"{alias_name}.bat"
-        content = f"@echo off\nREM {_WRAPPER_MARKER} {profile_name}\npolyrob -P {profile_name} %*\n"
+        content = (f"@echo off\nREM {_WRAPPER_MARKER} {profile_name}\n"
+                   f"{quoted} -P {profile_name} %*\n")
     else:
         target = bin_dir / alias_name
         content = (f"#!/bin/sh\n{_WRAPPER_MARKER} {profile_name}\n"
-                   f'exec polyrob -P {profile_name} "$@"\n')
+                   f'exec {quoted} -P {profile_name} "$@"\n')
     if target.exists() and _WRAPPER_MARKER not in target.read_text(encoding="utf-8", errors="replace"):
         raise click.ClickException(
             f"{target} exists and is not a polyrob profile wrapper — refusing "
@@ -555,6 +577,20 @@ def adopt_cmd(name, include_data, description):
     click.echo(f"Created profile '{name}' at {result['home']}")
     if result["copied"]:
         click.echo("Copied: " + ", ".join(result["copied"]))
+    else:
+        # F7: with nothing to copy, "Created" + "Pinned" reads as though an
+        # existing bot was adopted. The verb promises continuity — say plainly
+        # when there was none, and name the two commands that create one.
+        click.echo(f"Adopted nothing — {cwd / '.polyrob'} has no identity/, "
+                   "characters/ or skills/ to copy. This is a BLANK profile.")
+        click.echo(f"  Next: polyrob -P {name} persona init <slug> "
+                   f"&& polyrob -P {name} soul init")
+    if not include_data:
+        sidecars = sorted(
+            p.name for pattern in _DATA_DB_GLOBS
+            for p in (cwd / ".polyrob").glob(pattern)) if (cwd / ".polyrob").is_dir() else []
+        if sidecars:
+            click.echo(f"  Not copied (re-run with --include-data): {', '.join(sidecars)}")
     click.echo(f"Pinned this folder to it ({pin}). Runs from here now use '{name}'.")
 
 

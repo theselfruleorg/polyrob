@@ -15,6 +15,7 @@ import logging
 import os
 import re
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -62,17 +63,34 @@ class EvidencePack:
 # Ledger walking (shares the RunOutcome readers)
 # ---------------------------------------------------------------------------
 
-def _walk_ledger(orchestrator: Any):
-    """Yield (label, action_name, action, result) across all agents' steps."""
+@dataclass
+class ActionEvent:
+    agent_id: str
+    sequence: int
+    label: str
+    name: str
+    action: Any
+    result: Any
+
+    @property
+    def receipt(self):
+        metadata = getattr(self.result, "metadata", None)
+        value = metadata.get("execution_receipt") if isinstance(metadata, dict) else None
+        return value if isinstance(value, dict) else {}
+
+
+def walk_action_events(orchestrator: Any):
+    """Keep agent-local sequence; cross-agent order requires harness receipts."""
     from agents.task.runtime.run_outcome import _action_name
 
     if orchestrator is None:
         return
     try:
-        agents = list((getattr(orchestrator, "agents", None) or {}).values())
+        agents = list((getattr(orchestrator, "agents", None) or {}).items())
     except Exception:
         return
-    for agent in agents:
+    for agent_id, agent in agents:
+        sequence = 0
         label = "sub:" if getattr(agent, "_is_sub_agent", False) else ""
         try:
             steps = list(getattr(getattr(agent, "history", None), "history", None) or [])
@@ -86,7 +104,19 @@ def _walk_ledger(orchestrator: Any):
                 continue
             for i, action in enumerate(actions):
                 result = results[i] if i < len(results) else None
-                yield (label, _action_name(action), action, result)
+                yield ActionEvent(str(agent_id), sequence, label, _action_name(action), action, result)
+                sequence += 1
+
+
+def _walk_ledger(orchestrator: Any):
+    """Compatibility tuple view; chronological only when all receipts permit it."""
+    events = list(walk_action_events(orchestrator))
+    clocks = {event.receipt.get("clock_id") for event in events}
+    if len(clocks) == 1 and None not in clocks and all(
+            isinstance(event.receipt.get("finished_ns"), int) for event in events):
+        events.sort(key=lambda event: event.receipt["finished_ns"])
+    for event in events:
+        yield event.label, event.name, event.action, event.result
 
 
 def _result_head(result: Any, limit: int = 120) -> str:
@@ -99,15 +129,17 @@ def build_evidence(orchestrator: Any, *, workspace_dir: Optional[str] = None,
     """Assemble the pack from the resident orchestrator. Never raises."""
     pack = EvidencePack()
     try:
+        ledger_tail = deque(maxlen=MAX_LEDGER_LINES // 2)
+        ledger_count = 0
         seen_refs: set = set()
         step_errors: List[tuple] = []  # (step_index, text) for the tail selection
         idx = 0
         for label, name, _action, result in _walk_ledger(orchestrator):
             idx += 1
-            if result is None:
-                continue
             error = getattr(result, "error", None)
-            if error:
+            if result is None:
+                status = "UNKNOWN: no execution result"
+            elif error:
                 status = f"ERROR: {str(error)[:MAX_LINE_CHARS]}"
                 step_errors.append((idx, f"{label}{name}: {str(error)[:MAX_LINE_CHARS]}"))
             else:
@@ -119,8 +151,15 @@ def build_evidence(orchestrator: Any, *, workspace_dir: Optional[str] = None,
                     if m not in seen_refs and len(pack.captured_refs) < MAX_REFS:
                         seen_refs.add(m)
                         pack.captured_refs.append(m)
+            line = f"{label}{name} -> {status}"
+            ledger_count += 1
             if len(pack.ledger) < MAX_LEDGER_LINES:
-                pack.ledger.append(f"{label}{name} -> {status}")
+                pack.ledger.append(line)
+            ledger_tail.append(line)
+        if ledger_count > MAX_LEDGER_LINES:
+            head_size = MAX_LEDGER_LINES - len(ledger_tail) - 1
+            omitted = ledger_count - head_size - len(ledger_tail)
+            pack.ledger = pack.ledger[:head_size] + [f"... {omitted} middle actions omitted ..."] + list(ledger_tail)
         # errors in the final steps: keep the tail
         if step_errors:
             pack.errors_tail = [t for _, t in step_errors[-ERRORS_TAIL_STEPS:]]

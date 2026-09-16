@@ -1,365 +1,166 @@
-# POLYROB Console
+# The console
 
-The **POLYROB Console** is the web app in `webview/` — a FastAPI + Socket.IO
-service that gives you a browser view of your agent's sessions, memory,
-autonomy loops, identity, and (in multitenant deployments) billing. It runs
-alongside the API/CLI, not instead of them; every page reads the same
-underlying services the agent itself uses (session files, the memory
-provider, the goal board, cron, `doctor_report`) rather than a second,
-parallel data store.
-
-Start it with:
+The console is polyrob's web seat: a browser view of what the agent is doing, and
+the controls to decide, pause and correct it. It runs as its own process beside the
+agent and reads the same stores the agent itself uses — the goal board, cron, the
+memory provider, the ledger, `polyrob doctor` — never a second copy of the numbers.
 
 ```bash
 polyrob dashboard          # alias: polyrob webgate
 ```
 
-By default this binds to `127.0.0.1:5050` (Posture 0, `local`) and opens
-`http://localhost:5050` in your browser (`--no-browser` to skip that,
-`--host`/`--port` to change the bind). See
-[deployment-postures.md](deployment-postures.md) for the full posture model
-(`--posture local|own_ops|multitenant`) and [self-hosting.md](self-hosting.md)
-for running it as a persistent service.
+That binds `127.0.0.1:5050` and opens a browser (`--no-browser` to skip,
+`--host` / `--port` to change the bind). Which posture it runs in, how owner login
+works, and how to run it as a service are in
+[deployment-postures.md](deployment-postures.md) and
+[self-hosting.md](self-hosting.md).
 
 ---
 
-## Naming: framework vs. instance
+## The five destinations
 
-**POLYROB** is the framework. A running deployment is one **instance** of it —
-by default the instance id is `"polyrob"` (`core/instance.py::DEFAULT_INSTANCE_ID`,
-overridable via `POLYROB_INSTANCE_ID`/`BOT_INSTANCE_ID`). The Console's product
-name is resolved independently of the instance id:
+| Nav | Route | What it answers |
+|---|---|---|
+| New | `/` | Talk to it. A thread you already started is `/c/{session_id}` |
+| Inbox | `/inbox` | What is waiting on you, and what expires soonest |
+| Work | `/work` | What it is doing and what is queued |
+| Money | `/money` | What it earned, what it spent, what it holds |
+| Agent | `/agent` | Who it is, how it is configured, whether it is healthy |
 
-- Default: **"POLYROB Console"** (the framework brand), regardless of what the
-  instance is called.
-- Opt-in override: set `POLYROB_CONSOLE_NAME` to rename the Console itself
-  (e.g. an operator running an instance called "rob" can present its web app
-  as "Rob Console" without that silently happening just because they set an
-  instance id).
+**New** opens on one true sentence about the last day — built from the same reader
+`polyrob journey` and the chat `/recap` use — four things you could ask, and a place
+to type. It is deliberately not a configuration form. A thread you do not own
+answers 404 rather than an access-denied page.
 
-This is deliberate: setting `POLYROB_INSTANCE_ID` alone does **not** rename the
-Console (`core/instance.py::console_display_name`) — naming the instance and
-branding the Console are two independent, both opt-in, decisions. Every page
-template renders the name via the `console_display_name()` Jinja global
-(`webview/server.py`, `webview/pages.py`), so a single env var repaints the
-whole app (title bar, header, page `<title>`).
+On a public posture, `/` is also the status page an unauthenticated visitor sees:
+"polyrob is live", the instance id, the version. Signing in replaces it with the
+console.
 
----
+**Inbox** is the one list of what is blocked on a person, composed from five stores:
+the self-evolution review queue, tool approvals, correspondents awaiting your
+approval, the agent's open asks, and pending app deployments. Each card says what it
+wants, why, what yes costs, what no costs, and how long it has waited; Approve,
+Reject and Fulfill act through exactly the same deciders as `polyrob owner pending`
+and the chat verbs, so one decision means the same thing on every seat. A store that
+would not answer is listed as an unreadable entry with its reason — never dropped,
+and never counted as zero.
 
-## Deployment posture
 
-The Console runs in one of three postures — `local` (default, loopback,
-no auth), `own_ops` (off-loopback, owner-login), or `multitenant`
-(wallet/SIWE auth, admin + billing pages registered). See
-[deployment-postures.md](deployment-postures.md) for the full posture model,
-resolution order, and how to launch each one. Most of what follows applies
-to all three postures; where a capability is posture-gated, it's called out
-explicitly below.
+### Live sessions
 
----
-
-## Capabilities
-
-### 1. Chat / live session feed
-
-`/session/{id}` renders a session's running transcript; the page opens a
-Socket.IO connection and joins the session's room to stream new feed events
-live as the agent works (`webview/server.py` `join_session`/`_feed_watcher`),
-backed by `GET /api/session/{id}/feed/events` for the initial/paginated
-history (the older plain `/feed` endpoint is deprecated and just redirects
-there). In `own_ops`/`multitenant` posture, the
-Socket.IO `connect` handler requires a decoded owner-login cookie or
-wallet/SIWE token before a socket is attached to a session room (`local`
-posture skips this — the loopback operator is trusted by construction).
-
-### 2. File workspace (tree / preview / download)
-
-`GET /api/session/{id}/workspace/tree`, `/workspace/status`,
-`/workspace/file` (text preview) and `/workspace/serve/{path}` (raw
-download) expose the session's workspace directory as a browsable file tree.
-These endpoints deliberately serve under the **session owner's** identity
-even when a different authenticated caller is viewing (`webview/server.py`,
-commented "allow public viewing of shared sessions") — i.e. knowing a
-session's URL is the access key for a shared session's files, the same as
-its live feed, independent of who is logged in.
-
-### 3. Screenshots
-
-`GET /api/session/{id}/screenshot` (latest, JSON) and
-`/screenshot/file?ts=...` (a specific captured PNG) surface browser-tool
-screenshots saved to the session's `screenshots/` directory. Same
-session-owner-scoped access model as the workspace endpoints above.
-
-### 4. Memory browse (`/memory`)
-
-Read-only browse + keyword search over the **active `MemoryProvider`**
-(`webview/pages.py::api_memory` → `provider.search(...)`) — the exact same
-provider the agent's `session_search`/prefetch calls use
-(`modules/memory/*`, selected by `MEMORY_BACKEND`). An empty query browses
-most-recent entries; a non-empty query searches. No separate memory store —
-this is a read window onto the agent's real recall.
-
-### 4b. Knowledge (`/knowledge`)
-
-Read-only wiki over everything the agent knows (C2, 2026-07-12;
-`webview/knowledge.py`): curated **notes** (incl. quarantined pending ones),
-the **episode** ledger (per-run outcome/artifacts/spend — needs
-`EPISODIC_MEMORY_ENABLED`), the **skill** catalog with reuse stats + pending
-drafts, **KB** sources, and a **changes** tab filtering the durable event log
-(`self_modification` + `memory_write`). Every endpoint reuses an existing
-reader (notes verbs / `recall_episodes` / `SkillManager` / `kb_list_sources` /
-event log) — no second source of truth. Approve/reject moved to the
-Console's own **Pending review** page (4e below; same queue as `/pending`
-and `polyrob owner pending`); the export twin is
-`polyrob knowledge export` (an Obsidian-compatible vault).
-
-### 4c. Finance (`/finance`)
-
-The agent's balance sheet over a trailing window, shown as **two blocks that
-are never summed**: **Treasury** (the agent's own money — income / spend /
-pending x402 invoices / net) and **Runtime cost** (the owner's LLM compute
-spend), plus display-only policy caps.
-`GET /api/webgate/ledger` reuses
-`modules.credits.unified_ledger.build_ledger` — the same core `polyrob
-finance` and the REPL `/finance` render, so the numbers can never disagree
-across surfaces. Read-only, tenant-scoped; a ledger error degrades to zeros.
-
-### 4d. Preferences (`/preferences`)
-
-The typed per-tenant preference store (`preferences.toml`), schema-driven
-from `core.prefs.PREF_SCHEMA`: every key with its type/sensitivity/applies/
-description and the EFFECTIVE value + source (`display_effective` — the same
-helper the REPL `/config` and the agent's `preferences` action use). Safe
-keys apply on change; guarded keys ask for an explicit confirm (the
-authenticated PATCH with `confirm:true` is the owner confirmation — same
-trust as `polyrob config set --confirm`). `WEBVIEW_READ_ONLY` disables all
-writes; tenant resolution is fail-closed (`_effective_user_id`).
-
-### 4e. Pending review (`/pending`)
-
-The self-evolution review queue: identity notes, authored skills, operating
-contract text and guarded preference changes the agent quarantined for owner
-review. List / show-full / **Approve** / **Reject** ride the same
-`core.self_evolution` aggregator as `polyrob owner pending/promote/reject`,
-the REPL `/pending` and Telegram `/approve` — one queue, identical effect
-from every surface. Decision verbs are blocked in `WEBVIEW_READ_ONLY`.
-
-### 5. Autonomy (`/autonomy`)
-
-Shows the durable **goal board** and **cron jobs** for the effective tenant:
-`GET /api/webgate/goals` reuses `GoalBoard.list()`
-(`agents/task/goals/board.py`) and `GET /api/webgate/cron` reuses
-`CronService.list_jobs()` (`cron/service.py`). Both report `{"enabled":
-false}` (not an error) when `GOALS_ENABLED`/cron is off — the page degrades
-to an empty state rather than a broken one. Read-only; goals/cron are
-created by the agent itself (`goal_create`/`cronjob_schedule` tools) or the
-CLI, not from this page.
-
-**Pause panel.** The page leads with the owner pause state
-(`GET /api/webgate/pause` → `{paused, scopes, since, until, set_by, via, reason,
-source, env_scopes, halted, env_halt}`; `halted` = the `all` scope), read
-from the ONE pause record every loop honours (`<data>/AUTONOMY_PAUSE.json`).
-On the owner console `POST /api/webgate/pause` (`{scopes?, duration_minutes?}`)
-pauses everything or the selected scopes (an unknown scope is a 400, like
-`/pause`), and `POST /api/webgate/resume` (`{scopes?}`) lifts it (`still_halted`
-= any scope still paused); the message shown is the verified read-back state,
-never a checkmark on a write. `/api/webgate/halt` stays as an alias of
-"pause everything". See `docs/guide/owner-controls.md`.
-
-### 6. Identity (`/identity`)
-
-Read-only view of the instance's SOUL and SELF context:
-`GET /api/webgate/identity` returns `load_self_context()` (the
-operator-authored, instance-wide SOUL/IDENTITY docs) and `load_self_doc()`
-(the per-`(instance, user)` evolving SELF doc the agent can write via the
-`self_context_manage` tool). There is **no write path from the Console** —
-SOUL is frozen/operator-only by design, and SELF is edited only through the
-agent's own owner-gated tool, never a web form.
-
-### 7. System health (`/system`)
-
-`GET /api/webgate/doctor` runs the exact same checks as `polyrob doctor`
-(`cli/commands/doctor.py::doctor_report`, imported directly — not shelled
-out) and reports them alongside the resolved provider/model
-(`cli/config_store.py::resolve_provider_model`) and active memory backend.
-This is diagnostic/legibility only, not a control surface.
-
-### 8. Settings (MCP / skills / prefs / API keys)
-
-`/settings` is a tabbed page:
-
-- **MCP Servers** — lists platform (global) MCP servers and lets you add
-  your own custom server (URL, auth method, transport, retry/timeout
-  knobs); credentials are encrypted at rest (Fernet/AES-128-CBC,
-  `tools/mcp/security.py::MCPEncryption`).
-- **Skills** — lists system skills (read-only, viewable/forkable) and lets
-  you create/edit your own custom skills (id, markdown body, trigger
-  keywords/tool-ids/priority) — the same skill system the agent loads at
-  session start.
-- **Preferences** — see the dedicated `/preferences` page (4d above); the
-  Settings tab remains a pointer.
-- **API Keys** — placeholder in the Settings UI ("Coming soon"); the
-  underlying capability is already live as a **REST** surface, not yet
-  wired into this tab: `POST/GET/DELETE /api/auth/api-keys`
-  (`api/auth_endpoints.py`) lets an authenticated (wallet-logged-in) user
-  self-service create/list/revoke their own `rob_…`-prefixed API keys for
-  programmatic access (A2A, `/v1`). The full key is shown exactly once at
-  creation time.
-
-Two trading-tool config modals (Polymarket, Hyperliquid) also live on this
-page — wallet/private-key config, demo-mode toggle, and per-tool trading
-limits (max order size, exposure, leverage) — independent of the 11 items
-listed here.
-
-### 9. Token-gating / tiers (multitenant only)
-
-`/profile` is registered only in `multitenant` posture
-(`webview/server.py::_multitenant_get`, the same gate as the admin pages in
-capability 10) — in `local`/`own_ops` posture the route doesn't exist and a
-request 404s. Where it's available, it shows an **Account Tier** badge and a
-connected-wallet address. Tiers are a `user_profiles.tier` column (e.g.
-`x402`, `admin`, a DEN-token-gated tier) consulted at the point of use, not
-verified live by the Console page itself — e.g. `POST /api/auth/api-keys`
-requires "DEN token ownership (verified via tier)" per its own docstring, and
-`LLMUsageTracker._get_user_tier()` reads the same column to decide whether a
-user is billed per-token or exempt (x402/admin). The **on-chain
-verification** that establishes a tier happens elsewhere (wallet
-auth/SIWE verification, x402 settlement, or an admin/tier-assignment path)
-— the Console banner only *displays* the tier already recorded in
-`user_profiles`, it does not itself talk to a chain.
-
-### 10. Admin dashboard (multitenant only)
-
-`/admin`, `/admin/users`, `/admin/users/{id}`, `/admin/activity` are
-registered **only in `multitenant` posture**
-(`webview/server.py::_multitenant_get` — the route table simply doesn't
-include them in `local`/`own_ops`, so a request 404s rather than being
-access-denied). Each handler additionally requires
-`request.state.is_admin` at request time; a non-admin authenticated user
-gets redirected/alerted rather than seeing the dashboard.
-
-### 11. Crypto deposits / transaction history (multitenant only)
-
-Same posture gate as capability 9 — the `/profile` page only exists in
-`multitenant` posture. Its **Top Up Credits** section shows a per-user deposit
-address (QR code + copy button) and a paginated **Transaction History**
-table. The deposit address is deterministically derived from a master seed
-+ `user_id` (`modules/payments/wallet_generator.py::DepositWalletGenerator`
-— same user always gets the same address, so the seed can regenerate the
-sweep key later). Crediting is driven by `DepositMonitor`
-(`modules/payments/deposit_monitor.py`), which is **off by default**
-(`DEPOSIT_MONITOR_ENABLED`, also needs `SEPOLIA_RPC_URL`/`ETHEREUM_RPC_URL`)
-and polls for on-chain USDC/USDT/ETH transfers, converting ETH via a live
-price oracle (`modules/payments/price_oracle.py::get_eth_price_usd`,
-clamped by `ETH_PRICE_USD_MAX` so an oracle glitch can't over-credit an
-account) at $0.01 USD = 1 credit, with a $5.00 minimum deposit.
-
-### Tenant scoping (multitenant)
-
-Per the B7/E4 fixes, the cross-session pages (Memory/Autonomy/Identity) and
-the live feed socket now resolve the **authenticated caller's** identity in
-multitenant posture, not the instance owner's:
-`webview/pages.py::_effective_user_id` returns
-`request.state.user_id` in `multitenant` and **fails closed** (403) if that's
-missing — it never silently falls back to the owner's data. In `local`/
-`own_ops` posture there is exactly one owner and no separate caller-identity
-concept, so these pages are simply "your" data by construction. The
-session-scoped pages (chat feed, workspace, screenshots) use a different,
-intentional model: they're gated by knowledge of the session's own URL /
-Socket.IO room, which is what makes "share a session link" work — see
-capabilities 1–3 above.
+`/session/{id}` streams a running session's transcript over Socket.IO as the agent
+works, alongside its workspace file tree, file previews and downloads, and any
+browser screenshots it captured. These session-scoped views are reachable by
+knowing the session's URL, which is what makes sharing a session link work — they
+are not scoped to whoever is logged in. Treat a session URL as the key to that
+session.
 
 ---
 
-## Payments
+## Every page leads with the same two facts
 
-Billing in POLYROB has one shape after the C-workstream consolidation (see
-`docs/CONFIGURATION.md` → "Billing / x402 / wallet" for the full flag
-reference); this section is the narrative version for Console users.
+The frame above every destination states, once:
 
-### a. Credits are deducted once, per token, at the end
+- **whether autonomy is paused**, read from the one pause record every loop
+  honours — including which scopes and until when. An unreadable record renders as
+  paused, because that is what the runtime then does;
+- **whether this console can act at all** (the read-only badge, below).
 
-`modules/credits/usage_tracker.py::LLMUsageTracker.record_llm_usage` is the
-**single** deduction path. A request first passes
-`api/payment_verification.py::verify_payment_for_request`, which only
-**authorizes** (checks `has_sufficient_balance`) — it does **not** deduct.
-The actual charge happens once per LLM call, sized to real token usage
-(input/output/cached, with markup), when `record_llm_usage` runs. This
-closed a prior double-billing bug where the gate deducted a flat cost *and*
-the tracker deducted again per token.
+The Inbox count rides in the nav. When a source could not be read it says "at
+least N waiting, one list unreadable" rather than a confident number.
 
-### b. One x402 price, quoted == charged
+---
 
-`modules/x402/x402_integration.py::get_x402_price_usd()` is the single
-source of the x402 per-request price. An explicit `X402_PRICE_USD` always
-wins; otherwise the price is *derived* — worst-case cost of the
-`X402_MAX_TOKENS_PER_REQUEST` budget at the most expensive model's output
-rate, times a safety markup (`X402_PRICE_MARKUP`, default 2×) — because
-x402 settles *before* the request runs. Every caller of this value (the
-live middleware charge, `/api/x402/pricing`, the A2A Agent Card, and the
-402-challenge body) reads the same function, so what's quoted is always
-what's charged. The dead premium-tier override that used to diverge from
-this SSOT has been removed. `LLMUsageTracker._enforce_x402_budget` then
-caps actual token usage to the prepaid budget per session, so a request can
-never cost the platform more than it collected.
+## What you can do here
 
-### c. Anonymous x402 works on A2A + `/v1` — not the REST API
+The console is a control plane, not only a monitor. Unless it is read-only, you can:
 
-The pay-per-request 402-challenge handshake (`X-PAYMENT` header, Coinbase
-facilitator verify+settle) is gated to exactly four `(METHOD, path)` routes —
-the ones that actually create a new billable task/completion:
-`POST /a2a/rpc`, `POST /a2a/message/stream`, `POST /a2a/tasks`,
-`POST /v1/chat/completions` (`modules/x402/middleware.py::X402_GATED_ROUTES`).
-Gating is exact-route, not a path prefix: reads and continuations that share
-the `/a2a/tasks` path segment — `GET /a2a/tasks/{id}` (status), `GET
-/a2a/tasks` (list), `POST /a2a/tasks/{id}/send`, `POST /a2a/tasks/{id}/cancel`,
-`POST /a2a/tasks/resubscribe` — are never billed by
-`verify_payment_for_request` at the endpoint layer, so the middleware never
-402-challenges them either. The authenticated `/api/task/*` REST API is
-intentionally **not** included — POLYROB's outermost `fallback_auth_middleware`
-already 401s anonymous callers on every `/api/`/`/task/` path, so an
-anonymous, pay-per-crypto-signature caller who wants access without an
-account should use the A2A protocol or the OpenAI-compatible `/v1` surface,
-not the REST API. A caller that already carries an
-`Authorization`/`X-API-KEY`/session cookie is never intercepted by the 402
-challenge, regardless of path — only genuinely anonymous requests hitting a
-gated route see it. A request that DOES carry `X-PAYMENT` on a gated route
-but arrives while the `fastapi-x402` facilitator SDK is unavailable
-(uninstalled or failed to initialize) gets an honest `503` explaining
-settlement is unavailable, instead of being silently dropped and 401'd
-downstream.
+- pause and resume autonomy, by scope and with a duration;
+- approve or reject anything in the Inbox;
+- act on goals and cancel cron jobs;
+- settle an invoice (an attestation, not a payment);
+- approve, reject or kill a durable app, and read its logs;
+- write preferences and cataloged flags;
+- type an owner verb into the chat box.
 
-### d. Crypto top-up via deposit addresses
+### Owner verbs in the chat box
 
-See capability 11 above: a per-user deterministic deposit address, a
-`DepositMonitor` background poller (off by default,
-`DEPOSIT_MONITOR_ENABLED`), a clamped live ETH price oracle, and $0.01
-USD = 1 credit at a $5.00 minimum. There is **no fiat/card payment path**
-anywhere in POLYROB — credits/x402/deposits are the entire billing surface.
+A leading `/verb` is routed through the same owner-verb plane every other seat uses,
+not sent to the model as prose. Roughly forty verbs work — `/pause`, `/resume`,
+`/halt`, `/status`, `/inbox`, `/pending`, `/approve`, `/reject`, `/asks`, `/goals`,
+`/cron`, `/book`, `/wallet`, `/invoices`, `/settle`, `/trade`, `/bridge`, `/launch`,
+`/deploy`, `/apps`, `/mcp`, `/kb`, `/files`, `/groups`, `/mute`, `/prefs`,
+`/config`, `/recap`, `/missed` and more. `/help` lists them.
 
-### e. Billing only exists when `ENABLE_AUTH` is on
+`/task` and `/new` are the exception: the console has its own controls for starting
+a session, so they are excluded here and `/help task` says so. Prose and an unknown
+slash still reach the agent.
 
-`core/initialization.py::initialize_auth_services()` is called
-unconditionally on every boot but returns immediately if
-`container.config.enable_auth` (env `ENABLE_AUTH`, default **OFF**) is
-false — *before* it registers `balance_manager`, `api_key_manager`,
-`wallet_generator`, or the deposit monitor. Posture 0 (`local`) and Posture
-1 (`own_ops`) run with these services never constructed: no credit
-deduction, no deposit address, no tier — because you're using your own LLM
-provider API keys directly, there's nothing for POLYROB to meter.
-Multitenant deployments are the intended posture for turning `ENABLE_AUTH`
-(and `X402_ENABLED`) on. `api/payment_endpoints.py` and
-`api/x402_endpoints.py` are mounted unconditionally regardless of posture —
-each request-time handler self-checks for a registered `balance_manager`
-and 503s/no-ops when billing isn't wired up, rather than the routes being
-absent.
+Full owner-control model: [owner-controls.md](owner-controls.md).
+
+---
+
+## Read-only mode
+
+```bash
+WEBVIEW_READ_ONLY=true
+```
+
+Every mutating endpoint then returns 403 server-side and the chat input is not
+rendered. The frame says this once, in words, instead of showing you a screen of
+greyed buttons. Owner login still works, so the monitoring seat is never lost.
+
+Use it where the agent is driven elsewhere — Telegram, the CLI — and the console
+only watches. Be aware that it disables *everything*, approvals included.
+
+---
+
+## What the console refuses
+
+These are deliberate refusals with remedies, not bugs.
+
+**It will not boot as an anonymous console on a server.** At `local` posture there
+is no login and every anonymous request is the owner. If the process also looks
+like a server — a public URL is configured, it runs behind a reverse proxy, or the
+data directory is a system path — the console refuses to start and names what it
+saw. Set a real posture, or `WEBVIEW_ALLOW_LOCAL_POSTURE=1` if you front it with
+your own authentication.
+
+**It will not boot as a writable console without a bound owner and a shared session
+registry.** Both preconditions, and how to satisfy them, are in
+[deployment-postures.md](deployment-postures.md#a-writable-console-has-two-preconditions).
+
+**An `own_ops` console with no bound owner refuses every tenant read** with a 403
+that names the remedy: set `POLYROB_OWNER_USER_ID` to the value the agent service
+uses. Answering those reads would mean rendering an empty goal board and an empty
+invoice list for an agent whose work lives under a different tenant.
+
+**It will not write certain settings at any posture.** A flag that decides who the
+agent obeys, what it may spend, whether a payment needs your approval, how much of
+the host it can reach, or where its credentials live is writable only from the
+local CLI (`polyrob config set`). The config screen marks those settings and the
+refusal names the command to use instead. Preferences and ordinary flags write
+normally; a guarded one asks for an explicit confirmation.
+
+**A page outside its posture is absent, not denied.** Account and admin pages exist
+only in `multitenant`; elsewhere the route is not registered and the request 404s.
+Inside `multitenant`, a signed-in non-admin following an admin link is redirected
+home.
+
+---
+
+## Naming
+
+The console is called "POLYROB Console" regardless of what your instance is named.
+Renaming the instance and branding the console are two separate, deliberate
+choices; set `POLYROB_CONSOLE_NAME` to change the second one.
 
 ---
 
 ## See also
 
-- [architecture.md](architecture.md) — overall system architecture
-- [configuration.md](configuration.md) — configuration guide
-- [../CONFIGURATION.md](../CONFIGURATION.md) — full environment-flag SSOT,
-  including every billing/webgate flag referenced above
-- [api.md](api.md) — REST + A2A + OpenAI-compatible API reference
+- [deployment-postures.md](deployment-postures.md) — postures, owner login, boot refusals
+- [owner-controls.md](owner-controls.md) — pause, approvals, and the verbs, on every seat
+- [payments.md](payments.md) — the wallet, invoicing and what the Money screens report
+- [configuration.md](configuration.md) — how settings work; [../CONFIGURATION.md](../CONFIGURATION.md) is the full flag reference
+- [api.md](api.md) — REST, A2A and the OpenAI-compatible surface

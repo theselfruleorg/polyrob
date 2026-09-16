@@ -46,10 +46,16 @@ class BrowserPoolMixin:
         Returns:
             Browser context or None
         """
-        # No BrowserManager is an EXPECTED steady state now — the default CLI (and
-        # any non-browser session) provisions none, and the step loop asks for a
-        # context every step regardless of loaded tools. Log at debug, not error
-        # (OR-3): an error here is misleading noise on every step of a normal run.
+        # The CLI container registers a BrowserManager so the browser can be loaded
+        # on demand, but a non-browser session must not launch Chromium merely to
+        # collect an empty state. Dynamic load_tool() adds "browser" to this list,
+        # so the context becomes available as soon as the session actually loads it.
+        requested = getattr(self, "_requested_tool_ids", None)
+        loaded = self.controller.list_tools() if self.controller is not None else []
+        if requested is not None and "browser" not in requested and "browser" not in loaded:
+            return None
+
+        # No BrowserManager remains an expected state for browser-less installs.
         if not self.browser_manager:
             self.logger.debug(f"No BrowserManager - no browser context for {agent_id}")
             return None

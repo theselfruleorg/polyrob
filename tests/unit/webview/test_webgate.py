@@ -77,9 +77,15 @@ def test_bind_port_webview_port_fallback(webgate, monkeypatch):
     assert webgate.bind_port() == 7000
 
 
-def test_local_owner_id_falls_back_to_instance_default(webgate):
+def test_local_owner_id_falls_back_to_the_local_tenant(webgate):
+    """⚠️ This fallback was the INSTANCE id (``"polyrob"``) until 2026-09-15 —
+    a tenant only the console and the x402 stamp ever wrote to, while the REPL,
+    goals and memory on the same box used ``"local"``. One resolver now
+    (``core.instance.resolve_owner_user_id``); the instance axis is untouched."""
+    from core.identity import LocalIdentity
     from core.instance import DEFAULT_INSTANCE_ID
-    assert webgate.local_owner_id() == DEFAULT_INSTANCE_ID
+    assert webgate.local_owner_id() == LocalIdentity.USER_ID == "local"
+    assert webgate.local_owner_id() != DEFAULT_INSTANCE_ID
 
 
 def test_local_owner_id_env_override(webgate, monkeypatch):
@@ -178,14 +184,17 @@ def test_console_display_name_env_override(webgate, monkeypatch):
 
 
 def test_branding_config_defaults(webgate):
+    # 043 A12: an operator who never sets brand/org URLs gets no placeholder
+    # host / framework-author domain — those default to "" so the footer
+    # renders no dead link. support_url keeps its real Telegram default.
     b = webgate.branding_config()
     assert b["support_url"] == "https://t.me/tmachinrobot"
     assert b["support_display"] == "t.me/tmachinrobot"
     assert b["support_handle"] == "@TMACHINROBOT"
-    assert b["brand_url"] == "https://your-polyrob-host.example"
-    assert b["brand_display"] == "your-polyrob-host.example"
-    assert b["org_url"] == "https://theselfrule.org"
-    assert b["org_display"] == "theselfrule.org"
+    assert b["brand_url"] == ""
+    assert b["brand_display"] == ""
+    assert b["org_url"] == ""
+    assert b["org_display"] == ""
 
 
 def test_branding_config_env_overrides(webgate, monkeypatch):
@@ -204,9 +213,11 @@ def test_branding_config_env_overrides(webgate, monkeypatch):
 
 
 def test_branding_config_legal_links_default(webgate):
+    # 043 A12: with no POLYROB_BRAND_URL to derive from, terms/privacy are
+    # empty too — never a dead link built off a placeholder host.
     b = webgate.branding_config()
-    assert b["terms_url"] == "https://your-polyrob-host.example/terms"
-    assert b["privacy_url"] == "https://your-polyrob-host.example/privacy"
+    assert b["terms_url"] == ""
+    assert b["privacy_url"] == ""
 
 
 def test_branding_config_legal_links_follow_brand_url_override(webgate, monkeypatch):

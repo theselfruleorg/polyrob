@@ -10,15 +10,15 @@ treats it as DATA, not instructions (paired with a ``<security>`` system-prompt 
 
 Pure functions only — no controller/agent/registry deps; the caller resolves and passes
 the ``(action_name, tool)`` namespace in. Port of Reference ``_maybe_wrap_untrusted``
-(``agent/tool_dispatch_helpers.py``), including the ``< MIN_CHARS`` skip and the
-already-wrapped re-entrancy guard. Format string is byte-for-byte the Reference wording.
+(``agent/tool_dispatch_helpers.py``). Only empty strings skip framing; embedded
+delimiter tokens are defanged rather than trusted as already-wrapped content.
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
 
-UNTRUSTED_WRAP_MIN_CHARS = 32  # parity with Reference — don't wrap trivial outputs
+UNTRUSTED_WRAP_MIN_CHARS = 1  # even a short directive is untrusted; only empty strings skip
 
 # Any literal wrapper delimiter embedded in untrusted content would let it break out of
 # the DATA frame (a closing tag) or forge a new one (an opening tag). Rewrite the tag

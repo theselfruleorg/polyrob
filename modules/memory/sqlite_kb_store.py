@@ -43,6 +43,57 @@ class KbStoreMixin:
             "ON kb_sources (user_id, collection)"
         )
 
+    async def kb_replace_source(self, *, user_id, collection: str, source_path: str,
+                                source_hash: str, chunks: list[str],
+                                mime: str = "text/plain", created_at: str = None) -> bool:
+        """Commit all chunks and their hash/count in one SQLite transaction.
+
+        Cancellation can leave the worker completing its transaction, but readers
+        always see an entire old or new source, never a partially replaced source.
+        """
+        if self._anon_blocked(user_id) or not chunks or not source_hash:
+            return False
+        snapshot = tuple(chunk.strip() for chunk in chunks)
+        if not all(snapshot):
+            return False
+        try:
+            await self._run_blocking(
+                self._kb_replace_source_sync, self._norm_user(user_id), collection,
+                source_path, source_hash, snapshot, mime, created_at,
+            )
+            return True
+        except Exception as e:
+            logger.warning("kb_replace_source failed: %s", e)
+            return False
+
+    def _kb_replace_source_sync(self, norm, collection, source_path, source_hash,
+                                chunks, mime, created_at):
+        conn = wal_connect(self.db_path, timeout=5)
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "DELETE FROM kb_chunks WHERE user_id = ? AND collection = ? AND source_path = ?",
+                    (norm, collection, source_path),
+                )
+                conn.executemany(
+                    "INSERT INTO kb_chunks (user_id, collection, source_path, chunk_idx, content) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    ((norm, collection, source_path, str(idx), text)
+                     for idx, text in enumerate(chunks)),
+                )
+                conn.execute(
+                    "INSERT INTO kb_sources "
+                    "(user_id, collection, source_path, source_hash, chunk_count, mime, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id, collection, source_path) DO UPDATE SET "
+                    "source_hash = excluded.source_hash, chunk_count = excluded.chunk_count, "
+                    "mime = excluded.mime, created_at = excluded.created_at",
+                    (norm, collection, source_path, source_hash, len(chunks), mime, created_at),
+                )
+        finally:
+            conn.close()
+
     async def kb_ingest_chunk(self, *, user_id, collection: str, source_path: str,
                               source_hash: str, chunk_idx: int, content: str,
                               mime: str = "text/plain", created_at: str = None) -> bool:
@@ -59,28 +110,39 @@ class KbStoreMixin:
         if not content:
             return False
         try:
-            execute_retry(
-                self.db_path,
-                "INSERT INTO kb_chunks (user_id, collection, source_path, chunk_idx, content) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (norm, collection, source_path, str(chunk_idx), content),
-            )
-            execute_retry(
-                self.db_path,
-                "INSERT INTO kb_sources "
-                "(user_id, collection, source_path, source_hash, chunk_count, mime, created_at) "
-                "VALUES (?, ?, ?, ?, 1, ?, ?) "
-                "ON CONFLICT(user_id, collection, source_path) DO UPDATE SET "
-                "source_hash = excluded.source_hash, "
-                "chunk_count = chunk_count + 1, "
-                "mime = excluded.mime, "
-                "created_at = excluded.created_at",
-                (norm, collection, source_path, source_hash, mime, created_at),
+            await self._run_blocking(
+                self._kb_ingest_chunk_sync, norm, collection, source_path, source_hash,
+                chunk_idx, content, mime, created_at,
             )
             return True
         except Exception as e:
             logger.warning("kb_ingest_chunk failed: %s", e)
             return False
+
+    def _kb_ingest_chunk_sync(self, norm, collection, source_path, source_hash,
+                               chunk_idx, content, mime, created_at):
+        conn = wal_connect(self.db_path, timeout=5)
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute(
+                    "INSERT INTO kb_chunks (user_id, collection, source_path, chunk_idx, content) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (norm, collection, source_path, str(chunk_idx), content),
+                )
+                conn.execute(
+                    "INSERT INTO kb_sources "
+                    "(user_id, collection, source_path, source_hash, chunk_count, mime, created_at) "
+                    "VALUES (?, ?, ?, ?, 1, ?, ?) "
+                    "ON CONFLICT(user_id, collection, source_path) DO UPDATE SET "
+                    "source_hash = excluded.source_hash, "
+                    "chunk_count = chunk_count + 1, "
+                    "mime = excluded.mime, created_at = excluded.created_at",
+                    (norm, collection, source_path, source_hash, mime, created_at),
+                )
+        finally:
+            conn.close()
+
     def kb_keyword_contents(self, query: str, *, user_id, collection: str,
                             limit: int) -> list:
         """FTS5 recall over kb_chunks scoped to (user_id, collection).
@@ -172,49 +234,28 @@ class KbStoreMixin:
             return 0
         norm = self._norm_user(user_id)
         try:
-            if source is not None:
-                # Count first (FTS5 DELETE doesn't return affected rows reliably)
-                count_rows = execute_retry(
-                    self.db_path,
-                    "SELECT COUNT(*) AS n FROM kb_chunks "
-                    "WHERE user_id = ? AND collection = ? AND source_path = ?",
-                    (norm, collection, source), fetch="all",
-                )
-                count = count_rows[0]["n"] if count_rows else 0
-                execute_retry(
-                    self.db_path,
-                    "DELETE FROM kb_chunks "
-                    "WHERE user_id = ? AND collection = ? AND source_path = ?",
-                    (norm, collection, source),
-                )
-                execute_retry(
-                    self.db_path,
-                    "DELETE FROM kb_sources "
-                    "WHERE user_id = ? AND collection = ? AND source_path = ?",
-                    (norm, collection, source),
-                )
-            else:
-                count_rows = execute_retry(
-                    self.db_path,
-                    "SELECT COUNT(*) AS n FROM kb_chunks "
-                    "WHERE user_id = ? AND collection = ?",
-                    (norm, collection), fetch="all",
-                )
-                count = count_rows[0]["n"] if count_rows else 0
-                execute_retry(
-                    self.db_path,
-                    "DELETE FROM kb_chunks WHERE user_id = ? AND collection = ?",
-                    (norm, collection),
-                )
-                execute_retry(
-                    self.db_path,
-                    "DELETE FROM kb_sources WHERE user_id = ? AND collection = ?",
-                    (norm, collection),
-                )
-            return count
+            return await self._run_blocking(self._kb_remove_sync, norm, collection, source)
         except Exception as e:
             logger.warning("kb_remove failed: %s", e)
             return 0
+
+    def _kb_remove_sync(self, norm, collection, source):
+        predicate = "user_id = ? AND collection = ?"
+        params = (norm, collection)
+        if source is not None:
+            predicate += " AND source_path = ?"
+            params += (source,)
+        conn = wal_connect(self.db_path, timeout=5)
+        try:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                count = conn.execute("SELECT COUNT(*) FROM kb_chunks WHERE " + predicate, params).fetchone()[0]
+                conn.execute("DELETE FROM kb_chunks WHERE " + predicate, params)
+                conn.execute("DELETE FROM kb_sources WHERE " + predicate, params)
+            return count
+        finally:
+            conn.close()
+
     def kb_source_hash(self, *, user_id, collection: str, source_path: str):
         """Return the stored source_hash for this (user_id, collection, source_path),
         or None if not found. Synchronous — cheap SELECT, no async needed.

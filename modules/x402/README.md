@@ -7,7 +7,7 @@
 
 ## Overview
 
-The x402 module implements the [x402 payment protocol](https://x402.org) for pay-per-request API access. It enables AI agents and users to pay for API calls using USDC stablecoins on supported blockchains (Base, Avalanche, etc.).
+The x402 module implements the [x402 payment protocol](https://x402.org) for pay-per-request API access. The built-in facilitator rail is USDC on Base (Base Sepolia for testnet). Agent invoices can additionally use an operator-pinned asset with direct on-chain settlement detection; that is a transfer-instruction rail, not facilitator x402.
 
 > **This README covers the x402 protocol + machine-payer HTTP middleware.** For the
 > complete crypto/payments picture — the agent wallet, agent invoicing, branded QR
@@ -82,7 +82,7 @@ X402_ENABLED=true
 X402_PAYMENT_RECIPIENT=0xYourTreasuryAddress
 
 # Blockchain network
-X402_DEFAULT_CHAIN=base  # Options: base, base-sepolia, avalanche, iotex
+X402_DEFAULT_CHAIN=base  # Facilitator rail: base or base-sepolia
 
 # Coinbase Developer Platform credentials (REQUIRED for mainnet)
 CDP_API_KEY_ID=your_cdp_key_id
@@ -95,9 +95,13 @@ CDP_API_KEY_SECRET=your_cdp_key_secret
 |---------|----------|---------|--------------|
 | `base` | 8453 | No | Yes |
 | `base-sepolia` | 84532 | Yes | No |
-| `avalanche` | 43114 | No | Yes |
-| `avalanche-fuji` | 43113 | Yes | No |
-| `iotex` | 4689 | No | Yes |
+
+Robinhood Chain is not a built-in facilitator network. It is supported by the
+separate DeFi integration. If an operator pins a verified Robinhood asset with
+`polyrob wallet asset add`, an invoice can use the `onchain_scan` direct-transfer
+rail (with a Robinhood RPC); the payer sends the exact token amount to the
+treasury and the watcher detects it. No `X-PAYMENT` facilitator signature is
+accepted for that custom asset.
 
 ### Getting CDP Credentials
 

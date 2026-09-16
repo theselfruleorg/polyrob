@@ -12,6 +12,7 @@ import importlib
 from unittest.mock import MagicMock, patch
 
 import pytest
+import time
 from fastapi.testclient import TestClient
 
 
@@ -31,7 +32,7 @@ def multitenant_pages_client(monkeypatch):
 def _auth_cookie(user_id: str) -> dict:
     import jwt as pyjwt
     token = pyjwt.encode(
-        {"sub": "0xabc", "user_id": user_id, "tier": "free", "role": "user"},
+        {"sub": "0xabc", "user_id": user_id, "tier": "free", "role": "user", "exp": time.time() + 60, "jti": "page-session"},
         "test-secret", algorithm="HS256",
     )
     return {"auth_token": token}
@@ -56,11 +57,19 @@ def test_memory_uses_caller_user_id_not_local_owner(multitenant_pages_client, mo
 def test_goals_uses_caller_user_id_not_local_owner(multitenant_pages_client, monkeypatch):
     monkeypatch.setattr("webview.pages.AutonomyConfig.goals_enabled", lambda: True)
     with patch("webview.pages.GoalBoard") as MockBoard:
-        MockBoard.return_value.list.return_value = []
+        # B1/B2: the endpoint must read list_recent/status_counts/asks — never
+        # the dispatcher-ordered list() (forbidden as a view per AGENTS.md).
+        MockBoard.return_value.list.side_effect = AssertionError("list() must not be called")
+        MockBoard.return_value.list_recent.return_value = []
+        MockBoard.return_value.status_counts.return_value = {}
+        MockBoard.return_value.asks.return_value = []
         multitenant_pages_client.get(
             "/api/webgate/goals", cookies=_auth_cookie("tenant-42"),
         )
-    MockBoard.return_value.list.assert_called_once_with(user_id="tenant-42")
+    MockBoard.return_value.list.assert_not_called()
+    MockBoard.return_value.list_recent.assert_called_once_with(user_id="tenant-42")
+    MockBoard.return_value.status_counts.assert_called_once_with(user_id="tenant-42")
+    MockBoard.return_value.asks.assert_called_once_with(user_id="tenant-42", status="open")
 
 
 def test_cron_uses_caller_user_id_not_local_owner(multitenant_pages_client, monkeypatch):

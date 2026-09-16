@@ -15,8 +15,14 @@ New rules pinned here:
    simulation's MEASURED inflow when the outflow token has no price by any
    source — the treasury's receipt is exact and unfalsifiable, so the caps
    run against it instead of refusing.
-2. An exit-bounded allowance grant on an unpriceable token values at $0
-   (loudly) instead of dead-ending on "have the owner approve it by hand".
+2. An exit-bounded allowance grant on an unpriceable token stays EXECUTABLE
+   instead of dead-ending on "have the owner approve it by hand". ⚠️ Amended
+   by S3 (2026-09-14): it used to value at $0, which cleared every cap and ran
+   on the autonomous lane; it is now charged the autonomous ceiling, so the
+   owner is asked and the claim is charged to the caps. An exit-bounded grant
+   is also only exit-bounded when its spender is a route spender the chain
+   pins — "within held balance" alone let an injected approve hand the whole
+   position to any address at $0.00.
 3. Cap comparisons are run in CENTS — a $1.9903-vs-$1.99 refusal is a rounding
    artifact, not a policy.
 4. DEFI_MONITOR_EXITS (default OFF) lets a forged MAIN-agent turn (self-wake /
@@ -36,6 +42,10 @@ USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"  # base's pinned quote asset
 MEME = "0xB2000000000000000000000Ff4a547c891AB1b01"
 SPENDER = "0x1111111111111111111111111111111111111111"
 HOLDER = "0x2222222222222222222222222222222222222222"
+#: Base's pinned Uniswap V3 SwapRouter02 — the spender the sell leg approves.
+#: Since S3 (2026-09-14) the exit-bounded exemption requires it: a grant to an
+#: address the chain does not pin as a route spender is not an exit.
+ROUTER = "0x2626664c2603336E57B271c5C0b26F421741e481"
 
 
 @pytest.fixture(autouse=True)
@@ -123,9 +133,9 @@ def test_a_sell_beyond_held_balance_is_not_an_exit():
 # --------------------------------------------------------------------------
 
 def _approve_intent(**kw):
-    base = dict(chain="base", token=MEME, to=SPENDER, amount_raw=0,
+    base = dict(chain="base", token=MEME, to=ROUTER, amount_raw=0,
                 max_spend_usd=2.0,
-                expected_allowance_grants=((MEME, SPENDER, 10 ** 18),),
+                expected_allowance_grants=((MEME, ROUTER, 10 ** 18),),
                 is_allowance_op=True, idempotency_key="k2",
                 held_balance_raw=10 ** 18)
     base.update(kw)
@@ -134,13 +144,18 @@ def _approve_intent(**kw):
 
 def _approve_deltas():
     return Deltas(ok=True, native_delta=0, token_deltas={MEME: 0},
-                  allowance_deltas={(MEME, SPENDER): 10 ** 18})
+                  allowance_deltas={(MEME, ROUTER): 10 ** 18})
 
 
-def test_unpriceable_exit_bounded_grant_is_allowed_at_zero():
-    d = _authorize(_approve_intent(), _approve_deltas())
-    assert d.allowed, d.reason
-    assert d.amount_usd == 0.0
+def test_unpriceable_exit_bounded_grant_is_charged_the_ceiling():
+    """Superseded by S3 (2026-09-14): the $0 this rule used to produce cleared
+    every cap and ran unattended. The grant is still EXECUTABLE — it goes to
+    the owner queue instead of refusing — but it is no longer free."""
+    d = _authorize(_approve_intent(max_spend_usd=1_000.0), _approve_deltas(),
+                   gate=_gate(per_tx=1_000.0, daily=1_000.0))
+    assert not d.allowed
+    assert d.lane == "owner_queue"
+    assert d.amount_usd is not None and d.amount_usd > 0.0
 
 
 def test_unpriceable_grant_beyond_held_balance_still_refuses():
@@ -169,7 +184,7 @@ def test_sub_cent_drift_does_not_refuse_the_declared_max():
 # --------------------------------------------------------------------------
 
 def _monitor_ctx():
-    return types.SimpleNamespace(role="orchestrator", is_sub_agent=False)
+    return types.SimpleNamespace(user_id="local", role="orchestrator", is_sub_agent=False)
 
 
 class TestMonitorExitsOff:
@@ -206,10 +221,20 @@ class TestMonitorExitsOn:
         assert not d.allowed
         assert "forged" in d.reason.lower()
 
-    def test_a_self_wake_exit_bounded_approve_passes(self):
+    def test_a_self_wake_priced_exit_bounded_approve_passes(self):
         d = _authorize(_approve_intent(), _approve_deltas(), ctx=_monitor_ctx(),
-                       forged=True)
+                       forged=True, price=0.000001)
         assert d.allowed, d.reason
+
+    def test_a_self_wake_UNPRICEABLE_approve_asks_the_owner(self):
+        """S3 (2026-09-14): the monitor lane may still CLOSE, but a grant no
+        source can value is charged the autonomous ceiling, so an unattended
+        turn can no longer hand a whole position to a spender at $0.00."""
+        d = _authorize(_approve_intent(max_spend_usd=1_000.0), _approve_deltas(),
+                       ctx=_monitor_ctx(), forged=True,
+                       gate=_gate(per_tx=1_000.0, daily=1_000.0))
+        assert not d.allowed
+        assert d.lane == "owner_queue"
 
     def test_a_self_wake_revoke_passes(self):
         intent = _approve_intent(expected_allowance_grants=())
@@ -224,7 +249,7 @@ class TestMonitorExitsOn:
         assert not d.allowed
 
     def test_a_sub_agent_exit_is_still_refused(self):
-        ctx = types.SimpleNamespace(role="orchestrator", is_sub_agent=True)
+        ctx = types.SimpleNamespace(user_id="local", role="orchestrator", is_sub_agent=True)
         d = _authorize(_sell_intent(), _sell_deltas(), ctx=ctx, forged=True)
         assert not d.allowed
 
@@ -235,3 +260,8 @@ class TestMonitorExitsOn:
                        forged=True, gate=PolicyGate(max_per_tx_usd=5.0))
         assert not d.allowed
         assert "daily" in d.reason.lower() or "aggregate" in d.reason.lower()
+
+
+@pytest.fixture(autouse=True)
+def _wallet_owner_identity(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "local")

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77.0"]
+requires = ["setuptools>=83.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "polyrob"
-version = "0.13.0"
+version = "1.0.0"
 description = "POLYROB — autonomous AI agent framework"
 requires-python = ">=3.11"
 license = "MIT"
@@ -24,8 +24,10 @@ dependencies = [
   "numpy>=1.24.0", "pandas>=2.0.0",
   "apsw>=3.46", "sqlite-vec>=0.1.6",
   "rich>=13.0.0", "prompt_toolkit>=3.0.43", "click>=8.0", "colorama>=0.4.6",
-  "python-docx>=0.8.0", "pypdf>=6.15.0", "markdown>=3.5.0", "markdownify>=0.11.0",
-  "pillow>=11.0.0", "imageio>=2.37.0", "python-magic>=0.4.27", "qrcode>=7.4",
+  "python-docx>=0.8.0", "pypdf>=6.16.1", "markdown>=3.5.0", "markdownify>=0.11.0",
+  "pillow>=12.3.0", "imageio>=2.37.0", "python-magic>=0.4.27", "qrcode>=7.4",
+  # Security floors for transitive parsers/HTTP clients; see the system security review.
+  "httplib2>=0.32.0", "pyasn1>=0.6.4",
   "anysite-cli>=0.3", "pyyaml>=6",
 ]
 
@@ -49,7 +51,7 @@ crypto = ["web3>=6.0.0", "eth-account>=0.10.0", "x402>=2.13.0", "fastapi-x402>=0
 # `solana>=0.36.0` under its `svm` extra, so the pair had no solution and pip
 # backtracked through the whole x402 range into a cytoolz sdist that fails to
 # Cythonize on current toolchains (public CI, 0.13.0).
-solana = ["solders>=0.21", "x402[svm]>=2.16.0", "solana>=0.36,<0.40"]
+solana = ["solders>=0.21", "x402[svm]>=2.16.0", "solana>=0.36,<0.40", "httpx2>=2.12.0", "httpcore2>=2.10.0"]
 telegram = ["aiogram>=3.17.0"]
 twitter = ["tweepy>=4.14.0"]
 voice = ["faster-whisper>=1.0.0"]
@@ -66,19 +68,31 @@ polyrob = "cli.polyrob:main"
 
 [tool.setuptools.packages.find]
 include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*","surfaces*","webview*","avatar*","datagen*","data","assets*","migrations*"]
+exclude = ["*.node_modules", "*.node_modules.*", "*.__pycache__", "*.__pycache__.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*.json","*.txt","*.md"]
-# data/streams carries the declarative stream manifest an install needs before
-# scripts/seed_streams.py can seed anything; without it a pip install has no
-# manifest at all and the seeder exits 2.
-"data" = ["prompts/**/*.json", "prompts/**/*.md", "prompts/**/*", "streams/**/*"]
+# data/characters carries the curated use-case personas (researcher/coder/
+# analyst/writer/ops) that tier 3 of persona_resolver.character_search_dirs()
+# serves; the "*" glob above is NOT recursive, so a subdirectory needs its own
+# entry or every pip install gets exactly one character (F12, 0.13.0).
+"data" = ["prompts/**/*.json", "prompts/**/*.md", "prompts/**/*",
+          "characters/*.json"]
 # Webgate dev-tree assets (doc 03, P4). Ship the raw static/ + templates/ so an
 # installed wheel can serve the webgate from the package when no built web_dist
 # bundle is present. core/assets.py::webgate_asset_dir() prefers web_dist, then
 # falls back to these.
 "webview" = ["static/**/*", "templates/**/*"]
-"webview.templates" = ["**/*"]
+# 042: the token template's Solidity source ships beside its compiled bytes.
+# `core/wallet/token_template.py` tells the reader "the source lives beside this
+# file"; the "*" glob above is not recursive and does not carry .sol, so without
+# this the claim is false in an installed wheel.
+"core" = ["wallet/contracts/*.sol"]
+# 043 A14(S): tools/dom/service.py reads buildDomTree.js by path at runtime
+# (browser-side DOM extraction script); the "*" glob above does not carry
+# .js, so without this the installed wheel silently fell back to a broken
+# minimal DOM-tree builder.
+"tools" = ["dom/*.js"]
 # Avatar engine + brand/render assets (mindprint.js, studio.html, config/rob.json,
 # renders/rob.png, webview/avatar-live.js) — the renderer/store/webview read these by
 # path, so they MUST ship in the wheel (mirrors the webview asset handling above).
@@ -91,3 +105,6 @@ include = ["cli*","core*","agents*","modules*","tools*","api*","utils*","cron*",
 # in Pillow (no headless browser). Without this the wheel omits them and card
 # rendering silently degrades to PIL's default font. Ship the TTFs + LICENSE.
 "assets" = ["fonts/**/*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc", "**/*.pyo"]

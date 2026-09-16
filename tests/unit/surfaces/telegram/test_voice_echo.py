@@ -59,7 +59,10 @@ def _voice_update(uid=2, from_id=777, chat_id=555, msg_id=42):
             "from": {"id": from_id, "username": "me"}, "voice": {"file_id": "vf"}}}
 
 
-def _result(text, media, kind="TASK_AGENT", key="telegram:555:dm"):
+def _result(text, media, kind="task_agent", key="telegram:555:dm"):
+    # 044 T3: must match RouteKind's actual (lowercase) string values —
+    # harness._route_is_turn compares decision.kind against the RouteKind enum,
+    # and RouteKind(str, Enum) is case-sensitive ("TASK_AGENT" != RouteKind.TASK_AGENT).
     inbound = types.SimpleNamespace(text=text, media=media,
               identity=types.SimpleNamespace(user_id="u1", source=None))
     decision = types.SimpleNamespace(kind=kind, session_key=key, session_id="s1", command=None)
@@ -75,7 +78,7 @@ async def _drain():
 
 
 def _spawn_act():
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         async def _turn():
             return None
         spawn(_turn())

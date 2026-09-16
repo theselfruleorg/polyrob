@@ -132,95 +132,137 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         ".json": "data", ".csv": "data", ".yaml": "data", ".yml": "data",
     }
 
-    def _record_artifact(self, file_path: str) -> None:
+    def _record_artifact(self, file_path: str) -> Optional[str]:
         """Record the just-written file in the artifact ledger.
 
-        This is the ONE write-time choke point (write_file and append_file both
-        route through _verify_file_write). Recording here replaces the run-end
+        This is the ONE write-time choke point — write_file routes through
+        _verify_file_write, which calls this (append_file does NOT call
+        _verify_file_write and records no artifact today; 043 A13 fix round 1).
+        Recording here replaces the run-end
         guesswork in agents/task/runtime/evidence.py::collect_artifacts, which on
         a shared project-root workspace attributed other runs' files to this run
         and, after the 2026-08-17 wipe, found nothing at all.
 
         Fail-open by construction: the ledger is bookkeeping, and a bookkeeping
         failure must never fail a write the agent already completed.
+
+        Returns the artifact's row id (043 A18) so the caller can stamp it onto
+        its ``ActionResult.metadata["artifact_id"]`` — or ``None`` on every
+        fail-open path (no user_id, or a bookkeeping error).
         """
         try:
             user_id = getattr(self, "user_id", None)
             if not user_id:
-                return
+                return None
             import os as _os
             ext = _os.path.splitext(file_path)[1].lower()
             from core.artifacts import get_artifact_ledger
-            get_artifact_ledger().record(
+            artifact = get_artifact_ledger().record(
                 str(user_id), file_path,
                 session_id=str(getattr(self, "session_id", "") or ""),
                 kind=self._ARTIFACT_KINDS.get(ext, "file"),
             )
+            return artifact.id if artifact is not None else None
         except Exception:
             self.logger.debug("artifact ledger record skipped for %s", file_path,
                               exc_info=True)
+            return None
 
     async def _verify_file_write(self, file_path: str, expected_content: str, original_path: str) -> dict:
         """Verify file was written correctly (OPTIMIZATION: Task 6 - Nov 14, 2025)"""
-        self._record_artifact(file_path)
-        try:
-            # Read back the file
-            with open(file_path, 'r', encoding='utf-8') as f:
-                actual_content = f.read()
+        # 043 A18: the artifact id is captured here (the ONE write-time choke
+        # point) and merged into whichever verification dict below fires, so
+        # write_file can stamp it onto ActionResult.metadata["artifact_id"]
+        # without a second ledger lookup.
+        artifact_id = self._record_artifact(file_path)
 
-            # For JSON files, verify structure and provide item counts
-            if file_path.endswith('.json'):
-                try:
-                    expected_data = json.loads(expected_content)
-                    actual_data = json.loads(actual_content)
+        async def _verify() -> dict:
+            try:
+                # Read back the file
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    actual_content = f.read()
 
-                    # Compare counts for lists
-                    if isinstance(expected_data, list) and isinstance(actual_data, list):
-                        if len(expected_data) != len(actual_data):
+                # For JSON files, verify structure and provide item counts
+                if file_path.endswith('.json'):
+                    try:
+                        expected_data = json.loads(expected_content)
+                        actual_data = json.loads(actual_content)
+
+                        # Compare counts for lists
+                        if isinstance(expected_data, list) and isinstance(actual_data, list):
+                            if len(expected_data) != len(actual_data):
+                                return {
+                                    "verified": False,
+                                    "reason": f"Count mismatch: wrote {len(expected_data)}, file has {len(actual_data)}"
+                                }
+
                             return {
-                                "verified": False,
-                                "reason": f"Count mismatch: wrote {len(expected_data)}, file has {len(actual_data)}"
+                                "verified": True,
+                                "item_count": len(actual_data),
+                                "message": f"Verified: file contains {len(actual_data)} items"
                             }
 
+                        # For dict, return keys
+                        elif isinstance(actual_data, dict):
+                            return {
+                                "verified": True,
+                                "type": "dict",
+                                "keys": list(actual_data.keys())[:5],
+                                "message": f"Verified: dict with {len(actual_data)} keys"
+                            }
+
+                    except json.JSONDecodeError as e:
                         return {
-                            "verified": True,
-                            "item_count": len(actual_data),
-                            "message": f"Verified: file contains {len(actual_data)} items"
+                            "verified": False,
+                            "reason": f"Invalid JSON in file: {e}"
                         }
 
-                    # For dict, return keys
-                    elif isinstance(actual_data, dict):
-                        return {
-                            "verified": True,
-                            "type": "dict",
-                            "keys": list(actual_data.keys())[:5],
-                            "message": f"Verified: dict with {len(actual_data)} keys"
-                        }
-
-                except json.JSONDecodeError as e:
+                # For text files, verify size
+                if len(actual_content) != len(expected_content):
                     return {
                         "verified": False,
-                        "reason": f"Invalid JSON in file: {e}"
+                        "reason": f"Size mismatch: expected {len(expected_content)} chars, got {len(actual_content)} chars"
                     }
 
-            # For text files, verify size
-            if len(actual_content) != len(expected_content):
                 return {
-                    "verified": False,
-                    "reason": f"Size mismatch: expected {len(expected_content)} chars, got {len(actual_content)} chars"
+                    "verified": True,
+                    "size_bytes": len(actual_content.encode('utf-8')),
+                    "message": "File write verified successfully"
                 }
 
-            return {
-                "verified": True,
-                "size_bytes": len(actual_content.encode('utf-8')),
-                "message": "File write verified successfully"
-            }
+            except Exception as e:
+                return {
+                    "verified": False,
+                    "reason": f"Verification failed: {e}"
+                }
 
-        except Exception as e:
-            return {
-                "verified": False,
-                "reason": f"Verification failed: {e}"
-            }
+        result = await _verify()
+        if artifact_id:
+            result["artifact_id"] = artifact_id
+        return result
+
+    def _write_success_result(self, original_path: str, verification: dict):
+        """Build write_file's success return (043 A18).
+
+        Byte-identical to the pre-A18 plain JSON string EXCEPT when the
+        verification dict carries an ``artifact_id`` (``_verify_file_write``
+        merges one in when ``_record_artifact`` succeeded): in that case the
+        SAME payload is wrapped in an ``ActionResult`` with
+        ``metadata={"artifact_id": ...}`` so a caller can read the artifact id
+        directly off the result instead of a second ledger lookup. Plain
+        string return still auto-wraps into an equivalent, metadata-less
+        ``ActionResult`` at the Controller (``tools/controller/execution.py``).
+        """
+        payload = json.dumps({
+            "success": True,
+            "filepath": original_path,
+            "verification": verification,
+        }, indent=2)
+        artifact_id = verification.get("artifact_id") if isinstance(verification, dict) else None
+        if artifact_id:
+            from tools.controller.types import ActionResult
+            return ActionResult(extracted_content=payload, metadata={"artifact_id": artifact_id})
+        return payload
 
     # ---------------------------------------------------------------------------
     # @action: extract_urls
@@ -431,7 +473,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         'Write content to a file in the workspace',
         param_model=WriteFileAction
     )
-    async def write_file(self, params: WriteFileAction, execution_context=None) -> str:
+    async def write_file(self, params: WriteFileAction, execution_context=None) -> Any:
         """Write content to a file in the workspace."""
         await self.ensure_initialized()
 
@@ -550,11 +592,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                     verification = await self._verify_file_write(file_path, processed_content, original_path)
 
                     # Return success message with verification
-                    return json.dumps({
-                        "success": True,
-                        "filepath": original_path,
-                        "verification": verification
-                    }, indent=2)
+                    return self._write_success_result(original_path, verification)
 
                 except Exception as write_error:
                     self.logger.warning(f"Write attempt {retry_count+1}/{max_retries} failed: {str(write_error)}")
@@ -588,11 +626,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                         verification = await self._verify_file_write(file_path, processed_content, original_path)
 
                         # Return success message with verification
-                        return json.dumps({
-                            "success": True,
-                            "filepath": original_path,
-                            "verification": verification
-                        }, indent=2)
+                        return self._write_success_result(original_path, verification)
                     else:
                         raise ServiceError("Direct write verification failed: file is empty or missing")
                 except Exception as direct_error:

@@ -68,3 +68,17 @@ def test_tools_property_reads_from_controller():
 async def test_get_browser_context_none_without_manager():
     host = _Host(browser_manager=None)
     assert await host.get_browser_context("agent1") is None
+
+
+@pytest.mark.asyncio
+async def test_get_browser_context_does_not_launch_for_non_browser_session():
+    class _BrowserManager:
+        async def get_context(self, *_args, **_kwargs):
+            raise AssertionError("non-browser session attempted to launch Chromium")
+
+    host = _Host(
+        controller=_FakeController({"filesystem": object()}),
+        browser_manager=_BrowserManager(),
+    )
+    host._requested_tool_ids = ["filesystem"]
+    assert await host.get_browser_context("agent1") is None

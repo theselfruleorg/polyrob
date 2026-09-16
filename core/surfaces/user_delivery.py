@@ -4,7 +4,9 @@ All user-bound sends converge here: the agent's ``send_message`` from
 autonomous sessions (§3.1), cron delivery's telegram leg, and the framework
 safety-net notices (§3.4). The rail adds what the scattered rails never had:
 
-- **content-hash dedup** (24h window, per tenant) — the watermark-spam class;
+- **content-hash dedup** (24h window, per tenant) — the watermark-spam class.
+  It keys on content the user actually RECEIVED, never on a failed attempt: a
+  message nobody saw is not a duplicate of anything;
 - **per-tenant rate limit + daily cap** — blast-radius bound: an injected turn
   can at most rate-limited-message its OWN user;
 - **durable owner_notice fallback** when no live sink exists or the send fails
@@ -26,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from typing import Any, Optional
 
@@ -36,8 +39,33 @@ logger = logging.getLogger(__name__)
 
 DELIVERY_EVENT_KIND = USER_DELIVERY
 
-# Outcomes that consumed the content (count toward dedup/rate windows).
+#: Prefixes stamped on a durable ``owner_notice`` row when the original text
+#: could not be delivered live (A7 / A40): suppressed by the daily cap, held
+#: by an active owner pause, or undelivered (no live sink / send failed).
+#: ``core.surfaces.missed`` matches on every marker so a paused or
+#: undelivered notice is as readable as a capped one — before this only the
+#: cap marker was matched anywhere, so the other two shapes were silently
+#: unreadable via `/missed`.
+NOTICE_MARKERS = (
+    "[suppressed by daily proactive-message cap",
+    "[held by owner pause",
+    "[undelivered",
+    "[suppressed by hourly rate limit",
+    "[suppressed by owner-message cooldown",
+)
+
+#: Outcomes that spent a slot of the rate/cap budget. ``fallback`` is included
+#: because the rail DID try and did durably record; it must not become free
+#: retry headroom.
 _CONSUMED_OUTCOMES = ("sent", "fallback")
+
+#: Outcomes that prove the text actually REACHED the user. Dedup keys on this,
+#: NOT on ``_CONSUMED_OUTCOMES`` (2026-09-15 prod review, C2): matching an
+#: ``undelivered`` fallback made a failed send permanent — the retry came back
+#: ``deduped`` for 24h, so neither attempt ever reached the owner and the rail
+#: reported the loss as a successful duplicate-suppression. A message the owner
+#: never saw is not a duplicate of anything.
+_DELIVERED_OUTCOMES = ("sent",)
 
 # --- priority lanes (2026-07-20 overnight incident) ------------------------
 # The cap was a flat FIFO across every source, so whoever spoke FIRST won the
@@ -76,6 +104,22 @@ _CRITICAL_SOURCES = frozenset({
     "goal_blocked",      # agents/task/goals/escalation.py — a stopped goal's need
     "payment_unmatched", # modules/x402/settlement_watcher.py — unexpected on-chain
                          # money the owner must reconcile (rare, always owner-actionable)
+    # 035 P0-2: core/self_evolution.py::NOTIFY_SOURCE — "I've proposed N change(s)
+    # to how I work, approve to make them stick". This used to ride the default
+    # ``self_evolution`` source, i.e. the LIFECYCLE bucket below, shared with
+    # "▶ goal started" chatter. On 2026-09-08 seven lifecycle pings exhausted that
+    # bucket at 13:20 and the approval prompt was dropped (`capped`) at 14:01 —
+    # after which a content-independent fingerprint made the loss permanent and
+    # four owner directives sat inert for two days. An owner DECISION the agent is
+    # blocked on belongs with `approval`/`goal_blocked`, not with chatter.
+    "pending_approval",
+    # 039 Unit A: core/wallet/tx_notify.py — "this transaction broadcast" and
+    # "this is what it did". Money that has ALREADY MOVED may not queue behind
+    # "▶ goal started": over 8 days in August the shared cap dropped 195 of 196
+    # owner notices. The test is the same one the comment above states — the
+    # owner is blocked until they read this, because until they do they do not
+    # know where their funds are.
+    "tx_execution",
 })
 
 
@@ -92,11 +136,24 @@ def _reserved_slots() -> int:
 #: capped, and on 08-27 only 3 of the agent's 171 attempted messages reached the
 #: owner. The lifecycle bucket below is a SEPARATE, smaller ceiling for this
 #: source, so it can never crowd the agent's voice out of the shared cap.
-_LIFECYCLE_SOURCES = frozenset({"self_evolution"})
+_LIFECYCLE_SOURCES = frozenset({"self_evolution", "lifecycle"})
+
+#: Sources whose suppressed text does NOT enter the owner's `/missed` store.
+#:
+#: Deliberately NARROWER than ``_LIFECYCLE_SOURCES`` (2026-09-15 review, C3).
+#: ``self_evolution`` is ``push_owner_message``'s DEFAULT source, so it carries
+#: real content too ("I'm blocked; grant twitter access") as well as chatter —
+#: keying the notice on it would silence the escalations `/missed` exists for.
+#: Only the run-lifecycle pings, which now pass ``source="lifecycle"``
+#: explicitly, are excluded: they were 822 of the 899 rows there, so four of
+#: the five entries `/missed` renders were "▶ goal started". A goal COMPLETION
+#: is not in here — that one carries the result.
+_NO_NOTICE_SOURCES = frozenset({"lifecycle"})
 #: 031: sources the owner pause holds AT THE RAIL (one choke point, not N call
 #: sites) -> the autonomy_control kind that decides it. Critical sources
 #: (crash/security/credit) are never listed here.
-_PAUSE_KIND_BY_SOURCE = {"self_evolution": "lifecycle_ping", "goal_blocked": "escalate"}
+_PAUSE_KIND_BY_SOURCE = {"self_evolution": "lifecycle_ping", "lifecycle": "lifecycle_ping",
+                         "goal_blocked": "escalate"}
 
 
 def _lifecycle_daily_cap() -> int:
@@ -151,39 +208,79 @@ def _daily_cap() -> int:
     return int_env("USER_DELIVERY_DAILY_CAP", 30)
 
 
+def _operator_int(name: str) -> Optional[int]:
+    """The operator's EXPLICIT value for *name*, or None when they set nothing.
+
+    2026-09-15 prod review, C12. ``delivery.daily_cap`` / ``delivery.rate_per_hour``
+    merge ``min(pref, env_value)``, and these accessors passed the result of
+    ``int_env(...)`` — which returns the FRAMEWORK DEFAULT (30 / 10) even when the
+    variable is unset, as it is on prod. So the min-merge always clamped against
+    the default and the owner could not RAISE their own budget from any seat:
+    `/config set delivery.daily_cap 60` resolved back to 30, while the health item
+    for a capped message advises exactly that command.
+
+    The min-merge is correct when the operator set a real ceiling — a pref must
+    not widen past what the deployment allows. With no operator value there is no
+    ceiling to widen past, which is the same reasoning ``narrow_list`` already
+    states for an empty operator set. Returning None here is what tells
+    ``prefs.resolve`` "no operator opinion", so the pref wins.
+    """
+    raw = (os.getenv(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
 def effective_rate_per_hour(user_id: Optional[str], home_dir) -> int:
-    """Owner's proactive-message rate limit: pref (min-merged, spec
-    ``delivery.rate_per_hour``) over the ``USER_DELIVERY_RATE_PER_HOUR`` env
-    default. No pref file present => byte-identical to ``_rate_per_hour()``
-    (owner-UX P1 T4)."""
+    """Owner's proactive-message rate limit: pref (spec ``delivery.rate_per_hour``,
+    min-merged against an EXPLICIT ``USER_DELIVERY_RATE_PER_HOUR`` only) over the
+    default. No pref file present => byte-identical to ``_rate_per_hour()``."""
     from core import prefs
-    env_value = _rate_per_hour()
     return prefs.resolve("delivery.rate_per_hour", user_id, home_dir,
-                         env_value=env_value, default=env_value)
+                         env_value=_operator_int("USER_DELIVERY_RATE_PER_HOUR"),
+                         default=_rate_per_hour())
 
 
 def effective_daily_cap(user_id: Optional[str], home_dir) -> int:
-    """Owner's proactive-message daily cap: pref (min-merged, spec
-    ``delivery.daily_cap``) over the ``USER_DELIVERY_DAILY_CAP`` env default.
-    No pref file present => byte-identical to ``_daily_cap()`` (owner-UX P1 T4)."""
+    """Owner's proactive-message daily cap: pref (spec ``delivery.daily_cap``,
+    min-merged against an EXPLICIT ``USER_DELIVERY_DAILY_CAP`` only) over the
+    default. No pref file present => byte-identical to ``_daily_cap()``."""
     from core import prefs
-    env_value = _daily_cap()
     return prefs.resolve("delivery.daily_cap", user_id, home_dir,
-                         env_value=env_value, default=env_value)
+                         env_value=_operator_int("USER_DELIVERY_DAILY_CAP"),
+                         default=_daily_cap())
 
 
 def _home_dir_for_container(container: Any) -> str:
-    """Data-home for pref resolution, reusing the SAME data_dir the container's
-    BotConfig already carries (no new global default). Fail-open to the resolved
-    data home (WS-3: never a relative "data" under the cwd) when no container/config
-    is available — the test-fixture containers in this suite have no `.config`."""
-    cfg = getattr(container, "config", None)
-    from core.runtime_paths import data_dir_or_home
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    """Home for pref resolution (``delivery.daily_cap``/``rate_per_hour``, quiet
+    hours) — the IDENTITY axis, which is the data home and nothing else.
+
+    ⚠️ This used to read the container's ``config.data_dir``, which on a server
+    is ``<data_home>/data`` (a shadow one level down, see
+    ``core.runtime_paths.prefs_home_dir``) while every preference WRITER
+    resolves the data home. The owner could raise the cap on any seat and this
+    rail would keep reading the env default. *container* is kept in the
+    signature because callers pass it and a future per-tenant home may need it.
+    """
+    from core.runtime_paths import prefs_home_dir
+    return prefs_home_dir()
 
 
-def _content_hash(text: str) -> str:
+def content_hash(text: str) -> str:
+    """The rail's content fingerprint — the ONE definition of "the same message".
+
+    Public because two gates outside this module compare against it (the
+    `message` tool's owner-resend cooldown and its owner-send bookkeeping); a
+    second hash would be a second opinion on what counts as a repeat.
+    """
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+#: Back-compat alias for the in-module call sites and existing tests.
+_content_hash = content_hash
 
 
 def _default_event_log():
@@ -198,11 +295,13 @@ def _default_event_log():
 
 def _record(event_log: Any, user_id: str, session_id: Optional[str], source: str,
             outcome: str, content_hash: str, text: Optional[str] = None,
-            attachments: Optional[list] = None) -> None:
+            attachments: Optional[list] = None,
+            lane: Optional[str] = None) -> None:
     if event_log is None:
         return
     try:
-        attrs = {"outcome": outcome, "content_hash": content_hash}
+        attrs = {"outcome": outcome, "content_hash": content_hash,
+                 "lane": lane or resolve_priority(source, None)}
         if text is not None:
             attrs["text"] = str(text)[:500]
         if attachments:
@@ -212,6 +311,93 @@ def _record(event_log: Any, user_id: str, session_id: Optional[str], source: str
                          session_id=str(session_id or ""), source=source, attrs=attrs)
     except Exception:
         pass
+
+
+def _event_lane(event: dict) -> str:
+    """The priority lane a recorded attempt rode.
+
+    Prefers the lane stamped at record time; falls back to deriving it from the
+    source so rows written before the stamp existed still classify correctly.
+    """
+    attrs = event.get("attrs") or {}
+    lane = attrs.get("lane")
+    if lane in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW):
+        return str(lane)
+    return resolve_priority(str(event.get("source") or ""), None)
+
+
+def _budgeted(events: list) -> list:
+    """The subset of *events* that may be counted against the shared daily cap
+    and the hourly rate limit.
+
+    2026-09-15 prod review, C1: ``_CRITICAL_SOURCES`` skip both gates for
+    themselves but used to land in the counted window anyway, so every
+    cap-exempt send silently spent a slot only NON-exempt traffic could be
+    denied for. Measured over 2026-09-08..15: 105 of 154 delivered messages
+    were critical-lane, and on 2026-09-14 sixteen `tx_execution` notices plus
+    nine approval prompts consumed the owner's whole 30-slot budget — the
+    agent's own voice got one send that day and was capped fifteen times that
+    week. A lane that cannot be denied must not be able to deny others.
+    """
+    return [e for e in events if _event_lane(e) != PRIORITY_CRITICAL]
+
+
+#: Outcomes that already wrote a marked ``owner_notice`` for their body. A
+#: SECOND suppression of the same body must not write a second notice —
+#: ``/missed`` shows five entries, and filling them with one repeated body is
+#: the failure C3 just removed. ``sent``/``deduped``/``quiet_held`` are absent
+#: on purpose: none of them wrote a notice, so none of them may suppress one.
+_NOTICE_OUTCOMES = ("capped", "paused", "fallback", "rate_limited", "cooldown")
+
+
+def _notice_already_written(event_log: Any, user_id: str, content_hash: str,
+                            now: float) -> bool:
+    """True when this exact body already has an ``owner_notice`` in the window.
+
+    Round-2 review: C9 gave this rule to the ``paused`` branch alone, and its
+    four siblings did not get it — while C2 made ``fallback`` retryable, so a
+    dead sink re-wrote its notice on every attempt. The ATTEMPT row is still
+    written every time; only the recovery entry is deduplicated.
+
+    Fail-open to False: a query fault costs a duplicate notice, never a lost one.
+    """
+    try:
+        recent = event_log.query(kind=DELIVERY_EVENT_KIND, user_id=str(user_id or ""),
+                                 since_ts=now - _dedup_hours() * 3600, limit=1000)
+    except Exception:
+        return False
+    for e in recent:
+        attrs = e.get("attrs") or {}
+        if (attrs.get("content_hash") == content_hash
+                and attrs.get("outcome") in _NOTICE_OUTCOMES):
+            return True
+    return False
+
+
+def _maybe_notice(event_log: Any, user_id: str, source: str, text: str, *,
+                  content_hash: Optional[str] = None,
+                  now: Optional[float] = None) -> None:
+    """Write an owner_notice unless *source* is framework lifecycle chatter, or
+    this exact body already has one in the window.
+
+    Both rules live HERE rather than at the five call sites, because the
+    round-2 review found exactly the "applied to one branch of a set" mistake
+    that pattern invites.
+
+    2026-09-15 prod review, C3: 822 of the 899 rows in the owner's ``/missed``
+    store were run-lifecycle pings, so four of the five entries ``/missed``
+    renders were ``▶ goal started`` and the one real report was buried.
+    ``/missed`` is the owner's RECOVERY channel — it holds content they still
+    need. A start ping is ephemeral status: the ``user_delivery`` attempt row
+    (which carries the full text) remains the durable audit record, so nothing
+    is silently dropped.
+    """
+    if str(source or "") in _NO_NOTICE_SOURCES:
+        return
+    if content_hash and _notice_already_written(
+            event_log, user_id, content_hash, now if now is not None else time.time()):
+        return
+    _record_notice(event_log, user_id, text)
 
 
 def _record_notice(event_log: Any, user_id: str, text: str) -> None:
@@ -273,6 +459,11 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     owner_notice — 019 #2) | ``fallback`` (durably recorded, no live sink /
     send failed) | ``empty``. Never raises.
 
+    EVERY outcome now records the body on its attempt row, so "what did it try
+    to tell me" and "what did it actually tell me" are both answerable; and
+    every outcome the owner did not receive — except lifecycle chatter — also
+    writes the marked ``owner_notice`` that ``/missed`` renders.
+
     ``attachments`` (QW-1, 2026-07-19): pre-validated media entries
     (``core.surfaces.attachments`` shapes — the caller does confinement +
     screening; the rail only transports). Passed to the sink as ``media=``;
@@ -288,11 +479,31 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     body = (text or "").strip()
     if not body:
         return "empty"
+    # 2026-09-15: the SECOND owner rail gets the same remedy check the `message`
+    # tool now gets. Everything the framework itself pushes at the owner — a
+    # goal escalation, a pending-approval notice, a settlement notice — arrives
+    # here, and every one of them reaches a reader with no shell. Content-only
+    # (it appends, never suppresses), applied BEFORE the dedup hash so a
+    # corrected body and its uncorrected twin are one message, not two.
+    try:
+        from core.owner_remedy import correction_line, shell_free_correction
+        _fixups = correction_line(body) + shell_free_correction(body)
+        if _fixups:
+            logger.info("owner delivery carried unreachable actions; corrected inline")
+            body = body + _fixups
+    except Exception:
+        logger.debug("owner remedy check skipped", exc_info=True)
     if event_log is ...:
         event_log = _default_event_log()
     uid = str(user_id or "")
     h = _content_hash(body)
     now = time.time()
+    # Round-2 review: the EFFECTIVE lane, resolved once. `_record` used to
+    # re-derive it from the source alone, ignoring the explicit `priority=`
+    # the gates honour one line below — so a caller passing
+    # priority="critical" skipped the cap for itself and then spent a slot
+    # anyway, which is the very bug C1 exists to remove.
+    lane = resolve_priority(source, priority)
 
     # 031 owner pause: a lifecycle ping / escalation is held, durably recorded as
     # an owner_notice (visible in /missed + the digest), never silently dropped.
@@ -302,9 +513,17 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
         _dec = _allows(_pk)
         if not _dec.allowed:
             if event_log is not None:
-                _record_notice(event_log, uid, f"[held by owner pause; source={source}] {body}")
+                # 2026-09-15 prod review, C9: ``paused`` is not a consumed
+                # outcome, so the producer re-offers the same body on every
+                # tick. One notice per held body is a recovery entry; one per
+                # tick is the noise that buried the real ones — prod held the
+                # identical "I've proposed 3 change(s)" text seven times. The
+                # ATTEMPT is still recorded every time (that is the audit).
+                _maybe_notice(event_log, uid, source,
+                              f"[held by owner pause; source={source}] {body}",
+                              content_hash=h, now=now)
                 _record(event_log, uid, session_id, source, "paused", h, text=body,
-                        attachments=attachments)
+                        attachments=attachments, lane=lane)
             return "paused"
 
     # --- the rail's memory (fail-open when the event log is unavailable) ----
@@ -314,8 +533,14 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                      since_ts=now - _dedup_hours() * 3600, limit=1000)
             consumed = [e for e in recent
                         if (e.get("attrs") or {}).get("outcome") in _CONSUMED_OUTCOMES]
-            if any((e.get("attrs") or {}).get("content_hash") == h for e in consumed):
-                _record(event_log, uid, session_id, source, "deduped", h)
+            delivered = [e for e in recent
+                         if (e.get("attrs") or {}).get("outcome") in _DELIVERED_OUTCOMES]
+            if any((e.get("attrs") or {}).get("content_hash") == h for e in delivered):
+                # The owner HAS this text, so no notice — but the attempt row
+                # carries the body (C2): 383 of 383 deduped rows in prod held a
+                # NULL text, which made "what did it try to tell me" unanswerable.
+                _record(event_log, uid, session_id, source, "deduped", h, text=body,
+                        attachments=attachments, lane=lane)
                 return "deduped"
             _home_dir = _home_dir_for_container(container)
             # 018 P0.3 — quiet hours: DEFER, never drop (owner decision
@@ -332,26 +557,27 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                      session_id=str(session_id or ""),
                                      source=source,
                                      attrs={"outcome": "quiet_held",
-                                            "content_hash": h,
+                                            "content_hash": h, "lane": lane,
                                             "held_text": body[:4000]})
                 except Exception:
                     logger.debug("user_delivery: quiet hold record failed",
                                  exc_info=True)
                 return "quiet_held"
-            day = [e for e in consumed if e.get("ts", 0) >= now - 86400]
-            lane = resolve_priority(source, priority)
+            # C1: only traffic the cap can DENY is counted against it.
+            day = _budgeted([e for e in consumed if e.get("ts", 0) >= now - 86400])
             allowance = effective_cap_for_priority(
                 effective_daily_cap(uid, _home_dir), lane)
             _lc_cap = _lifecycle_daily_cap()
             if lane != PRIORITY_CRITICAL and source in _LIFECYCLE_SOURCES and _lc_cap > 0:
                 lifecycle_day = [e for e in day if e.get("source") in _LIFECYCLE_SOURCES]
                 if len(lifecycle_day) >= _lc_cap:
-                    _record_notice(
-                        event_log, uid,
+                    _maybe_notice(
+                        event_log, uid, source,
                         f"[suppressed by daily proactive-message cap; "
-                        f"source={source}; bucket=lifecycle] {body}")
+                        f"source={source}; bucket=lifecycle] {body}",
+                        content_hash=h, now=now)
                     _record(event_log, uid, session_id, source, "capped", h,
-                            text=body, attachments=attachments)
+                            text=body, attachments=attachments, lane=lane)
                     return "capped"
             if lane != PRIORITY_CRITICAL and len(day) >= allowance:
                 # 019 #2: a capped message must not be silently lost — unlike
@@ -361,17 +587,26 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 # the fallback branch: durable owner_notice (with the source +
                 # truncated text so the owner can reconstruct what was
                 # suppressed) + the full attempt record carrying the text.
-                _record_notice(
-                    event_log, uid,
+                _maybe_notice(
+                    event_log, uid, source,
                     f"[suppressed by daily proactive-message cap; "
-                    f"source={source}] {body}")
+                    f"source={source}] {body}", content_hash=h, now=now)
                 _record(event_log, uid, session_id, source, "capped", h,
-                        text=body, attachments=attachments)
+                        text=body, attachments=attachments, lane=lane)
                 return "capped"
             hour = [e for e in day if e.get("ts", 0) >= now - 3600]
             if lane != PRIORITY_CRITICAL and \
                     len(hour) >= effective_rate_per_hour(uid, _home_dir):
-                _record(event_log, uid, session_id, source, "rate_limited", h)
+                # C2: the owner did NOT receive this. Its sibling `capped`
+                # has written a marked owner_notice since 019 #2; this branch
+                # never did, so 18 rate-limited messages were readable only by
+                # someone querying telemetry by hand.
+                _maybe_notice(
+                    event_log, uid, source,
+                    f"[suppressed by hourly rate limit; source={source}] {body}",
+                    content_hash=h, now=now)
+                _record(event_log, uid, session_id, source, "rate_limited", h,
+                        text=body, attachments=attachments, lane=lane)
                 return "rate_limited"
     except Exception:
         logger.debug("user_delivery: gate check failed (fail-open)", exc_info=True)
@@ -443,7 +678,6 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 res = await res
             return bool(res)
 
-        lane = resolve_priority(source, priority)
         broadcast = lane == PRIORITY_CRITICAL and len(targets) > 1
         for _sid, _addr in targets:
             ok = await _send_one(_sid, _addr)
@@ -455,13 +689,18 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
         sent = False
 
     if sent:
-        _record(event_log, uid, session_id, source, "sent", h,
-                attachments=send_attachments)
+        # C7: all 527 `sent` rows in prod held a NULL text, so no surface could
+        # answer "what did you actually tell me" — only failures were legible.
+        _record(event_log, uid, session_id, source, "sent", h, text=body,
+                attachments=send_attachments, lane=lane)
         return "sent"
-    # Durable fallback — the message is never silently lost.
-    _record_notice(event_log, uid, body)
+    # Durable fallback — the message is never silently lost. Marker-prefixed
+    # (A7 / A40) like the cap/pause notices, so `/missed` can read it too —
+    # before this it carried NO marker at all and was unreadable there.
+    _maybe_notice(event_log, uid, source, f"[undelivered; source={source}] {body}",
+                  content_hash=h, now=now)
     _record(event_log, uid, session_id, source, "fallback", h, text=body,
-            attachments=attachments)
+            attachments=attachments, lane=lane)
     return "fallback"
 
 
@@ -544,6 +783,15 @@ async def maybe_deliver_autonomous_send(orchestrator: Any, session_id: str, text
     """
     try:
         if not send_message_user_delivery_enabled():
+            return None
+        # 044 T20 fix round 2 (Obs 1): a PUBLIC (room-bound) session never mirrors
+        # to the owner's DM — autonomous or not. The autonomous carve-out below
+        # exists because a goal/cron run has no surface of its own; a room SERVICE
+        # run has one, and is autonomous, so every public answer was ALSO pushed
+        # into the owner's private chat and spent his daily delivery budget on a
+        # message he did not ask for and had already read in the room.
+        from core.surfaces.room_policy import is_public_session
+        if is_public_session(orchestrator):
             return None
         from agents.task.goals.autonomy_marker import is_autonomous
         has_live_mirror = bool(

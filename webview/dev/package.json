@@ -1,0 +1,17 @@
+{
+  "name": "polyrob-console-dev",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dev-only test rig for the POLYROB console UI. Nothing in this directory ships in the wheel: the console itself stays stack-free (no framework, no build step, no bundler). This rig only CHECKS what is already plain HTML and CSS.",
+  "scripts": {
+    "test": "vitest run",
+    "axe": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0",
+    "axe-core": "4.10.2",
+    "jsdom": "^25.0.1",
+    "vitest": "^2.1.9"
+  }
+}

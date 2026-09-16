@@ -45,6 +45,28 @@ def test_python_dash_m_migrate_status_works(tmp_path):
     assert proc.returncode == 0, proc.stderr[-2000:]
 
 
+def test_python_dash_m_migrate_status_is_read_only_without_a_database(tmp_path):
+    """A diagnostic in a fresh directory must not create runtime state."""
+    cwd = tmp_path / "empty"
+    home = tmp_path / "home"
+    cwd.mkdir()
+    home.mkdir()
+    env = {
+        "HOME": str(home),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYTHONPATH": str(REPO_ROOT),
+        "TERM": "dumb",
+        "CI": "1",
+    }
+    proc = subprocess.run(
+        [sys.executable, "-m", "migrations.migrate", "status"],
+        cwd=cwd, env=env, capture_output=True, text=True, timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    assert list(cwd.iterdir()) == []
+    assert list(home.iterdir()) == []
+
+
 def test_build_cli_container_runs_boot_migrations():
     import core.bootstrap as bootstrap
 

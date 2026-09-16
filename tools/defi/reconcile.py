@@ -84,6 +84,19 @@ class ReconcileReport:
             return "UNVERIFIED"
         return "CLEAN"
 
+    def to_dict(self) -> dict:
+        """Every list + the scalar fields, plain-dict shaped so the core tier
+        (``core.book.verdict_from_report``) can consume it without importing
+        this module (core may not import ``tools.*``)."""
+        fields = ("matched", "mismatched", "unbacked", "unexplained",
+                  "unreadable_rows", "unknown", "dust", "skipped_other_family")
+        return {
+            **{f: list(getattr(self, f)) for f in fields},
+            "ledger_rows": self.ledger_rows,
+            "holdings_considered": self.holdings_considered,
+            "verdict": self.verdict,
+        }
+
 
 def diff(ledger: List[LedgerPosition],
          holdings: List[ChainHolding],

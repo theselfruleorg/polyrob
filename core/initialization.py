@@ -538,6 +538,42 @@ def _treasury_sweeper_enabled() -> bool:
     return bool_env("TREASURY_SWEEPER_ENABLED", False)
 
 
+async def initialize_user_mcp_service(container: DependencyContainer) -> None:
+    """Register the per-tenant MCP server store (``user_mcp_service``).
+
+    This is the ONLY durable home for "the owner added this MCP server" — the
+    rows ``MCPTool.load_user_servers`` reads at session start. It used to live
+    inside :func:`initialize_auth_services`, which returns early unless
+    ``ENABLE_AUTH`` is set, and ran only on the server boot path. Live prod has
+    ``ENABLE_AUTH`` unset and the CLI never calls auth-services at all, so on
+    both of the shapes the owner actually runs there was no store to persist
+    into — an added MCP server could not survive a restart even in principle.
+
+    Per-tenant MCP configuration is not a billing feature. The gate is
+    ``MCP_ENABLED``. Fail-open: a degraded boot with no database just means no
+    store, never a failed startup.
+    """
+    if not getattr(container.config, "mcp_enabled", False):
+        return
+    db_manager = container.get_service('database_manager')
+    if db_manager is None or getattr(db_manager, "connection", None) is None:
+        logger.info("  ⏩ User MCP service skipped (no database) — MCP servers "
+                    "added this session will not persist")
+        return
+    try:
+        from modules.database.user_mcp_servers import UserMCPServersHandler
+        from tools.mcp.user_mcp_service import init_user_mcp_service
+
+        user_mcp_handler = UserMCPServersHandler(db_manager.connection)
+        await user_mcp_handler.ensure_tables()
+        container.register_service('user_mcp_handler', user_mcp_handler)
+        container.register_service('user_mcp_service',
+                                   init_user_mcp_service(user_mcp_handler))
+        logger.info("  ✓ User MCP service initialized")
+    except Exception as e:
+        logger.warning(f"  ⚠ User MCP service initialization failed (optional): {e}")
+
+
 async def initialize_auth_services(container: DependencyContainer) -> None:
     """Initialize authentication and payment services."""
     logger.info("➤ Auth services initialization started")
@@ -690,26 +726,10 @@ async def initialize_auth_services(container: DependencyContainer) -> None:
         else:
             logger.info("  ⏩ x402 payment system disabled")
 
-        # User MCP Service (for per-user MCP server configurations)
-        try:
-            from modules.database.user_mcp_servers import UserMCPServersHandler
-            from tools.mcp.user_mcp_service import UserMCPService, init_user_mcp_service
-
-            # Create database handler - use connection attribute from DatabaseManager
-            user_mcp_handler = UserMCPServersHandler(db_manager.connection)
-
-            # Ensure tables exist (creates if missing)
-            await user_mcp_handler.ensure_tables()
-
-            container.register_service('user_mcp_handler', user_mcp_handler)
-
-            # Create service
-            user_mcp_service = init_user_mcp_service(user_mcp_handler)
-            container.register_service('user_mcp_service', user_mcp_service)
-            logger.info("  ✓ User MCP service initialized")
-
-        except Exception as e:
-            logger.warning(f"  ⚠ User MCP service initialization failed (optional): {e}")
+        # User MCP Service — registered independently of ENABLE_AUTH (see
+        # initialize_user_mcp_service). Called here so the server boot path keeps
+        # registering it in the same phase it always did.
+        await initialize_user_mcp_service(container)
 
         # Note: Polymarket tool is initialized in initialize_tools() phase
         # with init_priority=55. It self-registers polymarket_db in container.

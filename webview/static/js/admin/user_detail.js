@@ -9,7 +9,12 @@
     // Use shared utilities
     const { apiCall, formatDateTime, formatCredits, timeAgo, showAlert, showConfirm } = AdminUtils;
 
-    const userId = window.TARGET_USER_ID;
+    // 043 phase 5 (R6): de-inlined — the value crosses on the DOM node's
+    // data-user-id attribute (was window.TARGET_USER_ID from an inline script,
+    // which the console CSP now forbids).
+    const userIdNode = document.getElementById('user-id-display');
+    const userId = (userIdNode && userIdNode.dataset.userId)
+        || (window.TARGET_USER_ID || '');
     let userData = null;
 
     // Format wallet with more characters for detail view

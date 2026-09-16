@@ -158,12 +158,15 @@ def test_readonly_session_verbs_skip_key_preflight(monkeypatch, tmp_path, argv):
     )
 
 
-def test_mutating_session_verb_keeps_key_preflight(monkeypatch, tmp_path):
+def test_cancel_is_keyless_and_routes_to_live_control(monkeypatch, tmp_path):
     from cli.commands.session import session
 
     calls = _patch_rig(monkeypatch, tmp_path)
     runner = CliRunner()
+    control = AsyncMock()
+    monkeypatch.setattr("cli.commands._session_control.control_live_session", control)
     result = runner.invoke(session, ["cancel", "abc"])
 
-    assert calls, "`session cancel` must still run the key preflight"
+    assert calls == [], "Stopping work must not require an LLM credential"
+    control.assert_awaited_once()
     assert result.exit_code == 0, result.output

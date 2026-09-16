@@ -80,7 +80,10 @@ def _cron_ev(job, outcome: str, reason: Optional[str] = None, **extra) -> None:
     except Exception:
         pass
 
-from agents.task.runtime.run_as_session import run_task_to_outcome as _run_task_to_outcome
+from agents.task.runtime.run_as_session import (
+    create_session_accepts as _create_session_accepts,
+    run_task_to_outcome as _run_task_to_outcome,
+)
 from cron.jobs import CronJob
 
 logger = logging.getLogger(__name__)
@@ -259,6 +262,33 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
     async def _execute(job: CronJob, payload: dict) -> bool:
         session_id = None
         _t0 = time.time()
+        # 044 T20: a job carrying `payload.group` SERVICES a room — the run
+        # session IS the room's bound session (PUBLIC profile + room toolset,
+        # stamped by bind_chat_surface), and its task is the room's ledger tail
+        # since THIS reader's checkpoint. Resolved BEFORE the `started` event so
+        # an empty tail is a genuine $0 tick — no session, no start notice, the
+        # same shape the wake change-gate emits.
+        from agents.task.goals.group_service import (
+            build_service_task, close_room_books, room_binding, service_read_mark,
+        )
+        _room = room_binding(payload)
+        _room_task = _room_read_at = _room_sid = None
+        if _room is not None:
+            from core.config_policy import AutonomyConfig as _RoomCfg
+            _src, _key = _room
+            _room_read_at = service_read_mark()
+            _room_task, _skip = build_service_task(
+                getattr(task_agent, "container", None), payload,
+                owner_uid=job.user_id,
+                max_replies=_RoomCfg.goal_group_max_replies_per_run())
+            if _room_task is None:
+                _skip = _skip or "no_change"
+                logger.info("cron job %s: room %s:%s — $0 tick, agent not invoked (%s)",
+                            job.id, _src.surface_id, _src.chat_id, _skip)
+                _cron_ev(job, "skipped", _skip)
+                return True
+            import uuid as _uuid
+            _room_sid = str(_uuid.uuid4())
         _cron_ev(job, "started")
         # 019 P2: owner notice at run START (posture-gated default; the one
         # delivery rail dedups/caps). Fail-open.
@@ -266,9 +296,15 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             from agents.task.constants import AutonomyConfig as _StartCfg
             if _StartCfg.autonomy_start_notice():
                 from core.self_evolution import push_owner_message
+                # priority="low" to match the goal dispatcher's start ping
+                # (2026-07-20): a start notice is the least valuable thing on
+                # the rail and must not spend the slice reserved for results.
+                # This leg was missing it, so the two siblings competed on
+                # different terms for the same budget.
                 await push_owner_message(
                     getattr(task_agent, "container", None),
-                    f"▶ cron run started: {(job.task or '')[:120]} ({job.id[:8]})")
+                    f"▶ cron run started: {(job.task or '')[:120]} ({job.id[:8]})",
+                    priority="low", source="lifecycle")
         except Exception:
             logger.debug("cron start notice failed for %s", job.id, exc_info=True)
         from core.runtime_config import resolve_default_provider
@@ -292,21 +328,59 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             "temperature": 0.0,
             "cron": True,
         }
+        if _room is not None:
+            # The room's own toolset wins: a room session is PUBLIC and
+            # `payload.tools` must not be able to widen it.
+            if payload.get("tools"):
+                logger.warning("cron job %s: payload.tools ignored — a room service "
+                               "run uses the room toolset (%s)", job.id,
+                               payload.get("tools"))
+            from core.surfaces.room_policy import room_tool_ids
+            request["task"] = _room_task
+            request["tools"] = room_tool_ids()
+            request["session_source"] = _room[0]
+            request["chat_session_key"] = _room[1]
+            # Bind WITHOUT taking over the room's durable chat<->session row
+            # (fix round 1, Critical 1), and pre-generate the session id so the
+            # `finally` below can close the books after a cancel (Important 5).
+            request["bind_write_row"] = False
+            request["session_id"] = _room_sid
         try:
             from core.config_policy import AutonomyConfig
 
             # Legacy branch (CRON_RUN_LOOP=OFF): create-only, return bool(session_info).
             # Kept exactly as-is — run_task_as_session does NOT apply here.
             if not AutonomyConfig.cron_run_loop():
-                session_info = await task_agent.create_session(user_id=job.user_id, request=request)
+                _cs_kwargs = {"user_id": job.user_id, "request": request}
+                # 043 A17: only pass `creator` when the target actually accepts
+                # it — a narrow test fake (no **kwargs, no `creator` param)
+                # must not start raising TypeError.
+                if _create_session_accepts(task_agent.create_session, "creator"):
+                    _cs_kwargs["creator"] = "cron"
+                session_info = await task_agent.create_session(**_cs_kwargs)
                 return bool(session_info)
 
             # W3 LIVE-BUG FIX: route through the shared helper so create_session AND
             # run_session are both called. §2: consume the RunOutcome envelope —
             # the done() ledger text, never a re-extracted message-history string.
-            run = await _run_task_to_outcome(
-                task_agent, user_id=job.user_id, request=request, autonomous=True
-            )
+            run = None
+            try:
+                run = await _run_task_to_outcome(
+                    task_agent, user_id=job.user_id, request=request, autonomous=True,
+                    creator="cron",
+                )
+            finally:
+                # 044 T20 fix round 1 (Important 5): the scheduler's per-job
+                # `wait_for` CANCELS this coroutine, so the old post-run call
+                # never ran on a timeout and the next tick re-answered every line
+                # the cancelled run had already answered. Presented IS handled.
+                # Fix round 2 (N2): prefer the run's REAL session id — the
+                # pre-generated one is only honoured if create_session took it.
+                if _room is not None:
+                    close_room_books(
+                        task_agent, payload,
+                        session_id=getattr(run, "session_id", None) or _room_sid,
+                        up_to_ts=_room_read_at)
             session_id = run.session_id
 
             # Back-half: cron-specific log messages + early returns.

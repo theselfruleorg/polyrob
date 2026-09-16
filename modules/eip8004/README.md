@@ -272,7 +272,7 @@ The registration file is a JSON document that the Identity Registry's `tokenURI`
   "description": "AI automation agent with browser control, file system access, MCP integrations, and autonomous task execution capabilities.",
   "image": "https://your-domain.example/static/images/rob-logo.png",
   
-  "endpoints": [
+  "services": [
     {
       "name": "A2A",
       "endpoint": "https://your-domain.example/.well-known/agent.json",
@@ -341,7 +341,7 @@ The registration file is a JSON document that the Identity Registry's `tokenURI`
 | `type` | Yes | Schema identifier, must be `https://eips.ethereum.org/EIPS/eip-8004#registration-v1` |
 | `name` | Yes | Agent name (ERC-721 compatible) |
 | `description` | Yes | Human-readable description of agent capabilities |
-| `image` | No | Agent avatar/logo URL (ERC-721 compatible) |
+| `image` | No | Agent avatar/logo URL. ⚠️ OMITTED when there is no public base URL to serve it from — a link that does not resolve is worse than an absent field. `metadata.avatar` carries generator/seed/variant so the face stays reproducible either way. |
 | `endpoints` | Yes | Array of protocol endpoints |
 | `registrations` | Should | On-chain registration references |
 | `supportedTrust` | No | Trust models this agent supports |
@@ -475,7 +475,7 @@ Returns the ERC-8004 registration file.
   "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
   "name": "POLYROB",
   "description": "AI automation agent...",
-  "endpoints": [...],
+  "services": [...],
   "registrations": [...],
   "supportedTrust": ["reputation"]
 }
@@ -979,7 +979,7 @@ modules/eip8004/
 ### Run Module Tests
 
 ```bash
-cd /path/to/rob_dev
+cd /path/to/polyrob
 source venv/bin/activate
 
 # Test imports

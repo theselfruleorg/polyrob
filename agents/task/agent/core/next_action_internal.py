@@ -56,6 +56,7 @@ from modules.llm.messages import (
 	ToolMessage,
 )
 from modules.llm.adapters import BaseChatModel
+from modules.llm.retry_log import log_exhausted
 from core.exceptions import (
     RateLimitError,
     LLMError,
@@ -1181,17 +1182,25 @@ Then emit your function calls."""
 										self.logger.debug(f"tool_call_id re-stamp skipped: {_restamp_err}")
 
 								except asyncio.TimeoutError:
-									self.logger.error(f"LLM call timed out after {timeout_seconds} seconds with {len(tools)} tools", exc_info=True)
+									# A12 fix round (2026-09-14, 043 §4.6): per-attempt — this
+									# `raise`s onward to the outer retry loop, which owns the
+									# turn's one final ERROR line.
+									self.logger.warning(f"LLM call timed out after {timeout_seconds} seconds with {len(tools)} tools", exc_info=True)
 									raise
 								except TypeError as type_error:
 									# Handle cases where bind_tools() is not supported or has invalid tool schemas
-									self.logger.error(f"Failed to bind tools to LLM: {type_error}", exc_info=True)
+									# A12 fix round: per-attempt, falls through (doesn't raise) —
+									# already paired with the warning below.
+									self.logger.warning(f"Failed to bind tools to LLM: {type_error}", exc_info=True)
 									self.logger.warning("Falling back to non-tool calling mode")
 									# Set parsed to None to trigger fallback to structured output
 									parsed = None
 									# Don't raise - let it fall through to structured output fallback
 								except Exception as llm_error:
-									self.logger.error(f"LLM call failed with {len(tools)} tools: {llm_error}", exc_info=True)
+									# A12 fix round (2026-09-14, 043 §4.6): the tool-calling
+									# attempt failed and we're about to fall back to plain —
+									# per-attempt, `raise`s onward to the outer retry loop.
+									self.logger.warning(f"LLM call failed with {len(tools)} tools: {llm_error}", exc_info=True)
 									# Log tool sample for debugging
 									if tools:
 										sample = tools[:2] if len(tools) > 2 else tools
@@ -1291,7 +1300,9 @@ Then emit your function calls."""
 								# G2: plain fallback completion must be billed too.
 								await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_fallback")
 							except asyncio.TimeoutError:
-								self.logger.error(f"LLM call timed out after {timeout_seconds:.0f} seconds", exc_info=True)
+								# A12 fix round (2026-09-14, 043 §4.6): per-attempt (first
+								# plain-fallback leg); `raise`s onward.
+								self.logger.warning(f"LLM call timed out after {timeout_seconds:.0f} seconds", exc_info=True)
 								raise
 							parsed = None
 				
@@ -1328,10 +1339,13 @@ Then emit your function calls."""
 						# G2: final manual-parse fallback completion must be billed too.
 						await self._bill_llm_response(response, time.time() - _fb_start, provider, purpose="next_action_fallback")
 					except asyncio.TimeoutError:
-						self.logger.error(f"LLM call timed out after {timeout_seconds} seconds", exc_info=True)
+						# A12 fix round (2026-09-14, 043 §4.6): per-attempt (the
+						# "final" plain-fallback leg is still one leg of the
+						# outer retry loop); `raise`s onward.
+						self.logger.warning(f"LLM call timed out after {timeout_seconds} seconds", exc_info=True)
 						raise
 					parsed = None
-				
+
 				# Handle manual parsing if structured output failed
 				if parsed is None:
 					self.logger.info("All structured methods failed - attempting manual JSON parsing")
@@ -1341,8 +1355,11 @@ Then emit your function calls."""
 					if content is not None and content.strip():
 						parsed = self._parse_fallback_content(content)
 					else:
-						# Log the full response for debugging when no content is found
-						self.logger.error(f"No content available for manual parsing. Response type: {type(response)}, Response: {str(response)[:1000]}", exc_info=True)
+						# Log the full response for debugging when no content is found.
+						# A12 fix round (2026-09-14, 043 §4.6): per-attempt — this
+						# `raise`s onward to the outer retry loop, which owns the
+						# turn's one final ERROR line.
+						self.logger.warning(f"No content available for manual parsing. Response type: {type(response)}, Response: {str(response)[:1000]}", exc_info=True)
 						raise LLMResponseError("No content available for manual parsing")
 				
 				# Extract token usage and response metadata
@@ -1403,7 +1420,9 @@ Then emit your function calls."""
 							self.logger.warning(f"Unexpected parsed type: {type(parsed)}, attempting validation")
 							parsed = self.AgentOutput.model_validate(parsed)
 					except Exception as validation_error:
-						self.logger.error(f"Failed to validate parsed response into AgentOutput: {validation_error}", exc_info=True)
+						# A12 fix round (2026-09-14, 043 §4.6): per-attempt —
+						# doesn't raise, feeds the parse-retry decision below.
+						self.logger.warning(f"Failed to validate parsed response into AgentOutput: {validation_error}", exc_info=True)
 						parsed = None
 						last_error_type = "parse"
 				
@@ -1466,8 +1485,11 @@ Then emit your function calls."""
 				elapsed_time = time.time() - start_time
 				
 				last_error_type = self._classify_llm_error(e)
-				
-				self.logger.error(f"LLM request attempt {retry_count} failed after {elapsed_time:.2f}s: {str(e)}", exc_info=True)
+
+				# A12 fix round (2026-09-14, 043 §4.6): "attempt N of M" —
+				# per-attempt, not the turn's final word (may retry below).
+				# The single final ERROR is the `else:` branch further down.
+				self.logger.warning(f"LLM request attempt {retry_count} failed after {elapsed_time:.2f}s: {str(e)}", exc_info=True)
 				
 				# Update request info with error details
 				request_info.update({
@@ -1492,7 +1514,10 @@ Then emit your function calls."""
 					await asyncio.sleep(delay)
 					continue
 				else:
-					self.logger.error(f"LLM call failed after {retry_count} attempts", exc_info=True)
+					# A12 fix round 5 (2026-09-14, 043 §4.6): the ONE final
+					# ERROR for this retry loop -- every per-attempt log above
+					# is WARNING. Rendering extracted to modules/llm/retry_log.py.
+					log_exhausted(self.logger, retry_count=retry_count, provider=provider, exc=e)
 					raise
 		
 		# Should not reach here, but just in case

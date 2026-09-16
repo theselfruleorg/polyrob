@@ -72,7 +72,10 @@ def _tool(backend):
 
 
 def _owner_ctx(**kw):
-    d = dict(role="orchestrator", is_sub_agent=False, user_id="polyrob",
+    # The owner tenant (`core.identity.LocalIdentity.USER_ID`). ⚠️ Was "polyrob"
+    # until 2026-09-15: the owner principal's unbound fallback is no longer the
+    # instance id, so an instance-id context is a stranger to the posture gate.
+    d = dict(role="orchestrator", is_sub_agent=False, user_id="local",
              session_id="s1", metadata={"turn_kind": None})
     d.update(kw)
     return ActionExecutionContext(**d)

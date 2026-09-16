@@ -136,7 +136,7 @@ class ConversationResumeMixin:
                     f"conversation whose original session ({dead_session_id}) is no longer "
                     "available. Their message arrives as correspondent DATA in this "
                     "session; review the conversation context and respond appropriately.")
-                info = await self.create_session(user_id, task_text)
+                info = await self.create_session(user_id, task_text, creator="correspondent")
                 new_sid = (info or {}).get("session_id")
                 if not new_sid:
                     return False

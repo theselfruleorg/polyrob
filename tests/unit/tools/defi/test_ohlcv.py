@@ -1,0 +1,159 @@
+"""N2 — price history. Candles, and the shape read a 24h snapshot cannot give.
+
+The agent named this its own second-biggest weakness: "All timing decisions use
+24h snapshots. Can't distinguish 'steady climber' from 'one spike 20h ago.'"
+The measured research turns on exactly that: winners climbed over ~40 days in
+steps, wash tokens peaked in 2-6 hours and lost 75-99%.
+
+Candles are POOL-scoped on this indexer, not token-scoped. Handing it a token
+address returns nothing, which is why the verb resolves the token's deepest pool
+and SAYS which pool it read.
+"""
+import pytest
+
+from tools.defi.providers.geckoterminal import Candle, parse_ohlcv
+from tools.defi.data_tool import DefiDataTool, OhlcvParams
+
+TOKEN = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+POOL = "0xd42a491087a15e5afd51feb3606066cc152d2b09"
+
+
+def _payload(rows):
+    return {"data": {"attributes": {"ohlcv_list": rows}}}
+
+
+def _text(res):
+    return (res.extracted_content or "") + (res.error or "")
+
+
+# --- the parser -----------------------------------------------------------
+
+def test_candles_are_parsed_oldest_first():
+    out = parse_ohlcv(_payload([
+        [1789365600, 2.0, 3.0, 1.5, 2.5, 100.0],
+        [1789362000, 1.0, 1.2, 0.9, 1.1, 50.0],
+    ]))
+    assert [c.timestamp for c in out] == [1789362000, 1789365600]
+    assert out[0].open == pytest.approx(1.0)
+    assert out[-1].close == pytest.approx(2.5)
+
+
+def test_a_malformed_row_is_dropped_not_zeroed():
+    out = parse_ohlcv(_payload([[1, 1.0, 1.0, 1.0, 1.0, 1.0], ["bad"], None]))
+    assert len(out) == 1
+
+
+def test_an_empty_payload_is_an_empty_list():
+    assert parse_ohlcv({}) == []
+    assert parse_ohlcv(None) == []
+
+
+# --- the shape read -------------------------------------------------------
+
+def _series(closes, start=1_000_000, step=3600):
+    return [Candle(start + i * step, c, c, c, c, 1000.0) for i, c in enumerate(closes)]
+
+
+def test_peak_and_time_to_peak_are_measured():
+    from tools.defi.providers.geckoterminal import summarize_candles
+    s = summarize_candles(_series([1.0, 2.0, 50.0, 20.0, 6.0]))
+    assert s.peak == pytest.approx(50.0)
+    assert s.candles_to_peak == 2
+    assert s.pct_off_peak == pytest.approx(-88.0, abs=0.5)
+
+
+def test_a_vertical_then_dumped_series_is_described_as_such():
+    """The measured wash shape: peak at hour 4-5, then 30 hours of decline."""
+    from tools.defi.providers.geckoterminal import summarize_candles
+    s = summarize_candles(_series(
+        [0.0004, 0.004, 0.0198, 0.008, 0.0026, 0.0021, 0.0018,
+         0.0016, 0.0015, 0.0014, 0.0013, 0.0012]))
+    assert s.pct_off_peak < -80
+    assert s.peak_in_first_half is True
+    assert s.candles_to_peak == 2
+
+
+def test_a_stair_step_climber_peaks_late():
+    from tools.defi.providers.geckoterminal import summarize_candles
+    s = summarize_candles(_series([1.0, 1.4, 1.3, 1.9, 1.8, 2.6, 2.5, 3.4]))
+    assert s.peak_in_first_half is False
+    assert s.pct_off_peak > -20
+
+
+def test_an_empty_series_summarizes_to_unknown_not_zero():
+    from tools.defi.providers.geckoterminal import summarize_candles
+    s = summarize_candles([])
+    assert s.peak is None and s.pct_off_peak is None
+
+
+# --- the verb -------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_ohlcv_renders_candles_and_the_shape():
+    tool = DefiDataTool(
+        pool_for_token_fn=lambda c, a: POOL,
+        ohlcv_fn=lambda c, p, **kw: _series([1.0, 2.0, 50.0, 20.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert "50" in out
+    assert "peak" in out.lower()
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_names_the_pool_it_read():
+    """Candles are pool-scoped. Not saying which pool makes the numbers
+    unattributable, and a token's pools disagree."""
+    tool = DefiDataTool(
+        pool_for_token_fn=lambda c, a: POOL,
+        ohlcv_fn=lambda c, p, **kw: _series([1.0, 2.0]))
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert POOL in out
+
+
+@pytest.mark.asyncio
+async def test_ohlcv_uses_an_explicit_pool_without_resolving():
+    called = []
+    tool = DefiDataTool(
+        pool_for_token_fn=lambda c, a: called.append(1) or POOL,
+        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+    await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN, pool=POOL))
+    assert not called
+
+
+@pytest.mark.asyncio
+async def test_no_candles_is_stated_never_rendered_as_a_flat_chart():
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: POOL,
+                        ohlcv_fn=lambda c, p, **kw: [])
+    out = _text(await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN)))
+    assert "no candles" in out.lower() or "no price history" in out.lower()
+    assert "0.00" not in out
+
+
+@pytest.mark.asyncio
+async def test_an_unresolvable_pool_is_an_honest_error():
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: None,
+                        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+    res = await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN))
+    assert res.error and "pool" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_bad_address_is_refused_before_any_provider_call():
+    called = []
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: called.append(1) or POOL,
+                        ohlcv_fn=lambda c, p, **kw: _series([1.0]))
+    res = await tool.ohlcv(OhlcvParams(chain="base", address="nope"))
+    assert res.error and not called
+
+
+@pytest.mark.asyncio
+async def test_timeframe_is_passed_through():
+    seen = {}
+
+    def _fetch(chain, pool, timeframe=None, aggregate=None, limit=None):
+        seen.update(timeframe=timeframe, aggregate=aggregate, limit=limit)
+        return _series([1.0])
+
+    tool = DefiDataTool(pool_for_token_fn=lambda c, a: POOL, ohlcv_fn=_fetch)
+    await tool.ohlcv(OhlcvParams(chain="base", address=TOKEN,
+                                 timeframe="day", aggregate=1, limit=30))
+    assert seen["timeframe"] == "day" and seen["limit"] == 30

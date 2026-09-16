@@ -212,10 +212,36 @@ def test_size_gas_without_a_measurement_keeps_the_default(monkeypatch):
 def test_size_gas_caps_the_margin_at_the_max_gas_limit(monkeypatch):
     """The x1.5 margin is clamped by the ceiling, never allowed past it.
     Expressed against MAX_GAS_LIMIT rather than a literal so the intent survives
-    the ceiling moving (500k -> 2M in 2026-08-25 for aggregator routes)."""
+    the ceiling moving (500k -> 2M 2026-08-25 for aggregator routes;
+    2M -> 8M 2026-09-13 for a launchpad launch).
+
+    The maxFeePerGas is lowered to an L2-realistic figure so the GAS clamp is
+    what this test measures — at the fixture's 0.3 gwei the FEE ceiling refuses
+    first, which is a different (correct, and separately tested) behaviour.
+    """
     r, tx = _built_tx(monkeypatch)
+    tx = {**tx, "maxFeePerGas": 24_000_000}          # 0.024 gwei, Robinhood-measured
     just_under = rail.MAX_GAS_LIMIT - 1
     assert r.size_gas(tx, just_under)["gas"] == rail.MAX_GAS_LIMIT
+
+
+def test_the_FEE_ceiling_still_binds_before_the_raised_gas_ceiling(monkeypatch):
+    """The gas ceiling is an anomaly brake; the FEE ceiling is the economic
+    bound, and raising the first must never widen the second. At a mainnet-ish
+    gas price, a transaction sized anywhere near 8M is refused on cost."""
+    r, tx = _built_tx(monkeypatch)
+    tx = {**tx, "maxFeePerGas": 20 * 10 ** 9}        # 20 gwei
+    with pytest.raises(rail.GasCeilingExceeded) as exc:
+        r.size_gas(tx, 4_000_000)
+    assert "ceiling" in str(exc.value)
+
+
+def test_a_launchpad_sized_deployment_fits_the_raised_ceiling(monkeypatch):
+    """Measured on prod 2026-09-13: a Pons V2 launch costs 3,468,850 gas, which
+    at the x1.5 margin needs 5.2M. The 2M ceiling refused every launch."""
+    r, tx = _built_tx(monkeypatch)
+    tx = {**tx, "maxFeePerGas": 24_000_000}
+    assert r.size_gas(tx, 3_468_850)["gas"] == 3_468_850 * 3 // 2
 
 
 def test_size_gas_refuses_a_tx_the_cap_cannot_hold(monkeypatch):
@@ -243,7 +269,8 @@ def test_size_gas_rechecks_the_fee_ceiling_with_the_sized_gas(monkeypatch):
 def test_reverted_receipt_is_failed_not_success(monkeypatch):
     monkeypatch.setattr(rail, "_rpc_call", lambda c, m, p, timeout=8.0: {
         "eth_chainId": hex(8453),
-        "eth_getTransactionReceipt": {"status": "0x0", "blockNumber": hex(10),
+        "eth_getTransactionReceipt": {"transactionHash": "0x" + "ab" * 32,
+                                      "status": "0x0", "blockNumber": hex(10),
                                       "gasUsed": hex(21000)},
     }[m])
     r = rail.EvmRail(chain="base", signer=_signer())
@@ -255,7 +282,8 @@ def test_reverted_receipt_is_failed_not_success(monkeypatch):
 def test_successful_receipt(monkeypatch):
     monkeypatch.setattr(rail, "_rpc_call", lambda c, m, p, timeout=8.0: {
         "eth_chainId": hex(8453),
-        "eth_getTransactionReceipt": {"status": "0x1", "blockNumber": hex(11),
+        "eth_getTransactionReceipt": {"transactionHash": "0x" + "cd" * 32,
+                                      "status": "0x1", "blockNumber": hex(11),
                                       "gasUsed": hex(52000)},
     }[m])
     r = rail.EvmRail(chain="base", signer=_signer())

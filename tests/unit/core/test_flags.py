@@ -84,6 +84,29 @@ def test_secret_flags_masked():
     assert r.value == "(unset)"
 
 
+def test_rpc_flags_are_secret():
+    """S10: a managed-RPC endpoint carries its API key IN THE URL, so the
+    suffix rule missed it. `_SECRET_NAME_PARTS` matches `_RPC` as a NAME
+    SUBSTRING — this pins the exact catalog rows that now mask, so a future
+    non-URL `_RPC` flag (a timeout, a retry count) has to be looked at rather
+    than silently rendered as `(set, masked)`."""
+    from core.flags import REGISTRY
+    matched = sorted(k for k in REGISTRY if "_RPC" in k.upper())
+    assert matched == [
+        "ARBITRUM_RPC_URL",
+        "BASE_RPC_URL",
+        "DEFI_EVM_RPC_BASE",
+        "DEFI_SOLANA_RPC",
+        "ETHEREUM_RPC_URL",
+        "POLYGON_RPC_URL",
+        "X402_SETTLEMENT_RPC",
+    ], matched
+    for name in matched:
+        assert is_secret_flag(name), name
+        # Every one is a URL — masking it hides a credential, not a number.
+        assert REGISTRY[name].kind == "str", name
+
+
 def test_dynamic_default_hook():
     def dyn(name):
         if name == "GOALS_ENABLED":

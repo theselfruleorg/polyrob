@@ -41,6 +41,12 @@ def is_tty(stream: object | None = None) -> bool:
         return False
 
 
+def supports_cursor_ui() -> bool:
+    """Cursor UI needs interactive input AND output; NO_COLOR only affects color."""
+    return (is_tty(sys.stdin) and is_tty(sys.stdout)
+            and os.environ.get("TERM", "").lower() != "dumb")
+
+
 # ---------------------------------------------------------------------------
 # Icons / glyphs
 # ---------------------------------------------------------------------------

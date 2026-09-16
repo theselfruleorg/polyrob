@@ -68,6 +68,10 @@ from .collabland.collabland_tool import CollabLandTool
 from .alchemy.alchemy_tool import AlchemyTool
 from .mcp.mcp_tool import MCPTool
 from .anysite.tool import AnysiteTool
+# Importing this registers the bridge STATUS reader with core's seam
+# (core/wallet/bridge_status.py) so the bridge watcher has one in every
+# process that loads the tool tier — not only after a bridge has run.
+from .defi.providers import relay_bridge as _relay_bridge  # noqa: F401
 
 # Browser is optional (may not be available in all environments)
 try:
@@ -267,6 +271,25 @@ try:
     register_defi_trade_tool()
 except Exception as _e:  # never block tool import on the optional defi seam
     logging.getLogger(__name__).debug(f"defi_trade registration skipped: {_e}")
+
+# Launchpad tool (042): registers the 'launchpad' descriptor + class only when
+# LAUNCHPAD_ENABLED=true. It signs spends -- every write routes through
+# core/wallet/tx_guard.py. OFF by default; never in the default tool_ids.
+try:
+    from .launchpad import register_launchpad_tool
+    register_launchpad_tool()
+except Exception as _e:  # never block tool import on the optional launchpad seam
+    logging.getLogger(__name__).debug(f"launchpad registration skipped: {_e}")
+
+# Dapp browser wallet (042): registers the 'dapp_browser' descriptor + class
+# only when DAPP_BROWSER_ENABLED=true. `dapp_connect` authorizes spending from a
+# web page; every transaction still routes through core/wallet/tx_guard.py.
+# OFF by default; never in the default tool_ids.
+try:
+    from .dapp_browser import register_dapp_browser_tool
+    register_dapp_browser_tool()
+except Exception as _e:  # never block tool import on the optional dapp seam
+    logging.getLogger(__name__).debug(f"dapp_browser registration skipped: {_e}")
 
 # Build TOOL_COMPONENTS for backward compatibility
 TOOL_COMPONENTS: List[Tuple[str, Type[BaseTool]]] = [

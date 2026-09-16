@@ -82,6 +82,10 @@ def _login_post(client, username, password, follow_redirects=True):
         "/owner-login",
         data={"username": username, "password": password, "csrf_token": token},
         follow_redirects=follow_redirects,
+        # 043 W1: a browser attaches Origin to a same-origin form POST; this
+        # client must too, or the CSRF guard refuses a cookie-bearing request
+        # that states no origin.
+        headers={"Origin": "http://testserver"},
     )
 
 
@@ -107,11 +111,27 @@ def test_own_ops_logout_clears_cookie_and_redirects(own_ops_client):
     assert after.headers["location"].startswith("/owner-login")
 
 
-def test_own_ops_logged_in_page_shows_logout_link(own_ops_client):
+def test_own_ops_logged_in_owner_gets_the_console_and_can_log_out(own_ops_client):
+    """A logged-in own_ops owner reaches the console at `/` (not the public
+    status page) and can end the session.
+
+    ⚠️ 043 phase 5: the legacy nav's own_ops Logout LINK is gone with the legacy
+    pages; the new chat shell does not yet carry account links (a §9-deferred
+    "account links move into the shell" item). The affordance that matters — the
+    /logout ROUTE — still works (test_own_ops_logout_clears_cookie_and_redirects
+    covers it end-to-end); this test pins that the authenticated owner sees the
+    console rather than the stranger status page, and that tenant links stay
+    hidden in own_ops.
+    """
     _login_post(own_ops_client, "op", "s3cret")
     root = own_ops_client.get("/")
     assert root.status_code == 200
-    assert 'href="/logout"' in root.text
+    # The authenticated owner gets the console, not the public status page.
+    assert "POLYROB is live" not in root.text
+    # /logout is reachable (a real redirect that clears the cookie).
+    resp = own_ops_client.get("/logout", follow_redirects=False)
+    assert resp.status_code in (302, 303)
+    assert resp.headers["location"] == "/owner-login"
     # Tenant-only links must still stay hidden in own_ops.
     assert 'href="/signin"' not in root.text
     assert 'href="/profile"' not in root.text
@@ -137,6 +157,7 @@ def test_failed_login_rerender_keeps_csrf_field(own_ops_client):
         "/owner-login",
         data={"username": "op", "password": "s3cret", "csrf_token": match.group(1)},
         follow_redirects=False,
+        headers={"Origin": "http://testserver"},   # 043 W1: a browser states it
     )
     assert retry.status_code in (302, 303)
     assert "auth_token" in retry.cookies
@@ -147,6 +168,7 @@ def test_csrf_reject_rerender_recovers(own_ops_client):
     resp = own_ops_client.post(
         "/owner-login",
         data={"username": "op", "password": "s3cret", "csrf_token": "bogus"},
+        headers={"Origin": "http://testserver"},   # 043 W1: a browser states it
     )
     assert resp.status_code == 403
     match = _CSRF_FIELD.search(resp.text)
@@ -156,6 +178,7 @@ def test_csrf_reject_rerender_recovers(own_ops_client):
         "/owner-login",
         data={"username": "op", "password": "s3cret", "csrf_token": match.group(1)},
         follow_redirects=False,
+        headers={"Origin": "http://testserver"},   # 043 W1: a browser states it
     )
     assert retry.status_code in (302, 303)
 

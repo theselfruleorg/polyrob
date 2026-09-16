@@ -14,6 +14,7 @@ from cli.commands._grouped import GroupedGroup
 from cli.ui.events import normalize as _normalize_event
 from cli.ui.plain_renderer import PlainRenderer
 from cli.ui.state import SessionState
+from cli.session_paths import session_directory
 
 # D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
 _SESSION_HELP_SECTIONS = [
@@ -36,23 +37,10 @@ def find_compaction_checkpoints(data_root: Path, session_id: str) -> List[Path]:
     the checkpoints under `.../data/history`, sorted by their numeric suffix so the
     recovery order is chronological. Returns [] when the session or history is absent.
     """
-    data_root = Path(data_root)
-    history_dir = None
-    patterns = [
-        f"*/{session_id}*/data/history",
-        f"*/sessions/{session_id}*/data/history",
-        f"*/*{session_id}*/data/history",
-    ]
-    for pattern in patterns:
-        for path in data_root.glob(pattern):
-            if path.is_dir():
-                history_dir = path
-                break
-        if history_dir:
-            break
-
-    if not history_dir:
+    directory = session_directory(data_root, session_id)
+    if directory is None:
         return []
+    history_dir = directory / "data" / "history"
 
     def _n(p: Path) -> int:
         m = re.search(r"compaction_(\d+)\.json$", p.name)
@@ -130,12 +118,11 @@ async def _session_list(show_all: bool, as_json: bool):
         active_statuses = {"created", "running", "resumed"}
         sessions = [s for s in sessions if s.get("status") in active_statuses]
 
-    if not sessions:
-        click.echo("No sessions found.")
-        return
-
     if as_json:
         click.echo(json.dumps(sessions, indent=2, default=str))
+        return
+    if not sessions:
+        click.echo("No sessions found.")
         return
 
     click.echo(f"{'ID':<12} {'Status':<12} {'Task':<40} {'Created'}")
@@ -145,7 +132,7 @@ async def _session_list(show_all: bool, as_json: bool):
         # NB: `.get(k, default)` returns None when the key is PRESENT with a null
         # value (default only applies to absent keys), so `(x or default)` is
         # required before slicing — a null task/created_at/id crashed session list.
-        sid = (s.get("id") or s.get("session_id") or "?")[:10]
+        sid = (s.get("id") or s.get("session_id") or "?")
         status = s.get("status") or "?"
         task_str = (s.get("task") or "")[:38]
         created = (s.get("created_at") or "")[:19]
@@ -177,20 +164,8 @@ async def _session_tail(session_id: str, follow: bool = False):
 
     from agents.task.path import pm
 
-    # Find feed directory — try multiple path patterns
-    feed_dir = None
-    patterns = [
-        f"*/{session_id}*/feed",         # data/task/{user}/{session_id}/feed
-        f"*/sessions/{session_id}*/feed", # data/auto/{user}/sessions/{session_id}/feed
-        f"*/*{session_id}*/feed",         # partial match
-    ]
-    for pattern in patterns:
-        for path in pm().data_root.glob(pattern):
-            if path.is_dir():
-                feed_dir = path
-                break
-        if feed_dir:
-            break
+    directory = session_directory(pm().data_root, session_id)
+    feed_dir = directory / "feed" if directory else None
 
     if not feed_dir or not feed_dir.exists():
         click.echo(f"No feed found for session matching '{session_id}'")
@@ -199,7 +174,7 @@ async def _session_tail(session_id: str, follow: bool = False):
     click.echo(click.style("[polyrob] ", fg="cyan") + f"Tailing feed: {feed_dir}")
 
     _state = SessionState()
-    _renderer = PlainRenderer(state=_state, stream=sys.stdout)
+    _renderer = PlainRenderer(state=_state, stream=sys.stdout, one_shot=True)
 
     def _render_file(path) -> bool:
         try:
@@ -207,6 +182,9 @@ async def _session_tail(session_id: str, follow: bool = False):
             event = _normalize_event(data)
             _state.update(event)
             _renderer.on_event(event)
+            from cli.ui.events import SessionDone
+            if isinstance(event, SessionDone):
+                _renderer.on_turn_end(event.final_result)
             return True
         except (json.JSONDecodeError, OSError):
             return False
@@ -247,7 +225,7 @@ def session_cancel(session_id: str):
 
 
 async def _session_cancel(session_id: str):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -255,12 +233,8 @@ async def _session_cancel(session_id: str):
         sys.exit(1)
 
     user_id = container.get_service("identity").resolve()
-    success = await task_agent.cancel_session(user_id=user_id, session_id=session_id)
-    if success:
-        click.echo(click.style("[polyrob] ", fg="green") + f"Session {session_id} cancelled")
-    else:
-        click.echo(click.style("[polyrob] ", fg="red") + f"Failed to cancel session {session_id}")
-        sys.exit(1)
+    from cli.commands._session_control import control_live_session
+    await control_live_session(task_agent, user_id, session_id, "cancel")
 
 
 @session.command("show")
@@ -284,13 +258,21 @@ async def _session_show(session_id: str, as_json: bool):
         click.echo(click.style("[polyrob] ", fg="red") + f"Session {session_id} not found")
         sys.exit(1)
 
+    from agents.task.path import pm
+    from core.session_control import SessionControl
+    owner = session_info.get("user_id")
+    control = SessionControl(pm().get_session_root(session_id, owner)).read() if owner else None
+    session_info = dict(session_info)
+    session_info["control"] = control
     if as_json:
         click.echo(json.dumps(session_info, indent=2, default=str))
         return
 
-    sid16 = (session_info.get('id') or session_id)[:16]
+    sid16 = (session_info.get('id') or session_id)
     click.echo(f"{click.style(sid16, fg='cyan', bold=True)}: {session_info.get('task') or 'No task'}")
     click.echo(f"  status: {session_info.get('status', '?')}")
+    if control:
+        click.echo(f"  control: {control['request']} / {control['acknowledged']} (pid {control['pid']})")
     click.echo(f"  created: {session_info.get('created_at', '?')}")
     if session_info.get('updated_at'):
         click.echo(f"  updated: {session_info.get('updated_at')}")
@@ -308,7 +290,7 @@ def session_pause(session_id: str):
 
 
 async def _session_pause(session_id: str):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -316,12 +298,8 @@ async def _session_pause(session_id: str):
         sys.exit(1)
 
     user_id = container.get_service("identity").resolve()
-    success = await task_agent.pause_session(user_id=user_id, session_id=session_id)
-    if success:
-        click.echo(click.style("[polyrob] ", fg="green") + f"Session {session_id} paused")
-    else:
-        click.echo(click.style("[polyrob] ", fg="red") + f"Failed to pause session {session_id}")
-        sys.exit(1)
+    from cli.commands._session_control import control_live_session
+    await control_live_session(task_agent, user_id, session_id, "pause")
 
 
 @session.command("resume")
@@ -332,7 +310,7 @@ def session_resume(session_id: str):
 
 
 async def _session_resume(session_id: str):
-    container = await cli_container()
+    container = await cli_container(require_llm=False)
 
     task_agent = container.get_agent("task_agent")
     if not task_agent:
@@ -340,13 +318,8 @@ async def _session_resume(session_id: str):
         sys.exit(1)
 
     user_id = container.get_service("identity").resolve()
-    success = await task_agent.resume_session(user_id=user_id, session_id=session_id)
-    if success:
-        click.echo(click.style("[polyrob] ", fg="green") + f"Session {session_id} marked resumable")
-        click.echo("  Continue execution with: polyrob run --resume " + session_id)
-    else:
-        click.echo(click.style("[polyrob] ", fg="red") + f"Failed to resume session {session_id}")
-        sys.exit(1)
+    from cli.commands._session_control import control_live_session
+    await control_live_session(task_agent, user_id, session_id, "resume")
 
 
 @session.command("export")
@@ -399,19 +372,7 @@ async def _session_export(session_id: str, output: Optional[str], format: str):
 
     # Find session directory
     data_root = pm().data_root
-    session_dir = None
-    patterns = [
-        f"*/{session_id}*/",
-        f"*/sessions/{session_id}*/",
-        f"*/*{session_id}*/",
-    ]
-    for pattern in patterns:
-        for path in data_root.glob(pattern):
-            if path.is_dir():
-                session_dir = path
-                break
-        if session_dir:
-            break
+    session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session directory not found for {session_id}")
@@ -530,19 +491,7 @@ def session_artifacts(session_id: str):
     from agents.task.path import pm
 
     data_root = pm().data_root
-    session_dir = None
-    patterns = [
-        f"*/{session_id}*/",
-        f"*/sessions/{session_id}*/",
-        f"*/*{session_id}*/",
-    ]
-    for pattern in patterns:
-        for path in data_root.glob(pattern):
-            if path.is_dir():
-                session_dir = path
-                break
-        if session_dir:
-            break
+    session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session directory not found for {session_id}")
@@ -646,19 +595,7 @@ def session_tools(session_id: str, as_json: bool):
     from agents.task.path import pm
 
     data_root = pm().data_root
-    session_dir = None
-    patterns = [
-        f"*/{session_id}*/",
-        f"*/sessions/{session_id}*/",
-        f"*/*{session_id}*/",
-    ]
-    for pattern in patterns:
-        for path in data_root.glob(pattern):
-            if path.is_dir():
-                session_dir = path
-                break  # inside the is_dir guard (was mis-indented; cf. session_artifacts)
-        if session_dir:
-            break
+    session_dir = session_directory(data_root, session_id)
 
     if not session_dir:
         click.echo(click.style("[polyrob] ", fg="red") + f"Session directory not found for {session_id}")

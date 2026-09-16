@@ -12,6 +12,11 @@ import pytest
 from tools.x402.spend_gate import x402_spend_refusal
 
 
+@pytest.fixture(autouse=True)
+def bound_owner(monkeypatch):
+    monkeypatch.setenv("POLYROB_OWNER_USER_ID", "owner")
+
+
 def _ctx(**kw):
     """An execution context shaped like the real one (see
     agents/task/agent/core/step_execution.py::_build_execution_context)."""

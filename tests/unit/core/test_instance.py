@@ -23,16 +23,40 @@ from core.instance import (
 )
 
 
-def test_owner_principal_defaults_to_instance_id():
-    # Auto-derive (2026-07-03): with nothing explicit bound, the owner principal is the
-    # instance's own tenant (defaults to "polyrob"), so a single-user deploy unifies the
-    # owner's chat/CLI with autonomy WITHOUT retyping the instance's name in env.
-    assert resolve_owner_principal(env={}) == "polyrob"
+def test_owner_principal_defaults_to_the_owner_tenant():
+    """⚠️ Reversed 2026-09-15 (043 residue R1). The auto-derive (2026-07-03) was the
+    INSTANCE id, so on an unbound install the PRINCIPAL answered "polyrob" while the
+    TENANT answered "local" — and every owner gate compares one to the other, so the
+    owner was denied owner-tier capability on their own box (a REPL/console-created
+    goal lost its deliverable attachments; the owner's Telegram DM ran under a third
+    tenant). Tier 3 is now the ONE owner-tenant resolver, so the two axes agree."""
+    from core.instance import resolve_owner_user_id
+    assert resolve_owner_principal(env={}) == "local"
+    assert resolve_owner_principal(env={}) == resolve_owner_user_id(env={})
 
 
-def test_owner_principal_defaults_to_custom_instance_id():
+def test_owner_principal_ignores_the_instance_id():
+    """A named instance is not an owner. The instance axis keeps its own answer."""
+    from core.instance import resolve_instance_id
     env = {"POLYROB_INSTANCE_ID": "acme"}
-    assert resolve_owner_principal(env=env) == "acme"
+    assert resolve_owner_principal(env=env) == "local"
+    assert resolve_instance_id(env=env) == "acme"
+
+
+def test_owner_principal_honours_the_local_owner_override():
+    """Tier 3 IS `resolve_owner_user_id`, so `POLYROB_LOCAL_OWNER` reaches the
+    principal axis too — otherwise the two would disagree on that env."""
+    env = {"POLYROB_LOCAL_OWNER": "me"}
+    assert resolve_owner_principal(env=env) == "me"
+
+
+def test_owner_principal_never_binds_an_anonymous_sentinel():
+    """A value `is_anonymous` rejects is not a binding at any tier, on either axis."""
+    from core.instance import resolve_owner_user_id
+    env = {"POLYROB_OWNER_USER_ID": "system"}
+    assert resolve_owner_principal(env=env) == "local"
+    assert resolve_owner_principal(env=env, default_to_instance=False) is None
+    assert resolve_owner_user_id(env=env) == "local"
 
 
 def test_owner_principal_strict_returns_none_when_unbound():

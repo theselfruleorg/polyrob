@@ -29,6 +29,40 @@ MONEY_VERBS = (
     # Solana Phase 3. One verb, not three: Jupiter needs no standing delegate,
     # so approve/revoke have no meaning on that chain.
     "defi_trade_solana_swap",
+    # 037: the cross-chain bridge. Unlike every verb above it has NO autonomous
+    # lane and NO dollar cap — the owner's approval is the cap — so these four
+    # lists are a floor under that policy, not the policy itself.
+    "defi_trade_bridge",
+    # 2026-09-13: wrapping native into its ERC-20 form. It moves no value out of
+    # the wallet -- 1:1, same wallet, pinned destination -- but it IS a signed
+    # native-value send, and "not really a spend" is the reasoning that left
+    # solana_swap and x402_fetch ungoverned.
+    "defi_trade_wrap",
+    # 2026-09-14: the inverse. `wrap` shipped one-way, which left a wallet that
+    # wrapped its gas to trade unable to pay for a transaction. Same reasoning as
+    # wrap for why it is governed: it moves no value out, but it is a signed
+    # transaction against a money contract from the treasury wallet.
+    "defi_trade_unwrap",
+    # 2026-09-15: the non-fungible verbs. `nft_transfer` is the FIRST verb with
+    # no cap that means anything -- a collectible has no reliable price, so
+    # tx_guard prices only the FEE and the owner is the bound
+    # (ALWAYS_OWNER_APPROVED_VERBS). `nft_revoke_approval` grants nothing and
+    # moves nothing; it only retires a standing operator claim, so it is on the
+    # capped lane as risk-reducing. There is deliberately NO grant verb.
+    "defi_trade_nft_transfer",
+    "defi_trade_nft_revoke_approval",
+    # 046: the agent's own ERC-8004 identity. Both send nothing -- their cost
+    # is the fee -- but both are signed transactions from the treasury wallet
+    # that create or rewrite a PERMANENT public identity.
+    "defi_trade_register_agent",
+    "defi_trade_set_agent_uri",
+    # 042: deployment (the pinned token template and caller-supplied bytecode)
+    # and the generic contract call.
+    "defi_trade_deploy_token",
+    "defi_trade_deploy_contract",
+    "defi_trade_call",
+    "defi_trade_lp_add", "defi_trade_lp_remove", "defi_trade_lp_collect",
+    "defi_trade_solana_deploy_token",
 )
 
 
@@ -67,8 +101,38 @@ def test_a_delegated_leaf_cannot_reach_it():
 
 
 @pytest.mark.parametrize("verb", MONEY_VERBS)
-def test_every_money_verb_is_on_the_owner_approval_lane(verb):
-    assert verb in PAYMENT_APPROVAL_TOOLS
+def test_every_money_verb_is_on_an_owner_approval_lane(verb):
+    """Two legal homes, and a verb must be in exactly one (039).
+
+    Most verbs ride the shared pre-hook. A verb may instead own its gate inside
+    itself — but only by declaring it in `VERB_OWNED_APPROVAL_GATES`, so the
+    exception is a registry entry someone has to write, never a verb quietly
+    absent from both lists.
+
+    `defi_trade_bridge` earned that: it knows the recipient, the USD value, the
+    arrival floor and the Relay request id, none of which the raw action params
+    carry. Carrying BOTH gates meant two taps for one bridge from two different
+    prompts, which is what the owner hit on 2026-09-12.
+    """
+    from core.config_policy.payment_tools import VERB_OWNED_APPROVAL_GATES
+    in_shared = verb in PAYMENT_APPROVAL_TOOLS
+    in_own = verb in VERB_OWNED_APPROVAL_GATES
+    assert in_shared or in_own, (
+        f"{verb} is on NO owner-approval lane. Add it to PAYMENT_APPROVAL_TOOLS, "
+        f"or declare its in-verb gate in VERB_OWNED_APPROVAL_GATES.")
+    assert not (in_shared and in_own), (
+        f"{verb} is on BOTH lanes — that is two owner taps for one action.")
+
+
+def test_a_verb_owned_gate_names_where_it_lives():
+    """A registry entry that does not point at real code is a hole with a
+    comment on it."""
+    import os
+    from core.config_policy.payment_tools import VERB_OWNED_APPROVAL_GATES
+    for verb, where in VERB_OWNED_APPROVAL_GATES.items():
+        path, _, symbol = where.partition("::")
+        assert os.path.isfile(path), f"{verb}: {path} does not exist"
+        assert symbol and symbol in open(path).read(), f"{verb}: {where} not found"
 
 
 @pytest.mark.parametrize("verb", MONEY_VERBS)

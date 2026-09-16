@@ -102,7 +102,7 @@
       <div class="pad">
         <div class="field">
           <label class="cap" for="nameIn">Agent name / id</label>
-          <input type="text" id="nameIn" value="Rob Ottmachin" spellcheck="false" autocomplete="off">
+          <input type="text" id="nameIn" value="POLYROB" spellcheck="false" autocomplete="off">
         </div>
         <div class="btnrow">
           <button class="act primary" id="shuffle">⤮ Shuffle face</button>
@@ -197,7 +197,7 @@ const clamp=(x,a,b)=>x<a?a:x>b?b:x, lerp=(a,b,t)=>a+(b-a)*t;
 /* ---------------- Studio wiring ---------------- */
 const reduceMotion=matchMedia("(prefers-reduced-motion: reduce)").matches;
 const heroCanvas=document.getElementById("hero"),hctx=heroCanvas.getContext("2d");
-let hero=new Mindprint("Rob Ottmachin");
+let hero=new Mindprint("POLYROB");
 const nameIn=document.getElementById("nameIn");
 let variant="";
 
@@ -344,7 +344,7 @@ document.getElementById("export").addEventListener("click",()=>{
   a.href=off.toDataURL("image/png");a.click();});
 
 /* gallery */
-const AGENTS=["Rob Ottmachin","Ada Nine","Vesper Kade","Kilo Prime","Juno-7","Marrow",
+const AGENTS=["POLYROB","Ada Nine","Vesper Kade","Kilo Prime","Juno-7","Marrow",
   "Echo Vane","Sable Quinn","Nyx Orbital","Orrery","Pixel","Wren Halcyon",
   "Tycho","Bloom","Quill","Nova Pax"];
 const wall=document.getElementById("wall"),gals=[];

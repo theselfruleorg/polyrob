@@ -9,8 +9,10 @@ guidance (e.g. trading's "Never executes trades") shipped on one surface only.
 Single precedence, applied identically everywhere:
 
 1. Gate: ``task_personality_block_enabled()`` off -> ``""``.
-2. Explicit ``POLYROB_PERSONA``: a known template key renders that template's
-   persona; any other non-empty value is used as LITERAL free-form persona text.
+2. Explicit ``POLYROB_PERSONA``, through :func:`resolve_persona_selector`: a
+   known template key renders that template's persona; a known CHARACTER slug
+   renders that character (F1 — the selector namespace ``/persona`` lists);
+   any other non-empty value is used as LITERAL free-form persona text.
 3. The default character, rendered by the pure ``render_persona_block``:
    - async path (:func:`resolve_persona`): the container's ``character_manager``;
    - sync path (:func:`resolve_persona_sync`): the default character JSON read
@@ -25,6 +27,7 @@ Note the pinned SELF-CONTEXT stays authoritative over any persona text
 import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -46,9 +49,24 @@ def _gate_on() -> bool:
         return False
 
 
-def _explicit_persona() -> Optional[str]:
-    """Tier 2: the operator-chosen POLYROB_PERSONA (template key or literal)."""
-    val = (os.environ.get("POLYROB_PERSONA") or "").strip()
+def resolve_persona_selector(val: Optional[str]) -> Optional[str]:
+    """THE one selector->persona-text order, shared by every surface (F1).
+
+    ``template key`` -> ``character slug`` -> ``literal free-form text``.
+
+    Before this existed, the CLI's ``/persona`` listed CHARACTER slugs and then
+    persisted whatever it was given as literal text unless it was a TEMPLATE
+    key — so picking a name the command had just printed replaced the whole
+    ``<identity>`` block with that single word and reported success.
+
+    The character branch reaches the SAME operator-authored file tier that
+    ``PERSONALITY_DEFAULT_CHARACTER`` selects (``character_search_dirs``), by a
+    different selector — it does not widen the free-text threat-scan surface,
+    which still guards the literal branch at its own write/load sites.
+
+    Returns ``None`` for an empty selector.
+    """
+    val = (val or "").strip()
     if not val:
         return None
     try:
@@ -57,9 +75,17 @@ def _explicit_persona() -> Optional[str]:
             return resolve_template_persona(val)
     except Exception:
         pass
-    # A non-template value is LITERAL persona text (free-form), rather than
-    # silently degrading to the "general" template.
+    character = character_persona_text(val)
+    if character:
+        return character
+    # Neither a template key nor a known character: LITERAL persona text
+    # (free-form), rather than silently degrading to the "general" template.
     return val
+
+
+def _explicit_persona() -> Optional[str]:
+    """Tier 2: the operator-chosen POLYROB_PERSONA (template/character/literal)."""
+    return resolve_persona_selector(os.environ.get("POLYROB_PERSONA"))
 
 
 def character_search_dirs(data_dir: Optional[str] = None) -> "list[Path]":
@@ -108,16 +134,78 @@ def resolve_characters_dir(data_dir: Optional[str] = None) -> Path:
     return dirs[-1]
 
 
-def _find_character_file(name: str) -> Optional[Path]:
-    """The named character searched across ALL tiers (highest wins)."""
+# A character slug is ONE filename component, never a path. Both selectors that
+# reach the filesystem with it (PERSONALITY_DEFAULT_CHARACTER and, since F1, a
+# /persona argument or POLYROB_PERSONA value) run through this.
+_SAFE_SLUG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def is_safe_character_slug(name: Optional[str]) -> bool:
+    """Whether *name* may be used as a ``<slug>.character.json`` filename."""
+    name = (name or "").strip()
+    if not name or name in {".", ".."} or not _SAFE_SLUG_RE.match(name):
+        return False
+    return "/" not in name and os.sep not in name
+
+
+def find_character_file(name: str) -> Optional[Path]:
+    """The named character searched across ALL tiers (highest wins), or None."""
+    if not is_safe_character_slug(name):
+        return None
     for d in character_search_dirs():
         try:
-            f = d / f"{name}.character.json"
+            f = d / f"{name.strip()}.character.json"
             if f.is_file():
                 return f
         except Exception:
             continue
     return None
+
+
+# Back-compat alias for the private name this module used before F1.
+_find_character_file = find_character_file
+
+
+def load_character_dict(name: str) -> Optional[dict]:
+    """Parse the named character, or None (unknown slug / unreadable / bad JSON)."""
+    f = find_character_file(name)
+    if f is None:
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.debug(f"character {name!r} read skipped: {e}")
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def character_persona_text(name: str) -> Optional[str]:
+    """The rendered persona block for a known character slug, else None."""
+    data = load_character_dict(name)
+    if not data:
+        return None
+    from agents.personality.persona_render import render_persona_block
+    return render_persona_block(data) or None
+
+
+def character_bio(name: str) -> str:
+    """The character's bio as one line (``""`` when unknown/absent) — the
+    ``/persona`` listing's bio column reads THIS, not a cwd-relative guess."""
+    data = load_character_dict(name) or {}
+    raw = data.get("bio") or ""
+    text = raw if isinstance(raw, str) else " ".join(str(x) for x in raw if x)
+    return " ".join(text.split())
+
+
+def active_character() -> "tuple[str, Optional[Path]]":
+    """``(name, resolved file or None)`` for the character tier — the file the
+    default-character path would actually read (F13)."""
+    name = (os.environ.get("PERSONALITY_DEFAULT_CHARACTER")
+            or DEFAULT_CHARACTER_NAME).strip() or DEFAULT_CHARACTER_NAME
+    found = find_character_file(name)
+    if found is None:
+        found = find_character_file(DEFAULT_CHARACTER_NAME)
+    return name, found
 
 
 def _default_character_dict() -> Optional[dict]:

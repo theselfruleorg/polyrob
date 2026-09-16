@@ -130,6 +130,14 @@ def server_default_tools() -> list[str]:
     widens to the full ``AUTONOMOUS_MODE_TOOLS`` grant, minus the meta ``goal``/``cronjob``
     ids (those are agent-callable capabilities, not a session's ambient toolset). Supervised
     (default/unset) is byte-identical to the prior return.
+
+    ⚠️ The BARE constant, not ``autonomous_mode_tools()``, and that is
+    DELIBERATE. The accessor folds in the ``DEFI_AGENT_AUTONOMY`` grant
+    (``defi_trade``, ``launchpad``, ``dapp_browser``) — money-SPEND tools that
+    belong to a session the owner deliberately armed, never to the AMBIENT
+    default of a session that asked for no tools at all. Pinned both ways by
+    ``tests/unit/agents/task/test_ambient_toolset_has_no_spend.py``; an
+    alignment audit read this as drift precisely because nothing here said so.
     """
     from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
     if full_autonomy_enabled():
@@ -162,8 +170,13 @@ def default_session_tools() -> list[str]:
     (three drifting copies, pre-014). Effective AUTONOMY_MODE=autonomous: the
     ambient autonomous grant — AUTONOMOUS_MODE_TOOLS minus the meta
     goal/cronjob ids (same exclusion rationale as server_default_tools above).
-    Money-spend and compute tools are structurally absent from
-    AUTONOMOUS_MODE_TOOLS (013 §2.3), so this can never widen into them.
+    ⚠️ Money-SPEND tools are structurally absent from AUTONOMOUS_MODE_TOOLS
+    (013 §2.3), so this can never widen into them — which is why it reads the
+    BARE constant rather than ``autonomous_mode_tools()``, whose
+    `DEFI_AGENT_AUTONOMY` grant adds exactly those. (Precisely: `x402_invoice`
+    IS money-classified but RECEIVE-side, and `coding` IS a compute tool — the
+    older wording overclaimed on both. What actually holds, and what the test
+    pins, is that no money-SPEND tool is ever in an ambient session's toolset.)
     """
     from agents.task.constants import full_autonomy_enabled, AUTONOMOUS_MODE_TOOLS
     if full_autonomy_enabled():

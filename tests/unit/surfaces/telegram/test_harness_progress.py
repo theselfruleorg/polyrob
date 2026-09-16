@@ -76,7 +76,10 @@ def _text_update(uid=1, from_id=777, chat_id=555, text="hello"):
         "from": {"id": from_id, "username": "me"}, "text": text}}
 
 
-def _result(text="hi", kind="STEER", session_key="telegram:555:dm", media=None):
+def _result(text="hi", kind="steer", session_key="telegram:555:dm", media=None):
+    # 044 T3: must match RouteKind's actual (lowercase) string values —
+    # harness._route_is_turn compares decision.kind against the RouteKind enum,
+    # and RouteKind(str, Enum) is case-sensitive ("STEER" != RouteKind.STEER).
     # media must mirror what build_inbound_message now sets so handle_update's
     # core voice_needs_guard check (Task 1.6) has the right list.
     inbound = types.SimpleNamespace(
@@ -113,7 +116,7 @@ def _patch(monkeypatch, *, result, act):
 
 def _spawn_act(result_text=None):
     """act_on_inbound that spawns a completing turn (returns None)."""
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         async def _turn():
             return None
         spawn(_turn())
@@ -162,7 +165,7 @@ async def test_voice_redelivery_does_not_prestage(monkeypatch):
 async def test_immediate_reply_deletes_status_before_reply(monkeypatch):
     bot = FakeBot()
 
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         return "🔒 You're not authorized."   # DENIED-style immediate reply, no spawn
 
     _patch(monkeypatch, result=_result(text="hi"), act=act)
@@ -192,7 +195,7 @@ async def test_voice_guard_clears_transcribing(monkeypatch):
 async def test_no_reply_no_spawn_finishes(monkeypatch):
     bot = FakeBot()
 
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         return None   # neither replies NOR spawns (create_session-no-id case)
 
     _patch(monkeypatch, result=_result(text="hi"), act=act)
@@ -206,7 +209,7 @@ async def test_empty_nonvoice_message_dropped(monkeypatch):
     bot = FakeBot()
     called = {"act": False}
 
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         called["act"] = True
         return None
 
@@ -222,7 +225,7 @@ async def test_empty_nonvoice_message_dropped(monkeypatch):
 async def test_spawn_error_breadcrumb(monkeypatch):
     bot = FakeBot()
 
-    async def act(task_agent, result, *, spawn, deliver=None):
+    async def act(task_agent, result, *, spawn, deliver=None, **_kw):
         async def _turn():
             raise RuntimeError("turn blew up")
         spawn(_turn())
