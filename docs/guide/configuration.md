@@ -490,9 +490,13 @@ autonomous ceiling, and the trading grants.
 The ceilings are environment flags — `WALLET_DAILY_CAP_USD`,
 `AGENT_WALLET_MAX_PER_TX_USD`, `DEFI_AUTONOMOUS_MAX_USD`. Each has a preference
 twin (`budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`,
-`budget.defi_autonomous_usd`) you can set live from chat, and the effective
-value is the **minimum of the two**: a preference only ever tightens what the
-environment already allows.
+`budget.defi_autonomous_usd`) you set live from chat; the two money ones are
+guarded, so your tap applies them. The **daily cap** is the operator's hard
+envelope: its effective value is the minimum of preference and env, and a
+proposal above the env value is refused up front with the env line to change.
+The **per-transaction ceiling** and the **autonomous ceiling** are yours: an
+approved preference replaces the env default in either direction, and both are
+clamped so a single transaction can never exceed the daily cap.
 
 Start with [payments.md](payments.md); it is the complete reference for the
 wallet, invoicing, x402, trading and token deployment.
@@ -510,7 +514,7 @@ with their current value; from chat, `/config set KEY VALUE`.
 | Style | `style.verbosity`, `style.tone`, `style.language` | how the agent writes to you |
 | Session | `session.toolset`, `session.persona` | next session |
 | Approvals | `approvals.require`, `approvals.deny`, `approvals.provider` | tighten only; an env value is the floor |
-| Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | effective value is the minimum of pref and env |
+| Budget | `budget.wallet_daily_usd`, `budget.wallet_per_tx_usd`, `budget.defi_autonomous_usd` | daily = min(pref, env); per-tx and autonomous = your approved value, clamped to the daily cap |
 | Goals | `goals.daily_quota`, `goals.max_concurrent`, `goals.notify_on_done` | |
 | Autonomy | `autonomy.self_wake`, `autonomy.background_review` | |
 | Delivery | `delivery.rate_per_hour`, `delivery.daily_cap`, `digest.enabled`, `digest.channel`, `digest.quiet_hours`, `progress.telegram`, `pause.phrases` | owner notices and the daily digest |

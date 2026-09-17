@@ -187,28 +187,19 @@ def test_a_second_member_turn_clears_the_reply_latch():
 
     orch = _Orch()
     turn_reply.mark_reply_published(orch, "the PREVIOUS turn's answer")
-    assert turn_reply.reply_published(orch) is True
+    assert turn_reply.last_reply_text(orch) == "the PREVIOUS turn's answer"
 
     assert _deliver(_Agent(orch)) == "delivered"
 
-    assert turn_reply.reply_published(orch) is False
     assert turn_reply.last_reply_text(orch) is None
 
 
-def test_the_completion_mirror_stays_silent_after_a_member_turn(monkeypatch):
-    """⚠️ REVERSED 2026-09-16. This test used to assert the opposite — that with
-    the latch reset `done()`'s mirror PUBLISHES after a member turn — and that
-    assertion is what the live leak looked like in test form.
-
-    What actually went out under it, into a public group seconds after a member
-    said "Go boy, do it!": "Session closed. Owner's paid-group capabilities
-    question was answered in full earlier…". `done`'s summary is an INTERNAL
-    completion record; a room is many people; the model was not writing for them.
-
-    The latch reset above is still right (it stops this turn's `send_message`
-    looking like a second reply). What is wrong is treating `done` as the room's
-    fallback voice. A room turn may say nothing."""
-    from core.surfaces.outbound_mirror import build_completion_publish
+def test_a_member_turn_does_not_mute_the_room(monkeypatch):
+    """2026-09-16/17: `done` used to be the room's fallback voice and leaked a
+    session recap into a public group; it now has no delivery path at all. The
+    room is still not mute — `send_message` is the voice, and it works after
+    the reset above."""
+    from core.surfaces.outbound_mirror import build_discrete_publish
     from core.surfaces import turn_reply
 
     monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
@@ -224,14 +215,9 @@ def test_the_completion_mirror_stays_silent_after_a_member_turn(monkeypatch):
     asyncio.run(_Agent(orch).deliver_group_turn(
         "sess-1", user_id="u_member", context_block=_CTX,
         addressed_block=_ADDRESSED, role="member", reply_to="77"))
-    assert turn_reply.reply_published(orch) is False, "the latch still resets"
+    assert turn_reply.last_reply_text(orch) is None, "the record still resets"
 
     room_key = "agent:main:telegram:group:-1"
-    asyncio.run(build_completion_publish(_Router(), room_key, orch)("Base and Solana."))
-    assert sent == [], "done published into a room"
-
-    # …and the room is not mute: send_message is the voice, and it works.
-    from core.surfaces.outbound_mirror import build_discrete_publish
     asyncio.run(build_discrete_publish(_Router(), room_key)("Base and Solana."))
     assert sent == ["Base and Solana."]
 
@@ -245,7 +231,7 @@ def test_the_owner_path_leaves_the_latch_to_the_drain():
     orch = _Orch()
     turn_reply.mark_reply_published(orch, "in flight")
     _deliver(_Agent(orch), role="owner")
-    assert turn_reply.reply_published(orch) is True
+    assert turn_reply.last_reply_text(orch) == "in flight"
 
 
 def test_dispatch_marks_every_shown_line_and_the_addressed_one():

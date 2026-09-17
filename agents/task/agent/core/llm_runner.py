@@ -129,8 +129,12 @@ class LLMRunnerMixin:
 			return False
 
 		if not model_output.action:
-			self.logger.error("Model output has empty action list - this violates the agent contract")
-			self.logger.error("The LLM must ALWAYS provide at least one action. Empty actions are never valid.")
+			# The CALLER decides what an empty list means: the first one is the
+			# bounded planning turn ALLOWED_REASONING_TURNS grants, and it logs
+			# the warning either way. Shouting "violates the contract" at ERROR
+			# here painted two red lines on the REPL for every allowed
+			# reasoning turn (2026-09-17).
+			self.logger.debug("Model output has empty action list")
 			return False
 
 		# Check each action is valid

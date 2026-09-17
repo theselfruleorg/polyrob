@@ -66,9 +66,18 @@ def render_still(config: Dict[str, Any], out_png, *, size: Optional[int] = None)
         "<canvas id='c'></canvas><script>" + engine + "</script>"
     )
 
+    # Custody: never launch Chromium beside the signer (the store falls back to
+    # the pure-Python mesh still). `modules` may not import `tools`, so this is
+    # the core predicate + the sandbox flag rather than
+    # tools.browser.launch_security.desktop_launch_kwargs; with custody refused
+    # there is no seed in this process for Chromium to inherit.
+    from core.security.browser_rail import browser_rail_status
+    rail = browser_rail_status(probe=False)
+    if rail.custody:
+        raise PfpRenderUnavailable(rail.refusal() or "custody process: local Chromium refused")
     try:
         with sync_playwright() as pw:
-            browser = pw.chromium.launch(args=["--disable-gpu"])
+            browser = pw.chromium.launch(args=["--disable-gpu"], chromium_sandbox=True)
             try:
                 page = browser.new_page()
                 page.set_content(html, wait_until="load")

@@ -74,6 +74,7 @@ _LAZY_SUBCOMMANDS = {
     "signal": "cli.commands.signal:signal",
     "x": "cli.commands.x:x",
     "x-account": "cli.commands.x_account:x_account",
+    "browser": "cli.commands.browser:browser",  # 049: the isolated browser service (custody)
 }
 
 # --- Help-surface layout (027 WP6, regrouped 043 A14) ---
@@ -107,7 +108,7 @@ _HELP_GROUPS = [
       "x", "serve", "dashboard"]),
     ("Autonomy & work",
      ["goals", "cron", "session", "subagents", "skills", "surface", "todos",
-      "apps", "autonomy", "tools", "kb"]),
+      "apps", "autonomy", "tools", "kb", "browser"]),
     ("Money",
      ["wallet", "finance", "journey"]),
     ("Owner",

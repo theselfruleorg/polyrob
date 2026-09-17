@@ -97,3 +97,22 @@ async def test_failed_setup_stops_driver(monkeypatch):
 def test_server_cannot_opt_out_of_chromium_sandbox():
     with pytest.raises(ValueError, match="local, non-custody"):
         chromium_sandbox_enabled(BrowserConfig(use_no_sandbox=True), [])
+
+
+# --- owner-ceremony launches (049 phase 4) -------------------------------------
+
+def test_desktop_launch_refused_under_custody(monkeypatch):
+    from tools.browser.launch_security import desktop_launch_kwargs
+    monkeypatch.setenv('AGENT_WALLET_ENABLED', 'true')
+    with pytest.raises(RuntimeError, match='custody'):
+        desktop_launch_kwargs(headless=False)
+
+
+def test_desktop_launch_is_scrubbed_and_sandboxed(monkeypatch):
+    from tools.browser.launch_security import desktop_launch_kwargs
+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-secret')
+    monkeypatch.setenv('DISPLAY', ':0')
+    kw = desktop_launch_kwargs(headless=False, args=['--disable-gpu'])
+    assert kw['chromium_sandbox'] is True and kw['headless'] is False
+    assert 'OPENAI_API_KEY' not in kw['env'] and kw['env'].get('DISPLAY') == ':0'
+    assert kw['args'] == ['--disable-gpu']

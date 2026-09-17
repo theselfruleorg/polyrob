@@ -316,3 +316,36 @@ def test_the_money_remedy_names_a_verb_the_owner_can_actually_type():
     assert "/trade" in text or "/bridge" in text, (
         "when the OWNER is asking, the remedy must name the chat verb that "
         "reaches the capability from their seat")
+
+
+# --- custody-no-browser (2026-09-17) -----------------------------------------
+
+def test_browser_bearing_tools_gated_when_rail_unusable(monkeypatch):
+    """A loaded browser tool that refuses 100% of the time is GATED, with the
+    rail's own line as the remedy — the agent must not learn by failing."""
+    from core.security import browser_rail as br
+    monkeypatch.setattr(br, "browser_rail_status",
+                        lambda **k: br.BrowserRailStatus("unset", "local", True))
+    for tid in ("browser", "x_browser", "dapp_browser"):
+        st = resolve_tool_status(
+            tid, container=FakeContainer({"browser_manager"}), loaded_ids={tid})
+        assert st.status == "gated" and st.reason == "custody-no-browser", tid
+        assert "polyrob browser install" in st.remedy
+
+
+def test_browser_loaded_when_rail_ok(monkeypatch):
+    from core.security import browser_rail as br
+    monkeypatch.setattr(br, "browser_rail_status",
+                        lambda **k: br.BrowserRailStatus("ok", "cdp", True, version="v"))
+    st = resolve_tool_status(
+        "browser", container=FakeContainer({"browser_manager"}), loaded_ids={"browser"})
+    assert st.status == "loaded"
+
+
+def test_non_browser_tools_ignore_the_rail(monkeypatch):
+    from core.security import browser_rail as br
+    monkeypatch.setattr(br, "browser_rail_status",
+                        lambda **k: (_ for _ in ()).throw(AssertionError("not consulted")))
+    st = resolve_tool_status(
+        "web_fetch", container=FakeContainer({"web_fetch"}), loaded_ids={"web_fetch"})
+    assert st.status == "loaded"

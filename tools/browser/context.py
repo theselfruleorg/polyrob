@@ -425,12 +425,21 @@ class BrowserContext:
 		if context_options is None:
 			context_options = {}
 
-		if self.browser.config.cdp_url and len(browser.contexts) > 0:
-			context = browser.contexts[0]
-		elif self.browser.config.chrome_instance_path and len(browser.contexts) > 0:
-			# Connect to existing Chrome instance instead of creating new one
+		if self.browser.browser_config.chrome_instance_path and len(browser.contexts) > 0:
+			# Attaching to the operator's own desktop Chrome: drive the profile
+			# they are logged into. This is the ONLY path that reuses the
+			# default context.
 			context = browser.contexts[0]
 		else:
+			# Local launch, a remote CDP service or a Playwright server: ALWAYS a
+			# fresh context. Until 2026-09-17 the CDP path copied the desktop
+			# branch and attached every session to the remote browser's default
+			# PERSISTENT context — storage_state was never injected (the X login
+			# silently dropped), service workers were not blocked (bypassing the
+			# SSRF route guard) and every session/tenant shared one cookie jar
+			# that persisted on disk in the browser's user-data-dir. Chromium
+			# over CDP supports Target.createBrowserContext, which is what
+			# `browser.new_context` uses.
 			# Login persistence: inject a saved storage_state (cookies +
 			# localStorage) so the context starts authenticated.
 			if getattr(self.config, "storage_state", None):
@@ -497,8 +506,11 @@ class BrowserContext:
 
 	def _add_new_page_listener(self, context: PlaywrightBrowserContext):
 		async def on_page(page: Page):
-			if self.browser.config.cdp_url:
-				await page.reload()  # Reload the page to avoid timeout errors
+			if self.browser.browser_config.chrome_instance_path:
+				# Legacy desktop-attach hack: a page inherited from the operator's
+				# own Chrome may be mid-load. A fresh context (local, CDP service,
+				# Playwright server) never needs it.
+				await page.reload()
 			await page.wait_for_load_state()
 			self.logger.debug(f'New page opened: {page.url}')
 			if self.session is not None:
@@ -508,9 +520,22 @@ class BrowserContext:
 
 	async def get_session(self) -> BrowserSession:
 		"""Lazy initialization of the browser and related components"""
+		if self.session is not None and self._session_dead():
+			# The remote browser restarted under us: the context and its pages
+			# are gone. Re-initialize (storage_state/guards are re-applied) rather
+			# than fail every call until the session is torn down.
+			self.logger.warning("Browser session lost (browser restarted); re-initializing")
+			self.session = None
 		if self.session is None:
 			return await self._initialize_session()
 		return self.session
+
+	def _session_dead(self) -> bool:
+		try:
+			browser = self.session.context.browser
+			return browser is not None and not browser.is_connected()
+		except Exception:
+			return False
 
 	async def get_current_page(self) -> Page:
 		"""Get the current page"""

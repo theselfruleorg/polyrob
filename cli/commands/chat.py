@@ -739,6 +739,11 @@ async def _repl_main(plain: bool = False, lifecycle_ref: Optional[dict] = None,
         if orchestrator is None:
             click.echo(click.style("[polyrob] ERROR: ", fg="red") + "Orchestrator missing after session creation")
             return
+        # The terminal renders every reply live — keep chat replies off the
+        # owner delivery rail (its hourly/daily caps told the model its answer
+        # was "NOT delivered" and it re-sent). See core.surfaces.binding.
+        from core.surfaces.binding import bind_terminal_surface
+        bind_terminal_surface(orchestrator)
 
         # Wire the init-chosen persona into <identity> via the orchestrator seam
         # that run_session/create_agent already reads (execution.py:124). Fail-open.

@@ -163,6 +163,15 @@ class CronJobStore:
             (_iso(last_run_at), _iso(next_run_at), status, job_id),
         )
 
+    def run_now(self, job_id: str, now: datetime) -> bool:
+        """Pull an enabled, 'scheduled' job's ``next_run_at`` to *now* so the
+        next tick runs it. A CAS on status so a 'running'/'done'/'cancelled'
+        row is never touched; returns True iff the row moved. Used by the owner
+        queue (2026-09-18): approving an ask a cron run raised re-arms the job,
+        because the grant can only be redeemed by a genuine cron turn."""
+        from core.cron_rearm import rearm_job
+        return rearm_job(self.db_path, job_id, now)
+
     def set_status(self, job_id: str, status: str) -> None:
         execute_retry(self.db_path, "UPDATE cron_jobs SET status=? WHERE id=?", (status, job_id))
 

@@ -39,15 +39,17 @@ _CAP_ENV_KEY = {
 }
 
 # core.wallet.config.effective_daily_cap_usd / effective_max_per_tx_usd (the
-# pref/env merge helpers) are now real callers wired into load_wallet_config()
-# -> PolicyGate (owner-UX G-13): a per-tenant preference (budget.wallet_daily_usd
-# / budget.wallet_per_tx_usd) can TIGHTEN this env cap further, min-merged, but
-# can never raise or disable it — the env value set here always remains the
-# ceiling. Verify wiring: `grep -rn "effective_daily_cap_usd\|effective_max_per_tx_usd"
+# pref/env merge helpers) are real callers wired into load_wallet_config()
+# -> PolicyGate (owner-UX G-13), and since 2026-09-18 re-resolved LIVE by the
+# gate. The daily cap is min-merged: budget.wallet_daily_usd can TIGHTEN it,
+# never raise or disable it. The per-tx ceiling is owner-override: an approved
+# budget.wallet_per_tx_usd replaces the env default either way, clamped to the
+# daily cap. Verify wiring: `grep -rn "effective_daily_cap_usd\|effective_max_per_tx_usd"
 # core/ modules/ tools/ | grep -v test`.
 _POLICY_GATE_CAVEAT = (
-    "note: a per-tenant preference can TIGHTEN this cap further (min-merged); "
-    "it can never raise or disable it — this env value stays the ceiling."
+    "note: the daily cap is min-merged with the budget.wallet_daily_usd preference "
+    "(tighten only); the per-tx ceiling is replaced by an owner-approved "
+    "budget.wallet_per_tx_usd, clamped to the daily cap. Both apply live."
 )
 
 

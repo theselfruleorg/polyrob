@@ -226,7 +226,13 @@ class TwitterTool(BaseTool):
         self.access_token = twitter_config.get('access_token')
         self.access_token_secret = twitter_config.get('access_token_secret')
         self.bearer_token = twitter_config.get('bearer_token')
-        self.oauth2_access_token = twitter_config.get('oauth2_access_token')
+        # OAuth 2.0 user token: the managed resolver (encrypted store +
+        # auto-refresh, tools/x_oauth2.py) wins; the static config/env value is
+        # its own last fallback. Re-resolved before every DM read/send via
+        # `_ensure_oauth2_fresh`, because this instance lives for hours and the
+        # token lives for two.
+        self.oauth2_access_token = (self._resolve_oauth2_token()
+                                    or twitter_config.get('oauth2_access_token'))
         self.chat_private_keys_b64 = twitter_config.get('chat_private_keys_b64')
         self.chat_key_version = twitter_config.get('chat_key_version')
         self.chat_passphrase = twitter_config.get('chat_passphrase')
@@ -250,6 +256,36 @@ class TwitterTool(BaseTool):
             self._enabled = False
         else:
             self._enabled = True
+
+    @staticmethod
+    def _resolve_oauth2_token(force_refresh: bool = False) -> Optional[str]:
+        try:
+            from tools.x_oauth2 import resolve_access_token
+            return resolve_access_token(force_refresh=force_refresh)
+        except Exception as e:
+            logging.getLogger(__name__).debug("x oauth2 resolve failed: %s", e)
+            return None
+
+    def _ensure_oauth2_fresh(self, force_refresh: bool = False) -> None:
+        """Re-resolve the OAuth2 token; if it changed, rebuild the DM + Chat
+        clients so a long-lived tool instance never holds an expired token.
+
+        Also runs when the tool started with NO OAuth2 token: a pair imported
+        into the store later (`polyrob x-account oauth-import` on a live box,
+        2026-09-17) must become usable without a restart."""
+        fresh = self._resolve_oauth2_token(force_refresh=force_refresh)
+        if not fresh or fresh == getattr(self, "oauth2_access_token", None):
+            return
+        self.oauth2_access_token = fresh
+        try:
+            self.dm_client = tweepy.Client(bearer_token=fresh, wait_on_rate_limit=False)
+            from tools.x_chat_client import XChatClient
+            self.chat_client = XChatClient(
+                fresh, private_keys_b64=self.chat_private_keys_b64,
+                key_version=self.chat_key_version, passphrase=self.chat_passphrase)
+            self.logger.info("twitter: OAuth2 DM/Chat clients rebuilt on a refreshed token")
+        except Exception as e:
+            self.logger.warning(f"twitter: could not rebuild OAuth2 clients: {e}")
 
     async def initialize(self) -> None:
         """Initialize the Twitter service using the BaseService implementation.
@@ -2112,6 +2148,7 @@ class TwitterTool(BaseTool):
             uid = await self._resolve_user_id(params.recipient)
             if not uid:
                 return self._err(f"Could not resolve recipient '{params.recipient}'")
+            self._ensure_oauth2_fresh()
             dm_client = getattr(self, "dm_client", None) or self.client
             kwargs = {"participant_id": uid, "text": params.text}
             if getattr(self, "oauth2_access_token", None):
@@ -2203,6 +2240,7 @@ class TwitterTool(BaseTool):
         if params.participant and params.conversation_id:
             return self._err(
                 "Choose participant or conversation_id for a DM read, not both")
+        self._ensure_oauth2_fresh()
         try:
             use_chat = params.rail == "chat" or (
                 params.rail == "auto" and bool(

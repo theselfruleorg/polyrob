@@ -111,22 +111,16 @@ class ComfyFormatter(logging.Formatter):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.reset = Style.RESET_ALL
-        self._last_log = {}
-        self._buffer_timeout = 0.5  # Reduced from 1.0 for more responsive logging
-        
     def format(self, record):
         """Format log record with enhanced styling and timestamps."""
         try:
             if not sys.stdout.isatty():
                 return super().format(record)
 
-            # Create unique key for deduplication
-            log_key = f"{record.name}:{record.levelname}:{record.msg}"
-            current_time = time.time()
-
-            # Check for duplicate messages within buffer timeout
-            if self._should_skip_duplicate(log_key, current_time):
-                return ""
+            # Duplicate suppression lives in _DuplicateSuppressFilter (per
+            # handler). A formatter cannot suppress: returning "" here still
+            # made the StreamHandler write "" + "\n" — one blank terminal
+            # row per repeated record (2026-09-17).
 
             # Format standard message
             timestamp = self._format_timestamp(record)
@@ -142,14 +136,6 @@ class ComfyFormatter(logging.Formatter):
 
         except Exception:
             return super().format(record)
-
-    def _should_skip_duplicate(self, log_key: str, current_time: float) -> bool:
-        """Check if message should be skipped due to deduplication."""
-        last_time = self._last_log.get(log_key, 0)
-        if current_time - last_time < self._buffer_timeout:
-            return True
-        self._last_log[log_key] = current_time
-        return False
 
     def _format_timestamp(self, record) -> str:
         """Format timestamp with color and microsecond precision."""
@@ -266,6 +252,33 @@ class HTTPFormatter(logging.Formatter):
         except Exception:
             return super().format(record)
 
+class _DuplicateSuppressFilter(logging.Filter):
+    """Drop a record identical (name/level/msg) to one this handler passed in
+    the last ``window`` seconds — one instance PER HANDLER, so the file and
+    the console each judge their own stream.
+
+    This used to be ComfyFormatter's job, returning "" for the repeat; a
+    handler then still wrote the empty line. A Filter drops the record
+    before the handler writes anything.
+    """
+
+    def __init__(self, window: float = 0.5) -> None:
+        super().__init__()
+        self._window = window
+        self._last: dict = {}
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not sys.stdout.isatty():
+            return True
+        key = f"{record.name}:{record.levelname}:{record.msg}"
+        now = time.time()
+        last = self._last.get(key, 0)
+        if now - last < self._window:
+            return False
+        self._last[key] = now
+        return True
+
+
 class DynamicStderrHandler(logging.StreamHandler):
     """A StreamHandler that resolves ``sys.stderr`` at EMIT time.
 
@@ -349,11 +362,20 @@ def setup_logging(
         # dropped before any handler can see them.
         root_numeric = min(numeric_level, console_numeric)
         
-        # Create our formatters
-        standard_formatter = ComfyFormatter(
-            f'[%(asctime)s] %(levelname)s %(name)s: %(message)s',
-            datefmt='%H:%M:%S'
-        )
+        # Create our formatters. ONE ComfyFormatter PER SINK: its 0.5 s
+        # duplicate filter is per-instance state, so a formatter shared by the
+        # file handler and the console handler formats the console's copy of
+        # every record as a "repeat" of the file's and returns "" — and the
+        # StreamHandler then writes "" + "\n". In the REPL every ERROR record
+        # surfaced as one blank row above the prompt and the text was never
+        # shown (2026-09-17).
+        def _standard_formatter() -> ComfyFormatter:
+            return ComfyFormatter(
+                f'[%(asctime)s] %(levelname)s %(name)s: %(message)s',
+                datefmt='%H:%M:%S'
+            )
+
+        standard_formatter = _standard_formatter()
         
         http_formatter = HTTPFormatter(
             '[%(asctime)s] %(levelname)s %(name)s: %(message)s',
@@ -409,17 +431,19 @@ def setup_logging(
             file_handler.setLevel(numeric_level)
             file_handler._polyrob_sink = 'file'
             file_handler.addFilter(security_filter)
+            file_handler.addFilter(_DuplicateSuppressFilter())
             root_logger.addHandler(file_handler)
 
             # Console handler with standard formatter (late-binding stderr)
             console_handler = DynamicStderrHandler()
-            console_handler.setFormatter(standard_formatter)
+            console_handler.setFormatter(_standard_formatter())
             console_handler.setLevel(console_numeric)
             console_handler._polyrob_sink = 'console'
             # httpx records have a dedicated handler below — without this filter
             # every visible request line was emitted twice (F7).
             console_handler.addFilter(lambda record: record.name != 'httpx')
             console_handler.addFilter(security_filter)
+            console_handler.addFilter(_DuplicateSuppressFilter())
             root_logger.addHandler(console_handler)
 
             # Special handler for httpx logs (late-binding stderr)
@@ -469,7 +493,7 @@ def setup_logging(
                     backupCount=BACKUP_COUNT,
                     encoding='utf-8'
                 )
-                component_file_handler.setFormatter(standard_formatter)
+                component_file_handler.setFormatter(_standard_formatter())
                 component_file_handler.setLevel(numeric_level)
                 component_file_handler.addFilter(_SECURITY_FILTER)
                 logger.addHandler(component_file_handler)

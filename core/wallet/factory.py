@@ -153,6 +153,7 @@ def get_policy_gate() -> PolicyGate:
             daily_cap_usd=cfg.daily_cap_usd,
             per_venue_daily_cap_usd=cfg.per_venue_daily_cap_usd,
             on_record=_emit_spend_to_event_log,
+            cap_resolver=getattr(cfg, "cap_resolver", None),
         )
     return _standalone_policy
 

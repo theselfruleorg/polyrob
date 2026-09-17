@@ -15,7 +15,9 @@ Statuses (rendered per tool, resolved by :func:`resolve_tool_status`):
   ``money`` (explicit owner/goal grant only — NEVER loadable via load_tool),
   ``leaf-blocked`` (delegated child; parent must run it),
   ``unavailable-on-this-deploy`` (container never constructed it; remedy names the
-  missing config or the deploy shape), ``unknown-tool``.
+  missing config or the deploy shape), ``custody-no-browser`` (a browser-bearing
+  tool in a wallet-custody process whose remote browser rail is unset or
+  unreachable — the remedy is the rail's own line), ``unknown-tool``.
 
 Hard lines: this module CONSULTS the capability SSOT (core/tool_capabilities.py),
 never bypasses it; the delegation blocklist honours the DELEGATE_BLOCKED_TOOLS env
@@ -32,13 +34,17 @@ logger = logging.getLogger(__name__)
 
 _ASK_OWNER = "message the owner / file an ops ask"
 
+# Tools that cannot act without a browser. Under wallet custody they are exactly
+# as available as the remote browser rail (core/security/browser_rail.py).
+BROWSER_BEARING_TOOLS = frozenset({"browser", "x_browser", "dapp_browser"})
+
 
 @dataclass(frozen=True)
 class ToolStatus:
     """Resolved status for one display tool id."""
     tool_id: str
     status: str          # "loaded" | "loadable" | "gated"
-    reason: str = ""     # gated only: money | leaf-blocked | unavailable-on-this-deploy | unknown-tool
+    reason: str = ""     # gated only: money | leaf-blocked | unavailable-on-this-deploy | custody-no-browser | unknown-tool
     remedy: str = ""     # the channel that unblocks it — never empty for gated/loadable
 
 
@@ -75,6 +81,22 @@ def resolve_tool_status(
     from core.tool_capabilities import TOOL_CAPABILITIES
 
     display = get_tool_display_name((tool_id or "").strip())
+
+    # A browser-bearing tool in a custody process is only as available as the
+    # remote browser rail. Checked BEFORE `loaded`: a loaded tool that refuses
+    # 100% of the time is not loaded, it is gated, and the catalog must say so
+    # with the remedy rather than let the agent find out by failing (prod
+    # 2026-09-17: the agent tried, failed, and misreported the cause).
+    if display in BROWSER_BEARING_TOOLS:
+        try:
+            from core.security.browser_rail import browser_rail_status
+            rail = browser_rail_status()
+        except Exception:
+            rail = None
+        if rail is not None and not rail.usable:
+            return ToolStatus(
+                display, "gated", "custody-no-browser",
+                f"browser rail: {rail.line()}")
 
     if display in loaded_ids:
         return ToolStatus(display, "loaded")

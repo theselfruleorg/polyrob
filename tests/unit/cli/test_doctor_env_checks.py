@@ -136,7 +136,7 @@ def test_schema_status_unversioned_db(tmp_path):
 
 def test_doctor_report_includes_new_checks(tmp_path):
     blob = "\n".join(doctor_report({"POLYROB_DATA_DIR": str(tmp_path)}))
-    for marker in ("python:", "server extra:", "playwright:", "db schema:"):
+    for marker in ("python:", "server extra:", "playwright:", "browser rail:", "db schema:"):
         assert marker in blob, f"doctor report missing {marker!r}"
 
 

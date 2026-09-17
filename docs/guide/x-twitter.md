@@ -33,8 +33,36 @@ TWITTER_CHAT_PRIVATE_KEYS_B64=...
 TWITTER_CHAT_KEY_VERSION=...
 ```
 
-Both require `TWITTER_OAUTH2_ACCESS_TOKEN`. The ordinary
-`TWITTER_BEARER_TOKEN` is app-only and cannot read private messages.
+Both require an OAuth 2.0 user token. The ordinary `TWITTER_BEARER_TOKEN` is
+app-only and cannot read private messages.
+
+### Getting and keeping the OAuth 2.0 user token
+
+An X user access token expires **two hours** after it is minted. POLYROB keeps
+it alive for you: the pair (access + refresh) lives encrypted in the X token
+store and is refreshed automatically before expiry and on any 401. You need the
+app's Client ID once:
+
+```sh
+# developer.x.com → your app → User authentication settings: enable OAuth 2.0,
+# type "Web App, Automated App or Bot", redirect URI http://127.0.0.1:8765/callback
+TWITTER_OAUTH2_CLIENT_ID=...          # required to refresh
+TWITTER_OAUTH2_CLIENT_SECRET=...      # only for a confidential app
+
+polyrob x-account oauth-login         # PKCE in a browser, logged in AS the agent's account
+polyrob x-account oauth-status        # valid for N min · refresh token yes · scope [...]
+polyrob x-account oauth-refresh       # prove the refresh works right now
+```
+
+Already have a pair from a manual PKCE run? `polyrob x-account oauth-import`
+takes both values on hidden prompts and stores them. As an alternative for a
+headless deploy, set `TWITTER_OAUTH2_ACCESS_TOKEN` **and**
+`TWITTER_OAUTH2_REFRESH_TOKEN` in the env once: the pair is seeded into the
+store on first use and managed from there. A static access token alone still
+works as an override — for exactly two hours.
+
+Scopes to request: `dm.read dm.write tweet.read users.read offline.access`
+(`offline.access` is what makes X issue a refresh token at all).
 
 An empty result, or a result containing only the account's own sent messages,
 means only that the configured API access tier returned no inbound events. It

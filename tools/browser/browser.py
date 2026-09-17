@@ -150,6 +150,18 @@ class BrowserConfig:
 	cdp_url: str | None = None
 	auto_configure_for_server: bool = True
 
+	def endpoint_kind(self) -> str:
+		"""``"cdp"`` / ``"wss"`` (a remote, separately isolated browser) or ``"local"``.
+
+		The ONE accessor the manager log line, doctor and status read, so no seat
+		can report an endpoint the browser it built does not use.
+		"""
+		if self.cdp_url:
+			return "cdp"
+		if self.wss_url:
+			return "wss"
+		return "local"
+
 	proxy: Dict[str, Any] | None = field(default=None)
 	new_context_config: BrowserContextConfig = field(default_factory=BrowserContextConfig)
 
@@ -1187,10 +1199,34 @@ class Browser(BaseTool):
 
 	async def get_playwright_browser(self) -> PlaywrightBrowser:
 		"""Get a browser context"""
+		if self._browser is not None and not self._connected(self._browser):
+			# A REMOTE browser (polyrob-browser.service) restarts on its own
+			# schedule — an update, a crash, `polyrob browser install` under a
+			# live agent (prod 2026-09-17: every new_context failed with
+			# "browser has been closed" until the agent itself restarted).
+			# Drop the dead handle and connect again.
+			self.logger.warning("Browser connection lost; reconnecting")
+			await self._forget_dead_browser()
 		if self._browser is None:
 			return await self._init()
 
 		return self._browser
+
+	@staticmethod
+	def _connected(browser) -> bool:
+		try:
+			return bool(browser.is_connected())
+		except Exception:
+			return False
+
+	async def _forget_dead_browser(self) -> None:
+		self._browser = None
+		pw, self._playwright = self._playwright, None
+		if pw is not None:
+			try:
+				await pw.stop()
+			except Exception:
+				pass
 
 	async def _init(self):
 		"""Initialize the browser session"""
@@ -1219,7 +1255,8 @@ class Browser(BaseTool):
 		try:
 			return await playwright.chromium.connect_over_cdp(self.browser_config.cdp_url)
 		except Exception as exc:
-			raise BrowserError(f"Remote CDP connection failed ({type(exc).__name__})") from None
+			from tools.browser.launch_security import remote_connect_refusal
+			raise BrowserError(remote_connect_refusal("cdp", exc)) from None
 
 	async def _setup_wss(self, playwright: Playwright) -> PlaywrightBrowser:
 		"""Sets up and returns a Playwright Browser instance with anti-detection measures."""
@@ -1229,7 +1266,8 @@ class Browser(BaseTool):
 		try:
 			return await playwright.chromium.connect(self.browser_config.wss_url)
 		except Exception as exc:
-			raise BrowserError(f"Remote browser connection failed ({type(exc).__name__})") from None
+			from tools.browser.launch_security import remote_connect_refusal
+			raise BrowserError(remote_connect_refusal("wss", exc)) from None
 
 	async def _setup_browser_with_instance(self, playwright: Playwright) -> PlaywrightBrowser:
 		"""Sets up and returns a Playwright Browser instance with anti-detection measures."""

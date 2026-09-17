@@ -420,12 +420,11 @@ class TaskAgentDeliveryMixin:
             #     the previous turn would make this turn's `send_message` look
             #     like a SECOND reply. `reset_turn` is the same call
             #     `_drain_user_messages` makes for a drained batch.
-            # ⚠️ 2026-09-16: this reset no longer re-arms `done()` as a room
-            # fallback — `build_completion_publish` refuses a room session key
-            # outright, because the text it was falling back to is an internal
-            # completion record and publishing it leaked an owner question into a
-            # public group. A room turn that says nothing is now CORRECT (and is
-            # logged by the mirror), not a hole to be plugged with `done`.
+            # ⚠️ 2026-09-16/17: this reset does not re-arm `done()` as a room
+            # fallback — `done` has no delivery path any more, because the text
+            # it was falling back to is an internal completion record and
+            # publishing it leaked an owner question into a public group. A room
+            # turn that says nothing is CORRECT, not a hole to be plugged.
             # Safe: the push above already succeeded, so neither can be left
             # stale behind a rejected submission (the hazard the
             # `set_turn_reply_to` docstring warns about).

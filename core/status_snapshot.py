@@ -1298,7 +1298,7 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
     if len(present) == 4:
         sec.lines.append(
             f"x: api configured{' @' + handle if handle else ''} — writes "
-            f"{'ON' if writes else 'OFF (TWITTER_ENABLED)'}; browser rail: ask x_login_check")
+            f"{'ON' if writes else 'OFF (TWITTER_ENABLED)'}; X login session: ask x_login_check")
     elif present:
         missing = [k for k in api_keys if k not in present]
         sec.lines.append(f"x: api PARTIAL — missing {', '.join(missing)}")
@@ -1306,7 +1306,36 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
         sec.lines.append("x: no api keys — create an X developer app for the agent's "
                          "account and set TWITTER_API_KEY/SECRET_KEY/ACCESS_TOKEN/"
                          "ACCESS_TOKEN_SECRET (polls + search need the API rail); "
-                         "browser rail: x_login_check")
+                         "X login session: x_login_check")
+    _browser_rail_line(sec)
+
+
+def _browser_rail_line(sec: Section) -> None:
+    """Append `browser:` — the ONE rail line (core/security/browser_rail.py).
+
+    A custody process cannot launch Chromium; it may only connect to a
+    separately isolated browser. Until 2026-09-17 no seat said whether that
+    rail existed, and the agent told the owner "no remote browser configured"
+    while one was configured and running. A loopback endpoint is probed (a
+    local read); a remote one is reported as configured, unprobed — the
+    snapshot does no network read by default. The health item fires only when
+    an endpoint IS configured and fails: an unset rail is an owner choice, not
+    a fault (same rule as the avatar).
+    """
+    try:
+        from core.security.browser_rail import browser_rail_status
+        rail = browser_rail_status(probe=False)
+    except Exception as e:
+        sec.lines.append(f"browser: unreadable ({type(e).__name__})")
+        return
+    sec.data["browser_rail"] = rail.state
+    sec.data["browser_endpoint"] = rail.endpoint
+    sec.lines.append(f"browser: {rail.line()}")
+    if rail.state == "unreachable":
+        sec.health.append(HealthItem(
+            "browser_rail_unreachable",
+            f"remote browser ({rail.endpoint}) configured but unreachable: {rail.reason}",
+            rail.remedy, SEVERITY_WARN))
 
 
 def _positions_line(data_dir: Optional[str]) -> str:

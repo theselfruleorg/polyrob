@@ -455,6 +455,29 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
                     "owner_queue: %s approved — leaving redemption to the re-armed "
                     "goal(s) %s; no wake (a forged turn may not spend)",
                     display_id, payload.get("blocks_goal_ids"))
+            elif payload.get("cron_job_id"):
+                # A CRON run asked (2026-09-18). Same shape as the goal carve-out:
+                # the session that asked has FINISHED, and a self-wake into it is
+                # a forged turn the money guard refuses — live on prod 2026-09-17
+                # 16:14, the owner tapped approve on a buyback tranche, the wake
+                # said "grant is live, wait for the owner", and the agent asked
+                # the owner to trigger a trade the owner had just approved. So:
+                # no wake. Re-arm the JOB instead — its next tick is a genuine
+                # cron turn, which MAY spend and consumes the one-shot grant.
+                job_id = str(payload.get("cron_job_id"))
+                if _rearm_cron_job(board, job_id):
+                    logger.info(
+                        "owner_queue: %s approved — cron job %s re-armed to run on "
+                        "the next tick and redeem the grant; no wake",
+                        display_id, job_id)
+                    verb = ("approved — the scheduled job re-runs on the next tick "
+                            "and redeems the grant")
+                else:
+                    logger.info(
+                        "owner_queue: %s approved — cron job %s not re-armed "
+                        "(not scheduled or store unreadable); its next run redeems "
+                        "the grant", display_id, job_id)
+                    verb = ("approved — the scheduled job's next run redeems the grant")
             elif session_id:
                 # No goal to re-arm (an interactive ask). The wake still helps for
                 # a non-money action, but it must NOT promise a retry a money verb
@@ -488,6 +511,38 @@ def decide_tool_approval(board: Any, display_id: str, *, user_id: str,
         except Exception:
             logger.debug("resume-on-grant wake skipped (fail-open)", exc_info=True)
     return True, f"tool-approval request {display_id} {verb}"
+
+
+def _cron_job_id(session_id: str) -> Optional[str]:
+    """The cron job this session is running, or None. Fail-open to None: an ask
+    that cannot name its job is still created and still approvable — it merely
+    redeems on the job's own next scheduled tick instead of right away."""
+    try:
+        from agents.task.goals.autonomy_marker import cron_job_for_session
+        return cron_job_for_session(session_id) or None
+    except Exception:
+        logger.debug("owner_queue: cron-job-for-session lookup failed (fail-open)",
+                     exc_info=True)
+        return None
+
+
+def _rearm_cron_job(board: Any, job_id: str) -> bool:
+    """Pull *job_id*'s ``next_run_at`` to now so the next scheduler tick runs it
+    and redeems the grant. ``cron.db`` lives beside the board's ``goals.db``
+    (same data home, same rule ``_wake_queue_for_board`` uses). Returns True
+    when the row was re-armed; False (logged) when it was not — the grant is
+    still live for the job's own next scheduled run either way."""
+    from datetime import datetime, timezone
+    try:
+        from core.cron_rearm import cron_db_beside, rearm_job
+        cron_db = cron_db_beside(getattr(board, "db_path", None))
+        if cron_db is None:
+            return False
+        return rearm_job(cron_db, job_id, datetime.now(timezone.utc))
+    except Exception:
+        logger.debug("owner_queue: cron re-arm failed for %s (fail-open)", job_id,
+                     exc_info=True)
+        return False
 
 
 def _blocked_goal_ids(session_id: str) -> list:
@@ -913,6 +968,10 @@ class OwnerQueueApprover(ApprovalProvider):
                     "request_hash": req_hash,
                     "session_id": session_id,
                     "grant_consumed": False,
+                    # 2026-09-18: the cron twin of blocks_goal_ids — an approval
+                    # re-arms THIS job to run on the next tick (see
+                    # decide_tool_approval). None for every other origin.
+                    "cron_job_id": _cron_job_id(session_id),
                 },
                 # 039: name the goal this ask blocks, so `decide_ask`'s EXISTING
                 # unblock hop re-arms it on approval. Without it the owner

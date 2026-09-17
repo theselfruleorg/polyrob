@@ -67,7 +67,7 @@ def chat_verbs() -> FrozenSet[str]:
 #: this set equals the live map, so a new subcommand cannot drift out of the
 #: remedy vocabulary without a red test.
 CLI_COMMAND_NAMES: FrozenSet[str] = frozenset({
-    "approvals", "apps", "auth", "autonomy", "config", "cron",
+    "approvals", "apps", "auth", "autonomy", "browser", "config", "cron",
     "dashboard", "datagen", "discord", "doctor", "email", "finance",
     "gateway", "goals", "identity", "init", "journey", "kb", "keys", "knowledge",
     "model", "models", "owner", "persona", "pfp", "profile", "profiles",

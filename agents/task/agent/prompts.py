@@ -475,7 +475,8 @@ whose text the user reads. Everything you want them to know goes here.
 - wait_for_response=False: they read it and you continue immediately.
 
 done(text) ENDS the task. Its text is your internal completion record — what you
-finished, for the run log. It is not a second message to the user.
+finished, for the run log. The user NEVER sees it: it is not delivered on any
+surface, so an answer written only into done(text) is an answer nobody receives.
 - Never restate a message you already sent. If you already answered with
   send_message, done(text) is bookkeeping, not a repeat of the answer.
 - Never write done(text) in the third person about yourself ("Answered the owner's
@@ -701,8 +702,9 @@ Paths relative to workspace root (NO 'workspace/' prefix):
 - Bad: 'workspace/report.md'
 
 Task Completion:
-- done(text="...") - Ends the task. The text is your internal completion record.
-- Speak to the user with send_message; done is not a second message to them."""
+- done(text="...") - Ends the task. The text is your internal completion record;
+  the user never sees it.
+- Speak to the user with send_message; done is not a message to them."""
 		else:
 			return """Respond with JSON containing brain state and actions:
 ```json
@@ -804,11 +806,10 @@ Task Completion:
 				"config, goals, owner facts or any owner-only state here; the owner "
 				"can ask you privately. If nothing needs an answer, reply exactly "
 				"[SILENT].")
-			# 2026-09-16: `done` does NOT publish in a room (see
-			# core/surfaces/outbound_mirror.py::build_completion_publish). Saying
-			# so is load-bearing, not a courtesy: a `done()`-only turn — the
-			# majority shape in a DM — would otherwise leave the room with
-			# NOTHING. And `done`'s summary is an internal completion record; the
+			# 2026-09-16: `done` does NOT publish in a room (and since 2026-09-17
+			# nowhere else either — it has no delivery path). Saying so is
+			# load-bearing, not a courtesy: a `done()`-only turn — the majority
+			# shape in a DM — would otherwise leave the room with NOTHING. And `done`'s summary is an internal completion record; the
 			# turn it was published into a live room it read as a status report
 			# to nobody present, quoting the owner's private question back at it.
 			lines.append(

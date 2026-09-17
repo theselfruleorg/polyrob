@@ -28,8 +28,13 @@ _OAUTH1_ENVS = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
 
 def check_x_credentials() -> None:
     """DM endpoints need OAuth2 PKCE or OAuth1 USER context, never app-only."""
-    if (os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip():
-        return
+    try:
+        from tools.x_oauth2 import oauth2_configured
+        if oauth2_configured():
+            return
+    except Exception:
+        if (os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip():
+            return
     missing = [k for k in _OAUTH1_ENVS if not (os.environ.get(k) or "").strip()]
     if missing:
         raise XCredentialsError(

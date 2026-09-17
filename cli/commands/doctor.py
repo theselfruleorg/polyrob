@@ -118,6 +118,20 @@ def playwright_line(env: dict) -> str:
             "`python -m playwright install chromium`")
 
 
+def browser_rail_line() -> str:
+    """The browser RAIL (custody-aware), distinct from the playwright INSTALL line
+    above. A custody process cannot launch the chromium the line above found; it
+    can only connect to a separately isolated browser. Probes a loopback endpoint
+    (a local read) and reports a remote one as configured, unprobed — unless the
+    owner is running doctor, where a fresh probe is exactly what they want."""
+    try:
+        from core.security.browser_rail import browser_rail_status
+        rail = browser_rail_status(refresh=True)
+    except Exception as e:  # never fail doctor on a probe
+        return f"browser rail: unreadable ({type(e).__name__})"
+    return f"browser rail: {rail.line()}"
+
+
 def live_activity_line() -> str:
     """Live-activity pipeline check (019 P0.3): telemetry constructs.
 
@@ -798,6 +812,7 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(python_version_line())
     lines.append(server_extra_line())
     lines.append(playwright_line(env))
+    lines.append(browser_rail_line())
     lines.append(schema_status_line(env))
     lines.append(live_activity_line())
 

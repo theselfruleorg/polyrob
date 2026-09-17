@@ -2,11 +2,12 @@
 
 Two ceilings get confused constantly, and they are different animals:
 
-  AGENT_WALLET_MAX_PER_TX_USD   catastrophic-loss backstop. Prefs min-merge it,
-                                so a pref can only LOWER it. Raising needs env
-                                + restart, on purpose: that property is what
-                                makes a compromised chat surface unable to
-                                widen spend authority.
+  AGENT_WALLET_MAX_PER_TX_USD   catastrophic-loss backstop. Since 2026-09-18 an
+                                owner-approved pref replaces it in either
+                                direction, clamped to WALLET_DAILY_CAP_USD —
+                                the daily cap is the env-only, min-merged
+                                envelope, so no raise from chat moves the
+                                maximum daily loss (see core/wallet/config.py).
   DEFI_AUTONOMOUS_MAX_USD       how much executes without an owner approval.
                                 Raising it does NOT raise maximum loss -- the
                                 backstop above still binds -- it only reduces
