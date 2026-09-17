@@ -61,6 +61,16 @@ def test_signup_subcommand_registered():
     assert "signup" in x_account.commands
 
 
+def test_capture_completion_names_browser_dm_rail(monkeypatch):
+    """The capture command must not imply the API poller can consume the session."""
+    import inspect
+    from cli.commands import x_account as mod
+
+    source = inspect.getsource(mod._capture)
+    assert "X_BROWSER_ENABLED=true" in source
+    assert "x_read_dms" in source
+
+
 def test_signup_refuses_when_account_exists(monkeypatch):
     from cli.commands import x_account as mod
 

@@ -46,11 +46,8 @@ def _data_dir() -> str:
     deployed home when it can read it and REFUSES when it cannot; a purely local
     box is unchanged and silent.
     """
-    from core.admin_data_home import AmbiguousDataHome, admin_data_home
-    try:
-        return admin_data_home(echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
-    except AmbiguousDataHome as exc:
-        raise click.ClickException(str(exc))
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir()
 
 
 def _write_flag(key: str, value: str, *, is_global: bool) -> None:

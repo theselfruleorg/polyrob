@@ -27,9 +27,10 @@ def register_x_browser_tool(force: bool = False) -> bool:
         XBrowserTool,
         ToolDescriptor(
             name="x_browser",
-            description=("Post to X (x.com) through a real browser on a saved "
-                         "login, and register an account for the agent. Verbs: "
-                         "x_post / x_login_check / x_signup_start."),
+            description=("Read and send X DMs, post to X, and register an "
+                         "account through a real browser on a saved login. Verbs: "
+                         "x_read_dms / x_dm / x_post / x_login_check / "
+                         "x_signup_start."),
             category=ToolCategory.COMMUNICATION,
             required_config=[],
             init_priority=45,

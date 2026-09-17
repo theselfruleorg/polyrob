@@ -128,9 +128,8 @@ def _ledger(container: Any):
 
 
 def _data_home(container: Any) -> str:
-    from core.runtime_paths import data_dir_or_home
-    cfg = getattr(container, "config", None)
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    from core.runtime_paths import container_data_home
+    return container_data_home(container)
 
 
 def _policy_skip(policy: Any, now: float) -> Optional[str]:

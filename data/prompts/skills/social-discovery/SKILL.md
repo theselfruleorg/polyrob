@@ -1,12 +1,12 @@
 ---
 name: social-discovery
-description: Find engageable accounts, conversations, and mentions on X/social using anysite (preferred) over the flaky native twitter_search, with cost discipline
+description: Discover public X/social accounts and conversations with AnySite first, using native X account reads where they are authoritative and preserving write gates
 license: MIT
 metadata:
   polyrob-priority: '6'
   polyrob-auto-activate: 'true'
-  polyrob-triggers: '{"action_names":[],"keywords":["engagement targets","who to engage","find accounts","accounts to engage","discover on x","discover on twitter","social discovery","find people to engage","find prospects on x","who to reply to","trending in ai"],"task_patterns":["(find|discover|identify).*(account|people|target|prospect|conversation).*(x|twitter|social)","who.*(to )?(engage|reply|follow)","(engagement|social).*(discovery|target)","find.*(mentions|conversations).*(about|on)"],"tool_ids":["anysite","twitter"]}'
-  polyrob-version: '1'
+  polyrob-triggers: '{"action_names":["twitter_search","twitter_get_user","twitter_get_tweets","twitter_get_mentions","twitter_get_timeline"],"keywords":["engagement targets","who to engage","find accounts","accounts to engage","discover on x","discover on twitter","social discovery","find people to engage","find prospects on x","who to reply to","trending in ai"],"task_patterns":["(find|discover|identify).*(account|people|target|prospect|conversation).*(x|twitter|social)","who.*(to )?(engage|reply|follow)","(engagement|social).*(discovery|target)","find.*(mentions|conversations).*(about|on)"],"tool_ids":["anysite","twitter"]}'
+  polyrob-version: '2'
 ---
 # Social Discovery
 
@@ -23,10 +23,9 @@ quote-tweet, or follow.
 1. **anysite** — preferred for discovery. Structured, richer, and covers X/Twitter (and LinkedIn,
    Reddit, GitHub, YouTube, and more). Discover endpoints first — do not hardcode paths. One
    structured pull returns many results you can filter locally.
-2. **native `twitter` reads** (`twitter_search`, `get_mentions`) — fallback only. They are **flaky
-   and reply-restricted**: cold `twitter_search` and cold `twitter_reply` to strangers' posts often
-   return 403. Use native twitter mainly for **writing to your own space** (posting, replying within
-   your own threads, reading your own mentions), not for cold discovery.
+2. **native `twitter` reads** — use for authoritative own-account state (`twitter_get_mentions`,
+   `twitter_get_timeline`) and as a bounded public-search fallback. Cold search/reply availability
+   depends on X policy and access; do not retry a rejected call in a loop.
 
 If a source isn't loaded this session, say so and use what you have — never hard-fail.
 
@@ -45,9 +44,9 @@ If a source isn't loaded this session, say so and use what you have — never ha
 3. **Rank engageable targets** — prefer: your own mentions/threads (replies always open), accounts
    whose posts invite replies, and high-signal conversations. Deprioritize cold accounts where a
    reply is likely to 403.
-4. **Engage where it lands** — reply within your own threads / to your mentions; for cold accounts,
-   **quote-tweet** to amplify rather than cold-replying (which is what gets reply-restricted).
-   Never spray cold `twitter_reply` at search results.
+4. **Engage where it lands** — reply within your own threads / to your mentions. For cold accounts,
+   use a like/retweet/follow or publish a distinct post on your own timeline when appropriate.
+   Cold replies and cold quote-posts can both be rejected; never spray either at search results.
 5. **Record** — note who/what you engaged and why, so the next session reuses it instead of
    re-discovering.
 

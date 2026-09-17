@@ -50,6 +50,12 @@ def test_full_credentials_enable_the_tool():
     assert tool._enabled is True
 
 
+def test_oauth2_user_token_alone_enables_dm_reads():
+    tool = _make_tool({"oauth2_access_token": "oauth2-user-token"})
+    assert tool._enabled is True
+    assert tool.oauth2_access_token == "oauth2-user-token"
+
+
 @pytest.mark.asyncio
 async def test_private_cleanup_clears_initialized_flag():
     """Even when _cleanup() is invoked directly (bypassing cleanup()), the

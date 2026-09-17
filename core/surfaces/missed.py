@@ -29,7 +29,6 @@ import textwrap
 import time
 from typing import Dict, List
 
-from core.runtime_paths import sidecar_db_path
 from core.sqlite_util import execute_retry
 from core.surfaces.user_delivery import NOTICE_MARKERS
 
@@ -54,16 +53,9 @@ def _kind_for(text: str) -> str:
 
 
 def _resolve_db_path(data_dir: str) -> str:
-    """Same resolution the delivery rail's other readers use: an explicit
-    ``TELEMETRY_EVENT_LOG_PATH`` override, else a tenant-local file under
-    *data_dir*, else the shared sidecar db path."""
-    override = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
-    if override:
-        return override
-    local = os.path.join(data_dir, "telemetry_events.db")
-    if os.path.exists(local):
-        return local
-    return str(sidecar_db_path("telemetry_events.db"))
+    """The ONE telemetry-db resolution (``core.event_log.telemetry_db_path``)."""
+    from core.event_log import telemetry_db_path
+    return telemetry_db_path(data_dir)
 
 
 def missed_notices(user_id: str, data_dir: str, n: int = 5) -> List[Dict]:

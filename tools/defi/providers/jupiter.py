@@ -68,10 +68,8 @@ def supports(chain: str) -> bool:
 
 
 def _int(value, default=None):
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return default
+    from tools.defi.providers._http import parse_int
+    return parse_int(value, default)
 
 
 def parse_quote(payload: Any, *, chain: str) -> Optional[JupiterQuote]:
@@ -138,10 +136,8 @@ def decode_swap_transaction(body: Any) -> Optional[bytes]:
 # -- network boundary --------------------------------------------------------
 
 def _get(url: str) -> Any:
-    req = urllib.request.Request(url, headers={
-        "accept": "application/json", "user-agent": "polyrob-defi/1.0"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as r:
-        return json.loads(r.read())
+    from tools.defi.providers._http import get_json
+    return get_json(url, timeout=TIMEOUT_SEC)
 
 
 def quote(token_in: str, token_out: str, amount_in_raw: int, *,

@@ -176,3 +176,53 @@ def test_being_unregistered_raises_no_health_item(tmp_path):
     _write_pfp(tmp_path)
     sec = _identity_section("rob", str(tmp_path))
     assert sec.health == []
+
+
+# --- reachable identities: email + X (2026-09-17) --------------------------
+
+def _clear_reach_env(monkeypatch):
+    for k in ("POLYROB_AGENT_EMAIL", "GMAIL_EMAIL", "AGENTMAIL_API_KEY",
+              "TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
+              "TWITTER_ACCESS_TOKEN_SECRET", "TWITTER_BOT_USERNAME", "TWITTER_ENABLED"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_identity_names_missing_email_and_x_with_remedies(tmp_path, monkeypatch):
+    """A bootstrap skill must be able to READ 'no email / no X API' — and the
+    remedy — from the one snapshot instead of guessing."""
+    _clear_reach_env(monkeypatch)
+    sec = _identity_section("rob", str(tmp_path))
+    text = "\n".join(sec.lines)
+    assert sec.data["email"] is None
+    assert "email: none" in text and "AGENTMAIL_API_KEY" in text
+    assert sec.data["x_api"] == "none"
+    assert "x: no api keys" in text and "TWITTER_API_KEY" in text
+    assert sec.state == STATE_OK  # optional setup raises no health item
+
+
+def test_identity_reports_provisioned_inbox_and_x_api(tmp_path, monkeypatch):
+    _clear_reach_env(monkeypatch)
+    (tmp_path / "agent_mail.json").write_text(json.dumps(
+        {"inbox_id": "i1", "address": "dangerob@agentmail.to"}))
+    for k in ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY", "TWITTER_ACCESS_TOKEN",
+              "TWITTER_ACCESS_TOKEN_SECRET"):
+        monkeypatch.setenv(k, "x" * 20)
+    monkeypatch.setenv("TWITTER_BOT_USERNAME", "dangerob")
+    monkeypatch.setenv("TWITTER_ENABLED", "true")
+    sec = _identity_section("dangerob", str(tmp_path))
+    text = "\n".join(sec.lines)
+    assert sec.data["email"] == "dangerob@agentmail.to"
+    assert "email: dangerob@agentmail.to" in text
+    assert sec.data["x_api"] == "configured" and sec.data["x_handle"] == "dangerob"
+    assert "x: api configured @dangerob" in text and "writes ON" in text
+    # secret hygiene: no key VALUE leaks into a status line
+    assert "x" * 20 not in text
+
+
+def test_identity_x_partial_names_the_missing_keys(tmp_path, monkeypatch):
+    _clear_reach_env(monkeypatch)
+    monkeypatch.setenv("TWITTER_API_KEY", "k")
+    sec = _identity_section("rob", str(tmp_path))
+    text = "\n".join(sec.lines)
+    assert sec.data["x_api"] == "partial"
+    assert "PARTIAL" in text and "TWITTER_ACCESS_TOKEN_SECRET" in text

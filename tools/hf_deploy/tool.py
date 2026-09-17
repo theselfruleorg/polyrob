@@ -61,16 +61,11 @@ def _valid_app_name(name: Any) -> bool:
 def _emit_event(kind: str, execution_context, attrs: Dict[str, Any]) -> None:
     """First-class hf_deploy telemetry (fail-open). Module-level so tests can
     monkeypatch this exact seam."""
-    try:
-        from core.event_log import event_log_enabled, get_event_log
-        if not event_log_enabled():
-            return
-        uid = getattr(execution_context, "user_id", "") or ""
-        sid = getattr(execution_context, "session_id", "") or ""
-        get_event_log().record(kind, user_id=uid, session_id=sid,
-                               source="hf_deploy", attrs=attrs or {})
-    except Exception as e:
-        logger.debug("hf_deploy event emit skipped: %s", e)
+    from core.event_log import emit
+    emit(kind, source="hf_deploy",
+         user_id=getattr(execution_context, "user_id", "") or "",
+         session_id=getattr(execution_context, "session_id", "") or "",
+         attrs=attrs)
 
 
 def _deny_reason(execution_context) -> Optional[str]:
@@ -142,57 +137,13 @@ class HFDeployTool(BaseTool):
         return self._broker
 
     def _get_approval_provider(self):
-        """The approver that gates a FIRST publish of an unknown app.
-
-        The injected ``_approval_provider`` test seam always wins. In production
-        (nothing injected) we resolve the SAME provider the Controller uses at
-        posture>=2 via ``resolve_gated_actions`` — i.e. ``interactive_cli`` by
-        default, NOT ``AutoApprover``. So a brand-new PUBLIC app can never be
-        first-published from an unattended headless run (interactive_cli
-        fail-closes to deny when it can't prompt). An already-approved app skips
-        this path entirely (``deploy`` only asks when ``needs_approval``), so its
-        redeploy stays unattended within caps.
-
-        013 T4 review (Finding 1): under effective ``AUTONOMY_MODE=autonomous``,
-        ``resolve_gated_actions()`` now defaults the gated set's provider to
-        ``auto_notify`` (allow + audit + post-hoc owner notify — the generic
-        act-and-report lane wired in ``tools/controller/service.py``).
-        ``AutoNotifyApprover.request()`` always returns ``True``, so honoring it
-        HERE would silently first-publish a brand-new PUBLIC HF Space from an
-        unattended run — inverting the invariant documented above and at module
-        scope (:13). ``auto_notify`` is therefore remapped to the durable,
-        remotely-approvable ``owner_queue`` provider instead of ``interactive_cli``:
-        a real owner can still approve a first publish out-of-band (e.g. Telegram
-        ``/approve``), so autonomous mode doesn't FREEZE headless hf_deploy, but it
-        never rubber-stamps — ``owner_queue`` itself fail-closes (denies, no ask
-        even created) for a forged/leaf/sub-agent/autonomous-goal-run turn
-        (``tools/controller/approval_queue.py::OwnerQueueApprover.request``),
-        exactly the shape ``interactive_cli`` fails closed for on a headless run.
-        An explicit non-``auto_notify`` resolution (``deny``, an operator-set
-        ``owner_queue``/custom provider, or supervised-mode ``interactive_cli``) is
-        untouched.
-        """
+        """The approver that gates a FIRST publish. The injected
+        ``_approval_provider`` test seam always wins; otherwise the ONE
+        policy in ``tools.ship_common.first_publish_approval_provider``
+        (Controller's provider, ``auto_notify`` remapped to ``owner_queue``)."""
         if self._approval_provider is None:
-            # Importing this registers the 'interactive_cli' provider so it can
-            # actually be resolved (mirrors Controller.__init__'s H9 import).
-            try:
-                import tools.controller.approval_interactive  # noqa: F401
-            except Exception:
-                pass
-            from tools.controller.approval import (
-                get_approval_provider_or_deny, resolve_gated_actions,
-            )
-            _required, provider_name = resolve_gated_actions()
-            if provider_name == "auto_notify":
-                # Finding 1: never let the generic allow-all act-and-report lane
-                # gate a first PUBLIC publish — fall back to the durable
-                # owner-approval queue instead.
-                try:
-                    import tools.controller.approval_queue  # noqa: F401 — registers 'owner_queue'
-                except Exception:
-                    pass
-                provider_name = "owner_queue"
-            self._approval_provider = get_approval_provider_or_deny(provider_name)
+            from tools.ship_common import first_publish_approval_provider
+            self._approval_provider = first_publish_approval_provider()
         return self._approval_provider
 
     def _resolve_workspace_root(self, execution_context):
@@ -213,24 +164,9 @@ class HFDeployTool(BaseTool):
         return None
 
     def _resolve_orchestrator(self, session_id):
-        resolver = self._orchestrator_resolver
-        if resolver is not None:
-            try:
-                return resolver(session_id)
-            except Exception:
-                return None
-        try:
-            agent = None
-            if self.container is not None:
-                if hasattr(self.container, "get_agent"):
-                    agent = self.container.get_agent("task_agent")
-                if agent is None and hasattr(self.container, "get_service"):
-                    agent = self.container.get_service("task_agent")
-            return agent.get_orchestrator(session_id) if agent else None
-        except Exception:
-            return None
-
-    # --- actions -------------------------------------------------------------
+        from tools.ship_common import resolve_orchestrator
+        return resolve_orchestrator(lambda: self.container, session_id,
+                                    self._orchestrator_resolver)
 
     @BaseTool.action(
         "Deploy the current session workspace as a Hugging Face Space (Docker SDK). "

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from tools.polymarket.clob_adapter import ClobClient
 
 from tools.base_tool import BaseTool, ToolStatus
+from tools.credential_cache import UserCredentialCacheMixin
 from tools.polymarket.models import (
     TradingLimits,
     PolymarketCredentials,
@@ -180,7 +181,7 @@ class EmptyParams(BaseModel):
 # POLYMARKET SERVICE
 # =============================================================================
 
-class PolymarketTool(BaseTool):
+class PolymarketTool(UserCredentialCacheMixin, BaseTool):
     """
     Direct Polymarket API integration tool.
 
@@ -294,24 +295,6 @@ class PolymarketTool(BaseTool):
         if user_id != self._user_id:
             self._user_id = user_id
             self.logger.debug(f"Polymarket user context set: {user_id}")
-    
-    async def _get_user_credentials(self) -> Optional[PolymarketCredentials]:
-        """Get current user's credentials."""
-        if not self._user_id:
-            return None
-        
-        # Check cache first
-        if self._user_id in self._credentials_cache:
-            return self._credentials_cache[self._user_id]
-        
-        # Fetch from database
-        if self.db:
-            credentials = await self.db.get_credentials(self._user_id)
-            if credentials:
-                self._credentials_cache[self._user_id] = credentials
-            return credentials
-        
-        return None
     
     def _check_trading_limits(
         self,

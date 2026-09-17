@@ -78,44 +78,20 @@ class LogsParams(BaseModel):
 def _emit_event(kind: str, execution_context, attrs: Dict[str, Any]) -> None:
     """First-class app_service telemetry (fail-open). Module-level so tests can
     monkeypatch this exact seam."""
-    try:
-        from core.event_log import event_log_enabled, get_event_log
-        if not event_log_enabled():
-            return
-        uid = getattr(execution_context, "user_id", "") or ""
-        sid = getattr(execution_context, "session_id", "") or ""
-        get_event_log().record(kind, user_id=uid, session_id=sid, source="app_service",
-                               attrs=attrs or {})
-    except Exception as e:
-        logger.debug("app_service event emit skipped: %s", e)
+    from core.event_log import emit
+    emit(kind, source="app_service",
+         user_id=getattr(execution_context, "user_id", "") or "",
+         session_id=getattr(execution_context, "session_id", "") or "",
+         attrs=attrs)
 
 
 def _deny_reason(execution_context: Any, verb: str = "app_deploy") -> Optional[str]:
-    """Non-None -> refuse. The three clauses ``publish`` states directly (level-0
-    ``compute_posture_allows`` is an unconditional pass by contract): owner
-    tenant, not a leaf/sub-agent, not a forged turn. Fail-CLOSED."""
-    if execution_context is None:
-        return f"{verb} requires an execution context"
-    try:
-        if getattr(execution_context, "is_sub_agent", False):
-            return f"{verb} denied: a delegated sub-agent never decides what the world runs"
-        if getattr(execution_context, "role", "leaf") != "orchestrator":
-            return f"{verb} denied: a leaf agent never decides what the world runs"
-        metadata = getattr(execution_context, "metadata", None) or {}
-        from core.security.forged_turns import FORGED_TURN_KINDS
-        if metadata.get("turn_kind") in FORGED_TURN_KINDS:
-            return (f"{verb} denied: a self-wake / delegation-result re-entry is not an "
-                    f"owner asking to ship")
-        from core.config_policy import local_mode_enabled
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        if not is_owner_local_safe(
-                getattr(execution_context, "user_id", None),
-                owner_principal=resolve_owner_principal(),
-                local_enabled=local_mode_enabled()):
-            return f"{verb} denied: only the owner tenant may run something at a public URL"
-    except Exception:
-        return f"{verb} denied: capability gate unavailable"
-    return None
+    """Non-None -> refuse. The three clauses ``publish`` states too — the ONE
+    statement in ``core.security.owner_turn``. Fail-CLOSED."""
+    from core.security.owner_turn import owner_turn_refusal
+    return owner_turn_refusal(execution_context, verb=verb,
+                              does="decides what the world runs",
+                              public="run something at a public URL")
 
 
 def _valid_slug(slug: Any) -> bool:
@@ -149,40 +125,16 @@ class AppServiceTool(BaseTool):
         return get_data_root()
 
     def _workspace_root(self, execution_context: Any) -> Optional[str]:
-        """NEVER falls back to cwd — on a shared project-root workspace that would
-        be the whole install tree."""
-        if self._workspace_override:
-            return self._workspace_override
-        ws = getattr(execution_context, "workspace_dir", None)
-        if ws:
-            return str(ws)
-        try:
-            from agents.task.path import pm
-            return str(pm().get_workspace_dir(
-                getattr(execution_context, "session_id", "") or "",
-                getattr(execution_context, "user_id", None)))
-        except Exception:
-            return None
+        """NEVER falls back to cwd — on a shared project-root workspace that
+        would be the whole install tree (``tools.ship_common``)."""
+        from tools.ship_common import session_workspace_root
+        return session_workspace_root(execution_context,
+                                      override=self._workspace_override)
 
     def _resolve_orchestrator(self, session_id):
-        resolver = self._orchestrator_resolver
-        if resolver is not None:
-            try:
-                return resolver(session_id)
-            except Exception:
-                return None
-        try:
-            agent = None
-            if self.container is not None:
-                if hasattr(self.container, "get_agent"):
-                    agent = self.container.get_agent("task_agent")
-                if agent is None and hasattr(self.container, "get_service"):
-                    agent = self.container.get_service("task_agent")
-            return agent.get_orchestrator(session_id) if agent else None
-        except Exception:
-            return None
-
-    # --- actions ---------------------------------------------------------
+        from tools.ship_common import resolve_orchestrator
+        return resolve_orchestrator(lambda: self.container, session_id,
+                                    self._orchestrator_resolver)
 
     @BaseTool.action(
         "Run a built app as a durable service behind a public URL. Give the app's "

@@ -91,6 +91,13 @@ class SignupPaused(Exception):
 class SignupResult:
     handle: str
     address: str
+    #: What the post-signup profile step actually did. ``requested_handle`` is
+    #: what we asked for; ``handle`` above is what X shows. ``bio_applied``
+    #: False means the automation disclosure is NOT on the profile yet and the
+    #: owner must add it by hand — say so, never imply compliance.
+    requested_handle: str = ""
+    handle_applied: bool = False
+    bio_applied: bool = False
 
 
 def classify_page(state: str) -> Optional[Obstacle]:
@@ -175,7 +182,22 @@ class SignupFlow:
                 start_index = STEPS.index(last) + 1
 
         email = self._agent_email()
+        if not email:
+            # Filling an EMPTY email into the form fails several steps later
+            # with a misleading "no verification code" pause. Refuse here and
+            # name the remedy instead.
+            raise SignupPaused(
+                Obstacle.VALUE_NEEDED,
+                "the agent has no email address to register with. Set "
+                "AGENTMAIL_API_KEY (the agent provisions its own inbox) or "
+                "POLYROB_AGENT_EMAIL, then retry.")
+        if getattr(self.mail, "client", object()) is None:
+            raise SignupPaused(
+                Obstacle.VALUE_NEEDED,
+                "no inbox client to read X's verification code from — set "
+                "AGENTMAIL_API_KEY, then retry.")
         password = self._ensure_password()
+        self._profile_outcome = {}
 
         for step in STEPS[start_index:]:
             self._current_step = step
@@ -183,12 +205,18 @@ class SignupFlow:
             await self._guard_page()
             await self._persist(step)
 
+        live_handle = await self.driver.current_handle()
         self.store.save(self.user_id,
                         storage_state=await self.driver.export_storage_state(),
                         password=password,
-                        handle=await self.driver.current_handle())
+                        handle=live_handle)
         self.progress.delete(self.user_id)
-        return SignupResult(handle=await self.driver.current_handle(), address=email)
+        outcome = getattr(self, "_profile_outcome", None) or {}
+        return SignupResult(
+            handle=live_handle, address=email,
+            requested_handle=str(getattr(self.identity, "handle", "") or ""),
+            handle_applied=bool(outcome.get("handle_applied")),
+            bio_applied=bool(outcome.get("bio_applied")))
 
     async def _run_step(self, step: str, email: str, password: str) -> None:
         if step == "open":
@@ -206,8 +234,9 @@ class SignupFlow:
         elif step == "password":
             await self.driver.set_password(password)
         elif step == "profile":
-            await self.driver.set_handle_and_profile(
+            outcome = await self.driver.set_handle_and_profile(
                 self.identity.handle, self.identity.disclosure)
+            self._profile_outcome = dict(outcome or {})
         elif step == "export":
             # storage_state captured by the caller after the loop.
             pass

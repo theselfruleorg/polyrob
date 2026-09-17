@@ -11,8 +11,16 @@ from agents.task.agent.core import tool_availability as ta
 
 
 def test_registry_covers_the_stall_tools():
-    for tool in ("twitter", "mcp", "email", "x402_invoice", "code_execution", "shell"):
+    for tool in ("twitter", "x_browser", "mcp", "email", "x402_invoice",
+                 "code_execution", "shell"):
         assert tool in ta.GATED_TOOL_REGISTRY
+
+
+def test_x_browser_remedy_names_enablement_and_session_capture():
+    gate, tier, remedy = ta.GATED_TOOL_REGISTRY["x_browser"]
+    assert tier == "disabled"
+    assert "X_BROWSER_ENABLED" in gate
+    assert "capture-session" in remedy
 
 
 def test_money_tools_marked_reserved():

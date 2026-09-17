@@ -25,9 +25,11 @@ def _service():
     from cron.jobs import CronJobStore
     from cron.service import CronService
 
+    from cli._admin_home import admin_data_dir
+
     setup_project_path()
     setup_sqlite_compat()
-    return CronService(CronJobStore(cron_db_path()))
+    return CronService(CronJobStore(cron_db_path(admin_data_dir())))
 
 
 def _tenant(user: Optional[str]) -> str:
@@ -72,8 +74,8 @@ def cron():
 @click.argument("task")
 @click.argument("schedule_spec")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
-@click.option("--max-duration", default=180, type=int,
-              help="Per-run hard cap in seconds (default 180)")
+@click.option("--max-duration", default=600, type=int,
+              help="Per-run hard cap in seconds (default 600)")
 def schedule(task: str, schedule_spec: str, user: Optional[str], max_duration: int):
     """Schedule TASK on SCHEDULE_SPEC (e.g. '30m', 'every monday 09:00')."""
     from cron.schedule import ScheduleError

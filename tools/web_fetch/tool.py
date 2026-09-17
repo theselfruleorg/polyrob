@@ -11,7 +11,8 @@ from tools.web_fetch.render import render_html_to_markdown, render_text, classif
 
 
 def _allow_private_urls() -> bool:
-	return os.getenv("WEB_FETCH_ALLOW_PRIVATE_URLS", "false").strip().lower() in ("1", "true", "yes", "on")
+	from core.env import bool_env
+	return bool_env("WEB_FETCH_ALLOW_PRIVATE_URLS", False)
 
 
 class WebFetchTool(BaseTool):

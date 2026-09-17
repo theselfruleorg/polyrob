@@ -382,12 +382,8 @@ def _remove_quiet(path: str) -> bool:
 
 
 def _emit(kind: str, attrs: dict) -> None:
-    try:
-        from core.event_log import event_log_enabled, get_event_log
-        if event_log_enabled():
-            get_event_log().record(kind, source="autonomy_control", attrs=attrs)
-    except Exception:
-        logger.debug("autonomy_control: telemetry emit failed", exc_info=True)
+    from core.event_log import emit
+    emit(kind, source="autonomy_control", attrs=attrs)
 
 
 def _audit(data_dir: Optional[str], action: str, st: PauseState) -> None:

@@ -121,15 +121,9 @@ logger = get_task_logger('agent')
 T = TypeVar('T', bound=BaseModel)
 
 
-def _detect_service_for_action(action_name: str) -> str:
-	"""Lazy delegate to the module-level helper in service.py.
-
-	Defined here so the moved ``_step_impl`` body (which references
-	``_detect_service_for_action`` as a global) resolves at runtime without a
-	circular import at module load time.
-	"""
-	from agents.task.agent.service import _detect_service_for_action as _impl
-	return _impl(action_name)
+from agents.task.telemetry.service_detect import (  # noqa: E402
+	detect_service_for_action as _detect_service_for_action,
+)
 
 
 def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool:

@@ -69,8 +69,8 @@ def _refuse_shape(tx, *, payer: str, mint: str) -> Optional[str]:
 async def perform_solana_deploy_token(tool, params, execution_context=None):
     from core.wallet import solana_onchain, spl_token
     from core.wallet.solana_rail import SolanaRail, confirmation_outcome
-    from tools.defi.deploy_verb import (
-        FLAG, _refuse_non_owner_turn, _refuse_paused, deploy_enabled)
+    from core.wallet.authority import leaf_refusal, spend_pause_refusal
+    from tools.defi.deploy_verb import FLAG, deploy_enabled
 
     if not deploy_enabled():
         return tool._ar(error=(
@@ -82,11 +82,11 @@ async def perform_solana_deploy_token(tool, params, execution_context=None):
             "the Solana money rail is off — set SOLANA_TRADE_ENABLED=true. "
             "Nothing was broadcast."))
 
-    turn_err = _refuse_non_owner_turn(execution_context, "deploy a token")
+    turn_err = leaf_refusal(execution_context, "deploy a token")
     if turn_err:
         return tool._ar(error=turn_err)
     if not params.dry_run:
-        paused = _refuse_paused()
+        paused = spend_pause_refusal()
         if paused:
             return tool._ar(error=paused + " RESULT: NOT SENT.")
 

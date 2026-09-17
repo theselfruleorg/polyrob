@@ -31,6 +31,7 @@ def test_approval_gating_lists():
         _ALWAYS_GATED_VERBS,
     )
     assert "x_browser_x_post" in DEFAULT_APPROVAL_REQUIRED_TOOLS
+    assert "x_browser_x_dm" in DEFAULT_APPROVAL_REQUIRED_TOOLS
     assert "x_browser_x_signup_start" in _ALWAYS_GATED_VERBS
 
 
@@ -41,6 +42,8 @@ class FakeDriver:
         self._logged_in = logged_in
         self._url = url
         self.posted = None
+        self.dm_reads = []
+        self.dm_sends = []
 
     async def is_logged_in(self):
         return self._logged_in
@@ -50,6 +53,14 @@ class FakeDriver:
             raise RuntimeError("not logged in")
         self.posted = text
         return self._url
+
+    async def read_dms(self, participant, max_results):
+        self.dm_reads.append((participant, max_results))
+        return {"view": "thread", "messages": [{"text": "inbound hello"}]}
+
+    async def send_dm(self, participant, text):
+        self.dm_sends.append((participant, text))
+        return {"conversation_id": "42-999", "sent": True}
 
 
 def _tool(monkeypatch, *, session=None, driver=None):
@@ -128,6 +139,50 @@ async def test_x_post_refused_on_leaf_turn(monkeypatch):
     tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
                  driver=driver)
     res = await tool.x_post(XPostAction(text="hi"), execution_context=_Ctx(role="leaf"))
+    assert res.error and "delegated" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_x_read_dms_reads_visible_thread(monkeypatch):
+    from tools.x_browser.tool import XReadDMsAction
+    driver = FakeDriver()
+    tool = _tool(monkeypatch, session={"storage_state": {}}, driver=driver)
+    res = await tool.x_read_dms(
+        XReadDMsAction(participant="@alice", max_results=7),
+        execution_context=_Ctx())
+    assert res.error is None
+    assert "inbound hello" in res.extracted_content
+    assert driver.dm_reads == [("@alice", 7)]
+
+
+@pytest.mark.asyncio
+async def test_x_read_dms_requires_captured_session(monkeypatch):
+    from tools.x_browser.tool import XReadDMsAction
+    tool = _tool(monkeypatch, session=None)
+    res = await tool.x_read_dms(XReadDMsAction(), execution_context=_Ctx())
+    assert res.error and "x-account capture-session" in res.error
+
+
+@pytest.mark.asyncio
+async def test_x_dm_sends_existing_thread(monkeypatch):
+    from tools.x_browser.tool import XDMAction
+    driver = FakeDriver()
+    tool = _tool(monkeypatch, session={"storage_state": {}}, driver=driver)
+    res = await tool.x_dm(
+        XDMAction(participant="alice", text="hello"),
+        execution_context=_Ctx())
+    assert res.error is None
+    assert "42-999" in res.extracted_content
+    assert driver.dm_sends == [("alice", "hello")]
+
+
+@pytest.mark.asyncio
+async def test_x_dm_refused_on_leaf_turn(monkeypatch):
+    from tools.x_browser.tool import XDMAction
+    tool = _tool(monkeypatch, session={"storage_state": {}}, driver=FakeDriver())
+    res = await tool.x_dm(
+        XDMAction(participant="alice", text="hello"),
+        execution_context=_Ctx(role="leaf"))
     assert res.error and "delegated" in res.error.lower()
 
 

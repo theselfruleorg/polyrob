@@ -56,3 +56,20 @@ def scrub_secret(text: str, *secrets: str) -> str:
         if len(secret) >= _MIN_SECRET_LEN:
             out = out.replace(secret, "<redacted>")
     return out
+
+
+def fingerprint(value, keep: int = 4) -> str:
+    """A display-safe fingerprint of a credential — THE only printable form.
+
+    Enough for an owner to tell two credentials apart ("is that the key I just
+    pasted?") without printing one. Short values redact whole: for anything
+    under ``3 * keep`` a prefix+suffix would reveal most of it. ``polyrob auth
+    status``, ``polyrob config show`` and the LLM auth resolver all render
+    through here; two of them used to carry their own reveal sizes.
+    """
+    if not value:
+        return "(none)"
+    text = str(value)
+    if len(text) <= keep * 3:
+        return "*" * 8
+    return f"{text[:keep]}…{text[-keep:]}"

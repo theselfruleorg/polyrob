@@ -20,13 +20,13 @@ def apps():
 
 
 def _data_dir() -> str:
-    from core.runtime_paths import resolve_data_home
-    return str(resolve_data_home())
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir()
 
 
 def _registry():
     from core.app_service.registry import AppServiceRegistry, default_app_services_db
-    return AppServiceRegistry(default_app_services_db())
+    return AppServiceRegistry(default_app_services_db(data_dir=_data_dir()))
 
 
 def _tenant(user):

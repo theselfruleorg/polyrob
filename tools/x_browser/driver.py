@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -27,9 +28,24 @@ SELECTORS = {
     "password_new": 'input[name="password"]',
     "arkose_frame": 'iframe[src*="arkoselabs"], iframe[title*="challenge"]',
     "phone_field": 'input[name="phone_number"]',
+    "conversation_link": 'a[href^="/messages/"]',
+    "message_entry": '[data-testid="messageEntry"]',
+    "dm_composer": '[data-testid="dmComposerTextInput"]',
+    "dm_send": '[data-testid="dmComposerSendButton"]',
+    # Post-signup profile edit (/settings/profile) and handle change
+    # (/settings/screen_name). Best-effort: X churns these, and a miss is
+    # REPORTED (applied=False), never faked.
+    "profile_bio": '[data-testid="ProfileDescriptionTextarea"], textarea[name="description"]',
+    "profile_save": '[data-testid="Profile_Save_Button"]',
+    "screen_name_input": 'input[name="typedScreenName"], input[name="screen_name"]',
+    "settings_save": '[data-testid="settingsDetailSave"]',
 }
 
+PROFILE_SETTINGS_URL = "https://x.com/settings/profile"
+SCREEN_NAME_SETTINGS_URL = "https://x.com/settings/screen_name"
+
 HOME_URL = "https://x.com/home"
+MESSAGES_URL = "https://x.com/messages"
 
 
 class XPageDriver:
@@ -88,6 +104,113 @@ class XPageDriver:
             logger.debug("x permalink read failed: %s", e)
         return HOME_URL
 
+    # -- direct messages -------------------------------------------------
+
+    async def _conversation_rows(self) -> list:
+        """Return visible inbox rows in a stable, serializable shape."""
+        rows = []
+        for link in await self.page.query_selector_all(
+                SELECTORS["conversation_link"]):
+            try:
+                href = await link.get_attribute("href") or ""
+                text = (await link.inner_text()).strip()
+            except Exception:
+                continue
+            if not href or href.rstrip("/") == "/messages":
+                continue
+            rows.append({
+                "conversation_id": href.rstrip("/").rsplit("/", 1)[-1],
+                "href": href,
+                "summary": text,
+            })
+        return rows
+
+    @staticmethod
+    def _matches_conversation(row: dict, participant: str) -> bool:
+        needle = str(participant or "").strip().lstrip("@").casefold()
+        if not needle:
+            return False
+        cid = str(row.get("conversation_id") or "").casefold()
+        summary = str(row.get("summary") or "").casefold()
+        return needle == cid or f"@{needle}" in summary or needle in summary
+
+    async def _open_conversation(self, participant: str) -> dict:
+        direct_id = str(participant or "").strip()
+        if re.fullmatch(r"[0-9]+(?:-[0-9]+)*", direct_id):
+            url = f"{MESSAGES_URL}/{direct_id}"
+            await self.page.goto(url, wait_until="domcontentloaded")
+            return {"conversation_id": direct_id, "href": f"/messages/{direct_id}",
+                    "summary": ""}
+        await self.page.goto(MESSAGES_URL, wait_until="domcontentloaded")
+        await self.page.wait_for_selector(
+            SELECTORS["conversation_link"], timeout=15000, state="visible")
+        rows = await self._conversation_rows()
+        match = next((r for r in rows
+                      if self._matches_conversation(r, participant)), None)
+        if match is None:
+            raise RuntimeError(
+                f"no visible X DM conversation matches '{participant}'")
+        href = str(match["href"])
+        url = href if href.startswith("http") else f"https://x.com{href}"
+        await self.page.goto(url, wait_until="domcontentloaded")
+        return match
+
+    async def read_dms(self, participant: str = "", max_results: int = 20) -> dict:
+        """Read the visible inbox or an existing thread through the logged-in UI."""
+        if not await self.is_logged_in():
+            raise RuntimeError("x session is not logged in")
+        if not participant:
+            await self.page.goto(MESSAGES_URL, wait_until="domcontentloaded")
+            try:
+                await self.page.wait_for_selector(
+                    SELECTORS["conversation_link"], timeout=15000, state="visible")
+            except Exception as exc:
+                # Never turn a stale selector / challenge page into a confident
+                # empty inbox (the same semantic bug this rail exists to avoid).
+                try:
+                    body = (await self.page.inner_text("body")).casefold()
+                except Exception:
+                    body = ""
+                empty_markers = (
+                    "welcome to your inbox",
+                    "send a message, get a message",
+                )
+                if any(marker in body for marker in empty_markers):
+                    return {"view": "inbox", "conversations": []}
+                raise RuntimeError(
+                    "X inbox did not expose conversation rows; the page may be "
+                    "blocked or the selector may need updating") from exc
+            rows = await self._conversation_rows()
+            return {"view": "inbox", "conversations": rows[:max_results]}
+
+        row = await self._open_conversation(participant)
+        await self.page.wait_for_selector(
+            SELECTORS["message_entry"], timeout=15000, state="visible")
+        messages = []
+        entries = await self.page.query_selector_all(SELECTORS["message_entry"])
+        for entry in entries[-max_results:]:
+            try:
+                text = (await entry.inner_text()).strip()
+            except Exception:
+                continue
+            if text:
+                messages.append({"text": text})
+        return {"view": "thread", "conversation": row, "messages": messages}
+
+    async def send_dm(self, participant: str, text: str) -> dict:
+        """Send to an existing visible conversation through the logged-in UI."""
+        if not await self.is_logged_in():
+            raise RuntimeError("x session is not logged in")
+        row = await self._open_conversation(participant)
+        box = await self.page.wait_for_selector(
+            SELECTORS["dm_composer"], timeout=15000, state="visible")
+        await box.click()
+        await box.type(text, delay=10)
+        button = await self.page.wait_for_selector(
+            SELECTORS["dm_send"], timeout=8000, state="visible")
+        await button.click()
+        return {"conversation_id": row["conversation_id"], "sent": True}
+
     # -- signup choreography (used by tools/x_browser/signup.py) ----------
 
     SIGNUP_URL = "https://x.com/i/flow/signup"
@@ -112,10 +235,53 @@ class XPageDriver:
     async def set_password(self, password: str) -> None:
         await self._type_if_present(SELECTORS["password_new"], password)
 
-    async def set_handle_and_profile(self, handle: str, bio: str) -> None:
-        # Profile/bio editing happens post-signup on /settings/profile; the
-        # automation disclosure (bio) is applied there.
-        pass
+    async def set_handle_and_profile(self, handle: str, bio: str) -> dict:
+        """Apply the requested @handle and the automation-disclosure bio.
+
+        Runs AFTER the account exists (the settings pages need a login). Each
+        half is independent and best-effort, and the outcome is RETURNED as
+        ``{"handle_applied": bool, "bio_applied": bool, "handle": <live>}`` so
+        the caller can say what actually happened. A handle X refuses (taken,
+        too long) leaves the assigned one in place — that is a fact to report,
+        not a failure of the signup. Until 2026-09-17 this method was a ``pass``
+        stub while the docs claimed the disclosure was written into the bio.
+        """
+        out = {"handle_applied": False, "bio_applied": False, "handle": ""}
+        if handle:
+            try:
+                await self.page.goto(SCREEN_NAME_SETTINGS_URL, wait_until="domcontentloaded")
+                el = await self.page.wait_for_selector(
+                    SELECTORS["screen_name_input"], timeout=8000, state="visible")
+                if el:
+                    await el.fill(handle)
+                    await asyncio.sleep(0.3)
+                    btn = await self.page.wait_for_selector(
+                        SELECTORS["settings_save"], timeout=6000, state="visible")
+                    if btn:
+                        await btn.click()
+                        await asyncio.sleep(1.0)
+                live = await self.current_handle()
+                out["handle_applied"] = bool(live) and live.lower() == handle.lower()
+            except Exception as e:
+                logger.debug("x handle change not applied: %s", e)
+        if bio:
+            try:
+                await self.page.goto(PROFILE_SETTINGS_URL, wait_until="domcontentloaded")
+                el = await self.page.wait_for_selector(
+                    SELECTORS["profile_bio"], timeout=8000, state="visible")
+                if el:
+                    await el.fill(bio)
+                    await asyncio.sleep(0.3)
+                    btn = await self.page.wait_for_selector(
+                        SELECTORS["profile_save"], timeout=6000, state="visible")
+                    if btn:
+                        await btn.click()
+                        await asyncio.sleep(1.0)
+                        out["bio_applied"] = True
+            except Exception as e:
+                logger.debug("x bio not applied: %s", e)
+        out["handle"] = await self.current_handle()
+        return out
 
     async def current_handle(self) -> str:
         try:

@@ -31,38 +31,14 @@ router = APIRouter(tags=["polymarket"])
 
 async def get_polymarket_tool():
     """Get PolymarketTool from container."""
-    from core.container import DependencyContainer
-
-    container = DependencyContainer.get_instance()
-    if not container:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    tool = container.get_service("polymarket")
-    if not tool:
-        raise HTTPException(
-            status_code=503,
-            detail="Polymarket service not available"
-        )
-
-    return tool
+    from api.dependencies import require_service
+    return require_service("polymarket", missing="Polymarket service not available")
 
 
 async def get_polymarket_db():
     """Get PolymarketDBHandler from container."""
-    from core.container import DependencyContainer
-
-    container = DependencyContainer.get_instance()
-    if not container:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    db = container.get_service("polymarket_db")
-    if not db:
-        raise HTTPException(
-            status_code=503,
-            detail="Polymarket database not available"
-        )
-
-    return db
+    from api.dependencies import require_service
+    return require_service("polymarket_db", missing="Polymarket database not available")
 
 
 # ========================================

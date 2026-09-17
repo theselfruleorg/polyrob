@@ -15,12 +15,8 @@ from core.env import bool_env as _bool_env
 def coding_tools_enabled() -> bool:
     # Explicit env value always wins; otherwise default ON under POLYROB_LOCAL
     # (CODING_TOOLS_ENABLED is in core.config_policy._SAFE_LOCAL_FLAGS).
-    import os
-    raw = os.getenv("CODING_TOOLS_ENABLED")
-    if raw is not None:
-        return _bool_env("CODING_TOOLS_ENABLED", False)
-    from core.config_policy import _safe_autonomy_default
-    return _safe_autonomy_default("CODING_TOOLS_ENABLED")
+    from core.config_policy import safe_local_flag
+    return safe_local_flag("CODING_TOOLS_ENABLED")
 
 
 def register_coding_tool(force: bool = False) -> bool:

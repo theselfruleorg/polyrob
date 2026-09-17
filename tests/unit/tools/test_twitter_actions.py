@@ -388,12 +388,14 @@ async def test_get_dms_lists_events(monkeypatch):
                "sender_id": "42", "dm_conversation_id": "42-999",
                "created_at": "2026-07-12T00:00:00.000Z"}
     t.client.get_direct_message_events = MagicMock(
-        return_value=MagicMock(data=[ev]))
+        return_value=MagicMock(data=[ev], meta={"next_token": "next-1"}))
     from tools.twitter_tool import TwitterGetDMsAction
-    res = await t.twitter_get_dms(TwitterGetDMsAction())
+    res = await t.twitter_get_dms(TwitterGetDMsAction(rail="legacy"))
     assert res.error is None
     assert "yo" in res.extracted_content
     assert "42-999" in res.extracted_content
+    assert '"next_token": "next-1"' in res.extracted_content
+    assert "does not establish" in res.extracted_content
     kwargs = t.client.get_direct_message_events.call_args.kwargs
     assert kwargs["event_types"] == "MessageCreate"
     assert "participant_id" not in kwargs
@@ -411,6 +413,103 @@ async def test_get_dms_participant_filter(monkeypatch):
     kwargs = t.client.get_direct_message_events.call_args.kwargs
     assert kwargs["participant_id"] == "123456"
     assert kwargs["max_results"] == 5
+
+
+@pytest.mark.asyncio
+async def test_get_dms_conversation_route_and_pagination(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    t.client.get_direct_message_events = MagicMock(
+        return_value=MagicMock(data=[], meta={"previous_token": "prev"}))
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(TwitterGetDMsAction(
+        conversation_id="42-999", pagination_token="page-2"))
+    assert res.error is None
+    kwargs = t.client.get_direct_message_events.call_args.kwargs
+    assert kwargs["dm_conversation_id"] == "42-999"
+    assert kwargs["pagination_token"] == "page-2"
+    assert "participant_id" not in kwargs
+    assert '"previous_token": "prev"' in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_get_dms_rejects_ambiguous_scope(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(TwitterGetDMsAction(
+        participant="42", conversation_id="42-999"))
+    assert res.error and "not both" in res.error
+    t.client.get_direct_message_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_dms_empty_is_not_reported_as_no_replies(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    t.client.get_direct_message_events = MagicMock(
+        return_value=MagicMock(data=[], meta={}))
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(TwitterGetDMsAction())
+    assert res.error is None
+    assert '"events": []' in res.extracted_content
+    assert "does not establish" in res.extracted_content
+    assert "no replies" not in res.extracted_content.lower()
+
+
+@pytest.mark.asyncio
+async def test_get_dms_uses_oauth2_user_client(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    t.oauth2_access_token = "oauth2-user-token"
+    t.dm_client = MagicMock()
+    t.dm_client.get_direct_message_events.return_value = MagicMock(data=[], meta={})
+    from tools.twitter_tool import TwitterGetDMsAction
+    res = await t.twitter_get_dms(TwitterGetDMsAction(rail="legacy"))
+    assert res.error is None
+    t.client.get_direct_message_events.assert_not_called()
+    kwargs = t.dm_client.get_direct_message_events.call_args.kwargs
+    assert kwargs["user_auth"] is False
+
+
+@pytest.mark.asyncio
+async def test_get_dms_auto_prefers_encrypted_chat_with_oauth2(monkeypatch):
+    from unittest.mock import AsyncMock
+    from tools.twitter_tool import TwitterGetDMsAction
+
+    t = _tool(monkeypatch, enabled_env=False)
+    t.oauth2_access_token = "oauth2-user-token"
+    t.chat_client = MagicMock()
+    t.chat_client.get_conversations = AsyncMock(return_value={
+        "data": [{"id": "42-999", "participant_ids": ["42", "999"]}],
+        "includes": {"users": [{"id": "42", "username": "friend"}]},
+        "meta": {"next_token": "chat-next"},
+    })
+
+    res = await t.twitter_get_dms(TwitterGetDMsAction())
+    assert res.error is None
+    assert '"rail": "chat"' in res.extracted_content
+    assert "friend" in res.extracted_content
+    t.client.get_direct_message_events.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_dms_chat_thread_surfaces_decryption_status(monkeypatch):
+    from unittest.mock import AsyncMock
+    from tools.twitter_tool import TwitterGetDMsAction
+
+    t = _tool(monkeypatch, enabled_env=False)
+    t.oauth2_access_token = "oauth2-user-token"
+    t.chat_client = MagicMock()
+    t.chat_client.read_conversation = AsyncMock(return_value={
+        "conversation_id": "42",
+        "events": [{"id": "e1", "encoded_event": "ciphertext"}],
+        "decryption": {"status": "not_configured"},
+    })
+
+    res = await t.twitter_get_dms(TwitterGetDMsAction(
+        participant="42", rail="chat"))
+    assert res.error is None
+    assert '"status": "not_configured"' in res.extracted_content
+    t.chat_client.read_conversation.assert_awaited_once_with(
+        "42", participant_ids=["42"], max_results=20,
+        pagination_token=None)
 
 
 @pytest.mark.asyncio
@@ -439,3 +538,56 @@ def test_media_paths_description_warns_against_live_debug_posts():
         desc = cls.model_fields["media_paths"].description
         assert "LIVE public account" in desc
         assert "verify" in desc.lower()
+
+
+# --- poll results (read) ----------------------------------------------------
+
+def _poll_resp(options, status="closed"):
+    poll = MagicMock()
+    poll.options = options
+    poll.voting_status = status
+    poll.end_datetime = None
+    poll.duration_minutes = 60
+    resp = MagicMock()
+    resp.data = MagicMock(text="what next?")
+    resp.includes = {"polls": [poll]}
+    return resp
+
+
+@pytest.mark.asyncio
+async def test_poll_results_reads_attachment_and_ranks_options(monkeypatch):
+    """A poll is an ATTACHMENT: the read must ask for `attachments.poll_ids` +
+    `poll_fields`, and the result must rank options by votes with shares."""
+    from tools.twitter_tool import TwitterPollResultsAction
+    t = _tool(monkeypatch)
+
+    async def _mk(func, endpoint_type, **kw):
+        assert "attachments.poll_ids" in kw["expansions"]
+        assert "options" in kw["poll_fields"] and "voting_status" in kw["poll_fields"]
+        return _poll_resp([{"position": 1, "label": "buy", "votes": 3},
+                           {"position": 2, "label": "wait", "votes": 9}])
+    t._make_request = _mk
+    res = await t.twitter_poll_results(TwitterPollResultsAction(tweet_id="777"))
+    assert res.error is None
+    assert '"total_votes": 12' in res.extracted_content
+    body = res.extracted_content
+    assert body.index('"label": "wait"') < body.index('"label": "buy"')
+    assert '"share_pct": 75.0' in body
+
+
+@pytest.mark.asyncio
+async def test_poll_results_names_a_tweet_without_a_poll(monkeypatch):
+    from tools.twitter_tool import TwitterPollResultsAction
+    t = _tool(monkeypatch)
+
+    async def _mk(func, endpoint_type, **kw):
+        resp = MagicMock(); resp.data = MagicMock(text="plain"); resp.includes = {}
+        return resp
+    t._make_request = _mk
+    res = await t.twitter_poll_results(TwitterPollResultsAction(tweet_id="1"))
+    assert res.error and "no poll" in res.error
+
+
+def test_poll_results_is_a_read_available_when_writes_are_off(monkeypatch):
+    t = _tool(monkeypatch, enabled_env=False)
+    assert "twitter_poll_results" in t.get_actions()

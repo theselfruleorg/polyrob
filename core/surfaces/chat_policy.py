@@ -50,7 +50,6 @@ MODES = ("mention", "active", "listen", "off")
 #: changes only when an owner writes it.
 _CACHE: dict = {}
 
-_FALSEY = ("false", "0", "off", "no")
 
 
 @dataclass(frozen=True)
@@ -123,7 +122,8 @@ class ChatPolicy:
             mode = "mention"
         # One-release alias: GROUP_REQUIRE_MENTION=false meant "respond to
         # everything in an allowlisted room", which is exactly `active`.
-        if (os.getenv("GROUP_REQUIRE_MENTION", "").strip().lower() in _FALSEY
+        from core.env import bool_env
+        if (bool_env("GROUP_REQUIRE_MENTION", True) is False
                 and not (os.getenv("GROUP_DEFAULT_MODE") or "").strip()):
             mode = "active"
         return cls(mode=mode)

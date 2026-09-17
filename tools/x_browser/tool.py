@@ -1,11 +1,11 @@
-"""x_browser — post to X and register an account through a real browser.
+"""x_browser — use X through a real, owner-captured browser session.
 
 ⚠️ This module deliberately does NOT ``from __future__ import annotations``: the
 Registry introspects each action's first-param annotation to route the validated
 Pydantic model, and stringized annotations break that (see the shared landmine in
 AGENTS.md / the action-registration modules).
 
-Dedicated verbs only (``x_post`` / ``x_login_check`` / ``x_signup_start``) — never
+Dedicated verbs only (post, DM read/send, login check, signup) — never
 raw browser clicks — so a name-based approval gate can actually distinguish
 "post to X" from "click a cookie banner". Capabilities high_impact +
 delegate_blocked; ``x_post`` is owner-approval-gated and ``x_signup_start`` is
@@ -40,6 +40,26 @@ class XSignupStartAction(BaseModel):
         None, description="Preferred @handle (X may require a variant).")
     resume: bool = Field(
         False, description="Resume a previously paused signup.")
+
+
+class XReadDMsAction(BaseModel):
+    """Read the visible X inbox or one existing conversation."""
+    model_config = ConfigDict(extra="forbid")
+    participant: Optional[str] = Field(
+        None, description="Existing thread to open: @handle, visible name, or "
+                          "conversation id. Omit to list the visible inbox.")
+    max_results: int = Field(20, ge=1, le=100,
+                             description="Maximum rows/messages to return.")
+
+
+class XDMAction(BaseModel):
+    """Send a DM in an existing visible X conversation."""
+    model_config = ConfigDict(extra="forbid")
+    participant: str = Field(
+        ..., min_length=1, description="Existing thread: @handle, visible name, "
+                                       "or conversation id.")
+    text: str = Field(..., min_length=1, max_length=10000,
+                      description="Direct-message text.")
 
 
 def _leaf_or_forged(execution_context) -> bool:
@@ -142,7 +162,8 @@ class XBrowserTool(BaseTool):
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(
-                error="no X session — run `polyrob x capture-session` (owner login) "
+                error="no X session — run `polyrob x-account capture-session` "
+                      "(owner login) "
                       "or `x_signup_start` to create the agent's account first.",
                 include_in_memory=True)
         if not self._post_limiter.check(user_id):
@@ -159,12 +180,89 @@ class XBrowserTool(BaseTool):
         except Exception as e:
             return ActionResult(
                 error=f"post failed: {e} — the session may be expired; "
-                      "run `polyrob x capture-session` to refresh it.",
+                      "run `polyrob x-account capture-session` to refresh it.",
                 include_in_memory=True)
         finally:
             await self._run_release(release)
         return ActionResult(extracted_content=f"posted to X: {url}",
                             include_in_memory=True)
+
+    @BaseTool.action(
+        "Read the inbox visible in the agent's logged-in X browser session, or "
+        "read one existing thread. Use this when X API DM reads are empty or "
+        "own-only; browser results reflect the inbox UI and include inbound replies.",
+        param_model=XReadDMsAction,
+    )
+    async def x_read_dms(self, params: XReadDMsAction,
+                         execution_context=None) -> ActionResult:
+        user_id = self._user_id(execution_context)
+        if not self.session_store.exists(user_id):
+            return ActionResult(
+                error="no X session — run `polyrob x-account capture-session` "
+                      "on a machine with a visible browser.",
+                include_in_memory=True)
+        try:
+            driver, release = await self._open_driver(user_id)
+        except Exception as e:
+            return ActionResult(error=f"could not open X session: {e}",
+                                include_in_memory=True)
+        try:
+            result = await driver.read_dms(
+                params.participant or "", params.max_results)
+        except Exception as e:
+            return ActionResult(
+                error=f"browser DM read failed: {e} — run `polyrob x-account "
+                      "capture-session` if the login expired.",
+                include_in_memory=True)
+        finally:
+            await self._run_release(release)
+        import json
+        return ActionResult(
+            extracted_content="X browser DM read (visible inbox):\n" +
+                              json.dumps(result, ensure_ascii=False, indent=2),
+            include_in_memory=True)
+
+    @BaseTool.action(
+        "Send a direct message in an existing X conversation through the saved "
+        "browser session. Owner-approval-gated.",
+        param_model=XDMAction,
+    )
+    async def x_dm(self, params: XDMAction,
+                   execution_context=None) -> ActionResult:
+        if _leaf_or_forged(execution_context):
+            return ActionResult(
+                error="x_dm is blocked for delegated/forged turns — report back "
+                      "and let the main agent send it.",
+                include_in_memory=True)
+        user_id = self._user_id(execution_context)
+        if not self.session_store.exists(user_id):
+            return ActionResult(
+                error="no X session — run `polyrob x-account capture-session` "
+                      "on a machine with a visible browser.",
+                include_in_memory=True)
+        if not self._post_limiter.check((user_id, "dm")):
+            return ActionResult(
+                error="hourly X browser write cap reached "
+                      "(TWITTER_WRITE_MAX_PER_HOUR).",
+                include_in_memory=True)
+        try:
+            driver, release = await self._open_driver(user_id)
+        except Exception as e:
+            return ActionResult(error=f"could not open X session: {e}",
+                                include_in_memory=True)
+        try:
+            result = await driver.send_dm(params.participant, params.text)
+        except Exception as e:
+            return ActionResult(
+                error=f"browser DM send failed: {e} — run `polyrob x-account "
+                      "capture-session` if the login expired.",
+                include_in_memory=True)
+        finally:
+            await self._run_release(release)
+        return ActionResult(
+            extracted_content=("DM sent through X browser conversation "
+                               f"{result.get('conversation_id', '')}"),
+            include_in_memory=True)
 
     @BaseTool.action(
         "Register a NEW X (x.com) account for the agent through the browser. "
@@ -208,14 +306,33 @@ class XBrowserTool(BaseTool):
                 return ActionResult(error=f"X signup failed: {e}",
                                     include_in_memory=True)
             return ActionResult(
-                extracted_content=(
-                    f"X account created: @{result.handle} ({result.address}). "
-                    "Session stored; post with x_post."),
+                extracted_content=self._signup_summary(result),
                 include_in_memory=True)
         return ActionResult(
             extracted_content="X signup made progress but is still paused after "
                               "several owner checkpoints — resume later.",
             include_in_memory=True)
+
+    @staticmethod
+    def _signup_summary(result) -> str:
+        """One honest line per fact: the live handle, whether it is the one we
+        asked for, and whether the automation disclosure reached the bio. A
+        missing disclosure is named as owner work — X's automation rules want
+        it on the profile, and implying it is there when it is not is the
+        confident-wrong shape this tree refuses everywhere else."""
+        parts = [f"X account created: @{result.handle} ({result.address})."]
+        req = getattr(result, "requested_handle", "") or ""
+        if req and not getattr(result, "handle_applied", False) \
+                and req.lower() != (result.handle or "").lower():
+            parts.append(f"Requested handle @{req} was NOT applied (taken or refused) — "
+                         f"X kept @{result.handle}; change it at x.com/settings/screen_name.")
+        if getattr(result, "bio_applied", False):
+            parts.append("Automation disclosure written to the bio.")
+        else:
+            parts.append("⚠️ Automation disclosure NOT applied — add it to the bio by hand "
+                         "at x.com/settings/profile before posting.")
+        parts.append("Session stored; post with x_post.")
+        return " ".join(parts)
 
     async def _build_signup_flow(self, user_id: str, resume: bool):
         """Construct a live SignupFlow (headless on a server). Overridable in tests."""
@@ -223,24 +340,71 @@ class XBrowserTool(BaseTool):
         from tools.x_browser.session_store import XSessionStore
         from tools.x_browser.signup import MailPoller, SignupFlow
 
+        client = self._agentmail_client()
+        if client is None:
+            # Refuse BEFORE a browser is opened: the flow cannot read X's
+            # verification code without the agent's own inbox.
+            raise RuntimeError(
+                "X signup needs the agent's inbox to receive the verification "
+                "code — set AGENTMAIL_API_KEY (the agent provisions its own "
+                "address) and retry.")
+        # The inbox is normally provisioned lazily by the email tool's first
+        # initialize. A signup that runs before that would register with an
+        # EMPTY address, so make sure it exists here (idempotent).
+        try:
+            await client.provision(resolve_instance_id())
+        except Exception as e:
+            raise RuntimeError(f"could not provision the agent inbox for X signup: {e}")
+
         driver, release = await self._open_signup_driver(user_id)
         self._signup_driver = driver
         self._signup_release = release
-        mail = MailPoller(self._agentmail_client())
+        mail = MailPoller(client)
         progress = XSessionStore(provider="x_signup")
+        display, handle = self._signup_identity()
+        disclosure = self._disclosure()
 
         class _Identity:
-            name = resolve_instance_id().capitalize()
+            name = display
             dob = "2000-01-01"
-            handle = resolve_instance_id()
-            disclosure = self._disclosure()
+            handle = ""
+            disclosure = ""
+        _Identity.handle = handle
+        _Identity.disclosure = disclosure
         return SignupFlow(driver=driver, mail=mail, store=self.session_store,
                           progress=progress, identity=_Identity(), user_id=user_id)
 
+    @staticmethod
+    def _signup_identity() -> tuple:
+        """(display name, requested @handle) for the agent's X account.
+
+        ``X_SIGNUP_HANDLE`` lets an operator pick the handle (an instance id is
+        often already taken on X); the display name follows the instance id.
+        The handle is sanitised to X's rules (letters, digits, underscore,
+        <=15 chars) so a bad env value degrades to a legal request, never to a
+        form error several steps in.
+        """
+        import os as _os
+        import re as _re
+        from core.instance import resolve_instance_id
+        iid = resolve_instance_id()
+        raw = (_os.environ.get("X_SIGNUP_HANDLE") or iid).strip().lstrip("@")
+        clean = _re.sub(r"[^A-Za-z0-9_]", "", raw)[:15]
+        handle = clean or _re.sub(r"[^A-Za-z0-9_]", "", iid)[:15]
+        return iid.capitalize(), handle
+
     def _disclosure(self) -> str:
-        from core.instance import resolve_owner_principal
-        owner = resolve_owner_principal() or "its owner"
-        return f"Automated account (bot) operated by {owner}."
+        """The automation-disclosure bio. ``X_SIGNUP_DISCLOSURE`` wins when set;
+        the default names the instance, never the owner's INTERNAL tenant id
+        (``resolve_owner_principal`` returns things like ``local`` or a numeric
+        Telegram id — 'operated by local' is not a disclosure)."""
+        import os as _os
+        from core.instance import resolve_instance_id
+        custom = (_os.environ.get("X_SIGNUP_DISCLOSURE") or "").strip()
+        if custom:
+            return custom[:160]
+        return (f"Automated account: {resolve_instance_id()} is an autonomous "
+                f"POLYROB agent. Posts are generated by software.")[:160]
 
     def _agentmail_client(self):
         import os as _os
@@ -288,7 +452,7 @@ class XBrowserTool(BaseTool):
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(
-                extracted_content="no X session stored — run `polyrob x capture-session`.",
+                extracted_content="no X session stored — run `polyrob x-account capture-session`.",
                 include_in_memory=True)
         try:
             driver, release = await self._open_driver(user_id)
@@ -303,6 +467,6 @@ class XBrowserTool(BaseTool):
             return ActionResult(extracted_content="X session is logged in.",
                                 include_in_memory=True)
         return ActionResult(
-            extracted_content="X session is expired — run `polyrob x capture-session` "
+            extracted_content="X session is expired — run `polyrob x-account capture-session` "
                               "to re-capture the login.",
             include_in_memory=True)

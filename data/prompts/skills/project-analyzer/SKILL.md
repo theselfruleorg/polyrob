@@ -32,7 +32,7 @@ Map the company across platforms:
 - **Instagram** — visual brand, follower count, engagement rate (if relevant)
 - **YouTube** — channel, product demos, thought leadership videos (if relevant)
 
-Discover available anysite endpoints for each platform before querying. For data retrieval (reading posts, profiles, search results), prefer `anysite` over the native `twitter` tool. Use the native `twitter` tool only for WRITE actions (posting, engaging).
+Discover available anysite endpoints for each platform before querying. For broad public data retrieval (posts, profiles, search results), prefer `anysite`. Native `twitter` remains authoritative for the configured account's mentions/timeline and private X API reads; its writes stay separately gated.
 
 ### Phase 3: Leadership footprint
 Key people who represent the company publicly:

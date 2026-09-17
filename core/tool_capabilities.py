@@ -131,7 +131,7 @@ TOOL_PERMISSIONS: Dict[str, Tuple[str, ...]] = {
     "browser_manager": ("browser.control", "network.read"),
     "perplexity": ("network.read",),
     "twitter": ("network.read", "network.write", "social.post"),
-    "x_browser": ("network.write", "social.post"),
+    "x_browser": ("network.read", "network.write", "social.post"),
     "launchpad": ("network.write", "wallet.spend"),
     "dapp_browser": ("network.write", "wallet.spend"),
     "email": ("network.write", "email.send"),

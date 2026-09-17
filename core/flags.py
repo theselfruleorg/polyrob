@@ -34,7 +34,7 @@ from core.flags_catalog import CATALOG
 # the argon2 hash enables offline cracking of the console password).
 _SECRET_SUFFIXES = (
     "_KEY", "_TOKEN", "_SECRET", "_PASSWORD", "_MNEMONIC", "_JWT", "_PRIVATE_KEY",
-    "_SEED", "_HASH",
+    "_PRIVATE_KEYS_B64", "_PASSPHRASE", "_SEED", "_HASH",
 )
 
 # S10 (2026-09-14): a managed-RPC endpoint IS a credential — the API key is IN

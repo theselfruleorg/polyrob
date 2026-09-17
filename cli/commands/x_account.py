@@ -99,6 +99,8 @@ async def _capture(timeout: int):
     _store().save(_user_id(), storage_state=storage_state, handle=handle)
     click.echo(click.style("captured", fg="green")
                + f": stored encrypted X session for @{handle or 'unknown'}.")
+    click.echo("enable agent inbox access with X_BROWSER_ENABLED=true, then load "
+               "the x_browser tool (x_read_dms / x_dm).")
 
 
 @x_account.command("signup")

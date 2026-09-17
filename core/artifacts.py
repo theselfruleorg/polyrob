@@ -31,7 +31,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema, wal_connect
 
 logger = logging.getLogger(__name__)
 
@@ -104,19 +104,9 @@ def default_artifacts_db() -> str:
     DB out of the developer's real data home. Mirrors
     ``hf_deploy/registry.py::default_deployed_apps_db``.
     """
-    override = os.getenv("ARTIFACTS_DB_PATH")
-    if override:
-        return override
-    try:
-        from core.container import DependencyContainer
-        cfg = DependencyContainer.get_instance().get_service("config")
-        data_dir = getattr(cfg, "data_dir", None)
-        if data_dir:
-            return os.path.join(str(data_dir), "artifacts.db")
-    except Exception:
-        pass
-    from core.runtime_config import get_data_root
-    return os.path.join(get_data_root(), "artifacts.db")
+    from core.runtime_paths import data_home_db_path
+    return data_home_db_path("artifacts.db", env_key="ARTIFACTS_DB_PATH",
+                             prefer_container=True)
 
 
 def hash_file(path: str) -> tuple[str, int]:
@@ -145,12 +135,7 @@ class ArtifactLedger:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        conn = wal_connect(self.db_path)
-        try:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-        finally:
-            conn.close()
+        init_schema(self.db_path, _SCHEMA)
 
     # --- writes ----------------------------------------------------------
 

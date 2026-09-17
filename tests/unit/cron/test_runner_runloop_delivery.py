@@ -12,6 +12,7 @@ import pytest
 from cron.runner import make_agent_runner
 from cron import delivery as cron_delivery
 from cron.jobs import CronJob
+from agents.task.runtime.run_outcome import RunOutcome
 
 
 def _job(**kw):
@@ -58,6 +59,22 @@ async def test_runner_treats_refusal_string_as_failure(monkeypatch):
     runner = make_agent_runner(agent)
     ok = await runner(_job())
     assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_runner_treats_missing_done_as_incomplete(monkeypatch):
+    """A timed-out/step-exhausted rail must never be recorded as done."""
+    monkeypatch.setenv("CRON_RUN_LOOP", "true")
+
+    async def incomplete(*args, **kwargs):
+        return RunOutcome(
+            session_id="sess-incomplete", status="Session completed successfully",
+            done_called=False, reply_text="partial work", steps=4,
+        )
+
+    monkeypatch.setattr("cron.runner._run_task_to_outcome", incomplete)
+    runner = make_agent_runner(_FakeTaskAgent())
+    assert await runner(_job()) is False
 
 
 @pytest.mark.asyncio

@@ -7,7 +7,10 @@ replies via ``POST /2/dm_conversations/with/:participant_id/messages``.
 Rate-limit reality (pay-per-use tier, docs.x.com 2026-07): DM reads are
 15 req/15 min per user, so the poll interval defaults to 90s (``X_DM_POLL_SEC``)
 — faster polling just burns the window and gets 429s. Sends are 15/15 min +
-1,440/24 h. Group DM conversations are not handled in v1.
+1,440/24 h. X access tiers can return incomplete DM history even with valid
+user-context auth. For a UI-authoritative fallback, capture a login with
+``polyrob x-account capture-session`` and enable the ``x_browser`` tool.
+Group DM conversations are not handled by this polling surface.
 """
 import asyncio
 import os
@@ -19,18 +22,21 @@ class XCredentialsError(click.ClickException):
     """Missing X (Twitter) OAuth1 user-context credentials."""
 
 
-_REQUIRED_ENVS = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
-                  "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")
+_OAUTH1_ENVS = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
+                "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")
 
 
 def check_x_credentials() -> None:
-    """DM endpoints need OAuth1 USER context — all four creds, not the bearer."""
-    missing = [k for k in _REQUIRED_ENVS if not (os.environ.get(k) or "").strip()]
+    """DM endpoints need OAuth2 PKCE or OAuth1 USER context, never app-only."""
+    if (os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip():
+        return
+    missing = [k for k in _OAUTH1_ENVS if not (os.environ.get(k) or "").strip()]
     if missing:
         raise XCredentialsError(
             "Missing X (Twitter) credentials: " + ", ".join(missing) + ". "
-            "DMs need OAuth 1.0a user-context keys (bearer-only won't work) — "
-            "set them in the env or ./.polyrob/.env."
+            "DMs need TWITTER_OAUTH2_ACCESS_TOKEN from an OAuth 2.0 PKCE user "
+            "grant, or all four OAuth 1.0a user-context keys. The app-only "
+            "TWITTER_BEARER_TOKEN cannot read DMs."
         )
 
 
@@ -55,6 +61,10 @@ async def _run_x(verbose: bool):
             click.echo(click.style(
                 "note: X allows 15 DM reads + 15 DM sends per 15 min — "
                 "replies can lag under load", dim=True))
+            click.echo(click.style(
+                "note: API-tier DM reads may be incomplete; browser fallback: "
+                "`polyrob x-account capture-session` + X_BROWSER_ENABLED=true",
+                dim=True))
             click.echo(click.style("listening… (Ctrl-C to stop)", dim=True))
 
         return SurfaceJob(harness=harness, run=harness.run, announce=_announce)

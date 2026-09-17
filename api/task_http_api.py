@@ -26,10 +26,8 @@ _BACKGROUND_SESSION_TASKS: set = set()
 
 def _spawn_session_task(coro) -> "asyncio.Task":
     """Schedule a background coroutine while retaining a strong reference to it."""
-    task = asyncio.create_task(coro)
-    _BACKGROUND_SESSION_TASKS.add(task)
-    task.add_done_callback(_BACKGROUND_SESSION_TASKS.discard)
-    return task
+    from core.async_bridge import spawn_retained
+    return spawn_retained(coro, _BACKGROUND_SESSION_TASKS)
 
 # Create router for Task endpoints
 router = APIRouter(prefix="/task", tags=["task"])

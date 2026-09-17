@@ -36,14 +36,19 @@ def get_eip8004_config() -> EIP8004Config:
 _PRIVATE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
 
 
-def _is_public(base_url: str) -> bool:
+def is_public_base_url(base_url) -> bool:
+    """True only for an http(s) URL on a host someone else can resolve — the
+    ONE rule (the defi agent-registration verb used to carry a twin)."""
     if not base_url:
         return False
-    low = base_url.lower()
+    low = str(base_url).lower()
     if not low.startswith(("http://", "https://")):
         return False
     host = low.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
     return host not in _PRIVATE_HOSTS and "." in host
+
+
+_is_public = is_public_base_url
 
 
 def _agent_identity() -> tuple:

@@ -104,6 +104,17 @@ class TestBrowserManagerInitialization:
         assert manager.browser == mock_browser_instance
 
     @patch('tools.browser.browser_manager.Browser')
+    async def test_remote_endpoint_from_environment(self, mock_browser_class, bot_config, monkeypatch):
+        """Custody deployments can connect to an isolated remote browser."""
+        monkeypatch.setenv('BROWSER_CDP_URL', 'http://127.0.0.1:9222')
+        manager = BrowserManager(config=bot_config)
+        await manager.initialize()
+
+        config = mock_browser_class.call_args.kwargs['config']
+        assert config.cdp_url == 'http://127.0.0.1:9222'
+        assert config.wss_url is None
+
+    @patch('tools.browser.browser_manager.Browser')
     async def test_background_tasks_not_started_on_initialize(self, mock_browser_class, bot_config):
         """Regression guard: BrowserManager.initialize() must not spawn the
         stale-context/wait-queue loops until a context is actually requested --

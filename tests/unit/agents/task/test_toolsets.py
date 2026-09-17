@@ -74,7 +74,7 @@ def test_earn_and_owner_interactive_toolsets(monkeypatch):
 
 
 def test_social_toolset_exists_with_valid_ids():
-    """The 'social' toolset exists and uses only VALID_TOOL_IDS (no twitter)."""
+    """The social template requests discovery plus both policy-gated X rails."""
     m = _import_tool_defaults()
     valid = _valid_tool_ids()
     assert "social" in m.TOOLSETS
@@ -82,11 +82,7 @@ def test_social_toolset_exists_with_valid_ids():
     assert social  # non-empty
     for tool_id in social:
         assert tool_id in valid
-    # twitter is NOT a valid tool id → must not be present.
-    assert "twitter" not in social
-    # social listening/research is reached via anysite + perplexity.
-    assert "anysite" in social
-    assert "perplexity" in social
+    assert {"anysite", "perplexity", "web_fetch", "twitter", "x_browser"} <= set(social)
 
 
 def test_research_toolset_ids():

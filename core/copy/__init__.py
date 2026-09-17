@@ -12,57 +12,18 @@ is worse only than one that 500s because a string is missing — the same
 fail-loud-where-watched, degrade-visibly-where-not asymmetry the console uses.
 """
 import logging
-import sys
 
+from core.copy._engine import build_copy_layer, strict as _strict
 from core.copy.en import STRINGS
 
 __all__ = ["t", "STRINGS", "has", "missing_keys"]
 
 logger = logging.getLogger(__name__)
 
-_WARNED = set()
-
-
-def _strict() -> bool:
-    """True when a missing key should raise rather than degrade.
-
-    The only signal is ``pytest`` being imported, matching ``webview.copy``.
-    """
-    return "pytest" in sys.modules
-
-
-def t(key: str, **kw) -> str:
-    """The string for *key*, with ``{placeholders}`` filled from *kw*.
-
-    Raises ``KeyError`` for an unknown key under test; returns the key itself
-    otherwise. A formatting failure degrades to the unformatted string rather
-    than to an exception in a hot path — the sentence is still readable, just
-    missing a number.
-    """
-    try:
-        text = STRINGS[key]
-    except KeyError:
-        if _strict():
-            raise KeyError(f"no core copy for {key!r} — add it to core/copy/en.py")
-        if key not in _WARNED:
-            _WARNED.add(key)
-            logger.warning("core copy missing: %s", key)
-        return key
-    if not kw:
-        return text
-    try:
-        return text.format(**kw)
-    except (KeyError, IndexError, ValueError) as exc:
-        if _strict():
-            raise KeyError(f"copy {key!r} does not take {sorted(kw)}: {exc}") from exc
-        logger.warning("core copy %s failed to format: %s", key, exc)
-        return text
-
-
-def has(key: str) -> bool:
-    return key in STRINGS
-
-
-def missing_keys(keys) -> list:
-    """The subset of *keys* with no string, for checking a whole screen at once."""
-    return sorted(k for k in keys if k not in STRINGS)
+# One engine (core/copy/_engine.py) bound to this layer's vocabulary; the
+# console binds the same engine to its own in webview/copy.
+# ``_strict`` is this layer's seam (tests monkeypatch it); the lambda reads the
+# module global at call time so the patch is what runs.
+t, has, missing_keys = build_copy_layer(
+    STRINGS, label="core copy", file_hint="core/copy/en.py", logger=logger,
+    strict_fn=lambda: _strict())

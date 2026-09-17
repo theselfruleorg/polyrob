@@ -85,18 +85,10 @@ def workers_enabled() -> bool:
 
 
 def _data_home() -> Path:
-    """Resolve ``<data_home>`` the SAME way skill/update storage does, so
-    ``POLYROB_DATA_DIR`` (and the local-vs-server default split) is honored
-    identically for worker storage."""
-    from core.runtime_paths import resolve_runtime_paths
-
-    try:
-        from agents.task.constants import local_mode_enabled
-
-        local = local_mode_enabled()
-    except Exception:
-        local = False
-    return Path(resolve_runtime_paths(local=local).data_home)
+    """``<data_home>`` with the local-vs-server split applied — the ONE rule
+    skill storage and the update snapshot/rollback paths also resolve through."""
+    from core.runtime_paths import effective_data_home
+    return effective_data_home()
 
 
 def profiles_data_home() -> Path:

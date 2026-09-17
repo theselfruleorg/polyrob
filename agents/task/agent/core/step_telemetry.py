@@ -7,15 +7,9 @@ StepTelemetryMixin; the only caller is _finalize_step (via MRO).
 from __future__ import annotations
 
 
-def _detect_service_for_action(action_name: str) -> str:
-	"""Lazy delegate to the module-level helper in service.py.
-
-	Defined here so the moved telemetry body (which references
-	``_detect_service_for_action`` as a global) resolves at runtime without a
-	circular import at module load time. Mirrors the shim in ``step.py``.
-	"""
-	from agents.task.agent.service import _detect_service_for_action as _impl
-	return _impl(action_name)
+from agents.task.telemetry.service_detect import (  # noqa: E402
+	detect_service_for_action as _detect_service_for_action,
+)
 
 
 class StepTelemetryMixin:

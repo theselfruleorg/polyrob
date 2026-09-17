@@ -65,7 +65,7 @@ class TickLock:
 
         Without this the mtime is fixed at O_CREAT time; a tick that legitimately
         runs longer than _LOCK_STALE_SECONDS (several due jobs each capped at
-        ~180s) would be judged stale and stolen by another worker, whose
+        ~600s) would be judged stale and stolen by another worker, whose
         reclaim_stale_running() then resets the live worker's rows and double-runs.
         """
         try:
@@ -191,13 +191,11 @@ class CronScheduler:
                 break
             self._pause_cancelled = False
             if self._approval_deferred and not success:
-                # FIX 3: the cap cut the run off while an owner approval THIS run
-                # raised was still open. The owner's window (300s) is longer than
-                # the cap (180s), so blaming the job records a failure whose real
-                # cause is an unanswered prompt. Record the run, do not blame it,
-                # and leave the job redeemable — /approve leaves a one-shot grant
-                # the next attempt consumes. The tick CONTINUES (unlike a pause):
-                # one job waiting on the owner says nothing about the next.
+                # FIX 3: the run ended while an owner approval THIS run raised
+                # was still open. Record the run, do not blame it, and leave the
+                # job redeemable — /approve leaves a one-shot grant the next
+                # attempt consumes. The tick CONTINUES (unlike a pause): one job
+                # waiting on the owner says nothing about the next.
                 self._approval_deferred = False
                 self._record(job, now, False, deferred=True)
                 result.deferred.append(job.id)

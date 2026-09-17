@@ -26,7 +26,7 @@ import time
 from typing import Any, Dict, Optional
 
 from core.runtime_paths import sidecar_db_path
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema, wal_connect
 
 logger = logging.getLogger("core.token_denylist")
 
@@ -57,13 +57,7 @@ class TokenDenylist:
         self.db_path = db_path
         self._ready = False
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-            conn = wal_connect(db_path)
-            try:
-                conn.executescript(_SCHEMA)
-                conn.commit()
-            finally:
-                conn.close()
+            init_schema(db_path, _SCHEMA, mkdir=True)
             self._ready = True
         except Exception as e:
             # Keep the unavailable instance; reads refuse credentials.

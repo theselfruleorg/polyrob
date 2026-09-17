@@ -42,8 +42,6 @@ _U256 = {"type": "uint256"}
 #: never a truncation: a half-written identity on-chain is permanent.
 MAX_AGENT_URI_BYTES = 16_384
 
-#: Hosts nobody outside this machine can resolve.
-_PRIVATE_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "::1")
 
 
 class AgentUriTooLarge(ValueError):
@@ -51,13 +49,9 @@ class AgentUriTooLarge(ValueError):
 
 
 def _is_public(base_url: Optional[str]) -> bool:
-    if not base_url:
-        return False
-    low = str(base_url).lower()
-    if not low.startswith(("http://", "https://")):
-        return False
-    host = low.split("://", 1)[1].split("/", 1)[0].split(":", 1)[0]
-    return host not in _PRIVATE_HOSTS and "." in host
+    """The ONE public-host rule (``modules.eip8004.registration``)."""
+    from modules.eip8004.registration import is_public_base_url
+    return is_public_base_url(base_url)
 
 
 def uri_mode() -> str:

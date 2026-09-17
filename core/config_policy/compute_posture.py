@@ -116,3 +116,13 @@ def compute_posture_allows(execution_context, min_posture: int) -> bool:
         )
     except Exception:
         return False  # fail-closed: can't prove entitlement -> deny
+
+
+def compute_posture_allows_safe(execution_context, min_posture: int) -> bool:
+    """:func:`compute_posture_allows`, fail-CLOSED: any fault in the probe is a
+    refusal. The per-call gate every host-capability tool (shell, process,
+    code_exec dev mode, self_env) wraps the predicate in."""
+    try:
+        return bool(compute_posture_allows(execution_context, min_posture))
+    except Exception:
+        return False

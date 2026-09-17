@@ -229,6 +229,24 @@ async def get_user_permissive(request: Request) -> str:
 # ---------------------------------------------------------------------------
 
 
+def require_service(name: str, *, missing: str, unavailable: str = "Service unavailable"):
+    """The registered service *name*, or a 503 naming what is missing.
+
+    The container-fetch + two-503s four-liner every router's dependency
+    getter carried by hand (mcp, polymarket). *missing* is the detail when the
+    container is up but the service is not registered.
+    """
+    from core.container import DependencyContainer
+
+    container = DependencyContainer.get_instance()
+    if not container:
+        raise HTTPException(status_code=503, detail=unavailable)
+    service = container.get_service(name)
+    if not service:
+        raise HTTPException(status_code=503, detail=missing)
+    return service
+
+
 async def resolve_orchestrator(session_id: str, agent) -> Optional[object]:
     """Canonical orchestrator-resolution pipeline.
 

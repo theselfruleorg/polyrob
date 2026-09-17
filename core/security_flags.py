@@ -6,10 +6,13 @@ the reverse). Both must be on for a security event to be written.
 """
 import os
 
-_FALSEY = ("0", "false", "off", "no", "")
+from core.env import parse_bool
 
 
 def security_event_log_enabled() -> bool:
-    """Lanes 1-3 recording. Default ON; OFF is byte-identical to pre-045."""
-    return (os.getenv("SECURITY_EVENT_LOG_ENABLED", "true")
-            .strip().lower() not in _FALSEY)
+    """Lanes 1-3 recording. Default ON; OFF is byte-identical to pre-045.
+
+    Value-based (``parse_bool``) on purpose: an explicitly BLANK value is an
+    off switch here (pinned by tests/unit/core/test_security_flags.py), while
+    ``bool_env`` would read blank as "unset -> default ON"."""
+    return parse_bool(os.getenv("SECURITY_EVENT_LOG_ENABLED"), True)

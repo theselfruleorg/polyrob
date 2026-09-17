@@ -27,6 +27,25 @@ def wal_connect(db_path: str, timeout: float = _BUSY_TIMEOUT_S) -> sqlite3.Conne
     return conn
 
 
+def init_schema(db_path: str, script: str, *, mkdir: bool = False) -> None:
+    """Run a ``CREATE … IF NOT EXISTS`` script once over a WAL connection.
+
+    The open/executescript/commit/close four-liner every sidecar store's
+    ``_init_schema`` carried by hand. ``mkdir=True`` creates the parent
+    directory first (the fail-open stores that keep a ``_ready`` flag).
+    Raises on failure; the caller decides whether that is fatal.
+    """
+    if mkdir:
+        import os
+        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+    conn = wal_connect(db_path)
+    try:
+        conn.executescript(script)
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None):
     """Execute one statement with jittered retry on write contention.
 

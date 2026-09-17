@@ -22,33 +22,14 @@ router = APIRouter(tags=["mcp"])
 
 async def get_user_mcp_service():
     """Get UserMCPService from container."""
-    from core.container import DependencyContainer
-
-    container = DependencyContainer.get_instance()
-    if not container:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    service = container.get_service('user_mcp_service')
-    if not service:
-        raise HTTPException(status_code=503, detail="MCP service not initialized")
-
-    return service
+    from api.dependencies import require_service
+    return require_service('user_mcp_service', missing="MCP service not initialized")
 
 
 async def get_mcp_tool():
-    """Get MCPTool from container."""
-    from core.container import DependencyContainer
-
-    container = DependencyContainer.get_instance()
-    if not container:
-        raise HTTPException(status_code=503, detail="Service unavailable")
-
-    # MCPTool is registered as a service, not a tool
-    mcp_tool = container.get_service('mcp')
-    if not mcp_tool:
-        raise HTTPException(status_code=503, detail="MCP tool not available")
-
-    return mcp_tool
+    """Get MCPTool from container (registered as a service, not a tool)."""
+    from api.dependencies import require_service
+    return require_service('mcp', missing="MCP tool not available")
 
 
 # ========================================

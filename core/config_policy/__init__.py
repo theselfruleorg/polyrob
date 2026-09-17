@@ -20,6 +20,8 @@ from core.config_policy.policy import (  # noqa: F401  (underscored names: expli
     _safe_autonomy_default,
     reset_autonomy_mode_warnings,
 )
+from core.config_policy._env import posture_flag, safe_local_flag  # noqa: E402,F401
+from core.config_policy.compute_posture import compute_posture_allows_safe  # noqa: E402,F401
 from core.config_policy.builder_mode import (  # noqa: E402 — 032 bundle
     _builder_capability_default,
     agent_builder_mode,

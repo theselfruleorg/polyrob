@@ -56,10 +56,10 @@ async def test_schedule_rejects_bad_spec(tmp_path):
     assert res.error and "Invalid schedule" in res.error
 
 
-def test_max_duration_capped_at_180():
+def test_max_duration_capped_at_600():
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
-        CronScheduleAction(task="x" * 20, schedule="1h", max_duration_seconds=600)
+        CronScheduleAction(task="x" * 20, schedule="1h", max_duration_seconds=601)
 
 
 def test_cron_enabled_env(monkeypatch):

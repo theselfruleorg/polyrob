@@ -1,11 +1,11 @@
-"""X (x.com) browser rail — durable login + gated posting + supervised signup.
+"""X browser rail — durable login, visible DMs, posting, and supervised signup.
 
 Three pieces (2026-08-18 design):
 
 - ``session_store``  — Fernet-encrypted per-tenant custody of the X login
   (storage_state + generated password + handle).
-- ``tool``           — the optional ``x_browser`` tool: dedicated, approval-
-  gated verbs (``x_post`` / ``x_login_check`` / ``x_signup_start``); never raw
+- ``tool``           — the optional ``x_browser`` tool: dedicated DM read/send,
+  posting, login-check, and signup verbs; never raw
   browser clicks, so the approval gate is enforceable by action name.
 - ``signup``         — deterministic signup state machine; a CAPTCHA / phone
   check / unknown page is an OBSTACLE that escalates to the owner (ask/notice

@@ -23,7 +23,6 @@ No ``from __future__ import annotations`` (kept consistent with the CLI
 command modules this feeds; unnecessary here).
 """
 import math
-import os
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -104,14 +103,15 @@ def _events(user_id: str, since_ts: Optional[float],
     that fallback only kicks in when no home is given (library/legacy use).
     """
     try:
-        from core.event_log import (
-            TelemetryEventLog, get_event_log, event_log_enabled)
+        from core.event_log import event_log_enabled, open_event_log
         if not event_log_enabled():
             return []
-        if data_home:
-            log = TelemetryEventLog(os.path.join(data_home, "telemetry_events.db"))
-        else:
-            log = get_event_log()
+        # The ONE resolution every other reader uses (override, then a file
+        # under *data_home*, then the sidecar) — and a read never CREATES the
+        # db in whatever home it resolved.
+        log = open_event_log(data_home)
+        if log is None:
+            return []
         return log.query(user_id=user_id, since_ts=since_ts, limit=200) or []
     except Exception:
         return []

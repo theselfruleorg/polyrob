@@ -20,7 +20,7 @@ never ``BotConfig.get`` (which is a getattr that silently ignores the env).
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 # code_root == the install/code root: the parent of this ``core/`` package.
@@ -184,6 +184,81 @@ def data_dir_or_home(value: Optional[str]) -> str:
     if value:
         return str(value)
     return str(resolve_data_home())
+
+
+def container_data_home(container: Optional[Any]) -> str:
+    """The data home a container-bearing seat operates in: ``config.data_dir``
+    when the container carries a config, else the resolved data home.
+
+    The ONE replacement for the per-module ``getattr(container.config, "data_dir")``
+    + :func:`data_dir_or_home` pair (group admin, room actions, room reads, the
+    avatar action, the goal-board room service) — five spellings of one rule
+    are how two seats start disagreeing about which home they mean. Accepts a
+    Controller-like object too (``.container.config``) and ``None``.
+    """
+    cfg = getattr(container, "config", None) if container is not None else None
+    if cfg is None and container is not None:
+        inner = getattr(container, "container", None)
+        cfg = getattr(inner, "config", None) if inner is not None else None
+    return data_dir_or_home(getattr(cfg, "data_dir", None))
+
+
+def effective_data_home() -> Path:
+    """``<data_home>`` with the local-vs-server default split applied.
+
+    :func:`resolve_data_home` is the LOCAL rule (``POLYROB_DATA_DIR`` else
+    ``cwd/.polyrob``); a headless deploy that left the env unset lands on the
+    server default instead. Per-tenant stores that must agree with the update
+    snapshot/rollback paths (``cli/update/context.py``) resolve through here.
+    """
+    try:
+        from core.config_policy import local_mode_enabled
+        local = local_mode_enabled()
+    except Exception:
+        local = False
+    return Path(resolve_runtime_paths(local=local).data_home)
+
+
+def data_home_db_path(name: str, *, env_key: Optional[str] = None,
+                      data_dir: Optional[str] = None,
+                      prefer_container: bool = False) -> str:
+    """Resolve a sidecar db that lives beside the autonomy DBs.
+
+    Order: the *env_key* override (the test suite's seam to keep a db out of
+    the developer's real home) → an explicit *data_dir* → the running
+    container's ``config.data_dir`` when *prefer_container* → the data home.
+
+    ``prefer_container`` names the dbs that HISTORICALLY resolved under the
+    container's ``config.data_dir`` — on a server that is ``$POLYROB_DATA_DIR/
+    data``, one level below the ``<data_home>/<name>`` layout ``core/
+    db_manifest.py`` documents (artifacts, deployed_apps, autonomy_state). They
+    converge on the manifest path with the read-both/write-new rule
+    :func:`sidecar_db_path` applies: the manifest path wins when it exists, an
+    EXISTING legacy container-path file keeps being used (history is never
+    forked across two files), and a fresh install starts at the manifest path.
+    An operator moves the legacy file to finish the convergence; nothing here
+    moves data.
+    """
+    if env_key:
+        override = os.getenv(env_key)
+        if override:
+            return override
+    if data_dir:
+        return os.path.join(str(data_dir), name)
+    canonical = os.path.join(str(resolve_data_home()), name)
+    if prefer_container and not os.path.exists(canonical):
+        try:
+            from core.container import DependencyContainer
+            cfg = DependencyContainer.get_instance().get_service("config")
+            cfg_dir = getattr(cfg, "data_dir", None)
+            if cfg_dir:
+                legacy = os.path.join(str(cfg_dir), name)
+                if os.path.exists(legacy) and \
+                        os.path.abspath(legacy) != os.path.abspath(canonical):
+                    return legacy
+        except Exception:
+            pass
+    return canonical
 
 
 def prefs_home_dir() -> str:

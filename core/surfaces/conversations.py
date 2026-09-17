@@ -34,29 +34,21 @@ _PRUNE_KEEP = 200       # newest messages kept per conversation
 
 
 #: A chat link wrapper the agent sometimes types instead of the handle.
-_LINK_PREFIX_RE = re.compile(r"^(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/",
-                             re.IGNORECASE)
 
 
 def _norm_addr(address: str) -> str:
-    """The ONE key for a counterparty address, on read and on write.
+    """The ONE key for a counterparty address, on read and on write —
+    ``core.surfaces.address_key.canonical_addr``.
 
     2026-09-15 prod review, C8: lowercasing alone left one channel stored as
     THREE conversations — ``thepublicden``, ``@thepublicden`` and
     ``t.me/thepublicden`` — so "have we spoken" and the owner-resend cooldown
-    (which reads this store by address) each saw a third of the history. A
-    leading ``@`` and a t.me/ wrapper are spellings of one address, not
-    different addresses.
-
-    Safe across surfaces: an email never starts with ``@``, and a numeric chat
-    id is untouched. Normalizing HERE rather than at the call sites is what
-    makes reads and writes agree, including for rows written before this.
+    (which reads this store by address) each saw a third of the history.
+    Normalizing HERE rather than at the call sites is what makes reads and
+    writes agree, including for rows written before this.
     """
-    a = (address or "").strip()
-    a = _LINK_PREFIX_RE.sub("", a)
-    if a.startswith("@"):
-        a = a[1:]
-    return a.lower()
+    from core.surfaces.address_key import canonical_addr
+    return canonical_addr(address)
 
 
 def _iso(ts: float) -> str:

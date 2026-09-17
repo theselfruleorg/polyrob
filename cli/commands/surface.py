@@ -16,11 +16,10 @@ import click
 
 
 def _data_dir() -> str:
-    # Match the worker's data home via the ONE core policy seam (POLYROB_DATA_DIR
-    # wins, else <cwd>/.polyrob) so pause/resume write the SAME surface_state.db the
-    # worker reads — 'POLYROB_DATA_DIR or data' pointed the CLI at a divergent ./data.
-    from core.runtime_paths import resolve_data_home
-    return str(resolve_data_home())
+    # The worker's data home via the ONE admin seam, so pause/resume write the
+    # SAME surface_state.db the worker reads (cli/_admin_home.py).
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir()
 
 
 def _store():

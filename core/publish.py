@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema, wal_connect
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +96,10 @@ class Publication:
                    updated_at=float(d["updated_at"] or 0.0))
 
 
-def default_publish_db() -> str:
-    override = os.getenv("PUBLICATIONS_DB_PATH")
-    if override:
-        return override
-    from core.runtime_config import get_data_root
-    return os.path.join(get_data_root(), "publications.db")
+def default_publish_db(data_dir: Optional[str] = None) -> str:
+    from core.runtime_paths import data_home_db_path
+    return data_home_db_path("publications.db", env_key="PUBLICATIONS_DB_PATH",
+                             data_dir=data_dir)
 
 
 def default_publish_root() -> str:
@@ -133,12 +131,7 @@ class PublishStore:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        conn = wal_connect(self.db_path)
-        try:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-        finally:
-            conn.close()
+        init_schema(self.db_path, _SCHEMA)
 
     # --- paths -----------------------------------------------------------
 

@@ -31,11 +31,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 
-#: The ten grouped-``/help`` sections, in render order (043 A13/A24). This is
-#: the SAME order the CLI registry renders (``cli/ui/commands/registry.py``
-#: ``GROUP_ORDER``) — kept here independently because ``core/`` may not import
-#: the CLI package. A row whose group is outside this tuple fails the contract
-#: test, so a verb can never silently fall out of a rendered section.
+#: The ten grouped-``/help`` sections, in render order (043 A13/A24). The
+#: ONE order: the CLI registry (``cli/ui/commands/registry.py``) imports it
+#: from here (``core/`` may not import the CLI package, so the SSOT sits
+#: below). A row whose group is outside this tuple fails the contract test,
+#: so a verb can never silently fall out of a rendered section.
 GROUP_ORDER: tuple[str, ...] = (
     "talk",
     "needs you",

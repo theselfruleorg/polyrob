@@ -74,3 +74,16 @@ def run_coroutine_sync(coro: "Coroutine[Any, Any, Any]", timeout: Optional[float
             return asyncio.run(asyncio.wait_for(coro, timeout))
         return asyncio.run(coro)
     return _bridge.run(coro, timeout=timeout)
+
+
+def spawn_retained(coro, registry: set):
+    """Schedule *coro* fire-and-forget WITH a strong reference held in
+    *registry* until it finishes, so the loop cannot GC it mid-run. The
+    task-set idiom three session spawners (the HTTP API, A2A, the TaskAgent
+    support mixin) each carried by hand; each keeps its own registry so it
+    can still drain it on shutdown."""
+    import asyncio
+    task = asyncio.create_task(coro)
+    registry.add(task)
+    task.add_done_callback(registry.discard)
+    return task

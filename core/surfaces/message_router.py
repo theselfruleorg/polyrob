@@ -259,6 +259,13 @@ class MessageRouter:
         try:
             if msg.partial:
                 await surface.stream(msg)  # base buffers if surface can't stream
+                # A live-edit surface has already opened a user-visible bubble;
+                # a buffered surface has not.  The stream producer uses this
+                # distinction to avoid letting done() publish a second recap.
+                # ``getattr`` keeps legacy/test surface doubles (which only
+                # implemented ``stream``) compatible; real Surface subclasses
+                # inherit ``stream_is_live`` above.
+                return bool(getattr(surface, "stream_is_live", lambda: False)())
             else:
                 result = await surface.send(msg)
                 ok = bool(getattr(result, "success", False))
@@ -295,9 +302,6 @@ class MessageRouter:
                                     and reason in ROOM_DEATH_REASONS):
                                 self._mark_room_left(surface_id, chat_id, reason)
                 return ok
-            # A streamed delta is not a committed delivery — the discrete reply
-            # that finalizes the bubble is, and it comes through the branch above.
-            return False
         except Exception as e:  # fail-open
             logger.error("message_router: surface %s raised: %s", row.get("surface_id"), e, exc_info=True)
             return False

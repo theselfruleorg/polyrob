@@ -122,12 +122,6 @@ class X402PayTool(BaseTool):
             self._client_resolved = True
         return self._client
 
-    def _ar(self, *, content: str = None, error: str = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content)
-
     @BaseTool.action("Get the x402 price (USD) of a resource without paying (never pays)",
                      param_model=QuoteParams)
     async def x402_quote(self, params: QuoteParams, execution_context=None):

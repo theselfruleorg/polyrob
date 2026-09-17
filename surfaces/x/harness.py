@@ -4,6 +4,7 @@ Mirrors the Discord harness shape: every polled MessageCreate is parsed into an
 InboundMessage, deduped (dm_event id), routed via the shared ``route_inbound``
 → ``act_on_inbound`` pipeline, and replies are delivered back to the DM
 participant.
+The shell is ``surfaces._shared.BaseHarness``.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import os
 from typing import Any, Optional
 
 from core.surfaces.idempotency import IdempotencyStore
+from surfaces._shared import BaseHarness, TextSink, register_surface_and_sink
 from surfaces.x.client import XDMClient
 from surfaces.x.poller import XCursorStore, XDMPoller, parse_dm_event
 from surfaces.x.surface import XSurface
@@ -19,58 +21,32 @@ from surfaces.x.surface import XSurface
 logger = logging.getLogger(__name__)
 
 
-class XSink:
+def XSink(client: Any) -> TextSink:  # noqa: N802 — kept name
     """cron/delivery sink: send a raw text as a DM to a participant id."""
-
-    def __init__(self, client: Any) -> None:
-        self._client = client
-
-    async def send_message(self, chat_id, text) -> bool:
-        try:
-            await self._client.send_dm(str(chat_id), str(text))
-            return True
-        except Exception:
-            logger.warning("XSink.send_message failed for %s", chat_id,
-                           exc_info=True)
-            return False
+    return TextSink(client.send_dm, label="XSink")
 
 
-class XHarness:
+class XHarness(BaseHarness):
+    surface_id = "x"
+
     def __init__(self, container: Any, task_agent: Any, client: Any,
                  dedup: IdempotencyStore, *,
                  bot_user_id: Optional[str] = None,
                  poller: Optional[XDMPoller] = None) -> None:
-        self._container = container
-        self._task_agent = task_agent
+        super().__init__(container, task_agent, dedup)
         self._client = client
-        self._dedup = dedup
         self._bot_user_id = bot_user_id
         self._poller = poller
-        self._user_directory = container.get_service("user_directory") \
-            if container else None
 
     async def handle_event(self, event: dict) -> None:
         inbound = parse_dm_event(event, self._bot_user_id or "",
                                  user_directory=self._user_directory)
-        if inbound is None:
-            return
-        if inbound.idempotency_key and self._dedup.seen(
-                f"x:{inbound.idempotency_key}"):
+        if inbound is None or self._is_duplicate(inbound):
             return
         await self._route(inbound)
 
-    async def _route(self, inbound) -> None:
-        from surfaces._shared import route_and_act
-
-        participant_id = inbound.identity.source.chat_id
-
-        async def _deliver(text: str) -> None:
-            try:
-                await self._client.send_dm(participant_id, text)
-            except Exception:
-                logger.warning("x deliver failed", exc_info=True)
-
-        await route_and_act(self._container, self._task_agent, inbound, _deliver)
+    async def _deliver_to(self, target, text: str) -> None:
+        await self._client.send_dm(target, text)
 
     async def run(self) -> None:
         if not self._bot_user_id:
@@ -107,19 +83,9 @@ def build_x_harness(container: Any, task_agent: Any, *,
             poll_sec = float(os.getenv("X_DM_POLL_SEC", "90"))
         except ValueError:
             poll_sec = 90.0
-    surface = XSurface(client)
-
     harness = XHarness(container, task_agent, client, dedup)
     harness._poller = XDMPoller(client, harness.handle_event, cursor,
                                 poll_sec=poll_sec)
-
-    # 030 WS-B2: register_surface enforces the contract, joins the surface
-    # registry (so surface_profile() reaches the prompt) AND subscribes to
-    # the router — the old bare subscribe left the agent blind to the shape.
-    if container is not None:
-        from core.surfaces.registry import register_surface
-        register_surface(container, surface)
-    if container is not None and container.get_service("x_sink") is None:
-        container.register_service("x_sink", XSink(client))
-
+    register_surface_and_sink(container, XSurface(client), sink_name="x_sink",
+                              send=client.send_dm, sink_label="XSink")
     return harness

@@ -19,15 +19,10 @@ from core import recap
 
 
 def _window_seconds(label: str) -> Optional[float]:
-    """Parse '30m'/'24h'/'7d' -> seconds; None if unset/bad (=> all time).
-
-    Display-only: used to pick the "last X" vs "all time" scope heading.
-    Deliberately fail-open (unlike ``core.recap._parse_window``, which is the
-    one that actually bounds the data query and raises on a malformed,
-    non-empty label) — a bad label here should never crash the heading.
-    """
-    if not label:
-        return None
+    """'30m'/'24h'/'7d' -> seconds; None if unset/bad (=> all time). The ONE
+    display-window parser, ``cli.ui.commands.window.parse_window_seconds``."""
+    from cli.ui.commands.window import parse_window_seconds
+    return parse_window_seconds(label)
     label = label.strip().lower()
     try:
         if label.endswith("m"):

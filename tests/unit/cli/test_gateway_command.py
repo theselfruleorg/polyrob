@@ -15,7 +15,8 @@ def _patch_gateway_bootstrap(monkeypatch, data_dir="/tmp/polyrob-instanceX"):
               "X_SURFACE_ENABLED",
               "DISCORD_BOT_TOKEN", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SIGNAL_ACCOUNT",
               "TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
-              "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET"):
+              "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET",
+              "TWITTER_OAUTH2_ACCESS_TOKEN"):
         monkeypatch.delenv(v, raising=False)
 
     fake_container = MagicMock()
@@ -203,6 +204,25 @@ def test_gateway_warns_and_skips_connector_without_creds(monkeypatch, name, flag
 
     res = CliRunner().invoke(gw_mod.gateway, [])
     assert f"skipping {name}" in res.output.lower()
+
+
+def test_gateway_accepts_x_oauth2_user_token(monkeypatch):
+    from click.testing import CliRunner
+    from cli.commands import gateway as gw_mod
+
+    _patch_gateway_bootstrap(monkeypatch)
+    monkeypatch.setenv("X_SURFACE_ENABLED", "true")
+    monkeypatch.setenv("TWITTER_OAUTH2_ACCESS_TOKEN", "oauth2-user-token")
+    captured = {}
+
+    def _fake_harness(container, task_agent, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after capture")
+
+    monkeypatch.setattr(
+        "surfaces.x.harness.build_x_harness", _fake_harness)
+    CliRunner().invoke(gw_mod.gateway, [])
+    assert captured.get("data_dir") == "/tmp/polyrob-instanceX"
 
 
 def test_gateway_no_surfaces_message_lists_all_flags(monkeypatch):

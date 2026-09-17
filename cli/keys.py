@@ -23,7 +23,6 @@ from modules.llm.profiles import (  # noqa: F401  (no_key_message re-exported)
     usable_providers_with_credentials,
 )
 
-_TRUTHY = {"1", "true", "yes", "on"}
 
 
 def should_warn_no_key(env=None) -> bool:
@@ -63,9 +62,8 @@ def _can_prompt() -> bool:
             return False
     except Exception:
         return False
-    if str(os.environ.get("CI", "")).strip().lower() in _TRUTHY:
-        return False
-    if str(os.environ.get("POLYROB_NONINTERACTIVE", "")).strip().lower() in _TRUTHY:
+    from core.env import bool_env
+    if bool_env("CI", False) or bool_env("POLYROB_NONINTERACTIVE", False):
         return False
     return True
 

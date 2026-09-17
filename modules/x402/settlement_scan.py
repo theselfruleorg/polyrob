@@ -163,12 +163,10 @@ def solana_settle_enabled() -> bool:
     path — a different rail, a different signer family and a different matching
     strategy deserve a deliberate second decision.
     """
-    import os
-    if not os.getenv("X402_SETTLE_ONCHAIN_DETECT", "false").strip().lower() in (
-            "1", "true", "yes", "on"):
+    from core.env import bool_env
+    if not bool_env("X402_SETTLE_ONCHAIN_DETECT", False):
         return False
-    return os.getenv("X402_SOLANA_SETTLE", "false").strip().lower() in (
-        "1", "true", "yes", "on")
+    return bool_env("X402_SOLANA_SETTLE", False)
 def _scan_max_span() -> int:
     """Bounded per-tick block-range cap (`X402_SETTLEMENT_SCAN_MAX_SPAN`,
     default 5000) — a tick never scans more than this many blocks even after

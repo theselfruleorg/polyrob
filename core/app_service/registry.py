@@ -127,12 +127,10 @@ def screen_env(env: Any) -> Dict[str, str]:
     return out
 
 
-def default_app_services_db() -> str:
-    override = os.getenv("APP_SERVICES_DB_PATH")
-    if override:
-        return override
-    from core.runtime_config import get_data_root
-    return os.path.join(get_data_root(), "app_services.db")
+def default_app_services_db(data_dir: Optional[str] = None) -> str:
+    from core.runtime_paths import data_home_db_path
+    return data_home_db_path("app_services.db", env_key="APP_SERVICES_DB_PATH",
+                             data_dir=data_dir)
 
 
 class AppServiceRegistry:

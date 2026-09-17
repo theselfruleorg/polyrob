@@ -112,3 +112,19 @@ def typo_protection_note(chain: str) -> str:
                 "here can flag it. Verify it against an independent source "
                 "before anything is sent to it.")
     return "unknown chain — no address rules apply."
+
+
+def same_address(a, b) -> bool:
+    """Address equality — ONE rule for every chain family.
+
+    Case-insensitive for 0x-hex only; base58 is case-SENSITIVE, so lowercasing
+    a Solana address would make two DIFFERENT accounts compare equal (the
+    2026-08-27 fold-only-0x-hex rule). ``bridge_guard`` and the Relay provider
+    each carried this by hand; they share it here.
+    """
+    if a is None or b is None:
+        return False
+    sa, sb = str(a).strip(), str(b).strip()
+    if sa.startswith("0x") and sb.startswith("0x"):
+        return sa.lower() == sb.lower()
+    return sa == sb

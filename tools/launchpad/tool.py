@@ -16,6 +16,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
+from tools.wallet_holder import WalletHolderMixin
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +149,7 @@ def _metadata_block(params) -> str:
     return out
 
 
-class LaunchpadTool(BaseTool):
+class LaunchpadTool(WalletHolderMixin, BaseTool):
     """Pons V2 on Robinhood Chain. One provider today; the seam takes more."""
 
     def __init__(self, name: str = "launchpad", config=None, container=None, *,
@@ -170,18 +171,6 @@ class LaunchpadTool(BaseTool):
         return True
 
     # -- plumbing ---------------------------------------------------------
-
-    def _ar(self, *, content: str = None, error: str = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content)
-
-    def _get_wallet(self):
-        if self._wallet is not None:
-            return self._wallet
-        from core.wallet.factory import get_agent_wallet
-        return get_agent_wallet()
 
     def _price(self, chain, addr):
         if self._price_fn:
@@ -217,12 +206,12 @@ class LaunchpadTool(BaseTool):
         if not launchpad_enabled():
             return (f"the launchpad is off — set {FLAG}=true to arm it. Nothing "
                     f"was broadcast.")
-        from tools.defi.deploy_verb import _refuse_non_owner_turn, _refuse_paused
-        turn_err = _refuse_non_owner_turn(execution_context, verb)
+        from core.wallet.authority import leaf_refusal, spend_pause_refusal
+        turn_err = leaf_refusal(execution_context, verb)
         if turn_err:
             return turn_err
         if not dry_run:
-            paused = _refuse_paused()
+            paused = spend_pause_refusal()
             if paused:
                 return paused + " RESULT: NOT SENT."
         return None

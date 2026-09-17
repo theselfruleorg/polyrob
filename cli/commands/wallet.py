@@ -50,7 +50,6 @@ _POLICY_GATE_CAVEAT = (
     "it can never raise or disable it — this env value stays the ceiling."
 )
 
-_ENABLED_TRUE = {"1", "true", "yes", "on"}
 
 
 def _is_malformed_number(raw, key: str) -> bool:
@@ -160,7 +159,8 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         # raise happens before enabled/seed are ever read, so without this the
         # disabled+bad-cap case printed two lies). And NAME the malformed key in
         # the config-error branch instead of dumping a bare ValueError.
-        enabled = str(os.environ.get("AGENT_WALLET_ENABLED", "")).strip().lower() in _ENABLED_TRUE
+        from core.env import bool_env
+        enabled = bool_env("AGENT_WALLET_ENABLED", False)
         bad_caps = [k for k in ("AGENT_WALLET_MAX_PER_TX_USD", "WALLET_DAILY_CAP_USD")
                     if _is_malformed_number(os.environ.get(k), k)]
         if not enabled:

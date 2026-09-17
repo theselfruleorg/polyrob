@@ -45,41 +45,14 @@ class PublishListParams(BaseModel):
 
 
 def _deny_reason(execution_context: Any) -> Optional[str]:
-    """Non-None -> refuse, with this message.
-
-    Publishing needs no HOST capability, so it does not require a compute
-    posture — but it is emphatically not something a background re-entry may do.
-    ``compute_posture_allows(ctx, 0)`` cannot express that: level 0 is an
-    unconditional pass by contract ("posture-0 capabilities keep their own
-    gates"), so this states the three clauses it would otherwise borrow —
-    owner tenant, not a leaf/sub-agent, not a forged turn — directly.
-
-    The forged-turn kinds come from the same SSOT the posture gate uses
-    (``core.security.forged_turns``), so a new forged kind is denied here too
-    without a second edit. Fail-CLOSED: any fault in resolution denies.
-    """
-    if execution_context is None:
-        return "publish requires an execution context"
-    try:
-        if getattr(execution_context, "is_sub_agent", False):
-            return "publish denied: a delegated sub-agent never chooses what the world sees"
-        if getattr(execution_context, "role", "leaf") != "orchestrator":
-            return "publish denied: a leaf agent never chooses what the world sees"
-        metadata = getattr(execution_context, "metadata", None) or {}
-        from core.security.forged_turns import FORGED_TURN_KINDS
-        if metadata.get("turn_kind") in FORGED_TURN_KINDS:
-            return ("publish denied: a self-wake / delegation-result re-entry is not "
-                    "an owner asking to ship")
-        from core.config_policy import local_mode_enabled
-        from core.instance import is_owner_local_safe, resolve_owner_principal
-        if not is_owner_local_safe(
-                getattr(execution_context, "user_id", None),
-                owner_principal=resolve_owner_principal(),
-                local_enabled=local_mode_enabled()):
-            return "publish denied: only the owner tenant may put something at a public URL"
-    except Exception:
-        return "publish denied: capability gate unavailable"
-    return None
+    """Non-None -> refuse, with this message — the ONE statement of the three
+    clauses (owner tenant, not a leaf/sub-agent, not a forged turn) in
+    ``core.security.owner_turn``; publishing needs no compute posture, so it
+    borrows none."""
+    from core.security.owner_turn import owner_turn_refusal
+    return owner_turn_refusal(execution_context, verb="publish",
+                              does="chooses what the world sees",
+                              public="put something at a public URL")
 
 
 class PublishTool(BaseTool):
@@ -100,50 +73,21 @@ class PublishTool(BaseTool):
         return self._store
 
     def _get_approval_provider(self):
-        """The approver that gates a FIRST publish of an unknown slug.
-
-        Mirrors ``hf_deploy``: resolve the provider the Controller uses, and
-        remap ``auto_notify`` to the durable ``owner_queue``. ``auto_notify``
-        always returns True, so honoring it would silently put a brand-new public
-        address live from an unattended run — inverting the whole point of the
-        gate. ``owner_queue`` still lets a real owner approve out-of-band (e.g.
-        Telegram ``/approve``) without ever rubber-stamping.
-        """
+        """The approver that gates a FIRST publish. The injected
+        ``_approval_provider`` test seam always wins; otherwise the ONE
+        policy in ``tools.ship_common.first_publish_approval_provider``
+        (Controller's provider, ``auto_notify`` remapped to ``owner_queue``)."""
         if self._approval_provider is None:
-            try:
-                import tools.controller.approval_interactive  # noqa: F401
-            except Exception:
-                pass
-            from tools.controller.approval import (
-                get_approval_provider_or_deny, resolve_gated_actions,
-            )
-            _required, provider_name = resolve_gated_actions()
-            if provider_name == "auto_notify":
-                try:
-                    import tools.controller.approval_queue  # noqa: F401
-                except Exception:
-                    pass
-                provider_name = "owner_queue"
-            self._approval_provider = get_approval_provider_or_deny(provider_name)
+            from tools.ship_common import first_publish_approval_provider
+            self._approval_provider = first_publish_approval_provider()
         return self._approval_provider
 
     def _workspace_root(self, execution_context: Any) -> Optional[str]:
-        """The directory a publish may copy from. NEVER falls back to cwd — on a
-        shared project-root workspace that would be the whole install tree."""
-        if self._workspace_override:
-            return self._workspace_override
-        ws = getattr(execution_context, "workspace_dir", None)
-        if ws:
-            return str(ws)
-        try:
-            from agents.task.path import pm
-            return str(pm().get_workspace_dir(
-                getattr(execution_context, "session_id", "") or "",
-                getattr(execution_context, "user_id", None)))
-        except Exception:
-            return None
-
-    # --- actions ---------------------------------------------------------
+        """NEVER falls back to cwd — on a shared project-root workspace that
+        would be the whole install tree (``tools.ship_common``)."""
+        from tools.ship_common import session_workspace_root
+        return session_workspace_root(execution_context,
+                                      override=self._workspace_override)
 
     @BaseTool.action(
         "Publish workspace files to a stable public URL. A NEW slug needs owner "

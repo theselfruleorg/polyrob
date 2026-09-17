@@ -115,6 +115,7 @@ colorama>=0.4.6
 
 # Twitter/X API
 tweepy>=4.14.0
+chatxdk>=0.5.0  # official X Chat encryption/decryption SDK
 
 fastapi-x402>=0.1.8
 

@@ -48,11 +48,9 @@ TIMEOUT_SEC = 12.0
 
 def _int(value, default=None):
     """Provider numbers arrive as decimal STRINGS. A malformed one is None
-    (unknown), never 0 — a zero would read as a free trade."""
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return default
+    (unknown), never 0 (``tools.defi.providers._http.parse_int``)."""
+    from tools.defi.providers._http import parse_int
+    return parse_int(value, default)
 
 
 class LifiRouteProvider:

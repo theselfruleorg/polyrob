@@ -10,7 +10,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema, wal_connect
 
 _VALID_STATUSES = frozenset({"pending", "approved", "live", "failed", "undeployed"})
 
@@ -52,19 +52,9 @@ def default_deployed_apps_db() -> str:
     default_autonomy_state_db``: prefer the container config's ``data_dir``,
     fall back to ``get_data_root()``.
     """
-    override = os.getenv("DEPLOYED_APPS_DB_PATH")
-    if override:
-        return override
-    try:
-        from core.container import DependencyContainer
-        cfg = DependencyContainer.get_instance().get_service("config")
-        data_dir = getattr(cfg, "data_dir", None)
-        if data_dir:
-            return os.path.join(str(data_dir), "deployed_apps.db")
-    except Exception:
-        pass
-    from core.runtime_config import get_data_root
-    return os.path.join(get_data_root(), "deployed_apps.db")
+    from core.runtime_paths import data_home_db_path
+    return data_home_db_path("deployed_apps.db", env_key="DEPLOYED_APPS_DB_PATH",
+                             prefer_container=True)
 
 
 class DeployedAppsRegistry:
@@ -78,12 +68,7 @@ class DeployedAppsRegistry:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        conn = wal_connect(self.db_path)
-        try:
-            conn.executescript(_SCHEMA)
-            conn.commit()
-        finally:
-            conn.close()
+        init_schema(self.db_path, _SCHEMA)
 
     # --- reads -----------------------------------------------------------
 

@@ -49,16 +49,8 @@ def default_autonomy_state_db() -> str:
     co-location never misses this DB. Fall back to ``get_data_root()`` (the CLI
     resolution) when no container config is available.
     """
-    try:
-        from core.container import DependencyContainer
-        cfg = DependencyContainer.get_instance().get_service("config")
-        data_dir = getattr(cfg, "data_dir", None)
-        if data_dir:
-            return os.path.join(str(data_dir), "autonomy_state.db")
-    except Exception:
-        pass
-    from core.runtime_config import get_data_root
-    return os.path.join(get_data_root(), "autonomy_state.db")
+    from core.runtime_paths import data_home_db_path
+    return data_home_db_path("autonomy_state.db", prefer_container=True)
 
 
 class AutonomyStateStore:

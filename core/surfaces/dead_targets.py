@@ -40,11 +40,11 @@ logger = logging.getLogger(__name__)
 
 
 def _norm_addr(address: str) -> str:
-    """Normalize an external address for keying (mirrors
-    ``core/surfaces/correspondents.py::_norm_addr`` — case/space-insensitive;
-    lowercasing is correct for email and harmless for phone-number/chat ids).
-    """
-    return (address or "").strip().lower()
+    """Normalize an external address for keying — the SAME rule the
+    correspondent registry and the conversation store use
+    (``core.surfaces.address_key.canonical_addr``)."""
+    from core.surfaces.address_key import canonical_addr
+    return canonical_addr(address)
 
 
 class DeadTargetStore:
@@ -71,6 +71,7 @@ class DeadTargetStore:
         try:
             conn.execute(self._CREATE)
             conn.commit()
+            _rekey_rows(conn, "dead_targets")
         finally:
             conn.close()
 
@@ -192,3 +193,35 @@ def classify_dead_error(surface_id: str, error_text: Optional[str]) -> Optional[
         if pattern in lowered:
             return reason
     return None
+
+
+def _rekey_rows(conn, table: str) -> None:
+    """Rewrite ``address`` to its canonical spelling once per file (``PRAGMA
+    user_version``). A dead target keyed ``@handle`` must still be found when
+    the sender arrives as ``handle``. Duplicates keep the row marked LATEST.
+    Fail-open."""
+    try:
+        if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= 1:
+            return
+        rows = conn.execute(f"SELECT surface, address, marked_at FROM {table}").fetchall()
+        best: dict = {}
+        for surface, address, marked in rows:
+            key = (surface, _norm_addr(address))
+            if key not in best or float(marked or 0) > best[key][0]:
+                best[key] = (float(marked or 0), address)
+        for surface, address, _m in rows:
+            if best[(surface, _norm_addr(address))][1] != address:
+                conn.execute(f"DELETE FROM {table} WHERE surface=? AND address=?",
+                             (surface, address))
+        for (surface, canon), (_m, winner) in best.items():
+            if winner != canon:
+                conn.execute(f"UPDATE {table} SET address=? WHERE surface=? AND address=?",
+                             (canon, surface, winner))
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+    except Exception:
+        logger.warning("dead-target address rekey skipped", exc_info=True)
+        try:
+            conn.rollback()
+        except Exception:
+            pass

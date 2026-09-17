@@ -137,10 +137,13 @@ TOOL_DESCRIPTORS: Dict[str, ToolDescriptor] = {
     # ---------------------------------------------------------------------
     'twitter': ToolDescriptor(
         name='twitter',
-        description='Twitter/X account actions: post/media/poll/thread, reply/quote/delete, like/retweet, follow/mute/block, DM, mentions (gated by TWITTER_ENABLED). For Twitter/X DATA RETRIEVAL prefer the anysite tool to conserve quota.',
+        description=('X account API: public/account reads, legacy DM events, encrypted '
+                     'X Chat inbox/thread reads, and gated post/engagement/DM writes. '
+                     'Prefer anysite for broad public discovery; use x_browser when '
+                     'the visible inbox is authoritative.'),
         category=ToolCategory.COMMUNICATION,
-        required_services=['rate_limit_manager', 'database_manager'],
-        optional_services=['cache_manager'],
+        required_services=['rate_limit_manager'],
+        optional_services=['cache_manager', 'database_manager'],
         required_config=[],  # Uses OAuth tokens from DB
         init_priority=30,
         is_optional=True,
@@ -355,7 +358,7 @@ def get_agent_usable_tools() -> Dict[str, ToolDescriptor]:
     Excludes:
     - Internal verification tools (collabland, alchemy)
     - Tools shown as MCP servers (polymarket)
-    - Deprecated tools (twitter - use mcp:anysite)
+    - Internal verification tools and tools represented elsewhere
     - Internal tools not meant for user selection (task)
     """
     # Categories that should appear in config panel

@@ -265,8 +265,12 @@ def ceiling_scope(execution_context=None):
             user_id = resolve_owner_user_id()
         if not user_id:
             return None, None
-        from core.paths import polyrob_home
-        return user_id, polyrob_home()
+        # The IDENTITY axis has ONE home per process (C10, 2026-09-15): every
+        # pref WRITER resolves the data home. Reading via ``polyrob_home()``
+        # (the unit's $HOME/.polyrob on prod) found an empty store, so an
+        # owner-approved ceiling silently fell back to the env value.
+        from core.runtime_paths import prefs_home_dir
+        return user_id, prefs_home_dir()
     except Exception:
         logger.debug("ceiling scope unresolved; env value applies", exc_info=True)
         return None, None

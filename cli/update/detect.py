@@ -42,7 +42,10 @@ class InstallContext:
 
 
 def _truthy(val: Optional[str]) -> bool:
-    return str(val or "").strip().lower() in {"1", "true", "yes", "on"}
+    # The repo's ONE falsey-set flag parser (core.env) — a private opt-in
+    # truth set here disagreed with every other POLYROB_* flag.
+    from core.env import parse_bool
+    return parse_bool(val, False) if val is not None else False
 
 
 def find_git_root(start: Path) -> Optional[Path]:

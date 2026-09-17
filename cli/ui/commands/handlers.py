@@ -1246,9 +1246,10 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _parse_window_seconds(arg: str) -> Optional[float]:
-    """Parse a window token like '30m', '24h', '7d' -> seconds. None if unset/bad."""
-    if not arg:
-        return None
+    """'30m'/'24h'/'7d' -> seconds; None if unset/bad — the ONE display-window
+    parser (``cli.ui.commands.window``); this name is a test seam."""
+    from cli.ui.commands.window import parse_window_seconds
+    return parse_window_seconds(arg)
     arg = arg.strip().lower()
     try:
         if arg.endswith("m"):
