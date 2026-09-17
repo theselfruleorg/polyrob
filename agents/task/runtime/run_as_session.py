@@ -104,6 +104,7 @@ async def run_task_to_outcome(
     autonomous: bool = False,
     goal_id: str | None = None,
     creator: str | None = None,
+    cron_job_id: str | None = None,
 ):
     """The primary run entry (§2): create_session → run_session → RunOutcome.
 
@@ -120,6 +121,11 @@ async def run_task_to_outcome(
     ``blocks_goal_ids`` on an owner-queue ask, so approving the ask re-arms the
     goal that raised it — otherwise the owner presses /approve and nothing
     happens (039).
+
+    *cron_job_id* (2026-09-18) is the cron twin of *goal_id*: the approval queue
+    stamps it on an owner-queue ask so approving the ask re-arms the JOB to run
+    on the next tick — the run that redeems the grant is a genuine cron turn,
+    where a self-wake into the finished session could never spend.
 
     *creator* (043 A17): the session-creator display label. This helper is
     shared by BOTH the goal dispatcher and cron runner, which resolve to
@@ -175,7 +181,7 @@ async def run_task_to_outcome(
             pre_sid = None
     if autonomous and pre_sid:
         from agents.task.goals.autonomy_marker import mark_autonomous
-        mark_autonomous(pre_sid, goal_id)
+        mark_autonomous(pre_sid, goal_id, cron_job_id=cron_job_id)
 
     kwargs = {"session_id": pre_sid} if pre_sid else {}
     if creator is not None and create_session_accepts(task_agent.create_session, "creator"):
@@ -188,7 +194,7 @@ async def run_task_to_outcome(
         return RunOutcome(session_id=None)
     if autonomous:
         from agents.task.goals.autonomy_marker import mark_autonomous
-        mark_autonomous(session_id, goal_id)
+        mark_autonomous(session_id, goal_id, cron_job_id=cron_job_id)
     status = await task_agent.run_session(user_id, session_id)
     outcome = await build_run_outcome(task_agent, session_id, status)
     if autonomous:

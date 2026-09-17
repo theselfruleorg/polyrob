@@ -367,7 +367,7 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
             try:
                 run = await _run_task_to_outcome(
                     task_agent, user_id=job.user_id, request=request, autonomous=True,
-                    creator="cron",
+                    creator="cron", cron_job_id=job.id,
                 )
             finally:
                 # 044 T20 fix round 1 (Important 5): the scheduler's per-job

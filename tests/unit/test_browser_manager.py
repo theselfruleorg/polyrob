@@ -103,16 +103,44 @@ class TestBrowserManagerInitialization:
         mock_browser_class.assert_called_once()
         assert manager.browser == mock_browser_instance
 
-    @patch('tools.browser.browser_manager.Browser')
-    async def test_remote_endpoint_from_environment(self, mock_browser_class, bot_config, monkeypatch):
-        """Custody deployments can connect to an isolated remote browser."""
+    async def test_remote_endpoint_from_environment(self, bot_config, monkeypatch):
+        """Custody deployments can connect to an isolated remote browser.
+
+        REAL constructor, no Browser mock: the previous version of this test
+        mocked `Browser` and asserted on `call_args.kwargs['config']` — which is
+        the BotConfig slot — so it pinned the exact bug it was meant to catch
+        (the BrowserConfig was passed as `config=`, the endpoint never reached
+        the browser, and prod refused local Chromium beside a running remote
+        one, 2026-09-17)."""
         monkeypatch.setenv('BROWSER_CDP_URL', 'http://127.0.0.1:9222')
+        monkeypatch.setenv('AGENT_WALLET_ENABLED', 'true')
         manager = BrowserManager(config=bot_config)
         await manager.initialize()
 
-        config = mock_browser_class.call_args.kwargs['config']
-        assert config.cdp_url == 'http://127.0.0.1:9222'
-        assert config.wss_url is None
+        built = manager.browser.browser_config
+        assert built.cdp_url == 'http://127.0.0.1:9222'
+        assert built.wss_url is None
+        assert built.endpoint_kind() == 'cdp'
+        # The BotConfig slot holds the BotConfig, not the BrowserConfig.
+        assert manager.browser.config is bot_config
+        # And a custody process with the endpoint set never consults the local
+        # launch refusal (it connects instead).
+        from unittest.mock import patch as _patch, AsyncMock
+        with _patch('tools.browser.launch_security.require_local_browser_allowed',
+                    side_effect=AssertionError('must not refuse: endpoint is set')):
+            with _patch('tools.browser.browser.async_playwright') as pw:
+                driver = AsyncMock()
+                driver.stop = AsyncMock()
+                pw.return_value.start = AsyncMock(return_value=driver)
+                manager.browser._setup_browser = AsyncMock(return_value=object())
+                assert await manager.browser._init() is not None
+
+    async def test_endpoint_log_reads_what_was_built(self, bot_config, monkeypatch):
+        """The manager's log line derives from the built browser, not its own field."""
+        monkeypatch.setenv('BROWSER_WSS_URL', 'ws://127.0.0.1:3000/token')
+        manager = BrowserManager(config=bot_config)
+        await manager.initialize()
+        assert manager.browser.browser_config.endpoint_kind() == 'wss'
 
     @patch('tools.browser.browser_manager.Browser')
     async def test_background_tasks_not_started_on_initialize(self, mock_browser_class, bot_config):

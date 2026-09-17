@@ -114,13 +114,39 @@ def test_per_tx_cap_pref_only_tightens_the_safety_default(tmp_path):
     assert cfg.max_per_tx_usd == 200.0
 
 
-def test_per_tx_cap_both_min_wins(tmp_path):
-    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 800.0)
-    cfg = load_wallet_config({"AGENT_WALLET_MAX_PER_TX_USD": "500"}, user_id="u1", home_dir=tmp_path)
-    assert cfg.max_per_tx_usd == 500.0  # env is tighter -> env wins
+def test_per_tx_cap_owner_pref_overrides_env_within_the_daily_cap(tmp_path):
+    """Owner decision 2026-09-18: an owner-approved pref replaces the env
+    default in EITHER direction; the daily cap is the envelope."""
+    env = {"AGENT_WALLET_MAX_PER_TX_USD": "120", "WALLET_DAILY_CAP_USD": "500"}
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 220.0)
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    assert cfg.max_per_tx_usd == 220.0  # the owner's raise TOOK EFFECT
     write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 100.0)
-    cfg = load_wallet_config({"AGENT_WALLET_MAX_PER_TX_USD": "500"}, user_id="u1", home_dir=tmp_path)
-    assert cfg.max_per_tx_usd == 100.0  # pref is tighter -> pref wins
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    assert cfg.max_per_tx_usd == 100.0  # a lower pref still tightens
+
+
+def test_per_tx_cap_can_never_exceed_the_daily_cap(tmp_path):
+    """The whole safety argument now: a single transaction is at most what a
+    day may lose, so no raise from chat moves the maximum daily loss."""
+    env = {"AGENT_WALLET_MAX_PER_TX_USD": "120", "WALLET_DAILY_CAP_USD": "500"}
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 5000.0)
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    assert cfg.max_per_tx_usd == 500.0
+    # and the daily cap itself is still min-merged: a pref cannot widen it
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 9000.0)
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    assert cfg.daily_cap_usd == 500.0
+    assert cfg.max_per_tx_usd == 500.0
+
+
+def test_per_tx_cap_with_the_daily_cap_disabled_is_the_pref(tmp_path):
+    """`WALLET_DAILY_CAP_USD=none` is an explicit operator opt-out of the
+    envelope; there is nothing to clamp to."""
+    env = {"AGENT_WALLET_MAX_PER_TX_USD": "120", "WALLET_DAILY_CAP_USD": "none"}
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 800.0)
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    assert cfg.max_per_tx_usd == 800.0
 
 
 def test_per_tx_cap_pref_invalid_falls_back_to_env(tmp_path):
@@ -256,3 +282,53 @@ def test_daily_cap_pref_cannot_widen_above_the_new_default(tmp_path):
     # A pref that's actually tighter than the default still wins, unaffected.
     write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 30.0)
     assert effective_daily_cap_usd("u1", tmp_path, env={}) == 30.0
+
+
+# --- 2026-09-18: the owner caps are LIVE in the gate, not frozen at start --------
+#
+# `preferences explain` said `applies: live` for budget.wallet_per_tx_usd, and the
+# pref was on disk — but PolicyGate had copied the number at construction, so
+# nothing the owner approved from chat reached the gate until the next restart.
+
+def _gate(env, tmp_path):
+    from core.wallet.policy import PolicyGate
+    cfg = load_wallet_config(env, user_id="u1", home_dir=tmp_path)
+    return PolicyGate(max_per_tx_usd=cfg.max_per_tx_usd, daily_cap_usd=cfg.daily_cap_usd,
+                      cap_resolver=cfg.cap_resolver)
+
+
+def test_policy_gate_reads_an_owner_raise_without_a_restart(tmp_path):
+    env = {"AGENT_WALLET_MAX_PER_TX_USD": "120", "WALLET_DAILY_CAP_USD": "500"}
+    gate = _gate(env, tmp_path)
+    assert gate.per_tx_cap_usd == 120.0
+    assert not gate.check(venue="defi", amount_usd=197.0, idempotency_key="a").allowed
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 220.0)
+    assert gate.per_tx_cap_usd == 220.0
+    assert gate.check(venue="defi", amount_usd=197.0, idempotency_key="b").allowed
+
+
+def test_policy_gate_reads_an_owner_tightening_without_a_restart(tmp_path):
+    env = {"AGENT_WALLET_MAX_PER_TX_USD": "500", "WALLET_DAILY_CAP_USD": "500"}
+    gate = _gate(env, tmp_path)
+    assert gate.check(venue="defi", amount_usd=300.0, idempotency_key="a").allowed
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 100.0)
+    write_preference(tmp_path, "u1", "budget.wallet_daily_usd", 150.0)
+    assert not gate.check(venue="defi", amount_usd=300.0, idempotency_key="b").allowed
+    assert gate.daily_cap_usd == 150.0
+
+
+def test_a_gate_without_a_resolver_keeps_its_constructed_caps(tmp_path):
+    from core.wallet.policy import PolicyGate
+    gate = PolicyGate(max_per_tx_usd=42.0, daily_cap_usd=99.0)
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 1.0)
+    assert gate.per_tx_cap_usd == 42.0 and gate.daily_cap_usd == 99.0
+
+
+def test_a_raising_resolver_keeps_the_constructed_caps():
+    from core.wallet.policy import PolicyGate
+
+    def _boom():
+        raise RuntimeError("store gone")
+    gate = PolicyGate(max_per_tx_usd=42.0, daily_cap_usd=99.0, cap_resolver=_boom)
+    assert gate.per_tx_cap_usd == 42.0 and gate.daily_cap_usd == 99.0
+    assert gate.has_daily_cap

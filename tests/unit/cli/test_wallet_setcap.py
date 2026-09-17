@@ -101,15 +101,16 @@ def test_output_shows_file_new_cap_and_restart_note(tmp_path):
 
 def test_output_includes_policygate_tighten_only_note(tmp_path):
     # core.wallet.config.effective_daily_cap_usd / effective_max_per_tx_usd are
-    # now real callers wired into load_wallet_config() -> PolicyGate (owner-UX
-    # G-13, verified via `grep -rn "effective_daily_cap_usd\|effective_max_per_tx_usd"
-    # core/ modules/ tools/ | grep -v test`) — the command now says a pref can
-    # only TIGHTEN the env cap, not that wiring is pending.
+    # real callers wired into load_wallet_config() -> PolicyGate (owner-UX
+    # G-13) and re-resolved live since 2026-09-18. The command states the two
+    # merge rules: the daily cap is min-merged (a pref can only tighten it);
+    # the per-tx ceiling is an owner-override clamped to the daily cap.
     home = tmp_path / "home"
     res = _invoke(["set-cap", "daily", "10", "--yes", "--home", str(home)])
     assert res.exit_code == 0, res.output
-    assert "TIGHTEN" in res.output
-    assert "never raise or disable" in res.output
+    assert "tighten only" in res.output
+    assert "budget.wallet_per_tx_usd" in res.output
+    assert "apply live" in res.output
 
 
 def test_confirmation_prompt_shows_exact_key_value_and_path(tmp_path):

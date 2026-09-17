@@ -2,7 +2,6 @@ import pytest
 from types import SimpleNamespace
 from core.surfaces.message_router import MessageRouter
 from core.surfaces.session_chat_registry import SessionChatRegistry
-from core.surfaces import turn_reply
 from agents.task.session.feed import build_stream_publish
 
 
@@ -62,31 +61,3 @@ async def test_no_session_key_is_noop(tmp_path, monkeypatch):
     fn = build_stream_publish(_R(reg), session_key=None)
     await fn(chunk="Hello", step=1)
     assert published == []
-
-
-@pytest.mark.asyncio
-async def test_live_stream_claims_the_reply_latch(monkeypatch):
-    """A visible streamed reply must suppress done()'s bookkeeping recap."""
-    monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
-
-    class _R:
-        async def publish(self, msg):
-            return True  # MessageRouter uses True only for a visible live stream.
-
-    orch = SimpleNamespace()
-    await build_stream_publish(_R(), "agent:main:telegram:dm:1", orch)("Answer")
-    assert turn_reply.reply_published(orch) is True
-
-
-@pytest.mark.asyncio
-async def test_buffered_stream_does_not_claim_the_reply_latch(monkeypatch):
-    """A buffered delta needs done() to make it visible, so it cannot claim."""
-    monkeypatch.setenv("SINGULAR_CHAT_ENABLED", "true")
-
-    class _R:
-        async def publish(self, msg):
-            return False
-
-    orch = SimpleNamespace()
-    await build_stream_publish(_R(), "agent:main:telegram:dm:1", orch)("Answer")
-    assert turn_reply.reply_published(orch) is False

@@ -94,10 +94,21 @@ PREF_SCHEMA: dict[str, PrefSpec] = dict((
           "WALLET_DAILY_CAP_USD", min_value=0.0,
           description="Wallet daily cap; effective = min(pref, env), wired into "
                       "PolicyGate via load_wallet_config() (G-13)"),
-    _spec("budget.wallet_per_tx_usd", "float", SENSITIVITY_GUARDED, "min", "live",
+    # OWNER-OVERRIDE, not min-merged (owner decision 2026-09-18, after the
+    # owner hit the min-merge wall for the second time: an approved raise
+    # sat on disk as a tap that changed nothing, and the agent sent the owner
+    # to edit the env file and restart). The env value is the DEFAULT; an
+    # owner-approved pref replaces it in either direction. The operator's hard
+    # envelope is the DAILY cap, which stays min-merged and env-only: the read
+    # site (`core/wallet/config.py::effective_max_per_tx_usd`) clamps this to
+    # it, so a single transaction can never exceed what a day may lose and
+    # the maximum daily loss is unchanged by any raise made from chat.
+    _spec("budget.wallet_per_tx_usd", "float", SENSITIVITY_GUARDED, "override", "live",
           "AGENT_WALLET_MAX_PER_TX_USD", min_value=0.0,
-          description="Wallet per-transaction cap; effective = min(pref, env), wired "
-                      "into PolicyGate via load_wallet_config() (G-13)"),
+          description="Wallet per-transaction cap; an owner-approved pref replaces "
+                      "the env default, clamped to the daily cap (never above "
+                      "WALLET_DAILY_CAP_USD); wired into PolicyGate via "
+                      "load_wallet_config() (G-13)"),
     # NOT min-merged, unlike the two wallet caps above, and deliberately so.
     # This is not a loss ceiling -- it is how much runs WITHOUT interrupting the
     # owner, and the catastrophic backstop (AGENT_WALLET_MAX_PER_TX_USD) still
@@ -1231,6 +1242,40 @@ def _archive_pref_proposal(home_dir: Path | str, user_id: Optional[str], path: P
         pass
 
 
+def _min_merge_noop(key: str, coerced: object) -> Optional[str]:
+    """Why a proposed value for a min-merged key could never take effect, or
+    None when it can.
+
+    A min-merged key (the daily wallet cap, the goal quotas) resolves to
+    ``min(pref, env)``, so a pref ABOVE the operator's env value changes
+    nothing. Until 2026-09-18 such a proposal was queued anyway: the owner saw
+    "tap to approve", tapped, and the guard kept reading the env value — a tap
+    that lies is worse than a refusal (prod, 2026-09-17: two decorative
+    ceiling proposals in one afternoon). Refuse up front and name the one line
+    that would actually move it. Fail-open: an unparseable env value queues
+    the proposal as before.
+    """
+    spec = PREF_SCHEMA.get(key)
+    if spec is None or spec.merge != "min" or not spec.env_flag:
+        return None
+    raw_env = os.environ.get(spec.env_flag)
+    if raw_env is None:
+        return None
+    ok, env_value, _err = validate_pref(key, raw_env)
+    if not ok:
+        return None
+    try:
+        if float(coerced) <= float(env_value):
+            return None
+    except (TypeError, ValueError):
+        return None
+    return (f"{key}={coerced} would change nothing: the effective value is "
+            f"min(pref, env) and the operator env {spec.env_flag}={env_value} "
+            f"is lower. Raising it is an operator change — set "
+            f"{spec.env_flag}={coerced} in the service env file (polyrob.env) "
+            f"and restart; a preference can only tighten this one.")
+
+
 def propose_pref_change(user_id: Optional[str], key: str, value: object,
                         home_dir: Path | str,
                         instance_id: Optional[str] = None,
@@ -1277,6 +1322,9 @@ def propose_pref_change(user_id: Optional[str], key: str, value: object,
         ok, coerced, err = validate_pref(key, value)
         if not ok:
             return False, err
+        noop = _min_merge_noop(key, coerced)
+        if noop:
+            return False, noop
     path = _pref_proposal_path(home_dir, user_id, key, instance_id)
     if path is None:
         return False, "empty or unsafe user_id refused (tenant scope)"

@@ -324,6 +324,12 @@ async def _run_session(
                     creator="cli",
                 )
             session_id = session_info["id"]
+            # A session this terminal created is rendered here, live; a
+            # --resume'd one keeps the durable rail (2026-08-28 incident).
+            from core.surfaces.binding import bind_terminal_surface
+            _orch_new = task_agent.get_orchestrator(session_id)
+            if _orch_new is not None:
+                bind_terminal_surface(_orch_new)
         except Exception as e:
             # F1/F8: render the actionable block for a session-limit error (shared
             # with the REPL), the raw message otherwise.

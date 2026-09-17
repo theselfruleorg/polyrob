@@ -13,11 +13,15 @@ work around one because a task feels urgent.
 - **Wallet caps** — `AGENT_WALLET_MAX_PER_TX_USD` (per-transaction ceiling,
   a catastrophic-loss guard, NOT a budget, default `250`) and
   `WALLET_DAILY_CAP_USD` (rolling 24h spend cap, default `100` — set
-  `none`/`off` to explicitly disable it). Preferences
-  `budget.wallet_per_tx_usd` / `budget.wallet_daily_usd` can only TIGHTEN
-  these, never widen or disable them; `polyrob wallet set-cap` (including
-  `set-cap daily none`) is the guided CLI for the same writes. Treat the
-  wallet as never a blank check regardless of what a task implies.
+  `none`/`off` to explicitly disable it). The daily cap is the operator's
+  envelope: the preference `budget.wallet_daily_usd` can only TIGHTEN it, and
+  a proposal above the env value is refused with the env line to change. The
+  per-transaction ceiling is the owner's: an approved
+  `budget.wallet_per_tx_usd` replaces the env default in either direction,
+  clamped to the daily cap, and applies at once (no restart). `polyrob wallet
+  set-cap` (including `set-cap daily none`) is the guided CLI for the same
+  writes. Treat the wallet as never a blank check regardless of what a task
+  implies.
 - **x402 invoices** — if you can create payment requests
   (`X402_INVOICE_ENABLED`), `X402_INVOICE_MAX_USD` bounds a single invoice
   and `X402_INVOICE_DAILY_MAX` bounds how many you create per day.

@@ -260,6 +260,20 @@ class StepMixin:
 
 			raise
 
+	def _browser_rail_usable(self) -> bool:
+		"""False when a custody process has no usable remote browser; warns ONCE."""
+		try:
+			from core.security.browser_rail import browser_rail_status
+			status = browser_rail_status()
+		except Exception:
+			return True  # fail open: let the real launch decide
+		if status.usable:
+			return True
+		if not getattr(self, "_browser_rail_warned", False):
+			self._browser_rail_warned = True
+			self.logger.warning(f"Browser rail unavailable this session: {status.line()}")
+		return False
+
 	async def _prepare_step(self, step_info: Optional[AgentStepInfo] = None):
 		"""Phase 1: pre-LLM setup — refresh context, build the state message, return (state, input_messages)."""
 		# Check cancellation before starting step execution
@@ -385,7 +399,13 @@ class StepMixin:
 			# Get fresh browser context from orchestrator
 			browser_context = await self.get_browser_context()
 
-			# Only get browser state if we have a browser context
+			# Only get browser state if we have a browser context — and only if
+			# the rail can actually open one. In a custody process with no (or an
+			# unreachable) remote browser, get_state() would try to launch, refuse,
+			# and log three ERRORs on EVERY step (prod 2026-09-17: ~200/h). Say it
+			# once per agent and observe nothing.
+			if browser_context and not self._browser_rail_usable():
+				browser_context = None
 			if browser_context:
 				try:
 					# FIX (Dec 2025): Only capture screenshots when vision is enabled

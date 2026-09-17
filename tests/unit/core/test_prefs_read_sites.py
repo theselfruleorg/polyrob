@@ -148,11 +148,16 @@ def test_wallet_daily_cap_explicit_sentinel_still_lets_pref_set_a_cap(tmp_path, 
     assert effective_daily_cap_usd("u1", tmp_path) == 5.0
 
 
-def test_wallet_per_tx_cap_min_merge(tmp_path, monkeypatch):
+def test_wallet_per_tx_cap_owner_override_bounded_by_the_daily_cap(tmp_path, monkeypatch):
+    """2026-09-18: the env value is the default, an owner-approved pref
+    replaces it, and the daily cap (env-only, min-merged) is the envelope."""
     monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "500")
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "600")
     from core.wallet.config import effective_max_per_tx_usd
     write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 800.0)
-    assert effective_max_per_tx_usd("u1", tmp_path) == 500.0   # env ceiling holds
+    assert effective_max_per_tx_usd("u1", tmp_path) == 600.0   # daily envelope holds
+    write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 550.0)
+    assert effective_max_per_tx_usd("u1", tmp_path) == 550.0   # the raise took effect
     write_preference(tmp_path, "u1", "budget.wallet_per_tx_usd", 100.0)
     assert effective_max_per_tx_usd("u1", tmp_path) == 100.0
 
@@ -182,3 +187,37 @@ def test_digest_channel_overridden_by_pref(tmp_path):
     assert effective_digest_channel("u1", tmp_path) == "telegram"
     write_preference(tmp_path, "u1", "digest.channel", "email")
     assert effective_digest_channel("u1", tmp_path) == "email"
+
+
+# --- 2026-09-18: a proposal that cannot take effect is refused, not queued -------
+
+def test_a_daily_cap_raise_above_the_env_is_refused_with_the_env_line(tmp_path, monkeypatch):
+    """min-merged key + env set + pref above env = a tap that would lie."""
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "500")
+    from core.prefs import propose_pref_change
+    ok, msg = propose_pref_change("u1", "budget.wallet_daily_usd", 900.0, tmp_path)
+    assert ok is False
+    assert "WALLET_DAILY_CAP_USD=900.0" in msg and "min(pref, env)" in msg
+
+
+def test_a_daily_cap_tightening_still_queues(tmp_path, monkeypatch):
+    monkeypatch.setenv("WALLET_DAILY_CAP_USD", "500")
+    from core.prefs import propose_pref_change
+    ok, result = propose_pref_change("u1", "budget.wallet_daily_usd", 100.0, tmp_path)
+    assert ok is True and result == "budget.wallet_daily_usd"
+
+
+def test_a_per_tx_raise_is_no_longer_a_noop_so_it_queues(tmp_path, monkeypatch):
+    """The per-tx cap is owner-override now (bounded by the daily cap at the
+    read site); a raise above the env default is a REAL change and queues."""
+    monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "120")
+    from core.prefs import propose_pref_change
+    ok, result = propose_pref_change("u1", "budget.wallet_per_tx_usd", 220.0, tmp_path)
+    assert ok is True and result == "budget.wallet_per_tx_usd"
+
+
+def test_no_env_set_means_a_raise_queues(tmp_path, monkeypatch):
+    monkeypatch.delenv("WALLET_DAILY_CAP_USD", raising=False)
+    from core.prefs import propose_pref_change
+    ok, _ = propose_pref_change("u1", "budget.wallet_daily_usd", 900.0, tmp_path)
+    assert ok is True

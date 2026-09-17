@@ -6,6 +6,178 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-09-18
+
+### Added
+
+- X OAuth 2.0 user token: encrypted store + **auto-refresh** (`tools/x_oauth2.py`).
+  The X Chat DM read (where every inbound DM now lands) needs a user-context
+  OAuth2 token that X expires two hours after mint; the tree read ONE static
+  env value and never refreshed it, so a hand-minted token proved the rail once
+  and then inbound went dark. Every consumer (`surfaces/x/client.py`,
+  `tools/twitter_tool.py`, the `polyrob x`/gateway presence checks, the CLI
+  twitter gate) now resolves through `resolve_access_token`: store → refresh
+  within 5 min of expiry (refresh token ROTATED and persisted before the old one
+  is dropped; a failed refresh keeps the old pair) → env seed
+  (`TWITTER_OAUTH2_ACCESS_TOKEN` + new `TWITTER_OAUTH2_REFRESH_TOKEN`, stored
+  once) → static env override. The DM client retries a 401 exactly once on a
+  refreshed token; the twitter tool rebuilds its DM + Chat clients before every
+  DM read/send. `polyrob x-account oauth-login` (PKCE with a local callback),
+  `oauth-import` (hidden prompts), `oauth-status`, `oauth-refresh`. New flags
+  `TWITTER_OAUTH2_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN`.
+
+### Changed
+
+- **The per-transaction wallet ceiling is the owner's, from chat** (owner ruling
+  2026-09-18, after the second time an approved raise did nothing).
+  `budget.wallet_per_tx_usd` is now an owner-override preference: an approved
+  value replaces the `AGENT_WALLET_MAX_PER_TX_USD` default in either direction,
+  clamped to the daily cap (`core/wallet/config.py::effective_max_per_tx_usd`).
+  The daily cap (`budget.wallet_daily_usd` over `WALLET_DAILY_CAP_USD`) stays
+  min-merged and env-only — it is the operator's hard envelope, so a single
+  transaction can never exceed what a day may lose and no raise made from chat
+  moves the maximum daily loss. Prod 2026-09-17: the owner approved
+  `wallet_per_tx_usd = 220`, the pref sat on disk, the guard kept reading the
+  env's $120, and the agent asked the owner to edit `polyrob.env` and restart.
+
+### Fixed
+
+- **The wallet caps apply LIVE.** `PolicyGate` copied both caps at construction
+  (process start), so `budget.wallet_per_tx_usd` / `budget.wallet_daily_usd` —
+  documented and shown as `applies: live` — took effect only at the next
+  restart, in EITHER direction (an owner tightening from chat was just as
+  inert). `WalletConfig.cap_resolver` (`live_caps_resolver`) is consulted on
+  every `check()` and by the cap properties; a hand-built config keeps the
+  frozen values; a raising resolver keeps what the gate had.
+- **The approval pre-hook read the raw env ceiling, not the owner's.**
+  `spend_lane.autonomous_ceiling_usd()` read `DEFI_AUTONOMOUS_MAX_USD` while
+  `tx_guard` step 9 read the pref-resolved `budget.defi_autonomous_usd`, so the
+  two halves of one lane disagreed: the owner approved a $300 autonomous
+  ceiling, tx_guard honoured it, and the hook still demanded a tap for every
+  live swap over the env's $5 — three taps in one afternoon for trades the
+  owner had said may run unattended, and an unattended cron buyback that could
+  never run. The hook now delegates to `tx_guard.autonomous_max_usd` (fail-open
+  to the env value, never wider).
+- **Approving an ask a CRON run raised re-arms the job instead of waking the
+  dead run.** The ask had no goal to re-arm, so resume-on-grant self-woke the
+  finished cron session — a forged turn the money guard refuses — and the agent
+  told the owner "trigger it from your seat" for a trade the owner had just
+  approved (prod 2026-09-17 16:14). Autonomous sessions now remember their cron
+  job (`autonomy_marker.cron_job_for_session`, threaded through
+  `run_task_to_outcome(cron_job_id=)`), the ask carries `cron_job_id`, and an
+  approval pulls that job's `next_run_at` to now (`core/cron_rearm.py`, the one
+  UPDATE both `CronJobStore.run_now` and the owner queue use) so the next tick —
+  a genuine cron turn — redeems the grant. No wake. A running job is left alone
+  and the owner is told its next run redeems the grant.
+- **A guarded proposal that could never take effect is refused, not queued.**
+  For a min-merged key with the env set, a value above the env value resolved
+  to the env value after the tap — the owner saw "tap to approve", tapped, and
+  nothing moved. `propose_pref_change` now refuses up front and names the exact
+  env line (`WALLET_DAILY_CAP_USD=…` in the service env file) that would.
+
+- `FileTokenStore` writes follow the shared-data identity convention
+  (`<writer>:polyrob-data 0660` under a group-writable data dir; an existing
+  file keeps its mode + group). It wrote `0600` in the writer's primary group,
+  so the OAuth2 pair the root CLI imported was unreadable by `polyrob-agent`
+  — the unit that needed it — and an agent-written refresh would have been
+  unreadable by the owner's CLI the same way.
+- `FileTokenStore` no longer treats an UNREADABLE file as a CORRUPT one. On
+  prod the `polyrob-email` unit (a non-root service identity) got `EACCES` on
+  the root-owned `0600` X token store that `polyrob.service` had just written,
+  and the corruption branch renamed the file aside — deleting the agent's
+  freshly imported OAuth2 pair from under the process that owned it. An
+  `OSError` on read now logs and yields an empty in-memory store for THAT
+  process only; the file is left where it is.
+
+- **The browser rail under wallet custody (proposal 049).** A custody process
+  refused local Chromium — correctly — but never reached the isolated browser
+  it was told to use: `BrowserManager` passed the `BrowserConfig` into
+  `Browser`'s BotConfig slot, so `BROWSER_CDP_URL`/`BROWSER_WSS_URL` were
+  dropped (prod 2026-09-17: the service ran, the env was set, 4,517 refusals in
+  24 h, and the agent told the owner "no remote browser configured"). Over CDP,
+  every session then attached to the service's default PERSISTENT context — no
+  `storage_state` (the X login silently dropped), no service-worker block, one
+  cookie jar shared by every session and tenant. Both fixed: the endpoint
+  reaches the browser, and a remote browser always gets a fresh context.
+- Owner-ceremony launches (`x-account capture-session`/`signup`, the pfp still)
+  now consult the one launch policy: refused under custody, scrubbed env,
+  sandbox on. `tests/test_browser_launch_ratchet.py` pins the launch sites.
+
+### Added
+
+- `core/security/browser_rail.py`: the ONE answer to "can this process drive a
+  browser, and through what" — `none (custody) → install`, `configured,
+  unreachable (<reason>) → check the service`, `remote cdp ok (<version>)`.
+  Read by the launch refusal, the step loop (which now skips the per-step page
+  observation and warns once instead of three ERRORs per step), the
+  `<tool-catalog>` (`gated:custody-no-browser` for `browser`/`x_browser`/
+  `dapp_browser`), the status snapshot's `identity` section (`browser:` line;
+  WARN only when a configured endpoint fails) and `polyrob doctor`.
+- `polyrob browser install|update|status|render`: the isolated browser
+  service as a boundary — dedicated UID, Chromium **sandbox on** via an AppArmor
+  `userns` profile (Ubuntu 24.04 restricts unprivileged user namespaces; the
+  earlier unit's `--no-sandbox` was a wrong diagnosis of that), a UID-keyed nft
+  egress chain (no loopback / RFC1918 / link-local / metadata from the browser),
+  Chromium for the venv's Playwright pin. `deployment/polyrob-browser.service`,
+  `polyrob-browser-egress.service`, `hardening/polyrob-browser-egress.sh` and
+  `hardening/apparmor/polyrob-browser` are the CLI's rendered output, pinned by
+  a test. `scripts/deploy_prod.sh` prints the browser revision beside the pin
+  and updates on drift. `--mode server --listen <private-ip>` on a SECOND host
+  writes a Playwright-server unit instead (token in a root-only env file,
+  private bind enforced) and prints the agent's `BROWSER_WSS_URL` — the shape
+  that removes the shared kernel. Guide: `docs/guide/self-hosting.md`.
+
+### Fixed
+
+- The REPL painted 5–10 blank rows above the prompt for every provider error
+  and never showed the error text: `core/logging.py` gave the file handler
+  and the console handler ONE `ComfyFormatter`, whose 0.5 s duplicate filter
+  saw the console's copy of each record as a repeat of the file's and
+  returned `""` — the `StreamHandler` still wrote the newline, and every such
+  write erased and redrew the prompt. Duplicate suppression is now a
+  per-handler `logging.Filter` (a formatter cannot drop a record), and the
+  REPL console renders one compact `✗ component: message` line per error;
+  a re-wrapped exception (one 401 logged five layers of the same text) is
+  collapsed to its first line on the console only — `bot.log` keeps every
+  layer.
+- Gemini: a text part was dropped and logged as `Gemini function_call
+  missing name` at ERROR. A proto `Part` answers `hasattr(part,
+  "function_call")` True for every oneof member, so a plain text part hit the
+  nameless-call branch and `continue`d — every text-only Gemini reply became
+  "Model output has empty action list", the model was pushed into a filler
+  step, and the REPL showed a second bubble ("Я жду твоего ответа"). Presence
+  is now asked via `"function_call" in part`.
+- A session the terminal created (REPL, one-shot `polyrob run`) is a live
+  surface: it renders every reply from the feed but bound no router, so
+  `maybe_deliver_autonomous_send` pushed each chat reply through the owner
+  delivery rail — dedup, the hourly rate limit and the daily cap included.
+  Past the cap `send_message` told the model its answer was "NOT delivered",
+  the model re-sent an apology (another duplicate bubble) and the turn closed
+  `failed`. `core.surfaces.binding.bind_terminal_surface` marks such a
+  session; `--resume` keeps the durable rail (2026-08-28 incident).
+- The bounded planning turn (`ALLOWED_REASONING_TURNS`) no longer logs two
+  ERROR lines ("violates the agent contract") before the caller grants it.
+
+### Changed
+
+- `done(text)` no longer reaches the user on any chat surface. `done` writes
+  the run log (history + session feed) and nothing else; only `send_message`
+  / `message` speak, in a DM as in a room — exactly what the prompt has told
+  the model since C1. The old router mirror published `done` whenever
+  `send_message` had not claimed the turn, and the `message` tool (a file
+  with a caption) never claimed it, so on prod (2026-09-17) the owner received
+  the answer AND a 2,400-char third-person session recap after every such
+  turn. The unbound HTTP paths (`chat_once`, `/v1/chat/completions`) still
+  fall back to `done`'s text for the response body when the turn spoke
+  nothing — a request needs a body.
+
+### Removed
+
+- `CHAT_SINGLE_FINAL`. Its only consumer was the `done` mirror's latch gate;
+  with the mirror gone there is no second voice to gate, and a flag would be
+  a knob on a rule the prompt states without one. `core/surfaces/turn_reply.py`
+  keeps only the reply-text record the unbound paths read.
+
 ## [1.0.1] — 2026-09-17
 
 ### Added

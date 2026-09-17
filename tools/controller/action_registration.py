@@ -302,27 +302,12 @@ class ActionRegistrationMixin(DocAuthoringMixin):
 					except Exception as e:
 						self.logger.debug(f"Could not add completion to feed: {e}")
 
-					# C10: mirror the completion text into the unified MessageRouter seam so a
-					# bound chat surface (Singular Chat) delivers it once — matching send_message.
-					# Without this, the harness skipping its post-run deliver for bound sessions
-					# would silence done()-terminated turns (done doesn't otherwise reach the
-					# router). No-op + fail-open when unbound (build_discrete_publish → no router).
-					#
-					# C1: this mirror is now the turn's SAFETY NET, not a second voice —
-					# it publishes only when the turn spoke nothing, so a done()-only turn
-					# still reaches the user while an answer-then-recap turn delivers one
-					# message instead of two. Gate CHAT_SINGLE_FINAL.
-					try:
-						from core.surfaces.outbound_mirror import build_completion_publish
-						_mirror = build_completion_publish(
-							getattr(self.orchestrator, "_message_router", None),
-							getattr(self.orchestrator, "_chat_session_key", None),
-							self.orchestrator,
-							**_publish_context(self),
-						)
-						await _mirror(completion_msg)
-					except Exception as e:
-						self.logger.debug(f"Could not mirror completion to router: {e}")
+					# done's text is NOT delivered. Until 2026-09-17 a router mirror here
+					# published it whenever send_message had not claimed the turn — and
+					# the `message` tool (a file with a caption) never claims it, so the
+					# owner got the answer AND a third-person recap as a second bubble.
+					# The prompt promises send_message is the only verb the user reads;
+					# the feed entry above is the run log, and that is all done writes.
 
 				self.logger.info(f'Task marked as done: {completion_msg}')
 				return ActionResult(is_done=True, extracted_content=completion_msg)

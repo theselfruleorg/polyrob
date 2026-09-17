@@ -18,6 +18,7 @@ with warnings.catch_warnings():
 
 from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.token_counter import count_messages_tokens
+from modules.llm.gemini_parts import part_is_function_call
 from core.exceptions import LLMError, LLMConnectionError, LLMRateLimitError, ServiceError
 from core.config import BotConfig
 
@@ -387,7 +388,6 @@ class GeminiClient(LLMClient):
                 
             # Convert messages to Gemini format
             gemini_messages = []
-            has_system = False
             # H1 FIX: capture the system prompt (from the `system` kwarg OR embedded as a
             # role='system' message) and pass it natively via system_instruction below.
             # Previously a system message in `messages` was skipped and never re-added
@@ -400,7 +400,6 @@ class GeminiClient(LLMClient):
                 content = msg.get('content', '')
 
                 if role == 'system':
-                    has_system = True
                     # Prefer the content embedded in the message list — the agent builds
                     # the real system prompt there, not via the `system` kwarg.
                     if content and isinstance(content, str):
@@ -1195,7 +1194,8 @@ class GeminiClient(LLMClient):
                         if part_thought_sig:
                             self.logger.debug(f"[THOUGHT_SIG] Found thought_signature on part {i}: {str(part_thought_sig)[:50]}...")
 
-                        if hasattr(part, 'function_call'):
+                        # hasattr() is True for every oneof member — see gemini_parts.
+                        if part_is_function_call(part):
                             function_call = part.function_call
 
                             # Extract name with validation
@@ -1251,7 +1251,7 @@ class GeminiClient(LLMClient):
                                 self.logger.debug(f"[THOUGHT_SIG] Attached to tool call '{name}'")
 
                             tool_calls.append(tool_call_data)
-                        elif hasattr(part, 'text'):
+                        elif isinstance(getattr(part, 'text', None), str):
                             response_text += part.text
 
             # Extract usage data

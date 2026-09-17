@@ -434,6 +434,23 @@ def _materialize_cli_optional_descriptors() -> set:
     return enabled
 
 
+
+def _x_oauth2_store_present() -> bool:
+    """Core-tier probe: does the encrypted X token store hold an ``x_oauth2``
+    record? Reads only the store's KEY index (opaque Fernet values), so no
+    token is decrypted here and core imports nothing from the tools tier."""
+    try:
+        import json as _json
+        from core.runtime_paths import resolve_data_home
+        path = resolve_data_home() / ".x_session.json"
+        if not path.is_file():
+            return False
+        raw = _json.loads(path.read_text(encoding="utf-8"))
+        keys = raw.keys() if isinstance(raw, dict) else []
+        return any(str(k).endswith("x_oauth2") for k in keys)
+    except Exception:
+        return False
+
 def _cli_extra_gate(name: str) -> bool:
     """Extra per-tool enablement for STATICALLY-present descriptors whose gate is NOT a
     ``register_optional_tool()`` insert (their descriptor is always in the init order):
@@ -452,6 +469,8 @@ def _cli_extra_gate(name: str) -> bool:
     """
     if name == "twitter":
         return bool(os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN") or
+                    os.getenv("TWITTER_OAUTH2_REFRESH_TOKEN") or
+                    _x_oauth2_store_present() or
                     (os.getenv("TWITTER_API_KEY") and
                      os.getenv("TWITTER_ACCESS_TOKEN")))
     if name == "anysite":

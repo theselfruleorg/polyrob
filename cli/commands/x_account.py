@@ -72,8 +72,14 @@ async def _capture(timeout: int):
     from tools.x_browser.driver import XPageDriver
 
     click.echo("opening a browser at x.com/login — log in as the agent's account…")
+    from tools.browser.launch_security import desktop_launch_kwargs
+    try:
+        launch_kwargs = desktop_launch_kwargs(headless=False)
+    except RuntimeError as e:  # custody: never launch Chromium beside the signer
+        raise click.ClickException(
+            f"{e} Run capture-session on your desktop, not on the custody host.")
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=False)
+        browser = await pw.chromium.launch(**launch_kwargs)
         context = await browser.new_context()
         page = await context.new_page()
         await page.goto("https://x.com/login", wait_until="domcontentloaded")
@@ -149,8 +155,15 @@ async def _signup(resume: bool, timeout: int, headless: bool):
     )
     from tools.email_providers.agentmail import AgentMailClient
 
+    from tools.browser.launch_security import desktop_launch_kwargs
+    try:
+        launch_kwargs = desktop_launch_kwargs(headless=headless)
+    except RuntimeError as e:  # custody: never launch Chromium beside the signer
+        raise click.ClickException(
+            f"{e} Run `polyrob x-account signup` on your desktop (the session store "
+            "is what the server reads), not on the custody host.")
     async with async_playwright() as pw:
-        browser = await pw.chromium.launch(headless=headless)
+        browser = await pw.chromium.launch(**launch_kwargs)
         context = await browser.new_context()
         page = await context.new_page()
         driver = XPageDriver(page)
@@ -204,3 +217,138 @@ async def _read_handle(page) -> str:
     except Exception:
         pass
     return ""
+
+
+# ---------------------------------------------------------------------------
+# OAuth 2.0 user token (X Chat DM read) — store, import, PKCE login, refresh
+# ---------------------------------------------------------------------------
+
+def _oauth_status_lines(st: dict) -> list:
+    lines = []
+    if st.get("stored"):
+        left = st.get("expires_in_sec", 0)
+        state = "EXPIRED" if st.get("expired") else f"valid for {left // 60} min"
+        lines.append(click.style("OAuth2 token stored", fg="green") + f": {state}"
+                     f" · refresh token {'yes' if st.get('has_refresh_token') else 'NO'}"
+                     f" · scope [{st.get('scope') or '?'}] · source {st.get('source') or '?'}")
+    else:
+        lines.append(click.style("no OAuth2 token stored", fg="yellow")
+                     + (" (static TWITTER_OAUTH2_ACCESS_TOKEN env is set — it expires 2h "
+                        "after mint and nothing refreshes it)" if st.get("static_env") else ""))
+    lines.append(f"client id: {'set' if st.get('client_id_set') else 'MISSING (TWITTER_OAUTH2_CLIENT_ID)'}"
+                 f" · client secret: {'set' if st.get('client_secret_set') else 'not set (public app)'}")
+    if st.get("stored") and not st.get("has_refresh_token"):
+        lines.append(click.style("⚠ no refresh token — the store cannot renew this token; "
+                                 "re-run oauth-login with offline.access", fg="yellow"))
+    return lines
+
+
+@x_account.command("oauth-status")
+def oauth_status():
+    """Show the OAuth 2.0 user-token state (no secret values)."""
+    from tools.x_oauth2 import status
+    for line in _oauth_status_lines(status()):
+        click.echo(line)
+
+
+@x_account.command("oauth-import")
+@click.option("--expires-in", type=int, default=None,
+              help="Seconds of life left on the access token (default: assume a fresh 7200).")
+def oauth_import(expires_in):
+    """Store an access + refresh token pair minted elsewhere (hidden prompts).
+
+    Use this when you ran the PKCE flow by hand. The pair is stored encrypted
+    and refreshed automatically from then on; the env values are not needed.
+    """
+    from tools.x_oauth2 import import_pair, status
+    access = click.prompt("access token", hide_input=True).strip()
+    refresh = click.prompt("refresh token (blank = none)", hide_input=True,
+                           default="", show_default=False).strip()
+    import_pair(access, refresh, expires_in=expires_in)
+    click.echo(click.style("stored", fg="green") + " — encrypted in the X token store.")
+    for line in _oauth_status_lines(status()):
+        click.echo(line)
+    if not (os.environ.get("TWITTER_OAUTH2_CLIENT_ID") or "").strip():
+        click.echo(click.style("⚠ TWITTER_OAUTH2_CLIENT_ID is not set: the token can be USED "
+                               "but not REFRESHED. Set it (and the secret for a confidential "
+                               "app) in the instance env.", fg="yellow"))
+
+
+@x_account.command("oauth-refresh")
+def oauth_refresh():
+    """Refresh the stored token now (proves the client id/secret + refresh token work)."""
+    from tools.x_oauth2 import refresh, status
+    try:
+        refresh()
+    except Exception as e:
+        raise click.ClickException(f"refresh failed: {e}")
+    click.echo(click.style("refreshed", fg="green"))
+    for line in _oauth_status_lines(status()):
+        click.echo(line)
+
+
+@x_account.command("oauth-login")
+@click.option("--port", default=8765, type=int, help="Local callback port (must match the app's redirect URI).")
+@click.option("--timeout", default=600, type=int, help="Seconds to wait for the browser redirect.")
+@click.option("--no-browser", is_flag=True, default=False, help="Print the URL instead of opening a browser.")
+def oauth_login(port: int, timeout: int, no_browser: bool):
+    """Mint the OAuth 2.0 user token with a PKCE flow (login AS the agent's account).
+
+    Needs TWITTER_OAUTH2_CLIENT_ID (+ _CLIENT_SECRET for a confidential app) and
+    the app's redirect URI set to http://127.0.0.1:<port>/callback. Stores the
+    pair encrypted; refreshes are automatic afterwards.
+    """
+    import secrets as _secrets
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    from tools.x_oauth2 import authorize_url, exchange_code, pkce_pair, status
+
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    verifier, challenge = pkce_pair()
+    state = _secrets.token_urlsafe(16)
+    try:
+        url = authorize_url(redirect_uri=redirect_uri, state=state, code_challenge=challenge)
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    result: dict = {}
+
+    class _Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            q = parse_qs(urlparse(self.path).query)
+            result["code"] = (q.get("code") or [""])[0]
+            result["state"] = (q.get("state") or [""])[0]
+            result["error"] = (q.get("error") or [""])[0]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            self.wfile.write(b"polyrob: you can close this tab.")
+
+        def log_message(self, *a):  # silence
+            return
+
+    server = HTTPServer(("127.0.0.1", port), _Handler)
+    server.timeout = 1.0
+    click.echo("open this URL logged in AS the agent's X account:\n  " + url)
+    if not no_browser:
+        webbrowser.open(url)
+    waited = 0.0
+    while "code" not in result and waited < timeout:
+        server.handle_request()
+        waited += 1.0
+    server.server_close()
+    if "code" not in result:
+        raise click.ClickException("timed out waiting for the redirect — nothing stored.")
+    if result.get("error"):
+        raise click.ClickException(f"X refused: {result['error']}")
+    if result.get("state") != state:
+        raise click.ClickException("state mismatch — refusing the code (CSRF guard).")
+    try:
+        exchange_code(result["code"], redirect_uri=redirect_uri, code_verifier=verifier)
+    except Exception as e:
+        raise click.ClickException(f"token exchange failed: {e}")
+    click.echo(click.style("stored", fg="green") + " — encrypted OAuth2 pair for the agent's X account.")
+    for line in _oauth_status_lines(status()):
+        click.echo(line)

@@ -9,7 +9,7 @@ _logger = logging.getLogger(__name__)
 
 
 def build_stream_publish(
-    router: Any, session_key: Optional[str], orchestrator: Any = None,
+    router: Any, session_key: Optional[str],
 ) -> Callable[..., Awaitable[None]]:
     """Return an async ``(chunk, step) -> None`` that mirrors a streamed chunk into
     the unified outbound seam (``MessageRouter.publish``) as a partial OutboundMessage.
@@ -29,7 +29,7 @@ def build_stream_publish(
         try:
             from core.surfaces.envelopes import OutboundMessage
 
-            delivered_live = await router.publish(OutboundMessage(
+            await router.publish(OutboundMessage(
                 session_key=session_key,
                 text=chunk,
                 partial=True,
@@ -40,14 +40,6 @@ def build_stream_publish(
                 # and never finalize. `step` is retained for callers but no longer keys.
                 stream_id=session_key,
             ))
-            # A live stream is already the agent's visible reply.  Claim the
-            # same per-turn latch as send_message so a following done() cannot
-            # publish its internal completion recap as a second chat bubble.
-            # Buffered streams deliberately return False: their text still
-            # needs the final discrete message to reach the user.
-            if delivered_live is True and orchestrator is not None:
-                from core.surfaces.turn_reply import mark_reply_published
-                mark_reply_published(orchestrator)
         except Exception as e:  # fail-open: streaming mirror is non-critical
             _logger.debug("stream publish mirror failed: %s", e)
 
@@ -171,7 +163,6 @@ class FeedMixin:
         _mirror = build_stream_publish(
             getattr(self, "_message_router", None),
             getattr(self, "_chat_session_key", None),
-            self,
         )
         if callback is None:
             # Even with no legacy callback, the unified mirror may be active.

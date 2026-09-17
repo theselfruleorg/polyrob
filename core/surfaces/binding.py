@@ -194,6 +194,30 @@ def surface_profile(orchestrator: Any) -> Optional[dict]:
         return None
 
 
+def bind_terminal_surface(orchestrator: Any) -> None:
+    """Mark a session whose replies a FOREGROUND terminal renders live.
+
+    The REPL and one-shot ``polyrob run`` draw every ``send_message`` from the
+    session feed, but they bind no ``_message_router``/``_chat_session_key``,
+    so ``maybe_deliver_autonomous_send`` read them as a session with NO
+    surface and pushed each chat reply through the owner delivery rail —
+    dedup, the hourly rate limit and the daily cap included. Past the cap the
+    tool told the model its reply was "NOT delivered", the model re-sent an
+    apology (a second bubble on the terminal), and the turn closed ``failed``
+    (2026-09-17). Process-local by design: a later resume in another process
+    rebuilds the orchestrator without it and keeps the durable rail.
+    """
+    try:
+        orchestrator._terminal_attached = True
+    except Exception:  # a frozen/odd orchestrator: the rail stays as it was
+        logger.debug("bind_terminal_surface: could not mark orchestrator", exc_info=True)
+
+
+def terminal_attached(orchestrator: Any) -> bool:
+    """True when :func:`bind_terminal_surface` marked this orchestrator."""
+    return bool(getattr(orchestrator, "_terminal_attached", False))
+
+
 def surface_ask_capability(orchestrator: Any) -> Optional[bool]:
     """Can the surface bound to this orchestrator collect a reply (ask)?
 

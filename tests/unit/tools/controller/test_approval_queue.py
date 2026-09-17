@@ -677,3 +677,104 @@ async def test_a_rejection_never_wakes(board):
     await asyncio.sleep(0)
     await asyncio.sleep(0)
     assert spy.calls == []
+
+
+# --- 2026-09-18: a CRON run's ask re-arms the JOB, never wakes the dead session --
+#
+# Live on prod 2026-09-17 16:13-16:15. The buyback-ladder cron run hit the owner
+# queue, released its slot, and the owner tapped approve 56 s later. The ask had
+# no goal to re-arm, so resume-on-grant woke the FINISHED cron session — a
+# self-wake, a forged turn the money guard refuses — and the agent told the owner
+# "trigger it from your seat" for a trade the owner had just approved. The next
+# scheduled tick would have redeemed the grant, hours later. Now the ask names
+# its job and an approval pulls that job to the next tick.
+
+def _cron_store(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    from cron.jobs import CronJob, CronJobStore
+    store = CronJobStore(str(tmp_path / "cron.db"))
+    later = datetime.now(timezone.utc) + timedelta(hours=3)
+    store.add(CronJob(id="job-buyback", task="buyback tranche", schedule_spec="every 4h",
+                      user_id="u1", next_run_at=later))
+    return store, later
+
+
+@pytest.mark.asyncio
+async def test_an_ask_from_a_cron_run_names_its_job(
+        provider, board, autonomous_goal_turn, monkeypatch):
+    from agents.task.goals import autonomy_marker as am
+    am.mark_autonomous("s-cron", None, cron_job_id="job-buyback")
+    await provider.request("defi_trade_swap", {"amount_in": 0.04},
+                           _goal_ctx(session_id="s-cron"))
+    ask = board.asks(user_id="u1", status=ASK_OPEN)[0]
+    assert ask.payload.get("cron_job_id") == "job-buyback"
+    assert ask.payload.get("blocks_goal_ids") == []
+
+
+@pytest.mark.asyncio
+async def test_approving_a_cron_ask_re_arms_the_job_and_never_wakes(board, tmp_path):
+    from datetime import datetime, timezone
+    from tools.controller.approval_queue import decide_tool_approval, tap_display_id
+    store, later = _cron_store(tmp_path)   # beside goals.db, as on a real data home
+    ask = board.create_ask(user_id="u1", what="Approve defi_trade_swap?", why="x",
+                           force=True,
+                           extra_payload={"ask_kind": "tool_approval",
+                                          "tool_name": "defi_trade_swap",
+                                          "session_id": "s-cron",
+                                          "cron_job_id": "job-buyback"})
+    spy = _WakeSpy()
+    ok, msg = decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
+                                   approved=True, task_agent=spy)
+    assert ok is True
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert spy.calls == [], "a self-wake into a finished cron run cannot spend"
+    job = store.get("job-buyback")
+    assert job.next_run_at <= datetime.now(timezone.utc), "the job must be due now"
+    assert job.next_run_at < later
+    assert "next tick" in msg
+
+
+@pytest.mark.asyncio
+async def test_a_running_cron_job_is_not_re_armed(board, tmp_path):
+    """A CAS on status: a job mid-run keeps its row; the grant stays live for
+    its own next run and the owner is told so."""
+    from tools.controller.approval_queue import decide_tool_approval, tap_display_id
+    store, later = _cron_store(tmp_path)
+    assert store.claim_for_run("job-buyback")
+    ask = board.create_ask(user_id="u1", what="Approve defi_trade_swap?", why="x",
+                           force=True,
+                           extra_payload={"ask_kind": "tool_approval",
+                                          "tool_name": "defi_trade_swap",
+                                          "session_id": "s-cron",
+                                          "cron_job_id": "job-buyback"})
+    ok, msg = decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
+                                   approved=True, task_agent=_WakeSpy())
+    assert ok is True
+    assert store.get("job-buyback").next_run_at == later
+    assert "next run redeems" in msg
+
+
+@pytest.mark.asyncio
+async def test_rejecting_a_cron_ask_leaves_the_job_alone(board, tmp_path):
+    from tools.controller.approval_queue import decide_tool_approval, tap_display_id
+    store, later = _cron_store(tmp_path)
+    ask = board.create_ask(user_id="u1", what="Approve defi_trade_swap?", why="x",
+                           force=True,
+                           extra_payload={"ask_kind": "tool_approval",
+                                          "tool_name": "defi_trade_swap",
+                                          "session_id": "s-cron",
+                                          "cron_job_id": "job-buyback"})
+    decide_tool_approval(board, tap_display_id(ask.id), user_id="u1",
+                         approved=False, task_agent=_WakeSpy())
+    assert store.get("job-buyback").next_run_at == later
+
+
+def test_the_marker_remembers_which_cron_job_a_session_runs():
+    from agents.task.goals import autonomy_marker as am
+    am.mark_autonomous("s-c1", None, cron_job_id="job-1")
+    am.mark_autonomous("s-g1", "goal-1")
+    assert am.cron_job_for_session("s-c1") == "job-1"
+    assert am.cron_job_for_session("s-g1") is None
+    assert am.cron_job_for_session(None) is None
+    assert am.goal_for_session("s-c1") is None

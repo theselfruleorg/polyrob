@@ -542,3 +542,40 @@ def test_a_private_autonomous_send_still_reaches_the_owner():
     assert out == "sent"
     assert sink.sent == [("12345", "the build is green")]
     _SESSIONS.clear()
+
+
+def test_terminal_attached_send_is_not_routed():
+    """2026-09-17: the REPL renders its replies from the feed but binds no
+    router, so every chat reply went through the owner rail; past the hourly
+    rate limit the model was told its answer was NOT delivered and re-sent."""
+    from core.surfaces.binding import bind_terminal_surface
+    from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+    from agents.task.goals.autonomy_marker import _SESSIONS
+    _SESSIONS.clear()
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    orch = _orch(c, user_id="12345")
+    bind_terminal_surface(orch)
+    out = asyncio.run(maybe_deliver_autonomous_send(
+        orch, "sess-repl", "hello", event_log=ev))
+    assert out is None
+    assert not sink.sent
+
+
+def test_terminal_attached_autonomous_session_still_routes():
+    """A goal run that happens inside a REPL process has no human reading the
+    feed for it — the marker is per-orchestrator, and an autonomous session
+    keeps the durable rail."""
+    from core.surfaces.binding import bind_terminal_surface
+    from core.surfaces.user_delivery import maybe_deliver_autonomous_send
+    from agents.task.goals.autonomy_marker import mark_autonomous, _SESSIONS
+    _SESSIONS.clear()
+    mark_autonomous("sess-goal")
+    sink, ev = _Sink(), _EvLog()
+    c = _Container({"telegram_sink": sink})
+    orch = _orch(c, user_id="12345")
+    bind_terminal_surface(orch)
+    out = asyncio.run(maybe_deliver_autonomous_send(
+        orch, "sess-goal", "blocker", event_log=ev))
+    assert out == "sent"
+    _SESSIONS.clear()

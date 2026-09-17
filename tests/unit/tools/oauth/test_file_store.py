@@ -207,3 +207,56 @@ def test_two_instances_same_file_do_not_clobber(tmp_path):
     fresh2 = FileTokenStore(path)
     assert fresh2[("u1", "x")] == b"login-blob"
     assert ("u1", "x_signup") not in fresh2
+
+
+# --- unreadable is NOT corrupt: never rename another process's file -----------
+
+def test_permission_denied_leaves_the_file_in_place(tmp_path, caplog, monkeypatch):
+    """2026-09-17 prod: a non-root unit got EACCES on the root-owned store and the
+    corruption branch renamed it aside, deleting the agent's just-imported X
+    OAuth2 pair. A process that cannot READ a file has no standing to MOVE it."""
+    import logging
+    from pathlib import Path
+    from tools.oauth.file_store import FileTokenStore
+    path = tmp_path / "tokens.json"
+    path.write_text('{"u|p": "aGk="}')
+
+    real_read_text = Path.read_text
+
+    def _denied(self, *a, **k):
+        if self == path:
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_read_text(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", _denied)
+
+    with caplog.at_level(logging.WARNING):
+        store = FileTokenStore(path)
+        assert dict(store) == {}
+    assert path.exists()                          # NOT renamed aside
+    assert not list(tmp_path.glob("tokens.json.corrupt-*"))
+    msgs = [r.getMessage().lower() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any("not readable" in m and "untouched" in m for m in msgs)
+
+
+# --- shared-data identity: group + mode follow the directory / the target -----
+
+def test_new_file_in_group_writable_dir_is_0660_with_the_dir_group(tmp_path):
+    """Prod convention: <writer>:polyrob-data 0660 under a 0770 data dir. A
+    0600 file in the writer's primary group is unreadable by the sibling unit
+    that needs it (the agent could not read the root-imported pair, 2026-09-17)."""
+    d = tmp_path / "data"
+    d.mkdir()
+    d.chmod(0o770)  # umask-proof: the convention is a group-writable data dir
+    path = d / TOKENS_FILENAME
+    FileTokenStore(path)[("u", "p")] = b"x"
+    st = path.stat()
+    assert stat.S_IMODE(st.st_mode) == 0o660
+    assert st.st_gid == d.stat().st_gid
+
+
+def test_rewrite_preserves_the_existing_mode(tmp_path):
+    path = tmp_path / TOKENS_FILENAME
+    path.write_text("{}")
+    path.chmod(0o660)
+    FileTokenStore(path)[("u", "p")] = b"x"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o660

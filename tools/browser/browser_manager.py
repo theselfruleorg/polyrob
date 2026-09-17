@@ -122,11 +122,19 @@ class BrowserManager(BaseComponent):
                 cdp_url=self.browser_config.cdp_url,
                 wss_url=self.browser_config.wss_url,
             )
+            # `config=` is the BotConfig slot BaseTool reads; the BrowserConfig
+            # goes in `browser_config=`. Until 2026-09-17 the BrowserConfig was
+            # passed as `config=`, so Browser built a DEFAULT BrowserConfig and
+            # the remote endpoint (and disable_security) never reached it — a
+            # custody deployment refused local Chromium while an isolated
+            # browser service sat idle on 127.0.0.1:9222.
             self.browser = Browser(
                 headless=self.browser_config.headless,
-                config=browser_config
+                config=self.config,
+                browser_config=browser_config,
             )
-            endpoint = 'cdp' if self.browser_config.cdp_url else ('wss' if self.browser_config.wss_url else 'local')
+            # Report the endpoint from what was BUILT, not from our own field.
+            endpoint = self.browser.browser_config.endpoint_kind()
             self.logger.info(
                 "Browser initialized successfully "
                 f"(headless={self.browser_config.headless}, endpoint={endpoint})"

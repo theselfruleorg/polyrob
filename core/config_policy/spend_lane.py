@@ -154,12 +154,26 @@ def tiered_spend_lane_enabled() -> bool:
 
 
 def autonomous_ceiling_usd() -> float:
-    """The per-transaction ceiling, read from the SAME env var tx_guard reads.
+    """The per-transaction autonomous ceiling — the SAME number tx_guard step 9
+    reads, resolved the SAME way (owner pref ``budget.defi_autonomous_usd`` over
+    ``DEFI_AUTONOMOUS_MAX_USD``, clamped to the per-tx backstop).
 
-    Kept in sync by construction rather than by remembering: a divergence
-    would let this lane wave through a call tx_guard then refuses.
+    Until 2026-09-18 this read the RAW env var while tx_guard read the pref, so
+    the two halves of one lane disagreed: prod's owner approved a $300
+    autonomous ceiling from chat, tx_guard honoured it, and this hook still
+    demanded a tap for every live swap over the env's $5 — three taps in one
+    afternoon for trades the owner had already said may run unattended, and an
+    unattended cron buyback that could never run at all. Delegating to
+    tx_guard's own resolver keeps the two in sync by construction; a failed
+    resolve falls back to the env value, never to a wider one.
     """
-    return float_env("DEFI_AUTONOMOUS_MAX_USD", 25.0)
+    env_value = float_env("DEFI_AUTONOMOUS_MAX_USD", 25.0)
+    try:
+        # Lazy: core.wallet.tx_guard imports core.config_policy at module load.
+        from core.wallet.tx_guard import autonomous_max_usd, ceiling_scope
+        return float(autonomous_max_usd(*ceiling_scope(None)))
+    except Exception:
+        return env_value
 
 
 def x402_autonomous_ceiling_usd() -> float:

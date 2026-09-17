@@ -23,15 +23,28 @@ _MAX = 512
 #: has no goal row). Membership is what `is_autonomous` answers; the value is
 #: only ever a hint for re-arming, never an authority check.
 _SESSIONS: "OrderedDict[str, Optional[str]]" = OrderedDict()
+#: session_id -> the cron job id it is running (2026-09-18). The approval queue
+#: needs it for the same reason it needs the goal id: an owner-queue ask raised
+#: by a cron run must name its job so an approval re-arms THAT job to run on
+#: the next tick. Without it the approval woke the finished run's session as a
+#: self-wake — a forged turn the money guard refuses — and the agent told the
+#: owner to "trigger it from your seat" for a trade the owner had just approved.
+_CRON_JOBS: "OrderedDict[str, str]" = OrderedDict()
 
 
-def mark_autonomous(session_id: str, goal_id: Optional[str] = None) -> None:
+def mark_autonomous(session_id: str, goal_id: Optional[str] = None,
+                    *, cron_job_id: Optional[str] = None) -> None:
     if not session_id:
         return
     _SESSIONS[session_id] = goal_id
     _SESSIONS.move_to_end(session_id)
     while len(_SESSIONS) > _MAX:
         _SESSIONS.popitem(last=False)
+    if cron_job_id:
+        _CRON_JOBS[session_id] = cron_job_id
+        _CRON_JOBS.move_to_end(session_id)
+        while len(_CRON_JOBS) > _MAX:
+            _CRON_JOBS.popitem(last=False)
 
 
 def is_autonomous(session_id: Optional[str]) -> bool:
@@ -47,3 +60,11 @@ def goal_for_session(session_id: Optional[str]) -> Optional[str]:
     if not session_id:
         return None
     return _SESSIONS.get(session_id)
+
+
+def cron_job_for_session(session_id: Optional[str]) -> Optional[str]:
+    """The cron job this autonomous session is running, or None (a goal or
+    planner run, or an interactive session). None is a real answer."""
+    if not session_id:
+        return None
+    return _CRON_JOBS.get(session_id)

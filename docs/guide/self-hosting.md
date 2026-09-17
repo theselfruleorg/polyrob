@@ -123,6 +123,7 @@ unit per process you need:
 | API server | `python main.py` (or `polyrob serve`) | REST, A2A and the OpenAI-compatible `/v1` surface. Only needed if you want programmatic access. |
 | Console | `python -m uvicorn webview.server:app --host 127.0.0.1 --port 5050 --proxy-headers` | The web console, behind your reverse proxy. See [deployment-postures.md](deployment-postures.md). |
 | App supervisor | `polyrob apps supervise` | Only if the agent deploys durable apps. It holds the docker and nginx privilege the agent never has. |
+| Isolated browser | `polyrob browser install` (writes `polyrob-browser.service`) | Required as soon as the wallet is enabled. A custody process never launches Chromium beside the signer; it connects to this one. See below. |
 
 Give every unit the same `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`)
 and the same `POLYROB_DATA_DIR`, so they agree about the owner, the data home and
@@ -132,6 +133,82 @@ for posture and read-only settings.
 `polyrob doctor` on the box reports the health of whatever is running — providers,
 memory, autonomy state, active pauses — and is the first thing to run when a unit
 misbehaves.
+
+### The isolated browser (required with a wallet)
+
+When `AGENT_WALLET_ENABLED=true` or a master seed is present, the agent process
+is a **custody** process and refuses to launch Chromium: a browser renders
+untrusted pages, and it must not run as the same OS user as the signer. The
+browser tool, the X browser rail (`x_browser`) and web dapps (`dapp_connect`)
+all need a browser, so a custody deployment runs one as its own principal:
+
+```bash
+sudo polyrob browser install          # once, as root (add --with-deps on a fresh box)
+echo 'BROWSER_CDP_URL=http://127.0.0.1:9222' | sudo tee -a /etc/polyrob/polyrob.env
+sudo systemctl restart polyrob.service
+polyrob browser status                 # the rail line + the host facts
+```
+
+What `install` sets up, and why each part matters:
+
+- a dedicated system user `polyrob-browser` with a systemd-hardened unit — no
+  custody environment, no data home, loopback-only CDP listener;
+- the **Chromium sandbox ON**. Ubuntu 24.04 restricts unprivileged user
+  namespaces through AppArmor, so the installer writes a six-line profile
+  (`/etc/apparmor.d/polyrob-browser`, Ubuntu's own `chrome` template with the
+  path changed) that lifts the restriction for this binary only. The unit never
+  carries `--no-sandbox`;
+- an **egress chain** keyed on the browser's UID (`polyrob-browser-egress.service`):
+  the browser cannot open connections to loopback services (the console, its
+  own CDP port), RFC1918, link-local or the cloud metadata service. The agent's
+  Playwright route guard is the second line; this is the first;
+- Chromium for the Playwright version in the agent's venv, under
+  `/opt/polyrob-browser`. `polyrob browser update` re-installs it for the
+  current pin; `polyrob browser status` prints the installed revision beside
+  the pin and names drift.
+
+Every session gets a fresh browser context over CDP (its own cookies, its own
+login), so nothing the agent does lands in the service's persistent profile.
+CDP has no authentication by design: any local user can drive the browser, which
+is acceptable on a single-owner box because no credential persists in it.
+
+**A second host (removes the shared kernel).** The same-host service is a
+boundary of UID + sandbox + egress; what it cannot remove is the kernel it
+shares with the signer. To remove that too, run the browser on its own small
+box on the same private network (or over WireGuard):
+
+```bash
+# on the BROWSER box (no wallet, no data home, no LLM keys — only the [browser] extra)
+pip install 'polyrob[browser]==<the agent's version>'
+sudo polyrob browser install --mode server --listen <this box's private IP> --with-deps
+#   → prints BROWSER_WSS_URL=ws://<private-ip>:3000/<token>
+
+# on the AGENT box
+echo 'BROWSER_WSS_URL=ws://<private-ip>:3000/<token>' | sudo tee -a /etc/polyrob/polyrob.env
+sudo systemctl restart polyrob.service
+```
+
+`--mode server` writes the same user, AppArmor profile and egress chain, but the
+unit runs a Playwright server (`python -m playwright run-server`) bound to the
+private address, with the token kept in `/etc/polyrob/browser-server.env`
+(root, `0600`) — the URL path is the only authentication the protocol has, so
+allow inbound TCP 3000 from the agent's private IP only and never bind a public
+interface (the installer refuses `0.0.0.0`). The Playwright protocol requires the
+**same Playwright version on both ends**; the installer prints the version it
+serves. Prefer this over CDP across a network: CDP has no authentication at all.
+
+**Moving an X login onto the box.** `polyrob x-account capture-session` is a
+desktop ceremony (it opens a visible browser and refuses on a custody host).
+The captured session is written to `<data_home>/.x_session.json`, encrypted
+with `MCP_ENCRYPTION_KEY` — so run the capture with the SERVER's key exported
+(`MCP_ENCRYPTION_KEY=… polyrob x-account capture-session`), copy that one file
+to the server's data home, and give it to the agent identity
+(`chown polyrob-agent:polyrob-data`, mode `0600`). A file encrypted under a
+different key is unreadable there and `x_login_check` says so.
+
+`polyrob doctor`, `/status` and the agent's own tool catalog all report the rail
+in one of three states: `none (custody)` with the install remedy, `configured,
+unreachable (<reason>)` with the service remedy, or `remote cdp ok (<version>)`.
 
 ### One daemon per profile
 

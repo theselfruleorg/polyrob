@@ -794,11 +794,15 @@ async def maybe_deliver_autonomous_send(orchestrator: Any, session_id: str, text
         if is_public_session(orchestrator):
             return None
         from agents.task.goals.autonomy_marker import is_autonomous
+        from core.surfaces.binding import terminal_attached
         has_live_mirror = bool(
             getattr(orchestrator, "_message_router", None)
             and getattr(orchestrator, "_chat_session_key", None)
         )
-        if has_live_mirror and not is_autonomous(session_id):
+        # A foreground terminal (REPL / one-shot run) renders the reply from the
+        # feed itself; it is a live surface even though it binds no router.
+        if (has_live_mirror or terminal_attached(orchestrator)) \
+                and not is_autonomous(session_id):
             return None
         container = getattr(orchestrator, "container", None)
         user_id = str(getattr(orchestrator, "user_id", "") or "")

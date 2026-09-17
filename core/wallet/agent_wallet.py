@@ -115,6 +115,7 @@ class AgentWallet:
             daily_cap_usd=getattr(config, "daily_cap_usd", None),
             per_venue_daily_cap_usd=getattr(config, "per_venue_daily_cap_usd", None),
             on_record=on_record,
+            cap_resolver=getattr(config, "cap_resolver", None),
         )
 
     def _resolve_scheme(self) -> str:

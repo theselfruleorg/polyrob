@@ -39,8 +39,16 @@ class PolicyGate:
                  daily_cap_usd: Optional[float] = None,
                  per_venue_daily_cap_usd: Optional[dict] = None,
                  clock: Callable[[], float] = time.time,
-                 on_record: Optional[Callable[[dict], None]] = None):
+                 on_record: Optional[Callable[[dict], None]] = None,
+                 cap_resolver: Optional[Callable[[], tuple]] = None):
         self._ceiling = _nonnegative_finite(max_per_tx_usd)
+        # 2026-09-18: the two owner caps are LIVE. `cap_resolver` returns
+        # ``(max_per_tx_usd, daily_cap_usd)`` as configured right now (see
+        # ``core/wallet/config.py::live_caps_resolver``); it is consulted on
+        # every check and by the two cap properties, so a preference the owner
+        # approved from chat applies at once instead of at the next restart.
+        # A leg the resolver cannot answer keeps the constructed value.
+        self._cap_resolver = cap_resolver
         # Telemetry hook (audit 2026-07-04): fired with each recorded spend entry so
         # a durable sink can capture money movement. Fail-open — never break record().
         self._on_record = on_record
@@ -163,6 +171,7 @@ class PolicyGate:
         if _halted:
             return PolicyDecision(
                 False, "owner kill-switch active — autonomy halted, money movement refused")
+        self._refresh_caps()
         if amount_usd > self._ceiling:
             return PolicyDecision(False, f"amount ${amount_usd:.2f} exceeds catastrophic ceiling ${self._ceiling:.2f}")
         try:
@@ -275,6 +284,30 @@ class PolicyGate:
     def audit_log(self) -> List[dict]:
         return list(self._audit)
 
+    def _refresh_caps(self) -> None:
+        """Re-read the owner caps through the resolver, fail-open per leg."""
+        if self._cap_resolver is None:
+            return
+        try:
+            per_tx, daily = self._cap_resolver()
+        except Exception:
+            logger.debug("PolicyGate: cap resolver raised — keeping the "
+                         "constructed caps", exc_info=True)
+            return
+        if per_tx is not None:
+            try:
+                self._ceiling = _nonnegative_finite(per_tx)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        if daily is None:
+            self._daily_cap = None          # resolved: the operator disabled it
+        elif isinstance(daily, (int, float)) and not isinstance(daily, bool):
+            try:
+                self._daily_cap = _nonnegative_finite(daily)
+            except (TypeError, ValueError, OverflowError):
+                pass
+        # any other object = the daily leg was unresolved: keep what we had
+
     @property
     def daily_cap_usd(self) -> Optional[float]:
         """The rolling-24h ceiling, or None when the operator disabled it.
@@ -282,6 +315,7 @@ class PolicyGate:
         Public so a REPORT can name the headroom a spend consumed without
         reaching into the gate's internals. Read-only by construction.
         """
+        self._refresh_caps()
         return self._daily_cap
 
     @property
@@ -290,6 +324,7 @@ class PolicyGate:
         context on a finance surface, not just a refusal reason). Public for
         the same reason as :attr:`daily_cap_usd` — read-only by construction.
         """
+        self._refresh_caps()
         return self._ceiling
 
     def rolling_24h_spend_usd(self, venue: Optional[str] = None) -> float:
@@ -306,4 +341,5 @@ class PolicyGate:
         this is False so an operator can't arm unattended trading with no
         aggregate limit.
         """
+        self._refresh_caps()
         return self._daily_cap is not None

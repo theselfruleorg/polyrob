@@ -467,3 +467,44 @@ def test_creations_row_carries_its_explorer_link(tmp_path):
     sec = _creations_section(OWNER, data_dir)
     assert sec.data["creations"][0]["url"] == "https://basescan.org/token/0xTOKEN"
     assert any("https://basescan.org/token/" in ln for ln in sec.lines)
+
+
+# --- browser rail line (2026-09-17) -------------------------------------------
+
+def test_identity_reports_the_browser_rail(degraded, monkeypatch):
+    """The ONE seat every status surface renders says what the browser rail IS —
+    never silent while the agent misdiagnoses it."""
+    from core.security import browser_rail as br
+    monkeypatch.setattr(br, "browser_rail_status",
+                        lambda **k: br.BrowserRailStatus("unreachable", "cdp", True,
+                                                         reason="connection refused"))
+    snap = build_status_snapshot(OWNER, data_dir=degraded, ledger=_fake_ledger())
+    ident = snap.section("identity")
+    assert ident.data["browser_rail"] == "unreachable"
+    line = next(l for l in ident.lines if l.startswith("browser:"))
+    assert "configured, unreachable (connection refused)" in line
+    item = next(h for h in snap.health if h.key == "browser_rail_unreachable")
+    assert item.severity == "warn"
+
+
+def test_unset_browser_rail_is_a_fact_not_a_health_item(degraded, monkeypatch):
+    from core.security import browser_rail as br
+    monkeypatch.setattr(br, "browser_rail_status",
+                        lambda **k: br.BrowserRailStatus("unset", "local", True))
+    snap = build_status_snapshot(OWNER, data_dir=degraded, ledger=_fake_ledger())
+    ident = snap.section("identity")
+    assert any("browser: none (custody)" in l for l in ident.lines)
+    assert not any(h.key == "browser_rail_unreachable" for h in snap.health)
+
+
+def test_snapshot_never_probes_a_remote_browser(degraded, monkeypatch):
+    """No network read by default: the snapshot asks with probe=False."""
+    from core.security import browser_rail as br
+    seen = {}
+
+    def fake(**k):
+        seen.update(k)
+        return br.BrowserRailStatus("configured", "wss", True)
+    monkeypatch.setattr(br, "browser_rail_status", fake)
+    build_status_snapshot(OWNER, data_dir=degraded, ledger=_fake_ledger())
+    assert seen.get("probe") is False

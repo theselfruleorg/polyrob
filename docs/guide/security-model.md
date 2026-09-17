@@ -283,6 +283,20 @@ sanctioned credential channel for a server that needs one, so anything you put
 there is handed over. Treat the server *binary* as fully-trusted code even
 though its environment is now scrubbed.
 
+### c2) The browser runs as its own principal — a boundary only when the sandbox and egress are on
+
+A custody process never launches Chromium (`tools/browser/launch_security.py`);
+it connects to `polyrob-browser.service` over CDP (`BROWSER_CDP_URL`). That
+service is a boundary exactly to the extent that three things hold, all of which
+`polyrob browser install` sets up and `polyrob browser status` reports:
+a dedicated UID with no custody environment; the **Chromium sandbox on** (an
+AppArmor `userns` profile for the binary — never `--no-sandbox`); and a
+**UID-keyed egress chain** so the browser cannot open connections to loopback
+services, RFC1918 or the metadata service. What it does not remove is the shared
+kernel; a second host over `BROWSER_WSS_URL` does. Every session gets a fresh
+context over CDP, so no login persists in the service's profile; CDP itself is
+unauthenticated on loopback, which is why nothing may persist there.
+
 ### d) `AGENT_COMPUTE_POSTURE=3` ("host") is designed but unwired
 
 `core/config_policy/policy.py` defines the posture (0 `confined` / 1 `sandbox-dev`

@@ -73,6 +73,7 @@ import base64
 import json
 import logging
 import os
+import stat
 import tempfile
 import time
 from collections.abc import MutableMapping
@@ -128,7 +129,23 @@ class FileTokenStore(MutableMapping):
         if not self._path.exists():
             return {}
         try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
+            text = self._path.read_text(encoding="utf-8")
+        except OSError as e:
+            # UNREADABLE is not CORRUPT. On 2026-09-17 prod's polyrob-email unit
+            # (a non-root service identity) got EACCES on the root-owned 0600
+            # store that polyrob.service had just written, and the corruption
+            # branch below RENAMED IT ASIDE — deleting the agent's freshly
+            # imported X OAuth2 pair from under the process that owned it.
+            # A process that cannot read a file has no standing to move it.
+            logger.warning(
+                "FileTokenStore: %s is not readable by this process (%s) — using an "
+                "empty in-memory token store for this process and leaving the file "
+                "untouched. If this unit needs the store, fix its ownership/mode.",
+                self._path, e,
+            )
+            return {}
+        try:
+            raw = json.loads(text)
             if not isinstance(raw, dict):
                 raise ValueError(f"expected a JSON object at top level, got {type(raw).__name__}")
             decoded: dict = {}
@@ -167,7 +184,7 @@ class FileTokenStore(MutableMapping):
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(payload, f)
-            os.chmod(tmp_name, 0o600)
+            self._match_target_identity(tmp_name)
             os.replace(tmp_name, str(self._path))
         except Exception:
             try:
@@ -175,6 +192,35 @@ class FileTokenStore(MutableMapping):
             except OSError:
                 pass
             raise
+
+    def _match_target_identity(self, tmp_name: str) -> None:
+        """Give the temp file the group + mode the FINAL path should carry.
+
+        Prod runs each unit as its own identity (`polyrob-agent`, `polyrob-web`,
+        `polyrob-email`) sharing the `polyrob-data` group, and every data file
+        follows `<writer>:polyrob-data 0660` (deployment/hardening/
+        install-service-identities.sh). This store wrote `0600` in the writer's
+        primary group, so a pair imported by the root CLI was UNREADABLE by the
+        agent unit that needed it (EACCES, 2026-09-17) — and an agent-written
+        refresh would have been unreadable by the owner's CLI the same way.
+
+        Rule: an existing target keeps its mode and group; a new file inherits
+        the parent directory's group and is `0660` when that directory is
+        group-writable (the shared-data convention), else `0600`. A chown the
+        process is not allowed to make is skipped, never fatal.
+        """
+        try:
+            st = os.stat(self._path)
+            mode, gid = stat.S_IMODE(st.st_mode), st.st_gid
+        except FileNotFoundError:
+            dst = os.stat(self._path.parent)
+            gid = dst.st_gid
+            mode = 0o660 if (dst.st_mode & stat.S_IWGRP) else 0o600
+        try:
+            os.chown(tmp_name, -1, gid)
+        except OSError:
+            pass
+        os.chmod(tmp_name, mode)
 
     # -- MutableMapping ---------------------------------------------------
 
