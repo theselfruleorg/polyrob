@@ -7,7 +7,13 @@ import pytest
 
 def _chromium_available() -> bool:
     """The package alone isn't enough — a fresh [all] install has playwright
-    but no downloaded browser binary, and these tests must skip, not fail."""
+    but no downloaded browser binary, and these tests must skip, not fail.
+
+    Probe the SAME launch the renderer performs (sandbox ON, 049 phase 4): a
+    host that restricts unprivileged user namespaces (Ubuntu 24.04 CI runners)
+    has the binary but cannot launch it sandboxed, and that is "unavailable"
+    too — the test asserts the render, not the host's kernel policy.
+    """
     if importlib.util.find_spec("playwright") is None:
         return False
     try:
@@ -15,14 +21,17 @@ def _chromium_available() -> bool:
 
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
-            return Path(p.chromium.executable_path).exists()
+            if not Path(p.chromium.executable_path).exists():
+                return False
+            p.chromium.launch(args=["--disable-gpu"], chromium_sandbox=True).close()
+            return True
     except Exception:
         return False
 
 
 pytestmark = pytest.mark.skipif(
     not _chromium_available(),
-    reason="playwright extra or its chromium binary not installed",
+    reason="playwright extra, its chromium binary, or a sandboxed launch unavailable",
 )
 
 from modules.pfp.renderer import render_still, RenderResult  # noqa: E402

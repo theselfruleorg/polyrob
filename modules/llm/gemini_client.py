@@ -18,21 +18,9 @@ with warnings.catch_warnings():
 
 from modules.llm.llm_client import LLMClient, translate_llm_error
 from modules.llm.token_counter import count_messages_tokens
+from modules.llm.gemini_parts import part_is_function_call
 from core.exceptions import LLMError, LLMConnectionError, LLMRateLimitError, ServiceError
 from core.config import BotConfig
-
-def _part_is_function_call(part) -> bool:
-    """True only when the Part's ``function_call`` oneof member is SET.
-
-    proto-plus messages answer ``hasattr`` True for every field, so presence
-    must be asked via ``in``; a duck-typed double without ``__contains__``
-    falls back to "the attribute exists and is not None".
-    """
-    try:
-        return "function_call" in part
-    except TypeError:
-        return getattr(part, "function_call", None) is not None
-
 
 class GeminiClient(LLMClient):
     """Google Gemini LLM client.
@@ -400,7 +388,6 @@ class GeminiClient(LLMClient):
                 
             # Convert messages to Gemini format
             gemini_messages = []
-            has_system = False
             # H1 FIX: capture the system prompt (from the `system` kwarg OR embedded as a
             # role='system' message) and pass it natively via system_instruction below.
             # Previously a system message in `messages` was skipped and never re-added
@@ -413,7 +400,6 @@ class GeminiClient(LLMClient):
                 content = msg.get('content', '')
 
                 if role == 'system':
-                    has_system = True
                     # Prefer the content embedded in the message list — the agent builds
                     # the real system prompt there, not via the `system` kwarg.
                     if content and isinstance(content, str):
@@ -1208,15 +1194,8 @@ class GeminiClient(LLMClient):
                         if part_thought_sig:
                             self.logger.debug(f"[THOUGHT_SIG] Found thought_signature on part {i}: {str(part_thought_sig)[:50]}...")
 
-                        # A proto Part exposes EVERY oneof member as an attribute, so
-                        # ``hasattr(part, 'function_call')`` is True for a plain text
-                        # part too (its function_call is an empty message with
-                        # name ""). Until 2026-09-17 that branch logged an ERROR
-                        # per text part and then ``continue``d past it — every
-                        # text-only Gemini reply was DROPPED as "empty action list"
-                        # and the model was pushed into a filler step. Ask the
-                        # oneof which member is set instead.
-                        if _part_is_function_call(part):
+                        # hasattr() is True for every oneof member — see gemini_parts.
+                        if part_is_function_call(part):
                             function_call = part.function_call
 
                             # Extract name with validation
