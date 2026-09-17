@@ -48,6 +48,18 @@ class BaseTool(BaseComponent):
         self.logger.debug(f"- Name: {name}")
         self.logger.debug(f"- Container: {'Present' if container else 'None'}")
         
+    def _ar(self, *, content: Optional[str] = None, error: Optional[str] = None,
+            metadata: Optional[Dict[str, Any]] = None):
+        """One ``ActionResult`` shape for every tool: an error result when
+        *error* is given, else content (+ optional metadata). Six money/data
+        tools carried this four-liner each."""
+        from tools.controller.types import ActionResult
+        if error is not None:
+            return ActionResult(error=error)
+        if metadata is not None:
+            return ActionResult(extracted_content=content, metadata=metadata)
+        return ActionResult(extracted_content=content)
+
     @property
     def services(self) -> Dict[str, Any]:
         """Get tool dependencies."""

@@ -54,11 +54,8 @@ class ShellTool(BaseTool):
 
     @staticmethod
     def _allowed(execution_context) -> bool:
-        try:
-            from core.config_policy import compute_posture_allows
-            return bool(compute_posture_allows(execution_context, 1))
-        except Exception:
-            return False
+        from core.config_policy import compute_posture_allows_safe
+        return compute_posture_allows_safe(execution_context, 1)
 
     def _state_for(self, session_id: str) -> ShellState:
         st = self._states.get(session_id)

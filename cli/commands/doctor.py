@@ -73,8 +73,8 @@ def a2a_v1_line(env: dict) -> str:
     served. Without the ``[server]`` extra the API app cannot build at all, so both
     surfaces are honestly "absent". The path names are always shown either way.
     """
-    v1_on = str(env.get("OPENAI_COMPAT_API_ENABLED", "")).strip().lower() \
-        in ("1", "true", "yes", "on")
+    from core.env import bool_from
+    v1_on = bool_from(env, "OPENAI_COMPAT_API_ENABLED", False)
     server_missing = [m for m in ("fastapi", "uvicorn")
                       if importlib.util.find_spec(m) is None]
     if server_missing:
@@ -670,7 +670,8 @@ def doctor_report(env: dict, local_absent_means_on: bool = True) -> list[str]:
     lines.append(f"memory backend: {resolve_memory_backend(env, rob_local)}")
 
     # Wallet posture (setup section, part 1): off / on / MISCONFIGURED.
-    _wallet_on = str(env.get("AGENT_WALLET_ENABLED", "")).strip().lower() in ("1", "true", "yes", "on")
+    from core.env import bool_from
+    _wallet_on = bool_from(env, "AGENT_WALLET_ENABLED", False)
     _seed_ok = len((env.get("AGENT_WALLET_MASTER_SEED") or "").strip()) >= 32
     if not _wallet_on:
         lines.append("wallet: off (optional — create one with `polyrob wallet init`)")

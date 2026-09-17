@@ -32,7 +32,8 @@
     },
     "priority": 1,
     "auto_activate": true,
-    "description": "The map of what POLYROB is, its surfaces, configuration layers, autonomy, money/safety model, and skills/learning \u2014 load this first when the owner asks what you can do, how to enable/configure something, or wants help with settings/preferences/the operating contract"
+    "description": "The map of what POLYROB is, its surfaces, configuration layers, autonomy, money/safety model, and skills/learning — load this first when the owner asks what you can do, how to enable/configure something, or wants help with settings/preferences/the operating contract",
+    "version": "2"
   },
   "person-analyzer": {
     "triggers": {
@@ -643,7 +644,13 @@
         "who to reply to",
         "trending in ai"
       ],
-      "action_names": [],
+      "action_names": [
+        "twitter_search",
+        "twitter_get_user",
+        "twitter_get_tweets",
+        "twitter_get_mentions",
+        "twitter_get_timeline"
+      ],
       "task_patterns": [
         "(find|discover|identify).*(account|people|target|prospect|conversation).*(x|twitter|social)",
         "who.*(to )?(engage|reply|follow)",
@@ -653,12 +660,13 @@
     },
     "priority": 6,
     "auto_activate": true,
-    "description": "Find engageable accounts, conversations, and mentions on X/social using anysite (preferred) over the flaky native twitter_search, with cost discipline"
+    "description": "Discover public X/social accounts and conversations with AnySite first, using native X account reads where they are authoritative and preserving write gates"
   },
   "x-engagement": {
     "triggers": {
       "tool_ids": [
-        "twitter"
+        "twitter",
+        "x_browser"
       ],
       "keywords": [
         "post on x",
@@ -669,29 +677,44 @@
         "quote-tweet",
         "dm on x",
         "send a dm",
+        "read x dms",
+        "check x inbox",
+        "reply to x dm",
         "engage on x",
         "engage on twitter",
         "x thread",
         "twitter thread",
-        "publish on x"
+        "publish on x",
+        "poll",
+        "poll results",
+        "ask the community",
+        "community vote"
       ],
       "action_names": [
         "twitter_post",
         "twitter_reply",
         "twitter_quote",
         "twitter_thread",
-        "twitter_dm"
+        "twitter_dm",
+        "twitter_get_dms",
+        "twitter_get_mentions",
+        "twitter_get_timeline",
+        "x_post",
+        "x_dm",
+        "x_read_dms",
+        "twitter_poll_results"
       ],
       "task_patterns": [
         "(post|publish|tweet|thread).*(x|twitter)",
         "(reply|respond|quote).*(tweet|thread|conversation|x|twitter)",
-        "(dm|direct message).*(x|twitter|account|user)",
+        "(read|check|review|reply|send).*(dm|direct message|inbox).*(x|twitter|account|user)?",
         "engage.*(x|twitter|thread|conversation)"
       ]
     },
     "priority": 7,
     "auto_activate": true,
-    "description": "Write-side X/Twitter engagement \u2014 choose the right route (post, quote, reply, DM), meet the quality bar, and prove completion with live URLs, never drafts"
+    "description": "Operate X account communication across API and captured-browser rails—read inboxes, post/reply, and send DMs with correct routing, approval, and completion evidence",
+    "version": "3"
   },
   "treasury-trading": {
     "triggers": {
@@ -834,7 +857,7 @@
     "priority": 1,
     "auto_activate": true,
     "description": "How to grow the agent treasury by trading NEW memecoin launches in degen mode, primarily on Robinhood Chain (tokenized stocks, Pons launches, meme/stock pairs) plus Solana and Base: where to find fresh pairs, the two hard screens, the social-proof test, the tiered sizing ladder, fast exits, the anti-dust rule, learning the meta, and building the track record in public",
-    "version": "14"
+    "version": "15"
   },
   "verified-tooling": {
     "triggers": {
@@ -870,5 +893,48 @@
     "auto_activate": true,
     "description": "How to build a small read-only analysis tool you can trust and re-run: one tool one question, pure and read-only, UNKNOWN is never zero, tests alongside, a real run recorded in a smoke log, and cross-checked totals",
     "version": "1"
+  },
+  "self-deploy": {
+    "triggers": {
+      "tool_ids": [],
+      "keywords": [
+        "set yourself up",
+        "set up yourself",
+        "initialise yourself",
+        "initialize yourself",
+        "self deploy",
+        "self-deploy",
+        "bootstrap",
+        "onboarding",
+        "are you ready",
+        "readiness",
+        "fresh instance",
+        "new instance",
+        "first run",
+        "provision your",
+        "create your x account",
+        "your own email",
+        "fund you",
+        "funding address"
+      ],
+      "action_names": [
+        "x_browser_x_signup_start",
+        "x_browser_x_login_check",
+        "x402_wallet_status",
+        "twitter_whoami",
+        "agent_status"
+      ],
+      "task_patterns": [
+        "(set|setting) (your|its)?self up",
+        "(initiali[sz]e|bootstrap|provision) (yourself|the (agent|instance))",
+        "(are you|is (it|everything)) (ready|configured|set up)",
+        "readiness (check|table|report)",
+        "what (do you|does it) (need|still need) (from me|to (start|run|operate))"
+      ]
+    },
+    "priority": 1,
+    "auto_activate": true,
+    "version": "1",
+    "description": "How to bring a fresh instance of yourself online: assess what is already configured (model, wallet, funding, email, X, autonomy grants), provision what you can yourself (own inbox, X account, standing work), ask the owner only for what needs a human (API keys, funding, a CAPTCHA), and report one honest readiness table before you start operating"
   }
 }

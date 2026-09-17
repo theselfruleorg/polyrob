@@ -117,18 +117,15 @@ def _post(url: str, body: Dict[str, Any], *, timeout: float) -> Dict[str, Any]:
 
 
 def _get(url: str, *, timeout: float) -> Dict[str, Any]:
-    req = urllib.request.Request(url, headers={"user-agent": "polyrob-bridge/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    from tools.defi.providers._http import get_json
+    return get_json(url, timeout=timeout, user_agent="polyrob-bridge/1.0")
 
 
 def _int(value, default=None):
     """Relay numbers arrive as decimal STRINGS. A malformed one is None
-    (unknown), never 0 — a zero would read as a free bridge or a zero floor."""
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return default
+    (unknown), never 0 (``tools.defi.providers._http.parse_int``)."""
+    from tools.defi.providers._http import parse_int
+    return parse_int(value, default)
 
 
 def _float(value, default=None):
@@ -344,15 +341,10 @@ class RelayBridgeProvider:
 
 
 def _same_address(a, b) -> bool:
-    """Case-insensitive for EVM hex; exact for base58 (Solana IS case-sensitive,
-    so lowercasing a base58 address would make two DIFFERENT accounts compare
-    equal — the 2026-08-27 fold-only-0x-hex rule)."""
-    if a is None or b is None:
-        return False
-    sa, sb = str(a).strip(), str(b).strip()
-    if sa.startswith("0x") and sb.startswith("0x"):
-        return sa.lower() == sb.lower()
-    return sa == sb
+    """Case-insensitive for EVM hex; exact for base58 — the ONE rule in
+    ``core.wallet.addresses.same_address``."""
+    from core.wallet.addresses import same_address
+    return same_address(a, b)
 
 
 # The bridge watcher lives in `core` (it is a wallet reconciliation loop) and may

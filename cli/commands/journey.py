@@ -6,7 +6,6 @@ home the same way the goals CLI does.
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
 import click
@@ -19,8 +18,8 @@ def journey(since: str, user: Optional[str]) -> None:
     """Timeline: what I did, learned, changed — and my income."""
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
+    from cli._admin_home import admin_data_dir
     from core.bootstrap import setup_project_path, setup_sqlite_compat
-    from core.runtime_config import get_data_root
     from core.identity import resolve_identity
     from cli.ui.commands.h_journey import render_journey
 
@@ -28,5 +27,5 @@ def journey(since: str, user: Optional[str]) -> None:
     setup_sqlite_compat()
 
     uid = (user or resolve_identity() or "").strip() or "local"
-    data_dir = str(Path(get_data_root()))
+    data_dir = admin_data_dir()
     click.echo(render_journey(user_id=uid, since_label=since, data_dir=data_dir))

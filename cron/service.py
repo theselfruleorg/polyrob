@@ -17,19 +17,14 @@ from cron.schedule import ScheduleError, parse_schedule
 
 logger = logging.getLogger("cron.service")
 
-#: 3-minute hard cap for cron sessions, enforced by ``cron/scheduler.py``'s
+#: 10-minute hard cap for cron sessions, enforced by ``cron/scheduler.py``'s
 #: ``asyncio.wait_for``.
 #:
-#: ⚠️ This is SHORTER than the durable owner-approval wait
-#: (``tools/controller/approval.py::approval_wait_timeout_sec`` -> 300s for the
-#: ``owner_queue`` provider), so an approval-gated verb attempted inside a cron
-#: run is always cut off before the owner's window elapses. Raising the cap to
-#: cover it is the wrong lever — it would let EVERY cron run occupy the tick for
-#: 5+ minutes. The scheduler resolves it in the accounting instead: a cap timeout
-#: attributable to an OPEN owner ask THIS run raised is recorded as *deferred*,
-#: not as the job's failure, and the durable ask stays redeemable via ``/approve``
-#: (see ``cron/approval_defer.py``). A timeout with no such ask still fails.
-_DEFAULT_MAX_DURATION_S = 180
+#: Jobs may opt into a shorter cap. If one expires while an owner approval opened
+#: by that run is still pending, the scheduler records the attempt as deferred
+#: rather than failed (see ``cron/approval_defer.py``). A timeout with no such ask
+#: still fails.
+_DEFAULT_MAX_DURATION_S = 600
 
 
 class CronService:

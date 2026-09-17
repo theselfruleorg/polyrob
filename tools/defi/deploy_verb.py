@@ -37,42 +37,16 @@ def deploy_enabled() -> bool:
 
 def _refuse_non_owner_turn(execution_context, verb: str) -> Optional[str]:
     """A delegated sub-agent never deploys — it reports back. Fails closed.
-
-    Deliberately the SAME shape as ``bridge_verb._refuse_non_owner_turn``: an
-    autonomous goal/cron turn MAY deploy, bounded by the caps, the simulation and
-    the owner queue above the ceiling — caps, not taps. What is refused is a
-    LEAF, because a delegated worker that can create a contract and fund it has
-    escaped every bound its parent was operating under.
-    """
-    try:
-        if getattr(execution_context, "role", None) == "leaf" or \
-                getattr(execution_context, "is_sub_agent", False):
-            return (f"refused: a delegated sub-agent may not {verb} — report back "
-                    f"and let the parent run it. Nothing was broadcast.")
-    except Exception:
-        return "refused: sub-agent probe failed; failing closed."
-    from core.wallet.authority import turn_refusal
-    return turn_refusal(execution_context)
+    ONE shape for every money verb: ``core.wallet.authority.leaf_refusal``."""
+    from core.wallet.authority import leaf_refusal
+    return leaf_refusal(execution_context, verb)
 
 
 def _refuse_paused() -> Optional[str]:
-    """The 031 owner pause. ONE predicate, ONE text, fail-closed.
+    """The 031 owner pause — ``core.wallet.authority.spend_pause_refusal``."""
+    from core.wallet.authority import spend_pause_refusal
+    return spend_pause_refusal()
 
-    Same two kinds ``bridge_verb`` consults, for the same reason: ``spend`` is
-    what a deployment is (it burns a fee), and ``dispatch`` is what
-    ``autonomy_halted`` reads.
-    """
-    from core.autonomy_control import pause_refusal_text
-    from core.wallet import tx_guard
-    try:
-        refusal = pause_refusal_text("spend", what="spending")
-        if refusal:
-            return refusal
-        if tx_guard._halted():
-            return pause_refusal_text("dispatch", what="spending", force=True)
-    except Exception as exc:
-        return f"refused: pause probe failed ({exc}); failing closed."
-    return None
 
 
 def _resolve_create2(tool, params, init_code: str):

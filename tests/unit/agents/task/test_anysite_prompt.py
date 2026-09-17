@@ -12,14 +12,12 @@ def test_anysite_guidance_teaches_cli_tool():
 
 
 def test_anysite_guidance_routes_data_retrieval_here(monkeypatch):
-    """G2: the block must explicitly route Twitter/X + social/web *data retrieval*
-    to anysite, leaving the native twitter tool for posting only. Locks the routing
-    sentence so a future prompt refactor can't silently drop it."""
+    """Public discovery goes to AnySite; private/account reads stay native."""
     block = _anysite_guidance_block().lower()
-    assert "data retrieval" in block
+    assert "public twitter/x discovery" in block
     assert "twitter" in block
-    # routes reads here; native twitter is for posting only
-    assert "post" in block
+    assert "mentions" in block and "dm" in block
+    assert "x_browser" in block and "inbox fallback" in block
 
 
 def test_anysite_guidance_is_wired_into_tools_section(monkeypatch):

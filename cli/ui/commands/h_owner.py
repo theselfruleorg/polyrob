@@ -93,21 +93,12 @@ def _run_owner_db(ctx, coro_factory):
 
 
 def _invoicing_off_note() -> str:
-    """The honest feature-off + remedy note, in the SAME house grammar
-    ``cli/_flag_warn.py::warn_if_flag_off`` prints for `polyrob owner invoices`
-    — returned as text so it flows through ``ctx.emit`` (the scrubbed REPL
-    output choke point) instead of raw stderr. A resolver error counts as OFF
-    (fail-to-warn, matching ``warn_if_flag_off``)."""
-    try:
-        from modules.x402.invoicing import x402_invoicing_enabled
-        if x402_invoicing_enabled():
-            return ""
-    except Exception:
-        pass
-    return ("note: X402_INVOICE_ENABLED is off — rows are durable, but no "
-            "settlement watcher runs — pending invoices will not settle or "
-            "wake sessions. Enable: `polyrob config set X402_INVOICE_ENABLED "
-            "true --global` (takes effect: restart).")
+    """The ONE feature-off note (``modules.x402.invoicing_note``), returned as
+    text so it flows through ``ctx.emit`` (the scrubbed REPL output choke
+    point) instead of raw stderr."""
+    from modules.x402.invoicing_note import invoicing_off_note
+    note = invoicing_off_note(remedy=True)
+    return f"note: {note}" if note else ""
 
 
 # ---------------------------------------------------------------------------

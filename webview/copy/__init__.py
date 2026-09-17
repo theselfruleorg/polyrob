@@ -19,63 +19,18 @@ That asymmetry is deliberate and is the same shape as the rest of the product �
 fail loudly where a human is watching, degrade visibly where one is not.
 """
 import logging
-import sys
 
+from core.copy._engine import build_copy_layer, strict as _strict
 from webview.copy.en import STRINGS
 
 __all__ = ["t", "STRINGS", "has", "missing_keys"]
 
 logger = logging.getLogger(__name__)
 
-_WARNED = set()
-
-
-def _strict() -> bool:
-    """True when a missing key should raise rather than degrade.
-
-    ⚠️ The detector is ``pytest`` being imported, and ONLY that. An earlier cut
-    also honoured a ``POLYROB_TEST`` env var — a read of a name nothing in this
-    tree ever sets, which ``tests/unit/core/test_flags_reverse.py`` correctly
-    refused: an undocumented env read is either a flag that needs a catalog row
-    or a dead branch, and this one was the second. A belt-and-braces signal
-    nobody can send is not a second signal.
-    """
-    return "pytest" in sys.modules
-
-
-def t(key: str, **kw) -> str:
-    """The string for *key*, with ``{placeholders}`` filled from *kw*.
-
-    Raises ``KeyError`` for an unknown key under test; returns the key itself
-    otherwise. A formatting failure degrades to the unformatted string rather
-    than to an exception in a request handler — the sentence is still readable,
-    just missing a number.
-    """
-    try:
-        text = STRINGS[key]
-    except KeyError:
-        if _strict():
-            raise KeyError(f"no console copy for {key!r} — add it to webview/copy/en.py")
-        if key not in _WARNED:
-            _WARNED.add(key)
-            logger.warning("console copy missing: %s", key)
-        return key
-    if not kw:
-        return text
-    try:
-        return text.format(**kw)
-    except (KeyError, IndexError, ValueError) as exc:
-        if _strict():
-            raise KeyError(f"copy {key!r} does not take {sorted(kw)}: {exc}") from exc
-        logger.warning("console copy %s failed to format: %s", key, exc)
-        return text
-
-
-def has(key: str) -> bool:
-    return key in STRINGS
-
-
-def missing_keys(keys) -> list:
-    """The subset of *keys* with no string. For a caller that wants to check a
-    whole screen's vocabulary at once rather than discover it one render later."""
-    return sorted(k for k in keys if k not in STRINGS)
+# One engine (core/copy/_engine.py) bound to the console's vocabulary; the
+# core tier binds the same engine to its own in core/copy.
+# ``_strict`` is this layer's seam (tests monkeypatch it); the lambda reads the
+# module global at call time so the patch is what runs.
+t, has, missing_keys = build_copy_layer(
+    STRINGS, label="console copy", file_hint="webview/copy/en.py", logger=logger,
+    strict_fn=lambda: _strict())

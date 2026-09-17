@@ -190,13 +190,10 @@ def effective_self_wake_enabled(user_id, home_dir) -> bool:
     No pref file present => byte-identical to
     ``AutonomyConfig.self_wake_enabled()``. Fail-open to the env value."""
     from agents.task.constants import AutonomyConfig
-    env_on = AutonomyConfig.self_wake_enabled()
-    try:
-        from core import prefs
-        return bool(prefs.resolve("autonomy.self_wake", user_id, home_dir,
-                                  env_value=env_on, default=env_on))
-    except Exception:
-        return env_on
+    from core.prefs import effective_autonomy_switch
+    return effective_autonomy_switch("autonomy.self_wake",
+                                     AutonomyConfig.self_wake_enabled(),
+                                     user_id, home_dir)
 
 
 def get_reentry_budget() -> ReentryBudget:

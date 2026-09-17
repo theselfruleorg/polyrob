@@ -69,12 +69,8 @@ class Credential:
         Callers must never format ``self.value`` directly. This method exists so
         that rule has somewhere to go.
         """
-        if not self.value:
-            return "(none)"
-        value = str(self.value)
-        if len(value) <= keep * 3:
-            return "*" * 8
-        return f"{value[:keep]}…{value[-keep:]}"
+        from core.security.redaction import fingerprint
+        return fingerprint(self.value, keep=keep)
 
 
 def auth_store_enabled(env=None) -> bool:

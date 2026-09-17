@@ -56,9 +56,8 @@ _NO_AVATAR = (
 
 
 def _data_dir(controller) -> Optional[str]:
-    cfg = getattr(getattr(controller, "container", None), "config", None)
-    from core.runtime_paths import data_dir_or_home
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    from core.runtime_paths import container_data_home
+    return container_data_home(getattr(controller, "container", None))
 
 
 def _workspace(controller, execution_context) -> Optional[str]:

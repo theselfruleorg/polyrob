@@ -122,18 +122,7 @@ Handler = Callable[[CommandContext], HandlerResult]
 #: ``Command.group`` outside this tuple (an ad-hoc test registry that never
 #: sets ``group=``, e.g.) still renders — appended after these ten, in
 #: first-seen order — so a command can never silently vanish from ``/help``.
-GROUP_ORDER: tuple = (
-    "talk",
-    "needs you",
-    "work",
-    "money",
-    "control",
-    "remember",
-    "look",
-    "set up",
-    "display",
-    "leave",
-)
+from core.verbs import GROUP_ORDER  # noqa: E402 — the ONE order; core/verbs.py is the SSOT
 
 
 @dataclass(frozen=True)

@@ -31,7 +31,7 @@ def test_schedule_one_shot_iso(tmp_path):
 def test_schedule_defaults_max_duration_cap(tmp_path):
     svc, _ = _svc(tmp_path)
     job = svc.schedule(task="t", schedule_spec="1h", user_id="u1")
-    assert job.max_duration_seconds == 180  # 3-minute hard cap default
+    assert job.max_duration_seconds == 600  # 10-minute hard cap default
     # skip_memory is a DORMANT column (ME-D2) — schedule() no longer accepts it,
     # and the job still takes the dataclass/schema default.
     assert job.skip_memory is True

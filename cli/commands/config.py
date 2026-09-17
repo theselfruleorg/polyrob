@@ -65,9 +65,9 @@ def _is_secret(key: str) -> bool:
 
 
 def _redact(value: str) -> str:
-    if len(value) <= 4:
-        return "****"
-    return f"{value[:2]}***{value[-2:]}"
+    """The ONE display fingerprint (``core.security.redaction.fingerprint``)."""
+    from core.security.redaction import fingerprint
+    return fingerprint(value)
 
 
 def _upsert_env(path: Path, key: str, value: str, secure: bool) -> None:

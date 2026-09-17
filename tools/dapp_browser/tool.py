@@ -25,6 +25,7 @@ import types
 from pydantic import BaseModel, ConfigDict, Field
 
 from tools.base_tool import BaseTool
+from tools.wallet_holder import WalletHolderMixin
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class NoParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class DappBrowserTool(BaseTool):
+class DappBrowserTool(WalletHolderMixin, BaseTool):
     """Arms, reports and revokes the injected wallet for one session."""
 
     def __init__(self, name: str = "dapp_browser", config=None, container=None, *,
@@ -93,18 +94,6 @@ class DappBrowserTool(BaseTool):
         return True
 
     # -- plumbing ---------------------------------------------------------
-
-    def _ar(self, *, content: str = None, error: str = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content)
-
-    def _get_wallet(self):
-        if self._wallet is not None:
-            return self._wallet
-        from core.wallet.factory import get_agent_wallet
-        return get_agent_wallet()
 
     def _price(self, chain, addr):
         if self._price_fn:
@@ -210,12 +199,11 @@ class DappBrowserTool(BaseTool):
                 f"the dapp wallet is off — set {FLAG}=true to arm it. Nothing "
                 f"was connected."))
 
-        from tools.defi.deploy_verb import _refuse_non_owner_turn, _refuse_paused
-        turn_err = _refuse_non_owner_turn(execution_context,
-                                          "connect a wallet to a dapp")
+        from core.wallet.authority import leaf_refusal, spend_pause_refusal
+        turn_err = leaf_refusal(execution_context, "connect a wallet to a dapp")
         if turn_err:
             return self._ar(error=turn_err)
-        paused = _refuse_paused()
+        paused = spend_pause_refusal()
         if paused:
             return self._ar(error=paused + " Nothing was connected.")
 

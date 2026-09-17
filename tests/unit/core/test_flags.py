@@ -74,6 +74,8 @@ def test_int_flag_resolution():
 def test_secret_flags_masked():
     assert is_secret_flag("OPENAI_API_KEY")
     assert is_secret_flag("MCP_GATEWAY_TOKEN")
+    assert is_secret_flag("TWITTER_CHAT_PASSPHRASE")
+    assert is_secret_flag("TWITTER_CHAT_PRIVATE_KEYS_B64")
     assert not is_secret_flag("GOALS_ENABLED")
     assert not is_secret_flag("LLM_MAX_OUTPUT_TOKENS")
     assert not is_secret_flag("POLYROB_PROJECT_SECRET_REFUSE")

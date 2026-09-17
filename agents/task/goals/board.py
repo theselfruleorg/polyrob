@@ -36,13 +36,15 @@ logger = logging.getLogger(__name__)
 # it is NOT dispatchable (ready()'s filter excludes it with zero query changes) and
 # flips to `ready` only when every prerequisite lands `done` (see deps_satisfied /
 # the record_success completion sweep).
-STATUS_TRIAGE = "triage"
-STATUS_WAITING = "waiting"
-STATUS_READY = "ready"
-STATUS_RUNNING = "running"
-STATUS_BLOCKED = "blocked"
-STATUS_DONE = "done"
-STATUS_CANCELLED = "cancelled"
+# The literals live in core.goal_vocab (core may not import agents; the status
+# snapshot, the renderer, streams and goal_list all read the SAME spelling).
+from core.goal_vocab import (  # noqa: E402,F401 — re-exported by name
+    STATUS_TRIAGE, STATUS_WAITING, STATUS_READY, STATUS_RUNNING,
+    STATUS_BLOCKED, STATUS_DONE, STATUS_CANCELLED,
+    KIND_GOAL, KIND_OBJECTIVE, KIND_ASK,
+    ASK_OPEN, ASK_FULFILLED, ASK_REJECTED, ASK_OBSOLETE,
+    OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE,
+)
 
 #: How many ready rows one fair-dispatch pass considers. The dispatcher asks for
 #: 2-4 slots against a board of a few hundred rows, so scan a bounded window
@@ -52,29 +54,17 @@ READY_SCAN_LIMIT = 200
 
 # kind: rows are goals (dispatchable), objectives (standing, never dispatched),
 # or asks (owner-facing needs, never dispatched)
-KIND_GOAL = "goal"
-KIND_OBJECTIVE = "objective"
-KIND_ASK = "ask"
-
 # ask lifecycle (§7.2b) — disjoint from goal statuses so nothing dispatches them
-ASK_OPEN = "open"
-ASK_FULFILLED = "fulfilled"
 # Task 9 (G-2): a tool_approval ask's owner-declined outcome. Disjoint from the
 # goal-status STATUS_CANCELLED string on purpose — an ask is never a goal.
-ASK_REJECTED = "rejected"
 # 2026-08-18: the ask answered itself — every goal it blocked reached a terminal
 # state, so the owner no longer has a decision to make. Distinct from FULFILLED
 # on purpose: "fulfilled" claims the owner acted, and an ask that expired because
 # the work resolved itself must never be recorded as an owner decision. Prod held
 # 44 open asks (oldest a month) with several naming goals that had since
 # succeeded — that queue is what the owner has to read.
-ASK_OBSOLETE = "obsolete"
 
 # objective lifecycle (disjoint from goal statuses so nothing dispatches them)
-OBJ_ACTIVE = "active"
-OBJ_PAUSED = "paused"
-OBJ_DROPPED = "dropped"
-OBJ_DONE = "done"
 _OBJECTIVE_STATUSES = {OBJ_ACTIVE, OBJ_PAUSED, OBJ_DROPPED, OBJ_DONE}
 
 

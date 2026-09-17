@@ -117,3 +117,53 @@ def test_no_pref_is_byte_identical_to_the_env_default(tmp_path, monkeypatch):
     monkeypatch.delenv("USER_DELIVERY_DAILY_CAP", raising=False)
     from core.surfaces.user_delivery import _daily_cap, effective_daily_cap
     assert effective_daily_cap("12345", str(tmp_path)) == _daily_cap()
+
+
+# --- 2026-09-17: the wallet ceiling readers were the next seats on the wrong home
+
+# The owner approved ``budget.defi_autonomous_usd = 300``; the console/agent
+# wrote it under the data home, but ``tx_guard.ceiling_scope`` and
+# ``wallet/config._fail_open_home_dir`` read via ``polyrob_home()`` — the unit's
+# ``$HOME/.polyrob``, an empty tree — so the guard kept refusing at the env $5
+# while ``prefs explain`` showed the pref recorded. Every seat that reads or
+# writes an identity-axis pref derives its home from ``prefs_home_dir()`` (or a
+# data-home seam), never from ``core.paths.polyrob_home``. Extend; never remove.
+_PREF_SEATS_NEVER_ON_POLYROB_HOME = [
+    "core/wallet/tx_guard.py",
+    "core/wallet/config.py",
+    "surfaces/telegram/owner_ops.py",
+]
+
+
+@pytest.mark.parametrize("rel", _PREF_SEATS_NEVER_ON_POLYROB_HOME)
+def test_pref_seats_never_read_the_identity_axis_from_polyrob_home(rel):
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    src = (root / rel).read_text()
+    code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("#"))
+    assert not re.search(r"\bpolyrob_home\(\)", code), (
+        f"{rel} calls polyrob_home() — pref readers must use prefs_home_dir()")
+
+
+def test_guard_reads_the_ceiling_the_writer_wrote(tmp_path, monkeypatch):
+    """Write through the writer's home, read through the guard's own scope
+    resolver, with $HOME pointing somewhere else entirely."""
+    from pathlib import Path
+    monkeypatch.setenv("HOME", str(tmp_path / "elsewhere"))
+    monkeypatch.delenv("POLYROB_HOME", raising=False)
+    monkeypatch.setenv("AGENT_WALLET_MAX_PER_TX_USD", "120")
+    monkeypatch.setenv("DEFI_AUTONOMOUS_MAX_USD", "5")
+    from core import prefs
+    from core.runtime_paths import prefs_home_dir
+    from core.wallet import tx_guard
+
+    ok, err = prefs.write_preference(prefs_home_dir(), "rob",
+                                     "budget.defi_autonomous_usd", 300.0)
+    assert ok, err
+    uid, home = tx_guard.ceiling_scope(type("Ctx", (), {"user_id": "rob"})())
+    assert uid == "rob"
+    assert Path(home) == Path(prefs_home_dir())
+    # 300 is above the per-tx backstop, so the backstop binds — but it is 120,
+    # not the env's 5: the owner's pref was READ.
+    assert tx_guard.autonomous_max_usd(uid, home) == 120.0

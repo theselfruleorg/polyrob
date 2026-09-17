@@ -430,7 +430,11 @@ class RunLoopMixin:
 						await self.step(step_info=step_info)
 					except asyncio.CancelledError:
 						self.logger.warning(f"❌ Step execution cancelled at step {step_num + 1}")
-						break
+						# This is the scheduler/goal wall-clock cancellation, not the
+						# cooperative ``self._cancelled`` path handled above.  Swallowing
+						# it makes asyncio.wait_for report success and lets an incomplete
+						# rail be recorded as done.
+						raise
 
 					# FIX 10: Update last activity time after successful step
 					last_activity_time = time.time()
@@ -723,5 +727,4 @@ class RunLoopMixin:
 						errors=self.history.errors(),
 					)
 				)
-
 

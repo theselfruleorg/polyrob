@@ -41,6 +41,7 @@ policy; it may not broadcast without a `Decision(allowed=True)`.
 from __future__ import annotations  # safe: @BaseTool.action uses explicit param_model
 
 import logging
+import os
 import time
 import types
 import uuid
@@ -49,6 +50,7 @@ from typing import Optional, Tuple
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool
+from tools.wallet_holder import WalletHolderMixin
 
 logger = logging.getLogger(__name__)
 
@@ -187,9 +189,8 @@ def _erc8004_register_enabled() -> bool:
 def _solana_trade_enabled() -> bool:
     """Default OFF. Shipping the Solana rail must change nothing until an
     operator arms it, exactly like DEFI_TRADE_ENABLED for the EVM verbs."""
-    import os
-    return os.getenv("SOLANA_TRADE_ENABLED", "false").strip().lower() in (
-        "1", "true", "yes", "on")
+    from core.env import bool_env
+    return bool_env("SOLANA_TRADE_ENABLED", False)
 
 
 def _max_slippage_bps() -> int:
@@ -515,7 +516,7 @@ class BridgeParams(BaseModel):
         "TRUE (default) quotes, asserts and simulates without broadcasting."))
 
 
-class DefiTradeTool(BaseTool):
+class DefiTradeTool(WalletHolderMixin, BaseTool):
     def __init__(self, name: str = "defi_trade", config=None, container=None, *,
                  wallet=None, rail_factory=None, guard_fn=None, price_fn=None,
                  route_fn=None, fallback_price_fn=None, balance_fn=None,
@@ -539,18 +540,6 @@ class DefiTradeTool(BaseTool):
         self._solana_decimals_fn = solana_decimals_fn
         self._solana_held_fn = solana_held_fn
         self._solana_confirm_fn = solana_confirm_fn
-
-    def _ar(self, *, content: str = None, error: str = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content)
-
-    def _get_wallet(self):
-        if self._wallet is not None:
-            return self._wallet
-        from core.wallet.factory import get_agent_wallet
-        return get_agent_wallet()
 
     def _route(self, chain, token_in, token_out, amount_in_raw, *, holder,
                slippage_bps):

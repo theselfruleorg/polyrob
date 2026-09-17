@@ -19,7 +19,7 @@ from core.env import bool_env as _core_bool_env, int_env as _core_int_env, float
 # MEMORY_SEARCH_TOOL (read-only, tenant-scoped) and CRON_RUN_LOOP (fixes a live bug
 # where cron built a session but never ran the agent loop).
 
-_FALSEY = ("none", "off", "false", "0", "no", "")
+from core.env import _FALSEY  # noqa: E402 — the ONE falsey set, re-exported by name
 
 
 def _bool_env(name: str, default: bool) -> bool:
@@ -41,3 +41,29 @@ def _int_env(name: str, default: int) -> int:
 def _float_env(name: str, default: float) -> float:
     """Delegates to the ONE float parser (core.env.float_env); mirrors _int_env."""
     return _core_float_env(name, default)
+
+
+def posture_flag(name: str, min_posture: int) -> bool:
+    """A flag that defaults ON at ``AGENT_COMPUTE_POSTURE >= min_posture``.
+
+    An explicit env value always wins (e.g. force-off at a raised posture);
+    a posture probe error means the default is OFF. Three tool packages
+    (shell, self_env, code_exec) each re-derived this by hand.
+    """
+    try:
+        from core.config_policy.compute_posture import compute_posture
+        default = compute_posture() >= min_posture
+    except Exception:
+        default = False
+    return _bool_env(name, default)
+
+
+def safe_local_flag(name: str) -> bool:
+    """A flag in the ``POLYROB_LOCAL`` safe group: an explicit env value wins
+    (parsed default-OFF), otherwise the interactive-local default
+    (``_safe_autonomy_default``). coding/git each re-derived this by hand."""
+    import os
+    if os.getenv(name) is not None:
+        return _bool_env(name, False)
+    from core.config_policy.policy import _safe_autonomy_default
+    return _safe_autonomy_default(name)

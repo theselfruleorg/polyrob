@@ -6,6 +6,131 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.1] — 2026-09-17
+
+### Added
+
+- `self-deploy` skill: an agent-facing bootstrap for a FRESH instance —
+  assess (model, wallet + funding per chain, email, X, autonomy grants, tool
+  catalog), provision what a lever exists for (own inbox, X account, standing
+  work), bundle the human-only asks into ONE message (API keys, funding
+  addresses read from a tool, env flags, a CAPTCHA), verify by a READ, and
+  report one readiness table. Until now `polyrob init` was the human's wizard
+  and the setup interview covered only the owner contract.
+- `twitter_poll_results(tweet_id)`: reads the options, votes, shares,
+  `voting_status` and end time of a poll the agent posted. The tool could post
+  a poll (`poll_options`) but no read asked for `attachments.poll_ids`, so the
+  agent could ask the community and never learn the answer. The
+  `x-engagement` skill now teaches the post → record id → read → aggregate loop
+  and pins poll answers as DATA.
+- X message reads distinguish legacy Direct Messages from encrypted X Chat,
+  support OAuth 2.0 PKCE user tokens, and can verify/decrypt Chat event history
+  with the official Chat XDK and account keys instead of misreporting ciphertext
+  or a legacy-only page as an empty inbox.
+- The `identity` status section now reports the agent's reachable identities:
+  `email:` (the address it sends AS, or `none → remedy`) and `x:` (API rail
+  configured / PARTIAL with the missing key names / none, plus the handle and
+  whether writes are armed). Env PRESENCE only, never a value.
+- A `liquidity` status section on every seat (status snapshot, `polyrob wallet
+  overview`, Telegram `/wallet overview`, console `GET /api/webgate/liquidity`)
+  lists the treasury's Uniswap v3 positions with their fees; on-chain
+  enumeration is opt-in and owner-only. `/lp` is listed in the money verb
+  group on every chat surface.
+- `launchpad_status` names the graduated pool (PoolKey + pool id) once a Pons
+  V2 curve has graduated, and states the fee reality: the LP fee is 0, the
+  hook collects, creator income is claimed via the escrow, and the launch
+  locker position cannot be withdrawn.
+- `X_SIGNUP_HANDLE` / `X_SIGNUP_DISCLOSURE`: the @handle `x_signup_start`
+  requests and the automation-disclosure bio it writes.
+
+### Changed
+
+- Post-1.0 alignment sweep: one home per shared rule instead of hand-carried
+  copies. `core.event_log` owns the telemetry db resolution and a fail-open
+  `emit()` (the recap reader used to ignore `TELEMETRY_EVENT_LOG_PATH` and
+  create the db on read); every owner/admin CLI verb resolves its data home
+  through `cli/_admin_home.py` (the deployed-home rule now also covers
+  `apps`, `surface`, `cron`, `goals`, `journey`, and `owner pending`'s goal
+  board, which came from a third resolver); the sub-agent and owner-pause
+  refusals every money verb states live in `core.wallet.authority`; the
+  publish/app-service owner-turn clauses in `core.security.owner_turn`; the
+  ship rail's orchestrator/approval/workspace helpers in `tools/ship_common.py`;
+  the goal board's status/kind vocabulary in `core.goal_vocab`; the `/help`
+  group order is read from `core.verbs`; the copy-layer engine is shared by
+  `core.copy` and `webview.copy`; the Telegram update dedup is the core
+  `IdempotencyStore` over its existing table. Twelve open-coded boolean
+  truth sets now parse through `core.env`, pinned shrink-only by
+  `tests/test_bool_env_parse_ratchet.py`.
+- Social-agent skills and toolsets now route public discovery, native X account
+  reads, encrypted Chat, browser inbox fallback, and approval-gated writes through
+  the capabilities that actually implement each operation.
+- REPL slash commands parse quoted arguments (`/steer "two words"` is one
+  argument); an unbalanced quote is refused with the remedy. Free-text verbs
+  (`/learn`, `/persona`) keep the raw line. `/export` names the formats the
+  REPL supports and points at `polyrob session export` for the rest; `/logs`
+  prints the log directory instead of a CLI verb that does not exist.
+- The approval `awaiting` event names the provider that will decide.
+- `lp_collect` / `lp_remove` set their receipt minimum from a simulated
+  collect, not the position's fee-growth estimate (core rounding leaves the
+  estimate several raw units high, which made a correct collect refuse).
+  Every position receipt also asserts the fungible legs. LP legs are no longer
+  written into the token-keyed position book: adding them double-counted
+  tokens already held, and removing them on withdrawal erased unrelated
+  holdings. Position receipts stay in the NFT and transaction telemetry until
+  an LP-specific basis exists.
+
+### Fixed
+
+- Scheduled agent runs now propagate wall-clock cancellation and are recorded as
+  incomplete unless the agent actually calls `done()`. The default cron budget is
+  ten minutes, preventing slow provider calls from silently turning unfinished
+  treasury rails into successful ticks.
+- Provider health distinguishes a sentinel on the serving provider from one on an
+  unused fallback. A credit-limited fallback is shown as a warning and explicitly
+  does not claim to block the live provider.
+- Live incremental streams claim the turn's reply latch after becoming visible,
+  preventing `done()` bookkeeping from producing a second user-facing response.
+- Browser management accepts operator-configured CDP and WebSocket endpoints, so
+  hardened custody deployments can keep Chromium outside the signing service.
+- The owner's spend ceilings are read from the same home the preference
+  writers use. `tx_guard`, the wallet config fallback and the Telegram
+  `/wallet autonomous` verb resolved the preference store through the
+  process home (an empty tree under a service account), so an approved
+  `budget.defi_autonomous_usd` was recorded and never read and the guard kept
+  refusing at the env default. Those seats may no longer call the process
+  home (ratcheted).
+- X self-registration: `XPageDriver.set_handle_and_profile` was a `pass` stub
+  while the docs claimed the disclosure was written into the bio — no handle
+  and no disclosure were ever applied. It now edits `/settings/screen_name` and
+  `/settings/profile` best-effort and RETURNS what it applied; the signup
+  result carries `requested_handle`/`handle_applied`/`bio_applied` and the tool
+  says plainly when the disclosure is NOT on the profile yet. The flow refuses
+  up front with the remedy when the agent has no email or no inbox client
+  (it used to fill an EMPTY email and pause several steps later on "no code
+  arrived"), provisions the AgentMail inbox idempotently before opening a
+  browser, and the default disclosure names the instance instead of the
+  owner's internal tenant id (`operated by local`).
+- `x_browser` stays explicit-grant-only: it is `high_impact` +
+  `delegate_blocked`, so it is not on the CLI optional-registrar table and is
+  reached by explicit `tool_ids` only.
+- A per-profile daemon (`polyrob profile create --service`) no longer loads
+  the primary instance's environment first: any key the profile did not
+  override leaked through (its Telegram token → a 409 fight, its `TWITTER_*`
+  keys → the profile posted AS the primary, its owner ids and money flags). A
+  profile daemon reads its own environment files only.
+- `defi_trade.register_agent` / `set_agent_uri` referenced `os.environ` with
+  no module-level import (latent `NameError`).
+- The coding and git tools resolve their confined root per TENANT, not the
+  anonymous bucket, on a multi-tenant server.
+- The `twitter` extra now carries `chatxdk`, which the encrypted X Chat reads
+  need; a base install without the extra still imports.
+
+### Deployment
+
+- The signing service owns the wallet state directory while wallet artifacts
+  remain group-readable, allowing the durable submission journal to be created on
+  the first broadcast without weakening the service-identity boundary.
+
 ## [1.0.0] — 2026-09-16
 
 POLYROB 1.0 is the first stable public release. It brings the terminal, web

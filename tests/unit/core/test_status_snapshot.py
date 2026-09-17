@@ -162,6 +162,26 @@ def test_degraded_fixture_renders_every_condition(degraded):
     assert "runtime cost (owner's compute bill): $2.00 last 24h · $40.00 total" in text
 
 
+def test_dead_non_serving_provider_does_not_claim_to_block_live_provider(
+        tmp_path, monkeypatch):
+    data_dir = str(tmp_path)
+    monkeypatch.setenv("POLYROB_DATA_DIR", data_dir)
+    monkeypatch.setenv("CREDIT_SENTINEL_ENABLED", "true")
+    monkeypatch.setenv("DEFAULT_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    with open(os.path.join(data_dir, "CREDIT_SENTINEL"), "w") as f:
+        json.dump({"providers": {"zai-coding": {
+            "ts": time.time() - 3600,
+            "release_ts": time.time() + 3600,
+            "reason": "weekly limit exhausted",
+        }}}, f)
+
+    snap = build_status_snapshot(OWNER, data_dir=data_dir, include_money=False)
+    item = next(h for h in snap.health if h.key == "credit_sentinel:zai-coding")
+    assert item.severity == "warn"
+    assert "does NOT block live provider openrouter" in item.text
+
+
 def test_every_section_is_always_present(degraded):
     snap = build_status_snapshot(OWNER, data_dir=degraded, ledger=_fake_ledger())
     assert tuple(snap.sections) == SECTION_ORDER

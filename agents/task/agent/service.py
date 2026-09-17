@@ -183,53 +183,12 @@ def _normalize_llm_content(content: Any) -> str:
 
 
 # Known tool/service names that namespace their actions
-_KNOWN_TOOLS = {
-	'polymarket', 'mcp', 'twitter', 'email', 'perplexity',
-	'filesystem', 'browser', 'collabland', 'alchemy', 'task'
-}
-
-
-def _detect_service_for_action(action_name: str) -> str:
-	"""Detect which service an action belongs to based on its name.
-
-	Uses a multi-tier detection strategy:
-	1. Check for known tool prefix (e.g., 'polymarket_get_markets' → 'polymarket')
-	2. Fall back to keyword-based detection for legacy actions
-	3. Return 'default' if no match found
-
-	Args:
-		action_name: The name of the action
-
-	Returns:
-		The service name or 'default' if not detected
-	"""
-	action_name_lower = action_name.lower()
-
-	# Strategy 1: Check for known tool prefix pattern (tool_action)
-	for tool in _KNOWN_TOOLS:
-		if action_name_lower.startswith(f"{tool}_"):
-			return tool
-
-	# Strategy 2: Keyword-based detection for actions without prefix
-	if 'perplexity' in action_name_lower or 'search_web' in action_name_lower:
-		return 'perplexity'
-	elif any(kw in action_name_lower for kw in ['document', 'doc_', 'extract_text', 'process_',
-											'file', 'write_file', 'read_file', 'append_file',
-											'delete_file', 'create_directory', 'list_directory']):
-		return 'filesystem'
-	elif any(kw in action_name_lower for kw in ['click', 'scroll', 'input', 'navigate', 'go_to',
-											'browse_to', 'back', 'forward', 'reload', 'screenshot']):
-		return 'browser'
-	elif 'mcp' in action_name_lower:
-		return 'mcp'
-
-	# Strategy 3: Try to extract prefix from first underscore
-	if '_' in action_name_lower:
-		potential_tool = action_name_lower.split('_')[0]
-		if len(potential_tool) >= 3 and potential_tool not in {'get', 'set', 'add', 'del', 'run'}:
-			return potential_tool
-
-	return 'default'
+# ONE detector (agents/task/telemetry/service_detect.py); this name is kept
+# because the step/telemetry mixins reference it as a module global.
+from agents.task.telemetry.service_detect import (  # noqa: E402
+	KNOWN_TOOLS as _KNOWN_TOOLS,
+	detect_service_for_action as _detect_service_for_action,
+)
 
 
 @dataclass

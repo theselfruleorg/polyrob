@@ -409,6 +409,32 @@ def make_agent_runner(task_agent: Any, *, data_dir: str = "data") -> Callable[[C
                 _cron_ev(job, "failed", "refusal_or_empty", duration_s=round(time.time() - _t0, 3))
                 return False
 
+            # A normal autonomous run must terminate through done().  Step-budget
+            # exhaustion and swallowed/late cancellation can still leave useful
+            # text behind, but that text is not evidence that the scheduled job
+            # completed.  Never advance a money rail as successful in that state.
+            if run.done_called is False:
+                logger.warning(
+                    "cron job %s: run ended without done(); treating as incomplete",
+                    job.id,
+                )
+                try:
+                    from modules.memory.episodic import finalize_episode
+                    await finalize_episode(
+                        session_id=session_id, user_id=job.user_id, kind="cron",
+                        task=job.task, outcome="failed",
+                        spend_usd=run.spend_usd, steps=run.steps,
+                        artifacts=run.artifacts,
+                        meta={"source": "cron", "job_id": job.id,
+                              "reason": "incomplete_no_done"},
+                    )
+                except Exception:
+                    logger.warning("cron episodic write failed", exc_info=True)
+                _cron_ev(job, "failed", "incomplete_no_done",
+                         duration_s=round(time.time() - _t0, 3),
+                         spend_usd=run.spend_usd, steps=run.steps)
+                return False
+
             final = run.result_text()
 
             # Episodic write happens BEFORE out-of-band delivery (Task 7): delivery's

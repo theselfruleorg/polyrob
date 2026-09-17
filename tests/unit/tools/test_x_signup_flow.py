@@ -93,6 +93,13 @@ class Identity:
     disclosure = "Automated account (bot) operated by Owner."
 
 
+@pytest.fixture(autouse=True)
+def _agent_email(monkeypatch):
+    # The flow refuses to register with NO email (it used to fill an empty
+    # field and fail late); the fakes here model a provisioned agent inbox.
+    monkeypatch.setenv("POLYROB_AGENT_EMAIL", "robbot@agentmail.to")
+
+
 def _flow(driver, store=None, mail=None, progress=None):
     return SignupFlow(
         driver=driver,
@@ -212,3 +219,46 @@ async def test_resume_skips_completed_steps():
     flow = _flow(driver, progress=progress)
     await flow.run(resume=True)
     assert "open" not in driver.calls  # did not restart from scratch
+
+
+# --- pre-flight refusals (2026-09-17) --------------------------------------
+
+@pytest.mark.asyncio
+async def test_no_agent_email_refuses_before_any_page(monkeypatch):
+    """No address = no signup. Refuse up front and name the remedy instead of
+    filling an empty email and pausing steps later on a misleading reason."""
+    monkeypatch.delenv("POLYROB_AGENT_EMAIL", raising=False)
+    monkeypatch.delenv("GMAIL_EMAIL", raising=False)
+    monkeypatch.setattr("core.instance.resolve_agent_email", lambda *a, **k: None)
+    driver = FakeDriver(probes=["ok", "ok", "ok"])
+    with pytest.raises(SignupPaused) as ei:
+        await _flow(driver).run()
+    assert ei.value.obstacle is Obstacle.VALUE_NEEDED
+    assert "AGENTMAIL_API_KEY" in ei.value.prompt
+    assert driver.calls == []
+
+
+@pytest.mark.asyncio
+async def test_no_inbox_client_refuses_before_any_page():
+    class NoClientMail:
+        client = None
+
+        async def wait_for_code(self, timeout=120):
+            return None
+    driver = FakeDriver(probes=["ok", "ok", "ok"])
+    with pytest.raises(SignupPaused) as ei:
+        await _flow(driver, mail=NoClientMail()).run()
+    assert ei.value.obstacle is Obstacle.VALUE_NEEDED
+    assert driver.calls == []
+
+
+@pytest.mark.asyncio
+async def test_profile_outcome_is_reported_not_assumed():
+    """The driver says what it applied; the result carries it verbatim."""
+    class Driver(FakeDriver):
+        async def set_handle_and_profile(self, handle, bio):
+            self.bio = bio
+            return {"handle_applied": False, "bio_applied": True, "handle": "robbot"}
+    result = await _flow(Driver(probes=["ok", "ok", "ok"])).run()
+    assert result.requested_handle == "robbot"
+    assert result.handle_applied is False and result.bio_applied is True

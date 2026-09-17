@@ -49,18 +49,17 @@ def _warn_if_goals_off() -> None:
 
 def _get_board(data_root: Optional[Path] = None) -> GoalBoard:
     """Get the GoalBoard instance for the current user."""
+    from cli._admin_home import admin_data_dir
     from core.bootstrap import setup_project_path, setup_sqlite_compat
-    from core.runtime_config import get_data_root
 
     setup_project_path()
     setup_sqlite_compat()
 
     if data_root is None:
-        data_root = Path(get_data_root())
+        data_root = Path(admin_data_dir())
 
-    # WS-3: one shared {data_dir}/goals.db resolver. The CLI keeps its own
-    # get_data_root() home resolution (parity-pinned against the dispatcher by
-    # tests/unit/core/test_cli_data_home_isolation.py) and only the join is shared.
+    # WS-3: one shared {data_dir}/goals.db resolver; the home is the admin
+    # seam every owner verb uses (cli/_admin_home.py) and only the join is shared.
     from core.runtime_paths import goals_db_path
     return GoalBoard(goals_db_path(str(data_root)))
 

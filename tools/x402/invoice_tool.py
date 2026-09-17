@@ -144,12 +144,6 @@ class X402InvoiceTool(BaseTool):
             from tools.defi.payment_quote import register_payment_quoter
             register_payment_quoter(container)
 
-    def _ar(self, *, content: str = None, error: str = None, metadata: Optional[Dict[str, Any]] = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content, metadata=metadata)
-
     @BaseTool.action(
         "Create an x402 payment request (invoice): amount, purpose, expiry. "
         "Returns payment instructions the payer needs (recipient/chain/amount/id).",

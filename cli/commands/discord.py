@@ -51,8 +51,8 @@ async def _run_discord(token_opt: Optional[str], verbose: bool):
         async def _announce():
             click.echo(click.style("discord bot online", fg="green")
                        + " — connecting to gateway…")
-            if os.environ.get("GROUP_CHAT_ENABLED", "").strip().lower() in (
-                    "1", "true", "yes", "on"):
+            from core.env import bool_env
+            if bool_env("GROUP_CHAT_ENABLED", False):
                 click.echo(click.style(
                     "group chat ON — only allowlisted channels respond "
                     "(polyrob owner groups allow discord <channel_id>)", dim=True))

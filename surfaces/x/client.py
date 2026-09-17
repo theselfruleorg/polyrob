@@ -1,16 +1,20 @@
-"""Thin X API v2 DM client over tweepy (OAuth 1.0a user context), off-loop.
+"""Thin X API v2 DM client over Tweepy user context, off-loop.
 
-DM endpoints require USER-context auth (app-only bearer is rejected), so this
-reuses the OAuth1 creds POLYROB already stores (``BotConfig.get_twitter_config``:
-api_key/api_secret/access_token/access_token_secret) — never a second credential
-store. tweepy is already a dependency (tools/twitter_tool.py); every call runs
-via ``asyncio.to_thread`` so the sync SDK never blocks the event loop.
+DM endpoints require USER-context auth (app-only bearer is rejected). Prefer a
+distinct OAuth 2.0 PKCE user access token (``TWITTER_OAUTH2_ACCESS_TOKEN``); the
+existing OAuth 1.0a user-context credential set remains supported. The ordinary
+``TWITTER_BEARER_TOKEN`` is app-only and is NEVER used as a DM user token.
 
 Rate-limit reality (docs.x.com, 2026-07): GET /2/dm_events is 15 req/15 min per
 user (shared across DM GET endpoints); POST dm_conversations/... messages is
 15/15 min + 1,440/24 h. A 429 surfaces as :class:`XRateLimited` carrying the
 ``x-rate-limit-reset`` epoch so the poller can back off to the reset, not a
 fixed sleep.
+
+Important: successful user-context authentication does not guarantee that the
+account's X access tier exposes every inbound event. Callers must treat an
+empty or own-only API page as "API returned no inbound", never "no replies".
+The ``x_browser`` tool is the UI-authoritative fallback for that case.
 """
 from __future__ import annotations
 
@@ -52,23 +56,41 @@ class XDMClient:
                               or os.getenv("TWITTER_ACCESS_TOKEN", ""))
         self._access_token_secret = (creds.get("access_token_secret")
                                      or os.getenv("TWITTER_ACCESS_TOKEN_SECRET", ""))
+        self._oauth2_access_token = (
+            creds.get("oauth2_access_token")
+            or os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN", ""))
         self._client = None  # lazy tweepy.Client
 
     @property
     def has_credentials(self) -> bool:
-        return all((self._api_key, self._api_secret,
-                    self._access_token, self._access_token_secret))
+        return bool(self._oauth2_access_token) or all((
+            self._api_key, self._api_secret,
+            self._access_token, self._access_token_secret))
+
+    @property
+    def auth_mode(self) -> str:
+        return "oauth2_user" if self._oauth2_access_token else "oauth1_user"
+
+    @property
+    def _user_auth(self) -> bool:
+        # Tweepy uses user_auth=False for OAuth2 bearer-style requests. Because
+        # this is the dedicated PKCE USER token, that is user context—not app-only.
+        return not bool(self._oauth2_access_token)
 
     def _tweepy(self):
         if self._client is None:
             import tweepy
-            self._client = tweepy.Client(
-                consumer_key=self._api_key,
-                consumer_secret=self._api_secret,
-                access_token=self._access_token,
-                access_token_secret=self._access_token_secret,
-                wait_on_rate_limit=False,  # the poller owns backoff
-            )
+            if self._oauth2_access_token:
+                self._client = tweepy.Client(
+                    bearer_token=self._oauth2_access_token,
+                    wait_on_rate_limit=False)
+            else:
+                self._client = tweepy.Client(
+                    consumer_key=self._api_key,
+                    consumer_secret=self._api_secret,
+                    access_token=self._access_token,
+                    access_token_secret=self._access_token_secret,
+                    wait_on_rate_limit=False)
         return self._client
 
     async def _call(self, fn, *args, **kwargs):
@@ -80,7 +102,8 @@ class XDMClient:
 
     async def get_me(self) -> str:
         """The authenticated bot account's user id (needed to skip own echoes)."""
-        resp = await self._call(self._tweepy().get_me, user_auth=True)
+        resp = await self._call(
+            self._tweepy().get_me, user_auth=self._user_auth)
         return str(resp.data.id)
 
     async def get_dm_events(self, pagination_token: Optional[str] = None,
@@ -92,7 +115,7 @@ class XDMClient:
             event_types="MessageCreate",
             max_results=max_results,
             pagination_token=pagination_token,
-            user_auth=True,
+            user_auth=self._user_auth,
         )
         events = []
         for e in (resp.data or []):
@@ -109,7 +132,8 @@ class XDMClient:
         """POST /2/dm_conversations/with/:participant_id/messages."""
         resp = await self._call(
             self._tweepy().create_direct_message,
-            participant_id=str(participant_id), text=text, user_auth=True,
+            participant_id=str(participant_id), text=text,
+            user_auth=self._user_auth,
         )
         return dict(resp.data or {})
 

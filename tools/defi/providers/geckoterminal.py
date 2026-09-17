@@ -327,10 +327,8 @@ def parse_pools(payload: Any, chain: str, gt_network: str) -> List[PoolCandidate
 
 
 def _get(url: str) -> Any:
-    req = urllib.request.Request(url, headers={
-        "accept": "application/json", "user-agent": "polyrob-defi/1.0"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT_SEC) as resp:
-        return json.loads(resp.read())
+    from tools.defi.providers._http import get_json
+    return get_json(url, timeout=TIMEOUT_SEC)
 
 
 def _fetch(chain: str, endpoint: str, *, fetch=None) -> List[PoolCandidate]:

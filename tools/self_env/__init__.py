@@ -26,12 +26,8 @@ def self_env_enabled() -> bool:
 
     An explicit ``SELF_ENV_ENABLED`` always wins (e.g. force-off at a raised posture).
     """
-    try:
-        from core.config_policy import compute_posture
-        default = compute_posture() >= 2
-    except Exception:
-        default = False
-    return _bool_env("SELF_ENV_ENABLED", default)
+    from core.config_policy import posture_flag
+    return posture_flag("SELF_ENV_ENABLED", 2)
 
 
 def register_self_env_tool(force: bool = False) -> bool:

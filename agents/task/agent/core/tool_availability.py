@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 # tool_id -> (gate description, tier, remedy shown to the agent)
 GATED_TOOL_REGISTRY: dict = {
     "twitter":        ("TWITTER_ENABLED", "disabled",
-                       "owner sets TWITTER_ENABLED=true (auto-ON in AUTONOMY_MODE=autonomous)"),
+                       "owner configures X user credentials; TWITTER_ENABLED=true unlocks writes"),
+    "x_browser":      ("X_BROWSER_ENABLED + captured X session", "disabled",
+                       "owner enables X_BROWSER_ENABLED and runs `polyrob x-account capture-session`"),
     "mcp":            ("MCP_ENABLED + config/mcp_config.json", "disabled",
                        "owner sets MCP_ENABLED=true and configures servers"),
     "email":          ("SMTP/IMAP credentials + outbound policy", "disabled",

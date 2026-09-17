@@ -2713,16 +2713,9 @@ async def receive_stream_chunk(session_id: str, request: Request) -> Response:
 
 def _in_process_task_agent():
     """The TaskAgent living in THIS process (single-service webview deploys),
-    or None when only the classic two-service (:9000) shape is available."""
-    try:
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        agent = container.get_agent("task_agent")
-        if not agent:
-            agent = container.get_service("task_agent")
-        return agent or None
-    except Exception:
-        return None
+    or None when only the classic two-service (:9000) shape is available
+    (``webgate.in_process_task_agent``)."""
+    return webgate.in_process_task_agent()
 
 
 async def _send_message_in_process(request: Request, clean_id: str, agent,

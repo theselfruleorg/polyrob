@@ -6,6 +6,7 @@ pattern, handling context pooling, allocation, cleanup, and resource management.
 """
 
 import asyncio
+import os
 import time
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -26,6 +27,11 @@ class BrowserManagerConfig:
     stale_context_timeout: float = 300.0  # 5 minutes
     enable_pooling: bool = True
     wait_queue_timeout: float = 60.0  # Default wait timeout
+    # Remote browser endpoints are required for custody processes.  These are
+    # intentionally environment-driven so endpoint credentials never enter
+    # the BotConfig object or ordinary session metadata.
+    cdp_url: Optional[str] = None
+    wss_url: Optional[str] = None
     # Backstop-only: the primary allocation path already resolves waiters
     # synchronously from _release_context_internal the instant a context
     # frees up. This loop just recovers any edge case that skips that path,
@@ -74,6 +80,8 @@ class BrowserManager(BaseComponent):
                 self.config, 'browser_wait_queue_backstop_interval',
                 BrowserManagerConfig.wait_queue_backstop_interval,
             ),
+            cdp_url=os.getenv('BROWSER_CDP_URL') or None,
+            wss_url=os.getenv('BROWSER_WSS_URL') or None,
         )
 
         # Browser instance
@@ -110,13 +118,19 @@ class BrowserManager(BaseComponent):
             from tools.browser.browser import BrowserConfig
             browser_config = BrowserConfig(
                 headless=self.browser_config.headless,
-                disable_security=self.browser_config.security_flags.get('bypass_csp', False)
+                disable_security=self.browser_config.security_flags.get('bypass_csp', False),
+                cdp_url=self.browser_config.cdp_url,
+                wss_url=self.browser_config.wss_url,
             )
             self.browser = Browser(
                 headless=self.browser_config.headless,
                 config=browser_config
             )
-            self.logger.info(f"Browser initialized successfully (headless={self.browser_config.headless})")
+            endpoint = 'cdp' if self.browser_config.cdp_url else ('wss' if self.browser_config.wss_url else 'local')
+            self.logger.info(
+                "Browser initialized successfully "
+                f"(headless={self.browser_config.headless}, endpoint={endpoint})"
+            )
 
         except Exception as e:
             self.logger.error(f"Failed to initialize browser: {e}")

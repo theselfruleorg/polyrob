@@ -17,12 +17,8 @@ APPROVE_HINTS = "polyrob apps approve <slug> · /apps approve <slug> · console 
 
 
 def _emit(kind: str, user_id: str, attrs: Dict[str, Any]) -> None:
-    try:
-        from core.event_log import event_log_enabled, get_event_log
-        if event_log_enabled():
-            get_event_log().record(kind, user_id=user_id, source="app_owner", attrs=attrs)
-    except Exception:
-        pass
+    from core.event_log import emit
+    emit(kind, source="app_owner", user_id=user_id, attrs=attrs)
 
 
 def _hhmm(ts: Optional[float]) -> str:

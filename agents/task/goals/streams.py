@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 #: 3-leg cycle. A stuck money stream is therefore an owner action, not a wait:
 #: ``goal_unblock`` EACH blocked leg (unblocking only the head leaves the rest
 #: blocked behind it).
-LIVE_STATUSES = frozenset({"triage", "waiting", "ready", "running", "blocked"})
+from core.goal_vocab import LIVE_STATUSES  # noqa: E402 — the ONE spelling
 
 #: The only objective status under which a stream seeds. A literal, not an
 #: import, because `board` imports are lazy everywhere else in this module;

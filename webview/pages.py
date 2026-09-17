@@ -1110,15 +1110,7 @@ def _console_task_agent():
     Rob #1) this returns a monitoring agent that does NOT own the session (or
     None), and ``decide_tool_approval`` writes a durable cross-process wake row
     instead — it checks ``route_session().is_local``, never trusts mere presence."""
-    try:
-        from core.container import DependencyContainer
-        container = DependencyContainer.get_instance()
-        agent = container.get_agent("task_agent")
-        if not agent:
-            agent = container.get_service("task_agent")
-        return agent or None
-    except Exception:
-        return None
+    return webgate.in_process_task_agent()
 
 
 def _webgate_correspondent_registry():
@@ -1502,18 +1494,10 @@ async def _with_owner_money_db(coro_factory):
 
 
 def _invoicing_off_note():
-    """The honest feature-off note (same grammar as the CLI/REPL invoice
-    listings), or None while the settlement watcher is enabled. A resolver
-    error counts as OFF (fail-to-warn, matching ``warn_if_flag_off``)."""
-    try:
-        from modules.x402.invoicing import x402_invoicing_enabled
-        if x402_invoicing_enabled():
-            return None
-    except Exception:
-        pass
-    return ("X402_INVOICE_ENABLED is off — rows are durable, but no "
-            "settlement watcher runs; pending invoices will not settle or "
-            "wake sessions.")
+    """The ONE feature-off note (``modules.x402.invoicing_note``), or None
+    while the settlement watcher is enabled."""
+    from modules.x402.invoicing_note import invoicing_off_note
+    return invoicing_off_note() or None
 
 
 @router.get("/api/webgate/invoices")

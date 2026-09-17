@@ -81,13 +81,10 @@ def effective_background_review_enabled(user_id, home_dir) -> bool:
     directly). No pref file present => byte-identical to
     ``AutonomyConfig.background_review_enabled()``. Fail-open to the env value."""
     from agents.task.constants import AutonomyConfig
-    env_on = AutonomyConfig.background_review_enabled()
-    try:
-        from core import prefs
-        return bool(prefs.resolve("autonomy.background_review", user_id, home_dir,
-                                  env_value=env_on, default=env_on))
-    except Exception:
-        return env_on
+    from core.prefs import effective_autonomy_switch
+    return effective_autonomy_switch("autonomy.background_review",
+                                     AutonomyConfig.background_review_enabled(),
+                                     user_id, home_dir)
 
 
 class BackgroundReviewMixin:

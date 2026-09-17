@@ -227,16 +227,16 @@ def receipt_position(plan, raw_receipt, holder):
 async def _perform(tool, p, ctx, verb):
     from core.wallet.broadcast.evm import EvmRail
     from core.wallet import tx_notify
-    from tools.defi.deploy_verb import _refuse_non_owner_turn, _refuse_paused
+    from core.wallet.authority import leaf_refusal, spend_pause_refusal
     from tools.defi.trade_tool import _unsupported_chain
     if not liquidity_enabled():
         return tool._ar(error=f'liquidity writes are off; set {FLAG}=true. Nothing was broadcast.')
-    err = _refuse_non_owner_turn(ctx, verb) or _unsupported_chain(p.chain)
+    err = leaf_refusal(ctx, verb) or _unsupported_chain(p.chain)
     if err:
         return tool._ar(error=err)
     if p.protocol != 'v3':
         return tool._ar(error='Uniswap v4 requires the phase-3 Permit2 rail; v3 only today. Nothing was broadcast.')
-    paused = _refuse_paused()
+    paused = spend_pause_refusal()
     if paused:
         return tool._ar(error=paused)
     wallet = tool._get_wallet()
@@ -269,7 +269,7 @@ async def _perform(tool, p, ctx, verb):
                 note = f'would mint position #{decision.position_token_id} (prediction only)\n' if plan.intent.lp_position_effect == 'mint' else ''
                 return tool._ar(content=header + note + 'RESULT: DRY RUN. Re-run with dry_run=false to send.')
             # Re-check the owner's pause immediately before signing.
-            if _refuse_paused():
+            if spend_pause_refusal():
                 raise ValueError('owner paused spending before broadcast')
             tx_hash = rail.sign_and_send(tx)
         except Exception as exc:

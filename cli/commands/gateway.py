@@ -381,10 +381,12 @@ async def _run_gateway(port: int, telegram_token_opt, verbose: bool) -> None:
         _x_required = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
                        "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")
         x_missing = [k for k in _x_required if not (os.environ.get(k) or "").strip()]
-        if x_missing:
+        _x_oauth2 = bool((os.environ.get("TWITTER_OAUTH2_ACCESS_TOKEN") or "").strip())
+        if x_missing and not _x_oauth2:
             click.echo(click.style("[gateway] WARN: ", fg="yellow")
                        + "X_SURFACE_ENABLED=true but missing " + ", ".join(x_missing)
-                       + " (DMs need OAuth 1.0a user-context keys). Skipping X.")
+                       + " (set an OAuth 2.0 PKCE user token or all OAuth 1.0a "
+                         "user-context keys). Skipping X.")
         else:
             try:
                 from surfaces.x.harness import build_x_harness

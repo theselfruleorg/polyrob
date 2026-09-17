@@ -29,7 +29,7 @@ class CronJob:
     # migration. Wire or drop in a dedicated proposal. Not settable via
     # CronService.schedule — always takes this default.
     skip_memory: bool = True
-    max_duration_seconds: int = 180
+    max_duration_seconds: int = 600
     payload: Dict[str, Any] = field(default_factory=dict)
     enabled: bool = True
     status: str = "scheduled"  # scheduled|running|done|failed|cancelled
@@ -73,7 +73,7 @@ class CronJobStore:
                 -- DORMANT (ME-D2): never consumed by the runner; retained to avoid
                 -- a schema migration. Wire or drop in a dedicated proposal.
                 skip_memory INTEGER NOT NULL DEFAULT 1,
-                max_duration_seconds INTEGER NOT NULL DEFAULT 180,
+                max_duration_seconds INTEGER NOT NULL DEFAULT 600,
                 payload TEXT NOT NULL DEFAULT '{}',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 status TEXT NOT NULL DEFAULT 'scheduled',

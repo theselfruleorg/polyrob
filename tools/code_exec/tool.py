@@ -127,11 +127,8 @@ class CodeExecutionTool(BaseTool):
         Rides the single posture predicate (posture >= 1 AND owner tenant AND
         not leaf/sub-agent AND not a forged turn). Fail-closed on any fault.
         """
-        try:
-            from core.config_policy import compute_posture_allows
-            return bool(compute_posture_allows(execution_context, 1))
-        except Exception:
-            return False
+        from core.config_policy import compute_posture_allows_safe
+        return compute_posture_allows_safe(execution_context, 1)
 
     @BaseTool.action(
         "Execute python or bash code in a local subprocess (timeout + output cap + env allowlist)",

@@ -50,8 +50,11 @@ Run one surface directly (`polyrob telegram`, `polyrob whatsapp`,
 `polyrob email`) or all enabled ones together with `polyrob gateway`. Each
 needs its own credentials/flag (e.g. `TELEGRAM_BOT_TOKEN` +
 `TELEGRAM_SURFACE_ENABLED`, `DISCORD_BOT_TOKEN` + `DISCORD_SURFACE_ENABLED`;
-X DMs reuse the twitter tool's `TWITTER_*` OAuth1 keys + `X_SURFACE_ENABLED`
-— see `references/configuration.md`).
+The legacy X DM surface accepts OAuth1 user-context keys or
+`TWITTER_OAUTH2_ACCESS_TOKEN` plus `X_SURFACE_ENABLED`. Agent-driven reads can
+also use encrypted X Chat through `twitter_get_dms`; plaintext requires the
+account's Chat passphrase or exported key blob. `x_browser` is the captured-session
+fallback when the visible inbox is authoritative — see `references/configuration.md`).
 
 **Access tiers** (when `CORRESPONDENT_ACCESS_ENABLED` is on — the multi-user
 model):

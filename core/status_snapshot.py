@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -60,13 +61,15 @@ OVERALL_PARTIAL = "partial"
 SEVERITY_CRIT = "crit"
 SEVERITY_WARN = "warn"
 
-# Goal-board literals (pinned to agents/task/goals/board.py by the contract test).
-_KIND_GOAL, _KIND_OBJECTIVE, _KIND_ASK = "goal", "objective", "ask"
-_ST_READY, _ST_RUNNING, _ST_BLOCKED, _ST_WAITING, _ST_TRIAGE = (
-    "ready", "running", "blocked", "waiting", "triage")
-_ST_DONE, _ST_CANCELLED = "done", "cancelled"
-_ASK_OPEN = "open"
-_OBJ_ACTIVE = "active"
+# Goal-board literals — the ONE spelling (core.goal_vocab; the board imports
+# the same names, and the contract test still pins them equal).
+from core.goal_vocab import (  # noqa: E402
+    KIND_GOAL as _KIND_GOAL, KIND_OBJECTIVE as _KIND_OBJECTIVE, KIND_ASK as _KIND_ASK,
+    STATUS_READY as _ST_READY, STATUS_RUNNING as _ST_RUNNING,
+    STATUS_BLOCKED as _ST_BLOCKED, STATUS_WAITING as _ST_WAITING,
+    STATUS_TRIAGE as _ST_TRIAGE, STATUS_DONE as _ST_DONE,
+    STATUS_CANCELLED as _ST_CANCELLED, ASK_OPEN as _ASK_OPEN, OBJ_ACTIVE as _OBJ_ACTIVE,
+)
 _TOOL_APPROVAL_ASK_KIND = "tool_approval"
 # Telemetry kinds (pinned to core/event_kinds.py by the contract test).
 _K_USER_DELIVERY, _K_OWNER_NOTICE = "user_delivery", "owner_notice"
@@ -257,14 +260,8 @@ def _live_started_loops(rows: List[Dict[str, Any]]) -> tuple[Optional[List[str]]
 
 
 def _telemetry_db_path(data_dir: str) -> str:
-    override = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
-    if override:
-        return override
-    local = os.path.join(data_dir, "telemetry_events.db")
-    if os.path.exists(local):
-        return local
-    from core.runtime_paths import sidecar_db_path
-    return str(sidecar_db_path("telemetry_events.db"))
+    from core.event_log import telemetry_db_path
+    return telemetry_db_path(data_dir)
 
 
 def _read_telemetry(user_id: str, data_dir: str, since_ts: float) -> Section:
@@ -362,14 +359,19 @@ def _providers_section(tele: Section, now: float) -> Section:
     sec.data.update({"usable": usable, "pin": pin, "live": live})
     for name, entry in sorted(latched.items()):
         who = "ALL providers" if name == "*" else name
+        blocks_live_provider = name == "*" or name == live
         release = entry.get("release_ts")
         until = (f"until ~{_hhmm(release)}" if release
                  else f"auto-release {_hhmm(float(entry.get('ts') or 0) + _release_window())}")
         reason = (entry.get("reason") or "").strip().replace("\n", " ")[:140]
+        serving_note = ""
+        if not blocks_live_provider and live:
+            serving_note = f"; does NOT block live provider {live}"
         sec.health.append(HealthItem(
-            key=f"credit_sentinel:{name}", severity=SEVERITY_CRIT,
+            key=f"credit_sentinel:{name}",
+            severity=SEVERITY_CRIT if blocks_live_provider else SEVERITY_WARN,
             text=f"credit sentinel TRIPPED for {who} since {_hhmm(entry.get('ts'))} "
-                 f"({until})" + (f": {reason}" if reason else ""),
+                 f"({until})" + (f": {reason}" if reason else "") + serving_note,
             remedy="top up the account, or remove <data>/CREDIT_SENTINEL after topping up"))
     if live is None and usable:
         sec.health.append(HealthItem(
@@ -1196,6 +1198,13 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
         # teaches an owner to skip the health block.
         sec.lines.append("erc-8004: not registered (optional)")
 
+    # 2026-09-17: the agent's OWN reachable identities — the address it sends
+    # mail AS and the X account it posts AS. Until now no seat could answer
+    # "do I have an email / an X account", so a bootstrap skill had to guess.
+    # Env PRESENCE only, never a value; the X browser-session record lives in
+    # the tools tier and is checked by the agent's own `x_login_check` verb.
+    _identity_reach_lines(sec, data_dir)
+
     d = pfp_dir(data_dir, instance_id)
     png = d / "pfp.png"
     if not png.is_file():
@@ -1247,6 +1256,57 @@ def _identity_section(instance_id: str, data_dir: Optional[str]) -> Section:
         sec.lines.append("re-roll with `polyrob pfp randomize`, accept with "
                          "`polyrob pfp keep` (permanent)")
     return sec
+
+
+def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
+    """Append `email:` and `x:` facts to the identity section (read-only).
+
+    email — `resolve_agent_email` (explicit override → provisioned AgentMail
+    inbox → legacy GMAIL login), or `none` with the remedy. An unset
+    `AGENTMAIL_API_KEY` is named so the owner knows which lever provisions one.
+    x — the API rail is "configured" when the four OAuth 1.0a keys are all
+    present (`TWITTER_ENABLED` decides whether WRITES are armed); the handle is
+    `TWITTER_BOT_USERNAME` when set. Nothing here reads a secret VALUE.
+    """
+    from core.instance import resolve_agent_email
+    email = None
+    try:
+        email = resolve_agent_email(data_home=Path(data_dir) if data_dir else None)
+    except Exception as e:
+        sec.lines.append(f"email: unreadable ({type(e).__name__})")
+    else:
+        sec.data["email"] = email
+        if email:
+            sec.lines.append(f"email: {email}")
+        else:
+            has_key = bool((os.environ.get("AGENTMAIL_API_KEY") or "").strip())
+            sec.lines.append(
+                "email: none — " + ("AGENTMAIL_API_KEY is set; the inbox is provisioned "
+                                    "the first time the email tool initialises"
+                                    if has_key else
+                                    "set AGENTMAIL_API_KEY (own inbox) or GMAIL_EMAIL/"
+                                    "GMAIL_APP_PASSWORD (SMTP)"))
+    api_keys = ("TWITTER_API_KEY", "TWITTER_API_SECRET_KEY",
+                "TWITTER_ACCESS_TOKEN", "TWITTER_ACCESS_TOKEN_SECRET")
+    present = [k for k in api_keys if (os.environ.get(k) or "").strip()]
+    handle = (os.environ.get("TWITTER_BOT_USERNAME") or "").strip().lstrip("@")
+    from core.env import bool_env
+    writes = bool_env("TWITTER_ENABLED", False)
+    sec.data["x_api"] = "configured" if len(present) == 4 else (
+        "partial" if present else "none")
+    sec.data["x_handle"] = handle or None
+    if len(present) == 4:
+        sec.lines.append(
+            f"x: api configured{' @' + handle if handle else ''} — writes "
+            f"{'ON' if writes else 'OFF (TWITTER_ENABLED)'}; browser rail: ask x_login_check")
+    elif present:
+        missing = [k for k in api_keys if k not in present]
+        sec.lines.append(f"x: api PARTIAL — missing {', '.join(missing)}")
+    else:
+        sec.lines.append("x: no api keys — create an X developer app for the agent's "
+                         "account and set TWITTER_API_KEY/SECRET_KEY/ACCESS_TOKEN/"
+                         "ACCESS_TOKEN_SECRET (polls + search need the API rail); "
+                         "browser rail: x_login_check")
 
 
 def _positions_line(data_dir: Optional[str]) -> str:

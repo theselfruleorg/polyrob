@@ -55,64 +55,26 @@ def _refuse_non_owner_turn(execution_context) -> Optional[str]:
     reasoning that a bridge can relocate the treasury in one action. Living with
     it showed the cost: the agent could never bridge for its owner, only tell him
     to do it himself, three taps at a time. That is not autonomy with a safety
-    margin, it is a rail the owner operates by hand.
-
-    The posture is now **caps, not taps**, matching `swap`/`solana_swap`: an
-    autonomous turn MAY bridge, and what bounds it is the per-tx ceiling, the
-    rolling daily cap, the simulation and its asserted deltas, and the owner
-    queue above `DEFI_AUTONOMOUS_MAX_USD` — not a blanket refusal.
-
-    Two refusals survive, because neither is about autonomy:
-      * a delegated **sub-agent/leaf** never moves money (it reports back);
-      * a **correspondent-tainted** session never reaches a money verb.
-    And it still fails CLOSED on any probe error.
+    margin, it is a rail the owner operates by hand. The posture is now **caps,
+    not taps** — the ONE shape in ``core.wallet.authority.leaf_refusal``.
     """
-    try:
-        if getattr(execution_context, "role", None) == "leaf" or \
-                getattr(execution_context, "is_sub_agent", False):
-            return ("refused: a delegated sub-agent may not bridge — report back "
-                    "and let the parent run it. Nothing was broadcast.")
-    except Exception:
-        return "refused: sub-agent probe failed; failing closed."
-    from core.wallet.authority import turn_refusal
-    return turn_refusal(execution_context)
+    from core.wallet.authority import leaf_refusal
+    return leaf_refusal(execution_context, "bridge")
 
 
 def _refuse_paused() -> Optional[str]:
-    """The 031 owner pause. ONE predicate, ONE text, fail-closed.
-
-    ⚠️ There is no separate kill-switch to name. ``AutonomyConfig.autonomy_halted``
-    is literally ``not allows("dispatch").allowed`` — a FACET of the same pause
-    record — so the old "autonomy is HALTED (owner kill-switch)" text sent the
-    owner looking for a lever that does not exist, and offered no remedy.
+    """The 031 owner pause — ``core.wallet.authority.spend_pause_refusal``.
 
     Live, 2026-09-12: the owner armed the trading rail, asked his agent in chat
     to bridge, and hit this branch. He was told it was a hard safety gate the
     agent could not self-grant, and advised to type `/bridge` himself — which
     would have hit this SAME check, because it runs before any seat distinction.
-    Both halves of that answer were wrong, and the message is why.
-
-    The sentence itself now lives in ``core.autonomy_control.pause_refusal_text``,
-    beside the record it describes, so this verb and ``tx_guard`` cannot drift into
-    two different explanations of one stop (census, 2026-09-12).
-
-    Two kinds are consulted because two map differently: ``spend`` is what a bridge
-    IS, and ``dispatch`` is what ``autonomy_halted`` reads. Either denying refuses.
+    Both halves of that answer were wrong, and the message is why; the sentence
+    now lives beside the pause record (``core.autonomy_control.pause_refusal_text``).
     """
-    from core.autonomy_control import pause_refusal_text
-    from core.wallet import tx_guard
-    try:
-        refusal = pause_refusal_text("spend", what="spending")
-        if refusal:
-            return refusal
-        if tx_guard._halted():
-            # force=True — see the note at the tx_guard call site: `_halted` also
-            # answers to the legacy env/touch-file facets, which leave this record
-            # silent, and a refusal must not lose its explanation on that branch.
-            return pause_refusal_text("dispatch", what="spending", force=True)
-    except Exception as exc:
-        return f"refused: pause probe failed ({exc}); failing closed."
-    return None
+    from core.wallet.authority import spend_pause_refusal
+    return spend_pause_refusal()
+
 
 
 async def _require_owner_approval(tool, *, params_summary: dict,

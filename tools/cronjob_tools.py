@@ -32,8 +32,8 @@ class CronScheduleAction(BaseModel):
     task: str = Field(..., description="The task the scheduled agent should perform.", min_length=10)
     schedule: str = Field(..., description="When to run: '30m'/'2h'/'1d', 'every monday 09:00', "
                                            "5-field cron '*/15 * * * *', or an ISO timestamp (one-shot).")
-    max_duration_seconds: int = Field(default=180, le=180,
-                                      description="Hard cap per run (<=180s, the cron 3-minute limit).")
+    max_duration_seconds: int = Field(default=600, le=600,
+                                      description="Hard cap per run (<=600s).")
     deliver: Optional[str] = Field(default=None,
                                    description="Optional out-of-band delivery sink for the result: "
                                                "'telegram', 'email', or 'twitter'. Omit to keep silent.")

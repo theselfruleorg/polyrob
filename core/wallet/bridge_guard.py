@@ -473,10 +473,7 @@ def await_arrival(*, provider, request_id: str, recipient: str, chain_name: str,
 
 
 def _same(a, b) -> bool:
-    """Case-insensitive for 0x-hex only; base58 is case-SENSITIVE."""
-    if a is None or b is None:
-        return False
-    sa, sb = str(a).strip(), str(b).strip()
-    if sa.startswith("0x") and sb.startswith("0x"):
-        return sa.lower() == sb.lower()
-    return sa == sb
+    """Case-insensitive for 0x-hex only; base58 is case-SENSITIVE
+    (``core.wallet.addresses.same_address``)."""
+    from core.wallet.addresses import same_address
+    return same_address(a, b)

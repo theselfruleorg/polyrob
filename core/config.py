@@ -255,6 +255,14 @@ class ServerConfig(AgentConfig):
     twitter_access_token: Optional[str] = Field(None, alias='TWITTER_ACCESS_TOKEN')
     twitter_access_token_secret: Optional[str] = Field(None, alias='TWITTER_ACCESS_TOKEN_SECRET')
     twitter_bearer_token: Optional[str] = Field(None, alias='TWITTER_BEARER_TOKEN')
+    twitter_oauth2_access_token: Optional[str] = Field(
+        None, alias='TWITTER_OAUTH2_ACCESS_TOKEN')
+    twitter_chat_private_keys_b64: Optional[str] = Field(
+        None, alias='TWITTER_CHAT_PRIVATE_KEYS_B64')
+    twitter_chat_key_version: Optional[str] = Field(
+        None, alias='TWITTER_CHAT_KEY_VERSION')
+    twitter_chat_passphrase: Optional[str] = Field(
+        None, alias='TWITTER_CHAT_PASSPHRASE')
     twitter_bot_user_id: Optional[str] = Field(None, alias='TWITTER_BOT_USER_ID')
     twitter_bot_username: Optional[str] = Field(None, alias='TWITTER_BOT_USERNAME')
     
@@ -573,7 +581,8 @@ class ServerConfig(AgentConfig):
 
     @field_validator('twitter_api_key', 'twitter_api_secret_key', 
                     'twitter_access_token', 'twitter_access_token_secret',
-                    'twitter_bearer_token')
+                    'twitter_bearer_token', 'twitter_oauth2_access_token',
+                    'twitter_chat_private_keys_b64')
     def validate_twitter_credentials(cls, v: Optional[str], info) -> Optional[str]:
         """Validate Twitter credentials."""
         if v is None:
@@ -607,6 +616,10 @@ class ServerConfig(AgentConfig):
         self.twitter_access_token = twitter.get('access_token')
         self.twitter_access_token_secret = twitter.get('access_token_secret')
         self.twitter_bearer_token = twitter.get('bearer_token')
+        self.twitter_oauth2_access_token = twitter.get('oauth2_access_token')
+        self.twitter_chat_private_keys_b64 = twitter.get('chat_private_keys_b64')
+        self.twitter_chat_key_version = twitter.get('chat_key_version')
+        self.twitter_chat_passphrase = twitter.get('chat_passphrase')
 
     def get_llm_config(self) -> Dict[str, Any]:
         """Get LLM configuration - API keys and endpoints only.
@@ -692,7 +705,11 @@ class ServerConfig(AgentConfig):
             'api_secret': self.twitter_api_secret_key,  # Match the field name
             'access_token': self.twitter_access_token,
             'access_token_secret': self.twitter_access_token_secret,
-            'bearer_token': self.twitter_bearer_token
+            'bearer_token': self.twitter_bearer_token,
+            'oauth2_access_token': self.twitter_oauth2_access_token,
+            'chat_private_keys_b64': self.twitter_chat_private_keys_b64,
+            'chat_key_version': self.twitter_chat_key_version,
+            'chat_passphrase': self.twitter_chat_passphrase,
         }
         # Only return values that are actually set
         return {k: v for k, v in twitter_config.items() if v and v.strip()}

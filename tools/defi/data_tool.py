@@ -605,12 +605,6 @@ class DefiDataTool(BaseTool):
         self._holder = holder
 
     # -- seams ------------------------------------------------------------
-    def _ar(self, *, content: str = None, error: str = None, metadata: dict = None):
-        from tools.controller.types import ActionResult
-        if error is not None:
-            return ActionResult(error=error)
-        return ActionResult(extracted_content=content, metadata=metadata)
-
     #: The resolver's indexes, in the order they are asked. ONE index is not
     #: enough: DexScreener lags a fresh launch by hours, so prod found the
     #: resolver "only knows wrong-chain or established tokens" — precisely the

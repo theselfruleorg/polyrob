@@ -381,8 +381,8 @@ def foreign_profile_of_path(path) -> Optional[str]:
 
 def cross_profile_access_allowed() -> bool:
     """The explicit opt-in for deliberate cross-profile file access."""
-    return (os.environ.get("POLYROB_ALLOW_CROSS_PROFILE") or "").strip().lower() in (
-        "1", "true", "yes", "on")
+    from core.env import bool_env
+    return bool_env("POLYROB_ALLOW_CROSS_PROFILE", False)
 
 
 def _read_profile_yaml(home: Path) -> dict:

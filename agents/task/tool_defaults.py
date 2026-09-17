@@ -51,10 +51,11 @@ TOOLSETS: dict[str, list[str]] = {
     "development": ["filesystem", "task", "coding", "browser"],
     # Browser-centric: just the browser on top of core.
     "browser": ["filesystem", "task", "browser"],
-    # Social listening / research: any-site scraping + web search.
-    # NOTE: `twitter` (a valid id) is intentionally omitted — the write surface is
-    # gated; social-platform DATA is reached via `anysite` (covers twitter/linkedin/etc).
-    "social": ["filesystem", "task", "anysite", "perplexity", "polymarket_data"],
+    # Social work: broad public discovery plus the two account-authoritative X rails.
+    # Registration/config gates still apply; writes keep their per-action approval and
+    # TWITTER_ENABLED boundaries, so requesting these ids does not bypass policy.
+    "social": ["filesystem", "task", "anysite", "perplexity", "web_fetch",
+               "twitter", "x_browser"],
     # Full server stack (mirrors server_default_tools()).
     "full": ["filesystem", "task", "web_fetch", "perplexity", "email", "mcp", "anysite"],
     # Flagship "earn real money, safely" goal toolset (scripts/seed_goal.py). Research /

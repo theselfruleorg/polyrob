@@ -105,7 +105,7 @@ def create_cron(service: Any, *, task: str, schedule_spec: str, user_id: str,
                 deliver: Optional[str] = None,
                 deliver_target: Optional[str] = None,
                 wake_agent: bool = True,
-                max_duration_seconds: int = 180,
+                max_duration_seconds: int = 600,
                 via: str = "",
                 extra_payload: Optional[Dict[str, Any]] = None) -> Any:
     """Schedule one durable cron job on *service* with the OWNER's grant.

@@ -40,7 +40,7 @@ def _defang_delimiters(content: str) -> str:
 # `defi_data`: a token's name/symbol are chosen by whoever deployed the contract,
 # and contract_read returns arbitrary bytes — so DeFi reads are an injection
 # inlet in exactly the way a fetched web page is, and are framed as DATA.
-UNTRUSTED_TOOL_NAMESPACES = frozenset({"mcp", "browser", "perplexity", "twitter", "email", "web_fetch", "anysite", "defi_data"})
+UNTRUSTED_TOOL_NAMESPACES = frozenset({"mcp", "browser", "x_browser", "perplexity", "twitter", "email", "web_fetch", "anysite", "defi_data"})
 # Untrusted by exact action name (tools whose ``tool`` attr may be absent).
 UNTRUSTED_TOOL_NAMES = frozenset(
     {"web_search", "web_extract", "extract_content", "fetch", "fetch_url", "perplexity_search"}

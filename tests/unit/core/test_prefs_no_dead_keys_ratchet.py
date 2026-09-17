@@ -44,8 +44,12 @@ def test_every_enforced_pref_key_has_a_literal_consumer():
     for key, spec in PREF_SCHEMA.items():
         if spec.enforcement != ENFORCEMENT_ENFORCED:
             continue
+        # A literal read via resolve()/resolve_with_source(), or via the shared
+        # env-AND-pref merge every autonomy loop's effective_* reader goes
+        # through (core.prefs.effective_autonomy_switch, itself a resolve()).
         pat = re.compile(
-            r"resolve(?:_with_source)?\(\s*[\"']" + re.escape(key) + r"[\"']")
+            r"(?:resolve(?:_with_source)?|effective_autonomy_switch)\(\s*[\"']"
+            + re.escape(key) + r"[\"']")
         hits = [str(rel) for rel, text in sources if pat.search(text)]
         if not hits:
             missing[key] = "no resolve('<key>') consumer found"

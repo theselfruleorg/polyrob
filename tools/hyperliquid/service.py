@@ -10,6 +10,7 @@ from typing import Optional, Dict, Any, List, Tuple
 from pydantic import BaseModel, Field
 
 from tools.base_tool import BaseTool, ToolStatus
+from tools.credential_cache import UserCredentialCacheMixin
 from tools.hyperliquid.models import (
     HyperliquidCredentials,
     TradingLimits,
@@ -128,7 +129,7 @@ class GetOrderHistoryParams(BaseModel):
 # Service Class
 # =============================================================================
 
-class HyperliquidTool(BaseTool):
+class HyperliquidTool(UserCredentialCacheMixin, BaseTool):
     """
     Hyperliquid trading tool for perpetuals and spot markets.
 
@@ -223,24 +224,6 @@ class HyperliquidTool(BaseTool):
     # =========================================================================
     # Credential Management
     # =========================================================================
-
-    async def _get_user_credentials(self) -> Optional[HyperliquidCredentials]:
-        """Get credentials for the current user"""
-        if not self._user_id:
-            return None
-
-        # Check cache first
-        if self._user_id in self._credentials_cache:
-            return self._credentials_cache[self._user_id]
-
-        # Load from database
-        if self.db:
-            credentials = await self.db.get_credentials(self._user_id)
-            if credentials:
-                self._credentials_cache[self._user_id] = credentials
-            return credentials
-
-        return None
 
     @staticmethod
     def _resolve_query_address(credentials: HyperliquidCredentials) -> str:

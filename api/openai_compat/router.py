@@ -33,9 +33,8 @@ def _estimate_tokens(text: str, model: str = "gpt-4o") -> int:
 
 def openai_compat_enabled() -> bool:
     """Whether the OpenAI-compatible /v1 surface is mounted (default OFF)."""
-    import os
-    return (os.getenv("OPENAI_COMPAT_API_ENABLED", "") or "").strip().lower() \
-        in ("1", "true", "yes", "on")
+    from core.env import bool_env
+    return bool_env("OPENAI_COMPAT_API_ENABLED", False)
 
 
 def _get_container():

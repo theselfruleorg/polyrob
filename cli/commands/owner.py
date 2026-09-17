@@ -57,11 +57,8 @@ def _data_dir() -> str:
     worked. `admin_data_home` adopts the deployed home when it can read it and
     REFUSES when it cannot; a purely local box is unchanged and silent.
     """
-    from core.admin_data_home import AmbiguousDataHome, admin_data_home
-    try:
-        return admin_data_home(echo=lambda m: click.echo(click.style(m, fg="yellow"), err=True))
-    except AmbiguousDataHome as exc:
-        raise click.ClickException(str(exc))
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir()
 
 
 # D7 (proposal 030): sectioned --help instead of one flat alphabetical wall.
@@ -498,10 +495,11 @@ def reject(kind, item_id, user):
 
 
 def _goal_board():
+    """The board under the SAME home ``_data_dir()`` adopts — the asks and the
+    correspondents of one `pending` listing must come from one data home."""
     from agents.task.goals.board import GoalBoard
-    from core.runtime_config import get_data_root
     from core.runtime_paths import goals_db_path
-    return GoalBoard(goals_db_path(get_data_root()))
+    return GoalBoard(goals_db_path(_data_dir()))
 
 
 @owner.command("asks")

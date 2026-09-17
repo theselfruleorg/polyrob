@@ -238,7 +238,7 @@ class GoalListAction(BaseModel):
 #: What ``goal_list`` shows when no status filter is given: work that is still
 #: on the board. ``done``/``cancelled`` are history and dwarf the live rows
 #: within days (357 done vs 1 ready on prod, 2026-08-29).
-GOAL_LIST_LIVE_STATUSES = ("triage", "waiting", "ready", "running", "blocked")
+from core.goal_vocab import LIVE_STATUS_ORDER as GOAL_LIST_LIVE_STATUSES  # noqa: E402
 
 
 class GoalShowAction(BaseModel):

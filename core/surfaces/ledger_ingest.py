@@ -15,9 +15,8 @@ logger = logging.getLogger(__name__)
 def _allowed(container: Any, surface: str, chat_id: str) -> bool:
     try:
         from core.surfaces.group_allowlist import GroupAllowlist
-        from core.runtime_paths import data_dir_or_home
-        cfg = getattr(container, "config", None)
-        data_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        from core.runtime_paths import container_data_home
+        data_dir = container_data_home(container)
         return GroupAllowlist(os.path.join(data_dir, "group_allowlist.db")).is_allowed(surface, chat_id)
     except Exception as e:
         logger.debug("ledger ingest allowlist probe failed (skip): %s", e)

@@ -17,7 +17,6 @@ from core.config_policy import embedder_needed
 from dotenv import load_dotenv
 
 
-_FALSEY_BACKFILL = {"0", "false", "off", "no", ""}
 _SECRET_ALLOWLIST = {"ANYSITE_JWT", "MCP_GATEWAY_TOKEN"}
 
 
@@ -116,10 +115,8 @@ def _backfill_enabled() -> bool:
     flag keeps the legacy behavior for one release and is then deleted along
     with ``_backfill_provider_keys``.
     """
-    raw = os.environ.get("POLYROB_ENV_KEY_BACKFILL")
-    if raw is None:
-        return False
-    return raw.strip().lower() not in _FALSEY_BACKFILL
+    from core.env import bool_env
+    return bool_env("POLYROB_ENV_KEY_BACKFILL", False)
 
 
 def _warn_backfill_retired_once(config_dir: str = "config") -> None:
@@ -379,8 +376,9 @@ _CLI_OPTIONAL_REGISTRARS = (
     ("tools.hf_deploy",        "register_hf_deploy_tool",    ("hf_deploy",)),
     ("tools.publish",          "register_publish_tool",      ("publish",)),
     ("tools.app_service",      "register_app_service_tool",  ("app_service",)),
+    ("tools.x_browser",        "register_x_browser_tool",    ("x_browser",)),
     # F2 (2026-09-14): read-only token sight (DEFI_DATA_ENABLED) — money/high-impact
-    # DeFi verbs (defi_trade/launchpad/dapp_browser/x_browser) deliberately stay OUT
+    # DeFi verbs (defi_trade/launchpad/dapp_browser) deliberately stay OUT
     # of this table; only the read-only book belongs on the CLI default rig.
     ("tools.defi",             "register_defi_data_tool",    ("defi_data",)),
 )
@@ -453,7 +451,9 @@ def _cli_extra_gate(name: str) -> bool:
     unconditional CLI tools).
     """
     if name == "twitter":
-        return bool(os.getenv("TWITTER_API_KEY") and os.getenv("TWITTER_ACCESS_TOKEN"))
+        return bool(os.getenv("TWITTER_OAUTH2_ACCESS_TOKEN") or
+                    (os.getenv("TWITTER_API_KEY") and
+                     os.getenv("TWITTER_ACCESS_TOKEN")))
     if name == "anysite":
         try:
             from tools.anysite import anysite_cli_enabled

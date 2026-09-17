@@ -45,10 +45,8 @@ _DETACHED_TASKS: set = set()
 def _spawn_detached(coro):
     """Schedule ``coro`` as a fire-and-forget task WITH a strong reference held
     until it finishes, so the event loop can't GC it mid-run."""
-    t = asyncio.create_task(coro)
-    _DETACHED_TASKS.add(t)
-    t.add_done_callback(_DETACHED_TASKS.discard)
-    return t
+    from core.async_bridge import spawn_retained
+    return spawn_retained(coro, _DETACHED_TASKS)
 def _resolve_session_runtime(provider=None, model=None, env=None):
     """Fill missing SessionRequest provider/model from the operator's runtime
     config. Thin alias for the one agents-tier resolver in

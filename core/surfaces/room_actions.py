@@ -146,9 +146,8 @@ def room_actions_enabled() -> bool:
 
 
 def _data_dir(container: Any) -> str:
-    from core.runtime_paths import data_dir_or_home
-    cfg = getattr(container, "config", None) if container is not None else None
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+    from core.runtime_paths import container_data_home
+    return container_data_home(container)
 
 
 def _policy(container: Any, surface: str, chat_id: str):

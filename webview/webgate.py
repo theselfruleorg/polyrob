@@ -464,3 +464,23 @@ __all__ = [
     "bind_host", "bind_port", "local_owner_id", "console_display_name", "branding_config",
     "data_dir",
 ]
+
+
+def in_process_task_agent():
+    """The ``TaskAgent`` living in THIS process, or None.
+
+    On a single-service console deploy it is the agent that owns the sessions;
+    when the console is a SEPARATE service (prod Rob #1) it is a monitoring
+    agent that does NOT own them (or None) — a caller must check
+    ``route_session().is_local``, never trust mere presence. ``pages`` and
+    ``server`` each carried this lookup by hand.
+    """
+    try:
+        from core.container import DependencyContainer
+        container = DependencyContainer.get_instance()
+        agent = container.get_agent("task_agent")
+        if not agent:
+            agent = container.get_service("task_agent")
+        return agent or None
+    except Exception:
+        return None

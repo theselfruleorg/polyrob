@@ -456,9 +456,11 @@ self-wake/delegation-result turn:
 | `ENABLE_GIF_CREATION` | OFF | (Legacy/dead) GIF creation. | `agents/task/constants.py:60` |
 | `FS_REALPATH_CONFINE` | ON (`"on"`) | Confine filesystem ops via realpath. | `os.getenv("FS_REALPATH_CONFINE","on")` |
 | `BROWSER_ALLOW_PRIVATE_URLS` | OFF (`'false'`) | Allow browser navigation to private/loopback URLs. | `os.getenv("BROWSER_ALLOW_PRIVATE_URLS","false")` |
+| `BROWSER_CDP_URL` | unset | Operator-configured Chrome DevTools Protocol endpoint for a browser kept OUTSIDE the agent process (hardened custody deployments); unset = launch the bundled Chromium. | `os.getenv('BROWSER_CDP_URL')` (`tools/browser/browser_manager.py`) |
+| `BROWSER_WSS_URL` | unset | Operator-configured Playwright WebSocket endpoint for a remote browser service; unset = launch the bundled Chromium. | `os.getenv('BROWSER_WSS_URL')` (`tools/browser/browser_manager.py`) |
 | `GIT_TOOL_TIMEOUT_SEC` | `120` | Per-command subprocess timeout (seconds) for the `git` tool. | `tools/git/tool.py:77` |
 | `GITHUB_TOKEN` / `GH_TOKEN` | unset (secret, masked) | GitHub token for the `github` tool when no per-user OAuth token is stored (`GITHUB_TOKEN` wins; the standard gh-CLI/Actions names). | `tools/github/tool.py:128` |
-| `TWITTER_WRITE_MAX_PER_HOUR` | `15` | Sliding-window cap on `x_browser` posts per hour. | `tools/x_browser/tool.py:67` |
+| `TWITTER_WRITE_MAX_PER_HOUR` | `15` | Sliding-window cap on `x_browser` posts and DM sends per account/action bucket. | `tools/x_browser/tool.py::XBrowserTool` |
 
 > **`PAYMENT_APPROVAL_TOOLS` also gates DRY-RUN orders (L9, 2026-07-15):** the four
 > namespaced order verbs (`hyperliquid_place_limit_order`, `hyperliquid_place_market_order`,
@@ -643,6 +645,7 @@ above `SHELL_MAX_TIMEOUT_SEC` so the tool's own kill fires before the controller
 | `SIGNAL_ACCOUNT` | unset | The Signal account (+E164 number) the surface sends/receives as; required for `polyrob signal`. | `cli/commands/signal.py::resolve_signal_config`, `surfaces/signal/client.py:36` |
 | `SIGNAL_SEND_MIN_INTERVAL_SEC` | `1.0` | Minimum seconds between Signal sends (send throttle). | `surfaces/signal/surface.py::_min_interval` |
 | `TWITTER_BOT_USER_ID` | unset | The bot's own X numeric user id for the X DM surface; unset = discovered via `get_me()` at startup (one API call saved when set). | `surfaces/x/harness.py:86` |
+| `TWITTER_BOT_USERNAME` | unset | The bot's own X handle (without `@`), shown beside the X API line of the identity status section; unset = the handle is omitted. | `core/status_snapshot.py` (`os.environ.get("TWITTER_BOT_USERNAME")`) |
 | `WEBHOOK_PATH` | `/telegram/webhook` | URL path for the Telegram webhook mode (explicitly not the old bot's hardcoded `/mvpbot`). | `surfaces/telegram/harness.py:212` |
 | `TELEGRAM_BOT_USERNAME` | unset | 044: the bot's @username without '@', used for room mention detection when getMe is unavailable at boot; getMe still wins when it succeeds. | `surfaces/telegram/harness.py::start` |
 | `DEV_RAIL_SCRIPT` | unset (a default path in the install tree) | Absolute path to the Telegram `/dev` rail's inject script. The rail is OFF unless this resolves to a real file, so a deployment that ships no such script has no `/dev`. | `surfaces/telegram/dev_rail.py::_inject_script` |
@@ -936,7 +939,9 @@ instance's domain / support handle / access-gate copy baked in at authoring time
 | `TWITTER_REQUIRE_APPROVAL` | ON (`'true'`) | Require approval for Twitter writes. | `os.getenv("TWITTER_REQUIRE_APPROVAL","true")` |
 | `TWITTER_POST_COOLDOWN_ENABLED` | **ON** | 2026-08-28: durable, cross-session minimum gap between AUTONOMOUS `twitter_post`/`twitter_thread` writes (a repeat goal re-firing in a fresh session, each with its own fresh in-memory rate-limit bucket, posted 30+ near-duplicate tweets over ~5 days — the in-memory `TWITTER_WRITE_MAX_PER_HOUR` bucket never saw a sibling session's posts). Reads the durable telemetry event log, not process memory. Scoped to `twitter_post`/`twitter_thread` only (a reply/quote to a different tweet is not a repeat); a genuine owner-interactive turn or `execution_context=None` (owner-direct/CLI) is never gated. Fail-open on any probe error. | `tools/twitter_tool.py::TwitterTool._social_cooldown_block` |
 | `TWITTER_POST_COOLDOWN_SEC` | `3600` | Minimum seconds between two autonomous `twitter_post`/`twitter_thread` writes for the same tenant, enforced by `TWITTER_POST_COOLDOWN_ENABLED`. | `tools/twitter_tool.py::TwitterTool._social_cooldown_sec` |
-| `X_BROWSER_ENABLED` | OFF | Register the browser-based `x_browser` tool (post to X + self-registration on a saved login). OFF by default; never in the default tool_ids; high_impact + delegate_blocked. `x_post` is owner-approval-gated, `x_signup_start` is always owner-queued. Needs a captured X session (`polyrob x capture-session`) or a completed signup. | `tools/x_browser/registration.py::x_browser_enabled` |
+| `X_BROWSER_ENABLED` | OFF | Register the captured-session `x_browser` tool for visible-inbox reads, existing-thread DM sends, posting, and self-registration. OFF by default; high_impact + delegate_blocked. `x_post`/`x_dm` are owner-approval-gated and `x_signup_start` is always owner-queued. Needs `polyrob x-account capture-session` or a completed signup. | `tools/x_browser/registration.py::x_browser_enabled` |
+| `X_SIGNUP_HANDLE` | unset (= the instance id) | The @handle `x_signup_start` REQUESTS for the agent's own X account (sanitised to letters/digits/underscore, ≤15 chars). An instance id is often already taken on X, so this lets an operator pick another. The live handle X actually assigned is reported back — a refused request keeps X's assigned handle and the result says so. | `tools/x_browser/tool.py::XBrowserTool._signup_identity` |
+| `X_SIGNUP_DISCLOSURE` | unset (= `Automated account: <instance> is an autonomous POLYROB agent. Posts are generated by software.`) | The automation-disclosure bio the signup writes to the new X profile (≤160 chars). The default names the INSTANCE, never the owner's internal tenant id (the old text rendered `operated by local`). Whether it was actually applied is reported (`bio_applied`), never assumed. | `tools/x_browser/tool.py::XBrowserTool._disclosure`; `tools/x_browser/driver.py::set_handle_and_profile` |
 | `ALLOWED_REASONING_TURNS` | `1` | Tool-free planning turns allowed before escalation. | `agents/task/constants.py:567` |
 | `COMPACTION_COOLDOWN_STEPS` | `3` | Steps between LLM-compaction firings (85–95% band). | `agents/task/constants.py:543` |
 | `COMPACTION_PROMPT_GUARD` | **ON** | Anti-injection framing on the compaction summarizer prompt + rebuilt summary. | `core/config_policy/capability_toggles.py::compaction_prompt_guard` |
@@ -1023,6 +1028,10 @@ instance's domain / support handle / access-gate copy baked in at authoring time
 | `TELEMETRY_EVENT_LOG_RETENTION_DAYS` | `30` (min 1) | Prune event-log rows older than this on the heartbeat ticker. | `core/tickers.py:125` |
 | `SECURITY_EVENT_LOG_ENABLED` | ON | 045 lanes 1-3: record every inbound routing decision, every gate refusal and every threat-scan flag into the durable event log. Bodies are never stored (length + an 8-char hash only). OFF is byte-identical to pre-045. Retention rides `TELEMETRY_EVENT_LOG_RETENTION_DAYS`. | `core/security_flags.py::security_event_log_enabled` |
 | `TWITTER_API_KEY` / `TWITTER_API_SECRET_KEY` / `TWITTER_ACCESS_TOKEN` / `TWITTER_ACCESS_TOKEN_SECRET` | unset (secret, masked) | OAuth 1.0a user-context credentials for the twitter tool, the X DM surface, and `pfp push --twitter`; explicit creds passed to the client win over env. | `surfaces/x/client.py:48-54`, `core/bootstrap.py:451` |
+| `TWITTER_OAUTH2_ACCESS_TOKEN` | unset (secret, masked) | OAuth 2.0 PKCE **user** access token with `dm.read`, `users.read`, and `tweet.read` (plus `dm.write` when sending). Enables the encrypted X Chat API; the app-only `TWITTER_BEARER_TOKEN` cannot read private messages. | `surfaces/x/chat_client.py::XChatClient`, `tools/twitter_tool.py::twitter_get_dms` |
+| `TWITTER_CHAT_PASSPHRASE` | unset (secret, masked) | X Chat secure-key-backup passphrase/PIN. When set with the OAuth2 user token, the official Chat XDK unlocks the account keys and decrypts API event ciphertext. Treat this as a root credential. | `surfaces/x/chat_client.py::_ensure_chat` |
+| `TWITTER_CHAT_PRIVATE_KEYS_B64` | unset (secret, masked) | Alternative server/bot X Chat private-key blob exported by Chat XDK. Prefer a secret manager; never commit it. | `surfaces/x/chat_client.py::_ensure_chat` |
+| `TWITTER_CHAT_KEY_VERSION` | unset (auto from X public-key record) | Registered public-key version paired with `TWITTER_CHAT_PRIVATE_KEYS_B64`. | `surfaces/x/chat_client.py::_ensure_chat` |
 
 ---
 
@@ -1289,7 +1298,6 @@ not proof of isolation: separate its UID/host, credentials and network access.
 Remote endpoint URLs and connection errors are not logged verbatim because they
 may contain authentication tokens. The Playwright driver remains trusted host
 code; these launch guards do not create an independent signer boundary.
-
 
 ### Treasury sweep submission safety
 

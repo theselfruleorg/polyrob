@@ -79,16 +79,18 @@ class GitTool(BaseTool):
     # --- root + confinement --------------------------------------------------
 
     def _resolve_root(self, execution_context=None) -> str:
-        if self._root_override:
-            return os.path.abspath(self._root_override)
-        try:
-            sid = getattr(execution_context, "session_id", None) or getattr(self, "session_id", None)
+        """The confined root: an override, else the session's per-tenant
+        workspace, else the cwd (the local CLI's project). ONE rule in
+        ``tools.ship_common.session_workspace_root``."""
+        from tools.ship_common import session_workspace_root
+        ctx = execution_context
+        if ctx is None or not getattr(ctx, "session_id", None):
+            sid = getattr(self, "session_id", None)
             if sid:
-                from agents.task.path import pm
-                return str(pm().get_workspace_dir(sid))
-        except Exception:
-            pass
-        return os.getcwd()
+                ctx = type("_Ctx", (), {"session_id": sid, "workspace_dir": None,
+                                        "user_id": getattr(ctx, "user_id", None)})()
+        return session_workspace_root(ctx, override=self._root_override,
+                                      fallback_cwd=True)
 
     def _confine(self, rel_path: str, root: str) -> str:
         target = os.path.abspath(os.path.join(root, rel_path))

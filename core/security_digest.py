@@ -44,14 +44,8 @@ class SecurityRollup:
 
 
 def _db_path(data_dir: str) -> str:
-    override = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
-    if override:
-        return override
-    local = os.path.join(data_dir, "telemetry_events.db")
-    if os.path.exists(local):
-        return local
-    from core.runtime_paths import sidecar_db_path
-    return str(sidecar_db_path("telemetry_events.db"))
+    from core.event_log import telemetry_db_path
+    return telemetry_db_path(data_dir)
 
 
 def _query(db_path: str, sql: str, params: tuple):

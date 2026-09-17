@@ -26,12 +26,8 @@ def shell_tools_enabled() -> bool:
     per-call gate still requires an owner/non-leaf/non-forged session). An explicit
     ``SHELL_TOOLS_ENABLED`` env always wins (e.g. force-off even at a raised posture).
     """
-    try:
-        from core.config_policy import compute_posture
-        default = compute_posture() >= 1
-    except Exception:
-        default = False
-    return _bool_env("SHELL_TOOLS_ENABLED", default)
+    from core.config_policy import posture_flag
+    return posture_flag("SHELL_TOOLS_ENABLED", 1)
 
 
 def register_shell_tools(force: bool = False) -> bool:

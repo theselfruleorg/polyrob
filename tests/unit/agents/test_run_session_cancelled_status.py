@@ -6,8 +6,10 @@ _run_session_impl must handle CancelledError and set a non-completed status.
 """
 import ast
 import inspect
+import textwrap
 
 from agents.task_agent_lite import TaskAgent
+from agents.task.agent.core.run_loop import RunLoopMixin
 
 
 def _method(name):
@@ -43,3 +45,32 @@ def test_run_session_impl_handles_cancelled_error():
     assert final_status_values, "handler must set final_status"
     assert "completed" not in final_status_values, "must NOT mark a cancelled run completed"
     assert any(isinstance(n, ast.Raise) for n in ast.walk(handler)), "must re-raise to honor cancel"
+
+
+def test_inner_run_loop_propagates_step_cancellation():
+    """The inner loop must not hide the cancellation from TaskAgent/scheduler."""
+    tree = ast.parse(textwrap.dedent(inspect.getsource(RunLoopMixin.run)))
+    handlers = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ExceptHandler) and node.type is not None:
+            name = (node.type.attr if isinstance(node.type, ast.Attribute)
+                    else node.type.id if isinstance(node.type, ast.Name) else "")
+            if name == "CancelledError":
+                handlers.append(node)
+    assert handlers, "run loop must explicitly handle asyncio.CancelledError"
+    step_handlers = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Try):
+            continue
+        guards_step = any(
+            isinstance(child, ast.Attribute) and child.attr == "step"
+            for stmt in node.body for child in ast.walk(stmt)
+        )
+        if not guards_step:
+            continue
+        for handler in node.handlers:
+            if handler in handlers:
+                step_handlers.append(handler)
+    assert step_handlers, "must explicitly handle cancellation around self.step()"
+    assert all(any(isinstance(n, ast.Raise) for n in ast.walk(handler))
+               for handler in step_handlers), "step cancellation must re-raise"

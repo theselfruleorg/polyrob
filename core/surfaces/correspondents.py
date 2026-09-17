@@ -36,11 +36,14 @@ STATE_EXPIRED = "expired"
 
 
 def _norm_addr(address: str) -> str:
-    """Normalize an external address for keying (case/space-insensitive).
-
-    Lowercasing is correct for email and harmless for phone-number ids (digits/+).
-    """
-    return (address or "").strip().lower()
+    """The ONE key for a counterparty address — ``core.surfaces.address_key.
+    canonical_addr`` (case-folded, a leading ``@`` and a ``t.me/`` wrapper
+    folded away), the same rule the conversation store keys on, so "have we
+    spoken" and "may this address reach a session" never disagree about who
+    someone is. Rows written under the older lowercase-only rule are collapsed
+    once per file on open (:meth:`CorrespondentRegistry._merge_legacy_spellings`)."""
+    from core.surfaces.address_key import canonical_addr
+    return canonical_addr(address)
 
 
 class CorrespondentRegistry:
@@ -65,8 +68,58 @@ class CorrespondentRegistry:
                 """
             )
             conn.commit()
+            self._merge_legacy_spellings(conn)
         finally:
             conn.close()
+
+    #: Bumped when an on-open migration lands, so it runs once per file.
+    _SCHEMA_VERSION = 1
+
+    @staticmethod
+    def _merge_legacy_spellings(conn) -> None:
+        """Collapse rows keyed under the older lowercase-only rule.
+
+        Mirrors ``ConversationStore._merge_legacy_spellings``: a live install
+        may hold ``@handle`` and ``handle`` as two bindings. Per canonical key
+        ONE row survives — an ``active`` binding beats a pending one (the owner
+        granted it), then the most recently updated (the registry's own
+        "latest binding wins" resolution) — and its address is rewritten to the
+        canonical spelling. Runs once per file (``PRAGMA user_version``),
+        idempotent, fail-open: a migration fault must not make the store
+        unusable.
+        """
+        try:
+            if int(conn.execute("PRAGMA user_version").fetchone()[0]) >= \
+                    CorrespondentRegistry._SCHEMA_VERSION:
+                return
+            rows = conn.execute(
+                "SELECT surface, address, thread_id, user_id, state, updated_at "
+                "FROM correspondents").fetchall()
+            best: dict = {}
+            for surface, address, tid, uid, state, updated in rows:
+                key = (surface, _norm_addr(address), tid, uid)
+                rank = (1 if state == STATE_ACTIVE else 0, float(updated or 0))
+                if key not in best or rank > best[key][0]:
+                    best[key] = (rank, address)
+            # Two passes: drop every loser, then rename each winner to canonical.
+            losers = [(s, a, t, u) for (s, a, t, u, _st, _up) in rows
+                      if best[(s, _norm_addr(a), t, u)][1] != a]
+            for s, a, t, u in losers:
+                conn.execute("DELETE FROM correspondents WHERE surface=? AND address=? "
+                             "AND thread_id=? AND user_id=?", (s, a, t, u))
+            for (surface, canon, tid, uid), (_rank, winner) in best.items():
+                if winner != canon:
+                    conn.execute("UPDATE correspondents SET address=? WHERE surface=? "
+                                 "AND address=? AND thread_id=? AND user_id=?",
+                                 (canon, surface, winner, tid, uid))
+            conn.execute(f"PRAGMA user_version = {CorrespondentRegistry._SCHEMA_VERSION}")
+            conn.commit()
+        except Exception:
+            logger.warning("correspondent address merge skipped", exc_info=True)
+            try:
+                conn.rollback()
+            except Exception:
+                pass
 
     # --- write -------------------------------------------------------------
     def seed(

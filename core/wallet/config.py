@@ -208,8 +208,10 @@ def _fail_open_home_dir():
     ``None`` => legacy env-only value (any downstream error is ALSO caught by
     the caller's own try/except, so this can never crash config loading)."""
     try:
-        from core.paths import polyrob_home
-        return polyrob_home()
+        # Same home the pref writers use (the data home), never $HOME/.polyrob —
+        # a reader on a different tree cannot see the owner's own cap.
+        from core.runtime_paths import prefs_home_dir
+        return prefs_home_dir()
     except Exception:
         return None
 

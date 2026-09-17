@@ -66,7 +66,8 @@ def token_streaming_enabled() -> bool:
     """
     raw = os.getenv("LLM_TOKEN_STREAMING")
     if raw is not None and raw.strip() != "":
-        return raw.strip().lower() in ("1", "true", "yes", "on")
+        from core.env import parse_bool
+        return parse_bool(raw, False)
     try:
         from core.config_policy.policy import local_mode_enabled
         return bool(local_mode_enabled())

@@ -57,7 +57,8 @@ TEMPLATES: dict[str, AgentTemplate] = {
         toolset="social",
         autonomy="standard",
         persona="Social-media and content strategist. Engaging, on-brand voice.",
-        seeded_skills=["web-scraping", "lead-research"],
+        seeded_skills=["social-discovery", "x-engagement", "web-scraping",
+                       "lead-research"],
     ),
     # trading → research toolset (reads-only; no code_execution/trade execution).
     "trading": AgentTemplate(

@@ -25,7 +25,7 @@ def test_count_authored_skills_matches_bundled_library_size():
         if d.is_dir() and (d / "SKILL.md").exists() and not d.name.startswith((".", "user_"))
     ]
     assert mgr.count_authored_skills() == len(on_disk)
-    assert mgr.count_authored_skills() == 28  # 28 bundled skills (verified-tooling added 2026-09-14)
+    assert mgr.count_authored_skills() == 29  # 29 bundled skills (self-deploy added 2026-09-17)
 
 
 def test_cli_skills_validate_no_arg_exits_zero_for_compliant_library():

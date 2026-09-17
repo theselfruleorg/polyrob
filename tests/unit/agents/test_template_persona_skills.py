@@ -22,6 +22,11 @@ def test_general_seeds_no_skills():
     assert seeded_skills_for("general") == []
 
 
+def test_social_seeds_discovery_and_account_communication_skills():
+    skills = seeded_skills_for("social")
+    assert {"social-discovery", "x-engagement"} <= set(skills)
+
+
 def test_seeded_skill_ids_exist_on_disk():
     """Every seeded skill id must have a SKILL.md (no dangling refs)."""
     import os

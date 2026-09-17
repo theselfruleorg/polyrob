@@ -29,8 +29,12 @@ def test_defi_data_is_in_cli_registerable_tools():
 
 def test_money_and_high_impact_defi_tools_stay_off_the_cli_default_rig():
     """Reach, never policy: only the read-only book joins the CLI registrar table.
-    defi_trade/launchpad/dapp_browser/x_browser move real funds or otherwise carry
-    money/delegate-blocked capability — they stay explicit-grant-only."""
+    defi_trade/launchpad/dapp_browser move real funds — they stay
+    explicit-grant-only. ``x_browser`` is the deliberate exception since the
+    self-deploy skill (2026-09-17): it rides the flag-gated registrar
+    (``X_BROWSER_ENABLED``, default OFF) so a CLI/headless agent can run the
+    owner-queued signup ceremony, and every write verb keeps its per-call
+    approval gate (tests/unit/core/test_cli_x_browser_tool.py)."""
     from core.bootstrap import _CLI_OPTIONAL_TOOLS
-    for tool_id in ("defi_trade", "launchpad", "dapp_browser", "x_browser"):
+    for tool_id in ("defi_trade", "launchpad", "dapp_browser"):
         assert tool_id not in _CLI_OPTIONAL_TOOLS, tool_id

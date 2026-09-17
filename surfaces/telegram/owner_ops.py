@@ -419,11 +419,11 @@ def _set_autonomous_ceiling(rest: List[str], user_id: Optional[str],
         return "A ceiling cannot be negative."
     try:
         from core import prefs
-        from core.paths import polyrob_home
-        prefs.write_preference(polyrob_home(), user_id,
+        from core.runtime_paths import prefs_home_dir
+        prefs.write_preference(prefs_home_dir(), user_id,
                                "budget.defi_autonomous_usd", value)
         from core.wallet import tx_guard
-        effective = tx_guard.autonomous_max_usd(user_id, polyrob_home())
+        effective = tx_guard.autonomous_max_usd(user_id, prefs_home_dir())
     except Exception as e:
         logger.warning("autonomous ceiling not written: %s", e)
         return f"Could not save it: {e}"
@@ -560,15 +560,11 @@ def _wallet_balance_lines(w) -> List[str]:
 # ---------------------------------------------------------------------------
 
 def _invoicing_off_note() -> str:
-    try:
-        from modules.x402.invoicing import x402_invoicing_enabled
-        if x402_invoicing_enabled():
-            return ""
-    except Exception:
-        logger.debug("invoicing enablement probe failed", exc_info=True)
-        return ""
-    return ("\n⚠️ X402_INVOICE_ENABLED is off — rows are durable, but no "
-            "settlement watcher runs, so nothing settles on its own.")
+    """The ONE feature-off note (``modules.x402.invoicing_note``), on its own
+    line for a chat bubble."""
+    from modules.x402.invoicing_note import invoicing_off_note
+    note = invoicing_off_note()
+    return f"\n⚠️ {note}" if note else ""
 
 
 async def invoices_reply(user_id: str, args: List[str]) -> str:

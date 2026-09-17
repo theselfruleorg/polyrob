@@ -135,6 +135,18 @@ class Surface(ABC):
             partial=False, stream_id=msg.stream_id, reply_to=msg.reply_to,
         ))
 
+    def stream_is_live(self) -> bool:
+        """Whether a partial stream is visibly delivered as it arrives.
+
+        Buffered surfaces retain partials locally until a final message arrives;
+        treating those frames as a user reply would suppress that final message
+        and lose the reply.  Edit-capable incremental surfaces, on the other
+        hand, have already opened the user's message, so their streamed prose
+        must claim the turn's reply latch.
+        """
+        return bool(self._incremental_streaming_enabled()
+                    and self.capabilities.supports_edit)
+
     async def identify(self, raw: dict) -> Optional[Identity]:
         return None
 

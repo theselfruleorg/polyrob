@@ -1410,3 +1410,14 @@ def reject_pref_change(item_id: str, *, user_id: Optional[str], home_dir: Path |
     except OSError as e:
         return False, f"reject failed: {e}"
     return True, f"pref change '{item_id}' rejected (archived)"
+
+
+def effective_autonomy_switch(pref_key: str, env_on: bool, user_id, home_dir) -> bool:
+    """A loop's env/posture default AND-merged with its tenant pref: the pref
+    can only DISABLE a loop, never enable one the operator has off (018 P0.2).
+    No pref file present => byte-identical to *env_on*; fail-open to it.
+    Self-wake and background review each carried this by hand."""
+    try:
+        return bool(resolve(pref_key, user_id, home_dir, env_value=env_on, default=env_on))
+    except Exception:
+        return env_on

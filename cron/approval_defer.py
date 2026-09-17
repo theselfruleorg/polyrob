@@ -1,14 +1,12 @@
 """Was this cron run cut off waiting on the OWNER, rather than failing? (FIX 3)
 
-The cron hard cap (``cron/service.py::_DEFAULT_MAX_DURATION_S``, 180s) is SHORTER
-than the durable owner-approval wait (``payment_approval_timeout_sec()``, 300s,
-see ``tools/controller/approval.py::approval_wait_timeout_sec``). So an
-approval-gated verb attempted inside a cron run — payment-SPEND and
-self-modification verbs always route to the durable ``owner_queue`` lane — is
-guaranteed to be cut off 120s before the owner's window even elapses, and the
-scheduler recorded that as the JOB's failure. The durable ask survives (the owner
-can still ``/approve``, leaving a one-shot grant the next attempt redeems), so
-only the accounting was wrong.
+A cron job may set a hard cap shorter than the durable owner-approval wait
+(``payment_approval_timeout_sec()``, 300s; see
+``tools/controller/approval.py::approval_wait_timeout_sec``). In that case an
+approval-gated verb attempted inside the run can be cut off while waiting for
+the owner, and the scheduler must not record that as the JOB's failure. The
+durable ask survives (the owner can still ``/approve``, leaving a one-shot grant
+the next attempt redeems), so only the accounting would be wrong.
 
 This module answers exactly one question, and answers it narrowly:
 

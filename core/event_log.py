@@ -24,7 +24,7 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
-from core.sqlite_util import execute_retry, wal_connect
+from core.sqlite_util import execute_retry, init_schema, wal_connect
 
 logger = logging.getLogger("task.telemetry.event_log")
 
@@ -51,13 +51,7 @@ class TelemetryEventLog:
         self.db_path = db_path
         self._ready = False
         try:
-            os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
-            conn = wal_connect(db_path)
-            try:
-                conn.executescript(_SCHEMA)
-                conn.commit()
-            finally:
-                conn.close()
+            init_schema(db_path, _SCHEMA, mkdir=True)
             self._ready = True
         except Exception as e:
             # Fail-open: a broken telemetry DB must never break the agent.
@@ -161,6 +155,55 @@ class TelemetryEventLog:
 
 # --- process-wide singleton keyed by db path -------------------------------------
 _INSTANCES: Dict[str, TelemetryEventLog] = {}
+
+
+def telemetry_db_path(data_dir: Optional[str] = None) -> str:
+    """The ONE resolution of where ``telemetry_events.db`` lives.
+
+    Order: an explicit ``TELEMETRY_EVENT_LOG_PATH`` override (the test suite's
+    seam), else a file that already exists under *data_dir* (a tenant-local or
+    explicitly resolved home), else the shared sidecar path
+    (``core.runtime_paths.sidecar_db_path``, read-both/write-new). Every reader
+    (status snapshot, security digest, missed notices, recap) and the writer
+    singleton resolve through here so they can never disagree about which file
+    holds the truth. A read never CREATES the file — see :func:`open_event_log`.
+    """
+    override = (os.getenv("TELEMETRY_EVENT_LOG_PATH") or "").strip()
+    if override:
+        return override
+    if data_dir:
+        local = os.path.join(str(data_dir), "telemetry_events.db")
+        if os.path.exists(local):
+            return local
+    from core.runtime_paths import sidecar_db_path
+    return str(sidecar_db_path("telemetry_events.db"))
+
+
+def open_event_log(data_dir: Optional[str] = None) -> Optional[TelemetryEventLog]:
+    """A read-only handle on the resolved log, or None when the file does not
+    exist yet. Constructing ``TelemetryEventLog`` creates the file, so a read
+    surface must go through here rather than manufacture an empty db in whatever
+    home it resolved."""
+    path = telemetry_db_path(data_dir)
+    if not path or not os.path.exists(path):
+        return None
+    return TelemetryEventLog(path)
+
+
+def emit(kind: str, *, source: str, user_id: str = "", session_id: str = "",
+         attrs: Optional[Dict[str, Any]] = None) -> None:
+    """Fail-open record: the enabled check, the singleton lookup and the
+    exception swallow that every emitter used to carry by hand. ``attrs`` is
+    an explicit dict — never ``**kwargs`` — because ``record()`` has reserved
+    keyword names and a colliding attr would be silently eaten."""
+    try:
+        if not event_log_enabled():
+            return
+        get_event_log().record(kind, user_id=str(user_id or ""),
+                               session_id=str(session_id or ""),
+                               source=source, attrs=attrs or {})
+    except Exception:
+        logger.debug("event emit skipped (%s from %s)", kind, source, exc_info=True)
 
 
 def get_event_log(db_path: Optional[str] = None) -> TelemetryEventLog:
