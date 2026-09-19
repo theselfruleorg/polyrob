@@ -219,6 +219,58 @@ def _is_finite(value) -> bool:
         return False
 
 
+# --- quote cross-check (2026-09-19) ------------------------------------------
+# A route quote is INPUT to the swap rail's min-out floor. On 2026-09-19 the
+# `lifi:fly` route answered ~4.1 WETH for four unrelated small tokens on a cold
+# first response, and the EXIT rail burned steps re-quoting "implausible"
+# numbers by eye. The keyless indexer price both sides already carry gives an
+# implied output; when the route disagrees by more than QUOTE_SUSPECT_RATIO
+# either way the quote is SUSPECT. Fail-open: no price, zero price, or a
+# pool with no real liquidity (a liquidity:0 pool once priced a token at
+# 1e35) ⇒ "unavailable", never a verdict.
+QUOTE_SUSPECT_RATIO = 5.0
+
+
+class QuoteCrossCheck:
+    __slots__ = ("verdict", "ratio", "implied_out", "why")
+
+    def __init__(self, verdict: str, ratio: Optional[float], implied_out: Optional[float], why: str):
+        self.verdict = verdict          # "consistent" | "suspect" | "unavailable"
+        self.ratio = ratio              # quoted / implied
+        self.implied_out = implied_out
+        self.why = why
+
+
+def _usable_price(info) -> Optional[float]:
+    try:
+        usd = float(getattr(info, "price_usd", None) or 0)
+        liq = getattr(info, "liquidity_usd", None)
+    except (TypeError, ValueError):
+        return None
+    if usd <= 0 or liq is None or float(liq) <= 0:
+        return None
+    return usd
+
+
+def quote_cross_check(amount_in: float, quoted_out: float, price_in, price_out) -> QuoteCrossCheck:
+    """Compare a route's output with the indexer-implied output. Pure."""
+    p_in = _usable_price(price_in)
+    p_out = _usable_price(price_out)
+    if p_in is None or p_out is None:
+        missing = "token_in" if p_in is None else "token_out"
+        return QuoteCrossCheck("unavailable", None, None,
+                               f"no indexed price with real liquidity for {missing}")
+    implied = amount_in * p_in / p_out
+    if implied <= 0 or quoted_out <= 0:
+        return QuoteCrossCheck("unavailable", None, implied, "non-positive side")
+    ratio = quoted_out / implied
+    if ratio > QUOTE_SUSPECT_RATIO or ratio < 1.0 / QUOTE_SUSPECT_RATIO:
+        return QuoteCrossCheck("suspect", ratio, implied,
+                               f"route output is {ratio:.1f}x the indexer-implied output")
+    return QuoteCrossCheck("consistent", ratio, implied,
+                           f"within {ratio:.2f}x of the indexer-implied output")
+
+
 def _fmt_usd(value: Optional[float]) -> str:
     """Money, with a real sub-cent figure kept instead of rounded to zero.
 
@@ -972,9 +1024,13 @@ class DefiDataTool(BaseTool):
             # `pool` is a SECOND caller-supplied address and it reaches the
             # indexer as a URL path segment. `address` above was validated;
             # this one was not, which is the whole finding.
-            pool, pool_err = self._validate(params.chain, pool)
-            if pool_err:
-                return self._ar(error=f"pool: {pool_err}")
+            # A pool may be a bytes32 id (Robinhood Chain), not only an address —
+            # the same path-safe validator the provider applies.
+            from tools.defi.providers.geckoterminal import _url_safe_address
+            try:
+                pool = _url_safe_address(params.chain, pool, what="pool")
+            except ValueError as exc:
+                return self._ar(error=f"pool: {exc}")
         if not pool:
             try:
                 pool = self._pool_for_token(params.chain, address)
@@ -1067,9 +1123,37 @@ class DefiDataTool(BaseTool):
 
         out_human = route.amount_out_raw / (10 ** id_out.decimals)
         rate = out_human / params.amount_in if params.amount_in else 0
+        # 2026-09-19: a quote is a time-stamped observation. The history
+        # compaction pass collapses byte-identical tool outputs into a
+        # back-reference, so two re-quotes minutes apart that agreed became
+        # "[duplicate of an earlier tool result]" and a fresh read was
+        # indistinguishable from a suppressed call. Stamp the read time and
+        # name both addresses so no two quotes are identical bytes.
+        import time as _time
+        from datetime import datetime as _dt, timezone as _tz
+        _qt = float(getattr(route, "quoted_at", 0) or 0) or _time.time()
+        _stamp = _dt.fromtimestamp(_qt, _tz.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Cross-check against the indexer-implied output (fail-open).
+        try:
+            xc = quote_cross_check(params.amount_in, out_human,
+                                   self._price_for(params.chain, addr_in),
+                                   self._price_for(params.chain, addr_out))
+        except Exception as e:  # noqa: BLE001 — a read-side check never blocks the quote
+            xc = QuoteCrossCheck("unavailable", None, None, f"price lookup failed: {e}")
+        if xc.verdict == "suspect":
+            head = (f"  ⚠ SUSPECT QUOTE — {xc.why} (implied "
+                    f"{xc.implied_out:.8f} {id_out.symbol or 'out'}, quoted "
+                    f"{out_human:.8f}, {xc.ratio:.1f}x). Re-quote before acting and "
+                    f"do NOT use this number as a min-out floor.\n")
+        elif xc.verdict == "consistent":
+            head = f"  cross-check: consistent — {xc.why}\n"
+        else:
+            head = f"  cross-check: unavailable — {xc.why}\n"
         return self._ar(content=(
             f"{params.amount_in} {id_in.symbol or addr_in} -> "
             f"{out_human:.8f} {id_out.symbol or addr_out}\n"
+            + head +
+            f"  quoted_at: {_stamp}   pair: {addr_in} -> {addr_out}\n"
             f"  route:  {route.venue}\n"
             f"  rate:   {rate:.8f} {id_out.symbol or 'out'} per "
             f"{id_in.symbol or 'in'}\n"

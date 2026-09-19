@@ -4,7 +4,12 @@ Distinct from ``polyrob x`` (the X DM surface). Subcommands:
 
 - ``capture-session`` — owner logs in once in a visible browser; the resulting
   storage_state is stored ENCRYPTED so the agent can post headless afterwards.
-  This is also how a locally-completed signup deploys to the VPS.
+  ``--out <file>`` ALSO writes the plain Playwright storage_state JSON — the
+  hand-off from a desktop capture to a headless server.
+- ``import-session``  — the server half: read that JSON (or just the two X
+  login cookies ``auth_token`` + ``ct0``) and store it under THIS box's key
+  and identity. The encrypted store cannot simply be copied between machines
+  (Fernet key + identity are per-box), which is why this verb exists.
 - ``status``          — show whether a session is stored + its handle.
 - ``signup``          — autonomous account registration (added in Task 13).
 
@@ -14,6 +19,7 @@ defeats a CAPTCHA.
 import asyncio
 import os
 import sys
+from typing import Optional
 
 import click
 
@@ -56,17 +62,104 @@ def status():
 @x_account.command("capture-session")
 @click.option("--timeout", default=300, type=int,
               help="Seconds to wait for the owner to finish logging in.")
-def capture_session(timeout: int):
+@click.option("--out", "out", type=click.Path(dir_okay=False), default=None,
+              help="Also write the plain storage_state JSON here (0600) for "
+                   "`polyrob x-account import-session <file>` on the server.")
+def capture_session(timeout: int, out):
     """Open a visible browser, let the owner log in, store the session encrypted."""
     if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
         click.echo(click.style("[polyrob] ERROR: ", fg="red")
                    + "no DISPLAY — capture-session needs a visible browser. Run it "
-                     "on your desktop, then deploy the session file to the server.")
+                     "on your desktop with --out x-session.json, copy that file to "
+                     "the server and run `polyrob x-account import-session "
+                     "x-session.json` there.")
         sys.exit(1)
-    asyncio.run(_capture(timeout))
+    asyncio.run(_capture(timeout, out=out))
 
 
-async def _capture(timeout: int):
+# The two cookies X's web client authenticates with. A storage_state without
+# `auth_token` is a logged-out browser; importing it would store a session the
+# agent then reports as "not logged in" on its first x_login_check.
+_LOGIN_COOKIES = ("auth_token", "ct0")
+
+
+def _write_plain_state(path: str, storage_state: dict) -> None:
+    import json
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        json.dump(storage_state, fh)
+
+
+def _cookie_state(auth_token: str, ct0: str) -> dict:
+    """A minimal Playwright storage_state carrying only the two login cookies,
+    shaped exactly as `context.storage_state()` emits them for x.com."""
+    return {
+        "cookies": [
+            {"name": "auth_token", "value": auth_token, "domain": ".x.com", "path": "/",
+             "expires": -1, "httpOnly": True, "secure": True, "sameSite": "None"},
+            {"name": "ct0", "value": ct0, "domain": ".x.com", "path": "/",
+             "expires": -1, "httpOnly": False, "secure": True, "sameSite": "Lax"},
+        ],
+        "origins": [],
+    }
+
+
+def _validate_state(storage_state: dict) -> Optional[str]:
+    """None when the state carries an X login; else the reason it does not."""
+    if not isinstance(storage_state, dict) or not isinstance(storage_state.get("cookies"), list):
+        return "not a Playwright storage_state (expected {\"cookies\": [...], \"origins\": [...]})"
+    names = {c.get("name") for c in storage_state["cookies"] if isinstance(c, dict)}
+    missing = [n for n in _LOGIN_COOKIES if n not in names]
+    if missing:
+        return ("no X login in this file — missing cookie(s): " + ", ".join(missing)
+                + " (export it from a browser that is signed in to x.com)")
+    return None
+
+
+@x_account.command("import-session")
+@click.argument("state_file", required=False, type=click.Path(exists=True, dir_okay=False))
+@click.option("--auth-token", default=None,
+              help="The x.com `auth_token` cookie value (alternative to a file).")
+@click.option("--ct0", default=None, help="The x.com `ct0` cookie value (with --auth-token).")
+@click.option("--handle", default=None, help="The account's @handle (without the @).")
+def import_session(state_file, auth_token, ct0, handle):
+    """Store an X login captured elsewhere, encrypted under THIS box's key.
+
+    Source is either a Playwright storage_state JSON (from `capture-session --out`
+    or `context.storage_state()`), or the two login cookies `auth_token` + `ct0`
+    copied from a signed-in desktop browser (DevTools → Application → Cookies →
+    x.com). Delete the plain file afterwards — it IS the login.
+    """
+    import json
+    if state_file and (auth_token or ct0):
+        raise click.UsageError("give a storage_state file OR --auth-token/--ct0, not both")
+    if state_file:
+        try:
+            with open(state_file) as fh:
+                storage_state = json.load(fh)
+        except (OSError, ValueError) as e:
+            raise click.ClickException(f"cannot read {state_file}: {e}")
+    elif auth_token and ct0:
+        storage_state = _cookie_state(auth_token.strip(), ct0.strip())
+    else:
+        raise click.UsageError("nothing to import: give a storage_state file, or both "
+                               "--auth-token and --ct0")
+    why = _validate_state(storage_state)
+    if why:
+        raise click.ClickException(why)
+    handle = (handle or "").lstrip("@").strip() or None
+    _store().save(_user_id(), storage_state=storage_state, handle=handle)
+    click.echo(click.style("imported", fg="green")
+               + f": stored encrypted X session for @{handle or 'unknown'} "
+                 f"({len(storage_state['cookies'])} cookie(s)).")
+    click.echo("verify with `polyrob x-account status`; the agent checks validity live "
+               "via x_login_check. Enable posting with X_BROWSER_ENABLED=true.")
+    if state_file:
+        click.echo(click.style(f"now delete {state_file} — it is the login in plain text.",
+                               fg="yellow"))
+
+
+async def _capture(timeout: int, out: Optional[str] = None):
     from playwright.async_api import async_playwright
 
     from tools.x_browser.driver import XPageDriver
@@ -105,6 +198,12 @@ async def _capture(timeout: int):
     _store().save(_user_id(), storage_state=storage_state, handle=handle)
     click.echo(click.style("captured", fg="green")
                + f": stored encrypted X session for @{handle or 'unknown'}.")
+    if out:
+        _write_plain_state(out, storage_state)
+        click.echo(click.style("wrote", fg="green") + f" plain storage_state to {out} "
+                   "(0600) — copy it to the server, run `polyrob x-account import-session "
+                   f"{os.path.basename(out)} --handle {handle or '<handle>'}` there, "
+                   "then delete both copies.")
     click.echo("enable agent inbox access with X_BROWSER_ENABLED=true, then load "
                "the x_browser tool (x_read_dms / x_dm).")
 

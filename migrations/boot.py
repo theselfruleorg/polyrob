@@ -194,11 +194,17 @@ async def run_boot_migrations(container, *, local: bool = True) -> dict:
         snapshots_root = data_home = None
         config_paths: list = []
         dir_paths: list = []
+        db_paths: list = []
         try:
             from cli.update.context import resolve_update_context
             uctx = resolve_update_context(local=local)
             snapshots_root, data_home = uctx.snapshots_root, uctx.data_home
             config_paths, dir_paths = uctx.config_paths, uctx.dir_paths
+            # The context is the ONLY thing that knows a config-resolved DB_PATH
+            # outside the data home (prod: /opt/polyrob/data/database/bot.db).
+            # Without it the snapshot falls back to the data-home layouts and
+            # backs up every sidecar EXCEPT the database being migrated.
+            db_paths = list(uctx.db_paths)
         except Exception as exc:
             logger.debug("run_boot_migrations: update-context unavailable (%s) — no snapshot", exc)
 
@@ -209,11 +215,16 @@ async def run_boot_migrations(container, *, local: bool = True) -> dict:
             from core.version import get_version
             create_snapshot(
                 snapshots_root=snapshots_root, data_home=data_home,
+                db_paths=db_paths or None,
                 from_version=get_version(), method="boot-migrate",
                 config_paths=config_paths, dir_paths=dir_paths, label="pre-migration")
             prune_snapshots(snapshots_root, keep=3)
 
-        lock_path = (Path(data_home) / "migrate.lock") if data_home else None
+        # The SAME lock file `polyrob update --apply` holds (process_guard.update_lock),
+        # so a `polyrob <cmd>` booted during an update's migrate window waits it out
+        # instead of migrating the same bot.db underneath the updater.
+        lock_path = (Path(snapshots_root) / "update.lock") if snapshots_root else (
+            (Path(data_home) / "migrate.lock") if data_home else None)
         return await apply_migrations_at_boot(
             db, db_manager, on_before_change=_snapshot_before, lock_path=lock_path)
     except Exception as exc:

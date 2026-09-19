@@ -33,6 +33,55 @@ class XPostAction(BaseModel):
                       description="The post body (<=280 chars).")
 
 
+class XReplyAction(BaseModel):
+    """Reply to an existing X post from the agent's saved session.
+
+    2026-09-19: the X API tier answers 403 to a reply aimed at anyone who has
+    not mentioned us, which killed the outreach programme's Phase-1
+    "value-first replies" lane outright. The browser rail exists to bypass
+    exactly that tier and had no reply verb — so the lane stayed dead even for
+    a captured session. ``in_reply_to`` accepts the status URL or the bare id.
+    """
+    model_config = ConfigDict(extra="forbid")
+    in_reply_to: str = Field(
+        ..., description="The post to reply under: its x.com/…/status/<id> URL "
+                         "or the bare numeric status id.")
+    text: str = Field(..., min_length=1, max_length=280,
+                      description="The reply body (<=280 chars).")
+
+    @property
+    def status_id(self) -> str:
+        return _status_id_from(self.in_reply_to)
+
+    @classmethod
+    def _validate_in_reply_to(cls, value: str) -> str:
+        if not _status_id_from(value):
+            raise ValueError(
+                "in_reply_to must be an x.com status URL (…/status/<id>) or a "
+                "numeric status id")
+        return value
+
+    def model_post_init(self, __context) -> None:  # pydantic v2 hook
+        self._validate_in_reply_to(self.in_reply_to)
+
+
+def _status_id_from(value: str) -> str:
+    """The numeric status id inside a status URL or a bare id; ``""`` if neither."""
+    import re
+    v = (value or "").strip()
+    m = re.search(r"/status/(\d+)", v)
+    if m:
+        return m.group(1)
+    return v if v.isdigit() else ""
+
+
+class XLoginCheckAction(BaseModel):
+    """No parameters. An explicit empty model (like TwitterWhoamiAction) so the
+    registry never has to auto-generate one — that fallback logged a WARNING at
+    every session start (106/24h on prod)."""
+    model_config = ConfigDict(extra="forbid")
+
+
 class XSignupStartAction(BaseModel):
     """Begin (or resume) the agent's own X account signup ceremony."""
     model_config = ConfigDict(extra="forbid")
@@ -186,6 +235,47 @@ class XBrowserTool(BaseTool):
             await self._run_release(release)
         return ActionResult(extracted_content=f"posted to X: {url}",
                             include_in_memory=True)
+
+    @BaseTool.action(
+        "Reply to an existing X post (by status URL or id) from the agent's own "
+        "saved account — the public-reply lane the API tier refuses (403) for "
+        "non-mentioners. Owner-approval-gated. Requires a captured X session.",
+        param_model=XReplyAction,
+    )
+    async def x_reply(self, params: XReplyAction, execution_context=None) -> ActionResult:
+        if _leaf_or_forged(execution_context):
+            return ActionResult(
+                error="x_reply is blocked for delegated/forged turns — report back "
+                      "and let the main agent reply.",
+                include_in_memory=True)
+        user_id = self._user_id(execution_context)
+        if not self.session_store.exists(user_id):
+            return ActionResult(
+                error="no X session — run `polyrob x-account capture-session` "
+                      "(owner login) first; until then public replies have no "
+                      "working rail (the API tier returns 403).",
+                include_in_memory=True)
+        if not self._post_limiter.check(user_id):
+            return ActionResult(
+                error="hourly X post cap reached (TWITTER_WRITE_MAX_PER_HOUR).",
+                include_in_memory=True)
+        try:
+            driver, release = await self._open_driver(user_id)
+        except Exception as e:
+            return ActionResult(error=f"could not open X session: {e}",
+                                include_in_memory=True)
+        try:
+            url = await driver.reply(params.status_id, params.text)
+        except Exception as e:
+            return ActionResult(
+                error=f"reply failed: {e} — the session may be expired; "
+                      "run `polyrob x-account capture-session` to refresh it.",
+                include_in_memory=True)
+        finally:
+            await self._run_release(release)
+        return ActionResult(
+            extracted_content=f"replied on X under status {params.status_id}: {url}",
+            include_in_memory=True)
 
     @BaseTool.action(
         "Read the inbox visible in the agent's logged-in X browser session, or "
@@ -446,9 +536,10 @@ class XBrowserTool(BaseTool):
 
     @BaseTool.action(
         "Check whether the agent's saved X session is still logged in.",
-        param_model=None,
+        param_model=XLoginCheckAction,
     )
-    async def x_login_check(self, execution_context=None) -> ActionResult:
+    async def x_login_check(self, params: XLoginCheckAction = None,
+                            execution_context=None) -> ActionResult:
         user_id = self._user_id(execution_context)
         if not self.session_store.exists(user_id):
             return ActionResult(

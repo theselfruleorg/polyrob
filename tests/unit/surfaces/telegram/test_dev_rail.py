@@ -127,3 +127,14 @@ async def test_bare_dev_reports_status(env, monkeypatch, tmp_path):
     monkeypatch.setenv("DEV_RAIL_SCRIPT", script)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/dev"))
     assert "dev loop: up" in out
+
+
+@pytest.mark.asyncio
+async def test_dev_spooled_when_host_side_unreachable(env, monkeypatch, tmp_path):
+    # Exit 5 = the hardened service could reach neither the clone nor the
+    # tmux socket and parked the message on the host spool for the relay.
+    script = _fake_script(tmp_path, "cat >/dev/null\nexit 5\n")
+    monkeypatch.setenv("DEV_RAIL_SCRIPT", script)
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/dev hello"))
+    assert "relay" in out.lower()
+    assert "error" not in out.lower()

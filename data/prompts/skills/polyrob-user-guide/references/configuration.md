@@ -12,6 +12,7 @@ for code anchors and complete prose.
 - LLM_PROMPT_CACHE / ANTHROPIC_PROMPT_CACHE — default: ON — Global prompt-caching kill-switch (either set falsey disables; default ON).
 - GEMINI_PROMPT_CACHE — default: OFF — Opt-in Gemini explicit `cachedContents` (billed, TTL'd object).
 - GEMINI_CACHE_TTL_MIN — default: 10 — TTL (minutes) for the Gemini explicit cache object.
+- OPENROUTER_PROVIDER_SORT — default: unset — OpenRouter upstream ordering for the SAME model: `latency`, `throughput` or `price` (OpenRouter's default is price-firs…
 - OPENROUTER_PROMPT_CACHE — default: OFF — Adds Anthropic-style `cache_control` breakpoints on the OpenRouter tools block.
 - THINKING_CONFIG_ENABLED — default: OFF — Enables per-provider extended-thinking/reasoning-effort config (real behavior change).
 - THINK_SCRUBBER_ENABLED — default: ON ("1") — Strips leaked `<think>`/`<reasoning>` blocks at the content→AIMessage seam.
@@ -126,6 +127,9 @@ for code anchors and complete prose.
 - GOALS_ENABLED — default: OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) — W4: durable cross-session goal board + dispatcher.
 - GOAL_MAX_RETRIES — default: 2 — Goal circuit-breaker failure threshold.
 - GOAL_CLAIM_TTL_SEC — default: 900 — Goal claim lease TTL.
+- GOAL_YIELD_FOR_MONEY_RAIL — default: OFF (false) — 056 WS5 (D1, owner-approved 2026-09-19): a cron job whose `payload.priority` is `money` that comes due while a BOARD GO…
+- GOAL_DEFAULT_MAX_STEPS — default: 30 — 056 WS5: the step budget for a goal whose payload sets none (was a literal 20). `goal_create` now exposes `max_steps` (…
+- GOAL_DISPATCH_CRON_HEADROOM_SEC — default: 0 (off) — Defer starting a board goal while an enabled cron job is due within this many seconds (overdue and currently RUNNING in…
 - GOAL_MAX_RUN_SECONDS — default: 1800 — Hard wall-clock cap on a single goal run (mirrors cron); a timeout is recorded as a failure and the slot is reclaimed.
 - GOAL_DISPATCH_INTERVAL_SEC — default: 60 — Goal dispatcher tick interval.
 - GOAL_MAX_CONCURRENT — default: 2 — Max concurrent goal runs.
@@ -212,6 +216,7 @@ for code anchors and complete prose.
 - GITHUB_TOOL_ENABLED — default: OFF (not safe-local; ON under AGENT_BUILDER_MODE=build|ship) — Register the `github` tool (PRs/issues/actions; auth via `GITHUB_TOKEN`/`GH_TOKEN`).
 - CODE_EXEC_ENABLED — default: OFF — Register `code_execution` tool (NOT a sandbox; never in default tool_ids).
 - CODE_EXEC_BACKEND — default: local_subprocess — Code-exec backend selector.
+- DOCKER_HOST — default: unset (docker default unix:///var/run/docker.sock) — Read only to locate the docker daemon socket the `docker` sandbox backend would use: when it names a `unix://` socket t…
 - CODE_EXEC_MAX_TIMEOUT_SEC — default: 30 (dev mode, unset: follows SHELL_MAX_TIMEOUT_SEC=300) — Hard cap on a code-exec run.
 - CODE_EXEC_MAX_OUTPUT_BYTES — default: 100000 — Code-exec output byte cap.
 - CODE_EXEC_DOCKER_IMAGE — default: python:3.12-slim — Container image for the `docker` code-exec backend (explicit value wins over `CODE_EXEC_DEV_IMAGE` in every mode).
@@ -332,8 +337,10 @@ for code anchors and complete prose.
 - UVICORN_PORT — default: 9000 — Uvicorn bind port (read in `main.py`).
 - UVICORN_WORKERS — default: 1 — Uvicorn worker count (read in `main.py`).
 - UVICORN_RELOAD — default: OFF (false) — Uvicorn auto-reload (read in `main.py`).
+- UVICORN_FORWARDED_ALLOW_IPS — default: 127.0.0.1 — Which proxies `polyrob serve` trusts for `X-Forwarded-For`/`X-Forwarded-Proto`.
 - ENVIRONMENT / ENV — default: development (varies by site) — Environment selector.
 - LOG_LEVEL — default: INFO — Logging level.
+- POLYROB_LOG_FILE — default: per entrypoint (bot.log / email.log / webview.log) — Basename of the rotating log file under `<data_home>/logs/`; overrides the per-entrypoint default.
 - CHAT_TOOL_IDS — default: task — Tools loaded for the chat surface.
 - CHAT_MAX_STEPS — default: 8 — Max agent steps for a chat-surface turn.
 - RUN_BUDGET_USD — default: 0 (disabled) — Session-cumulative provider-spend ceiling in USD; when > 0 the run loop halts honestly (`run_budget_exhausted`) before…
@@ -435,6 +442,8 @@ for code anchors and complete prose.
 - POLYROB_GITIGNORE_DOTROB — default: ON ("1") — Auto-gitignore the `.polyrob/` home.
 - CLI_WORKSPACE_LOCK — default: ON ("1") — CLI workspace lock to prevent concurrent CWD corruption.
 - CLI_WORKSPACE_LOCK_TIMEOUT — default: 30.0 — Seconds the interactive gate waits to acquire the CLI workspace lock before proceeding.
+- SESSION_DIR_GC_APPLY — default: OFF (false) — 056 WS8: the stale per-session directory GC (`core/session_gc.py`, `<data>/sessions/<user>/<uuid>/` untouched for 14 da…
+- INTERACTIVE_GATE_MARKER — default: ON (true) — 056 WS3: a live human turn (Telegram/email owner turn, REPL turn, room turn) writes `<lock_dir>/turn.active` (pid, kind…
 - CLI_PREFER_ACTION_TEXT — default: ON ('true') — CLI prefers clean action text over raw streamed buffer.
 - CLI_SUPPRESS_DONE_RECAP — default: ON ("true") — Suppress the duplicate `done()` recap bubble after the streamed reply in `polyrob run` (mirrors the REPL); `off` restor…
 - CLI_TODO_DOT_ROB — default: ON ("true") — In a project-root workspace, keep the agent TODO file under `.polyrob/` instead of the project root.

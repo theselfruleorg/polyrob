@@ -155,7 +155,10 @@ class TwitterTimelineAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user: str = Field(..., description="Username or numeric user id whose recent "
                                        "tweets to fetch.")
-    max_results: int = Field(10, ge=5, le=100, description="Max tweets to fetch.")
+    # 1..100, not the API's 5..100: the X floor is clamped inside get_user_timeline
+    # and the result truncated, so "last 3 posts" is a valid ask (2026-09-18: 8 paid
+    # steps/24h died on `max_results=3 … greater_than_equal 5`).
+    max_results: int = Field(10, ge=1, le=100, description="Max tweets to fetch (1-100).")
 
 
 class TwitterWhoamiAction(BaseModel):
@@ -419,15 +422,46 @@ class TwitterTool(BaseTool):
             self.logger.error(f"Error executing Twitter request: {e}")
             raise
 
+    # 2026-09-19: a 402 ("credits depleted") is remembered for this long and every
+    # API call in the window is refused LOCALLY with the remedy — outreach round 15
+    # burned its whole step budget rediscovering the same 402 (52 hits in 15 min).
+    _CREDIT_402_WINDOW_SEC = 3600
+
+    @staticmethod
+    def _is_payment_required(exc: BaseException) -> bool:
+        resp = getattr(exc, "response", None)
+        code = getattr(resp, "status_code", None)
+        if code == 402:
+            return True
+        return "402" in str(exc) and "payment required" in str(exc).lower()
+
+    def _credit_preflight_refusal(self) -> Optional[str]:
+        try:
+            from core.credential_verdicts import rejected_within
+            if rejected_within("twitter_api", self._CREDIT_402_WINDOW_SEC):
+                return (
+                    "X API credits depleted (a 402 Payment Required was returned within "
+                    f"the last {self._CREDIT_402_WINDOW_SEC // 60} min) — not retrying, this "
+                    "call was refused locally. Owner remedy: top up the pay-per-use credits "
+                    "or change tier at https://developer.x.com/en/portal/dashboard. The "
+                    "browser rail (x_browser) needs no API credits. Stop the round in ≤3 "
+                    "steps and report; do not probe other endpoints.")
+        except Exception:
+            return None
+        return None
+
     async def _make_request(self, func: callable, endpoint_type: str, *args, **kwargs) -> Any:
         """Make a rate-limited request."""
         if not self.client:
             raise ConfigurationError("Twitter client not initialized")
-        
+        refusal = self._credit_preflight_refusal()
+        if refusal:
+            raise APIError(refusal)
+
         try:
             # Use the rate_limiter property from BaseService
             if self.rate_limiter:
-                return await self.rate_limiter.execute_with_rate_limit(
+                result = await self.rate_limiter.execute_with_rate_limit(
                     service='twitter',
                     func=func,  # Pass func directly as the function parameter
                     endpoint_type=endpoint_type,
@@ -437,13 +471,28 @@ class TwitterTool(BaseTool):
             else:
                 # Fallback to direct execution if rate limiter is not available
                 self.logger.warning("Rate limiter not available, executing request directly")
-                return await self._execute_request(func, *args, **kwargs)
+                result = await self._execute_request(func, *args, **kwargs)
+            try:
+                from core.credential_verdicts import clear_rejection
+                clear_rejection("twitter_api", str(endpoint_type or ""))
+            except Exception:
+                pass
+            return result
         except RateLimitError:
             if getattr(self.rate_limiter, '_initialization_mode', False):
                 self.logger.warning("Rate limit hit during initialization")
                 return None
             raise
         except Exception as e:
+            if self._is_payment_required(e):
+                try:
+                    from core.credential_verdicts import record_rejection
+                    record_rejection("twitter_api", str(endpoint_type or ""))
+                    self.logger.error("X API 402 Payment Required (credits depleted) on %s — "
+                                      "remembering for %ss; further calls refuse locally",
+                                      endpoint_type, self._CREDIT_402_WINDOW_SEC)
+                except Exception:
+                    pass
             raise APIError(f"Twitter request failed: {str(e)}")
 
     async def get_tweet(self, tweet_id: str) -> Optional[Dict]:
@@ -545,11 +594,13 @@ class TwitterTool(BaseTool):
             else:
                 user_id = username_or_id
 
+            # The v2 users/:id/tweets endpoint refuses max_results < 5; ask for the
+            # floor and hand back only what the caller wanted.
             response = await self._make_request(
                 func=self.client.get_users_tweets,
                 endpoint_type='tweets',
                 id=user_id,  # Use resolved user_id
-                max_results=max_results,
+                max_results=max(5, max_results),
                 tweet_fields=['created_at', 'text', 'public_metrics'],
                 expansions=['author_id']
             )
@@ -563,7 +614,7 @@ class TwitterTool(BaseTool):
                         if getattr(tweet, 'created_at', None) else None,
                         'metrics': getattr(tweet, 'public_metrics', {})
                     }
-                    for tweet in response.data
+                    for tweet in list(response.data)[:max_results]
                 ]
             return None
             
@@ -1621,12 +1672,27 @@ class TwitterTool(BaseTool):
                 since_ts=since, kind=SOCIAL_WRITE, user_id=user_id, limit=1)
             if rows:
                 age_sec = time.time() - float(rows[0]["ts"])
+                # 2026-09-19 (intel 2169): the refusal used to end at "likely a
+                # re-fire" and the agent dropped a NEW executed-tranche report
+                # the owner had asked for on every tranche. Name the remaining
+                # window and the exact deferral so a new fact is deferred, not
+                # dropped; a genuine re-fire is still told not to repeat itself.
+                retry_after = max(1, int(cooldown - age_sec))
+                from datetime import datetime as _dt, timedelta as _td
+                # An ISO timestamp is a ONE-SHOT; a bare duration ('45s') would be
+                # a RECURRING job and repeat the post every window.
+                once_at = (_dt.now() + _td(seconds=retry_after + 30)).replace(microsecond=0).isoformat()
                 return (
                     f"Twitter write '{action_name}' blocked: a post from an "
                     f"autonomous run went out {int(age_sec)}s ago, under the "
                     f"{cooldown}s cooldown between autonomous posts (repeat-goal "
-                    f"guard, TWITTER_POST_COOLDOWN_SEC). Not an error — this run "
-                    f"is likely a re-fire of a goal that already posted."
+                    f"guard, TWITTER_POST_COOLDOWN_SEC). retry_after_sec={retry_after}. "
+                    f"If this text reports something NEW (an executed transaction, a "
+                    f"fact not yet posted): do NOT drop it — defer it with "
+                    f"cronjob_schedule(schedule_spec='{once_at}' (one-shot ISO — never a bare duration, that repeats), task='Post to X "
+                    f"exactly this text: <your text>') and say so in your result. If it "
+                    f"repeats what was just posted (this run is a re-fire of a goal that "
+                    f"already posted), skip it."
                 )
         except Exception:
             logger.debug("twitter social-cooldown probe failed (fail-open)", exc_info=True)

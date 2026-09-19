@@ -119,14 +119,50 @@ class CronScheduler:
         #: FIX 3: set by _run_one when a cap timeout is attributable to an OPEN
         #: owner-approval ask this run raised; tells _run_due not to blame the job.
         self._approval_deferred = False
+        #: 056 WS5: async hook(job) -> [goal ids] set by the runtime (None = never yield).
+        self._yield_hook = None
+
+    def set_yield_hook(self, hook) -> None:
+        """056 WS5: ``async hook(job) -> list[goal_id]`` — the goal dispatcher's
+        `yield_for_rail`, called when a MONEY job is due while a board goal holds
+        the process. Wired by core/autonomy_runtime.py; None = never yield."""
+        self._yield_hook = hook
+
+    async def _maybe_yield_for_money(self, now: datetime) -> bool:
+        """True iff a running goal was yielded for a due money job this tick."""
+        hook = getattr(self, "_yield_hook", None)
+        if hook is None:
+            return False
+        try:
+            from core.config_policy import AutonomyConfig
+            if not AutonomyConfig.goal_yield_for_money_rail():
+                return False
+            from core.interactive_gate import read_turn_marker
+            if read_turn_marker() is not None:
+                return False  # a human turn outranks every rail (D2)
+            from cron.jobs import is_money_job
+            due = [j for j in self.store.due(now) if is_money_job(j)]
+            if not due:
+                return False
+            job = due[0]
+            held = await hook(job)
+            if held:
+                logger.warning("cron: money job %s due — yielded running goal(s) %s",
+                               job.id, held)
+            return bool(held)
+        except Exception:
+            logger.debug("yield-for-money probe failed", exc_info=True)
+            return False
 
     async def tick(self, now: Optional[datetime] = None) -> TickResult:
         from core.interactive_gate import is_interactive_busy
-        if is_interactive_busy():
-            # human mid-turn in the REPL; defer cron execution (jobs stay due for
-            # the next idle tick, sharing the CWD workspace safely).
-            return TickResult(skipped_busy=True)
         now = now or datetime.now()
+        if is_interactive_busy():
+            # A human mid-turn (REPL / owner chat) or a goal run holds the shared
+            # workspace. 056 WS5: a due MONEY job may pre-empt a GOAL (never a
+            # human turn); otherwise defer — jobs stay due for the next idle tick.
+            if not (await self._maybe_yield_for_money(now) and not is_interactive_busy()):
+                return TickResult(skipped_busy=True)
         lock = TickLock(self.lock_path)
         if not lock.acquire():
             logger.debug("cron tick skipped: lock held")
@@ -230,16 +266,26 @@ class CronScheduler:
                 logger.info(
                     "cron job %s hit its %ss cap waiting on owner approval (ask %s) "
                     "— deferred, not failed", job.id, job.max_duration_seconds, ask_id)
+                self._terminal_ev(job, "deferred", f"owner_ask:{ask_id}",
+                                  cap_s=job.max_duration_seconds,
+                                  duration_s=round(time.time() - started, 3))
                 return False
             logger.warning("cron job %s timed out after %ss", job.id, job.max_duration_seconds)
+            self._terminal_ev(job, "cut_by_cap", f"{job.max_duration_seconds}s",
+                              cap_s=job.max_duration_seconds,
+                              duration_s=round(time.time() - started, 3))
             return False
         except asyncio.CancelledError:
             if self._pause_cancelled:
                 logger.warning("cron job %s cancelled by owner pause", job.id)
+                self._terminal_ev(job, "held", "owner_pause",
+                                  duration_s=round(time.time() - started, 3))
                 return False
             raise
         except Exception as e:  # runner blew up — never crash the tick
             logger.error("cron job %s raised: %s", job.id, e, exc_info=True)
+            self._terminal_ev(job, "failed", f"{type(e).__name__}: {str(e)[:120]}",
+                              duration_s=round(time.time() - started, 3))
             return False
         finally:
             self._current = None
@@ -272,6 +318,21 @@ class CronScheduler:
         except Exception:
             logger.debug("owner-ask probe failed for job %s", job.id, exc_info=True)
             return None
+
+    @staticmethod
+    def _terminal_ev(job: CronJob, outcome: str, reason: Optional[str] = None,
+                     **extra) -> None:
+        """056 WS1: a terminal `cron_run` event for the outcomes the RUNNER cannot
+        see — the cap timeout, an owner-pause cancel, a runner crash. Before this,
+        ~70 of 175 started runs in 48 h (2026-09-17→19) left no terminal event and
+        the rails read healthier than they were. Fail-open, lazy import (runner
+        imports this module)."""
+        try:
+            from cron.runner import _cron_ev
+            _cron_ev(job, outcome, reason, **extra)
+        except Exception:
+            logger.debug("terminal cron_run event failed for %s", getattr(job, "id", "?"),
+                         exc_info=True)
 
     def _record(self, job: CronJob, now: datetime, success: bool,
                 *, deferred: bool = False) -> None:

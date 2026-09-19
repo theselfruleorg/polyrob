@@ -29,6 +29,13 @@ cp config/.env.example config/.env.development
 $EDITOR config/.env.development
 ```
 
+⚠️ **Copy `config/.env.example` for Docker.** It is the container-shaped template:
+`POLYROB_DATA_DIR=/app/.polyrob`, which is where the compose volume is mounted. The
+file named `config/.env.development.template` is for a **host** install — it sets
+`POLYROB_DATA_DIR=/var/lib/polyrob`, and copying it into a container puts your data
+outside the volume, so nothing survives a restart. (`config/.env.production.example`
+is the same shape for a host production install.)
+
 Set at least one provider key (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, etc.). See [configuration.md](configuration.md) for all options.
 
 `docker-compose.yml` ships pointing `env_file` at the tracked `config/.env.example` so a fresh clone's `docker compose up` resolves without error. Before running for real, edit the `env_file:` line in `docker-compose.yml` to point at `config/.env.development` instead — that keeps your real key out of a git-tracked file.
@@ -63,6 +70,15 @@ The `Dockerfile` builds a production image with:
 - `polyrob[server,browser,memory-vector]` extras installed
 - Playwright Chromium binary pre-installed
 - `python main.py` as the entrypoint (`UVICORN_PORT=8000` set by the image)
+
+⚠️ **The image is API-only.** `.[server,browser,memory-vector]` does not carry the
+`telegram`, `crypto`, `solana`, `twitter` or `voice` extras, and the entrypoint is
+`python main.py` (the FastAPI app). So a compose deployment gives you REST, A2A and
+the OpenAI-compatible `/v1` surface, plus the browser and vector-memory extras — it
+does **not** run `polyrob telegram`, the email surface, or any money verb. For those,
+use a host install: `pip install -c requirements.lock ".[server,browser,crypto,solana,telegram,twitter,voice]"`
+from the repo root (that is the extras set a production deployer installs), or add
+the extras to your own image.
 
 The `docker-compose.yml` file:
 
@@ -121,14 +137,41 @@ unit per process you need:
 | Agent (headless) | `polyrob telegram` | The agent itself, long-polling a chat surface. This is the process that runs the autonomy loops. |
 | Email surface | `polyrob email` | IMAP poll in, SMTP out. Its own process. |
 | API server | `python main.py` (or `polyrob serve`) | REST, A2A and the OpenAI-compatible `/v1` surface. Only needed if you want programmatic access. |
-| Console | `python -m uvicorn webview.server:app --host 127.0.0.1 --port 5050 --proxy-headers` | The web console, behind your reverse proxy. See [deployment-postures.md](deployment-postures.md). |
+| Console | `python -m uvicorn webview.server:app --host 127.0.0.1 --port 5050 --proxy-headers --forwarded-allow-ips=127.0.0.1` | The web console, behind your reverse proxy. **Requires `POLYROB_POSTURE=own_ops` plus `POLYROB_OWNER_USERNAME`, `POLYROB_OWNER_PASSWORD_HASH` and `JWT_SECRET_KEY`** — see the warning below and [deployment-postures.md](deployment-postures.md). |
 | App supervisor | `polyrob apps supervise` | Only if the agent deploys durable apps. It holds the docker and nginx privilege the agent never has. |
 | Isolated browser | `polyrob browser install` (writes `polyrob-browser.service`) | Required as soon as the wallet is enabled. A custody process never launches Chromium beside the signer; it connects to this one. See below. |
 
 Give every unit the same `EnvironmentFile` (for example `/etc/polyrob/polyrob.env`)
 and the same `POLYROB_DATA_DIR`, so they agree about the owner, the data home and
-the flags. The console is the one exception: it may take an extra file of its own
-for posture and read-only settings.
+the flags. The console is the one exception: it takes an extra file of its own
+(`/etc/polyrob/webview.env`, `chmod 600`, outside the code tree) for posture, owner
+credentials and read-only settings, as the shipped console unit does.
+
+> ⚠️ **The console REFUSES to start as an anonymous server.** At the default `local`
+> posture there is no login at all — every anonymous request is treated as the owner,
+> with the whole control plane behind it. `webview/posture_guard.py` therefore looks
+> for the signals the posture resolver cannot see (`--proxy-headers` or
+> `--forwarded-allow-ips` on the argv, a `POLYROB_DATA_DIR` outside your home,
+> `WEBVIEW_PUBLIC_URL`) and aborts the boot with `REFUSING TO START`. A served
+> console sets:
+>
+> ```ini
+> # /etc/polyrob/webview.env
+> POLYROB_POSTURE=own_ops
+> POLYROB_OWNER_USERNAME=youruser
+> POLYROB_OWNER_PASSWORD_HASH='$argon2id$v=19$...'   # never a plaintext password
+> JWT_SECRET_KEY=<a long random secret>
+> ```
+>
+> The escape hatch `WEBVIEW_ALLOW_LOCAL_POSTURE=1` exists for an operator who fronts
+> the console with their own auth layer; it is honoured with a loud warning, never
+> silently. Full walkthrough, including the argon2 one-liner:
+> [deployment-postures.md](deployment-postures.md).
+>
+> ⚠️ Never pass `--forwarded-allow-ips=*`. Name the proxy's address (`127.0.0.1` for
+> nginx on the same box), or uvicorn believes any client's `X-Forwarded-For` and a
+> direct caller can claim to be localhost. `polyrob serve` defaults to `127.0.0.1`
+> and reads `UVICORN_FORWARDED_ALLOW_IPS` when you genuinely need another value.
 
 `polyrob doctor` on the box reports the health of whatever is running — providers,
 memory, autonomy state, active pauses — and is the first thing to run when a unit
@@ -199,12 +242,24 @@ serves. Prefer this over CDP across a network: CDP has no authentication at all.
 
 **Moving an X login onto the box.** `polyrob x-account capture-session` is a
 desktop ceremony (it opens a visible browser and refuses on a custody host).
-The captured session is written to `<data_home>/.x_session.json`, encrypted
-with `MCP_ENCRYPTION_KEY` — so run the capture with the SERVER's key exported
-(`MCP_ENCRYPTION_KEY=… polyrob x-account capture-session`), copy that one file
-to the server's data home, and give it to the agent identity
-(`chown polyrob-agent:polyrob-data`, mode `0600`). A file encrypted under a
-different key is unreadable there and `x_login_check` says so.
+The captured session lives in `<data_home>/.x_session.json`, encrypted with
+`MCP_ENCRYPTION_KEY` and keyed by the instance identity — both per-box, so that
+file is NOT portable. Hand it over as plain Playwright storage state instead:
+
+```sh
+# on the desktop (visible browser), sign in as the agent's account:
+polyrob x-account capture-session --out x-session.json
+scp x-session.json server:/tmp/
+# on the server, as the agent identity, stored under the server's own key:
+sudo -u polyrob-agent -H env POLYROB_DATA_DIR=/var/lib/polyrob \
+  /opt/polyrob/venv/bin/polyrob x-account import-session /tmp/x-session.json --handle <handle>
+rm /tmp/x-session.json   # it is the login in plain text
+```
+
+No desktop install? `import-session --auth-token <v> --ct0 <v>` takes the two
+login cookies straight from a signed-in browser (DevTools → Application →
+Cookies → x.com). Either way `polyrob x-account status` shows the stored
+handle and the agent's `x_login_check` verifies it live.
 
 `polyrob doctor`, `/status` and the agent's own tool catalog all report the rail
 in one of three states: `none (custody)` with the install remedy, `configured,
@@ -215,13 +270,21 @@ unreachable (<reason>)` with the service remedy, or `remote cdp ok (<version>)`.
 If you run several bots, let the CLI write the unit for you:
 
 ```bash
-polyrob profile create scout --service     # emits polyrob-scout.service
+polyrob profile create scout --service     # writes /etc/systemd/system/polyrob@.service
+sudo systemctl enable --now polyrob@scout
 ```
 
-The emitted unit sets `POLYROB_PROFILE` and `POLYROB_PROFILES_ROOT` explicitly,
-which is what keeps a spawned daemon out of the default home. Each profile needs
-its own surface credentials — two daemons long-polling one Telegram token fight
-each other. See [profiles.md](profiles.md#daemons).
+The unit is a systemd **template** (`polyrob@.service`, `%i` = the profile name), so
+one file serves every profile and `polyrob@scout` can never collide with the
+`polyrob-email` / `polyrob-webview` sibling units. It sets `POLYROB_PROFILE` and
+`POLYROB_PROFILES_ROOT` explicitly, which is what keeps a spawned daemon out of the
+default home — so the profile must live under the SAME root the unit names
+(`POLYROB_PROFILES_ROOT=/var/lib/polyrob/profiles polyrob profile create <name>` for a
+server layout; the CLI default is `~/.polyrob/profiles`). Without write access to
+`/etc/systemd/system` the command writes the rendered unit into the profile home and
+prints the `cp` to run. Each profile needs its own surface credentials — two daemons
+long-polling one Telegram token fight each other. See
+[profiles.md](profiles.md#daemons).
 
 ---
 
@@ -243,10 +306,13 @@ polyrob update --list-snapshots
 polyrob update --rollback         # restore the latest snapshot (data — not the code)
 ```
 
-`--check` and `--rollback` work on any install. `--apply` performs the update
-itself only for a git checkout or an editable install; for a pip, pipx or
-system-managed install it prints the exact manual command instead. What the
-snapshot covers, and why `--rollback` restores data but not code:
+`--check` works on any install. `--apply` performs the update itself **only** for a
+git checkout or an editable git install; for a pip, pipx, systemd or Docker install it
+prints the exact manual command for that method and exits non-zero — it never pretends
+to have updated anything. `--rollback` needs a snapshot to exist, and snapshots are
+created by `--apply` and by the boot-time migration, so an install that has only ever
+updated through its package manager has nothing to roll back to yet. What the snapshot
+covers, and why `--rollback` restores data but not code:
 [upgrading.md](upgrading.md#the-safety-net).
 
 ---

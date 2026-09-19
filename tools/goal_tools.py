@@ -203,6 +203,17 @@ class GoalCreateAction(BaseModel):
         description="Goal ids that must complete first — the goal waits until they are done.",
     )
     acceptance: Optional[str] = Field(None, description="What 'done' must prove (ids/paths/urls).")
+    max_steps: Optional[int] = Field(
+        None, ge=6, le=60,
+        description=("Step budget for the run (056 WS5). Omit for the default (30). Size it to "
+                     "the shape: ≥25 for write/post/deliver goals, ≥35 if it installs, renders "
+                     "or polls; a run that exhausts its budget without done() is retried at "
+                     "the same cost."))
+    report_back: bool = Field(
+        False,
+        description=("056 WS7: when true the FULL result re-enters the session that created "
+                     "this goal; default false = a one-line 'goal <id> done — <first line>' "
+                     "notice (the artefacts are on disk either way)."))
     acceptance_checks: Optional[List[Any]] = Field(
         None,
         description=("Optional TYPED checks the framework executes at run end (fail-closed "
@@ -394,6 +405,10 @@ class GoalTool(BaseTool):
             parent_id = obj.id
         if params.acceptance:
             payload["acceptance"] = params.acceptance
+        if params.max_steps is not None:
+            payload["max_steps"] = int(params.max_steps)
+        if params.report_back:
+            payload["report_back"] = True
         if params.acceptance_checks is not None:
             from agents.task.runtime.acceptance_checks import validate_checks
             try:

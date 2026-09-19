@@ -27,6 +27,12 @@ def _clean(monkeypatch):
 
 def _posture(monkeypatch, v):
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", v)
+    # 056 WS4: posture is the CEILING; each compute tool still needs its own flag
+    # (prod ran posture 1 with both off and every goal record carried a false
+    # tool-gap line). These tests are about the posture axis, so arm the flags.
+    monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
+    monkeypatch.setenv("SHELL_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("CODING_TOOLS_ENABLED", "true")
     c._refreeze_compute_posture_for_tests()
 
 

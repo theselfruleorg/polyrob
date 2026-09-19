@@ -46,7 +46,7 @@ def _ctx():
                             "metadata": {}})()
 
 
-def _seed_room(home, *, chat_id="-1002125904710", note="The Public Den (@thepublicden)"):
+def _seed_room(home, *, chat_id="-1001000000002", note="The Public Den (@example_den)"):
     from core.surfaces.group_allowlist import GroupAllowlist
     GroupAllowlist(str(home / "group_allowlist.db")).allow("telegram", chat_id, note)
     return chat_id
@@ -98,7 +98,7 @@ async def test_lists_rooms_when_no_room_given(home):
     fn, model = _action(c)
     res = await fn(model(), _ctx())
     out = res.extracted_content
-    assert "-1002125904710" in out
+    assert "-1001000000002" in out
     assert "The Public Den" in out
     assert "1 line" in out
 
@@ -108,14 +108,14 @@ async def test_reads_lines_by_chat_id(home):
     chat = _seed_room(home)
     _seed_lines(home, chat, [
         ("@Nrmpap", "Keep doubting, let the believers keep making money"),
-        ("@themontreal", "/unban"),
+        ("@example_admin", "/unban"),
     ])
     c = _Controller(home)
     fn, model = _action(c)
-    res = await fn(model(room="-1002125904710"), _ctx())
+    res = await fn(model(room="-1001000000002"), _ctx())
     out = res.extracted_content
     assert "@Nrmpap" in out and "Keep doubting" in out
-    assert "@themontreal" in out and "/unban" in out
+    assert "@example_admin" in out and "/unban" in out
     # honest source framing — it is the local ledger, not a live history fetch
     assert "local room ledger" in out
 
@@ -139,7 +139,7 @@ async def test_unknown_room_refuses_and_lists(home):
     res = await fn(model(room="-1009999999999"), _ctx())
     out = res.extracted_content
     assert "not an allowlisted room" in out
-    assert "-1002125904710" in out, "refusal must list the real rooms"
+    assert "-1001000000002" in out, "refusal must list the real rooms"
 
 
 @pytest.mark.asyncio
@@ -149,6 +149,24 @@ async def test_known_room_empty_ledger_is_honest(home):
     fn, model = _action(c)
     res = await fn(model(room=chat), _ctx())
     assert "no lines captured" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_empty_ledger_never_implies_own_posts_failed(home):
+    """Prod 2026-09-19 18:25Z: the agent read `0 lines captured` for the public
+    channel and told the owner it "can't be sure any channel post actually
+    rendered" — while the owner was looking at the rendered posts. Telegram
+    never delivers a bot's OWN messages back as updates, so an empty ledger
+    says nothing about delivery; the send receipt is the confirmation. Both the
+    room listing and the per-room read must say so."""
+    chat = _seed_room(home, chat_id="-1001000000001", note="Announcement channel (@example_channel)")
+    c = _Controller(home)
+    fn, model = _action(c)
+    per_room = (await fn(model(room=chat), _ctx())).extracted_content
+    listing = (await fn(model(room=None), _ctx())).extracted_content
+    for out in (per_room, listing):
+        assert "OWN" in out and "receipt" in out, out
+        assert "never" in out.lower()
 
 
 @pytest.mark.asyncio

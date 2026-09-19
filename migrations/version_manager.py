@@ -30,13 +30,23 @@ def migration_version_from_filename(path: Path) -> Optional[str]:
     return ".".join(match.groups())
 
 
+def _version_key(version: str) -> tuple:
+    return tuple(int(part) for part in version.split("."))
+
+
 def shipped_migrations(versions_dir: Path = _VERSIONS_DIR):
-    """``[(version, path)]`` for every versioned migration file, sorted by filename."""
+    """``[(version, path)]`` for every versioned migration file, in NUMERIC version order.
+
+    Never sort by filename: ``v1_10_0_*`` sorts lexicographically BEFORE ``v1_2_0_*``,
+    so a plain ``sorted(glob)`` would run a two-digit minor out of order on every
+    fresh install the moment one ships.
+    """
     out = []
-    for p in sorted(versions_dir.glob("v*.py")):
+    for p in versions_dir.glob("v*.py"):
         v = migration_version_from_filename(p)
         if v:
             out.append((v, p))
+    out.sort(key=lambda item: (_version_key(item[0]), item[1].name))
     return out
 
 
@@ -50,7 +60,7 @@ def latest_migration_version(versions_dir: Path = _VERSIONS_DIR) -> str:
     versions: List[tuple] = []
     try:
         for v, _path in shipped_migrations(versions_dir):
-            versions.append(tuple(int(part) for part in v.split(".")))
+            versions.append(_version_key(v))
     except OSError:
         pass
     if not versions:
@@ -112,9 +122,11 @@ class DatabaseVersionManager:
     async def get_current_version(self) -> Optional[str]:
         """Get currently applied database version."""
 
+        # ORDER BY id: applied_at is CURRENT_TIMESTAMP at 1 s granularity, so several
+        # migrations applied in one second would make the "current" row nondeterministic.
         result = await self.db.fetch_one("""
             SELECT version FROM schema_versions
-            ORDER BY applied_at DESC
+            ORDER BY id DESC
             LIMIT 1
         """)
 

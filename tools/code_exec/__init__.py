@@ -48,7 +48,8 @@ default_registry.register("ssh", SshBackend)
 
 
 def code_exec_enabled() -> bool:
-    return _bool_env("CODE_EXEC_ENABLED", False)
+    from core.config_policy.capability_toggles import code_exec_enabled as _core
+    return _core()
 
 
 def get_backend_name() -> str:

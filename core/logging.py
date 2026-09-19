@@ -69,6 +69,36 @@ def resolve_log_dir() -> Path:
     from core.runtime_paths import resolve_data_home
     return resolve_data_home() / "logs"
 
+def log_file_name(argv: Optional[list] = None) -> str:
+    """The per-ENTRYPOINT log file name under :func:`resolve_log_dir`.
+
+    ``POLYROB_LOG_FILE`` (basename only) wins; else the entrypoint decides:
+    ``polyrob email`` → ``email.log``, the webview (``uvicorn webview.server:app``
+    or ``webview.server_launcher``) → ``webview.log``, everything else — the
+    agent, ``polyrob run``, the REPL, doctor — keeps the legacy ``bot.log``.
+
+    Why per unit: since the 2026-09-16 identity cutover the three services run
+    as three non-root users sharing ``<data_home>/logs``. One shared
+    ``bot.log`` behind a RotatingFileHandler is owned 0644 by whichever unit
+    rotated last, and the other two then raise ``PermissionError`` on EVERY
+    emit (760 tracebacks in two hours on prod, file logs silently lost).
+    Rotation-by-rename across owners cannot be made safe; separate files can.
+    """
+    import os
+    import sys
+    env = (os.getenv("POLYROB_LOG_FILE") or "").strip()
+    if env:
+        base = os.path.basename(env)
+        if base:
+            return base
+    args = list(sys.argv) if argv is None else list(argv)
+    if any("webview" in str(a) for a in args):
+        return "webview.log"
+    if len(args) >= 2 and args[1] == "email":
+        return "email.log"
+    return "bot.log"
+
+
 # ---------------------------------------------------------------------------
 # Internal state flag to ensure we only configure the *root* logger once.
 # Re-entering setup_logging for component loggers should NOT re-attach handlers
@@ -418,8 +448,9 @@ def setup_logging(
             # tests/unit/core/test_security_logging_filter.py.
             security_filter = _SECURITY_FILTER
 
-            # Create file handler for bot.log that will capture ALL messages
-            log_path = log_dir / "bot.log"
+            # Create the file handler that will capture ALL messages — one
+            # file per service entrypoint (see log_file_name).
+            log_path = log_dir / log_file_name()
 
             file_handler = _LazyDirRotatingFileHandler(
                 filename=str(log_path),

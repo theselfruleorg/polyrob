@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
 import os
 from pathlib import Path
 from typing import Any, List, Optional
@@ -159,11 +160,12 @@ def default_goal_tools() -> list:
     (self-maintenance tier). Under effective AUTONOMY_MODE=autonomous the base
     switches to the full AUTONOMOUS_MODE_TOOLS grant (never money/host — those
     still ride compute posture, unaffected by mode)."""
-    from agents.task.constants import autonomous_mode_tools, full_autonomy_enabled
+    from agents.task.constants import effective_autonomous_tools, full_autonomy_enabled
     from agents.task.tool_defaults import with_compute_tools
-    # `autonomous_mode_tools()` folds in the defi rail when DEFI_AGENT_AUTONOMY is
-    # armed; unarmed it IS the bare constant, so the default posture is unchanged.
-    tools = list(autonomous_mode_tools()) if full_autonomy_enabled() else list(_DEFAULT_GOAL_TOOLS)
+    # `effective_autonomous_tools()` (056 WS4) = `autonomous_mode_tools()` — which
+    # folds in the defi rail when DEFI_AGENT_AUTONOMY is armed — minus tools this
+    # deploy cannot serve right now (email on rejected SMTP credentials).
+    tools = list(effective_autonomous_tools()) if full_autonomy_enabled() else list(_DEFAULT_GOAL_TOOLS)
     with_compute_tools(tools)  # SSOT for the posture>=1 additions (014 A2)
     if _hf_deploy_goal_tool_enabled() and "hf_deploy" not in tools:
         tools.append("hf_deploy")
@@ -185,6 +187,64 @@ def child_inheritable_tools() -> frozenset:
     if _compute_posture_at_least_1():
         return CHILD_INHERITABLE_TOOLS | {"code_execution", "shell"}
     return CHILD_INHERITABLE_TOOLS
+
+
+def imminent_cron_job(data_dir: str, now, headroom_sec: int) -> Optional[str]:
+    """Name the cron job due within ``headroom_sec`` (overdue included), else None.
+
+    Pure read of ``<data_dir>/cron.db``; ``headroom_sec <= 0`` or an absent /
+    unreadable store answers None without touching disk (fail-open: dispatch).
+    A goal run marks the shared project-root workspace busy and cron ticks skip
+    until it ends, so the dispatcher uses this to let a due rail go FIRST."""
+    if headroom_sec <= 0:
+        return None
+    from datetime import timedelta
+    db_path = os.path.join(data_dir, "cron.db")
+    if not os.path.exists(db_path):
+        return None
+    # Read-only over core.sqlite_util (the layering ratchet forbids agents -> cron);
+    # the predicate mirrors CronJobStore.due() (enabled, scheduled, next_run_at set)
+    # plus a job mid-run — it holds the workspace now, and its next_run_at is still
+    # the past due time until it finishes.
+    try:
+        from core.sqlite_util import execute_retry
+        rows = execute_retry(
+            db_path,
+            "SELECT id, task, next_run_at, status, payload FROM cron_jobs WHERE enabled=1 "
+            "AND status IN ('scheduled','running') AND next_run_at IS NOT NULL "
+            "AND next_run_at <= ? "
+            "ORDER BY next_run_at",
+            ((now + timedelta(seconds=headroom_sec)).isoformat(),), fetch="all")
+    except Exception:
+        logger.debug("imminent-cron probe failed; dispatching", exc_info=True)
+        return None
+    # 056 D1 follow-up (2026-09-19): a SCHEDULED money-class job pre-empts a running
+    # goal at the step boundary (`yield_for_rail`), so with yield on it need not hold
+    # the board back — after the D4 stagger the four rails' headroom windows covered
+    # every minute of an even hour and two goals sat `ready` for 40 min. A job mid-run
+    # holds the workspace NOW (nothing to pre-empt) and an ops-class job cannot
+    # pre-empt at all, so both still defer.
+    try:
+        from core.config_policy.goal_flags import GoalFlagsMixin
+        _yield_on = bool(GoalFlagsMixin.goal_yield_for_money_rail())
+    except Exception:
+        _yield_on = False
+    for job_id, task, next_run_at, status, payload in rows or []:
+        if _yield_on and status == "scheduled" and _payload_is_money(payload):
+            continue
+        return f"{str(job_id)[:12]} {(task or '')[:40]!r} due {next_run_at}"
+    return None
+
+
+def _payload_is_money(payload) -> bool:
+    """Mirror of ``cron.jobs.is_money_job`` over the raw stored payload (the
+    layering ratchet forbids agents -> cron)."""
+    try:
+        if isinstance(payload, (str, bytes)):
+            payload = json.loads(payload or "{}")
+        return str((payload or {}).get("priority") or "").lower() == "money"
+    except Exception:
+        return False
 
 
 def effective_goal_max_concurrent(user_id: Optional[str], home_dir) -> int:
@@ -401,6 +461,7 @@ class GoalDispatcher:
         and UNCONDITIONALLY — before the ``GOALS_ENABLED`` gate (AU-F4.3) — so a
         crashed ``running`` row isn't stuck forever if the flag was flipped off.
         """
+        from datetime import datetime
         from agents.task.constants import AutonomyConfig
 
         # AU-F4.3: reclaim expired claims BEFORE the enabled-gate so a crashed
@@ -538,6 +599,18 @@ class GoalDispatcher:
             if slots == 0:
                 return 0
             ready = self._ready_for_dispatch(slots)
+            # A due cron rail goes first: on the shared workspace a goal run would
+            # mark the process busy and hold that rail for its whole runtime.
+            # Checked only when something is actually ready (an empty board must
+            # not read cron.db and log a deferral every tick).
+            if ready:
+                _imminent = imminent_cron_job(
+                    os.path.dirname(self.board.db_path), datetime.now(),
+                    AutonomyConfig.goal_dispatch_cron_headroom_sec())
+                if _imminent:
+                    logger.info("goal dispatch deferred (%d ready): cron job %s",
+                                len(ready), _imminent)
+                    return 0
             ttl = AutonomyConfig.goal_claim_ttl_sec()
             worker = self._worker
             dispatched = 0
@@ -620,6 +693,27 @@ class GoalDispatcher:
         except Exception:
             logger.warning("hold_inflight: board hold failed", exc_info=True)
             return []
+
+    async def yield_for_rail(self, job) -> List[str]:
+        """056 WS5 (D1): a due MONEY cron job pre-empts this process's running goal
+        runs — `hold_inflight` (cancel at the step boundary, rows back to `ready`,
+        no failure increment) plus a `resume_note` so the goal knows why it
+        restarts and where its own artefacts are. Returns the held goal ids."""
+        jid = str(getattr(job, "id", "") or "")
+        jtask = str(getattr(job, "task", "") or "")[:40]
+        held = await self.hold_inflight(f"money rail {jid} ({jtask}) due")
+        from datetime import datetime as _dt
+        stamp = _dt.utcnow().strftime("%H:%MZ")
+        for gid in held:
+            try:
+                self.board.merge_payload(gid, {
+                    "resume_note": (f"Yielded at {stamp} because the money rail {jtask} "
+                                    f"({jid[:8]}) came due; this is a RESTART — read what "
+                                    f"you already wrote to disk before redoing anything.")})
+                self.board._event(gid, "yielded", {"job_id": jid, "task": jtask})
+            except Exception:
+                logger.debug("yield note failed for %s", gid, exc_info=True)
+        return held
 
     async def _run_goal(self, goal: Goal) -> None:
         """Run one claimed goal on the task-agent core, then record + self-wake."""
@@ -741,7 +835,7 @@ class GoalDispatcher:
                 "provider": provider,
                 "model": model,
                 "tools": self._resolve_tools(goal),
-                "max_steps": payload.get("max_steps", 20),
+                "max_steps": payload.get("max_steps", AutonomyConfig.goal_default_max_steps()),
                 "temperature": 0.0,
                 "goal_id": goal.id,
             }
@@ -1356,6 +1450,28 @@ class GoalDispatcher:
         except Exception:
             logger.debug("blocked-goal ask creation skipped", exc_info=True)
 
+    @staticmethod
+    def _wake_text(goal: Goal, final: str, verified: str = "verified") -> str:
+        """056 WS7: what a completed goal says when it re-enters the session that
+        CREATED it. Default = ONE line (`goal <id8> done — <first line>`, ≤280
+        chars) — the origin session already has the artefacts on disk and a full
+        result re-entering it cost the owner a 5-step "verification" turn
+        (2026-09-19 03:00Z). `payload.report_back=true` (goal_create) keeps the
+        full completion text for goals whose whole point is the report."""
+        payload = goal.payload or {}
+        if payload.get("report_back"):
+            head = (f"✅ Background goal '{goal.title}' completed." if verified == "verified"
+                    else f"Background goal '{goal.title}' finished — done (unverified).")
+            return f"{head}\nResult:\n{str(final)[:1500]}"
+        first = ""
+        for line in str(final or "").splitlines():
+            if line.strip():
+                first = line.strip()
+                break
+        state = "done" if verified == "verified" else "done (unverified)"
+        text = f"goal {str(goal.id)[:8]} {state} — {first}"
+        return text if len(text) <= 280 else text[:277] + "…"
+
     def _completion_text(self, goal: Goal, final: str, verified: str = "verified",
                          deliverable_lines: Optional[list] = None,
                          session_link: Optional[str] = None) -> str:
@@ -1484,7 +1600,7 @@ class GoalDispatcher:
             if deliver is None:
                 return
             delivered = await deliver(origin, goal.user_id,
-                                      self._completion_text(goal, final),
+                                      self._wake_text(goal, final, "verified"),
                                       metadata={"source": "goal", "goal_id": goal.id,
                                                 "run_session_id": session_id})
             if delivered:

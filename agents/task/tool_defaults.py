@@ -155,8 +155,21 @@ def with_compute_tools(tools: list[str]) -> list[str]:
     try:
         from agents.task.constants import compute_posture
         if compute_posture() >= 1:
-            for t in ("code_execution", "shell", "coding"):
-                if t not in tools:
+            # 056 WS4: posture is the CEILING; each tool's own flag still decides.
+            # Prod ran posture 1 with CODE_EXEC_ENABLED/SHELL_TOOLS_ENABLED off and
+            # every goal record carried a false "[tool gap] code_execution …" line
+            # (43 in 48 h) — the deploy was asking for tools it had switched off.
+            from core.config_policy.capability_toggles import (
+                code_exec_enabled, shell_tools_enabled, coding_tools_enabled)
+            wanted = (("code_execution", code_exec_enabled),
+                      ("shell", shell_tools_enabled),
+                      ("coding", coding_tools_enabled))
+            for t, enabled in wanted:
+                try:
+                    on = bool(enabled())
+                except Exception:
+                    on = False
+                if on and t not in tools:
                     tools.append(t)
     except Exception:
         pass

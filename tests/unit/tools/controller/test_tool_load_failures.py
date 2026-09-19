@@ -103,3 +103,36 @@ def test_gap_note_is_empty_without_gaps():
     assert format_tool_gap_note({}) == ""
     note = format_tool_gap_note({"publish": "gated:disabled-by-flag — PUBLISH_ENABLED is off"})
     assert "publish" in note and "PUBLISH_ENABLED" in note
+
+
+# --- 2026-09-18 (prod tick 88): an ACTION id is not a missing TOOL ---------------
+#
+# The goal vocabulary (tools/goal_tools.py, proposal 009) grants `message` for
+# telegram posting, and `_infer_tools_from_text` adds it whenever a goal's text
+# says "telegram". But `message` is a controller ACTION registered by
+# `_register_message_action` (MESSAGE_TOOL_ENABLED), not a container tool — so
+# every such goal loaded with `✗ Tool 'message' not loaded — gated:unknown-tool`
+# and carried a FALSE "[tool gap] message … not a known tool id" line on its
+# result record, while the action was present and used in the same run.
+
+@pytest.mark.asyncio
+async def test_a_registered_action_id_is_not_a_gap(monkeypatch):
+    monkeypatch.setenv("MESSAGE_TOOL_ENABLED", "true")
+    c = _controller(_Container({"filesystem_tool": _Tool()}))
+    assert c.has_action("message"), "precondition: the action registered"
+    loaded = await c.load_tools_from_container(["filesystem", "message"])
+    assert "filesystem" in loaded and "message" not in loaded, \
+        "which tools LOAD must not change — an action is not a tool object"
+    assert c.get_tool_load_failures() == {}
+
+
+@pytest.mark.asyncio
+async def test_an_absent_action_id_names_its_flag(monkeypatch):
+    monkeypatch.setenv("MESSAGE_TOOL_ENABLED", "false")
+    monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    c = _controller(_Container({}))
+    assert not c.has_action("message"), "precondition: the action is gated off"
+    await c.load_tools_from_container(["message"])
+    reason = c.get_tool_load_failures()["message"]
+    assert reason.startswith("gated:disabled-by-flag") and "MESSAGE_TOOL_ENABLED" in reason, \
+        "the flag is the answer, not 'unknown-tool'"

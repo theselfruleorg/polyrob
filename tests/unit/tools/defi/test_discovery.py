@@ -326,3 +326,36 @@ async def test_a_missing_ratio_renders_unknown_never_zero():
     out = _text(await tool.new_pools(DiscoverParams(chain="base", min_liquidity_usd=0)))
     assert "unknown" in out.lower()
     assert "V/L 0" not in out
+
+
+@pytest.mark.asyncio
+async def test_swap_quote_is_stamped_so_two_reads_are_never_byte_identical():
+    """2026-09-19 (goal aaaa0bf1bdda): the history compaction pass replaces a
+    byte-identical tool output with a back-reference. Two quotes minutes apart
+    that happen to agree collapsed into "[duplicate of an earlier tool result]",
+    so the agent could not tell a fresh re-quote from a suppressed call. A quote
+    is a time-stamped observation: carry `quoted_at` (UTC) and the token
+    addresses in the text so no two reads are identical bytes."""
+    from tools.defi.data_tool import SwapQuoteParams
+    from tools.defi.providers.routes import RouteQuote
+
+    stamps = iter([1789800000.0, 1789800061.0])
+
+    def _route(chain, ti, to_, amt, *, holder, slippage_bps):
+        return RouteQuote(chain=chain, token_in=ti, token_out=to_,
+                          amount_in_raw=amt, amount_out_raw=5 * 10 ** 17,
+                          amount_out_min_raw=49 * 10 ** 16, spender="0xspend",
+                          to="0xspend", calldata="0xabcd", value_raw=0,
+                          venue="lifi:kyberswap", quoted_at=next(stamps))
+
+    tool = DefiDataTool(
+        route_fn=_route,
+        identity_fn=lambda c, a: type("I", (), {"symbol": "T", "name": "T",
+                                                "decimals": 18, "verified": False,
+                                                "metadata_changed": False})())
+    p = SwapQuoteParams(token_in="0x" + "11" * 20, token_out="0x" + "22" * 20, amount_in=1.0)
+    a = _text(await tool.swap_quote(p))
+    b = _text(await tool.swap_quote(p))
+    assert "quoted_at:" in a and "Z" in a
+    assert "0x" + "11" * 20 in a.lower() or "0x1111" in a.lower()
+    assert a != b, "same rate a minute later must still be a distinct observation"

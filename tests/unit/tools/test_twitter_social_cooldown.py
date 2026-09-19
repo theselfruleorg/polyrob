@@ -154,3 +154,24 @@ async def test_cooldown_expires_after_the_configured_window(monkeypatch):
     assert res1.error is None
     res2 = await t.twitter_post(TwitterPostAction(text="second"), execution_context=ctx)
     assert res2.error is None
+
+
+@pytest.mark.asyncio
+async def test_cooldown_refusal_teaches_the_reschedule_not_the_drop(monkeypatch):
+    """2026-09-17 (intel 2169): buyback tranche 3 broadcast two seconds after the
+    status-post cron consumed the cooldown; the refusal said "likely a re-fire"
+    and the agent dropped a report the owner had asked for on EVERY tranche.
+    The refusal must carry the remaining seconds and the exact way to defer the
+    post (a one-shot cron after the window) so a NEW-fact post is deferred, not
+    dropped — while a true re-fire is still told not to repeat itself."""
+    t = _tool(monkeypatch)
+    t.client.create_tweet.return_value = _resp("1")
+    ctx = _autonomous_ctx()
+    await t.twitter_post(TwitterPostAction(text="tranche 2 tx 0xaaa"), execution_context=ctx)
+    res = await t.twitter_post(TwitterPostAction(text="tranche 3 tx 0xbbb"), execution_context=ctx)
+    err = res.error or ""
+    assert "retry_after_sec=" in err
+    assert "cronjob_schedule" in err
+    assert "one-shot ISO" in err and "schedule_spec='20" in err  # an ISO instant, not a duration
+    assert "do not drop" in err.lower()
+    assert "re-fire" in err.lower()

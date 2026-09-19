@@ -59,6 +59,43 @@ class AnysiteDescribeParams(BaseModel):
                      "'github'. Returns the matching paths only."))
 
 
+def _looks_empty(stdout) -> bool:
+    """An answer with no rows. The 2026-09-18 user-search degradation returned
+    `[]`/`{"data": []}` for hours, including control queries — a fact worth a
+    health line instead of a seeded probe goal."""
+    text = (stdout or "").strip()
+    if not text:
+        return True
+    try:
+        import json
+        obj = json.loads(text)
+    except ValueError:
+        return False
+    if isinstance(obj, list):
+        return len(obj) == 0
+    if isinstance(obj, dict):
+        for k in ("data", "results", "items", "users", "posts"):
+            v = obj.get(k)
+            if isinstance(v, list):
+                return len(v) == 0
+        return len(obj) == 0
+    return False
+
+
+def _rail_probe(endpoint: str, outcome: str, detail=None) -> None:
+    """056 WS9: one durable `rail_probe` event per call (fail-open) so the status
+    snapshot — which cannot import tools — can say 'anysite user-search has
+    answered empty 3× running' with a timestamp."""
+    try:
+        from core.event_log import get_event_log, event_log_enabled
+        if event_log_enabled():
+            get_event_log().record("rail_probe", user_id="", source="anysite",
+                                   rail=f"anysite:{endpoint}", outcome=outcome,
+                                   detail=detail)
+    except Exception:
+        pass
+
+
 class AnysiteTool(BaseTool):
     def __init__(self, name: str = "anysite", config=None, container=None):
         super().__init__(name=name, config=config, container=container)
@@ -105,9 +142,13 @@ class AnysiteTool(BaseTool):
             argv = build_api_argv(params.endpoint, params.params, params.output_format)
             result = await run_anysite(argv)
             if result.timed_out:
+                _rail_probe(params.endpoint, "timeout")
                 return self._err("anysite CLI timed out")
             if result.exit_code != 0:
+                _rail_probe(params.endpoint, "error", result.exit_code)
                 return self._err(f"anysite api failed (exit {result.exit_code}): {result.stderr or result.stdout}")
+            _rail_probe(params.endpoint, "empty" if _looks_empty(result.stdout) else "ok",
+                        len(result.stdout or ""))
             return self._ok(result.stdout or "(empty response)")
         except ValueError as e:
             return self._err(f"invalid argument: {e}")

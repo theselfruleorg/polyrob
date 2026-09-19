@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+
+_BYTES32_RE = re.compile(r"0x[0-9a-fA-F]{64}")
 
 BASE_URL = "https://api.geckoterminal.com/api/v2"
 TIMEOUT_SEC = 12.0
@@ -326,9 +329,26 @@ def parse_pools(payload: Any, chain: str, gt_network: str) -> List[PoolCandidate
     return out
 
 
+# 2026-09-19: the free tier answers 429 when a step batches several reads; one
+# short retry turns a transient refusal into an answer, and a 429 that survives it
+# must PROPAGATE (the caller renders it) — it is not "nothing indexed".
+_RETRY_SLEEP_SEC = 2.0
+
+
+def _is_rate_limited(exc: BaseException) -> bool:
+    return getattr(exc, "code", None) == 429 or "429" in str(exc)
+
+
 def _get(url: str) -> Any:
-    from tools.defi.providers._http import get_json
-    return get_json(url, timeout=TIMEOUT_SEC)
+    from tools.defi.providers import _http
+    try:
+        return _http.get_json(url, timeout=TIMEOUT_SEC)
+    except Exception as exc:
+        if not _is_rate_limited(exc):
+            raise
+        import time as _time
+        _time.sleep(_RETRY_SLEEP_SEC)
+        return _http.get_json(url, timeout=TIMEOUT_SEC)
 
 
 def _fetch(chain: str, endpoint: str, *, fetch=None) -> List[PoolCandidate]:
@@ -440,11 +460,19 @@ def _url_safe_address(chain: str, value: str, *, what: str) -> str:
     """
     from core.wallet.addresses import normalize_for_chain
     text = str(value or "").strip()
+    # 2026-09-19: a POOL on a singleton-style AMM (Robinhood Chain) is a bytes32
+    # id, and that is what this indexer returns as the pool "address". Strict
+    # 0x + 64 hex keeps the path-segment guarantee (hex only, fixed width); a
+    # TOKEN is still an address and never gets this shape.
+    if what == "pool" and _BYTES32_RE.fullmatch(text):
+        return text
     try:
         normalize_for_chain(chain, text)
     except ValueError as exc:
         raise ValueError(
-            f"{what} {text!r} is not an address on {chain}: {exc}") from exc
+            f"{what} {text!r} is not an address on {chain}"
+            + (" (a 32-byte 0x…64-hex pool id is also accepted)" if what == "pool" else "")
+            + f": {exc}") from exc
     # The VALIDATED original, not the normalized form. Normalizing would
     # EIP-55-checksum an EVM address, and an indexer that 404s on checksummed
     # input is a real shape (LI.FI does exactly that). Solana is base58 and
@@ -490,9 +518,11 @@ def top_pool_for_token(chain: str, token_address: str, *, fetch=None) -> Optiona
     try:
         payload = (fetch or _get)(url)
     except Exception as exc:
+        # A provider ERROR (429, 5xx, timeout) is not "no pool" — propagate so the
+        # action says "could not resolve a pool: <why>" instead of "not indexed".
         logger.info("geckoterminal: pools-for-token failed for %s/%s (%s)",
                     chain, token_address, exc)
-        return None
+        raise RuntimeError(f"indexer error for {chain} pools-for-token: {exc}") from exc
     best, best_liq = None, None
     for item in ((payload or {}).get("data") or []):
         attrs = (item or {}).get("attributes") or {}

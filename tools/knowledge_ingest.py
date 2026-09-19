@@ -89,6 +89,54 @@ _TEXT_EXTENSIONS: frozenset[str] = frozenset({
 # ---------------------------------------------------------------------------
 
 
+# 2026-09-19: `data` is a blanket SECRET_DIR_PARTS entry, so `is_secret_path` calls
+# EVERY file under a `data/` dir a credential — including the agent's own markdown
+# plans in the project workspace (prod goal a049a57d1602: data/x-targets/*.md refused,
+# skipped_secret=1 each, while a grep proved they held no secret). The broad
+# classifier stays as it is for every other consumer (self_env, patch_source);
+# the KB path alone admits a plain-text DOCUMENT under data/ — outside the data
+# subtrees that hold runtime state — only when a content secret-scan passes.
+_KB_TEXT_DOC_SUFFIXES = frozenset({".md", ".txt", ".rst"})
+_KB_PROTECTED_DATA_SUBDIRS = frozenset({
+    "auto", "database", "sessions", "identity", "streams", "characters", "prompts",
+    "locks", "snapshots", "backups", "credentials",
+})
+_KB_SCAN_BYTES = 512 * 1024
+
+
+def kb_ingest_secret_skip(path: Path, root: Path) -> bool:
+    """True when the KB ingest must skip *path* as a secret (the walk + single-file
+    rule). Delegates to ``is_secret_path`` and then re-admits ONE shape: a
+    ``.md/.txt/.rst`` whose only offence is a parent dir named ``data`` (not a
+    protected data subtree, no other secret rule hit) AND whose content shows no
+    secret shape under the SSOT battery. Fail-closed on any read error."""
+    if not is_secret_path(path, root=root):
+        return False
+    if path.suffix.lower() not in _KB_TEXT_DOC_SUFFIXES:
+        return True
+    parts = [x.lower() for x in path.parts]
+    if "data" not in parts:
+        return True  # some other rule fired — never re-admit
+    if any(x in _KB_PROTECTED_DATA_SUBDIRS for x in parts):
+        return True
+    # Would it still be secret without the `data` dir rule? Re-check every other rule.
+    from core.security.secret_guard import SECRET_DIR_PARTS, _dir_part_match
+    if _dir_part_match(path, SECRET_DIR_PARTS - {"data"}):
+        return True
+    stripped = Path(*[x for x in path.parts if x.lower() != "data"])
+    if is_secret_path(stripped, root=root):
+        return True  # a name/path glob or the *.db rule fires on its own
+    try:
+        from core.secret_patterns import apply_ssot_shapes
+        sample = read_confined_bytes(path, root, _KB_SCAN_BYTES).decode("utf-8", "replace")
+        if apply_ssot_shapes(sample) != sample:
+            return True
+    except Exception:
+        logger.debug("kb secret content scan failed for %s — skipping", path, exc_info=True)
+        return True
+    return False
+
+
 def _iter_files(
     root: Path,
     *,
@@ -146,8 +194,8 @@ def _iter_files(
         if not path.is_file():
             continue
 
-        # Secret hard-skip
-        if is_secret_path(path, root=root):
+        # Secret hard-skip (a plain-text doc under `data/` is re-checked by content)
+        if kb_ingest_secret_skip(path, root):
             skipped["secret"] += 1
             continue
 
@@ -477,7 +525,7 @@ async def kb_ingest(
             "secret": 0, "binary": 0, "max_files": 0, "max_bytes": 0, "too_large": 0,
         }
         # Still apply secret/binary guards for single-file ingestion
-        if is_secret_path(resolved, root=allowed_root):
+        if kb_ingest_secret_skip(resolved, allowed_root):
             walk_skipped["secret"] += 1
             files = []
         else:
@@ -542,7 +590,7 @@ async def kb_ingest(
         # synchronous CPU/IO that would otherwise stall every other session during a
         # bulk ingest.
         try:
-            if is_secret_path(fpath, root=allowed_root):
+            if kb_ingest_secret_skip(fpath, allowed_root):
                 counts['skipped_secret'] += 1
                 continue
             snapshot = await asyncio.to_thread(

@@ -69,6 +69,10 @@ def test_autonomous_interactive_adds_compute_at_posture_1(monkeypatch):
     _enable_full(monkeypatch)
     monkeypatch.delenv("INTERACTIVE_TOOL_IDS", raising=False)
     monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "1")
+    # 056 WS4: posture is the CEILING — each compute tool also needs its own flag.
+    monkeypatch.setenv("CODE_EXEC_ENABLED", "true")
+    monkeypatch.setenv("SHELL_TOOLS_ENABLED", "true")
+    monkeypatch.setenv("CODING_TOOLS_ENABLED", "true")
     c._refreeze_compute_posture_for_tests()
     try:
         from surfaces.telegram.interactive_tools import interactive_tool_ids
