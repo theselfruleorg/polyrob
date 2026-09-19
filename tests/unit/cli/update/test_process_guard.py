@@ -172,8 +172,16 @@ def test_live_scan_detects_spawned_polyrob_lookalike(tmp_path, visible_processes
     fake.write_text("import time\ntime.sleep(30)\n")
     proc = subprocess.Popen([sys.executable, str(fake), "telegram"])
     try:
-        _time.sleep(0.3)  # let the scanner see it
-        assert server_process_alive() is True
+        # Poll: on macOS a framework Python re-execs through Python.app and the
+        # scanner can read a half-formed argv for the first few hundred ms.
+        deadline = _time.monotonic() + 3.0
+        seen = False
+        while _time.monotonic() < deadline:
+            seen = server_process_alive()
+            if seen:
+                break
+            _time.sleep(0.1)
+        assert seen is True
     finally:
         proc.kill()
         proc.wait()
@@ -197,3 +205,27 @@ def test_update_lock_releases(tmp_path):
     # After release, re-acquire must succeed.
     with update_lock(tmp_path):
         pass
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18 devops review §5.9: the executable must be polyrob, not any argument
+# ending in "polyrob"; a path with a space must not hide the agent.
+# ---------------------------------------------------------------------------
+
+def test_ls_of_the_install_dir_is_not_a_running_agent():
+    cmdlines = [(5, ["ls", "/opt/polyrob"]), (6, ["tail", "-f", "/opt/polyrob/x.log"]),
+                (7, ["vim", "/etc/polyrob"])]
+    assert server_process_alive(exclude_pid=1, _cmdlines=cmdlines) is False
+
+
+def test_bin_polyrob_path_is_the_agent():
+    cmdlines = [(5, ["/home/u/.local/pipx/venvs/polyrob/bin/polyrob", "telegram"])]
+    assert server_process_alive(exclude_pid=1, _cmdlines=cmdlines) is True
+
+
+def test_ps_parse_rejoins_an_executable_path_with_a_space():
+    from cli.update.process_guard import _parse_ps_lines
+    out = "  77 /Users/A B/venv/bin/polyrob telegram\n"
+    parsed = list(_parse_ps_lines(out))
+    assert parsed == [(77, ["/Users/A B/venv/bin/polyrob", "telegram"])]
+    assert server_process_alive(exclude_pid=1, _cmdlines=parsed) is True

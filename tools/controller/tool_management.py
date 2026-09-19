@@ -72,6 +72,18 @@ class ToolManagementMixin:
 
 		for tool_id in tool_ids:
 			try:
+				# An id that names a controller ACTION (`message`) is not a tool
+				# object: present → nothing to load and nothing missing; absent →
+				# its flag is the honest reason (never "unknown-tool").
+				from tools.controller.tool_load_report import action_id_gap
+				_action_gap = action_id_gap(tool_id, self.has_action)
+				if _action_gap is None:
+					self._clear_tool_load_failure(tool_id)
+					self.logger.debug(f"'{tool_id}' is a registered action, not a tool — nothing to load")
+					continue
+				if _action_gap:
+					self._record_tool_load_failure(tool_id, _action_gap)
+					continue
 				from core.wallet.authority import money_tool, owner_refusal
 				if money_tool(tool_id):
 					error = owner_refusal(getattr(self, 'user_id', None))

@@ -86,6 +86,11 @@ SIDECAR_DB_NAMES = (
     # cost basis for every open position, so the Money Book's profit/loss falls
     # back to "no entry recorded" — recoverable, but a backup must keep it.
     "open_positions.db",    # core/open_positions.py (PolicyGate.record writer)
+    # 2026-09-18: FOURTH generation of the D11 class. Opened from agents/, a tier
+    # the grep contract test did not walk. Session→owner_pid rows under
+    # SESSION_REGISTRY_BACKEND=sqlite; a rollback that skips it leaves live
+    # sessions routed to a PID that no longer exists.
+    "session_registry.db",  # agents/task_agent_lite.py (SqliteSessionRegistry)
 )
 
 _PathLike = Union[str, Path]

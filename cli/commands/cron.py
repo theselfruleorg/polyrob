@@ -214,6 +214,45 @@ def show(job_id: str, user: Optional[str]):
         click.echo(f"  payload:      {job.payload}")
 
 
+@cron.command("edit")
+@click.argument("job_id")
+@click.option("--max-duration", type=click.IntRange(1, 1800), default=None,
+              help="New hard cap in seconds (1-1800, the same ceiling the agent tool has).")
+@click.option("--schedule", default=None,
+              help="056 WS5: new schedule spec (5-field cron / 'every …' / duration); next run recomputed from now.")
+@click.option("--priority", type=click.Choice(["money", "ops"]), default=None,
+              help="056 WS5: priority class in payload.priority — 'money' rails pre-empt a running board goal.")
+@click.option("--user", default=None, help="Tenant id (default: this instance's identity)")
+def edit(job_id: str, max_duration: Optional[int], schedule: Optional[str],
+         priority: Optional[str], user: Optional[str]):
+    """Change a job's hard cap, schedule and/or priority class (tenant-scoped).
+
+    Why: the EXIT/SCOUT treasury rails were created with a 240 s cap and timed
+    out on 22 of 24 runs (2026-09-17) — until now the only remedy was a raw
+    sqlite UPDATE on the live db. The ceiling is 1800 s: the hourly buyback rail
+    (reconcile → quote → gates → swap → ledger → report) runs 1-5 min per step
+    and was cut at step 6 by the old 600 s ceiling before it could swap.
+    """
+    svc = _service()
+    if max_duration is None and schedule is None and priority is None:
+        raise click.ClickException("nothing to change: pass --max-duration, --schedule and/or --priority")
+    if max_duration is not None:
+        if svc.store.set_max_duration(job_id, max_duration, user_id=_tenant(user)):
+            click.echo(f"{job_id}: max duration → {max_duration}s (from the next run)")
+        else:
+            raise click.ClickException(f"no job {job_id!r} for this tenant")
+    if schedule is not None:
+        if svc.store.set_schedule(job_id, schedule, user_id=_tenant(user)):
+            click.echo(f"{job_id}: schedule → {schedule!r}; next run {svc.store.get(job_id).next_run_at}")
+        else:
+            raise click.ClickException(f"could not re-time {job_id!r}: bad spec or no job for this tenant")
+    if priority is not None:
+        if svc.store.set_priority(job_id, priority, user_id=_tenant(user)):
+            click.echo(f"{job_id}: priority → {priority}")
+        else:
+            raise click.ClickException(f"could not set priority on {job_id!r}")
+
+
 @cron.command("cancel")
 @click.argument("job_id")
 @click.option("--user", default=None, help="Tenant id (default: this instance's identity)")

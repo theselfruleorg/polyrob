@@ -22,6 +22,32 @@ class GoalFlagsMixin:
         return _int_env("GOAL_CLAIM_TTL_SEC", 900)
 
     @staticmethod
+    def goal_yield_for_money_rail() -> bool:
+        """056 WS5 (D1): a cron job with ``payload.priority == 'money'`` that comes
+        due while a board goal holds the shared workspace pre-empts that goal — the
+        run is cancelled at its step boundary, the row returns to ``ready`` with a
+        ``resume_note``, the rail runs on the same tick. A human turn is never
+        pre-empted. Default OFF (byte-identical); prod arms it."""
+        return _bool_env("GOAL_YIELD_FOR_MONEY_RAIL", False)
+
+    @staticmethod
+    def goal_default_max_steps() -> int:
+        """056 WS5: the step budget a goal gets when its payload sets none. Was a
+        literal 20 in the dispatcher; agent-created goals (which could not even set
+        one until `goal_create.max_steps`) exhausted it. Default 30."""
+        return _int_env("GOAL_DEFAULT_MAX_STEPS", 30)
+
+    @staticmethod
+    def goal_dispatch_cron_headroom_sec() -> int:
+        """Defer starting a board goal while a cron job is due within this window.
+
+        On a shared project-root workspace a goal run marks the process busy and
+        cron ticks skip until it ends, so a goal started minutes before a due money
+        rail delays that rail by the goal's whole runtime (prod 2026-09-18: SCOUT
+        due 13:30Z ran 13:43Z). ``0`` (default) = off, byte-identical."""
+        return _int_env("GOAL_DISPATCH_CRON_HEADROOM_SEC", 0)
+
+    @staticmethod
     def goal_max_run_seconds() -> int:
         """H11: hard wall-clock cap on a single goal run (mirrors cron's per-job cap).
         A goal is otherwise bounded only by max_steps, so one hung step (tool/LLM/browser)

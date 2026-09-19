@@ -199,9 +199,10 @@ def test_group_level_dash_P_applies_before_any_subcommand(env):
 def test_create_service_emits_unit_with_explicit_homes(env, tmp_path, monkeypatch):
     r = _run("create", "daemon1", "--no-alias", "--service")
     assert r.exit_code == 0, r.output
-    unit = env / "profiles" / "daemon1" / "polyrob-daemon1.service"
+    unit = env / "profiles" / "daemon1" / "polyrob@.service"
     if not unit.exists():  # root could write /etc — never true in CI/dev
         return
     text = unit.read_text()
-    assert 'POLYROB_PROFILE=daemon1' in text
+    assert 'POLYROB_PROFILE=%i' in text          # a systemd TEMPLATE unit
     assert f'POLYROB_PROFILES_ROOT={env / "profiles"}' in text
+    assert "polyrob@daemon1" in r.output and "polyrob-daemon1" not in r.output

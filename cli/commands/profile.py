@@ -293,34 +293,48 @@ def _register_transfer_commands():
 _register_transfer_commands()
 
 
+# The ONE per-profile unit text. `deployment/polyrob@.service` is this template
+# rendered with the server defaults (pinned byte-for-byte by
+# tests/unit/cli/test_profile_service_unit.py, the same contract the browser units
+# carry) — so `polyrob profile create --service` can never emit a weaker or
+# differently-named copy again. Until 2026-09-18 it hand-rolled a
+# `polyrob-<name>.service` with no User=/WorkingDirectory=/host env layer/
+# MemoryMax/TimeoutStopSec/KillMode, and the name collided with the
+# polyrob-email / polyrob-webview siblings (a profile named "email" overwrote
+# the live email unit).
+PROFILE_UNIT_TEMPLATE = '# polyrob@<profile>.service — one POLYROB daemon per named profile (W7).\n#\n# Install:  cp deployment/polyrob@.service /etc/systemd/system/\n#           systemctl enable --now polyrob@rob polyrob@scout\n#\n# Isolation is the OS process boundary (one process per profile — no\n# multiplexing). Selection mechanism: POLYROB_PROFILE below is the strong env\n# tier — the CLI\'s activate_profile() resolves it at process start and points\n# POLYROB_HOME/POLYROB_DATA_DIR at <POLYROB_PROFILES_ROOT>/%i. The two env\n# lines are REQUIRED: without them the daemon runs in legacy mode and writes\n# into the default home, not the profile.\n#\n# ⚠️ The profile must live under the SAME registry root this unit names.\n# The CLI default is ~/.polyrob/profiles; for this server layout create the\n# profile with:\n#     POLYROB_PROFILES_ROOT=__PROFILES_ROOT__ polyrob profile create <name>\n# (or move an existing profile dir there). `polyrob profile create <name>\n# --service` emits a unit matched to wherever the profile actually is.\n#\n# ⚠️ Each profile needs its OWN surface credentials in its .env (e.g. its own\n# TELEGRAM bot token). Two units long-polling one token — including the plain\n# polyrob.service next to a polyrob@<name> for the same bot — fight each other\n# (Telegram 409 Conflict).\n#\n# ⚠️ This unit does NOT load /etc/polyrob/polyrob.env (the PRIMARY instance\'s\n# env). Until 2026-09-17 it did, first, so any key the profile\'s .env did not\n# override leaked through: the primary\'s TELEGRAM_BOT_TOKEN (409 fight), its\n# TWITTER_* keys (the profile posted AS the primary), its POLYROB_OWNER_* ids\n# and its money flags. A profile daemon reads exactly two files: an optional\n# host-level /etc/polyrob/profiles/<name>.env for secrets you keep out of the\n# data tree, then the profile\'s own .env. Copy the LLM key(s) into one of them.\n#\n# ⚠️ Shared-host boundary: this profile daemon runs as root (with the shared\n# polyrob-data group), and the primary\'s wallet seed sits in\n# /etc/polyrob/wallet.env. A profile that is allowed a shell / compute posture\n# on the SAME host can read that file. Run an instance you do not trust on its\n# own host.\n\n[Unit]\nDescription=POLYROB agent — profile %i\nAfter=network-online.target\nWants=network-online.target\nStartLimitIntervalSec=500\nStartLimitBurst=5\n\n[Service]\nType=simple\nUser=root\n# Files this root unit creates under the shared POLYROB_DATA_DIR must stay\n# writable by the de-rooted agent (polyrob-agent:polyrob-data). root:root with\n# umask 022 produced rows the agent could read but never update (2026-09-18).\nGroup=polyrob-data\nUMask=0002\nWorkingDirectory=__WORKDIR__\nEnvironment="PYTHONUNBUFFERED=1"\nEnvironment="POLYROB_PROFILES_ROOT=__PROFILES_ROOT__"\nEnvironment="POLYROB_PROFILE=%i"\n# Host-level per-profile secrets first, the profile\'s own .env last (later\n# files win in systemd). NEVER the primary instance\'s /etc/polyrob/polyrob.env.\nEnvironmentFile=-/etc/polyrob/profiles/%i.env\nEnvironmentFile=-__PROFILES_ROOT__/%i/.env\nExecStart=__POLYROB_EXE__ telegram\nRestart=on-failure\nRestartSec=10\nTimeoutStopSec=60\nKillMode=mixed\nKillSignal=SIGTERM\nStandardOutput=journal\nStandardError=journal\n# "polyrob@%i" (not "polyrob-%i") so a profile named "email"/"webview" can\n# never collide with the polyrob-email/polyrob-webview sibling units\' tags.\nSyslogIdentifier=polyrob@%i\nMemoryMax=3G\n\n[Install]\nWantedBy=multi-user.target\n'
+
+PROFILE_UNIT_DEFAULTS = {
+    "profiles_root": "/var/lib/polyrob/profiles",
+    "exe": "/opt/polyrob/venv/bin/polyrob",
+    "workdir": "/opt/polyrob",
+}
+
+
+def render_profile_unit(*, profiles_root: str, exe: str, workdir: str) -> str:
+    """Render the template unit (`polyrob@.service`) for a profiles root + executable."""
+    return (PROFILE_UNIT_TEMPLATE
+            .replace("__PROFILES_ROOT__", str(profiles_root))
+            .replace("__POLYROB_EXE__", str(exe))
+            .replace("__WORKDIR__", str(workdir)))
+
+
 def _render_service_unit(name: str) -> str:
-    """Per-profile systemd unit. POLYROB_PROFILE + POLYROB_PROFILES_ROOT are
-    set explicitly (the strong env tier — activate_profile() resolves them at
-    process start); without them a spawned daemon would run in legacy mode and
-    write into the DEFAULT home, not the profile (known failure mode)."""
+    """The template unit for THIS machine's profiles root + polyrob executable.
+
+    The unit is `polyrob@.service` (a systemd template; `%i` = the profile
+    name): POLYROB_PROFILE + POLYROB_PROFILES_ROOT are set explicitly (the strong
+    env tier — activate_profile() resolves them at process start); without them a
+    spawned daemon would run in legacy mode and write into the DEFAULT home, not
+    the profile (known failure mode). `name` only affects the printed
+    `systemctl enable --now polyrob@<name>` hint — the text is instance-agnostic."""
     from core.profiles import profiles_root
     import shutil as _shutil
-    exe = _shutil.which("polyrob") or "/opt/polyrob/venv/bin/polyrob"
-    root = profiles_root()
-    return f"""[Unit]
-Description=POLYROB agent — profile {name}
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-Environment="PYTHONUNBUFFERED=1"
-Environment="POLYROB_PROFILES_ROOT={root}"
-Environment="POLYROB_PROFILE={name}"
-EnvironmentFile=-{root / name / '.env'}
-ExecStart={exe} telegram
-Restart=on-failure
-RestartSec=10
-SyslogIdentifier=polyrob-{name}
-
-[Install]
-WantedBy=multi-user.target
-"""
+    exe = _shutil.which("polyrob") or PROFILE_UNIT_DEFAULTS["exe"]
+    workdir = PROFILE_UNIT_DEFAULTS["workdir"]
+    if not Path(workdir).is_dir():
+        workdir = str(profiles_root() / name)
+    return render_profile_unit(profiles_root=str(profiles_root()), exe=exe, workdir=workdir)
 
 
 @profile.command("create")
@@ -360,17 +374,27 @@ def create_cmd(name, from_profile, from_project, include_data, description,
             click.echo(f"Alias skipped: {exc.message}", err=True)
     if with_service:
         unit_text = _render_service_unit(name)
-        unit_path = Path(f"/etc/systemd/system/polyrob-{name}.service")
+        # ONE template unit for every profile; `polyrob@<name>` (never
+        # `polyrob-<name>`, which collides with the polyrob-email/-webview siblings).
+        unit_path = Path("/etc/systemd/system/polyrob@.service")
         try:
-            unit_path.write_text(unit_text, encoding="utf-8")
-            click.echo(f"Service unit written: {unit_path}")
-            click.echo(f"Enable with: systemctl enable --now polyrob-{name}")
+            existing = unit_path.read_text(encoding="utf-8") if unit_path.exists() else None
+            if existing is not None and existing != unit_text:
+                click.echo(f"{unit_path} already exists with different content (another "
+                           "profiles root or executable) — not overwriting it.")
+                local = result["home"] / "polyrob@.service"
+                local.write_text(unit_text, encoding="utf-8")
+                click.echo(f"Rendered unit written to {local}; diff it against {unit_path}.")
+            else:
+                unit_path.write_text(unit_text, encoding="utf-8")
+                click.echo(f"Service unit written: {unit_path}")
+            click.echo(f"Enable with: systemctl enable --now polyrob@{name}")
         except OSError:
-            local = result["home"] / f"polyrob-{name}.service"
+            local = result["home"] / "polyrob@.service"
             local.write_text(unit_text, encoding="utf-8")
             click.echo(f"No permission for {unit_path} — unit written to {local}")
             click.echo(f"Install with: sudo cp {local} {unit_path} && "
-                       f"sudo systemctl enable --now polyrob-{name}")
+                       f"sudo systemctl enable --now polyrob@{name}")
     click.echo(f"Activate with: polyrob -P {name}   (or: polyrob profile use {name})")
 
 

@@ -52,6 +52,40 @@ TOOL_GATE_FLAGS: Dict[str, str] = {
 }
 
 
+#: Ids the GOAL vocabulary grants (`tools/goal_tools.py::_SELF_GOAL_ALLOWED_TOOLS`,
+#: proposal 009) that name a controller ACTION registered by
+#: `_register_default_actions`, not a container tool object: `message` is the
+#: `_register_message_action` verb behind MESSAGE_TOOL_ENABLED. Requesting such an
+#: id as a tool_id is satisfied by the action being present; recording it as a
+#: missing TOOL wrote a false "message … not a known tool id" line onto every
+#: telegram-mentioning goal's result record (prod 2026-09-18) while the very same
+#: run used the action. Value = the flag that gates the action, for the honest
+#: line when it is genuinely absent.
+ACTION_IDS_NOT_TOOLS: Dict[str, str] = {
+    "message": "MESSAGE_TOOL_ENABLED",
+}
+
+
+def action_id_gap(tool_id: str, has_action) -> Optional[str]:
+    """For an id in :data:`ACTION_IDS_NOT_TOOLS`: ``None`` when the action is
+    registered (nothing is missing — do not record a gap), else the
+    ``gated:disabled-by-flag`` line naming its flag. For any other id: ``""``
+    (caller falls through to the tool probes)."""
+    flag = ACTION_IDS_NOT_TOOLS.get((tool_id or "").strip())
+    if not flag:
+        return ""
+    try:
+        if has_action(tool_id):
+            return None
+    except Exception:
+        logger.debug("has_action probe failed for %r", tool_id, exc_info=True)
+    set_to = os.getenv(flag)
+    state = f"{flag}={set_to!r}" if set_to else f"{flag} is off"
+    return (f"gated:disabled-by-flag — '{tool_id}' is an agent action, not a tool, "
+            f"and it is not registered on this deploy ({state}); the owner enables "
+            f"it, the agent cannot")
+
+
 def _tool_is_registered(tool_id: str) -> bool:
     """Whether the id has a descriptor at all (a flag-gated tool has none)."""
     try:
@@ -105,4 +139,5 @@ def format_tool_gap_note(failures: Optional[Dict[str, str]]) -> str:
     return f"[tool gap] requested but not registered: {parts}"
 
 
-__all__ = ["TOOL_GATE_FLAGS", "describe_missing_tool", "format_tool_gap_note"]
+__all__ = ["ACTION_IDS_NOT_TOOLS", "TOOL_GATE_FLAGS", "action_id_gap",
+           "describe_missing_tool", "format_tool_gap_note"]

@@ -25,10 +25,18 @@ def test_steps_cover_multiple_detected_units():
 def test_fallback_names_both_candidates_with_caveat():
     steps = _systemd_manual_steps([])
     assert "polyrob.service" in steps
-    assert "polyrob-api.service" in steps
+    assert "polyrob-x402-api.service" in steps   # the LIVE api unit, not the retired polyrob-api
+    assert "polyrob-api.service" not in steps
     assert "daemon-reload" in steps
     # honest about not knowing which unit runs on this box
     assert "list-unit-files" in steps
+
+
+def test_steps_never_git_pull_in_the_rsync_target():
+    """A deployed /opt/polyrob has no .git; the path is the on-box deployer."""
+    steps = _systemd_manual_steps(["polyrob.service"])
+    assert "scripts/deploy_prod.sh" in steps
+    assert "git pull --ff-only && pip install ." not in steps
 
 
 def test_parse_unit_files_extracts_service_names():

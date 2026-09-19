@@ -50,3 +50,27 @@ def test_unbound_session_still_delivers():
     agent = _Agent(bound=False)
     asyncio.run(harness._run_and_deliver(agent, "u1", "s1", deliver))
     assert delivered == ["hello"]  # legacy path: harness delivers
+
+
+def test_run_and_deliver_holds_the_workspace_for_the_turn(monkeypatch, tmp_path):
+    """056 WS3: the owner's chat turn marks the process busy (so cron/goal ticks
+    skip) and leaves a turn.active marker while run_session runs — and clears
+    both afterwards."""
+    from core import interactive_gate as g
+    monkeypatch.setenv("POLYROB_WORKSPACE_LOCK_DIR", str(tmp_path / "locks"))
+    g._busy_depth = 0
+    seen = {}
+
+    class _A(_Agent):
+        async def run_session(self, user_id, session_id):
+            seen["busy"] = g.is_interactive_busy()
+            seen["marker"] = g.read_turn_marker()
+            return "Session completed successfully"
+
+    async def deliver(text):
+        pass
+
+    asyncio.run(harness._run_and_deliver(_A(bound=True), "u1", "s1", deliver))
+    assert seen["busy"] is True
+    assert seen["marker"] and seen["marker"]["kind"] == "owner_chat" and seen["marker"]["session_id"] == "s1"
+    assert not g.is_interactive_busy() and g.read_turn_marker() is None

@@ -154,11 +154,8 @@ class TaskContextManager(BaseComponent):
 
         self._sessions: Dict[str, SessionData] = {}
 
-        # Storage path
-        if base_path:
-            self._base_path = Path(base_path)
-        else:
-            self._base_path = Path(config.get("DATA_PATH", "data")) / "auto"
+        from core.runtime_paths import hmem_base_path  # never CWD-relative (N1)
+        self._base_path = Path(base_path) if base_path else hmem_base_path(config.get("DATA_PATH"))
 
         # Configuration
         self.enabled = config.get("HIERARCHICAL_MEMORY_ENABLED", True)

@@ -146,8 +146,33 @@ def test_apply_unsupported_method_prints_manual(monkeypatch):
     _patch(monkeypatch, method="docker", current="0.4.2", latest="0.4.3")
     monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: None, raising=False)
     res = CliRunner().invoke(update_cmd, ["--apply", "--yes"])
-    assert res.exit_code == EXIT_UP_TO_DATE
+    assert res.exit_code == EXIT_ERROR  # nothing was applied — never exit 0
     assert "isn't supported for a docker" in res.output
+
+
+def test_apply_unsupported_method_json_is_structured(monkeypatch):
+    import cli.commands.update as up
+    _patch(monkeypatch, method="docker", current="0.4.2", latest="0.4.3")
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: None, raising=False)
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--json"])
+    assert res.exit_code == EXIT_ERROR
+    data = json.loads(res.output)
+    assert data["applied"] is False and data["reason"] == "unsupported_method"
+    assert data["method"] == "docker" and data["manual_steps"]
+
+
+def test_apply_json_without_yes_never_blocks_on_stdin(monkeypatch, tmp_path):
+    import cli.commands.update as up
+    from cli.update.context import UpdateContext
+    _patch(monkeypatch, method="git", current="0.4.2", latest="0.4.3")
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: object(), raising=False)
+    uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
+    monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
+    monkeypatch.setattr(up, "active_use_reasons", lambda *a, **k: [], raising=False)
+    res = CliRunner().invoke(update_cmd, ["--apply", "--json"], input="")
+    assert res.exit_code == EXIT_ERROR
+    data = json.loads(res.output)
+    assert data["reason"] == "confirmation_required"
 
 
 def test_apply_fails_when_latest_version_cannot_be_determined(monkeypatch):
@@ -296,3 +321,55 @@ def test_apply_lock_held_is_clean_error(monkeypatch, tmp_path):
     data = json.loads(res2.output)
     assert data["applied"] is False
     assert "error" in data
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-18 §5.7: --channel git measures the BRANCH against its upstream, never the
+# GitHub release list (a branch with unreleased commits used to be "up to date").
+# ---------------------------------------------------------------------------
+
+def test_git_channel_apply_uses_branch_upstream_not_releases(monkeypatch, tmp_path):
+    import cli.commands.update as up
+    from cli.update.context import UpdateContext
+    from cli.update.detect import GIT, InstallContext
+    from cli.update.engine import ApplyResult
+
+    monkeypatch.setattr(up, "detect_install",
+                        lambda *a, **k: InstallContext(GIT, tmp_path, tmp_path, "git"))
+    # The release list must NOT be consulted on this channel.
+    monkeypatch.setattr(up, "resolve_status",
+                        lambda **k: (_ for _ in ()).throw(AssertionError("release list queried")))
+    monkeypatch.setattr("cli.update.runners.git_branch_status",
+                        lambda ctx, **k: {"ok": True, "reason": None, "behind": 3,
+                                          "head": "aaa", "upstream": "bbb", "branch": "main"})
+    monkeypatch.setattr("cli.update.versions.installed_version", lambda: "1.0.2")
+    seen = {}
+    monkeypatch.setattr(up, "build_runners", lambda ctx, **kw: seen.setdefault("kw", kw) or object())
+    uctx = UpdateContext(data_home=tmp_path, snapshots_root=tmp_path / "s", db_paths=[])
+    monkeypatch.setattr(up, "resolve_update_context", lambda *a, **k: uctx)
+    monkeypatch.setattr(up, "active_use_reasons", lambda *a, **k: [], raising=False)
+
+    class _Snap:
+        name = "S"
+    monkeypatch.setattr(up, "apply_update",
+                        lambda **kw: ApplyResult(True, None, None, _Snap(), False), raising=False)
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--channel", "git"])
+    assert res.exit_code == EXIT_UP_TO_DATE, res.output
+    assert seen["kw"].get("target_ref") is None  # branch fast-forward, never a tag checkout
+
+
+def test_git_channel_detached_head_refuses_before_snapshot(monkeypatch, tmp_path):
+    import cli.commands.update as up
+    from cli.update.detect import GIT, InstallContext
+    monkeypatch.setattr(up, "detect_install",
+                        lambda *a, **k: InstallContext(GIT, tmp_path, tmp_path, "git"))
+    monkeypatch.setattr("cli.update.runners.git_branch_status",
+                        lambda ctx, **k: {"ok": False, "behind": 0,
+                                          "reason": "HEAD is detached (a pinned tag) — use --channel stable"})
+    monkeypatch.setattr("cli.update.versions.installed_version", lambda: "1.0.2")
+    monkeypatch.setattr(up, "apply_update",
+                        lambda **kw: (_ for _ in ()).throw(AssertionError("snapshot taken")), raising=False)
+    res = CliRunner().invoke(update_cmd, ["--apply", "--yes", "--channel", "git", "--json"])
+    assert res.exit_code == EXIT_ERROR
+    data = json.loads(res.output)
+    assert data["reason"] == "check_failed" and "detached" in data["error"]

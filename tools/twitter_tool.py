@@ -155,7 +155,10 @@ class TwitterTimelineAction(BaseModel):
     model_config = ConfigDict(extra="forbid")
     user: str = Field(..., description="Username or numeric user id whose recent "
                                        "tweets to fetch.")
-    max_results: int = Field(10, ge=5, le=100, description="Max tweets to fetch.")
+    # 1..100, not the API's 5..100: the X floor is clamped inside get_user_timeline
+    # and the result truncated, so "last 3 posts" is a valid ask (2026-09-18: 8 paid
+    # steps/24h died on `max_results=3 … greater_than_equal 5`).
+    max_results: int = Field(10, ge=1, le=100, description="Max tweets to fetch (1-100).")
 
 
 class TwitterWhoamiAction(BaseModel):
@@ -545,11 +548,13 @@ class TwitterTool(BaseTool):
             else:
                 user_id = username_or_id
 
+            # The v2 users/:id/tweets endpoint refuses max_results < 5; ask for the
+            # floor and hand back only what the caller wanted.
             response = await self._make_request(
                 func=self.client.get_users_tweets,
                 endpoint_type='tweets',
                 id=user_id,  # Use resolved user_id
-                max_results=max_results,
+                max_results=max(5, max_results),
                 tweet_fields=['created_at', 'text', 'public_metrics'],
                 expansions=['author_id']
             )
@@ -563,7 +568,7 @@ class TwitterTool(BaseTool):
                         if getattr(tweet, 'created_at', None) else None,
                         'metrics': getattr(tweet, 'public_metrics', {})
                     }
-                    for tweet in response.data
+                    for tweet in list(response.data)[:max_results]
                 ]
             return None
             

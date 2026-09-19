@@ -28,8 +28,87 @@ def _workspace_lock_path() -> Optional[str]:
         return None
     root = os.environ.get("POLYROB_WORKSPACE_LOCK_DIR")
     if not root:
-        return None
+        # 056 WS3: the headless server never set the lock dir, so its cron/goal
+        # ticks and the deploy waiter could not see an owner turn at all. Derive
+        # <data_dir>/locks when the data dir is known; a box with neither is a
+        # bare dev checkout and stays lock-free as before.
+        if not _marker_enabled():
+            return None
+        data = os.environ.get("POLYROB_DATA_DIR")
+        if not data:
+            return None
+        root = os.path.join(data, "locks")
+        try:
+            os.makedirs(root, exist_ok=True)
+        except OSError:
+            return None
     return os.path.join(root, "workspace.turn.lock")
+
+
+def _marker_enabled() -> bool:
+    from core.env import bool_env
+    return bool_env("INTERACTIVE_GATE_MARKER", True)
+
+
+def turn_marker_path() -> Optional[str]:
+    """`<lock_dir>/turn.active` — the out-of-process fact "a human turn is live"
+    (pid, kind, started, session_id). Read by `scripts/deploy_when_idle.sh` and the
+    status snapshot; written only by :func:`owner_turn` / :func:`interactive_turn`."""
+    lp = _workspace_lock_path()
+    if lp is None or not _marker_enabled():
+        return None
+    return os.path.join(os.path.dirname(lp), "turn.active")
+
+
+def _write_turn_marker(kind: str, session_id: Optional[str]) -> None:
+    mp = turn_marker_path()
+    if mp is None:
+        return
+    import json
+    import time
+    try:
+        os.makedirs(os.path.dirname(mp), exist_ok=True)
+        tmp = f"{mp}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"pid": os.getpid(), "kind": kind, "started": time.time(),
+                       "session_id": session_id or ""}, f)
+        os.replace(tmp, mp)
+    except OSError:
+        pass
+
+
+def _clear_turn_marker() -> None:
+    mp = turn_marker_path()
+    if mp is None:
+        return
+    try:
+        os.unlink(mp)
+    except OSError:
+        pass
+
+
+def read_turn_marker() -> Optional[dict]:
+    """The live turn marker, or None (absent, unreadable, or from a dead pid —
+    a crashed process must not read as a turn forever)."""
+    mp = turn_marker_path()
+    if mp is None or not os.path.exists(mp):
+        return None
+    import json
+    try:
+        with open(mp, encoding="utf-8") as f:
+            m = json.load(f)
+        pid = int(m.get("pid") or 0)
+        if pid <= 0:
+            return None
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return None
+        except PermissionError:
+            pass  # alive, owned by another user
+        return m
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def _workspace_lock_timeout() -> float:
@@ -74,6 +153,49 @@ def is_interactive_busy() -> bool:
 
 
 @contextlib.contextmanager
+def owner_turn(kind: str = "owner_chat", session_id: Optional[str] = None,
+               lock_timeout: float = 5.0):
+    """A human turn on a HEADLESS surface (Telegram/email owner turn): mark the
+    process busy, write the `turn.active` marker, and try to take the cross-process
+    lock — but NEVER refuse the human. If another process holds the lock past
+    ``lock_timeout`` the turn proceeds without it (logged); the busy depth and the
+    marker still stop this process's cron/goal ticks and the deploy waiter.
+
+    056 WS3 (2026-09-19): until this existed the headless server's owner turns held
+    nothing, so a money rail could run under the owner's live turn on the same
+    shared workspace.
+    """
+    import logging
+    outermost = _busy_depth == 0
+    mark_busy()
+    if outermost:
+        _write_turn_marker(kind, session_id)
+    lock = None
+    try:
+        if outermost:
+            lp = _workspace_lock_path()
+            if lp is not None:
+                try:
+                    from agents.task.utils import SafeFileLock
+                    lock = SafeFileLock(lp, timeout=lock_timeout)
+                    lock.__enter__()
+                except Exception as e:  # contention/timeout: proceed unlocked
+                    logging.getLogger(__name__).warning(
+                        "owner turn proceeds without the workspace lock: %s", e)
+                    lock = None
+        yield
+    finally:
+        if lock is not None:
+            try:
+                lock.__exit__(None, None, None)
+            except Exception:
+                pass
+        if outermost:
+            _clear_turn_marker()
+        mark_idle()
+
+
+@contextlib.contextmanager
 def interactive_turn():
     """Mark the process busy + hold the cross-process workspace lock for a turn.
 
@@ -85,6 +207,8 @@ def interactive_turn():
     # nested turns are the same turn and must not re-acquire it.
     outermost = _busy_depth == 0
     mark_busy()
+    if outermost:
+        _write_turn_marker("repl", None)
     try:
         if outermost:
             with workspace_turn_lock():
@@ -92,4 +216,6 @@ def interactive_turn():
         else:
             yield
     finally:
+        if outermost:
+            _clear_turn_marker()
         mark_idle()

@@ -26,6 +26,7 @@ from core.exceptions import ServiceError
 from tools.controller.views import (
     ReadFileAction, WriteFileAction, AppendFileAction,
     ListDirectoryAction, DeleteFileAction, CreateDirectoryAction,
+    CopyFileAction, JsonlAppendAction, JsonlRemoveAction, JsonlValidateAction,
     DocProcessAction, DocAnalyzeAction,
 )
 from tools.filesystem_pdf import PdfExtractionMixin
@@ -437,15 +438,15 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                         f"3. The data was saved by MCP - consider using a smaller `limit` parameter in the original MCP call"
                     )
                 else:
-                    # Normal multi-line file: line-based chunking works
-                    raise ServiceError(
-                        f"File content ({estimated_tokens:,} tokens) exceeds maximum allowed tokens ({MAX_TOKENS:,}). "
-                        f"Please use offset and limit parameters to read specific portions of the file.\n\n"
-                        f"File has {total_lines} lines. Example usage:\n"
-                        f"- Read first 100 lines: {{\"filePath\": \"{params.file_path}\", \"offset\": 1, \"limit\": 100}}\n"
-                        f"- Read lines 500-600: {{\"filePath\": \"{params.file_path}\", \"offset\": 500, \"limit\": 100}}\n"
-                        f"- Read last 100 lines: {{\"filePath\": \"{params.file_path}\", \"offset\": {max(1, total_lines - 99)}, \"limit\": 100}}"
-                    )
+                    # Normal multi-line file: return a bounded TAIL instead of
+                    # refusing. Prod (2026-09-17): an append-only ledger at ~92k
+                    # tokens was read 84×/6h and refused 15× — each refusal a paid
+                    # step whose only output was "use offset/limit", after which
+                    # the agent asked for the tail anyway. The tail IS the answer
+                    # for a ledger/log/report; the header names the truncation
+                    # and the exact call for the rest, so nothing is silent.
+                    return self._tail_window(lines, params.file_path, estimated_tokens,
+                                             MAX_TOKENS)
 
             # Return content VERBATIM — the read twin of the F9 write fix below.
             # This used to run through _clean_text, which collapses horizontal
@@ -464,6 +465,35 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         except Exception as e:
             self.logger.error(f"Error reading file: {str(e)}")
             raise ServiceError(f"Failed to read file: {str(e)}")
+
+    @staticmethod
+    def _tail_window(lines: list, display_path: str, estimated_tokens: int,
+                     max_tokens: int) -> str:
+        """The newest lines of an over-cap multi-line file, numbered, under a header.
+
+        Budget: ~60% of the cap (chars ≈ tokens×4), so the window plus the
+        header never re-trips the limit downstream. Lines are numbered exactly
+        like the offset/limit branch, so a follow-up read can be addressed
+        from what the agent already sees.
+        """
+        total_lines = len(lines)
+        budget_chars = int(max_tokens * 4 * 0.6)
+        start = total_lines
+        used = 0
+        while start > 0 and used + len(lines[start - 1]) <= budget_chars:
+            used += len(lines[start - 1])
+            start -= 1
+        selected = lines[start:]
+        first_shown = start + 1
+        header = (
+            f"[TRUNCATED: file is {total_lines} lines / ~{estimated_tokens:,} tokens, over the "
+            f"{max_tokens:,}-token read cap — showing the LAST {len(selected)} lines "
+            f"({first_shown}-{total_lines}). Earlier lines: "
+            f"{{\"filePath\": \"{display_path}\", \"offset\": 1, \"limit\": {max(1, first_shown - 1)}}} "
+            f"(or any offset/limit window).]\n"
+        )
+        numbered = [f"{i:6}|{line}" for i, line in enumerate(selected, start=first_shown)]
+        return header + ''.join(numbered)
 
     # ---------------------------------------------------------------------------
     # @action: write_file
@@ -1098,6 +1128,222 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         except Exception as e:
             self.logger.error(f"Error deleting file: {str(e)}")
             raise ServiceError(f"Failed to delete file: {str(e)}")
+
+    # ---------------------------------------------------------------------------
+    # @action: copy_file
+    # ---------------------------------------------------------------------------
+
+    @BaseTool.action(
+        'Copy a file to a new path inside the workspace (byte-for-byte; use it to '
+        'back up a large file before rewriting it). Refuses to overwrite unless '
+        'overwrite=true; files only, never directories.',
+        param_model=CopyFileAction
+    )
+    async def copy_file(self, params: CopyFileAction, execution_context=None) -> str:
+        """Copy a file within the workspace without routing its bytes through the model."""
+        await self.ensure_initialized()
+
+        if not self._enabled:
+            raise ServiceError(f"{self.name} service is not enabled")
+
+        try:
+            if execution_context and hasattr(execution_context, 'session_id') and execution_context.session_id:
+                self.session_id = execution_context.session_id
+                if getattr(execution_context, 'user_id', None):
+                    self.user_id = execution_context.user_id
+            if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
+                self.workspace_dir = execution_context.workspace_dir
+
+            # Both ends confined by the ONE gate every filesystem verb uses.
+            src = self._normalize_path(params.source_path)
+            dst = self._normalize_path(params.dest_path)
+
+            if not os.path.isfile(src):
+                raise ServiceError(f"source is not a file: {params.source_path}")
+            if os.path.isdir(dst):
+                raise ServiceError(f"destination is a directory: {params.dest_path}")
+            if os.path.exists(dst) and not params.overwrite:
+                raise ServiceError(
+                    f"destination exists: {params.dest_path} (set overwrite=true to replace it)")
+            if os.path.realpath(src) == os.path.realpath(dst):
+                raise ServiceError("source and destination are the same file")
+
+            os.makedirs(os.path.dirname(dst) or ".", exist_ok=True)
+            # Copy to a sibling temp name, then atomic replace — a reader never sees
+            # a half-written destination.
+            tmp = f"{dst}.copy-tmp"
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dst)
+            size = os.path.getsize(dst)
+            return f"Copied {params.source_path} -> {params.dest_path} ({size} bytes)"
+
+        except ServiceError:
+            raise
+        except Exception as e:
+            self.logger.error(f"Error copying file: {str(e)}")
+            raise ServiceError(f"Failed to copy file: {str(e)}")
+
+    # ---------------------------------------------------------------------------
+    # @action: jsonl_append / jsonl_remove / jsonl_validate (056 WS2)
+    # ---------------------------------------------------------------------------
+
+    def _adopt_context(self, execution_context) -> None:
+        if execution_context and hasattr(execution_context, 'session_id') and execution_context.session_id:
+            self.session_id = execution_context.session_id
+            if getattr(execution_context, 'user_id', None):
+                self.user_id = execution_context.user_id
+        if execution_context and hasattr(execution_context, 'workspace_dir') and execution_context.workspace_dir:
+            self.workspace_dir = execution_context.workspace_dir
+
+    @staticmethod
+    def _jsonl_scan(path: str):
+        """(total_lines, records[(lineno, obj)], bad[(lineno, err)]) — one pass, verbatim lines."""
+        total, recs, bad = 0, [], []
+        with open(path, 'r', encoding='utf-8', errors='replace') as f:
+            for n, line in enumerate(f, 1):
+                if not line.strip():
+                    continue
+                total += 1
+                try:
+                    obj = json.loads(line)
+                except ValueError as e:
+                    bad.append((n, str(e)[:60]))
+                    continue
+                if not isinstance(obj, dict):
+                    bad.append((n, "not a JSON object"))
+                    continue
+                recs.append((n, obj, line))
+        return total, recs, bad
+
+    @BaseTool.action(
+        'Append one record (or a list of records) to a JSON-lines file: each object '
+        'becomes ONE compact line. Use this for targets.jsonl / contact-log.jsonl — '
+        'never write_file or a pretty-printed object.',
+        param_model=JsonlAppendAction
+    )
+    async def jsonl_append(self, params: JsonlAppendAction, execution_context=None) -> str:
+        await self.ensure_initialized()
+        if not self._enabled:
+            raise ServiceError(f"{self.name} service is not enabled")
+        try:
+            self._adopt_context(execution_context)
+            items = params.record if isinstance(params.record, list) else [params.record]
+            if not items or not all(isinstance(i, dict) for i in items):
+                raise ServiceError("jsonl_append: record must be a JSON object or a list of JSON objects")
+            path = self._normalize_path(params.file_path)
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            # A file that does not end in a newline gets one first, so the new
+            # record never glues onto the previous line.
+            needs_nl = False
+            if os.path.exists(path) and os.path.getsize(path) > 0:
+                with open(path, 'rb') as f:
+                    f.seek(-1, os.SEEK_END)
+                    needs_nl = f.read(1) != b"\n"
+            with open(path, 'a', encoding='utf-8') as f:
+                if needs_nl:
+                    f.write("\n")
+                for i in items:
+                    f.write(json.dumps(i, ensure_ascii=False, separators=(",", ":")) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            total, _, bad = self._jsonl_scan(path)
+            note = f"; WARNING {len(bad)} pre-existing bad line(s) (first: {bad[0][0]})" if bad else ""
+            return (f"Appended {len(items)} record(s) to {params.file_path} "
+                    f"({total} line(s) now{note})")
+        except ServiceError:
+            raise
+        except Exception as e:
+            self.logger.error(f"jsonl_append failed: {e}")
+            raise ServiceError(f"jsonl_append failed: {e}")
+
+    @BaseTool.action(
+        'Remove every line of a JSON-lines file whose <key> equals one of <values>. '
+        'Backs up to <file>.bak, verifies every remaining line parses and the counts '
+        'match, then replaces atomically; a single bad line refuses the rewrite and '
+        'leaves the file untouched.',
+        param_model=JsonlRemoveAction
+    )
+    async def jsonl_remove(self, params: JsonlRemoveAction, execution_context=None) -> str:
+        await self.ensure_initialized()
+        if not self._enabled:
+            raise ServiceError(f"{self.name} service is not enabled")
+        try:
+            self._adopt_context(execution_context)
+            path = self._normalize_path(params.file_path)
+            if not os.path.isfile(path):
+                raise ServiceError(f"not a file: {params.file_path}")
+            total, recs, bad = self._jsonl_scan(path)
+            if bad:
+                raise ServiceError(
+                    f"jsonl_remove refused: {len(bad)} line(s) do not parse (first: line "
+                    f"{bad[0][0]}: {bad[0][1]}) — run jsonl_validate and fix them first; "
+                    f"{params.file_path} left untouched")
+            wanted = {str(v) for v in params.values}
+            keep, removed_vals = [], []
+            for _n, obj, line in recs:
+                v = str(obj.get(params.key)) if params.key in obj else None
+                if v is not None and v in wanted:
+                    removed_vals.append(v)
+                else:
+                    keep.append(line if line.endswith("\n") else line + "\n")
+            if len(keep) + len(removed_vals) != total:
+                raise ServiceError("jsonl_remove refused: count check failed; file left untouched")
+            bak = path + ".bak"
+            shutil.copyfile(path, bak)
+            tmp = path + ".rewrite-tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                f.writelines(keep)
+                f.flush()
+                os.fsync(f.fileno())
+            t2, r2, b2 = self._jsonl_scan(tmp)
+            if b2 or t2 != len(keep):
+                os.unlink(tmp)
+                raise ServiceError("jsonl_remove refused: rewrite did not verify; file left untouched")
+            os.replace(tmp, path)
+            missing = sorted(wanted - set(removed_vals))
+            out = (f"{params.file_path}: removed {len(removed_vals)} line(s) where {params.key} in "
+                   f"{sorted(set(removed_vals))}; {total} -> {len(keep)} lines; backup {os.path.basename(bak)}")
+            if missing:
+                out += f"; not found: {', '.join(missing)}"
+            return out
+        except ServiceError:
+            raise
+        except Exception as e:
+            self.logger.error(f"jsonl_remove failed: {e}")
+            raise ServiceError(f"jsonl_remove failed: {e}")
+
+    @BaseTool.action(
+        'Validate a JSON-lines file (read-only): line count, valid count, first bad '
+        'lines, and duplicate values of <key> if given.',
+        param_model=JsonlValidateAction
+    )
+    async def jsonl_validate(self, params: JsonlValidateAction, execution_context=None) -> str:
+        await self.ensure_initialized()
+        if not self._enabled:
+            raise ServiceError(f"{self.name} service is not enabled")
+        try:
+            self._adopt_context(execution_context)
+            path = self._normalize_path(params.file_path)
+            if not os.path.isfile(path):
+                raise ServiceError(f"not a file: {params.file_path}")
+            total, recs, bad = self._jsonl_scan(path)
+            parts = [f"{params.file_path}: {total} lines, {len(recs)} valid, {len(bad)} bad"]
+            for n, err in bad[:5]:
+                parts.append(f"bad line {n}: {err}")
+            if params.key:
+                seen: Dict[str, int] = {}
+                for _n, obj, _l in recs:
+                    if params.key in obj:
+                        k = str(obj[params.key])
+                        seen[k] = seen.get(k, 0) + 1
+                dups = {k: c for k, c in seen.items() if c > 1}
+                parts.append(f"duplicate {params.key}: " + (", ".join(f"'{k}'×{c}" for k, c in sorted(dups.items())[:20]) if dups else "none"))
+            return "\n".join(parts)
+        except ServiceError:
+            raise
+        except Exception as e:
+            self.logger.error(f"jsonl_validate failed: {e}")
+            raise ServiceError(f"jsonl_validate failed: {e}")
 
     # ---------------------------------------------------------------------------
     # @action: create_directory

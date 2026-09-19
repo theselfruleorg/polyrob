@@ -59,7 +59,10 @@ def test_doctor_json():
 
     result = CliRunner().invoke(doctor, ["--json"], catch_exceptions=False)
     assert result.exit_code == 0, result.output
-    payload = json.loads(result.output)
+    # Click 8.2 interleaves stderr into `output`; on a box with a deployed
+    # instance the admin-home NOTE (correctly on stderr) precedes the JSON.
+    # `--json` contracts stdout only.
+    payload = json.loads(getattr(result, "stdout", result.output))
     assert isinstance(payload.get("report"), list) and payload["report"]
 
 

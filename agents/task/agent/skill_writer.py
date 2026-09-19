@@ -321,9 +321,13 @@ class SkillWriterMixin:
             return SkillWriteResult(skill_id, False, errors=[f"skill '{skill_id}' not found for user"])
         # A forged (non-user) turn may refine its OWN pending draft but must never
         # mutate an already-ACTIVE skill (that's user-controlled instruction content).
-        if created_by in _NON_USER_AUTHORS and not self._is_pending_path(skill_file):
-            return SkillWriteResult(skill_id, False,
-                                    errors=["a background turn cannot patch an active skill"])
+        # 056 WS6 (2026-09-19): instead of refusing, the SAME call lands a pending
+        # REVISION of the active skill under `.pending/<id>/` for the owner's
+        # `promote` — the active file is still never touched by a forged turn
+        # (SK-F10 holds; goal 367150fd7a0e had to be hand-applied by ops before).
+        propose_only = created_by in _NON_USER_AUTHORS and not self._is_pending_path(skill_file)
+        if propose_only:
+            pending = True
         try:
             current = self._read_skill_text(skill_file)
         except Exception as e:
@@ -345,7 +349,7 @@ class SkillWriterMixin:
         # Re-run the full validate+scan gate on the NEW body.
         return self.create_skill(skill_id, updated, user_id=uid, created_by=created_by,
                                  pending=pending if pending is not None else self._is_pending_path(skill_file),
-                                 expected_revision=actual_revision)
+                                 expected_revision=None if propose_only else actual_revision)
 
     def delete_skill(self, skill_id: str, *, user_id: str,
                      absorbed_into: Optional[str] = None,

@@ -519,6 +519,27 @@ def autonomous_mode_tools() -> tuple:
     return AUTONOMOUS_MODE_TOOLS
 
 
+def effective_autonomous_tools() -> tuple:
+    """056 WS4: `autonomous_mode_tools()` minus the tools this deploy cannot
+    actually serve right now — today `email` when the transport is SMTP and the
+    credentials were rejected within the backoff window (`tools.email_tool`
+    remembers a 535 process-wide). The CONSTANT is untouched; only the set the
+    goal/cron dispatchers REQUEST moves, so a goal record stops carrying a false
+    `[tool gap] email …` line (330 failed loads in 48 h, 2026-09-17→19). An
+    AgentMail transport is unaffected by an SMTP rejection. Fail-open: any probe
+    error keeps the tool in."""
+    tools = tuple(autonomous_mode_tools())
+    try:
+        from core.config_policy.capability_toggles import email_provider
+        if "email" in tools and email_provider() == "smtp":
+            from core.credential_verdicts import rejected_within
+            if rejected_within("smtp", 900.0):  # = tools.email_tool.SMTP_AUTH_BACKOFF_SEC
+                tools = tuple(t for t in tools if t != "email")
+    except Exception:
+        pass
+    return tools
+
+
 # MCP Tool Throttling (single source of truth)
 # MCP actions (scraping, searches, APIs) are expensive and execute SEQUENTIALLY
 # Each MCP action takes 30-180 seconds. Limiting prevents timeout cascades.
