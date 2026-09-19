@@ -1,4 +1,4 @@
-from typing import Optional, List, Literal
+from typing import Any, Optional, List, Literal
 from pathlib import Path
 import urllib.parse
 
@@ -203,8 +203,50 @@ class AppendFileAction(BaseModel):
 	@field_validator('content', mode='before')
 	@classmethod
 	def normalize_content(cls, v):
+		# 056 WS2: an APPEND of an object is a RECORD — one compact line, never a
+		# pretty-printed document. `_coerce_write_content`'s indent=2 (right for
+		# write_file, a whole JSON file) put a 17-line record into
+		# targets.jsonl on 2026-09-18 22:51Z and corrupted the store.
+		if isinstance(v, dict) or (isinstance(v, list) and v and all(isinstance(i, dict) for i in v)):
+			import json
+			items = v if isinstance(v, list) else [v]
+			return "".join(json.dumps(i, ensure_ascii=False, separators=(",", ":")) + "\n"
+			               for i in items)
+		# A list of scalars (or an empty list) is a JSON ARRAY document, not records —
+		# keep the legacy pretty form (pinned by test_filesystem_write_verbatim).
 		v = _coerce_write_content(v)
 		return str(v) if v is not None else ""
+
+
+class JsonlAppendAction(BaseModel):
+	"""056 WS2: append one record (or a list of records) to a JSON-lines file —
+	ONE compact line per object, the shape Rob's stores (`targets.jsonl`,
+	`contact-log.jsonl`) require."""
+	model_config = ConfigDict(extra='forbid', populate_by_name=True)
+
+	file_path: str = Field(alias='filePath', description="JSONL file (workspace-relative); created if absent.")
+	record: Any = Field(..., description="A JSON object, or a list of JSON objects. Each becomes one compact line.")
+
+
+class JsonlRemoveAction(BaseModel):
+	"""056 WS2: remove every line whose `key` equals one of `values`; backs the
+	file up to `<file>.bak` first, verifies every remaining line parses and
+	counts match, then atomically replaces. A single bad line refuses the whole
+	rewrite (the store is left untouched) and names the line."""
+	model_config = ConfigDict(extra='forbid', populate_by_name=True)
+
+	file_path: str = Field(alias='filePath')
+	key: str = Field(..., description="Top-level field to match, e.g. 'id'.")
+	values: List[Any] = Field(..., min_length=1, description="Values of `key` whose lines are removed (compared as strings).")
+
+
+class JsonlValidateAction(BaseModel):
+	"""056 WS2: read-only — line count, valid count, first bad lines, and (with
+	`key`) duplicate values of that field."""
+	model_config = ConfigDict(extra='forbid', populate_by_name=True)
+
+	file_path: str = Field(alias='filePath')
+	key: Optional[str] = Field(None, description="Optional field to check for duplicates, e.g. 'id'.")
 
 
 class ListDirectoryAction(BaseModel):
@@ -235,6 +277,20 @@ class DeleteFileAction(BaseModel):
 		if isinstance(v, str):
 			return str(Path(v.strip()))
 		return v
+
+
+class CopyFileAction(BaseModel):
+	"""Model for copying a file inside the workspace (2026-09-19).
+
+	A byte-level copy, so a file too large to round-trip through the model's
+	context (the 230 KB x-targets store) can still be backed up before a
+	rewrite — the exact primitive goal 1a5a313bfe9f declared itself BLOCKED on.
+	"""
+	model_config = ConfigDict(extra='forbid', populate_by_name=True)
+
+	source_path: str = Field(alias='sourcePath', description="Existing file to copy (workspace-relative).")
+	dest_path: str = Field(alias='destPath', description="Destination path (workspace-relative); parent dirs are created.")
+	overwrite: bool = Field(False, description="Replace an existing destination. Default False = refuse.")
 
 
 class CreateDirectoryAction(BaseModel):

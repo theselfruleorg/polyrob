@@ -63,8 +63,10 @@ def run_server(host=None, port=None, workers=None, *, reload=None, log_level=Non
         workers=workers if not reload else 1,  # Can't use multiple workers with reload
         reload=reload,
         log_level=log_level,
-        # Proxy headers for nginx
+        # Proxy headers for nginx. Trust X-Forwarded-For ONLY from the local reverse
+        # proxy by default: "*" lets any direct caller claim 127.0.0.1 and pass every
+        # localhost-only check (webview/server_launcher.py pins the same default).
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        forwarded_allow_ips=os.environ.get("UVICORN_FORWARDED_ALLOW_IPS", "127.0.0.1"),
         factory=True
     )

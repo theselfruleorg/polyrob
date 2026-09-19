@@ -467,7 +467,14 @@ async def _run_and_deliver(task_agent: Any, user_id: str, session_id: str, deliv
         from surfaces.telegram.interactive_tools import reconcile_owner_toolset
         await reconcile_owner_toolset(task_agent, user_id, session_id)
 
-    status = await task_agent.run_session(user_id, session_id)
+    # 056 WS3: a headless owner/room turn HOLDS the shared workspace for its whole
+    # run (busy depth + turn.active marker + cross-process lock, never refusing
+    # the human). Until 2026-09-19 nothing marked these turns, so cron/goal runs
+    # could start under the owner's live turn on the same project root.
+    from core.interactive_gate import owner_turn
+    _kind = "room_turn" if is_group_session_key(notice_key or "") else "owner_chat"
+    with owner_turn(kind=_kind, session_id=session_id):
+        status = await task_agent.run_session(user_id, session_id)
     if deliver is None:
         return
     # run_session returns a human-readable string, not a status enum. The

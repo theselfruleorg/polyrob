@@ -10,6 +10,26 @@ import secrets
 import stat
 
 
+def _share_with_parent_group(directory: int, name: str, *, is_dir: bool) -> None:
+    """A ROOT-run write inside a tenant store must stay readable by the service
+    group. When euid is 0 and the parent directory belongs to a non-root group,
+    give the new entry that group and open the group bits (dirs 0770, files
+    0660) — the same "data group + 2770/660" rule the deployer applies. A
+    non-root caller, or a root-group parent, is left exactly as before.
+    (2026-09-18: `polyrob owner promote skill …` from a root shell left three
+    approved skills root:root 0700 — unreadable by the agent.)"""
+    try:
+        if os.geteuid() != 0:
+            return
+        parent_gid = os.fstat(directory).st_gid
+        if parent_gid == 0:
+            return
+        os.chown(name, -1, parent_gid, dir_fd=directory, follow_symlinks=False)
+        os.chmod(name, 0o770 if is_dir else 0o660, dir_fd=directory, follow_symlinks=False)
+    except OSError:
+        pass  # ownership is a courtesy for the service; never fail the write over it
+
+
 def confined_path(path: Path, root: Path) -> Path:
     """Normalize the trusted root only; reject traversal in the candidate."""
     root = Path(root).absolute()
@@ -36,6 +56,7 @@ def confined_parent(path: Path, root: Path, *, create: bool = False):
             if create:
                 try:
                     os.mkdir(component, mode=0o700, dir_fd=directory)
+                    _share_with_parent_group(directory, component, is_dir=True)
                 except FileExistsError:
                     pass
             child = os.open(component, flags, dir_fd=directory)
@@ -69,6 +90,7 @@ def write_confined_text(path: Path, root: Path, text: str) -> None:
                 os.fsync(stream.fileno())
             _regular_or_absent(directory, name)
             os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+            _share_with_parent_group(directory, name, is_dir=False)
             os.fsync(directory)
         finally:
             try:

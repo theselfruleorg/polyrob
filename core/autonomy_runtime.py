@@ -1027,6 +1027,19 @@ def start_autonomy(*, task_agent, data_dir: str | None = None) -> AutonomyHandle
             handles._add("goals", _build_goal_ticker(task_agent, data_dir))
         except Exception as e:
             logger.warning("Could not start goal dispatcher: %s", e)
+    # 056 WS5 (D1): let a due MONEY cron job pre-empt a running board goal. The
+    # scheduler owns the trigger, the dispatcher owns the cancel+requeue; this is
+    # the one place both are in hand. Fail-open: no hook = never yield.
+    try:
+        _cron = handles._loops.get("cron")
+        _goals = handles._loops.get("goals")
+        if _cron is not None and _goals is not None:
+            _sched = getattr(_cron, "scheduler", None)
+            _disp = getattr(_goals, "dispatcher", None)
+            if _sched is not None and _disp is not None and hasattr(_sched, "set_yield_hook"):
+                _sched.set_yield_hook(_disp.yield_for_rail)
+    except Exception as e:
+        logger.debug("yield hook not wired: %s", e)
     if _curator_enabled():
         try:
             handles._add("curator", _build_curator_ticker(data_dir))

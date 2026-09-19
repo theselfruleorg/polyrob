@@ -79,3 +79,26 @@ def test_cancel_marks_job_cancelled_tenant_scoped(tmp_path):
 def test_cron_registered_in_group():
     from cli.polyrob import cli
     assert "cron" in cli.list_commands(None)
+
+
+def test_edit_max_duration_tenant_scoped_and_capped(tmp_path):
+    # 2026-09-17: the EXIT/SCOUT treasury rails were created with a 240 s cap
+    # and timed out on 22/24 runs; the only way to raise it was a raw sqlite
+    # UPDATE on prod. This verb is that edit, tenant-scoped and capped like the
+    # agent tool (≤1800 s since 2026-09-18).
+    _invoke(["schedule", "check the feeds", "30m", "--user", "u1",
+             "--max-duration", "240"], tmp_path)
+    job_id = _jobs(tmp_path, "u1")[0].id
+    # wrong tenant: refused, unchanged
+    res = _invoke(["edit", job_id, "--max-duration", "600", "--user", "u2"], tmp_path)
+    assert res.exit_code != 0
+    assert _jobs(tmp_path, "u1")[0].max_duration_seconds == 240
+    # over the cap: refused, unchanged
+    res = _invoke(["edit", job_id, "--max-duration", "1801", "--user", "u1"], tmp_path)
+    assert res.exit_code != 0
+    assert _jobs(tmp_path, "u1")[0].max_duration_seconds == 240
+    # right tenant, in range: applied and echoed
+    res = _invoke(["edit", job_id, "--max-duration", "600", "--user", "u1"], tmp_path)
+    assert res.exit_code == 0, res.output
+    assert "600" in res.output
+    assert _jobs(tmp_path, "u1")[0].max_duration_seconds == 600

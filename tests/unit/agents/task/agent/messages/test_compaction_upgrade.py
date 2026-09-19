@@ -213,19 +213,40 @@ def test_b1_disabled_by_env(monkeypatch):
 
 
 def test_b2_identical_tool_results_deduped():
-    from agents.task.agent.messages.filters import dedup_tool_results
+    from agents.task.agent.messages.filters import DEDUP_MIN_CHARS, dedup_tool_results
 
+    payload = "IDENTICAL_OUTPUT " * (DEDUP_MIN_CHARS // 10)
     msgs = [
         AIMessage(content="", tool_calls=[{"id": "c1", "name": "x", "args": {}}]),
-        ToolMessage(content="IDENTICAL_OUTPUT", tool_call_id="c1"),
+        ToolMessage(content=payload, tool_call_id="c1"),
         AIMessage(content="", tool_calls=[{"id": "c2", "name": "x", "args": {}}]),
-        ToolMessage(content="IDENTICAL_OUTPUT", tool_call_id="c2"),
+        ToolMessage(content=payload, tool_call_id="c2"),
     ]
     out = dedup_tool_results(msgs)
     tool_contents = [str(m.content) for m in out if isinstance(m, ToolMessage)]
-    assert tool_contents[0] == "IDENTICAL_OUTPUT"
-    assert tool_contents[1] != "IDENTICAL_OUTPUT"
+    assert tool_contents[0] == payload
+    assert tool_contents[1] != payload
     assert "duplicate" in tool_contents[1].lower() or "identical to" in tool_contents[1].lower()
+
+
+def test_b2_short_identical_confirmations_are_kept_verbatim():
+    """A short result is a confirmation the agent reads literally (prod 2026-09-19:
+    three identical `Edited <file>` results in one step came back as
+    "[duplicate of …]" and the agent reported them as artifacts, not edits); the
+    back-reference is longer than what it would replace anyway."""
+    from agents.task.agent.messages.filters import DEDUP_MIN_CHARS, dedup_tool_results
+
+    short = "Edited kb-root-position-ledger.md (1 replacement)"
+    assert len(short) < DEDUP_MIN_CHARS
+    msgs = [
+        AIMessage(content="", tool_calls=[{"id": f"c{i}", "name": "coding_str_replace", "args": {}}
+                                          for i in range(3)]),
+        ToolMessage(content=short, tool_call_id="c0"),
+        ToolMessage(content=short, tool_call_id="c1"),
+        ToolMessage(content=short, tool_call_id="c2"),
+    ]
+    out = dedup_tool_results(msgs)
+    assert [str(m.content) for m in out if isinstance(m, ToolMessage)] == [short] * 3
 
 
 def test_b3_keeps_latest_image_strips_older():

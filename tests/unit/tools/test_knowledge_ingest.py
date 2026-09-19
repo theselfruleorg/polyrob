@@ -663,3 +663,56 @@ def test_directory_walk_refuses_secret_aliases(tmp_path, monkeypatch):
     files, skipped = ki._iter_files(root)
     assert not files
     assert skipped['unsafe'] == 1
+
+
+# --- 2026-09-19: a plain-text doc under a workspace `data/` dir is not a credential ---
+# Prod (goal a049a57d1602): kb_ingest refused data/x-targets/round-plan-2026-09-19.md,
+# outreach-plan.md and rounds.md with skipped_secret=1 each — `data` is a blanket
+# SECRET_DIR_PARTS entry, so the agent's own markdown plans were unindexable while a
+# grep proved they held no secret. The KB path now admits a .md/.txt/.rst under data/
+# (outside the protected data subtrees) ONLY when a content secret-scan passes;
+# `is_secret_path` itself is unchanged (self_env and every other consumer keep the
+# broad rule).
+from tools.knowledge_ingest import kb_ingest_secret_skip
+
+
+def _ws(tmp_path, rel, text):
+    p = tmp_path / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+    return p
+
+
+def test_markdown_plan_under_data_is_admitted(tmp_path):
+    p = _ws(tmp_path, "data/x-targets/round-plan.md", "# Round plan\n- follow @a\n- reply @b\n")
+    assert kb_ingest_secret_skip(p, tmp_path) is False
+
+
+def test_markdown_under_data_with_a_secret_is_still_skipped(tmp_path):
+    # Built at runtime so no secret scanner reads a key-shaped literal in the tree.
+    fake_key = "sk-" + "a" * 40
+    p = _ws(tmp_path, "data/x-targets/notes.md", f"keys\nOPENAI_API_KEY={fake_key}\n")
+    assert kb_ingest_secret_skip(p, tmp_path) is True
+
+
+def test_db_under_data_is_still_skipped(tmp_path):
+    p = tmp_path / "data" / "bot.db"
+    p.parent.mkdir(parents=True)
+    p.write_bytes(b"SQLite format 3\x00")
+    assert kb_ingest_secret_skip(p, tmp_path) is True
+
+
+def test_protected_data_subtrees_stay_skipped(tmp_path):
+    for sub in ("auto", "database", "sessions", "identity", "streams"):
+        p = _ws(tmp_path, f"data/{sub}/x/notes.md", "# plain\n")
+        assert kb_ingest_secret_skip(p, tmp_path) is True, sub
+
+
+def test_non_text_under_data_stays_skipped(tmp_path):
+    p = _ws(tmp_path, "data/x-targets/targets.jsonl", '{"handle": "a"}\n')
+    assert kb_ingest_secret_skip(p, tmp_path) is True
+
+
+def test_dot_ssh_is_untouched_by_the_exemption(tmp_path):
+    p = _ws(tmp_path, ".ssh/notes.md", "# plain\n")
+    assert kb_ingest_secret_skip(p, tmp_path) is True

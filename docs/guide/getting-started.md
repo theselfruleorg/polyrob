@@ -197,7 +197,7 @@ $ polyrob
 /exit                    leave the REPL
 ```
 
-All 58 of them: [cli.md](cli.md#slash-commands-repl).
+The full list: [cli.md](cli.md#slash-commands-repl).
 
 ---
 
@@ -258,10 +258,11 @@ it again: [configuration.md §5](configuration.md#5-the-autonomy-dial).
         └── logs/
 ```
 
-About twenty-five more sidecar stores sit beside those (surfaces, dedup cursors,
-artifacts, apps, bridges); the authoritative list is
-`core/db_manifest.py::SIDECAR_DB_NAMES`, and `polyrob update` snapshots every
-one of them together.
+Those five are examples: `core/db_manifest.py::SIDECAR_DB_NAMES` is the
+authoritative list and names **37** sidecar stores (surfaces, dedup cursors,
+artifacts, apps, bridges, the session registry…), beside the relational `bot.db`
+whose path `DB_PATH` sets. `polyrob update --apply` and the boot-time migration both
+snapshot that whole set together, so a rollback never restores a half of it.
 
 `POLYROB_DATA_DIR` moves the runtime root; a named profile replaces both homes
 at once ([profiles.md](profiles.md)). Nothing leaves your machine except calls
@@ -278,11 +279,13 @@ polyrob update --apply     # git/editable installs: snapshot -> install -> migra
 polyrob update --rollback  # restore the most recent snapshot
 ```
 
-`--apply` is the automated path for git and editable installs. A pip or pipx
-install updates through the package manager (`pipx upgrade polyrob`), and schema
-migrations run on the next start either way. Every `--apply` takes a WAL-safe
-snapshot first — what it covers and what `--rollback` restores are in
-[upgrading.md](upgrading.md#the-safety-net). Options in full:
+`--apply` is the automated path for a git checkout or an editable git install. Any
+other install method (pip, pipx, systemd, Docker) prints the exact manual command for
+that method and exits non-zero rather than pretending — `pipx upgrade polyrob` for a
+pipx install, for example. Schema migrations run on the next start either way. Every
+`--apply` takes a WAL-safe snapshot first, and `--rollback` needs one of those (or a
+boot migration's) to exist; what a snapshot covers and what `--rollback` restores are
+in [upgrading.md](upgrading.md#the-safety-net). Options in full:
 [cli.md](cli.md#polyrob-update).
 
 ---

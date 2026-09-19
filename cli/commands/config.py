@@ -120,14 +120,17 @@ def _closest_match(key: str) -> Optional[str]:
 
 
 def _default_home_dir() -> str:
-    """The real data home used for per-user preference storage.
+    """The data home used for per-user preference storage — the DEPLOYED one.
 
-    Resolved the same way the CLI/local container resolves its data home
-    (``POLYROB_DATA_DIR`` if set, else ``cwd/.polyrob`` — see
-    ``core.runtime_paths.resolve_runtime_paths``). Overridable via the hidden
-    ``--home`` option (test/ops only).
+    Resolved through ``cli/_admin_home.py::admin_data_dir`` (the 031 rule):
+    ``POLYROB_DATA_DIR`` wins; on a box with a deployed instance the daemon's home
+    is adopted; a purely local box resolves ``cwd/.polyrob`` as before. Until
+    2026-09-18 this read ``resolve_runtime_paths(local=True)`` directly, so every
+    ``polyrob config set`` preference on prod landed in a home the service never
+    read. Overridable via the hidden ``--home`` option (test/ops only).
     """
-    return str(resolve_runtime_paths(local=True).data_home)
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir()
 
 
 @click.group("config")

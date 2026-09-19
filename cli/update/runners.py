@@ -2,7 +2,7 @@
 
 Only the **git / editable-git** methods get an automated apply here — they are the local
 dev + git-deployed server installs, and their code-swap + revert is a deterministic
-`git` operation (`pull --ff-only` / `reset --hard <old_sha>`). pip/pipx/docker/systemd
+`git` operation (`pull --ff-only` / `reset --keep <old_sha>`). pip/pipx/docker/systemd
 stay on the printed manual path until each has a verified, reversible runner (a bad
 `pip install -U` with no clean revert is worse than an honest manual step).
 
@@ -59,6 +59,35 @@ def _checked_capture(cmd: List[str], cwd: Optional[Path]) -> str:
                           capture_output=True, text=True).stdout.strip()
 
 
+def git_branch_status(install_ctx: InstallContext, *,
+                      capture: Optional[CaptureFn] = None) -> dict:
+    """``--channel git``: is the checked-out BRANCH behind its upstream?
+
+    The release list (GitHub tags) is the wrong oracle for this channel — a branch
+    with unreleased commits reported "Already up to date" and a detached HEAD
+    reported an update, then failed at ``git pull``. Returns
+    ``{"ok", "reason", "behind", "head", "upstream", "branch"}``; never raises on a
+    git error (``ok=False`` with the reason).
+    """
+    if install_ctx.method not in (GIT, EDITABLE_GIT) or not install_ctx.repo_root:
+        return {"ok": False, "reason": "not a git checkout", "behind": 0}
+    repo = Path(install_ctx.repo_root)
+    _capture: CaptureFn = capture or _checked_capture
+    try:
+        branch = _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
+        if branch == "HEAD":
+            return {"ok": False, "reason": "HEAD is detached (a pinned tag) — use --channel stable",
+                    "behind": 0, "branch": branch}
+        _capture(["git", "fetch", "--quiet"], repo)
+        behind = int(_capture(["git", "rev-list", "--count", "HEAD..@{upstream}"], repo) or "0")
+        head = _capture(["git", "rev-parse", "--short", "HEAD"], repo)
+        upstream = _capture(["git", "rev-parse", "--short", "@{upstream}"], repo)
+    except Exception as exc:  # noqa: BLE001 — a missing upstream is a plain answer
+        return {"ok": False, "reason": f"git: {exc}", "behind": 0}
+    return {"ok": True, "reason": None, "behind": behind, "head": head,
+            "upstream": upstream, "branch": branch}
+
+
 def build_runners(
     install_ctx: InstallContext,
     *,
@@ -90,26 +119,44 @@ def build_runners(
     pip_install = [py, "-m", "pip", "install", "-e", "."] if editable \
         else [py, "-m", "pip", "install", "."]
 
-    # Capture the current commit up-front so a rollback can restore it exactly.
-    old_sha = _capture(["git", "rev-parse", "HEAD"], repo)
+    old_sha = None
+    old_branch = None
+    mutated = False
+    pip_attempted = False
 
     def install() -> None:
+        nonlocal old_sha, old_branch, mutated, pip_attempted
+        # Run inside the update lock, immediately before mutating the checkout.
+        # A refusal must not trigger a destructive rollback of somebody's work.
+        # Only TRACKED modifications block: an untracked log or scratch file in a
+        # server checkout must not make every update refuse forever.
+        if _capture(["git", "status", "--porcelain", "--untracked-files=no"], repo):
+            raise RuntimeError("checkout has local changes; commit or stash them before updating")
+        old_sha = _capture(["git", "rev-parse", "HEAD"], repo)
+        old_branch = _capture(["git", "rev-parse", "--abbrev-ref", "HEAD"], repo)
         if target_ref:
             # Tag-pinned release update: fetch the new tags and move (detached) HEAD to
             # the released tag. Works whether HEAD was detached (prod) or on a branch.
-            _run(["git", "fetch", "--tags", "--force", "--quiet"], repo)
-            _run(["git", "checkout", "--quiet", target_ref], repo)
+            _run(["git", "check-ref-format", f"refs/tags/{target_ref}"], repo)
+            _run(["git", "fetch", "--tags", "--quiet"], repo)
+            mutated = True
+            _run(["git", "checkout", "--quiet", "--detach", f"refs/tags/{target_ref}"], repo)
         else:
             # --channel git: track the current branch by fast-forward.
+            if old_branch == "HEAD":
+                raise RuntimeError("git channel requires a branch with an upstream; HEAD is detached")
+            mutated = True
             _run(["git", "pull", "--ff-only"], repo)
+        pip_attempted = True
         _run(pip_install, repo)
 
     def migrate() -> None:
-        _run([py, "-m", "migrations.migrate", "upgrade"], repo)
+        _run([py, "-I", "-m", "migrations.migrate", "upgrade"], repo)
 
     def verify() -> None:
         # New code must at least import cleanly (the release smoke check).
-        _run([py, "-c", "import core, cli.polyrob"], repo)
+        _run([py, "-m", "pip", "check"], repo)
+        _run([py, "-I", "-c", "import core, cli.polyrob"], repo)
         # …and the runtime ASSETS must have landed with it. An import-only check
         # passes happily on an install that lost a package-data glob: the agent
         # then has no face (the avatar engine and the committed reference PNG
@@ -117,11 +164,20 @@ def build_runners(
         # font. Raising here is what makes engine.apply_update roll back —
         # `avatar/` and `assets/` shipped in NO deploy script at all until
         # 2026-09-15, which is the class this closes.
-        _run([py, "-c", _ASSET_PROBE], repo)
+        _run([py, "-I", "-c", _ASSET_PROBE], repo)
 
     def rollback_code() -> None:
-        _run(["git", "reset", "--hard", old_sha], repo)
-        _run(pip_install, repo)
+        if not mutated:
+            return
+        # --keep aborts on conflicting work added during the update instead of
+        # silently deleting it. Restore the original branch after a tag checkout.
+        _run(["git", "reset", "--keep", old_sha], repo)
+        if old_branch != "HEAD":
+            _run(["git", "checkout", "--quiet", old_branch], repo)
+        if pip_attempted:
+            # No `pip check` here: a pre-existing, unrelated dependency conflict
+            # must not make the ROLLBACK itself report as failed.
+            _run(pip_install, repo)
 
     return UpdateRunners(install=install, migrate=migrate,
                          verify=verify, rollback_code=rollback_code)

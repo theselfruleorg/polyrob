@@ -15,6 +15,13 @@ from agents.task.agent.views import ActionResult
 from modules.llm.messages import HumanMessage
 from agents.task.constants import MAX_MCP_PER_STEP
 
+# Hard ceiling on tool calls executed in ONE step; the rest are deferred to the next
+# step with a notice. ONE constant — the system prompt (`prompts.py`) renders this same
+# number, so the model is never told a bigger batch than the executor will run
+# (2026-09-19: the prompt said 1-10, the executor ran 5, and the 6th call vanished
+# from the agent's point of view).
+MAX_TOOL_CALLS_PER_STEP = 5
+
 #: OR-4: how many consecutive empty-action steps before the strong "thinking loop"
 #: intervention fires. Default 2 (one step sooner than the legacy 3) so a model
 #: that answers in prose without a tool call — Grok/GPT-5 on content-gen — is
@@ -371,7 +378,6 @@ class StepExecutionMixin:
 			# a whole extra LLM round trip (~60k input tokens) to re-request work the
 			# model had already decided on. 5 covers the common read-only fan-out while
 			# keeping a hard ceiling on single-step context growth.
-			MAX_TOOL_CALLS_PER_STEP = 5  # Allow up to 5 parallel calls
 			actions_to_execute = model_output.action
 			deferred_actions = []
 
@@ -387,11 +393,12 @@ class StepExecutionMixin:
 				deferred_names = [getattr(a, 'name', str(a)[:30]) for a in deferred_actions]
 				self.message_manager.push_ephemeral_message(
 					HumanMessage(content=(
-						f"⚠️ **Tool Call Limit Applied**\n\n"
-						f"{len(deferred_actions)} tool calls were deferred to prevent context overflow:\n"
+						f"⚠️ **Tool Call Limit Applied — {len(deferred_actions)} call(s) did NOT run**\n\n"
+						f"A step executes at most {MAX_TOOL_CALLS_PER_STEP} tool calls; these were NOT "
+						f"executed and have NO result:\n"
 						f"- {', '.join(deferred_names[:5])}"
 						f"{'...' if len(deferred_names) > 5 else ''}\n\n"
-						f"Process these in your next step, 1-{MAX_TOOL_CALLS_PER_STEP} at a time."
+						f"Call them again now, 1-{MAX_TOOL_CALLS_PER_STEP} at a time — do not assume they ran."
 					))
 				)
 

@@ -199,6 +199,12 @@ class BrowserManager(BaseComponent):
         async with self._pool_lock:
             # Check if session already has a context
             if session_id in self.contexts_in_use:
+                # Touch the clock: BROWSER_STALE_TIMEOUT is an IDLE timeout. Until
+                # 2026-09-18 this was allocation AGE, so the reaper closed the
+                # context of any session whose run outlived 5 min (32 reaps/24 h);
+                # the session's next new_page then hit a chrome segfault and the
+                # step hung to its 600 s timeout.
+                self.context_allocation_times[session_id] = time.time()
                 self.logger.debug(f"Returning existing context for session {session_id}")
                 return self.contexts_in_use[session_id]
 
@@ -403,27 +409,28 @@ class BrowserManager(BaseComponent):
         while True:
             try:
                 await asyncio.sleep(60)  # Check every minute
-
-                async with self._pool_lock:
-                    current_time = time.time()
-                    stale_sessions = []
-
-                    for session_id, alloc_time in self.context_allocation_times.items():
-                        if current_time - alloc_time > self.browser_config.stale_context_timeout:
-                            stale_sessions.append(session_id)
-
-                    # Use internal release while holding lock to avoid deadlock
-                    for session_id in stale_sessions:
-                        self.logger.warning(
-                            f"Cleaning up stale context for session {session_id} "
-                            f"(allocated {current_time - self.context_allocation_times.get(session_id, current_time):.0f}s ago)"
-                        )
-                        await self._release_context_internal(session_id, close=True)
-
+                await self._reap_stale_contexts_once()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 self.logger.error(f"Error in stale context cleanup: {e}")
+
+    async def _reap_stale_contexts_once(self) -> None:
+        """One reaper pass: close contexts IDLE (not merely old) past the timeout."""
+        async with self._pool_lock:
+            current_time = time.time()
+            stale_sessions = [
+                session_id
+                for session_id, last_used in self.context_allocation_times.items()
+                if current_time - last_used > self.browser_config.stale_context_timeout
+            ]
+            # Use internal release while holding lock to avoid deadlock
+            for session_id in stale_sessions:
+                self.logger.warning(
+                    f"Cleaning up stale context for session {session_id} "
+                    f"(idle {current_time - self.context_allocation_times.get(session_id, current_time):.0f}s)"
+                )
+                await self._release_context_internal(session_id, close=True)
 
     def _enqueue_waiter(self, session_id: str) -> asyncio.Future:
         """

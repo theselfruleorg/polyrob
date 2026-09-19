@@ -136,6 +136,18 @@ def resolve_data_home() -> Path:
 _LEGACY_SESSIONS_DEFAULT = "./data/task"
 
 
+def hmem_base_path(data_path: Optional[str] = None) -> Path:
+    """The H-MEM (task context) base: ``<DATA_PATH>/auto`` when a caller passes
+    one, else ``<data home>/auto``. Never CWD-relative (N1): ``DATA_PATH`` is
+    not a declared BotConfig field, so on a real deploy the data-home branch is
+    the ONLY one — the old CWD-relative default resolved against the read-only
+    install tree under the hardened service identity, and every H-MEM save
+    failed (2026-09-17)."""
+    if data_path:
+        return Path(data_path) / "auto"
+    return resolve_data_home() / "auto"
+
+
 def resolve_session_data_root() -> Path:
     """Resolve the session ARTIFACT tree root (PathManager ``data_root``).
 

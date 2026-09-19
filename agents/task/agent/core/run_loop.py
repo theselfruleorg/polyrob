@@ -78,6 +78,7 @@ from agents.task.agent.core.step import StepMixin
 from agents.task.agent.core.history_io import HistoryIOMixin
 from agents.task.agent.core.logging_io import LoggingIOMixin
 from agents.task.agent.core.safety_lifecycle import SafetyLifecycleMixin
+from core.wallet.infra_error import is_infra_broadcast_failure
 from agents.task.agent.core.user_ingress import UserIngressMixin
 from agents.task.agent.core.llm_provisioning import LLMProvisioningMixin
 from agents.task.agent.core.model_introspection import ModelIntrospectionMixin
@@ -474,6 +475,30 @@ class RunLoopMixin:
 						self.message_manager.inject_user_guidance(user_messages, session_context=session_context)
 						self.logger.info(f"✅ Injected {len(user_messages)} messages into conversation")
 
+					# A money verb that failed for a HOST reason (permission denied,
+					# read-only fs, unopenable db — "broadcast failed: … nothing was
+					# sent") cannot succeed later in this run and is an ops fact, not a
+					# puzzle: 2026-09-16/17 the EXIT rails spent 8 steps on `ls -la`/
+					# `run_code` forensics after exactly this, and the owner learned of
+					# the outage 5 h late with the wrong cause. End the run with the
+					# verbatim line so the runner reports one failed run, right cause.
+					_infra = next((r.error for r in (self._last_result or [])
+					               if getattr(r, "error", None)
+					               and is_infra_broadcast_failure(r.error)), None)
+					if _infra:
+						self.logger.error(
+							f"MONEY VERB INFRA FAILURE — ending the run, nothing was sent: {_infra[:400]}")
+						try:
+							from core.event_log import emit as _emit_event
+							_emit_event("money_verb_infra_failure", source="run_loop",
+							            user_id=str(getattr(self, "user_id", "") or ""),
+							            session_id=str(self.session_id),
+							            attrs={"error": _infra[:400]})
+						except Exception:
+							pass
+						self.state.stopped = True
+						break
+
 					# R1: track consecutive reply-only steps. A reply-only step is one
 					# whose every result is a non-blocking user-facing reply (no tool
 					# ran); anything else (productive tool, planning turn, error, done)
@@ -486,6 +511,18 @@ class RunLoopMixin:
 
 					# Check if the agent is done
 					if results and any(result.is_done for result in results):
+						# A message that arrived DURING the finishing step was just drained
+						# and injected above — the HITL queue is now empty, so the harness's
+						# "pending input" resume would never fire and the message would sit
+						# unanswered at the history tail (2026-09-18 08:12Z: the owner's
+						# "Ok I meant 0.04…" correction landed on Rob's done() step and got
+						# no reply). It earns the next step instead of dying with done().
+						if user_messages:
+							self.logger.info(
+								f"{len(user_messages)} message(s) arrived during the finishing "
+								"step — continuing the run so they get a turn")
+							continue
+
 						# I-3 / H3 (dedup decision D1): the agent can edit code and call
 						# done() without ever re-running tests. Derive the signal from the
 						# EXISTING action ledger (agents/task/runtime/edit_verify.py, which

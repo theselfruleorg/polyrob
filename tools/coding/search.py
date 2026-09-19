@@ -74,12 +74,33 @@ def search_files(
     Bounded by ``max_results``. Binary/undecodable files are skipped.
     """
     rx = re.compile(pattern)
-    ignored_dirs, ignored_globs = (
-        _load_gitignore(root) if respect_gitignore else (set(), [])
-    )
     matches = []
     seen_files = []
     seen_set = set()
+
+    # 2026-09-19 (agent self-review): a FILE path is grepped directly. `os.walk` on
+    # a file yields nothing, so `path=<file>` answered "(no matches)" for a line
+    # that was there. A path that is neither raises, naming it — a silent empty
+    # list reads as "not found" and cost the agent a false conclusion.
+    if os.path.isfile(root):
+        try:
+            with open(root, "r", encoding="utf-8") as f:
+                for i, line in enumerate(f, start=1):
+                    if rx.search(line):
+                        if output_mode == "files":
+                            return [root]
+                        matches.append(Match(path=root, line_no=i, line=line.rstrip("\n")))
+                        if len(matches) >= max_results:
+                            break
+        except (OSError, UnicodeDecodeError):
+            return []
+        return seen_files if output_mode == "files" else matches
+    if not os.path.isdir(root):
+        raise FileNotFoundError(f"grep path is neither a file nor a directory: {root}")
+
+    ignored_dirs, ignored_globs = (
+        _load_gitignore(root) if respect_gitignore else (set(), [])
+    )
 
     for dirpath, dirnames, filenames in os.walk(root):
         # prune ignored / noise directories in-place

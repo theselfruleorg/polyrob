@@ -58,3 +58,34 @@ def test_bounded_output(tmp_path):
         (tmp_path / f"f{i}.py").write_text("MATCH\n")
     hits = search_files(str(tmp_path), "MATCH", output_mode="content", max_results=10)
     assert len(hits) == 10
+
+
+# --- 2026-09-19 (Rob's self-review ask #2): a FILE path is searched, not walked ---
+# `os.walk` on a file yields nothing, so `coding_grep(path="data/x-targets/rounds.md")`
+# answered "(no matches)" for a line that IS there (2 wasted steps + a false
+# "gitignored?" conclusion). A file path now greps that file; a path that is neither
+# a file nor a directory raises, naming it — never a silent empty list.
+def test_file_path_is_searched_directly(tmp_path):
+    _seed(tmp_path)
+    hits = search_files(str(tmp_path / "notes.txt"), "VALUE")
+    assert [h.line for h in hits] == ["VALUE in prose"]
+    assert hits[0].path == str(tmp_path / "notes.txt")
+
+
+def test_file_path_files_mode(tmp_path):
+    _seed(tmp_path)
+    assert search_files(str(tmp_path / "a.py"), "VALUE", output_mode="files") == [str(tmp_path / "a.py")]
+
+
+def test_file_path_ignores_glob_mismatch_of_its_own_name(tmp_path):
+    """An explicit file is what the caller asked for; the glob scopes a WALK."""
+    _seed(tmp_path)
+    hits = search_files(str(tmp_path / "notes.txt"), "VALUE", glob="*.py")
+    assert len(hits) == 1
+
+
+def test_missing_path_raises_naming_it(tmp_path):
+    import pytest
+    with pytest.raises(FileNotFoundError) as ei:
+        search_files(str(tmp_path / "nope.md"), "x")
+    assert "nope.md" in str(ei.value)

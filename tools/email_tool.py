@@ -1,4 +1,5 @@
 import logging
+import time
 from typing import Dict, Any, Optional, List, Union
 import smtplib
 import ssl
@@ -22,6 +23,19 @@ from core.exceptions import ConfigurationError, APIError, AuthenticationError, T
 from tools.base_tool import BaseTool, ToolStatus
 from tools.controller.types import ActionResult
 
+
+# Process-wide memory of rejected SMTP logins, keyed (server, port, user); see
+# EmailTool._test_smtp_connection. 15 min = at most ~4 bad logins/hour per process
+# instead of one per minute plus one per session.
+SMTP_AUTH_BACKOFF_SEC = 900
+_SMTP_AUTH_FAILURES: Dict[tuple, float] = {}
+
+
+def smtp_credentials_rejected() -> bool:
+    """056 WS4: True while ANY SMTP login was rejected (535) within the backoff
+    window. Delegates to the core-tier register the autonomous toolset reads."""
+    from core.credential_verdicts import rejected_within
+    return rejected_within("smtp", SMTP_AUTH_BACKOFF_SEC)
 
 class EmailSendAction(BaseModel):
     """Send an email. Only the owner's email or an owner-allowlisted address is
@@ -110,14 +124,54 @@ class EmailTool(BaseTool):
             raise ToolError(f"Failed to initialize email service: {e}")
 
     async def _test_smtp_connection(self) -> None:
-        """Test SMTP connection."""
+        """Test SMTP connection.
+
+        A rejected login (535) is remembered process-wide for
+        ``SMTP_AUTH_BACKOFF_SEC``: the tool still fails closed, but from memory,
+        instead of re-sending bad credentials to the provider on every surface
+        poll and every session start (5,071 rejected Gmail logins in 24 h,
+        2026-09-18). Transient errors are never cached; a success clears it.
+        """
+        key = (self.smtp_server, self.smtp_port, self.config.gmail_email)
+        failed_at = _SMTP_AUTH_FAILURES.get(key)
+        if failed_at is not None:
+            elapsed = time.monotonic() - failed_at
+            if elapsed < SMTP_AUTH_BACKOFF_SEC:
+                raise ToolError(
+                    f"SMTP connection test failed: login rejected {int(elapsed)}s ago "
+                    f"(535, bad credentials); in backoff for another "
+                    f"{int(SMTP_AUTH_BACKOFF_SEC - elapsed)}s — fix the app password to clear it")
         try:
             context = ssl.create_default_context()
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
             server.starttls(context=context)
             server.login(self.config.gmail_email, self.config.gmail_app_password)
             server.quit()
+            _SMTP_AUTH_FAILURES.pop(key, None)
+            try:
+                from core.credential_verdicts import clear_rejection
+                clear_rejection("smtp", f"{self.smtp_server}:{self.smtp_port}")
+            except Exception:
+                pass
             self.logger.info("SMTP connection test successful")
+        except smtplib.SMTPAuthenticationError as e:
+            _SMTP_AUTH_FAILURES[key] = time.monotonic()
+            try:
+                from core.credential_verdicts import record_rejection
+                record_rejection("smtp", f"{self.smtp_server}:{self.smtp_port}")
+            except Exception:
+                pass
+            # 056 WS4/WS9: a durable, layering-safe fact for the status snapshot
+            # (core cannot import tools) — rendered as a health WARN with the remedy.
+            try:
+                from core.event_log import get_event_log, event_log_enabled
+                if event_log_enabled():
+                    get_event_log().record(
+                        "email_auth_rejected", user_id="", source="email",
+                        server=str(self.smtp_server), account=str(self.config.gmail_email or "")[:3] + "…")
+            except Exception:
+                pass
+            raise ToolError(f"SMTP connection test failed: {e}")
         except Exception as e:
             raise ToolError(f"SMTP connection test failed: {e}")
 

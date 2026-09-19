@@ -34,9 +34,15 @@ polyrob update --rollback                    # the most recent snapshot
 polyrob update --rollback --snapshot NAME    # a specific one
 ```
 
-A snapshot covers your **databases**, your **config files**, and the `identity/`,
-`skills/` and `wallet/` directories under the data home. `--rollback` restores that
-data and only that data — it does **not** revert the code, so pair it with the
+A snapshot covers your **databases** (every store in
+`core/db_manifest.py::SIDECAR_DB_NAMES` plus the relational `bot.db` at its configured
+`DB_PATH`), your **config files**, and the `identity/`, `skills/` and `wallet/`
+directories under the data home. Snapshots exist only where something created one:
+`--apply` and the boot-time migration are the two writers, and `--apply` keeps the
+three most recent. So `--rollback` on an install that has only ever been upgraded by
+its package manager has nothing to restore yet.
+
+`--rollback` restores that data and only that data — it does **not** revert the code, so pair it with the
 matching `pipx install "polyrob==<version>"` (or `git checkout`) if you are going
 back a release. Reverting code automatically is the `--apply` failure path: if the
 post-install verify fails, `--apply` puts both the code and the snapshot back on its
@@ -180,18 +186,31 @@ That replaces the files the distribution owns (characters, skills, cron, `mcp.js
 shipped `soul.md`) and never touches your `.env`, credentials, wallet or the `data/`
 tree. See [profiles.md](profiles.md).
 
-For a **systemd deployment**, the safe order is: stop the unit, upgrade, let the
-migration run at the next start, then verify.
+For a **systemd deployment**, `polyrob update --apply` is not the path: a deployed
+`/opt/polyrob` is an rsync TARGET with no `.git`, so `git pull` there fails, and
+`--apply` exits non-zero with the manual steps for exactly that reason. There are two
+honest paths, and `polyrob update` prints the one that fits your box:
+
+**A tree deployed from a maintenance clone** upgrades through your deployer,
+which should own the whole transaction: quiesce the unit family, snapshot the code
+and the virtualenv, install (`pip install -c requirements.lock -e ".[<your extras>]"`
+from the synced tree), migrate, restart, verify, and roll both back on failure.
+Run it from the clone (`git pull --ff-only` first), never from the deployed tree.
+
+**A wheel-shaped install** stops the units, upgrades the package, migrates and starts
+again:
 
 ```bash
-sudo systemctl stop polyrob
-# upgrade by whatever method polyrob update reported
-sudo systemctl start polyrob
-sudo systemctl status polyrob
+sudo systemctl stop polyrob.service polyrob-webview.service polyrob-email.service
+pip install -U polyrob          # in the deployment's own venv
+python -m migrations.migrate upgrade
+sudo systemctl daemon-reload
+sudo systemctl start polyrob.service polyrob-webview.service polyrob-email.service
 ```
 
-Then confirm the box actually runs what you think it runs — check file content and the
-process start time, not a recorded version string alone. Self-hosting details are in
+Use `systemctl list-unit-files 'polyrob*'` when you are not sure which units the box
+has. Then confirm it actually runs what you think it runs — check file content and the
+process start time, not a recorded version string alone. Deployment details are in
 [self-hosting.md](self-hosting.md).
 
 ---

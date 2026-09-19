@@ -670,8 +670,11 @@ Then emit your function calls."""
 			converted_input_messages = self.message_manager.merge_successive_messages(converted_input_messages, HumanMessage)
 			converted_input_messages = self.message_manager.merge_successive_messages(converted_input_messages, AIMessage)
 
-		# Check token safety using MessageManager's API (SINGLE SOURCE OF TRUTH)
-		safety_check = self.message_manager.check_token_safety(raise_on_overflow=True)
+		# Check token safety using MessageManager's API (SINGLE SOURCE OF TRUTH).
+		# Overflow first gets ONE emergency prune (the recalibration above can
+		# reveal an overflow the step-boundary gate never saw); raises if still over.
+		from agents.task.agent.core.token_budget import ensure_token_budget
+		safety_check = ensure_token_budget(self.message_manager, self.logger)
 		self.logger.debug(
 			f"Token usage: {safety_check['usage_percent']:.1f}% "
 			f"({safety_check['current_tokens']}/{safety_check['max_limit']} tokens)"

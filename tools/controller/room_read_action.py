@@ -151,7 +151,11 @@ def register_room_read_action(controller) -> None:
                     f"{body}\nsource: the local room ledger — every line the "
                     f"harness captured for each allowlisted room "
                     f"({_RETENTION_NOTE}); NOT a live Telegram history fetch. "
-                    f"Read again with room=<chat_id or title fragment>."),
+                    f"A room with 0 lines is not a broken room: Telegram never "
+                    f"echoes a bot's OWN posts back, so a channel only you post "
+                    f"to stays at 0 — the send receipt is the delivery "
+                    f"confirmation. Read again with room=<chat_id or title "
+                    f"fragment>."),
                 include_in_memory=True)
 
         matches = [r for r in rooms
@@ -190,7 +194,11 @@ def register_room_read_action(controller) -> None:
                   f"bot was not in the room are absent.")
         if not rows:
             lines = ["(no lines captured in this window — the room has been "
-                     "quiet, or the lines are older than the ledger retains)"]
+                     "quiet, or the lines are older than the ledger retains. "
+                     "NOTE: Telegram never delivers a bot's OWN posts back as "
+                     "updates, so an empty ledger says nothing about whether "
+                     "your posts rendered — the send receipt is the delivery "
+                     "confirmation; lines appear here only when OTHERS write.)"]
         else:
             lines = [_render_line(r) for r in rows]
         footer = ("read-only: this action never posts. Reply via "

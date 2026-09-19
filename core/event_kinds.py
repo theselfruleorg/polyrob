@@ -20,6 +20,14 @@ AUTONOMY_TICK = "autonomy_tick"
 #: disabled gate) is never mistaken for a silently-dead one.
 AUTONOMY_STARTED = "autonomy_started"
 CRON_RUN = "cron_run"
+#: 056 WS4/WS9: an SMTP login was rejected (535) — the layering-safe fact the
+#: status snapshot turns into a health WARN with the remedy.
+EMAIL_AUTH_REJECTED = "email_auth_rejected"
+#: 056 WS9: an external-rail call outcome (anysite …): ok / empty / error / timeout.
+RAIL_PROBE = "rail_probe"
+#: 056 WS8: one stale-session-directory GC pass (dry-run or applied) — the
+#: candidate count / bytes the owner reads before flipping SESSION_DIR_GC_APPLY.
+SESSION_GC = "session_gc"
 #: 043 A29: the SERVICE-level cron domain events — a job was scheduled or
 #: cancelled through ``cron.service.CronService`` (the SSOT every surface calls).
 #: Distinct from the console-action audit ``CONSOLE_CRON_CANCEL`` below: these

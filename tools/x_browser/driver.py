@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 # x.com DOM handles (data-testid is X's most stable hook). One place to update.
 SELECTORS = {
     "compose_box": '[data-testid="tweetTextarea_0"]',
+    "reply_button": '[data-testid="reply"]',
     "post_button": '[data-testid="tweetButtonInline"], [data-testid="tweetButton"]',
     "home_marker": '[data-testid="SideNav_NewTweet_Button"]',
     "login_link": '[data-testid="loginButton"], [href="/login"]',
@@ -81,6 +82,29 @@ class XPageDriver:
         btn = await self.page.wait_for_selector(
             SELECTORS["post_button"], timeout=8000, state="visible")
         await btn.click()
+        return await self._await_permalink()
+
+    async def reply(self, status_id: str, text: str) -> str:
+        """Open a status page, open its reply composer, publish; return the
+        reply's permalink (best-effort, as ``post``)."""
+        if not await self.is_logged_in():
+            raise RuntimeError("x session is not logged in")
+        sid = "".join(ch for ch in str(status_id) if ch.isdigit())
+        if not sid:
+            raise ValueError("status_id must be numeric")
+        await self.page.goto(f"https://x.com/i/status/{sid}",
+                             wait_until="domcontentloaded")
+        btn = await self.page.wait_for_selector(
+            SELECTORS["reply_button"], timeout=15000, state="visible")
+        await btn.click()
+        box = await self.page.wait_for_selector(
+            SELECTORS["compose_box"], timeout=15000, state="visible")
+        await box.click()
+        await box.type(text, delay=15)
+        await asyncio.sleep(0.2)
+        post = await self.page.wait_for_selector(
+            SELECTORS["post_button"], timeout=8000, state="visible")
+        await post.click()
         return await self._await_permalink()
 
     async def _await_permalink(self, timeout: float = 15000) -> str:

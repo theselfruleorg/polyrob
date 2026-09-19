@@ -22,8 +22,17 @@ from agents.task.agent.message_manager.tool_call_builder import (
 logger = logging.getLogger(__name__)
 
 
+# A tool result shorter than this is never replaced by a back-reference: the
+# pointer text is ~80 chars, so there is nothing to save, and a short result is
+# usually a CONFIRMATION ("Edited kb-root-position-ledger.md") the agent needs
+# verbatim — prod 2026-09-19 15:35Z: three identical `coding_str_replace`
+# confirmations in one step came back as "[duplicate of …]" and the agent
+# reported "3 that returned the dedup artifact" instead of three landed edits.
+DEDUP_MIN_CHARS = 160
+
+
 def dedup_tool_results(messages: List[BaseMessage]) -> List[BaseMessage]:
-	"""Replace byte-identical repeated tool outputs with a back-reference (B2).
+	"""Replace byte-identical repeated LONG tool outputs with a back-reference (B2).
 
 	Reference does this (MD5-keyed) in its compaction pre-pass — cheap token savings on
 	retry/polling loops where the same tool returns the same payload repeatedly. The
@@ -38,7 +47,8 @@ def dedup_tool_results(messages: List[BaseMessage]) -> List[BaseMessage]:
 	seen: Dict[str, int] = {}
 	out: List[BaseMessage] = []
 	for msg in messages:
-		if isinstance(msg, ToolMessage) and isinstance(msg.content, str) and msg.content:
+		if (isinstance(msg, ToolMessage) and isinstance(msg.content, str)
+				and len(msg.content) >= DEDUP_MIN_CHARS):
 			digest = hashlib.md5(msg.content.encode("utf-8", "ignore")).hexdigest()[:12]
 			if digest in seen:
 				ref = ToolMessage(

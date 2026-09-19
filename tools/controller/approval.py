@@ -228,7 +228,7 @@ DEFAULT_APPROVAL_REQUIRED_TOOLS = (
     # {tool_id}_{action}, so the bare `x402_request` matched nothing.
     "x402_invoice_x402_request",
     # Browser-based X posting/DMs — outward-facing, recommend owner approval.
-    "x_browser_x_post", "x_browser_x_dm",
+    "x_browser_x_post", "x_browser_x_reply", "x_browser_x_dm",
     # ⚠️ `defi_trade_bridge` is deliberately ABSENT (039). "Belt-and-braces" was
     # the intent; two owner taps for one bridge, from two prompts describing the
     # same transaction differently, was the result (2026-09-12). The verb owns its

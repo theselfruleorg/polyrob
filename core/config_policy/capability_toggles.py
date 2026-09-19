@@ -27,6 +27,26 @@ def run_budget_usd() -> float:
     return _float_env("RUN_BUDGET_USD", 0.0)
 
 
+def code_exec_enabled() -> bool:
+    """`CODE_EXEC_ENABLED` (default OFF). Core-tier home (056 WS4) so the agents
+    tier can read it without an upward import; `tools.code_exec` delegates here."""
+    return _bool_env("CODE_EXEC_ENABLED", False)
+
+
+def shell_tools_enabled() -> bool:
+    """`SHELL_TOOLS_ENABLED` — defaults ON at AGENT_COMPUTE_POSTURE>=1, an explicit
+    env always wins. Core-tier home (056 WS4); `tools.shell` delegates here."""
+    from core.config_policy._env import posture_flag
+    return posture_flag("SHELL_TOOLS_ENABLED", 1)
+
+
+def coding_tools_enabled() -> bool:
+    """`CODING_TOOLS_ENABLED` — explicit env wins, else ON under POLYROB_LOCAL
+    (the safe group). Core-tier home (056 WS4); `tools.coding` delegates here."""
+    from core.config_policy._env import safe_local_flag
+    return safe_local_flag("CODING_TOOLS_ENABLED")
+
+
 def email_provider(env=None) -> str:
     """Which transport backs the agent's email: ``smtp`` | ``agentmail``.
 

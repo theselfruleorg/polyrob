@@ -25,7 +25,7 @@ PIP = "pip"
 UNKNOWN = "unknown"
 
 # Methods this session can safely self-update in place vs. must defer to a manager.
-SELF_UPDATABLE = frozenset({SYSTEMD, EDITABLE_GIT, GIT, PIPX, PIP})
+SELF_UPDATABLE = frozenset({EDITABLE_GIT, GIT})
 DEFER_TO_MANAGER = frozenset({DOCKER, UNKNOWN})
 
 
@@ -97,6 +97,8 @@ def read_editable_flag(package_dir: Path) -> Optional[bool]:
             continue
         try:
             data = json.loads(raw)
+            if not isinstance(data, dict) or not isinstance(data.get("dir_info", {}), dict):
+                continue
         except Exception:
             continue
         return bool(data.get("dir_info", {}).get("editable", False))
@@ -108,7 +110,7 @@ def _looks_like_pipx(package_dir: Path, env: os._Environ) -> bool:
     if "/pipx/venvs/polyrob/" in joined:
         return True
     home = env.get("PIPX_HOME")
-    return bool(home and str(Path(home)) in str(package_dir))
+    return bool(home and package_dir.resolve().is_relative_to(Path(home).expanduser().resolve()))
 
 
 def classify_install(
@@ -127,7 +129,7 @@ def classify_install(
         return InstallContext(DOCKER, package_dir, git_root,
                               "container detected; update by rebuilding the image")
 
-    under_opt = str(package_dir).startswith("/opt/polyrob")
+    under_opt = package_dir.is_relative_to(Path("/opt/polyrob"))
     if env.get("INVOCATION_ID") or under_opt:
         return InstallContext(SYSTEMD, package_dir, git_root,
                               "systemd/server install")
@@ -161,6 +163,10 @@ def detect_install(env: Optional[os._Environ] = None,
 
     editable = read_editable_flag(pkg)
     git_root = find_git_root(pkg)
+    # A wheel's site-packages may itself live inside an unrelated git checkout
+    # (e.g. /work/project/.venv). Never update that enclosing repository.
+    if any(part in {"site-packages", "dist-packages"} for part in pkg.parts):
+        git_root = None
     try:
         from importlib.metadata import distribution
 

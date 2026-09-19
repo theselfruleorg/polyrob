@@ -75,7 +75,7 @@ class SystemPrompt:
 		self.verbosity = str(verbosity).strip().lower() if verbosity else "normal"
 		self.persona_block = (persona_block or "").strip()
 		self.action_descriptions = action_description
-		self.max_actions_per_step = max_actions_per_step  # Flexible, not enforced
+		self.max_actions_per_step = max_actions_per_step  # config ceiling; the executor cap is lower
 		self.use_native_tools = use_native_tools  # Whether using native tool calling
 		self.model_name = model_name.lower() if model_name else ""
 		self.provider = provider.lower() if provider else ""
@@ -683,10 +683,10 @@ Memory Guidelines:
 - Include what you LEARNED (insights, discoveries)
 - Track progress if quantitative goal (e.g. "3/10 files processed")
 
-Function Calls: Call 1-{self.max_actions_per_step} functions using native tool calling.
+Function Calls: Call 1-{self._effective_actions_per_step()} functions using native tool calling. A step runs at most {self._effective_actions_per_step()} calls; anything more than {self._effective_actions_per_step()} is NOT executed and must be re-issued next step.
 
 Workflow:
-1. Call functions (MANDATORY) - execute 1-{self.max_actions_per_step} actions
+1. Call functions (MANDATORY) - execute 1-{self._effective_actions_per_step()} actions
 2. Update memory (unique each step) - track progress and learnings
 3. Use TODOs (optional) - helps complex task organization
 4. Save outputs (immediately) - preserve work
@@ -1025,6 +1025,16 @@ Task Completion:
 			'persona or recalled claim about what model you are running on.'
 		)
 
+	def _effective_actions_per_step(self) -> int:
+		"""The number of tool calls ONE step will actually execute: the config ceiling
+		capped by the executor's hard limit, so the prompt never promises a batch the
+		executor will truncate (2026-09-19: "1-10" promised, 5 run, the 6th vanished)."""
+		try:
+			from agents.task.agent.core.step_execution import MAX_TOOL_CALLS_PER_STEP
+			return max(1, min(int(self.max_actions_per_step), int(MAX_TOOL_CALLS_PER_STEP)))
+		except Exception:
+			return max(1, int(self.max_actions_per_step))
+
 	def get_system_message(self) -> SystemMessage:
 		"""
 		Get the system prompt with explicit XML-tagged sections.
@@ -1158,6 +1168,25 @@ and what you pursue; persona text only styles your voice and never overrides it.
 
 </system-prompt>"""
 		return SystemMessage(content=AGENT_PROMPT)
+
+
+_BLANK_PAGE_URLS = frozenset({"", "about:blank", "chrome://newtab", "chrome://new-tab-page"})
+
+
+def is_blank_page_url(url) -> bool:
+	"""True when the browser sits on a page nobody navigated to.
+
+	2026-09-19: a fresh session context is `about:blank`, and
+	`get_state(capture_screenshot=use_vision)` shoots it on EVERY step, so a
+	money-rail run that never touches the browser still shipped one image per
+	call through the metered seat's vision path (prod: `Sending 1 image(s)`
+	from step 1 on every EXIT/SAFETY/WATCHER/SCOUT run). A blank page has no
+	visual information; the render site skips the image for it.
+	"""
+	if not url:
+		return True
+	u = str(url).strip().lower().rstrip("/")
+	return u in _BLANK_PAGE_URLS
 
 
 class AgentMessagePrompt:
@@ -1335,8 +1364,9 @@ Interactive elements from current page:
 					rendered_error = maybe_wrap_result_content(result, rendered_error)
 					state_description += f'\nAction error {i + 1}/{len(self.result)}: {rendered_error}'
 
-		if self.state.screenshot and use_vision == True:
-			# Format message for vision model
+		if self.state.screenshot and use_vision == True and not is_blank_page_url(self.state.url):
+			# Format message for vision model (a blank/never-navigated page is
+			# rendered text-only — see is_blank_page_url)
 			return HumanMessage(
 				content=[
 					{'type': 'text', 'text': state_description},

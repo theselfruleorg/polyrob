@@ -135,7 +135,7 @@ someone else's memories.
 One systemd unit per profile. Let the CLI emit one matched to your layout:
 
 ```bash
-polyrob profile create scout --service      # writes polyrob-scout.service
+polyrob profile create scout --service      # writes the polyrob@.service template; enable polyrob@scout
 sudo cp <emitted unit> /etc/systemd/system/ && sudo systemctl enable --now polyrob-scout
 ```
 
