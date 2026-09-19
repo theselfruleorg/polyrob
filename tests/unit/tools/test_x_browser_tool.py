@@ -258,3 +258,84 @@ async def test_signup_paused_reports_to_owner(monkeypatch):
     res = await tool.x_signup_start(XSignupStartAction(), execution_context=_Ctx())
     assert res.error is None
     assert "paused" in res.extracted_content.lower() or "owner" in res.extracted_content.lower()
+
+
+def test_x_login_check_declares_an_explicit_param_model():
+    """106 'missing param_model - auto-generating' WARNINGs/24h on prod came from
+    this one parameterless action; an explicit empty model ends the noise and
+    keeps the registry's strict path."""
+    from pydantic import ValidationError
+    from tools.x_browser.tool import XBrowserTool, XLoginCheckAction
+    assert XBrowserTool.x_login_check._param_model is XLoginCheckAction
+    with pytest.raises(ValidationError):
+        XLoginCheckAction(extra="nope")
+
+
+# --- x_reply (2026-09-19): the public-reply lane on the browser rail ---------
+#
+# The X API tier returns 403 on a reply to anyone who has not mentioned us, so
+# the whole Phase-1 "value-first replies" lane of the outreach programme was
+# dead — and the browser rail, built to bypass exactly that tier, had no reply
+# verb. `x_reply` opens the target status in the saved session and posts under
+# it. Same gates as `x_post`: owner-approval (DEFAULT_APPROVAL_REQUIRED_TOOLS),
+# hourly write cap, leaf/forged turns refused, structured no-session error.
+
+def test_x_reply_is_approval_gated():
+    from tools.controller.approval import DEFAULT_APPROVAL_REQUIRED_TOOLS
+    assert "x_browser_x_reply" in DEFAULT_APPROVAL_REQUIRED_TOOLS
+
+
+def test_x_reply_action_accepts_url_or_id_and_caps_length():
+    from pydantic import ValidationError
+    from tools.x_browser.tool import XReplyAction
+    a = XReplyAction(in_reply_to="https://x.com/someone/status/1234567890", text="hi")
+    assert a.status_id == "1234567890"
+    b = XReplyAction(in_reply_to="1234567890", text="hi")
+    assert b.status_id == "1234567890"
+    with pytest.raises(ValidationError):
+        XReplyAction(in_reply_to="https://x.com/someone", text="hi")
+    with pytest.raises(ValidationError):
+        XReplyAction(in_reply_to="1234567890", text="x" * 281)
+
+
+@pytest.mark.asyncio
+async def test_x_reply_no_session_is_structured_error(monkeypatch):
+    from tools.x_browser.tool import XReplyAction
+    tool = _tool(monkeypatch, session=None)
+    res = await tool.x_reply(XReplyAction(in_reply_to="1234567890", text="hi"),
+                             execution_context=_Ctx())
+    assert res.error and "no x session" in res.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_x_reply_success_returns_url(monkeypatch):
+    from tools.x_browser.tool import XReplyAction
+
+    class _ReplyDriver(FakeDriver):
+        def __init__(self):
+            super().__init__(url="https://x.com/robbot/status/77")
+            self.replied = None
+
+        async def reply(self, status_id, text):
+            self.replied = (status_id, text)
+            return self._url
+
+    driver = _ReplyDriver()
+    tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
+                 driver=driver)
+    res = await tool.x_reply(
+        XReplyAction(in_reply_to="https://x.com/alice/status/1234567890", text="good point"),
+        execution_context=_Ctx())
+    assert res.error is None
+    assert driver.replied == ("1234567890", "good point")
+    assert "https://x.com/robbot/status/77" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_x_reply_refused_for_leaf(monkeypatch):
+    from tools.x_browser.tool import XReplyAction
+    tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
+                 driver=FakeDriver())
+    res = await tool.x_reply(XReplyAction(in_reply_to="1234567890", text="hi"),
+                             execution_context=_Ctx(role="leaf"))
+    assert res.error and "blocked" in res.error.lower()

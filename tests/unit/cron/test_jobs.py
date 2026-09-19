@@ -111,3 +111,32 @@ def test_reclaim_stale_running_resets_orphans(tmp_path):
     s.claim_for_run("o1")  # 'running'
     assert s.reclaim_stale_running() == 1
     assert s.get("o1").status == "scheduled"
+
+
+# --- 056 WS5 (2026-09-19): owner/ops seat can re-time a job and class it ----------
+
+def test_set_schedule_recomputes_next_run(tmp_path):
+    from datetime import datetime
+    from cron.jobs import CronJob, CronJobStore
+    s = CronJobStore(str(tmp_path / "c.db"))
+    s.add(CronJob(id="j1", task="SAFETY", schedule_spec="0 */2 * * *", user_id="rob",
+                  next_run_at=datetime(2026, 9, 19, 6, 0)))
+    ok = s.set_schedule("j1", "20 */2 * * *", now=datetime(2026, 9, 19, 5, 50), user_id="rob")
+    assert ok
+    j = s.get("j1")
+    assert j.schedule_spec == "20 */2 * * *"
+    assert j.next_run_at == datetime(2026, 9, 19, 6, 20)
+    assert not s.set_schedule("j1", "not a schedule", now=datetime(2026, 9, 19, 5, 50))
+
+
+def test_set_priority_merges_payload(tmp_path):
+    from datetime import datetime
+    from cron.jobs import CronJob, CronJobStore, is_money_job
+    s = CronJobStore(str(tmp_path / "c.db"))
+    s.add(CronJob(id="j1", task="EXIT", schedule_spec="0 * * * *", user_id="rob",
+                  next_run_at=datetime(2026, 9, 19, 6, 0), payload={"deliver": "telegram"}))
+    assert s.set_priority("j1", "money", user_id="rob")
+    j = s.get("j1")
+    assert j.payload == {"deliver": "telegram", "priority": "money"} and is_money_job(j)
+    assert not s.set_priority("j1", "urgent")  # unknown class refused
+    assert not s.set_priority("j1", "money", user_id="someone-else")

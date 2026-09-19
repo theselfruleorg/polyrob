@@ -23,13 +23,15 @@ from __future__ import annotations
 import click
 
 from core.prefs import load_preferences, propose_pref_change, write_preference
-from core.runtime_paths import resolve_runtime_paths
+from cli._admin_home import admin_data_dir
 from tools.controller.approval import effective_approval_state
 
 
 def _default_home_dir() -> str:
-    """Same data-home resolution as ``polyrob config set`` (core.runtime_paths)."""
-    return str(resolve_runtime_paths(local=True).data_home)
+    """The DEPLOYED data home (cli/_admin_home.py, the 031 rule) — the approval set is
+    the daemon's; resolving the shell-local home here wrote to /root/.polyrob on prod
+    and printed success (the same class as the recorded `delivery.daily_cap` defect)."""
+    return admin_data_dir()
 
 
 @click.group("approvals")

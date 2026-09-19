@@ -46,7 +46,8 @@ def test_deploy_prod_polls_instead_of_fixed_sleep():
 
 def test_deploy_from_local_delegates_to_primary_in_background():
     text = _read("scripts/deploy_from_local.sh")
-    assert 'bash scripts/deploy_prod.sh' in text
+    # 056 WS3: the background primary is the idle waiter (which execs deploy_prod.sh).
+    assert 'bash scripts/deploy_when_idle.sh' in text
     assert 'nohup env' in text and 'DEPLOY_EXPECTED_SHA' in text
     assert 'git -C "$REPO" pull --rebase' in text
     assert 'rsync ' not in text

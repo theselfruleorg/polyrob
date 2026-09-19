@@ -13,6 +13,10 @@ def _rec():
 
     def capture(cmd, cwd):
         calls.append((cmd, str(cwd) if cwd else None))
+        if cmd[:2] == ["git", "status"]:
+            return ""  # clean checkout
+        if cmd[:3] == ["git", "rev-parse", "--abbrev-ref"]:
+            return "main"
         return "OLDSHA123"
     return calls, run, capture
 
@@ -46,8 +50,9 @@ def test_target_ref_checks_out_tag_not_pull(tmp_path):
     r = build_runners(ctx, target_ref="v0.5.0", python="/py", run=run, capture=capture)
     r.install()
     cmds = [c[0] for c in calls]
-    assert ["git", "fetch", "--tags", "--force", "--quiet"] in cmds
-    assert ["git", "checkout", "--quiet", "v0.5.0"] in cmds
+    assert ["git", "check-ref-format", "refs/tags/v0.5.0"] in cmds
+    assert ["git", "fetch", "--tags", "--quiet"] in cmds
+    assert ["git", "checkout", "--quiet", "--detach", "refs/tags/v0.5.0"] in cmds
     assert ["git", "pull", "--ff-only"] not in cmds  # NEVER on a tag-pinned install
     assert ["/py", "-m", "pip", "install", "."] in cmds
 
@@ -68,9 +73,49 @@ def test_rollback_resets_to_captured_sha(tmp_path):
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
     r = build_runners(ctx, python="/py", run=run, capture=capture)
     r.rollback_code()
+    assert calls == []  # nothing mutated yet → nothing to undo
+    r.install()
+    calls.clear()
+    r.rollback_code()
     cmds = [c[0] for c in calls]
-    assert ["git", "reset", "--hard", "OLDSHA123"] in cmds
+    assert ["git", "reset", "--keep", "OLDSHA123"] in cmds  # --keep never deletes new work
+    assert ["git", "checkout", "--quiet", "main"] in cmds
     assert ["/py", "-m", "pip", "install", "."] in cmds  # non-editable pip
+    assert ["/py", "-m", "pip", "check"] not in cmds  # a stale conflict must not fail the rollback
+
+
+def test_install_refuses_tracked_changes_but_not_untracked_files(tmp_path):
+    calls = []
+
+    def run(cmd, cwd):
+        calls.append(cmd)
+
+    def capture(cmd, cwd):
+        calls.append(cmd)
+        if cmd[:2] == ["git", "status"]:
+            assert "--untracked-files=no" in cmd  # an untracked log must not block forever
+            return " M core/x.py"
+        return "SHA"
+    ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
+    r = build_runners(ctx, python="/py", run=run, capture=capture)
+    import pytest
+    with pytest.raises(RuntimeError, match="local changes"):
+        r.install()
+    assert not any(c[:2] == ["git", "pull"] for c in calls)
+    r.rollback_code()
+    assert not any(c[:2] == ["git", "reset"] for c in calls)  # a refusal never resets
+
+
+def test_target_ref_is_validated_before_any_git_mutation(tmp_path):
+    """A release tag_name off the network is a ref, never an option or a branch."""
+    calls, run, capture = _rec()
+    ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
+    r = build_runners(ctx, target_ref="--upload-pack=evil", python="/py", run=run, capture=capture)
+    r.install()
+    cmds = [c[0] for c in calls]
+    assert cmds.index(["git", "check-ref-format", "refs/tags/--upload-pack=evil"]) < \
+        cmds.index(["git", "fetch", "--tags", "--quiet"])
+    assert ["git", "checkout", "--quiet", "--detach", "refs/tags/--upload-pack=evil"] in cmds
 
 
 def test_verify_smoke_imports(tmp_path):
@@ -78,7 +123,7 @@ def test_verify_smoke_imports(tmp_path):
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
     r = build_runners(ctx, python="/py", run=run, capture=capture)
     r.verify()
-    assert (["/py", "-c", "import core, cli.polyrob"], str(tmp_path)) in calls
+    assert (["/py", "-I", "-c", "import core, cli.polyrob"], str(tmp_path)) in calls
 
 
 # ---------------------------------------------------------------------------
@@ -96,8 +141,8 @@ def test_verify_also_checks_the_runtime_assets_resolve(tmp_path):
     ctx = InstallContext(GIT, tmp_path, tmp_path, "git")
     r = build_runners(ctx, python="/py", run=run, capture=capture)
     r.verify()
-    probes = [c[0] for c in calls if c[0][:2] == ["/py", "-c"]]
-    joined = "\n".join(p[2] for p in probes)
+    probes = [c[0] for c in calls if c[0][:3] == ["/py", "-I", "-c"]]
+    joined = "\n".join(p[3] for p in probes)
     assert "mindprint.js" in joined, (
         "verify does not check the avatar engine resolved after install")
     assert "DejaVuSans.ttf" in joined, (

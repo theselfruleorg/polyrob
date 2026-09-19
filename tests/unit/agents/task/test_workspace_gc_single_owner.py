@@ -87,4 +87,4 @@ async def test_gc_loop_runs_when_it_is_the_owner(monkeypatch):
         await agent._periodic_workspace_cleanup()
 
     assert agent.session_manager.calls == 1
-    assert slept[0] == 86400
+    assert slept[0] == 600  # 056 WS8: first pass after 10 min (a 24 h first pass never fired between restarts), then daily

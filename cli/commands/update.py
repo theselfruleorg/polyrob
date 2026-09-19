@@ -1,7 +1,7 @@
 """`polyrob update` — check for and apply POLYROB updates.
 
 ``--check`` / ``--dry-run`` / ``--json`` report status; ``--apply`` performs the
-automated snapshot → install → guarded-migrate → verify update with auto-rollback
+automated snapshot → install → migrate → verify update with auto-rollback
 (git/editable installs); ``--rollback`` / ``--list-snapshots`` manage the snapshot
 safety net. Other install methods get honest per-method manual instructions.
 """
@@ -89,15 +89,21 @@ def _systemd_manual_steps(units: list) -> str:
     prod shape (`polyrob.service`), so following the steps never restarted the agent
     and old code kept running (U3, 2026-07-14 review). Always includes daemon-reload.
     """
+    # A deployed /opt/polyrob is an rsync TARGET with no .git: `git pull` there
+    # fails. The update path is the on-box deployer from the maintenance clone
+    # (it quiesces the family, snapshots the venv, migrates, restarts, verifies
+    # and rolls back), or a fresh `pip install` for a wheel-shaped install.
     if units:
         names = " ".join(units)
-        return (f"sudo systemctl stop {names} && git pull --ff-only && "
-                f"pip install . && {_MIGRATE} && "
-                f"sudo systemctl daemon-reload && sudo systemctl start {names}")
+        return ("cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh   "
+                f"(stops/starts {names}, migrates, verifies, auto-rolls back) — or, for a "
+                f"wheel install: sudo systemctl stop {names} && pip install -U polyrob && "
+                f"{_MIGRATE} && sudo systemctl daemon-reload && sudo systemctl start {names}")
     # Couldn't detect the unit set — name both known shapes and say how to check.
-    return ("sudo systemctl stop polyrob.service (headless) or polyrob-api.service "
-            "(api shape) — check which exists: systemctl list-unit-files 'polyrob*' — "
-            f"then: git pull --ff-only && pip install . && {_MIGRATE} && "
+    return ("check which units exist (polyrob.service = headless agent, "
+            "polyrob-x402-api.service = api): systemctl list-unit-files 'polyrob*' — then "
+            "cd <maintenance clone> && git pull --ff-only && bash scripts/deploy_prod.sh, or for a "
+            f"wheel install: stop them && pip install -U polyrob && {_MIGRATE} && "
             "sudo systemctl daemon-reload && sudo systemctl start <that unit>")
 
 
@@ -211,6 +217,10 @@ def _do_rollback(snapshot_name: str, assume_yes: bool, as_json: bool,
                        "identity are NOT captured in it).")
         else:
             click.echo("This restores your databases, config, and identity to that snapshot.")
+    if as_json and not assume_yes:
+        click.echo(_json.dumps({"rolled_back": False, "reason": "confirmation_required",
+                               "hint": "pass --yes with --json"}))
+        sys.exit(EXIT_ERROR)
     if not assume_yes and not click.confirm("Proceed?", default=False):
         if as_json:
             click.echo(_json.dumps({"rolled_back": False, "reason": "aborted"}))
@@ -234,16 +244,35 @@ def _do_rollback(snapshot_name: str, assume_yes: bool, as_json: bool,
     sys.exit(EXIT_UP_TO_DATE)
 
 
+def _git_channel_status(ctx):
+    """``--channel git`` measures the BRANCH against its upstream, not the release list."""
+    from cli.update.runners import git_branch_status
+    from cli.update.versions import UpdateStatus, installed_version
+    st = git_branch_status(ctx)
+    cur = installed_version()
+    if not st["ok"]:
+        return UpdateStatus(current=cur, latest=None, channel="git", error=st["reason"],
+                            source_ref="the tracked branch"), st
+    latest = f"{cur}+git.{st['upstream']}" if st["behind"] else cur
+    return UpdateStatus(current=cur, latest=latest, channel="git",
+                        source_ref=f"branch {st['branch']}"), st
+
+
 def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> None:
-    """Automated apply: snapshot → install → guarded-migrate → verify → auto-rollback."""
+    """Automated apply: snapshot → install → migrate → verify → auto-rollback."""
     ctx = detect_install()
-    status = resolve_status(channel=channel, fetch=_http_get, source=_source_for(ctx))
+    git_state = None
+    if channel == "git":
+        status, git_state = _git_channel_status(ctx)
+    else:
+        status = resolve_status(channel=channel, fetch=_http_get, source=_source_for(ctx))
     if status.error is not None or status.latest is None:
         msg = f"Cannot apply: {status.human_note}."
         click.echo(_json.dumps({"applied": False, "reason": "check_failed",
                                **status.as_dict()}) if as_json else msg)
         sys.exit(EXIT_ERROR)
-    if not status.update_available:
+    behind_branch = bool(git_state and git_state.get("behind"))
+    if not status.update_available and not behind_branch:
         msg = "Already up to date."
         click.echo(_json.dumps({"applied": False, "reason": "no_update", **status.as_dict()})
                    if as_json else msg)
@@ -255,15 +284,23 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     runners = build_runners(ctx, target_ref=target_ref)
     if runners is None:
         manual = _manual_steps_for(ctx.method)
+        if as_json:
+            click.echo(_json.dumps({"applied": False, "reason": "unsupported_method",
+                                   "method": ctx.method, "manual_steps": manual}))
+            sys.exit(EXIT_ERROR)
         click.echo(click.style(
             f"Automated apply isn't supported for a {ctx.method} install. Update manually:",
             fg="cyan"))
         click.echo(f"  {manual}")
-        sys.exit(EXIT_UP_TO_DATE)
+        sys.exit(EXIT_ERROR)
 
     uctx = resolve_update_context()
     reasons = active_use_reasons(uctx.db_paths)
     if reasons and not force:
+        if as_json:
+            click.echo(_json.dumps({"applied": False, "error": "in_use",
+                                   "reasons": list(reasons)}))
+            sys.exit(EXIT_ERROR)
         click.echo(click.style("Refusing to apply: POLYROB appears to be in use.", fg="red"))
         for r in reasons:
             click.echo(f"  - {r}")
@@ -272,21 +309,31 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
 
     if not as_json:
         click.echo(f"Updating {status.current} → {status.latest} ({ctx.method}).")
-        click.echo("Steps: snapshot → install → migrate (guarded) → verify → auto-rollback on failure.")
+        click.echo("Steps: snapshot → install → migrate → verify → auto-rollback on failure.")
+    if as_json and not assume_yes:
+        click.echo(_json.dumps({"applied": False, "reason": "confirmation_required",
+                               "hint": "pass --yes with --json"}))
+        sys.exit(EXIT_ERROR)
     if not assume_yes and not click.confirm("Proceed?", default=False):
-        click.echo(_json.dumps({"applied": False, "reason": "aborted"})
-                   if as_json else "Aborted.")
+        click.echo("Aborted.")
         sys.exit(EXIT_UP_TO_DATE)
 
     try:
         with update_lock(uctx.snapshots_root):
             res = apply_update(ctx=uctx, runners=runners,
                                from_version=status.current, to_version=status.latest or "")
-    except UpdateLockHeld as exc:
+    except Exception as exc:
         click.echo(_json.dumps({"applied": False, "error": str(exc)})
                    if as_json else click.style(f"Apply failed: {exc}", fg="red"))
         sys.exit(EXIT_ERROR)
     if res.ok:
+        # Every apply writes a full snapshot (every DB + wallet/ + identity/ + every
+        # .env). Without pruning they accumulate forever under <data_home>/snapshots/.
+        try:
+            from cli.update.snapshot import prune_snapshots
+            prune_snapshots(uctx.snapshots_root, keep=3)
+        except Exception:
+            pass  # pruning is housekeeping; never fail a completed update over it
         if as_json:
             click.echo(_json.dumps({
                 "applied": True, "from_version": status.current,
@@ -298,13 +345,21 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
     if as_json:
         click.echo(_json.dumps({
             "applied": False, "failed_step": res.failed_step, "error": str(res.error),
-            "snapshot": res.snapshot.name, "rolled_back": True}))
+            "snapshot": res.snapshot.name, "rolled_back": res.rolled_back,
+            "rollback_errors": list(res.rollback_errors)}))
     else:
         click.echo(click.style(
             f"✗ Update failed at the '{res.failed_step}' step: {res.error}", fg="red"))
-        click.echo(click.style(
-            "Auto-rolled back — your databases, config, and code are back at "
-            f"{status.current} (snapshot {res.snapshot.name}).", fg="yellow"))
+        if res.rolled_back:
+            click.echo(click.style(
+                "Auto-rolled back databases, config, and code to "
+                f"{status.current} (snapshot {res.snapshot.name}).", fg="yellow"))
+        else:
+            click.echo(click.style(
+                f"Rollback incomplete; retain snapshot {res.snapshot.name} for recovery.",
+                fg="red"))
+            for error in res.rollback_errors:
+                click.echo(f"  {error}")
     sys.exit(EXIT_ERROR)
 
 
@@ -315,7 +370,7 @@ def _do_apply(channel: str, assume_yes: bool, force: bool, as_json: bool) -> Non
 @click.option("--channel", type=click.Choice(["stable", "pre", "git"]), default="stable",
               help="stable=latest release, pre=include prereleases, git=track branch.")
 @click.option("--apply", "do_apply", is_flag=True,
-              help="Automated apply: snapshot → install → guarded-migrate → verify → auto-rollback.")
+              help="Automated apply: snapshot → install → migrate → verify → auto-rollback.")
 @click.option("--rollback", "do_rollback", is_flag=True,
               help="Restore the most recent snapshot (databases, config, identity).")
 @click.option("--snapshot", "snapshot_name", default="", metavar="NAME",
@@ -329,6 +384,14 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                do_rollback: bool, snapshot_name: str, do_list: bool, assume_yes: bool,
                force: bool, as_json: bool):
     """Check for and apply POLYROB updates."""
+    if sum((check_only, dry_run, do_apply, do_rollback, do_list)) > 1:
+        message = "Choose only one of --check, --dry-run, --apply, --rollback, --list-snapshots."
+        if as_json:
+            click.echo(_json.dumps({"error": message}))
+            sys.exit(EXIT_ERROR)
+        raise click.UsageError(message)
+    if snapshot_name and not do_rollback:
+        raise click.UsageError("--snapshot requires --rollback.")
     from cli.commands._bootstrap import ensure_env_loaded
     ensure_env_loaded()
     if do_list:
@@ -389,7 +452,7 @@ def update_cmd(check_only: bool, dry_run: bool, channel: str, do_apply: bool,
                 f"\nAutomated update is not available for a {ctx.method} install.", fg="cyan"))
         elif ctx.method in (GIT, EDITABLE_GIT):
             if dry_run:
-                click.echo("\nPlan (dry-run): snapshot → install → migrate (guarded) → "
+                click.echo("\nPlan (dry-run): snapshot → install → migrate → "
                            "verify → auto-rollback on failure")
                 click.echo("Run `polyrob update --apply` to perform it.")
             else:

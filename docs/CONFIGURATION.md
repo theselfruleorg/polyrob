@@ -242,9 +242,9 @@ dotenv loaded at startup). Capabilities at posture ≥1 additionally require the
 to pass `compute_posture_allows` — OWNER tenant, not a leaf/sub-agent, not a forged
 self-wake/delegation-result turn:
 
-| `AGENT_COMPUTE_POSTURE` | Default | What it does | Code anchor |
+| Flag | Default | What it does | Code anchor |
 |---|---|---|---|
-| `AGENT_COMPUTE_POSTURE` | `0` | `0` = confined (today's docker sandbox, no persistent shell). `1` = sandbox-dev: persistent networked sandbox with **importable pip installs** (`/install` + `PYTHONPATH`), the `shell` tool scoped INTO the container, loopback port-publish the browser may fetch. `2` = self-maintain: posture 1 + the approval-gated `self_env` verbs (install_dep/patch_source/restart_service/git_pull). `3` = host (requires `POLYROB_LOCAL`, single-tenant box only). Unset/garbage/out-of-range → `0` (garbage never rounds up). | `agents/task/constants.py::compute_posture`, `compute_posture_allows` |
+| `AGENT_COMPUTE_POSTURE` | `0` | `0` = confined (today's docker sandbox, no persistent shell). `1` = sandbox-dev: persistent networked sandbox with **importable pip installs** (`/install` + `PYTHONPATH`), the `shell` tool scoped INTO the container, loopback port-publish the browser may fetch. `2` = self-maintain: posture 1 + the approval-gated `self_env` verbs (install_dep/patch_source/restart_service/git_pull). `3` = host (requires `POLYROB_LOCAL`, single-tenant box only). Unset/garbage/out-of-range → `0` (garbage never rounds up). **056 WS4:** posture is the CEILING — `with_compute_tools` adds `code_execution`/`shell`/`coding` only when their own flags are on; a posture-1 deploy with `CODE_EXEC_ENABLED=false` no longer requests a tool it cannot serve. | `agents/task/constants.py::compute_posture`, `compute_posture_allows` |
 
 | Flag | Default | What it does | Code anchor |
 |---|---|---|---|
@@ -278,6 +278,9 @@ self-wake/delegation-result turn:
 | `GOALS_ENABLED` | OFF (**ON under POLYROB_LOCAL + AUTONOMY_ENABLED**) | W4: durable cross-session goal board + dispatcher. | `agents/task/constants.py:316` |
 | `GOAL_MAX_RETRIES` | `2` | Goal circuit-breaker failure threshold. | `agents/task/constants.py:320` |
 | `GOAL_CLAIM_TTL_SEC` | `900` | Goal claim lease TTL. | `agents/task/constants.py:324` |
+| `GOAL_YIELD_FOR_MONEY_RAIL` | OFF (`false`) | 056 WS5 (D1, owner-approved 2026-09-19): a cron job whose `payload.priority` is `money` that comes due while a BOARD GOAL holds the shared workspace pre-empts it — the goal's run is cancelled at the step boundary, its row returns to `ready` (no failure increment) with a `payload.resume_note`, a `yielded` goal event is written, and the rail runs on the same tick. A human turn (`turn.active`) is never pre-empted. Prod arms it. | `core/config_policy/goal_flags.py::goal_yield_for_money_rail` |
+| `GOAL_DEFAULT_MAX_STEPS` | `30` | 056 WS5: the step budget for a goal whose payload sets none (was a literal 20). `goal_create` now exposes `max_steps` (6–60). | `core/config_policy/goal_flags.py::goal_default_max_steps` |
+| `GOAL_DISPATCH_CRON_HEADROOM_SEC` | `0` (off) | Defer starting a board goal while an enabled cron job is due within this many seconds (overdue and currently RUNNING included). On a shared project-root workspace a goal run marks the process busy and cron ticks skip until it ends, so a goal started minutes before a due money rail delays that rail by its whole runtime; with headroom the rail goes first and the goal runs on the next idle tick. Absent/unreadable `cron.db` fails open (dispatch). With `GOAL_YIELD_FOR_MONEY_RAIL` on, a SCHEDULED money-class job (`payload.priority=money`) no longer defers — it pre-empts a running goal instead (`yield_for_rail`); a job mid-run and every ops-class job still defer. | `core/config_policy/goal_flags.py::GoalFlagsMixin.goal_dispatch_cron_headroom_sec` |
 | `GOAL_MAX_RUN_SECONDS` | `1800` | Hard wall-clock cap on a single goal run (mirrors cron); a timeout is recorded as a failure and the slot is reclaimed. | `agents/task/constants.py::AutonomyConfig.goal_max_run_seconds` |
 | `GOAL_DISPATCH_INTERVAL_SEC` | `60` | Goal dispatcher tick interval. | `agents/task/constants.py:328` |
 | `GOAL_MAX_CONCURRENT` | `2` | Max concurrent goal runs. | `agents/task/constants.py:332` |
@@ -372,6 +375,7 @@ self-wake/delegation-result turn:
 | `GITHUB_TOOL_ENABLED` | OFF (not safe-local; ON under `AGENT_BUILDER_MODE=build\|ship`) | Register the `github` tool (PRs/issues/actions; auth via `GITHUB_TOKEN`/`GH_TOKEN`). | `tools/github/__init__.py::github_enabled` |
 | `CODE_EXEC_ENABLED` | OFF | Register `code_execution` tool (NOT a sandbox; never in default tool_ids). | `tools/code_exec/__init__.py:26-27` |
 | `CODE_EXEC_BACKEND` | `local_subprocess` | Code-exec backend selector. | `os.getenv("CODE_EXEC_BACKEND","local_subprocess")` |
+| `DOCKER_HOST` | unset (docker default `unix:///var/run/docker.sock`) | Read only to locate the docker daemon socket the `docker` sandbox backend would use: when it names a `unix://` socket that is absent or unreachable, `run_code`/`run_tests` refuse ONCE with the remedy (proposal 053) instead of retrying a dead daemon; a TCP `DOCKER_HOST` is not probed. Standard docker client variable, not a POLYROB flag. | `tools/code_exec/sandbox_guard.py::docker_socket_unreachable_reason` |
 | `CODE_EXEC_MAX_TIMEOUT_SEC` | `30` (dev mode, unset: follows `SHELL_MAX_TIMEOUT_SEC`=300) | Hard cap on a code-exec run. An explicit value always wins; unset under the docker backend's dev mode (posture ≥1) the cap follows `SHELL_MAX_TIMEOUT_SEC` so `run_code` and `shell_run` share ONE foreground ceiling. | `os.getenv("CODE_EXEC_MAX_TIMEOUT_SEC","30")`; `tools/code_exec/backends/docker.py` (dev-mode default) |
 | `CODE_EXEC_MAX_OUTPUT_BYTES` | `100000` | Code-exec output byte cap. | `os.getenv("CODE_EXEC_MAX_OUTPUT_BYTES","100000")` |
 | `CODE_EXEC_DOCKER_IMAGE` | `python:3.12-slim` | Container image for the `docker` code-exec backend (explicit value wins over `CODE_EXEC_DEV_IMAGE` in every mode). | `tools/code_exec/backends/docker.py::__init__` |
@@ -536,8 +540,10 @@ above `SHELL_MAX_TIMEOUT_SEC` so the tool's own kill fires before the controller
 | `UVICORN_PORT` | `9000` | Uvicorn bind port (read in `main.py`). | `main.py:40` |
 | `UVICORN_WORKERS` | `1` | Uvicorn worker count (read in `main.py`). | `main.py:41` |
 | `UVICORN_RELOAD` | OFF (`false`) | Uvicorn auto-reload (read in `main.py`). | `main.py:42` |
+| `UVICORN_FORWARDED_ALLOW_IPS` | `127.0.0.1` | Which proxies `polyrob serve` trusts for `X-Forwarded-For`/`X-Forwarded-Proto`. Default = the local nginx only; never `*` on a bound port (any direct caller could then claim `127.0.0.1`). | `api/server_boot.py::run_server` |
 | `ENVIRONMENT` / `ENV` | `development` (varies by site) | Environment selector. | `core/config.py`, `agents/task/constants.py:32` |
 | `LOG_LEVEL` | `INFO` | Logging level. | `core/config.py:50` |
+| `POLYROB_LOG_FILE` | per entrypoint (`bot.log` / `email.log` / `webview.log`) | Basename of the rotating log file under `<data_home>/logs/`; overrides the per-entrypoint default. Directory components are ignored. | `core/logging.py::log_file_name` |
 | `CHAT_TOOL_IDS` | `task` | Tools loaded for the chat surface. | `agents/task/constants.py:617` |
 | `CHAT_MAX_STEPS` | `8` | Max agent steps for a chat-surface turn. | `agents/task/constants.py:618` |
 | `RUN_BUDGET_USD` | `0` (disabled) | Session-cumulative provider-spend ceiling in USD; when > 0 the run loop halts honestly (`run_budget_exhausted`) before the next step once summed `usage_records.api_cost_usd` for the session reaches the cap. Real provider cost, not the markup user price. Sub-agents ride the parent budget; anonymous/no-DB sessions are ungated (fail-open). | `core/config_policy/capability_toggles.py::run_budget_usd` |
@@ -663,6 +669,8 @@ above `SHELL_MAX_TIMEOUT_SEC` so the tool's own kill fires before the controller
 | `POLYROB_GITIGNORE_DOTROB` | ON (`"1"`) | Auto-gitignore the `.polyrob/` home. | `os.environ.get("POLYROB_GITIGNORE_DOTROB","1")` (`core/bootstrap.py:506`) |
 | `CLI_WORKSPACE_LOCK` | ON (`"1"`) | CLI workspace lock to prevent concurrent CWD corruption. | `os.environ.get("CLI_WORKSPACE_LOCK","1")` |
 | `CLI_WORKSPACE_LOCK_TIMEOUT` | `30.0` | Seconds the interactive gate waits to acquire the CLI workspace lock before proceeding. | `core/interactive_gate.py::_workspace_lock_timeout` |
+| `SESSION_DIR_GC_APPLY` | OFF (`false`) | 056 WS8: the stale per-session directory GC (`core/session_gc.py`, `<data>/sessions/<user>/<uuid>/` untouched for 14 days, live/bound sessions protected, never the shared project root) DELETES only when this is `true`; OFF = dry-run, logs + `session_gc` event with candidates/bytes. First pass 10 min after start, then daily. | `core/session_gc.py::gc_apply_enabled` |
+| `INTERACTIVE_GATE_MARKER` | ON (`true`) | 056 WS3: a live human turn (Telegram/email owner turn, REPL turn, room turn) writes `<lock_dir>/turn.active` (pid, kind, started, session) and, on a headless server with no `POLYROB_WORKSPACE_LOCK_DIR`, the lock dir is derived as `<POLYROB_DATA_DIR>/locks` so cron/goal ticks, the status snapshot and the idle-aware deployer can all see the turn. OFF = pre-056 behaviour (headless owner turns hold nothing). | `core/interactive_gate.py::_marker_enabled` |
 | `CLI_PREFER_ACTION_TEXT` | ON (`'true'`) | CLI prefers clean action text over raw streamed buffer. | `os.getenv("CLI_PREFER_ACTION_TEXT","true")` |
 | `CLI_SUPPRESS_DONE_RECAP` | ON (`"true"`) | Suppress the duplicate `done()` recap bubble after the streamed reply in `polyrob run` (mirrors the REPL); `off` restores the legacy double bubble. | `cli/ui/dialog.py:78` |
 | `CLI_TODO_DOT_ROB` | ON (`"true"`) | In a project-root workspace, keep the agent TODO file under `.polyrob/` instead of the project root. | `agents/task/path.py:976` |

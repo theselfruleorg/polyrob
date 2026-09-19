@@ -276,6 +276,7 @@ polyrob goals events <id>                # the event timeline for one goal
 polyrob cron schedule "check the feed" 30m [--max-duration 180] [--user ID]
 polyrob cron list
 polyrob cron show <id>
+polyrob cron edit <id> --max-duration 1800     # raise/lower a job's hard cap (≤1800 s), applies from its next run
 polyrob cron cancel <id>
 polyrob cron digest ["every day 08:00"] [--off] [--deliver telegram] [--days 1]
 ```
@@ -500,7 +501,7 @@ guide: [profiles.md](profiles.md).
 ## Other
 
 - `polyrob datagen run|export` — run a batch of tasks as rollouts and export a label-filtered trajectory corpus.
-- `polyrob x-account capture-session|status|signup` — the agent's own X account: the owner login ceremony, the stored session, and the supervised signup flow.
+- `polyrob x-account capture-session|import-session|status|signup` — the agent's own X account: the owner login ceremony (`--out` writes portable storage state), the server-side import of a desktop capture or of the `auth_token`/`ct0` cookies, the stored session, and the supervised signup flow.
 
 ---
 

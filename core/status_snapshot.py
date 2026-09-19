@@ -598,6 +598,18 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
             cron_db, "SELECT id FROM cron_jobs WHERE status='running' AND user_id=?", (user_id,)))
     except Exception as e:
         live["cron_reason"] = f"{type(e).__name__}: {str(e)[:80]}"
+    # 056 WS3: a live human turn holds the shared workspace (turn.active marker,
+    # written by owner_turn/interactive_turn; a dead pid reads as none). Shown
+    # so "why did the rail start late" has an answer on every seat.
+    try:
+        from core.interactive_gate import read_turn_marker
+        m = read_turn_marker()
+    except Exception:
+        m = None
+    live["turn"] = m
+    if m:
+        sec.lines.append(f"turn: {m.get('kind') or 'turn'} active since "
+                         f"{_hhmm(m.get('started'))} (session {str(m.get('session_id') or '')[:8]})")
     sec.data["live_actors"] = live
     # The cron store may not exist yet (fresh install, or a posture without
     # cron). That is a fact about cron, not about the pause state above: report
@@ -628,6 +640,66 @@ def _loops_section(user_id: str, cron_db: str, tele: Section, now: float,
         sec.data.update({"cron_runs_window": by, "self_wakes_window": wakes})
         sec.lines.append("24h: cron " + (", ".join(f"{k}={v}" for k, v in sorted(by.items()))
                                          or "no runs") + f"; self-wakes={wakes}")
+        # 056 WS1: the rail ledger, per enabled job — last TERMINAL outcome (done /
+        # failed / cut_by_cap / cut_by_restart / held / deferred / skipped) and a
+        # health item when a rail was cut. A `started` with no terminal event is
+        # rendered as such ("started HH:MM, no end recorded"), never as done.
+        _terminal = {"done", "failed", "cut_by_cap", "cut_by_restart", "held", "deferred",
+                     "skipped", "provider_rerouted"}
+        rails: Dict[str, Dict[str, Any]] = {}
+        for r in cron_runs:  # newest-first
+            a = r.get("attrs") or {}
+            jid = str(a.get("job_id") or "")
+            if not jid:
+                continue
+            slot = rails.setdefault(jid, {})
+            o = a.get("outcome")
+            if o in _terminal and "last" not in slot:
+                slot["last"] = {"outcome": o, "ts": r.get("ts"), "steps": a.get("steps"),
+                                "duration_s": a.get("duration_s"), "reason": a.get("reason")}
+            if o == "started" and "last_started" not in slot:
+                slot["last_started"] = r.get("ts")
+        sec.data["rails"] = rails
+        cut = []
+        for j in (jobs if "cron_reason" not in sec.data else []):
+            if not int(j.get("enabled") or 0):
+                continue
+            slot = rails.get(str(j.get("id") or ""))
+            if not slot:
+                continue
+            name = (j.get("task") or "")[:28].strip()
+            last, ls = slot.get("last"), slot.get("last_started")
+            if last and (ls is None or float(last["ts"] or 0) >= float(ls or 0)):
+                bits = [f"{name}: {last['outcome']} {_hhmm(last['ts'])}"]
+                if last.get("steps") is not None:
+                    bits.append(f"{last['steps']} steps")
+                if last.get("duration_s") is not None:
+                    bits.append(f"{int(float(last['duration_s']) // 60)}m")
+                sec.lines.append("rail " + " · ".join(bits))
+                if last["outcome"] in ("cut_by_cap", "cut_by_restart"):
+                    cut.append(f"{name} {last['outcome']} at {_hhmm(last['ts'])}")
+            elif ls is not None:
+                sec.lines.append(f"rail {name}: started {_hhmm(ls)}, no end recorded")
+        if cut:
+            sec.health.append(HealthItem(
+                key="rail_cut", severity=SEVERITY_WARN,
+                text="rail run cut: " + "; ".join(cut[:4]),
+                remedy="cut_by_cap → widen `polyrob cron edit <id> --max-duration`; "
+                       "cut_by_restart → deploy only via scripts/deploy_when_idle.sh"))
+        # 056 WS4/WS9: an external rail the deploy cannot use is a HEALTH fact, not a
+        # blocked goal discovered hours later. The email tool records a 535 as an
+        # event (core cannot import tools); the autonomous toolset already stops
+        # requesting `email` while the rejection is fresh.
+        _external_rail_health(sec, tele)
+        rej = _tele_rows(tele, "email_auth_rejected")
+        if rej:
+            sec.data["email_auth_rejected_at"] = rej[0].get("ts")
+            sec.health.append(HealthItem(
+                key="email_auth_rejected", severity=SEVERITY_WARN,
+                text=f"email: SMTP login rejected (535), last {_hhmm(rej[0].get('ts'))} — "
+                     f"autonomous runs no longer request the email tool",
+                remedy="set a valid GMAIL_APP_PASSWORD, or EMAIL_PROVIDER=agentmail + "
+                       "AGENTMAIL_API_KEY (zero-setup inbox)"))
         # Loop liveness from the supervisor heartbeat (autonomy_tick). A loop
         # that should run but has no fresh heartbeat is reported as such — a
         # dead ticker must never render identically to a healthy one.
@@ -1308,6 +1380,62 @@ def _identity_reach_lines(sec: Section, data_dir: Optional[str]) -> None:
                          "ACCESS_TOKEN_SECRET (polls + search need the API rail); "
                          "X login session: x_login_check")
     _browser_rail_line(sec)
+    _x_session_line(sec, data_dir)
+
+
+def _x_session_line(sec: Section, data_dir: Optional[str]) -> None:
+    """056 WS9: the X browser rail's login session — present or absent — and a
+    WARN naming the owner ceremony when the rail is enabled but has no session.
+    A read of the store file's key set only (no decryption); an unreadable file
+    is reported as such, never as absent."""
+    from core.env import bool_env
+    enabled = bool_env("X_BROWSER_ENABLED", False)
+    path = os.path.join(str(data_dir or ""), ".x_session.json") if data_dir else None
+    present: Optional[bool]
+    if not path or not os.path.exists(path):
+        present = False
+    else:
+        try:
+            with open(path, encoding="utf-8") as f:
+                present = bool(json.load(f))
+        except (OSError, ValueError):
+            sec.lines.append("X login session: unreadable (store file present but not parseable)")
+            return
+    sec.data["x_session"] = present
+    if present:
+        sec.lines.append("X login session: stored (browser rail x_post/x_reply/x_dm ready)")
+        return
+    if enabled:
+        sec.lines.append("X login session: none — browser rail enabled but cannot post/reply")
+        sec.health.append(HealthItem(
+            key="x_session_absent", severity=SEVERITY_WARN,
+            text="X browser rail enabled (X_BROWSER_ENABLED) but no login session is stored — "
+                 "public replies/posts through the browser cannot run",
+            remedy="run `polyrob x-account capture-session` from an owner shell (≈2 min, "
+                   "log in as the agent's account)"))
+    else:
+        sec.lines.append("X login session: none (browser rail off)")
+
+
+def _external_rail_health(sec: Section, tele: Section) -> None:
+    """056 WS9: three consecutive EMPTY answers from the anysite user-search
+    endpoint (the 2026-09-18 19:48–22:30Z degradation shape) → WARN. Reads the
+    `rail_probe` events the tool records; no network."""
+    if not tele.available:
+        return
+    rows = [r for r in _tele_rows(tele, "rail_probe")
+            if (r.get("attrs") or {}).get("rail") == "anysite:/api/twitter/search/users"]
+    if len(rows) < 3:
+        return
+    last3 = [(r.get("attrs") or {}).get("outcome") for r in rows[:3]]  # newest-first
+    sec.data["anysite_user_search_last3"] = last3
+    if all(o == "empty" for o in last3):
+        sec.health.append(HealthItem(
+            key="anysite_search_empty", severity=SEVERITY_WARN,
+            text=f"anysite user-search answered EMPTY on its last 3 calls (latest {_hhmm(rows[0].get('ts'))}) "
+                 f"— the discovery rail is degraded, not the queries",
+            remedy="pause collection rounds until a control query returns rows; "
+                   "the search/posts and /user endpoints were unaffected last time"))
 
 
 def _browser_rail_line(sec: Section) -> None:

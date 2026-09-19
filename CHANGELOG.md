@@ -6,10 +6,171 @@ All notable changes to POLYROB are documented here. The format is based on
 
 ## [Unreleased]
 
+## [1.0.3] — 2026-09-19
+
+### Added
+- `polyrob x-account import-session <storage_state.json> | --auth-token … --ct0 …` and
+  `capture-session --out <file>`: a desktop-captured X login can now reach a headless
+  server. The encrypted session store is per-box (Fernet key + identity), so the hand-off
+  is plain Playwright storage state (or the two login cookies), stored under the server's
+  own key on import; a file with no `auth_token` is refused.
+- **Autonomy scheduling.** A running board goal no longer starts just ahead of a due cron
+  job (`GOAL_DISPATCH_CRON_HEADROOM_SEC`, also honoured while a job is mid-run), and a cron
+  job classed `money` (`payload.priority`, set with `polyrob cron edit <id> --priority
+  money`) can pre-empt a running board goal: the goal returns to `ready` with no failure
+  counted and a `resume_note`, the rail runs on the same tick (`GOAL_YIELD_FOR_MONEY_RAIL`,
+  default off). A human turn is never pre-empted. `polyrob cron edit --schedule '<spec>'`
+  re-times a job with its next run recomputed.
+- **Goal budgets.** `goal_create` gained `max_steps` (6–60) and `report_back`; the default
+  budget for a goal that sets none is `GOAL_DEFAULT_MAX_STEPS` (30, was a literal 20). A goal
+  created from a chat reports back in one line unless `report_back=true`.
+- **Owner turns hold the shared workspace on headless surfaces.** A Telegram/email owner turn
+  (like a REPL turn) marks the process busy, writes `<data>/locks/turn.active`, and takes the
+  cross-process workspace lock — never refusing the human — so cron/goal ticks and the deploy
+  waiter defer while you are mid-turn (`INTERACTIVE_GATE_MARKER`, default on; the lock dir is
+  derived from `POLYROB_DATA_DIR` when unset). `/status` shows `turn: … active since HH:MM`.
+- **Rail ledger on every status seat.** Every `cron_run` now ends with a terminal event —
+  `done`, `failed`, `cut_by_cap`, `held` (owner pause), `deferred` (owner ask), or
+  `cut_by_restart` (orphan reclaimed after a restart) — and the `loops` status section shows
+  each enabled job's last outcome (`rail EXIT: done 04:18 · 7 steps · 6m`, or
+  `started HH:MM, no end recorded`) plus a `rail_cut` health warning with the remedy.
+- **External rails as health facts.** `/status` warns when the X browser rail is enabled
+  without a stored login session (naming `polyrob x-account capture-session`), when the
+  anysite user-search endpoint answers empty three calls running (`rail_probe` events), and
+  when an SMTP login was rejected (`email_auth_rejected`), each with the remedy.
+- **Filesystem verbs shaped for JSON-lines data.** `jsonl_append` (one compact line per
+  object), `jsonl_remove(key, values)` (backup → rewrite → verify → atomic replace; one bad
+  line refuses the whole rewrite), `jsonl_validate` (counts, bad lines, duplicates), and
+  `copy_file` (byte copy, no overwrite unless asked — the backup-before-rewrite primitive).
+- **`x_browser.x_reply`** — reply under an existing X post through the saved browser session
+  (the lane the API tier refuses for non-mentioners); owner-approval-gated like `x_post`.
+- **Skill revisions from background turns.** A background/forged turn's `skill_manage
+  patch` of an active skill lands a pending revision under `.pending/<id>/` for the owner's
+  `polyrob owner promote skill` — the active skill is never touched by a forged turn.
+- **Stale session-directory GC** (`core/session_gc.py`): per-session dirs untouched for 14
+  days are reported (dry-run, `session_gc` event) and removed only with
+  `SESSION_DIR_GC_APPLY=true`; the first pass runs 10 minutes after start, then daily. The
+  deployer purges the pip cache and vacuums the journal after a successful install.
+- The deployer gains an idle-wait entry point: it waits (up to the cron ceiling) for
+  no running cron job, no running goal and no live turn, then runs `deploy_prod.sh`
+  (which now refuses a direct call unless `DEPLOY_FORCE=1`). Units are runtime-masked while
+  the virtualenv is rewritten and unmasked on start and on rollback.
+
+- `polyrob cron edit <id> --max-duration N` — change a scheduled job's hard cap
+  (tenant-scoped, ≤1800 s like the agent tool; applies from the next run). The
+  EXIT/SCOUT treasury rails had a 240 s cap and timed out on 22 of 24 runs; the
+  cron ceiling itself rose 600 → 1800 s because the hourly buyback rail runs
+  1-5 min per step and was cut at step 6 before its swap.
+- The `/dev` owner→developer rail relays through a host spool (`<data>/dev_rail/`)
+  drained by an owner-run unit, because the hardened service identity cannot reach
+  the developer's tools directly.
+
+### Fixed
+
+- **Context overflow no longer kills a run.** The pre-LLM token check prunes once
+  (`emergency_context_prune`) and re-checks before raising; a five-page tool step used to end
+  the run with `Token overflow` and lose the round.
+- **Posture is a ceiling, not a request.** `AGENT_COMPUTE_POSTURE>=1` adds `code_execution`,
+  `shell` and `coding` to autonomous toolsets only when each tool's own flag is on; a
+  deploy with the flags off no longer stamps a false `[tool gap]` line on every goal record.
+  The flag predicates live in `core.config_policy.capability_toggles` (tools delegate).
+- **`email` is dropped from the effective autonomous toolset while its SMTP login is
+  rejected** (`core/credential_verdicts.py`, fed by the email tool's 535 path and cleared on
+  the next success); the tool also remembers a rejected login for 15 minutes instead of
+  re-sending bad credentials at every session start.
+- **`append_file` given a JSON object wrote a pretty-printed multi-line record** into a
+  JSON-lines store; it now writes one compact line per object. `coding_str_replace` coerces a
+  JSON object passed as `old_string`/`new_string` to its compact line and says so in the
+  result instead of failing validation.
+- **`message` is not a missing tool.** The goal vocabulary infers the `message` action from
+  "telegram"; the tool loader recorded it as `gated:unknown-tool` on every such goal.
+  Action ids are recognised (`ACTION_IDS_NOT_TOOLS`); an absent action names its flag.
+- **Docker socket unreachable → one honest refusal, not a retry storm.** `run_tests`/
+  `run_code` refuse up front when the agent identity cannot open the Docker socket, naming
+  the posture and "do not retry".
+- `x_login_check` declares an explicit empty parameter model (ended a per-session WARNING).
+- Twitter `get_timeline` accepts `max_results` 1–100 (the X floor is clamped inside the call).
+- Browser stale-context reaper measures idle time, not allocation age.
+- A message drained on the `done()` step earns the next step instead of ending the run.
+- A host-level money-verb broadcast failure ends the run with the verbatim line.
+- Root-run confined writes take the parent's service group (dirs 0770, files 0660).
+
+- `filesystem_read_file` on an over-cap multi-line file returns a numbered tail
+  window under a `TRUNCATED` header instead of refusing (append-only ledgers were
+  refused 15×/6h on prod).
+- H-MEM (`TaskContextManager`) base path was CWD-relative `data/auto` — read-only
+  under `ProtectSystem=strict`; now `<data_home>/auto` (`DATA_PATH` still wins).
+- One log file per service entrypoint (`bot.log` / `email.log` / `webview.log`,
+  `POLYROB_LOG_FILE` override) — three non-root units sharing one rotating file
+  raised `PermissionError` on every emit in two of them.
+- `deploy_prod.sh` owns `$DATA_DIR/auto` for the agent identity (its root-run
+  import-test created it 0700 root and every session then failed at init).
+
+- **`polyrob update --apply` inside a foreign git repo.** A wheel whose
+  site-packages sat inside somebody else's checkout (`/work/project/.venv/…`)
+  was classified `git`, and `--apply` ran `git pull` + `pip install .` against
+  THAT project. `site-packages`/`dist-packages` now never resolve a repo root.
+  Also: `--apply` on pip/pipx/systemd/docker exits 1 with a structured `--json`
+  payload (was exit 0 + nothing); the release `tag_name` is validated and
+  checked out as `refs/tags/<ref>`; rollback is `git reset --keep`; one snapshot
+  restore per failed step (`migrate_guarded.py` removed); `--json` never blocks
+  on stdin; draft/pre-releases are filtered; snapshots pruned to 3 after an
+  apply; `--channel git` measures the branch against its upstream instead of
+  the release list; `ls /opt/polyrob` no longer counts as a running agent.
+- **Migrations ran in filename order.** `v1_10_0_*` sorts before `v1_2_0_*`;
+  `shipped_migrations` now sorts by parsed version. The boot-time pre-migration
+  snapshot now includes the configured `DB_PATH` (on prod the one database
+  being migrated was the one NOT backed up) and takes the updater's
+  `update.lock`. `session_registry.db` joins the DB manifest.
+- **Deployer.** One `pip install -c requirements.lock -e "/opt/polyrob[…]"`
+  replaces a non-editable install that left a SECOND code copy in
+  site-packages (4 of 7 units ran that copy); every active unit sourced from
+  `deployment/` is reconciled (the webview unit carrying the de-root hardening
+  never was); `polyrob-browser-server.service` is quiesced with the family;
+  free space is checked on `$TMP`'s mount; the character preflight honours
+  `POLYROB_DATA_DIR`; the wallet chown is guarded; the import test covers the
+  telegram surface.
+- **`polyrob serve` trusted `X-Forwarded-For` from anyone** — default is now
+  `127.0.0.1`; new `UVICORN_FORWARDED_ALLOW_IPS`.
+- **`polyrob profile create --service`** wrote a weaker `polyrob-<name>.service`
+  (collided with `polyrob-email`); it now renders the committed
+  `polyrob@.service` template (byte-pinned) and enables `polyrob@<name>`.
+- `polyrob approvals *` / `polyrob config set` act on the DEPLOYED data home.
+- `setup_publish_vhost.sh` chowns the publish root to the agent (first publish
+  EACCES'd) and no longer guesses a port for `/api/`.
+
+### Changed
+
+- `requirements.lock` is `uv pip compile --all-extras --universal` (every extra
+  pinned, none installed unless named); `requirements.txt` is a thin pointer
+  (`-c requirements.lock` + the prod extras). Root units that stay root gain
+  `Group=polyrob-data` + `UMask=0002`. `.dockerignore` added; the image sets
+  `UVICORN_HOST=0.0.0.0` + `POLYROB_IN_DOCKER=1`. `release.yml` runs only on
+  the public repository.
+
+### Removed
+
+- `webview/webview.service`, `scripts/publish_prune.sh`,
+  `deployment/nginx_continuous_chat_fix.conf`, `.github/workflows/deploy-portal.yml`;
+  the api+webgate units, `nginx.conf`, the Xvfb trio and the SSL scripts moved to
+  `deployment/legacy/`; `deployment/CLEAN_DEPLOY.md` retired.
+
 ## [1.0.2] — 2026-09-18
 
 ### Added
 
+- Fly.io single-tenant container posture (`deployment/fly/`): a runtime image
+  (python + `polyrob[all]` + Chromium + tmux + git + the native Claude Code CLI),
+  a one-machine `fly.toml` with NO services and no IP (nothing listens;
+  Telegram is outbound), an entrypoint that clones the private repo onto the
+  volume (credential store, never a token in the URL), layers the committed
+  non-secret flags UNDER the Fly secrets, installs an instance kit on first
+  boot and runs three processes as one non-root user: the agent runner
+  (`touch /data/restart.agent` = clean restart after a `git pull` = deploy),
+  the Claude dev `/loop` in tmux (the `/dev` Telegram rail pastes into it),
+  and a watchdog. Dangerob gets `dangerob.fly.env` + a container-specific
+  `dev-loop-prompt.md`. `deployment/fly/README.md` lists what to buy and which
+  secrets to set.
 - X OAuth 2.0 user token: encrypted store + **auto-refresh** (`tools/x_oauth2.py`).
   The X Chat DM read (where every inbound DM now lands) needs a user-context
   OAuth2 token that X expires two hours after mint; the tree read ONE static

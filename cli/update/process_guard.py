@@ -148,7 +148,15 @@ def _iter_psutil_cmdlines():
 
 
 def _parse_ps_lines(output: str):
-    """Parse ``ps -axo pid=,args=`` output into ``(pid, [argv...])`` tuples."""
+    """Parse ``ps -axo pid=,args=`` output into ``(pid, [argv...])`` tuples.
+
+    ``ps`` joins argv with spaces and does not quote, so a path WITH a space
+    (a macOS home dir) cannot be split back exactly. Splitting on whitespace made
+    ``/Users/A B/venv/bin/polyrob telegram`` read as ``[…/A, B/venv/bin/polyrob,
+    telegram]`` — a false NEGATIVE for the guard. We keep the whitespace split
+    (the only faithful choice) but ALSO re-join adjacent fragments up to the
+    first token that ends in ``/polyrob`` so the executable is seen whole.
+    """
     for line in output.splitlines():
         line = line.strip()
         if not line:
@@ -157,8 +165,20 @@ def _parse_ps_lines(output: str):
         if not pid_str.isdigit():
             continue
         parts = rest.strip().split()
-        if parts:
-            yield int(pid_str), parts
+        if not parts:
+            continue
+        # `python …/polyrob telegram`: the interpreter is a whole token of its
+        # own — never glue it onto the script path, or the executable rule in
+        # server_process_alive() (position 1 ends in /polyrob) can't see it.
+        start = 1 if len(parts) > 1 and Path(parts[0]).name.lower().startswith("python") else 0
+        for i, tok in enumerate(parts):
+            if i > start and tok.endswith("/polyrob") and "/" in "".join(parts[start:i]):
+                # a split path: glue the fragments before it back on
+                head = " ".join(parts[start:i + 1])
+                if head.startswith("/") or head.startswith("~"):
+                    parts = parts[:start] + [head] + parts[i + 1:]
+                break
+        yield int(pid_str), parts
 
 
 def _iter_ps_cmdlines():
@@ -208,8 +228,16 @@ def server_process_alive(*, exclude_pid: Optional[int] = None, _cmdlines=None) -
                 continue
             tokens = [t.lower() for t in parts]
             joined = " ".join(tokens)
+            # The EXECUTABLE must be polyrob: the bare console script or a
+            # `…/bin/polyrob` path. `t.endswith("polyrob")` also matched the
+            # ARGUMENT `/opt/polyrob` — so `ls /opt/polyrob` or `tail -f
+            # /opt/polyrob/x.log` blocked --apply and trained people onto --force.
             is_polyrob = (
-                any(t.endswith("polyrob") for t in tokens)
+                any(t == "polyrob" or t.endswith("/bin/polyrob") for t in tokens)
+                # `python …/polyrob telegram`: the console script run through an
+                # interpreter (the real prod argv shape) — position 1 only.
+                or (len(tokens) > 1 and tokens[1].endswith("/polyrob")
+                    and Path(tokens[0]).name.startswith("python"))
                 or "cli.polyrob" in joined
                 or "api.app" in joined
                 or any(t.endswith("main.py") for t in tokens)

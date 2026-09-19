@@ -21,6 +21,9 @@ EXPECTED_NEW = {
     "correspondents.db",
     # 032: durable app service rows (approved addresses + live containers).
     "app_services.db",
+    # 2026-09-18 (4th generation): opened from agents/, a tier the grep below
+    # never walked. Session → owner_pid routing under the sqlite registry.
+    "session_registry.db",
 }
 
 
@@ -43,7 +46,7 @@ def test_grep_completeness_surfaces_and_hf_deploy():
     tools/hf_deploy/ must be in the manifest — the exact pattern that produced
     both prior generations of this bug."""
     found = set()
-    for sub in ("surfaces", "core/surfaces", "tools/hf_deploy"):
+    for sub in ("surfaces", "core/surfaces", "tools/hf_deploy", "agents", "core", "cli", "modules", "tools"):
         for py in (REPO / sub).rglob("*.py"):
             found |= set(_DB_LITERAL.findall(
                 py.read_text(encoding="utf-8", errors="replace")))

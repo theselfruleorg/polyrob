@@ -56,17 +56,59 @@ class TaskAgentLifecycleMixin:
         if not getattr(self, "_owns_workspace_gc", True):
             logger.debug("workspace GC not owned by this process — loop not running")
             return
+        # 056 WS8: the first pass runs 10 min after start, then daily. With
+        # ~28 restarts/day on prod the old "sleep 24 h first" never fired once,
+        # and 1,642 stale session dirs (4.0 GB) accumulated.
+        delay = 600
         while True:
             try:
-                # Run cleanup daily
-                await asyncio.sleep(86400)  # 24 hours
+                await asyncio.sleep(delay)
+                delay = 86400
 
                 if self.session_manager:
                     cleaned = self.session_manager.cleanup_old_workspaces(max_age_days=7)
                     logger.info(f"Workspace cleanup: removed {cleaned} old workspaces")
+                self._session_dir_gc()
 
             except Exception as e:
                 logger.error(f"Error in workspace cleanup: {e}")
+
+    def _session_dir_gc(self) -> None:
+        """056 WS8: collect stale per-session dirs (dry-run unless
+        SESSION_DIR_GC_APPLY=true). Live/resident session ids are protected;
+        the report is logged and recorded as a `session_gc` event so the owner
+        sees the numbers before the switch is flipped."""
+        try:
+            from agents.task.path import pm
+            from agents.task.session_registry import resident_session_ids
+            from core.session_gc import collect_stale_sessions
+            sessions_root = str(getattr(pm(), "data_root", "") or "")
+            protect = set()
+            try:
+                protect.update(resident_session_ids(self))
+            except Exception:
+                pass
+            try:
+                if self.session_manager:
+                    protect.update(self.session_manager.get_active_sessions())
+            except Exception:
+                pass
+            rep = collect_stale_sessions(sessions_root, max_age_days=14, protect=protect)
+            logger.info("session gc (%s): candidates=%s removed=%s bytes=%s kept_recent=%s "
+                        "protected=%s errors=%s sample=%s",
+                        "APPLY" if rep.get("apply") else "DRY-RUN", rep.get("candidates"),
+                        rep.get("removed"), rep.get("bytes"), rep.get("kept_recent"),
+                        rep.get("protected"), rep.get("errors"), rep.get("sample"))
+            try:
+                from core.event_log import get_event_log, event_log_enabled
+                from core.event_kinds import SESSION_GC
+                if event_log_enabled():
+                    get_event_log().record(SESSION_GC, user_id="", source="lifecycle",
+                                           **{k: v for k, v in rep.items() if k != "sample"})
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("session gc skipped: %s", e)
     @staticmethod
     def _session_age_seconds(created_at, now: Optional[datetime] = None) -> Optional[float]:
         """Age in seconds from an ISO 'created_at' string, or None if unparseable."""

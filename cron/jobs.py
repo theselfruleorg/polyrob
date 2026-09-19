@@ -45,6 +45,19 @@ def _parse(s: Optional[str]) -> Optional[datetime]:
     return datetime.fromisoformat(s) if s else None
 
 
+#: 056 WS5: the priority class a job declares in ``payload.priority``. ``money``
+#: marks the treasury rails (EXIT / SAFETY / WATCHER / SCOUT / BUYBACK); a due
+#: money job pre-empts a running board goal (GOAL_YIELD_FOR_MONEY_RAIL).
+CRON_PRIORITY_MONEY = "money"
+
+
+def is_money_job(job) -> bool:
+    try:
+        return str((getattr(job, "payload", None) or {}).get("priority") or "").lower() == CRON_PRIORITY_MONEY
+    except Exception:
+        return False
+
+
 class CronJobStore:
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -200,11 +213,78 @@ class CronJobStore:
         crash and safe to reclaim. Calling it WITHOUT the lock (e.g. from __init__)
         could reset a live job and cause a double-run.
         """
-        return execute_retry(
+        # 056 WS1: name the orphans so each gets a terminal `cron_run cut_by_restart`
+        # event — before this a restart mid-run left the ledger with a bare `started`.
+        try:
+            rows = execute_retry(
+                self.db_path,
+                "SELECT id, user_id, task FROM cron_jobs WHERE status='running' AND enabled=1",
+                (), fetch="all") or []
+        except Exception:
+            rows = []
+        n = execute_retry(
             self.db_path,
             "UPDATE cron_jobs SET status='scheduled' WHERE status='running' AND enabled=1",
             (),
         ) or 0
+        if n and rows:
+            try:
+                from types import SimpleNamespace
+                from cron.runner import _cron_ev
+                for r in rows:
+                    _cron_ev(SimpleNamespace(id=r["id"], user_id=r["user_id"], task=r["task"]),
+                             "cut_by_restart", "orphaned running row reclaimed")
+            except Exception:
+                pass
+        return n
+
+    def set_max_duration(self, job_id: str, seconds: int, *,
+                         user_id: Optional[str] = None) -> bool:
+        """Raise/lower one job's hard cap. Tenant-scoped like ``cancel``; the
+        scheduler reads the row fresh on every due tick, so the change applies
+        from the next run. Returns False when no row matched."""
+        sql = "UPDATE cron_jobs SET max_duration_seconds=? WHERE id=?"
+        params: tuple = (int(seconds), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = (int(seconds), job_id, user_id)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def set_schedule(self, job_id: str, schedule_spec: str, *, now: Optional[datetime] = None,
+                     user_id: Optional[str] = None) -> bool:
+        """056 WS5 (D4): re-time a job from the owner/ops seat and recompute
+        ``next_run_at`` from ``now``. An unparseable spec is refused (False), the
+        row untouched. Tenant-scoped like ``cancel``."""
+        from cron.schedule import parse_schedule, ScheduleError
+        try:
+            nxt = parse_schedule(schedule_spec).next_run_after(now or datetime.now())
+        except ScheduleError:
+            return False
+        if nxt is None:
+            return False
+        sql = "UPDATE cron_jobs SET schedule_spec=?, next_run_at=? WHERE id=? AND status IN ('scheduled','running')"
+        params: tuple = (schedule_spec, nxt.isoformat(), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
+
+    def set_priority(self, job_id: str, priority: str, *, user_id: Optional[str] = None) -> bool:
+        """056 WS5: set ``payload.priority`` (``money`` | ``ops``) — merge, never
+        replace, the payload. Unknown classes are refused."""
+        if str(priority) not in (CRON_PRIORITY_MONEY, "ops"):
+            return False
+        job = self.get(job_id)
+        if job is None or (user_id is not None and job.user_id != user_id):
+            return False
+        payload = dict(job.payload or {})
+        payload["priority"] = str(priority)
+        sql = "UPDATE cron_jobs SET payload=? WHERE id=?"
+        params: tuple = (json.dumps(payload), job_id)
+        if user_id is not None:
+            sql += " AND user_id=?"
+            params = params + (user_id,)
+        return bool(execute_retry(self.db_path, sql, params))
 
     def cancel(self, job_id: str, *, user_id: Optional[str] = None) -> bool:
         sql = "UPDATE cron_jobs SET enabled=0, status='cancelled' WHERE id=?"

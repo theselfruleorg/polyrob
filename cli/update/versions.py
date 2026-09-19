@@ -12,7 +12,14 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Iterable, List, Optional, Tuple
 
-_SEMVER_RE = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)(?:[-+.].*)?\s*$")
+from packaging.version import InvalidVersion, Version
+
+
+def _version(text: str) -> Optional[Version]:
+    try:
+        return Version(text)
+    except (InvalidVersion, TypeError):
+        return None
 
 # Default release home. Overridable so a fork / private mirror / renamed repo works
 # without a code change (§2.2 — the repo name is not hardcoded to a soon-gone value).
@@ -22,19 +29,20 @@ _DEFAULT_PYPI = "polyrob"
 
 def parse_semver(text: str) -> Optional[Tuple[int, int, int]]:
     """Parse ``X.Y.Z`` (optional ``v`` prefix / pre-release suffix) → tuple, else None."""
-    m = _SEMVER_RE.match(text or "")
-    if not m:
+    parsed = _version(text)
+    if parsed is None:
         return None
-    return tuple(int(g) for g in m.groups())  # type: ignore[return-value]
+    return (parsed.release + (0, 0, 0))[:3]
 
 
 def is_prerelease(text: str) -> bool:
-    return bool(re.search(r"[-+.](?:a|b|rc|alpha|beta|dev|pre)", (text or "").lower()))
+    parsed = _version(text)
+    return parsed is not None and parsed.is_prerelease
 
 
 def compare(a: str, b: str) -> int:
     """-1 if a<b, 0 if equal, 1 if a>b (by semver; unparseable sorts lowest)."""
-    pa, pb = parse_semver(a), parse_semver(b)
+    pa, pb = _version(a), _version(b)
     if pa is None and pb is None:
         return 0
     if pa is None:
@@ -165,11 +173,16 @@ def pypi_versions(fetch: Callable[[str], str], package: str = "polyrob") -> List
 
 
 def github_tag_versions(fetch: Callable[[str], str],
-                       repo: str = "theselfruleorg/polyrob") -> List[str]:
+                       repo: str = "theselfruleorg/polyrob", *,
+                       include_prerelease: bool = False) -> List[str]:
     """Release tag names from the GitHub Releases API."""
     body = fetch(f"https://api.github.com/repos/{repo}/releases")
     data = json.loads(body)
-    return [rel.get("tag_name", "") for rel in data if isinstance(rel, dict)]
+    if not isinstance(data, list):
+        raise ValueError("expected a GitHub release list")
+    return [rel.get("tag_name", "") for rel in data
+            if isinstance(rel, dict) and not rel.get("draft")
+            and (include_prerelease or not rel.get("prerelease"))]
 
 
 def resolve_status(
@@ -194,7 +207,7 @@ def resolve_status(
     error: Optional[str] = None
     try:
         raw = (pypi_versions(fetch, package) if source == "pypi"
-               else github_tag_versions(fetch, repo))
+               else github_tag_versions(fetch, repo, include_prerelease=include_pre))
         latest = select_latest(raw, include_prerelease=include_pre)
         if latest is None:
             error = "no_releases"

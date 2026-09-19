@@ -248,9 +248,21 @@ def restore_snapshot(snapshot_dir: Path) -> SnapshotManifest:
             shutil.copy2(stored, tmp)
             os.replace(tmp, target)
         elif item.kind == "dir":
+            # Stage beside the target, then swap: `rmtree(target); copytree(...)`
+            # lost identity/, skills/ or wallet/ outright if the copy failed
+            # between the two calls.
+            staged = target.with_name(target.name + ".restore.tmp")
+            if staged.exists():
+                shutil.rmtree(staged)
+            shutil.copytree(stored, staged)
+            old = target.with_name(target.name + ".restore.old")
+            if old.exists():
+                shutil.rmtree(old)
             if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(stored, target)
+                os.rename(target, old)
+            os.rename(staged, target)
+            if old.exists():
+                shutil.rmtree(old, ignore_errors=True)
     return manifest
 
 

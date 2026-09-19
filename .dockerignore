@@ -1,0 +1,55 @@
+# The container twin of "NEVER rsync the working tree": `COPY . .` must not bake a
+# developer's secrets, git history, virtualenv, data or parallel sessions' scratch
+# files into an image layer.
+.git
+.gitignore
+.github
+**/__pycache__
+*.py[cod]
+*.egg-info
+build/
+dist/
+venv/
+.venv/
+env/
+ENV/
+.env
+.env.*
+config/.env.development
+config/.env.production
+config/.env.*.local
+*.env
+!config/.env.example
+data/auto/
+data/task/
+data/database/
+data/logs/
+data/cache/
+data/temp/
+data/telemetry/
+data/anonymous/
+data/_anonymous_/
+identity/
+snapshots/
+logs/
+*.log
+*.db
+*.db-wal
+*.db-shm
+.polyrob/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+.DS_Store
+/*.png
+/*-render.py
+node_modules/
+docs/
+deployment/
+scripts/
+tests/
+
+# The Fly image needs its own bin/ (deployment/ stays excluded otherwise).
+!deployment/fly/bin/

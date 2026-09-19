@@ -2,7 +2,7 @@
 
 Orchestrates the 7-step update as an **atomic, always-rollbackable** operation:
 
-    snapshot(full) → install(code) → migrate(guarded) → verify → [auto-rollback on any failure]
+    snapshot(full) → install(code) → migrate → verify → [auto-rollback on any failure]
 
 Every mutating step is an injected ``runner`` so the ordering + rollback logic is fully
 unit-testable without touching a real install; the real runners (git pull / pip install /
@@ -10,8 +10,8 @@ unit-testable without touching a real install; the real runners (git pull / pip 
 
 Invariants (never violated):
 - A full snapshot (DBs + config + identity + skills) is taken BEFORE anything mutates.
-- The migration runs guarded (:func:`cli.update.migrate_guarded.migrate_guarded`) so a
-  half-applied schema is restored byte-identical.
+- The migration runs under the SAME full snapshot as every other step, so a
+  half-applied schema is restored byte-identical (one snapshot, one restore).
 - ANY step failure → revert the code AND restore the pre-update snapshot, then report the
   failed step. The caller never ends up with new code on an old DB (or vice-versa).
 """
@@ -21,7 +21,6 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 from cli.update.context import UpdateContext
-from cli.update.migrate_guarded import migrate_guarded
 from cli.update.snapshot import SnapshotInfo, create_snapshot, restore_snapshot
 
 
@@ -41,6 +40,7 @@ class ApplyResult:
     error: Optional[BaseException]
     snapshot: Optional[SnapshotInfo]
     rolled_back: bool
+    rollback_errors: tuple[str, ...] = ()
 
 
 def apply_update(
@@ -61,37 +61,21 @@ def apply_update(
         label="pre-update", timestamp=timestamp,
     )
 
-    def _unwind() -> None:
+    # The master snapshot guards every step, including migration. A former
+    # per-step "guarded migrate" restored the same snapshot a second time and
+    # a failed inner restore skipped code recovery altogether; one restore now.
+    for step, run in (("install", runners.install), ("migrate", runners.migrate),
+                      ("verify", runners.verify)):
         try:
-            runners.rollback_code()
-        except Exception:
-            pass  # best-effort code revert; the data restore below is the load-bearing part
-        restore_snapshot(snap.path)
-
-    # 1. install new code
-    try:
-        runners.install()
-    except BaseException as exc:  # noqa: BLE001
-        _unwind()
-        return ApplyResult(False, "install", exc, snap, True)
-
-    # 2. guarded migration (restores DBs byte-identical on its own failure).
-    # Reuses the master snapshot — one snapshot per apply, and rollback selection
-    # always finds the FULL one (U2/U9).
-    mres = migrate_guarded(
-        migrate=runners.migrate, db_paths=ctx.db_paths,
-        snapshots_root=ctx.snapshots_root, data_home=ctx.data_home,
-        from_version=from_version, to_version=to_version, snapshot=snap,
-    )
-    if not mres.ok:
-        _unwind()
-        return ApplyResult(False, "migrate", mres.error, snap, True)
-
-    # 3. verify the new install boots
-    try:
-        runners.verify()
-    except BaseException as exc:  # noqa: BLE001
-        _unwind()
-        return ApplyResult(False, "verify", exc, snap, True)
+            run()
+        except BaseException as exc:  # restore even on KeyboardInterrupt
+            errors = []
+            for name, undo in (("code", runners.rollback_code),
+                               ("data", lambda: restore_snapshot(snap.path))):
+                try:
+                    undo()
+                except BaseException as rollback_exc:
+                    errors.append(f"{name}: {rollback_exc}")
+            return ApplyResult(False, step, exc, snap, not errors, tuple(errors))
 
     return ApplyResult(True, None, None, snap, False)

@@ -83,6 +83,12 @@ machine with a visible browser:
 polyrob x-account capture-session
 ```
 
+When the agent runs on a headless server, capture on the desktop with
+`--out x-session.json`, copy the file over and run
+`polyrob x-account import-session x-session.json --handle <handle>` on the
+server (or pass the two login cookies: `--auth-token … --ct0 …`); the encrypted
+store itself is per-box and cannot be copied. See the self-hosting guide.
+
 Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 
 - `x_read_dms`: list the visible inbox or read an existing thread by handle,
@@ -90,6 +96,7 @@ Enable the tool with `X_BROWSER_ENABLED=true`. Its dedicated verbs are:
 - `x_dm`: send in an existing visible conversation. This is approval-gated and
   blocked for delegated/forged turns.
 - `x_post`: publish a post, also approval-gated.
+- `x_reply`: reply under an existing post (status URL or id) — the lane the API tier refuses for non-mentioners; approval-gated like `x_post`.
 - `x_login_check`: verify the captured session.
 
 The encrypted session is tenant-scoped. If X expires it, run the capture command

@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tools.base_tool import BaseTool
 from tools.coding.edit import apply_str_replace_ex, apply_patch, EditError
@@ -25,11 +25,41 @@ class CodingError(Exception):
     """Raised for confinement / IO errors at the tool boundary."""
 
 
+def _compact_json_if_object(v):
+    """056 WS2: a JSON object/array passed where TEXT is expected is coerced to its
+    compact single-line form (the shape a JSONL row has on disk) instead of
+    failing validation. Prod 2026-09-18/19: 31 `coding_str_replace` calls carried a
+    dict `old_string` for a JSONL store and were rejected, then retried, then
+    escalated as thinking loops. The coercion is surfaced in the result note."""
+    if isinstance(v, (dict, list)):
+        import json
+        return json.dumps(v, ensure_ascii=False, separators=(",", ":")), True
+    return v, False
+
+
 class StrReplaceParams(BaseModel):
     file_path: str = Field(..., description="Path to the file to edit (relative to the workspace, or absolute within it)")
-    old_string: str = Field(..., description="Exact text to replace; must be unique unless replace_all=true")
-    new_string: str = Field(..., description="Replacement text")
+    old_string: str = Field(..., description="Exact text to replace; must be unique unless replace_all=true. "
+                                             "For a JSONL row pass the row's exact text (a JSON object is coerced to its compact line).")
+    new_string: str = Field(..., description="Replacement text (a JSON object is coerced to its compact single line)")
     replace_all: bool = Field(False, description="Replace every occurrence instead of failing on ambiguity")
+    coerced_note: Optional[str] = Field(None, exclude=True, description="Set when old/new_string were coerced from an object.")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_objects(cls, data):
+        if not isinstance(data, dict):
+            return data
+        notes = []
+        for k in ("old_string", "new_string"):
+            v, did = _compact_json_if_object(data.get(k))
+            if did:
+                data[k] = v
+                notes.append(k)
+        if notes:
+            data["coerced_note"] = ("note: " + " and ".join(notes) + " were JSON objects and were coerced "
+                                    "to their compact single-line form — a JSONL row is a string")
+        return data
 
 
 class ApplyPatchParams(BaseModel):
@@ -343,6 +373,8 @@ class CodingTool(BaseTool):
             else:
                 msg = f"Edited {params.file_path} (1 replacement, via {rung} match)."
             metadata = {"artifact_id": artifact_id} if artifact_id else None
+            if getattr(params, "coerced_note", None):
+                msg = f"{msg}\n({params.coerced_note})"
             return self._ok(await self._with_diagnostics(msg, target, root), metadata)
         except CodingError as e:
             return self._err(str(e))

@@ -72,5 +72,11 @@ async def perform_dev_command(text: str) -> str:
         return "→ dev loop (live) — also queued durably in the ops inbox."
     if proc.returncode == 3:
         return "→ ops inbox (dev loop is down; the watchdog will revive it)."
+    if proc.returncode == 5:
+        # The hardened service identity (ProtectHome) can reach neither the
+        # maintenance clone nor root's tmux socket; the message is parked on
+        # the host spool and the root-side relay delivers it.
+        return ("→ dev loop via the host relay (queued on the spool; delivered "
+                "live within a minute and kept durably in the ops inbox).")
     tail = err.decode(errors="replace").strip()[-300:]
     return f"Dev rail error (exit {proc.returncode})" + (f": {tail}" if tail else ".")

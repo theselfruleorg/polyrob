@@ -152,11 +152,17 @@ def test_delete_validates_skill_id(sm):
 
 
 def test_background_author_cannot_patch_active_skill(sm, monkeypatch):
+    """SK-F10 invariant: a background turn never mutates the ACTIVE file. Since 056
+    WS6 the call succeeds as a PENDING revision (see the WS6 test below) instead
+    of refusing — the active content is byte-identical either way."""
     monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
     sm.create_skill("p", GOOD, user_id="u1", created_by="agent")  # active
+    active = sm.skills_dir / "user_u1" / "p" / "SKILL.md"
+    before = active.read_text()
     res = sm.patch_skill("p", user_id="u1", old_string="do Y", new_string="do Z",
                          created_by="background_review")
-    assert not res.ok and "active" in res.errors[0].lower()
+    assert res.ok and res.pending
+    assert active.read_text() == before
 
 
 def test_background_author_cannot_delete_active_skill(sm, monkeypatch):
@@ -235,3 +241,28 @@ def test_p2_20_promote_preserves_original_authorship(sm, monkeypatch, tmp_path):
     assert res.ok and not res.pending
     # authorship preserved (was overwritten to 'user' before P2-20)
     assert store.get_provenance("q", "u1")["created_by"] == "agent"
+
+
+# --- 056 WS6 (2026-09-19): a background turn PROPOSES a revision of an active skill ------
+#
+# Prod: goal 367150fd7a0e ended BLOCKED with "a background turn cannot patch an active
+# skill" and ops applied Rob's draft by hand (re-pinning the rules.json hash). The
+# SK-F10 invariant stands — the ACTIVE file is never touched by a forged turn — but
+# the same call now lands a pending REVISION for the owner's `promote`.
+
+def test_background_patch_of_active_skill_lands_a_pending_revision(sm, monkeypatch):
+    monkeypatch.setenv("SKILLS_WRITABLE_REQUIRE_REVIEW", "false")
+    monkeypatch.setenv("SKILL_OVERWRITE_PROTECT", "false")
+    sm.create_skill("p", GOOD, user_id="u1")
+    active = (sm.skills_dir / "user_u1" / "p" / "SKILL.md")
+    before = active.read_text()
+    res = sm.patch_skill("p", user_id="u1", old_string="do Y", new_string="do Z",
+                         created_by="background_review")
+    assert res.ok and res.pending, res.errors
+    assert active.read_text() == before, "SK-F10: the active skill is untouched"
+    pending = sm.skills_dir / "user_u1" / ".pending" / "p" / "SKILL.md"
+    assert pending.exists() and "do Z" in pending.read_text()
+    # and the owner's promote applies it
+    pr = sm.promote_pending_skill("p", user_id="u1")
+    assert pr.ok, pr.errors
+    assert "do Z" in active.read_text()
