@@ -519,6 +519,14 @@ def autonomous_mode_tools() -> tuple:
     return AUTONOMOUS_MODE_TOOLS
 
 
+def stable_autonomous_toolset() -> bool:
+    """057 WS-A: freeze the REQUESTED autonomous toolset so the emitted tool
+    schemas (part of the cached prompt prefix) do not flip on a credential
+    verdict's TTL. Default OFF => the 056 WS4 drop behaviour is unchanged."""
+    from core.env import bool_env
+    return bool_env("STABLE_AUTONOMOUS_TOOLSET", False)
+
+
 def effective_autonomous_tools() -> tuple:
     """056 WS4: `autonomous_mode_tools()` minus the tools this deploy cannot
     actually serve right now — today `email` when the transport is SMTP and the
@@ -529,11 +537,22 @@ def effective_autonomous_tools() -> tuple:
     AgentMail transport is unaffected by an SMTP rejection. Fail-open: any probe
     error keeps the tool in."""
     tools = tuple(autonomous_mode_tools())
+    if stable_autonomous_toolset():
+        # 057 WS-A: the drop below is a CACHE BUST. The emitted tool schemas are
+        # part of the prompt's stable prefix, so dropping and re-adding `email`
+        # on a 900 s TTL changed the prefix bytes between sessions — four
+        # distinct tool counts (175/176/177/180) were seen in one prod day, each
+        # one a cold cache at 50x the cached input price. Under this flag the
+        # REQUESTED set is frozen and the rejection is told honestly instead:
+        # the tool catalog renders `gated:credentials-rejected` with the remedy
+        # (tools/tool_disclosure.py) and the tool itself already refuses at call
+        # time with the same remedy. Same information, stable bytes.
+        return tools
     try:
         from core.config_policy.capability_toggles import email_provider
         if "email" in tools and email_provider() == "smtp":
-            from core.credential_verdicts import rejected_within
-            if rejected_within("smtp", 900.0):  # = tools.email_tool.SMTP_AUTH_BACKOFF_SEC
+            from core.credential_verdicts import rejected_within, SMTP_TTL_SEC
+            if rejected_within("smtp", SMTP_TTL_SEC):
                 tools = tuple(t for t in tools if t != "email")
     except Exception:
         pass

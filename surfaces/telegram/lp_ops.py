@@ -1,5 +1,12 @@
-"""Shared owner seat for liquidity; CLI and REPL call the same dispatcher."""
-from core.async_bridge import run_coroutine_sync
+"""Shared owner seat for liquidity; CLI and REPL call the same dispatcher.
+
+⚠️ D12: ``dispatch`` and ``lp_reply`` are ``async def``. They used to hop
+through ``core.async_bridge.run_coroutine_sync``, which runs the coroutine on a
+PERSISTENT BACKGROUND loop and blocks the caller until it finishes — so on the
+Telegram seat the whole polling loop stalled for the quote, and any loop-affine
+object the rail touched (an aiohttp session, a signer client) belonged to the
+other loop. A sync CLI caller bridges at ITS OWN seat; the seam is async.
+"""
 
 USAGE = '''Usage: /lp positions [on chain]
 /lp pool <pool-address> [on chain]
@@ -11,7 +18,7 @@ All support on <chain>; default robinhood. Writes simulate unless go is supplied
 Pons graduated pools pay LP fee 0; v3 creates a separate market. Removing your own liquidity removes depth for holders.'''
 
 
-def dispatch(user_id, action, values):
+async def dispatch(user_id, action, values):
     """Authenticated owner adapters supply identity; this helper never elevates it."""
     from surfaces.telegram.token_ops import _owner_ctx
     from tools.defi import data_tool as D, trade_tool as T
@@ -26,14 +33,12 @@ def dispatch(user_id, action, values):
     if not user_id:
         raise ValueError('Only the owner can use /lp.')
     cls, verb, model = mapping[action]
-    async def invoke():
-        from core.exec_identity import set_exec_identity, reset_exec_identity
-        token = set_exec_identity(user_id, None)
-        try:
-            return await getattr(cls(), verb)(model(**values), _owner_ctx(user_id))
-        finally:
-            reset_exec_identity(token)
-    return run_coroutine_sync(invoke())
+    from core.exec_identity import set_exec_identity, reset_exec_identity
+    token = set_exec_identity(user_id, None)
+    try:
+        return await getattr(cls(), verb)(model(**values), _owner_ctx(user_id))
+    finally:
+        reset_exec_identity(token)
 
 
 def parse(args):
@@ -92,14 +97,14 @@ def parse(args):
     return action, values
 
 
-def lp_reply(user_id, args):
+async def lp_reply(user_id, args):
     if not user_id:
         return 'Only the owner can use /lp.'
     if not args:
         return USAGE
     try:
         action, values = parse(args)
-        result = dispatch(user_id, action, values)
+        result = await dispatch(user_id, action, values)
         return result.error or result.extracted_content or 'No report returned; transaction state unknown. Do not retry blindly.'
     except Exception as exc:
         return f'Liquidity command error: {exc}\n{USAGE}'

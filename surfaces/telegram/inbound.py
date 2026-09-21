@@ -117,12 +117,18 @@ def build_inbound_message(update: dict, user_directory: Any,
     # Voice keeps its dedicated, ref-less shape: voice_guard and voice_echo have
     # always read `media[0]`, and the transcription path (not the attachment path)
     # owns a voice note. Everything ELSE goes through extract_media.
-    from surfaces.telegram.voice import extract_voice_file_id
     from surfaces.telegram.media import extract_media
     media: list = []
-    if extract_voice_file_id(update):
+    if (msg.get("voice") or {}).get("file_id"):
         media = [Media(kind="voice", mime="audio/ogg")]
     else:
+        # ⚠️ D25: the gate is the `voice` FIELD, not `extract_voice_file_id`,
+        # which also matches `audio`. An uploaded audio FILE therefore produced
+        # the ref-less voice shape and the attachment was LOST — neither
+        # downloadable nor nameable — while the transcription path (which is
+        # right to accept both) still transcribed it. An `audio` message now
+        # carries a real, downloadable Media like every other attachment, and
+        # its transcript rides on that Media below.
         media = extract_media(update)
 
     # W3 groups: mention/reply detection so the dispatcher's group gate can pass
@@ -151,6 +157,31 @@ def build_inbound_message(update: dict, user_directory: Any,
         mentions_bot=mentions_bot,
         sender_is_bot=sender_is_bot(msg),
     )
+
+
+def _sender_is_blocked(container: Any, update: dict) -> bool:
+    """Is this room sender ``blocked`` in THIS chat? (D63)
+
+    Cheap, room-only, and fail-OPEN to "not blocked": this gate exists to stop a
+    blocked member spending money on transcription, not to make an access
+    decision — ``resolve_access_tier`` still owns that, downstream, and it fails
+    CLOSED. A fault here costs one transcription, never a turn.
+    """
+    try:
+        msg = (update.get("message") or update.get("edited_message") or {})
+        chat = msg.get("chat") or {}
+        if str(chat.get("type") or "private") == "private":
+            return False
+        chat_id = chat.get("id")
+        sender = (msg.get("from") or {}).get("id")
+        if chat_id is None or sender is None:
+            return False
+        from core.surfaces.group_admin import room_role
+        return room_role(container, "telegram", str(chat_id),
+                         str(sender)) == "blocked"
+    except Exception as e:
+        logger.debug("telegram: blocked-sender probe failed (transcribing): %s", e)
+        return False
 
 
 async def process_update(
@@ -185,7 +216,18 @@ async def process_update(
         except Exception as e:  # fail-open: a dedup error must not drop a real update
             logger.debug("telegram dedup check failed (processing anyway): %s", e)
 
-    # 1b) VOICE -> TEXT (after dedup). Inject the transcript as the message text.
+    # 1b) VOICE -> TEXT (after dedup, and after the cheap ROLE gate below).
+    #
+    # ⚠️ D63: transcription is a PAID network round trip (Whisper), and it used
+    # to run before anything had asked whether this sender may speak at all. A
+    # member a room owner had explicitly BLOCKED could therefore spend the
+    # owner's money on every voice note they posted, forever, by being ignored
+    # slightly later in the pipeline. The room allowlist is already checked
+    # upstream in the harness; this is the per-member half of the same idea.
+    if transcribe_voice is not None and _sender_is_blocked(container, update):
+        logger.info("telegram: skipping transcription for a blocked sender")
+        transcribe_voice = None
+
     voice_text = None
     if transcribe_voice is not None:
         try:

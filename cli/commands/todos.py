@@ -20,6 +20,19 @@ import click
 
 TODO_MD_FILE = "todo.md"
 
+#: C50: the two todo lists are different objects with different lifetimes, and
+#: nothing on this seat said so — an operator who ran `polyrob todos list` after
+#: a session and saw nothing concluded the agent had lost its list.
+_REPL_TWIN = ("(the agent's LIVE per-session todos are a different list — "
+              "see `/todos` in the REPL)")
+
+
+def _no_file(todo_file: str) -> str:
+    from cli.ui.candy import empty
+    return (empty(f"todo file at {todo_file}",
+                  "create one:  polyrob todos add \"…\"", yet=False)
+            + "\n  " + _REPL_TWIN)
+
 # A Markdown checkbox item line, with capture groups for in-place rewriting:
 #   group(1)=prefix "- ["  group(2)=" "|"x"  group(3)="] "  group(4)=text
 _ITEM_RE = re.compile(r'^(\s*-\s*\[)([ xX])(\]\s*)(.+)$')
@@ -71,7 +84,7 @@ def todos_list(todo_file: str, as_json: bool):
         if as_json:
             click.echo("[]")
         else:
-            click.echo(f"No todo file found at {todo_file}")
+            click.echo(_no_file(todo_file))
         return
 
     content = path.read_text()
@@ -81,12 +94,15 @@ def todos_list(todo_file: str, as_json: bool):
         click.echo(json.dumps(items, indent=2))
     else:
         if not items:
-            click.echo(f"No todos in {todo_file}")
+            from cli.ui.candy import empty
+            click.echo(empty(f"todos in {todo_file}",
+                             "add one:  polyrob todos add \"…\""))
+            click.echo(click.style(_REPL_TWIN, dim=True))
             return
 
         completed = sum(1 for i in items if i["completed"])
         total = len(items)
-        click.echo(f"Todos: {completed}/{total} completed")
+        click.echo(f"Todos in {todo_file}: {completed}/{total} completed")
         click.echo("-" * 40)
         for item in items:
             marker = click.style("✓", fg="green") if item["completed"] else click.style("○", fg="yellow")
@@ -119,20 +135,30 @@ def todos_done(index: int, todo_file: str, as_json: bool):
     """Mark a todo as complete (1-based index)."""
     path = Path(todo_file)
     if not path.exists():
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") + "No todo file found")
+        if as_json:
+            click.echo(json.dumps({"error": f"no todo file at {todo_file}"}, indent=2))
+        else:
+            click.echo(click.style("[polyrob] ERROR: ", fg="red") + _no_file(todo_file))
         sys.exit(1)
 
     lines = _read_lines(path)
     positions = _item_line_positions(lines)
     if index < 1 or index > len(positions):
-        click.echo(click.style("[polyrob] ERROR: ", fg="red") +
-                   f"Invalid index {index} (have {len(positions)} items)")
+        msg = f"invalid index {index} (have {len(positions)} items)"
+        if as_json:
+            click.echo(json.dumps({"error": msg}, indent=2))
+        else:
+            click.echo(click.style("[polyrob] ERROR: ", fg="red") + msg)
         sys.exit(1)
 
     li = positions[index - 1]
     prefix, status, mid, text = _ITEM_RE.match(lines[li]).groups()
     if status.lower() == "x":
-        click.echo(click.style("[polyrob] ", fg="yellow") + "Already completed")
+        if as_json:
+            click.echo(json.dumps({"completed": text.strip(), "index": index,
+                                   "changed": False}, indent=2))
+        else:
+            click.echo(click.style("[polyrob] ", fg="yellow") + "Already completed")
         return
 
     lines[li] = f"{prefix}x{mid}{text}"  # flip in place; surrounding content untouched
@@ -151,7 +177,11 @@ def todos_clear(todo_file: str, as_json: bool):
     """Clear completed todos (non-item lines preserved)."""
     path = Path(todo_file)
     if not path.exists():
-        click.echo("No todo file found")
+        if as_json:
+            click.echo(json.dumps({"cleared": 0, "remaining": 0,
+                                   "error": f"no todo file at {todo_file}"}, indent=2))
+        else:
+            click.echo(_no_file(todo_file))
         return
 
     lines = _read_lines(path)
@@ -165,7 +195,13 @@ def todos_clear(todo_file: str, as_json: bool):
         kept.append(ln)
 
     if cleared == 0:
-        click.echo("No completed todos to clear")
+        remaining = len(_item_line_positions(lines))
+        if as_json:
+            click.echo(json.dumps({"cleared": 0, "remaining": remaining}, indent=2))
+        else:
+            from cli.ui.candy import empty
+            click.echo(empty("completed todos to clear",
+                             f"{remaining} item(s) are still open", yet=False))
         return
 
     _write_lines(path, kept)
@@ -185,7 +221,12 @@ def todos_stats(todo_file: str, as_json: bool):
     """Show todo statistics."""
     path = Path(todo_file)
     if not path.exists():
-        click.echo("No todo file found")
+        if as_json:
+            click.echo(json.dumps({"total": 0, "completed": 0, "remaining": 0,
+                                   "percent_complete": 0.0,
+                                   "error": f"no todo file at {todo_file}"}, indent=2))
+        else:
+            click.echo(_no_file(todo_file))
         return
 
     items = _parse_todo_md(path.read_text())
@@ -203,7 +244,7 @@ def todos_stats(todo_file: str, as_json: bool):
     if as_json:
         click.echo(json.dumps(stats, indent=2))
     else:
-        click.echo("Todo Stats:")
+        click.echo(f"Todo Stats ({todo_file}):")
         click.echo(f"  Total: {stats['total']}")
         click.echo(f"  Completed: {stats['completed']}")
         click.echo(f"  Remaining: {stats['remaining']}")

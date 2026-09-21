@@ -1,7 +1,21 @@
+import os
+
+import pytest
 from click.testing import CliRunner
 
 from cli.commands.doctor import doctor, doctor_report
 
+
+def _group_exists(name: str) -> bool:
+    try:
+        import grp
+        grp.getgrnam(name)
+        return True
+    except (KeyError, ImportError):
+        return False
+
+
+_IS_ROOT = hasattr(os, "geteuid") and os.geteuid() == 0
 
 def test_doctor_report_lists_present_keys_and_flags():
     env = {"ANTHROPIC_API_KEY": "sk-x", "POLYROB_LOCAL": "1"}
@@ -103,3 +117,71 @@ def test_doctor_malformed_env_key_names_the_unset_remedy():
     lines = doctor_report({"ANTHROPIC_API_KEY": "x"})
     blob = "\n".join(lines)
     assert "polyrob config unset ANTHROPIC_API_KEY" in blob
+
+
+# --- WS-G (057 R6): `doctor --perms` -------------------------------------
+
+def _perms_home(tmp_path, monkeypatch, mode=0o2770):
+    import os
+    h = tmp_path / "datahome"
+    h.mkdir()
+    (h / "auto").mkdir()
+    os.chmod(h, mode)
+    os.chmod(h / "auto", mode)
+    monkeypatch.setattr("cli._admin_home.admin_data_dir", lambda **kw: str(h))
+    return h
+
+
+def _own_group():
+    import grp
+    import os
+    return grp.getgrgid(os.getgid()).gr_name
+
+
+@pytest.mark.skipif(_group_exists("polyrob-data"),
+                    reason="this box HAS the polyrob-data group (a deployed box); the skip path needs its absence")
+def test_doctor_perms_skips_when_the_group_is_absent(tmp_path, monkeypatch):
+    """A dev checkout has no `polyrob-data` group: SKIP, never a false pass
+    and never a failure."""
+    _perms_home(tmp_path, monkeypatch)
+    res = CliRunner().invoke(doctor, ["--perms"])
+    assert res.exit_code == 0, res.output
+    assert "not checked" in res.output
+
+
+def test_doctor_perms_strict_exits_nonzero_on_an_offender(tmp_path, monkeypatch):
+    import os
+    h = _perms_home(tmp_path, monkeypatch)
+    bad = h / "auto" / "root_written.db"
+    bad.write_text("x")
+    os.chmod(bad, 0o644)
+    import core.data_perms as dp
+    real = dp.audit_data_perms
+    monkeypatch.setattr(dp, "audit_data_perms",
+                        lambda d, group=_own_group(), **kw: real(d, group=group, **kw))
+    res = CliRunner().invoke(doctor, ["--perms", "--strict"])
+    assert res.exit_code == 1, res.output
+    assert "root_written.db" in res.output
+    assert "remedy:" in res.output
+
+
+@pytest.mark.skipif(_IS_ROOT, reason="run as root every tmp entry is root-owned, which IS the offender class")
+def test_doctor_perms_strict_is_zero_when_clean(tmp_path, monkeypatch):
+    _perms_home(tmp_path, monkeypatch)
+    import core.data_perms as dp
+    real = dp.audit_data_perms
+    monkeypatch.setattr(dp, "audit_data_perms",
+                        lambda d, group=_own_group(), **kw: real(d, group=group, **kw))
+    res = CliRunner().invoke(doctor, ["--perms", "--strict"])
+    assert res.exit_code == 0, res.output
+    assert "data perms: OK" in res.output
+
+
+def test_doctor_perms_json_is_machine_readable(tmp_path, monkeypatch):
+    import json
+    _perms_home(tmp_path, monkeypatch)
+    res = CliRunner().invoke(doctor, ["--perms", "--json"])
+    assert res.exit_code == 0, res.output
+    doc = json.loads(res.output)
+    assert set(doc) >= {"data_dir", "group", "skipped", "ok", "offender_total",
+                        "counts", "offenders", "remedy", "report"}

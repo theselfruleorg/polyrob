@@ -46,9 +46,40 @@ def clean_session_id_at_entry(session_id: str) -> str:
 
     This is the ONLY place where session IDs should be cleaned in the API layer.
     All downstream code can trust that session IDs are already sanitized.
+
+    B43: a session id the path manager REFUSES (traversal, bad characters) is a
+    malformed REQUEST, so it answers 400. It used to raise ValueError out of
+    every endpoint into the generic 500 handler — telling the caller the server
+    broke, when the caller sent a bad id.
     """
     from agents.task.path import pm
-    return pm().clean_session_id(session_id)
+    try:
+        return pm().clean_session_id(session_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid session id: {e}")
+
+
+#: Session statuses that are FINAL — no orchestrator will ever run again for
+#: them. B34: the endpoints below each carried their own list
+#: (`['completed','failed','suspended','error']`,
+#: `["suspended","failed","error"]`), which disagreed with each other AND with
+#: `agents/task/agent/session.py` — "error" is not a SessionStatus at all, and
+#: "suspended" is RESUMABLE (it means evicted to disk), so treating it as final
+#: told a caller a live session was over.
+TERMINAL_SESSION_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+#: Statuses a session can be RESUMED from by sending it a new message.
+RESUMABLE_SESSION_STATUSES = frozenset({"completed", "suspended", "failed"})
+
+
+def _guard_session_route(agent, session_id: str) -> None:
+    """Honest 409 when another worker owns ``session_id`` (B11).
+
+    A no-op for the default in-process registry; with
+    ``SESSION_REGISTRY_BACKEND=sqlite`` it stops a REMOTE session being
+    reported as "not found", which is the false-404 Item 6 exists to kill.
+    """
+    guard_remote(agent, session_id)
 
 # Helper to normalize status values
 def normalize_status_value(value: Any) -> str:
@@ -92,6 +123,22 @@ def _require_session_owner(req: Request, resource_owner: Optional[str]) -> None:
     caller_id = get_authenticated_user_id(req)
     if not caller_id or not resource_owner or caller_id != resource_owner:
         raise HTTPException(status_code=403, detail="Access denied - session owned by a different user")
+
+def _internal_error(e: Exception, what: str) -> HTTPException:
+    """A 500 that NAMES the operation but never echoes the exception (B43).
+
+    ``detail=str(e)`` handed the caller whatever the exception carried — a
+    filesystem path, a SQL fragment, a provider key in a connection string.
+    The full traceback is logged; the response says what failed and gives a
+    reference the operator can find in the journal.
+    """
+    ref = uuid.uuid4().hex[:12]
+    logger.error("%s failed (ref %s): %s", what, ref, e, exc_info=True)
+    return HTTPException(
+        status_code=500,
+        detail=f"{what} failed (reference {ref})",
+    )
+
 
 # Dependency to get TaskAgent instance
 async def get_task_agent():
@@ -215,12 +262,11 @@ async def send_user_message(
             if hasattr(agent, 'get_orchestrator'):
                 orchestrator = agent.get_orchestrator(session_id)
 
-        if not orchestrator:
-            # Try to get from active sessions (nested structure - for compatibility)
-            if user_id and hasattr(agent, 'active_sessions'):
-                user_sessions = agent.active_sessions.get(user_id, {})
-                session_data = user_sessions.get(session_id, {})
-                orchestrator = session_data.get('orchestrator')
+        # B32: the third lookup here read `agent.active_sessions[user][sid]
+        # ['orchestrator']` — a shadow copy of the SessionRegistry that
+        # `get_session_by_id` populates from session METADATA and which has
+        # never carried an 'orchestrator' key, so the branch could only ever
+        # return None. `get_orchestrator` above is the one seam.
 
         # Check if orchestrator has agents
         has_agents = orchestrator and hasattr(orchestrator, 'agents') and len(orchestrator.agents) > 0
@@ -267,9 +313,18 @@ async def send_user_message(
             _session_id = session_id
 
             async def run_session_with_logging():
+                # 057 WS-H: this is the run a CONSOLE chat turn (and any API
+                # caller) drives, and until now it wrote no `turn.active`
+                # marker — so the goal/cron ticks and `deploy_when_idle.sh`
+                # could not see a live human turn on any seat but Telegram
+                # (which holds the same gate in `_run_and_deliver`). Fail-open
+                # by construction: the helper never refuses the human.
+                from core.surfaces.owner_turn import surface_owner_turn
                 try:
                     logger.info(f"Starting session execution for {_session_id}")
-                    result = await agent.run_session(_user_id, _session_id)
+                    with surface_owner_turn(kind="console_chat",
+                                            session_id=_session_id):
+                        result = await agent.run_session(_user_id, _session_id)
                     logger.info(f"Session {_session_id} completed with result: {result}")
                 except Exception as e:
                     logger.error(f"Session {_session_id} failed with error: {e}", exc_info=True)
@@ -324,7 +379,9 @@ async def send_user_message(
         # Handle terminal states that need resume
         # NOTE: Don't update status here - let TaskAgent handle status transitions
         # to avoid race condition where API and TaskAgent both try to update status
-        if status in ["suspended", "failed", "error"]:
+        # B34: one vocabulary (TERMINAL_/RESUMABLE_SESSION_STATUSES) — the
+        # local list here named "error", which is not a SessionStatus.
+        if status in RESUMABLE_SESSION_STATUSES:
             logger.info(f"Session {session_id} is {status}, will be resumed by TaskAgent")
 
         # Crash-mid-turn recovery: a session interrupted when the process died is
@@ -604,8 +661,7 @@ async def send_user_message(
                 )
             raise HTTPException(status_code=400, detail=error_str)
         else:
-            logger.error(f"Error sending user message: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
+            raise _internal_error(e, "Sending the message")
 
 @router.post("/sessions/{session_id}/cancel", response_model=MessageResponse)
 async def cancel_session(
@@ -648,8 +704,7 @@ async def cancel_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error cancelling session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Cancelling the session")
 
 @router.get("/sessions/{session_id}", response_model=SessionStatusResponse)
 async def get_session_status(
@@ -661,6 +716,9 @@ async def get_session_status(
     try:
         # OPTIMIZATION: Clean session ID once at API entry
         session_id = clean_session_id_at_entry(session_id)
+
+        # B11: honest 409 (not false-404) if another worker owns it.
+        _guard_session_route(agent, session_id)
 
         session_info = await agent.get_session_by_id(session_id)
         if not session_info:
@@ -677,9 +735,14 @@ async def get_session_status(
         from agents.task.agent.session import get_user_status
         user_status = get_user_status(internal_status)
         
-        # Determine user capabilities
+        # Determine user capabilities.
+        # B35: `can_send_message` was hardcoded True, so a client was told it
+        # could keep talking to a CANCELLED session — which
+        # `send_user_message` then refuses. The capability is real: a session
+        # accepts a message while it is live, or while it is in a state the
+        # agent can be RESUMED from; a cancelled session accepts nothing.
         can_cancel = (user_status == "active")
-        can_message = True  # Always allow messages
+        can_message = internal_status not in {"cancelled"}
         
         # Build response with user-facing status
         response_data = {
@@ -720,8 +783,7 @@ async def get_session_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting session status: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Reading the session status")
 
 @router.get("/sessions/{session_id}/queue-status", response_model=dict)
 async def get_queue_status(
@@ -772,12 +834,16 @@ async def get_queue_status(
             # ✅ FIX #4: session exists but is not active - return final status
             session_status = normalize_status_value(session_info.get('status', 'unknown'))
 
-            if session_status in ['completed', 'failed', 'suspended', 'error']:
+            # B34: one vocabulary. The old list called a SUSPENDED session
+            # `session_completed: True` — suspended means evicted to disk and
+            # resumable, so a poller was told a live session had finished.
+            if session_status in (TERMINAL_SESSION_STATUSES
+                                  | RESUMABLE_SESSION_STATUSES):
                 logger.debug(f"Session {session_id} is {session_status}, returning final status")
                 return {
                     "queued_messages": 0,
                     "agent_status": session_status,
-                    "session_completed": True,
+                    "session_completed": session_status in TERMINAL_SESSION_STATUSES,
                     "streaming_callbacks": 0,
                     "callback_failures": 0,
                     "message": f"Session {session_status}"
@@ -836,11 +902,7 @@ async def get_queue_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting queue status: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal error: {str(e)}"
-        )
+        raise _internal_error(e, "Reading the queue status")
 
 @router.get("/users/{user_id}/sessions", response_model=Dict[str, Any])
 async def get_user_sessions(
@@ -854,14 +916,36 @@ async def get_user_sessions(
         # any authenticated caller could otherwise list another tenant's sessions.
         _require_session_owner(req, user_id)
 
-        # Get all sessions for user from agent's active sessions (nested structure)
+        # B7: read the SessionManager, not `agent.active_sessions`. That dict
+        # is a LOOKUP CACHE — `get_session_by_id` populates it as a side effect
+        # (task_agent_lifecycle.py) — so a user who had not been looked up in
+        # this process since restart got a confident empty list, and a user who
+        # HAD been looked up under another request kept a stale entry. The
+        # session store is the source of truth and survives a restart.
         user_sessions = []
-        if hasattr(agent, 'active_sessions') and user_id in agent.active_sessions:
-            for sid, session_data in agent.active_sessions[user_id].items():
-                session_info = await agent.get_session_by_id(sid)
-                if session_info:
-                    user_sessions.append(session_info)
-        
+        session_manager = getattr(agent, 'session_manager', None)
+        if session_manager is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Sessions unavailable: session manager not initialized",
+            )
+        # The route is documented as "all sessions for a user".
+        # `get_active_sessions()` is created/running/resumed ONLY, so a
+        # completed or suspended session — both RESUMABLE, both the reason a
+        # client lists at all — was missing from an answer that looked
+        # complete. `get_all_sessions()` is the accessor that also recovers
+        # persisted sessions from disk; filter it to THIS tenant.
+        seen = set()
+        for info in (session_manager.get_all_sessions() or []):
+            if info.get("user_id") != user_id:
+                continue
+            sid = info.get("id")
+            if not sid or sid in seen:
+                continue
+            seen.add(sid)
+            session_info = await agent.get_session_by_id(sid)
+            user_sessions.append(session_info or info)
+
         # Get active session from agent state
         active_session_id = None
         if hasattr(agent, 'user_sessions') and user_id in agent.user_sessions:
@@ -876,8 +960,7 @@ async def get_user_sessions(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting user sessions: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Listing the sessions")
 
 @router.post("/users/{user_id}/active_session", response_model=MessageResponse)
 async def switch_active_session(
@@ -921,8 +1004,7 @@ async def switch_active_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error switching session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Switching the active session")
 
 def _capability_defaults(config) -> tuple:
     """Default (provider, model) advertised by /capabilities.
@@ -1076,8 +1158,7 @@ async def get_capabilities(request: Request):
         }
         
     except Exception as e:
-        logger.error(f"Error getting capabilities: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Reading the capabilities")
 
 @router.post("/sessions")
 async def create_session(
@@ -1326,12 +1407,25 @@ async def create_session(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error creating session: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Creating the session")
 
-@router.get("/metrics", response_model=dict)
+async def _require_admin(request: Request) -> bool:
+    """Admin gate for the cross-tenant metrics read (B5).
+
+    Delegates to the ONE admin predicate in ``api.admin_endpoints`` (role via
+    ``extract_admin_info``, never the second-truth ``request.state.is_admin``).
+    """
+    from api.admin_endpoints import require_admin
+    return await require_admin(request)
+
+
+@router.get("/metrics", response_model=dict, dependencies=[Depends(_require_admin)])
 async def get_resource_metrics(agent = Depends(get_task_agent)):
-    """Get current resource usage metrics.
+    """Get current resource usage metrics. ADMIN ONLY.
+
+    B5: this was unauthenticated and returned `users.sessions_per_user` and
+    `users.top_users` — every tenant id on the box, with its session count. A
+    tenant roster is not a health metric; the endpoint is admin-gated.
 
     Returns:
         Resource usage statistics for monitoring
@@ -1412,8 +1506,7 @@ async def get_resource_metrics(agent = Depends(get_task_agent)):
         }
 
     except Exception as e:
-        logger.error(f"Error getting metrics: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Reading the metrics")
 
 async def verify_files_ready(
     file_paths: List[str],
@@ -1554,6 +1647,9 @@ async def upload_document(
     try:
         # 1. Clean session ID
         session_id = clean_session_id_at_entry(session_id)
+
+        # B11: honest 409 (not false-404) if another worker owns it.
+        _guard_session_route(agent, session_id)
 
         # 2. Validate session exists
         session_info = agent.session_manager.get_session_info(session_id)
@@ -1708,8 +1804,14 @@ async def upload_document(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error uploading document: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        raise _internal_error(e, "The upload")
+
+# B8: serving ONE workspace file (the URI A2A artifacts point at) lives in its
+# own module — this file is at its size ratchet, so new behaviour is a new
+# module wired with one line.
+from api.task_workspace import router as _workspace_router  # noqa: E402
+router.include_router(_workspace_router)
+
 
 @router.get("/sessions/{session_id}/documents")
 async def list_session_documents(
@@ -1724,6 +1826,9 @@ async def list_session_documents(
     try:
         # 1. Clean session ID
         session_id = clean_session_id_at_entry(session_id)
+
+        # B11: honest 409 (not false-404) if another worker owns it.
+        _guard_session_route(agent, session_id)
 
         # 2. Validate session and access
         session_info = agent.session_manager.get_session_info(session_id)
@@ -1767,5 +1872,4 @@ async def list_session_documents(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error listing documents: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise _internal_error(e, "Listing the documents")

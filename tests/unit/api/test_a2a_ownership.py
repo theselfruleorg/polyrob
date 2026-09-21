@@ -91,6 +91,16 @@ def test_send_message_rejects_non_owner_before_write():
 
 # ── push-notification-config ownership (S5 IDOR) ────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _allow_push_urls(monkeypatch):
+    """B10 added a real SSRF/HTTPS gate on the push-notification URL, which
+    RESOLVES the host. These tests are about OWNERSHIP, and their fixture URL
+    is a non-resolvable example host, so stub the gate here — it has its own
+    tests in tests/unit/api/test_a2a_push_url_validation.py."""
+    import api.a2a.task_handler as th
+    monkeypatch.setattr(th, "validate_push_url", lambda url: url)
+
+
 def _pnc(url="https://attacker.example/hook", token="t"):
     from api.a2a.models import PushNotificationConfig
     return PushNotificationConfig(url=url, token=token)

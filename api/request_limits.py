@@ -4,7 +4,32 @@ import tempfile
 
 from starlette.responses import JSONResponse
 
-MAX_BODY_BYTES = 8 * 1024 * 1024
+#: Multipart envelope a single-file upload costs on top of the file itself
+#: (boundaries, part headers, the surrounding form fields).
+MULTIPART_OVERHEAD_BYTES = 1024 * 1024
+
+
+def max_body_bytes() -> int:
+    """The ingress body ceiling, derived from the ONE upload cap.
+
+    B14: this used to be a hardcoded 8 MiB while
+    ``core.surfaces.inbound_attachments.upload_max_mb()`` allowed 20 MiB, so
+    ``POST /api/task/sessions/{id}/workspace/upload`` advertised a limit this
+    middleware rejected first — with a *different* error — for every file over
+    8 MiB. One cap, plus the multipart envelope it actually travels in.
+    Fail-open to the legacy 8 MiB if the cap cannot be read.
+    """
+    try:
+        from core.surfaces.inbound_attachments import upload_max_mb
+        return int(upload_max_mb() * 1024 * 1024) + MULTIPART_OVERHEAD_BYTES
+    except Exception:
+        return 8 * 1024 * 1024
+
+
+# NOTE: there is deliberately no module-level `MAX_BODY_BYTES` constant. It had
+# zero readers after B14 and, being evaluated at IMPORT, it bound the cap
+# before env layering — the same import-time-binding landmine
+# `tests/test_home_binding_ratchet.py` exists for. Call `max_body_bytes()`.
 BODY_DEADLINE_SECONDS = 30
 MAX_ACTIVE_BODY_READS = 16
 
@@ -17,10 +42,12 @@ class RequestBodyLimitMiddleware:
     WebSockets are governed by the transport's independent frame limits.
     """
 
-    def __init__(self, app, max_bytes=MAX_BODY_BYTES, timeout=BODY_DEADLINE_SECONDS,
+    def __init__(self, app, max_bytes=None, timeout=BODY_DEADLINE_SECONDS,
                  concurrency=MAX_ACTIVE_BODY_READS):
         self.app = app
-        self.max_bytes = max_bytes
+        # Resolved at construction (not import) so the derived upload cap is
+        # read after env layering — see max_body_bytes().
+        self.max_bytes = max_body_bytes() if max_bytes is None else max_bytes
         self.timeout = timeout
         self.slots = asyncio.Semaphore(concurrency)
 

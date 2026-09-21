@@ -604,8 +604,8 @@ _notify_states: dict = {}  # (home_dir, instance_id, user_id) -> {key: content_h
 
 # Rail outcomes after which an item counts as "notified" — i.e. the owner
 # PLAUSIBLY SAW it. ``sent`` is a live delivery; ``deduped`` means the identical
-# text reached them inside the dedup window; ``fallback`` is the durable
-# owner_notice written when no live sink exists (a local/REPL owner's only
+# text reached them inside the dedup window; ``no_sink`` is the durable
+# owner_notice written when no live sink EXISTS (a local/REPL owner's only
 # channel, so it is their normal path, not a suppression).
 #
 # 035 P0-1 removed ``capped`` and ``quiet_held``. Both are SUPPRESSIONS: the
@@ -613,7 +613,13 @@ _notify_states: dict = {}  # (home_dir, instance_id, user_id) -> {key: content_h
 # leave behind is visible only via ``polyrob telemetry``. Counting an unread
 # record as delivery is what made the 09-08 lock permanent. ``rate_limited``
 # was already excluded on the same reasoning.
-_NOTIFIED_OUTCOMES = ("sent", "deduped", "fallback")
+#
+# D21 (2026-09-21 interface audit) splits ``fallback`` out for exactly that
+# reason. It used to mean BOTH "no channel exists, the notice is the channel"
+# and "a live channel was there and the send FAILED" — the second is a delivery
+# fault, and counting it as notified re-armed the 09-08 lock for a tenant whose
+# Telegram sink was down. Only the first (now ``no_sink``) counts.
+_NOTIFIED_OUTCOMES = ("sent", "deduped", "no_sink")
 
 
 def _item_key(item: dict) -> str:

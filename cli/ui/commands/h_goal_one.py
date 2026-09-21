@@ -14,11 +14,18 @@ from __future__ import annotations
 from cli.ui.commands.h_owner import _admin_data_dir, _tenant
 
 
-def h_goal(ctx) -> None:
-    """``/goal <show|ready|pause|resume|retry|cancel> <id>`` — one goal."""
+async def h_goal(ctx) -> None:
+    """``/goal <show|ready|pause|resume|retry|cancel> <id>`` — one goal.
+
+    ``async`` + ``_awaited``: the ``owner_ops`` helpers are migrating to async
+    one verb at a time (D12), and a seat that hard-codes one shape emits a
+    coroutine's repr as if it were the answer the moment its helper flips.
+    """
     from surfaces.telegram import owner_ops
+    from cli.ui.commands.h_money_verbs import _awaited
     ctx.emit(
-        owner_ops.goal_reply(_tenant(ctx), _admin_data_dir(ctx), list(ctx.args or [])),
+        await _awaited(owner_ops.goal_reply(
+            _tenant(ctx), _admin_data_dir(write=True), list(ctx.args or []))),
         title="goal",
     )
 

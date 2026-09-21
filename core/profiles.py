@@ -187,7 +187,14 @@ def _find_project_pin() -> Optional[str]:
     git_root = None
     p = cwd
     while True:
-        if (p / ".git").exists():
+        # An unreadable probe (the service user inside root's 0700 clone,
+        # prod 2026-09-20) is "not a git root here", never a crash — this is
+        # a weak ambient signal and the CLI must survive it.
+        try:
+            is_root = (p / ".git").exists()
+        except OSError:
+            is_root = False
+        if is_root:
             git_root = p
             break
         if p.parent == p:

@@ -150,11 +150,20 @@ async def test_a_text_only_turn_is_unchanged(workspace):
 
 
 @pytest.mark.asyncio
-async def test_no_fetcher_leaves_the_turn_untouched(workspace):
+async def test_no_fetcher_names_the_files_it_could_not_store(workspace):
+    """D52: an attachment that cannot be stored is NAMED on the turn.
+
+    Leaving the turn "untouched" meant the agent answered a message whose
+    attachments it had no idea existed — the same silent-drop the media rail
+    was built to end.
+    """
     agent = _FakeAgent()
     result = _result(RouteKind.STEER, text="hi", session_id="sess_live",
                      media=[Media(kind="image", ref="f1", filename="shot.png")])
 
     await act_on_inbound(agent, result, spawn=lambda c: c.close(), fetch_media=None)
 
-    assert agent.delivered[0]["text"] == "hi"
+    text = agent.delivered[0]["text"]
+    assert text.startswith("hi")
+    assert "shot.png" in text and "could NOT store" in text
+    assert agent.delivered[0]["metadata"] is None

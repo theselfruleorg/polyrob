@@ -22,6 +22,10 @@ def _client(monkeypatch, tmp_path, user_id="u1"):
     import webview.pages as pages
     monkeypatch.setattr(pages, "_effective_user_id", lambda req: user_id)
     monkeypatch.setattr(pages, "_data_dir", lambda: str(tmp_path))
+    # 043 A8/E2: `/api/webgate/pending` composes through
+    # `webview.inbox.build_inbox`, whose collectors resolve the data home
+    # via `webgate.data_dir()`. Patch the ONE seam both readers share.
+    monkeypatch.setattr(pages.webgate, "data_dir", lambda: str(tmp_path))
     app = FastAPI()
     app.include_router(pages.router)
     return TestClient(app), pages
@@ -44,7 +48,13 @@ def test_pending_list_shows_proposed_pref_change(monkeypatch, tmp_path):
     items = r.json()["items"]
     pref_items = [it for it in items if it["kind"] == "pref_change"]
     assert [it["id"] for it in pref_items] == [pid]
-    assert pref_items[0]["preview"]
+    # 043 A8/E2: one composed shape for every seat — the proposal's own text is
+    # the card's title + body (``core.surfaces.inbox.Item``), not a raw
+    # ``preview`` string only this endpoint knew about.
+    assert pref_items[0]["title"] or pref_items[0]["body"]
+    # …and the composer says which stores answered, so a short list is never
+    # silently short.
+    assert "unreadable_sources" in r.json()
 
 
 def test_pending_show_returns_full_body(monkeypatch, tmp_path):
@@ -107,15 +117,20 @@ def test_decisions_are_tenant_scoped(monkeypatch, tmp_path):
     assert load_preferences(tmp_path, "u1").get("budget.wallet_daily_usd") is None
 
 
-def test_pending_page_renders_200(monkeypatch):
+def test_the_pending_page_is_gone(monkeypatch):
+    """A21 (2026-09-21): the ``/pending`` PAGE is deleted; its reader stays.
+
+    Two review surfaces over one store is how they come to disagree — the page
+    swallowed a failed collector into an empty list while the Inbox named it.
+    The Inbox is the review queue; ``GET /api/webgate/pending`` (tested above)
+    is untouched.
+    """
     monkeypatch.setenv("WEBGATE_MULTITENANT", "false")
     monkeypatch.setenv("ENV", "development")
     import webview.server as server
     server = importlib.reload(server)
     client = TestClient(server._fastapi)
-    r = client.get("/pending")
-    assert r.status_code == 200
-    assert "Pending review" in r.text
+    assert client.get("/pending").status_code == 404
 
 
 @pytest.fixture(autouse=True)

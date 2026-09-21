@@ -618,6 +618,24 @@ class TaskAgentDeliveryMixin:
             logger.warning("correspondent delivery: could not narrow the resumed task",
                            exc_info=True)
 
+    def _tenant_for_correspondent(self, surface: str, address: str):
+        """The tenant that owns the binding for ``(surface, address)``, or None.
+
+        D32: the ONE way to name the owner of a correspondent reply when the
+        originating session is gone. Read-only and fail-soft.
+        """
+        try:
+            container = getattr(self, "container", None)
+            registry = (container.get_service("correspondent_registry")
+                        if container else None)
+            row = (registry.resolve(surface=surface, address=address)
+                   if registry is not None else None)
+            return (row or {}).get("user_id") or None
+        except Exception:
+            logger.warning("correspondent tenant lookup failed for %s:%s",
+                           surface, address, exc_info=True)
+            return None
+
     async def deliver_correspondent_data(
         self,
         session_id: str,
@@ -662,6 +680,14 @@ class TaskAgentDeliveryMixin:
                                session_id, _dec.reason)
                 _owner = ((session_info or {}).get("user_id")
                           if isinstance(session_info, dict) else None)
+                # D32 (2026-09-21 interface audit): a DEAD session has no
+                # session_info, so `_owner` was None, the store record was
+                # skipped AND the owner notice was skipped — a correspondent's
+                # reply that arrived during a pause was lost with no trace at
+                # all. The tenant is recoverable without the session: the
+                # correspondent binding for this address names it.
+                if not _owner and surface:
+                    _owner = self._tenant_for_correspondent(surface, source)
                 if store is not None and surface and _owner:
                     try:
                         store.record_inbound(str(_owner), surface, source, text,
@@ -673,7 +699,16 @@ class TaskAgentDeliveryMixin:
                 # is context for the next inbound after resume, not a lost message.
                 try:
                     from core.event_log import event_log_enabled, get_event_log
-                    if event_log_enabled() and _owner:
+                    if not _owner:
+                        # D32: never silent. If even the binding cannot name a
+                        # tenant, say so — an untenanted notice is unreadable by
+                        # any seat, so the ERROR line is the only record left.
+                        logger.error(
+                            "correspondent delivery: reply from %s for dead session "
+                            "%s arrived while paused and NO tenant could be "
+                            "resolved — it is not recorded anywhere",
+                            source, session_id)
+                    elif event_log_enabled():
                         get_event_log().record(
                             "owner_notice", user_id=str(_owner), session_id=session_id,
                             source="correspondent",
@@ -681,7 +716,8 @@ class TaskAgentDeliveryMixin:
                                            f"session {session_id[:8]} is in the conversation "
                                            f"store; it is delivered as context after resume"})
                 except Exception:
-                    logger.debug("held-reply owner notice failed", exc_info=True)
+                    logger.warning("held-reply owner notice failed — this reply has "
+                                   "no durable record", exc_info=True)
                 return False
             orchestrator = None
             if session_info:

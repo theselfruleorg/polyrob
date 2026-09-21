@@ -61,7 +61,8 @@ def test_role_bad_value_names_the_vocabulary(tmp_path, monkeypatch):
 def test_tail_empty(tmp_path, monkeypatch):
     _env(tmp_path, monkeypatch)
     res = CliRunner().invoke(owner, ["groups", "tail", "telegram", "100"])
-    assert res.exit_code == 0 and "no ledger rows" in res.output.lower()
+    # D58 (2026-09-21): an absent store is named as absent, and never created.
+    assert res.exit_code == 0 and "no room log on this box yet" in res.output.lower()
 
 
 def test_service_creates_and_off_stops_the_job(tmp_path, monkeypatch):

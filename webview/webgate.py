@@ -97,6 +97,69 @@ def is_local() -> bool:
     return posture() == "local"
 
 
+def is_owner_console() -> bool:
+    """True when this console IS the instance owner's seat — `local` or `own_ops`.
+
+    The ONE predicate behind every instance-wide control: pause/resume, the app
+    decisions, the avatar ceremony. ``pages._owner_console_required`` refuses
+    on it, and the shell asks it before DRAWING the control — because a button
+    that is always there and always answers 403 is a seat that lies about its
+    own reach. A multitenant TENANT is authenticated and still not the owner of
+    this instance's autonomy, so both halves must read one rule, not two.
+    """
+    return posture() in ("local", "own_ops")
+
+
+def service_token_header() -> str:
+    """The header the api tier reads the OPERATOR service token from.
+
+    ⚠️ Read from ``api.auth_constants.SERVICE_TOKEN_HEADER``, never spelled
+    here: ``X-API-KEY`` now routes to the per-user ``rob_xxx`` validator, and
+    the old spelling is accepted for one more release only.
+    """
+    try:
+        from api.auth_constants import SERVICE_TOKEN_HEADER
+        return str(SERVICE_TOKEN_HEADER)
+    except Exception:  # a console with no api tier never proxies to one
+        return "X-Service-Token"
+
+
+def request_is_admin(request) -> bool:
+    """Is this request's principal an ADMIN, by the ONE role predicate?
+
+    ⚠️ The console used to read the cached ``request.state.is_admin`` BOOLEAN
+    directly (`activity.py`, `posture_routes.py`) — a second admin truth of
+    exactly the kind the 2026-09-21 API work removed from the api tier. That
+    flag is written by THIS process's auth middleware and by nothing else, so a
+    request populated on any other path (``session_identity.py``, the api
+    tier's own middleware in a combined app) carries a ROLE and no flag, and a
+    reader that only looks at the flag answers "not an admin" for a real one —
+    silently, as a 303 or a 404.
+
+    The role is therefore resolved through ``core.constants.is_admin_role``
+    (re-exported by ``api.auth_constants``), the same predicate
+    ``api/app.py`` and ``webview/server.py`` already use. The cached flag is
+    still honoured when it is set, because it ALSO carries admin-by-WALLET,
+    which no role string can express — so this is an OR of the two, never a
+    replacement of one by the other.
+
+    Fail-CLOSED: an unresolvable predicate is "not an admin".
+    """
+    state = getattr(request, "state", None)
+    if state is None:
+        return False
+    if bool(getattr(state, "is_admin", False)):
+        return True
+    role = getattr(state, "role", None)
+    if not role:
+        return False
+    try:
+        from api.auth_constants import is_admin_role
+    except Exception:  # a console with no api tier has no roles either
+        return False
+    return bool(is_admin_role(str(role)))
+
+
 def requires_owner_login() -> bool:
     """True for own_ops/multitenant — console access needs SOME authenticated identity.
 

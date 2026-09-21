@@ -305,14 +305,59 @@ def get_x402_price_usd() -> float:
     return 0.01
 
 
+#: Post-settlement statuses that mean the SERVER refused a payer who had
+#: already paid. 401/403 after a settled x402 payment is never the payer's
+#: fault: the payment WAS the authentication, and an auth gate that then
+#: refuses them took money for nothing (B1, 2026-09-21).
+REFUNDABLE_AUTH_STATUSES = frozenset({401, 403})
+
+
 def should_refund_on_status(status_code: int) -> bool:
     """Whether a downstream response status means the paid request failed.
 
-    x402 settles BEFORE the downstream handler runs, so a server error (5xx)
-    means the customer paid but got nothing -> flag the payment for refund.
-    Client errors (4xx) are the caller's fault and are not refundable here.
+    x402 settles BEFORE the downstream handler runs, so:
+
+    - a server error (5xx) means the customer paid and got nothing;
+    - a 401/403 means an auth gate downstream refused a caller whose payment
+      had already settled — the x402 payment IS their credential, so this is
+      the server's misconfiguration, not a client error.
+
+    Every other 4xx (400/404/422/429) is the caller's own malformed or
+    out-of-scope request and is not refundable here.
     """
-    return int(status_code) >= 500
+    code = int(status_code)
+    return code >= 500 or code in REFUNDABLE_AUTH_STATUSES
+
+
+#: Telemetry kind emitted when a settled payment is flagged for refund.
+#: The DB status alone is invisible: every invoice listing filters on
+#: ``pending``/``completed``/``expired``, so a ``refund_due`` row disappears
+#: from the four owner seats the moment it is written. A durable event is the
+#: one place the fact survives a log rotation (2026-09-21 revalidation).
+from core.event_kinds import PAYMENT_REFUND_DUE as PAYMENT_REFUND_DUE_EVENT  # the ONE literal
+
+
+async def _tell_owner_refund_due(container: Any, payment_id: str) -> None:
+    """Actively TELL the owner (2026-09-21 revalidation): the status figure and
+    the critical lane were in place, but nothing sent the notice — the owner
+    had to go and look at `/status`. Rides the ONE delivery rail on the
+    critical lane (`payment_refund_due` is in `_CRITICAL_SOURCES`, so the
+    daily cap never drops it). Never raises."""
+    try:
+        from core.instance import resolve_owner_user_id
+        import core.surfaces.user_delivery as _ud
+        owner = resolve_owner_user_id()
+        if not owner:
+            return
+        text = (f"⚠ refund owed: a machine payment ({payment_id}) settled on-chain "
+                f"and the request then failed, so I took money and delivered "
+                f"nothing. It is listed under /invoices refund_due; the refund "
+                f"is yours to make — nothing here sends money back on its own.")
+        await _ud.deliver_user_message(container, owner, text,
+                                       source=PAYMENT_REFUND_DUE_EVENT)
+    except Exception:
+        logger.warning("refund_due owner notice could not be delivered "
+                       "(the status seat still shows it)", exc_info=True)
 
 
 async def mark_payment_refund_due(payment_id: str) -> bool:
@@ -330,10 +375,28 @@ async def mark_payment_refund_due(payment_id: str) -> bool:
             (payment_id,),
         )
         logger.warning(f"x402.refund_due payment_id={payment_id} (downstream failed after settlement)")
+        _emit_refund_due(payment_id)
+        await _tell_owner_refund_due(container, payment_id)
         return True
     except Exception as e:
         logger.error(f"Failed to flag x402 refund_due for {payment_id}: {e}")
         return False
+
+
+def _emit_refund_due(payment_id: str) -> None:
+    """Record the refund obligation as durable telemetry. Fail-open."""
+    try:
+        from core.instance import resolve_owner_user_id
+        from modules.x402.invoicing import _emit
+
+        try:
+            owner = resolve_owner_user_id()
+        except Exception:
+            owner = ""
+        _emit(PAYMENT_REFUND_DUE_EVENT, user_id=owner or "", session_id="",
+              attrs={"payment_id": payment_id, "reason": "downstream_failed_after_settlement"})
+    except Exception as e:  # telemetry never breaks the money path
+        logger.debug("refund_due telemetry unavailable: %s", e)
 
 
 # One-time WARN guard for a treasury/env vs wallet-address mismatch (W1.1) —
@@ -429,6 +492,17 @@ def receive_rail_summary() -> str:
         return ""
 
 
+def x402_network() -> str:
+    """The chain the per-request x402 rail settles on (``X402_DEFAULT_CHAIN``).
+
+    Split out of :func:`get_x402_config` so a caller that only needs the CHAIN
+    does not pay for ``resolve_treasury_address()``, which derives a wallet
+    signing key. The public agent card and ``/api/x402/pricing`` both need the
+    chain on every unauthenticated request (B41).
+    """
+    return (os.environ.get("X402_DEFAULT_CHAIN") or "base").strip() or "base"
+
+
 def get_x402_config() -> Dict[str, Any]:
     """Get x402 configuration from environment.
 
@@ -441,7 +515,7 @@ def get_x402_config() -> Dict[str, Any]:
     return {
         "enabled": os.environ.get("X402_ENABLED", "false").lower() == "true",
         "pay_to": resolve_treasury_address(),
-        "network": os.environ.get("X402_DEFAULT_CHAIN", "base"),
+        "network": x402_network(),
         "cdp_key_id": os.environ.get("CDP_API_KEY_ID", ""),
         "cdp_key_secret": os.environ.get("CDP_API_KEY_SECRET", ""),
     }

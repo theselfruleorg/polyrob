@@ -68,7 +68,7 @@ async def test_own_ops_non_owner_denied(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_own_ops_owner_allowed_gets_snapshot(monkeypatch):
+async def test_own_ops_owner_allowed_joins_the_room(monkeypatch):
     server = _reload_server(monkeypatch, "own_ops")
     import webview.webgate as wg
     import webview.activity as activity
@@ -81,7 +81,10 @@ async def test_own_ops_owner_allowed_gets_snapshot(monkeypatch):
     await server.join_activity("sid-o", {})
 
     assert ("sid-o", "activity") in fake.entered_rooms
-    assert any(evt == "activity_snapshot" for evt, _ in fake.emitted)
+    # 043 A29: NO `activity_snapshot` emit — `static/app/live.js` subscribes to
+    # `activity_event` only, so the 200-row snapshot went to nobody. Joining the
+    # room and starting the hub is the whole contract.
+    assert not any(evt == "activity_snapshot" for evt, _ in fake.emitted)
     assert activity.get_hub().started is True
 
     # last client leaves → hub stops

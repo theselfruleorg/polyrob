@@ -37,6 +37,6 @@ def register(reg, Command) -> None:
     reg.register(Command(
         "files", h_files,
         "Recent run artifacts (newest first) — what background runs produced",
-        usage="[n]", group="work",
+        usage="[n]", group="look",
         help_long=HELP_FILES[0], elsewhere=HELP_FILES[1],
     ))

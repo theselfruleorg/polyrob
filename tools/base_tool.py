@@ -314,6 +314,47 @@ class BaseTool(BaseComponent):
         """Set enabled status."""
         self._enabled = value
     
+    # --- 057 WS-F: a missing key is a VERDICT, not a per-construction log line ---
+    def note_missing_config(self, missing: List[str]) -> None:
+        """Record a ``missing_key`` verdict for this tool and WARN ONCE per process.
+
+        A tool with no API key (perplexity is the standing example) warned on
+        EVERY construction — and a new tool instance is built per session — while
+        leaving no durable trace, so the operator got log noise and no health
+        line. The verdict is the record (``core.credential_verdicts``, kind
+        ``missing_key``, key = the tool name); the log line is the notification,
+        once. Fail-open: a broken store still logs.
+        """
+        if not missing:
+            return
+        remedy = "set " + ", ".join(str(m) for m in missing)
+        first_seen = None
+        try:
+            from core.credential_verdicts import record_rejection
+            first_seen = record_rejection("missing_key", self.name,
+                                          code="missing_config", remedy=remedy).first_seen
+        except Exception:
+            pass
+        fresh = True
+        try:
+            from core.credential_verdicts import warn_once
+            fresh = warn_once("missing_key", self.name, episode=first_seen)
+        except Exception:
+            pass
+        text = f"{self.name} service missing required configuration: {remedy}"
+        if fresh:
+            self.logger.warning(text)
+        else:
+            self.logger.debug(text)
+
+    def note_config_present(self) -> None:
+        """Clear this tool's ``missing_key`` verdict — the key showed up."""
+        try:
+            from core.credential_verdicts import clear_rejection
+            clear_rejection("missing_key", self.name)
+        except Exception:
+            pass
+
     def _check_enabled(self) -> bool:
         """Check if service is enabled."""
         # Get metadata for this service
@@ -331,12 +372,11 @@ class BaseTool(BaseComponent):
                     missing_config.append(f"{key} (Required configuration)")
                     
             if missing_config:
-                self.logger.warning(
-                    f"{self.name} service missing required configuration: "
-                    f"{', '.join(missing_config)}"
-                )
+                self.note_missing_config(missing_config)
                 if is_required:
                     return False
+            elif required_config:
+                self.note_config_present()
                     
             # Validate services
             missing_services = []

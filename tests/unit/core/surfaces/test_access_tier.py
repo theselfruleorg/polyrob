@@ -98,7 +98,24 @@ def test_paired_user_is_owner_tier(workdir):
     assert store.approve(code) == "u_paired"
     c = _Container(workdir)
     env = {"POLYROB_OWNER_USER_ID": "u_owner"}
-    assert resolve_access_tier(c, _identity("u_paired"), env=env) == AccessTier.OWNER
+    # A pairing row is keyed on the sender address, so it is only evidence on a
+    # surface whose address is authenticated (telegram here).
+    assert resolve_access_tier(c, _identity("u_paired", surface="telegram"),
+                               env=env) == AccessTier.OWNER
+
+
+def test_paired_user_is_never_owner_on_a_forgeable_surface(workdir):
+    """D1: a ``From:`` header is spoofable, so a pairing row keyed on an email
+    address proves nothing. The pairing branch used to run for every surface,
+    which made a paired address an OWNER command-turn on email."""
+    from core.pairing import PairingStore
+    store = PairingStore(os.path.join(workdir, "pairing.db"))
+    code = store.request("u_paired")
+    assert store.approve(code) == "u_paired"
+    c = _Container(workdir)
+    env = {"POLYROB_OWNER_USER_ID": "u_owner"}
+    assert resolve_access_tier(c, _identity("u_paired", surface="email"),
+                               env=env) == AccessTier.DENIED
 
 
 def test_local_mode_owns_local_surface_only_not_network(workdir):

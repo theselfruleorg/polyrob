@@ -96,6 +96,61 @@ def completed_via_done(orchestrator: Any) -> Optional[bool]:
         return None
 
 
+async def _resume_existing_session(task_agent: Any, session_id: str, *,
+                                   user_id: str, note: Optional[str]) -> Optional[str]:
+    """Make *session_id* live again and inject *note*, or return None (057 WS-C B9).
+
+    Returns None — never raises — for every "cannot resume" shape: no session
+    metadata, a foreign tenant, a task_agent without the resume rail, or a
+    recreation that failed. The caller then starts a cold session, which is the
+    behaviour with the flag off.
+    """
+    try:
+        info = task_agent.session_manager.get_session_info(session_id)
+    except Exception:
+        logger.debug("resume: session lookup failed for %s", session_id, exc_info=True)
+        return None
+    if not info:
+        return None
+    owner = info.get("user_id")
+    if user_id is not None and owner is not None and owner != user_id:
+        logger.warning("resume refused: session %s belongs to %s, not %s",
+                       session_id, owner, user_id)
+        return None
+    resolve = getattr(task_agent, "_resolve_or_recreate", None)
+    if not callable(resolve):
+        return None
+    try:
+        orchestrator = await resolve(session_id, info)
+    except Exception:
+        logger.debug("resume: recreate failed for %s", session_id, exc_info=True)
+        return None
+    if orchestrator is None:
+        return None
+    if note:
+        _inject_resume_note(orchestrator, note)
+    return session_id
+
+
+def _inject_resume_note(orchestrator: Any, note: str) -> None:
+    """Push the restart note as a typed SYSTEM_NOTE control message.
+
+    A resumed run carries its whole history, so the note is the ONLY thing that
+    tells it the previous attempt was cut short and where it stopped. Fail-open:
+    a session that cannot take the note still resumes (the note is also in the
+    task body)."""
+    try:
+        from modules.llm.messages import MessageOrigin, make_control_message
+        agent = next(iter((getattr(orchestrator, "agents", None) or {}).values()), None)
+        mm = getattr(agent, "message_manager", None)
+        push = getattr(mm, "push_ephemeral_message", None)
+        if callable(push):
+            push(make_control_message(f"<restart-note>\n{note}\n</restart-note>",
+                                      MessageOrigin.SYSTEM_NOTE))
+    except Exception:
+        logger.debug("resume note injection skipped", exc_info=True)
+
+
 async def run_task_to_outcome(
     task_agent: Any,
     *,
@@ -140,6 +195,38 @@ async def run_task_to_outcome(
     envelope — never by re-extracting strings from message history.
     """
     from agents.task.runtime.run_outcome import RunOutcome, build_run_outcome
+
+    # 057 WS-C (B9): RESUME the goal's own session instead of minting a new one.
+    # A yielded goal's history is on disk and the resume machine already exists
+    # (`_resolve_or_recreate` -> `_recreate_orchestrator` -> `load_from_disk`,
+    # the self-wake path) — goals never used it, so every re-dispatch was a cold
+    # `create_session` that re-derived everything the pre-empted run had learned.
+    # Popped before anything else so a `create_session` fake never sees the key.
+    resume_sid = request.pop("resume_session_id", None) if isinstance(request, dict) else None
+    resume_note = request.pop("resume_note", None) if isinstance(request, dict) else None
+    if resume_sid:
+        resumed = await _resume_existing_session(
+            task_agent, str(resume_sid), user_id=user_id, note=resume_note)
+        if resumed:
+            if autonomous:
+                from agents.task.goals.autonomy_marker import mark_autonomous
+                mark_autonomous(resumed, goal_id, cron_job_id=cron_job_id)
+            # Emitted only when the resume REALLY happened, so `/status work` can
+            # render `yielded xN / resumed xM` from facts rather than intent.
+            try:
+                from core.event_log import emit
+                emit("goal_run", source="goal", user_id=str(user_id or ""),
+                     session_id=resumed,
+                     attrs={"goal_id": goal_id, "outcome": "resumed"})
+            except Exception:
+                logger.debug("resume telemetry skipped", exc_info=True)
+            status = await task_agent.run_session(user_id, resumed)
+            return await build_run_outcome(task_agent, resumed, status)
+        # Not resumable (evicted beyond recovery, wrong tenant, no metadata):
+        # fall through to a COLD session rather than failing the goal. The run
+        # then reads the same restart note from its task body.
+        logger.info("goal session %s is not resumable — starting a fresh one",
+                    resume_sid)
 
     # §3.3: pre-generate + pre-mark the session id for AUTONOMOUS runs so the
     # marker is visible DURING construction — the communication-contract block

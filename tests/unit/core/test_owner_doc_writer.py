@@ -117,3 +117,34 @@ def test_owner_doc_pending_labeled_in_notification(tmp_path):
     assert se.KIND_OWNER in kinds
     note = se.build_pending_notification(items)
     assert "owner-facts note" in note  # NOT mislabeled as skill '<uid>'
+
+
+def test_promote_of_a_sourced_rewrite_passes_the_claim_guard(tmp_path, monkeypatch):
+    """2026-09-20 07:23Z prod: /approve_all on a draft whose every line carried
+    '[from: owner said 2026-09-20]' was refused 'this line makes a durable claim
+    with no provenance'. The owner-review gate must accept a sourced draft, and
+    stamp the owner's approval onto anything the draft left bare."""
+    monkeypatch.setenv("DOC_CLAIM_PROVENANCE_REQUIRED", "true")
+    monkeypatch.setenv("OWNER_DOC_REQUIRE_REVIEW", "true")
+    w = OwnerDocWriter(tmp_path)
+    w.propose("NOTIFY ON EVERY BUYBACK: every executed tranche is announced.",
+              user_id="u1", created_by="user", pending=False, source="owner said",
+              observed_at="2026-09-18")
+    draft = ("NOTIFY ON EVERY BUYBACK (2026-09-18): every EXECUTED tranche is announced. [from: owner said 2026-09-20]\n"
+             "NO PUBLIC BUG-FIX REPORTS: never publish reports about bugs we fix. [from: owner said 2026-09-20]\n"
+             "TEXT ONLY: never produce or attach a video.\n")
+    res = w.propose(draft, user_id="u1", created_by="agent", source="owner said",
+                    observed_at="2026-09-20")
+    assert res.ok and res.pending
+    res = w.promote(user_id="u1")
+    assert res.ok and not res.pending, res.errors
+    active = w.read("u1")
+    assert "NO PUBLIC BUG-FIX REPORTS" in active and w.list_pending("u1") is None
+    assert active.count("[from: owner said 2026-09-20]") == 3   # the draft's own stamps survive
+    # A pre-057 draft (bare claim lines, written before the guard existed) is
+    # promoted with the owner's approval as its provenance, not refused.
+    pf = w._pending_file("u1"); pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text("Owner prefers terse replies.\nThe rail no longer works on weekends.\n", encoding="utf-8")
+    res = w.promote(user_id="u1")
+    assert res.ok and not res.pending, res.errors
+    assert "The rail no longer works on weekends. [from: owner approved" in w.read("u1")

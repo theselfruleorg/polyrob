@@ -141,3 +141,23 @@ def test_cron_default_tools_posture_1(monkeypatch):
 def test_cron_default_tools_posture_0(monkeypatch):
     from cron.runner import default_cron_tools
     assert default_cron_tools() == ["filesystem", "task"]
+
+
+# --- 057 WS-A: named rigs at the dispatcher's default point --------------------
+
+def test_resolve_tools_payload_rig_narrows_the_default(monkeypatch):
+    monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "0")
+    monkeypatch.delenv("AUTONOMOUS_RIG_DEFAULT", raising=False)
+    disp = _dispatcher(_Board())
+    tools = disp._resolve_tools(_Goal(payload={"rig": "ops"}))
+    assert tools == ["filesystem", "task", "goal", "cronjob", "message"]
+
+
+def test_resolve_tools_env_rig_default_applies_and_explicit_tools_still_win(monkeypatch):
+    monkeypatch.setenv("AGENT_COMPUTE_POSTURE", "0")
+    monkeypatch.setenv("AUTONOMOUS_RIG_DEFAULT", "research")
+    disp = _dispatcher(_Board())
+    assert "web_fetch" in disp._resolve_tools(_Goal())
+    assert disp._resolve_tools(_Goal(payload={"tools": ["filesystem"]})) == ["filesystem"]
+    # an explicit `full` on the row outranks a narrow deploy-wide default
+    assert disp._resolve_tools(_Goal(payload={"rig": "full"})) == ["filesystem", "task"]

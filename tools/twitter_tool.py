@@ -15,6 +15,7 @@ import math
 import traceback
 from .base_tool import BaseTool, ToolStatus
 from core.exceptions import APIError, ConfigurationError, AuthenticationError, RateLimitError, ToolError, ServiceError
+from core.credential_verdicts import TWITTER_API_TTL_SEC
 import os
 
 # Import action models from centralized location
@@ -425,7 +426,17 @@ class TwitterTool(BaseTool):
     # 2026-09-19: a 402 ("credits depleted") is remembered for this long and every
     # API call in the window is refused LOCALLY with the remedy — outreach round 15
     # burned its whole step budget rediscovering the same 402 (52 hits in 15 min).
-    _CREDIT_402_WINDOW_SEC = 3600
+    # 057 WS-F: the memory is the DURABLE verdict store, so a restart does not
+    # re-discover a depleted account, and the TTL constant lives there.
+    _CREDIT_402_WINDOW_SEC = TWITTER_API_TTL_SEC
+
+    # The browser rail needs no API credits. This is a HINT, not an auto-fallback:
+    # nothing here re-dispatches the call (an implicit rail change on a public
+    # posting verb is the agent's decision, not the tool's).
+    CREDIT_402_FALLBACK = "x_browser.x_post"
+
+    _CREDIT_402_REMEDY = ("top up the pay-per-use credits or change tier at "
+                          "https://developer.x.com/en/portal/dashboard")
 
     @staticmethod
     def _is_payment_required(exc: BaseException) -> bool:
@@ -437,18 +448,20 @@ class TwitterTool(BaseTool):
 
     def _credit_preflight_refusal(self) -> Optional[str]:
         try:
-            from core.credential_verdicts import rejected_within
-            if rejected_within("twitter_api", self._CREDIT_402_WINDOW_SEC):
-                return (
-                    "X API credits depleted (a 402 Payment Required was returned within "
-                    f"the last {self._CREDIT_402_WINDOW_SEC // 60} min) — not retrying, this "
-                    "call was refused locally. Owner remedy: top up the pay-per-use credits "
-                    "or change tier at https://developer.x.com/en/portal/dashboard. The "
-                    "browser rail (x_browser) needs no API credits. Stop the round in ≤3 "
-                    "steps and report; do not probe other endpoints.")
+            from core.credential_verdicts import active, since_text
+            live = active("twitter_api", live_only=True)
+            if not live:
+                return None
+            v = min(live, key=lambda x: x.first_seen)
+            refused = sum(x.count for x in live)
+            return (
+                f"X API credits depleted (402 Payment Required since {since_text(v)}; "
+                f"{refused} rejection(s)) — not retrying, this call was refused "
+                f"locally. Owner remedy: {self._CREDIT_402_REMEDY}. The browser rail "
+                f"({self.CREDIT_402_FALLBACK}) needs no API credits. Stop the round in "
+                "≤3 steps and report; do not probe other endpoints.")
         except Exception:
             return None
-        return None
 
     async def _make_request(self, func: callable, endpoint_type: str, *args, **kwargs) -> Any:
         """Make a rate-limited request."""
@@ -485,15 +498,35 @@ class TwitterTool(BaseTool):
             raise
         except Exception as e:
             if self._is_payment_required(e):
-                try:
-                    from core.credential_verdicts import record_rejection
-                    record_rejection("twitter_api", str(endpoint_type or ""))
-                    self.logger.error("X API 402 Payment Required (credits depleted) on %s — "
-                                      "remembering for %ss; further calls refuse locally",
-                                      endpoint_type, self._CREDIT_402_WINDOW_SEC)
-                except Exception:
-                    pass
+                self._record_credit_402(str(endpoint_type or ""))
             raise APIError(f"Twitter request failed: {str(e)}")
+
+    def _record_credit_402(self, endpoint_type: str) -> None:
+        """Remember a 402 durably and say so ONCE per outage.
+
+        Prod logged 317 "402" lines in 24 h and emitted NO durable event, so the
+        status snapshot could not show the rail was dead (057 R5). The event is
+        emitted per FRESH verdict, not per refused call; the log line likewise.
+        """
+        try:
+            from core.credential_verdicts import record_rejection, warn_once
+            v = record_rejection("twitter_api", endpoint_type, code="402",
+                                 remedy=self._CREDIT_402_REMEDY)
+        except Exception:
+            return
+        if v.count == 1:
+            from core.event_log import emit
+            emit("x_api_rejected", source="twitter", attrs={
+                "code": "402",
+                "endpoint": endpoint_type,
+                "remedy": self._CREDIT_402_REMEDY,
+                "fallback": self.CREDIT_402_FALLBACK})
+        if warn_once("twitter_api", endpoint_type, episode=v.first_seen):
+            self.logger.warning(
+                "X API 402 Payment Required (credits depleted) on %s — remembering "
+                "for %ss; further calls refuse locally. Remedy: %s. Fallback rail: %s",
+                endpoint_type or "(api)", int(self._CREDIT_402_WINDOW_SEC),
+                self._CREDIT_402_REMEDY, self.CREDIT_402_FALLBACK)
 
     async def get_tweet(self, tweet_id: str) -> Optional[Dict]:
         """Fetch a single tweet by ID.
@@ -1661,14 +1694,19 @@ class TwitterTool(BaseTool):
         except Exception:
             return None  # can't prove autonomous origin -> don't gate (fail-open, not a money verb)
         try:
-            from core.event_log import get_event_log, event_log_enabled
+            from core.event_log import event_log_enabled, open_event_log
             from core.event_kinds import SOCIAL_WRITE
             if not event_log_enabled():
                 return None
             user_id = str(getattr(execution_context, "user_id", "") or "")
             cooldown = self._social_cooldown_sec()
             since = time.time() - cooldown
-            rows = get_event_log().query(
+            # A cooldown READ never creates the store (2026-09-21): no file
+            # means no social write was ever recorded, so no cooldown applies.
+            log = open_event_log()
+            if log is None:
+                return None
+            rows = log.query(
                 since_ts=since, kind=SOCIAL_WRITE, user_id=user_id, limit=1)
             if rows:
                 age_sec = time.time() - float(rows[0]["ts"])
@@ -2600,11 +2638,20 @@ class TwitterTool(BaseTool):
                 include_in_memory=True
             )
             
-    def create_action_result(self, extracted_content=None, error=None, include_in_memory=False, is_done=False):
+    def create_action_result(self, extracted_content=None, error=None, include_in_memory=False,
+                             is_done=False, metadata=None):
         """Create a properly structured action result.
         
         This helper method ensures consistent action results.
         """
+        # 057 WS-F: a credit-402 refusal carries a STRUCTURED fallback field
+        # beside its prose, so a reader (or a future transform_tool_result hook)
+        # does not have to parse the sentence. Nothing auto-invokes it here.
+        if error and "credits depleted" in str(error).lower():
+            metadata = dict(metadata or {})
+            metadata.setdefault("rail", "x_api")
+            metadata.setdefault("code", "402")
+            metadata.setdefault("fallback", self.CREDIT_402_FALLBACK)
         try:
             # Import ActionResult from canonical location
             from tools.controller.types import ActionResult
@@ -2612,7 +2659,8 @@ class TwitterTool(BaseTool):
                 extracted_content=extracted_content,
                 error=error,
                 include_in_memory=include_in_memory,
-                is_done=is_done
+                is_done=is_done,
+                metadata=metadata
             )
         except ImportError:
             # Fallback to a dictionary if ActionResult can't be imported
@@ -2620,5 +2668,6 @@ class TwitterTool(BaseTool):
                 "extracted_content": extracted_content,
                 "error": error,
                 "include_in_memory": include_in_memory,
-                "is_done": is_done
+                "is_done": is_done,
+                "metadata": metadata
             }

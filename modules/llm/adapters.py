@@ -465,8 +465,16 @@ class LLMClientAdapter(BaseChatModel):
         # CRITICAL FIX (Dec 2025): the adapter's internal routing may bypass our
         # ainvoke override and call _agenerate directly without kwargs.
         # The _pending_tools fallback ensures tools are available in all cases.
+        #
+        # An EXPLICIT `tools` key is authoritative (2026-09-20): `tools=None` /
+        # `tools=[]` means "no tools" and must NOT inherit the last step's set.
+        # The fallback fires only when the key is ABSENT (the retry paths that
+        # re-call without kwargs). Before this, the main path never consumed the
+        # fallback, so it stayed armed and the next tool-less aux call on the
+        # same adapter — compaction, reflection, the judge — went out with the
+        # whole step toolset attached (176 schemas, 225 s, prod 19:55Z).
         tools = kwargs.get('tools')
-        if not tools and hasattr(self, '_pending_tools') and self._pending_tools:
+        if 'tools' not in kwargs and hasattr(self, '_pending_tools') and self._pending_tools:
             tools = self._pending_tools
             self._logger.info(f"[TOOLS_FIX] Retrieved {len(tools)} tools from _pending_tools fallback")
             # Clear after use to prevent stale data
@@ -591,6 +599,13 @@ class LLMClientAdapter(BaseChatModel):
             total_duration = time.time() - start_time
             self._logger.debug(f"_agenerate completed in {total_duration:.1f}s")
             self._logger.debug(f"Returning ChatResult with 1 generation")
+
+            # The call SUCCEEDED, so no retry path will need the stored fallback;
+            # disarm it so a later key-less aux call cannot inherit this step's
+            # toolset. A failure raises above this line and leaves it armed for
+            # the retry (the 16:50Z / 18:21Z Connection-error recoveries).
+            if 'tools' in kwargs and getattr(self, '_pending_tools', None) is kwargs['tools']:
+                self._pending_tools = None
 
             return ChatResult(generations=[generation])
 
@@ -984,66 +999,12 @@ class AnthropicAdapter(LLMClientAdapter):
         
     def _convert_image_to_anthropic_format(self, image_item: Dict[str, Any]) -> Dict[str, Any]:
         """Convert OpenAI image_url format to Anthropic image format.
-        
-        Args:
-            image_item: Image in OpenAI format {"type": "image_url", "image_url": {"url": "..."}}
-            
-        Returns:
-            Image in Anthropic format {"type": "image", "source": {...}}
+
+        Thin delegator over ``modules/llm/anthropic_images.py`` — the tests
+        and the subclass hook both address this name.
         """
-        try:
-            image_url_data = image_item.get("image_url", {})
-            url = image_url_data.get("url", "")
-            
-            if not url:
-                self._logger.warning("Empty image URL in image_url format")
-                return {"type": "text", "text": "[IMAGE: Empty URL]"}
-            
-            # Handle base64 data URLs
-            if url.startswith("data:"):
-                # Parse data URL: data:image/png;base64,<data>
-                # Format: data:[<mediatype>][;base64],<data>
-                try:
-                    # Split on comma to separate header from data
-                    header, base64_data = url.split(",", 1)
-                    
-                    # Extract media type from header (e.g., "data:image/png;base64")
-                    media_type = "image/png"  # Default
-                    if header.startswith("data:"):
-                        header_content = header[5:]  # Remove "data:"
-                        if ";" in header_content:
-                            media_type = header_content.split(";")[0]
-                        elif header_content:
-                            media_type = header_content
-                    
-                    return {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": base64_data
-                        }
-                    }
-                except ValueError as e:
-                    self._logger.error(f"Failed to parse base64 data URL: {e}")
-                    return {"type": "text", "text": "[IMAGE: Invalid data URL]"}
-            
-            # Handle regular URLs (Anthropic supports URL sources too)
-            elif url.startswith("http://") or url.startswith("https://"):
-                return {
-                    "type": "image",
-                    "source": {
-                        "type": "url",
-                        "url": url
-                    }
-                }
-            else:
-                self._logger.warning(f"Unknown image URL format: {url[:50]}...")
-                return {"type": "text", "text": "[IMAGE: Unsupported format]"}
-                
-        except Exception as e:
-            self._logger.error(f"Error converting image to Anthropic format: {e}")
-            return {"type": "text", "text": f"[IMAGE: Conversion error]"}
+        from modules.llm.anthropic_images import convert_image_to_anthropic_format
+        return convert_image_to_anthropic_format(image_item, self._logger)
 
     def _convert_to_client_messages(self, messages: List[BaseMessage]) -> List[Dict[str, Any]]:
         """Convert messages to Anthropic-compatible format.

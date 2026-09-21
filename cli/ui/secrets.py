@@ -12,6 +12,21 @@ regex scrubber has false negatives (novel/short token shapes, secrets embedded i
 structured blobs) — the real fix for secret EXPOSURE is workspace path-confinement
 at the tool layer. Treat this as defense-in-depth for the terminal surface only.
 
+PUBLIC FACTS ARE NOT SECRETS (C1, 2026-09-21). The two length-based catch-alls
+(hex / base64) used to eat every wallet address, transaction hash, UUID and
+filesystem path the REPL printed — so the one line a launch verb emits
+(``token: 0x…``) and the path of the file the agent just wrote both rendered as
+``«redacted»``, and the owner had to go to a third-party indexer to read back
+what his own agent had done. Those two rules now consult
+:func:`_is_public_identifier` / :func:`_path_shaped`. The residual, stated
+rather than implied: an opaque credential that is EXACTLY 43-44 base58
+characters, or exactly 64 hex after ``0x``, is indistinguishable from a Solana
+pubkey / a transaction hash by shape alone and would survive the catch-all. The
+named-shape rules (PEM, Bearer, KV, ``sk-``, ``rob_``, AWS, JWT, opaque-token,
+Google, Slack, GitHub) all run FIRST and catch the credentials that actually
+exist; this gap was taken deliberately against losing every address the agent
+writes down.
+
 Everything here is PURE (no I/O, no state) and trivially unit-testable.
 """
 
@@ -33,6 +48,7 @@ REDACTED = "«redacted»"
 # its OWN REDACTED marker ("«redacted»", above) — only the regexes are shared. The
 # cli-only patterns (Google/Slack/GitHub/hex/base64 catch-alls) stay local below.
 from core.secret_patterns import (  # noqa: E402
+    PUBLIC_ADDRESS_RE,
     apply_ssot_shapes,
 )
 
@@ -51,8 +67,82 @@ _GITHUB_PAT_RE = re.compile(r"\bgithub_pat_[A-Za-z0-9_]{22,}")
 
 #: Long opaque hex / base64 blobs (>=40 base64 chars, >=32 hex chars). Catches
 #: hashes/JWT-ish blobs; a redacted git SHA is harmless collateral.
+#:
+#: ``/`` is DELIBERATELY absent from ``_B64_RE`` (C1, 2026-09-21). With it in the
+#: class, ``/Users/me/.polyrob/data/sessions/abcdef`` is one 40+ char "base64"
+#: token and the whole path redacted — so every workspace path, every session
+#: dir and every log location the REPL printed came out as «redacted». A real
+#: base64 blob is still caught segment-by-segment (its own run is >=40 chars).
 _HEX_RE = re.compile(r"\b[A-Fa-f0-9]{32,}\b")
-_B64_RE = re.compile(r"\b[A-Za-z0-9+/]{40,}={0,2}\b")
+_B64_RE = re.compile(r"\b[A-Za-z0-9+]{40,}={0,2}\b")
+
+#: An EVM transaction hash / block hash: ``0x`` + EXACTLY 64 hex. A PUBLIC fact
+#: (it is what a receipt IS), and the one string that proves a money verb did
+#: what it said. Anchored, so a longer hex run never matches.
+_TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+#: A canonical UUID (``8-4-4-4-12``) or its undashed 32-hex form — tool-call
+#: ids, session ids, request ids. An identifier, never a credential.
+_UUID_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$"
+)
+
+#: A Solana-shaped base58 public key. Wider than ``PUBLIC_ADDRESS_RE``'s 43-44
+#: (a program-derived address, a mint, a signature prefix) because the catch-all
+#: this exempts only fires at 40+ characters anyway.
+_BASE58_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+
+
+def _is_public_identifier(token: str) -> bool:
+    """True when *token* is a PUBLIC identifier, not a credential shape.
+
+    The invariant: a public address, a transaction hash and a UUID are FACTS the
+    owner needs on screen — the launch verb's own success line is ``token: 0x…``
+    — and the length-based catch-alls below cannot tell them from a secret. Each
+    rule is anchored and exact-length, so widening one never exempts a private
+    key (EVM private keys are ``0x`` + 64 hex too, but they are never written
+    under a bare key the KV battery above has not already claimed; the residual
+    is stated in the module doc).
+    """
+    return bool(
+        PUBLIC_ADDRESS_RE.match(token)
+        or _TX_HASH_RE.match(token)
+        or _UUID_RE.match(token)
+        or _BASE58_RE.match(token)
+    )
+
+
+def _path_shaped(text: str, start: int, end: int) -> bool:
+    """True when the match sits inside a filesystem path / dotted identifier.
+
+    ``/`` is gone from ``_B64_RE`` so a path is now split into segments; a
+    segment is still long enough to trip the catch-all on its own. Looking at
+    the ONE character on each side is what distinguishes
+    ``…/sessions/<long-segment>/feed`` from a bare token on a line of its own.
+    """
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    if before in ("/", "\\", "."):
+        return True
+    if after in ("/", "\\"):
+        return True
+    # ``name.ext`` / ``pkg.module`` — a dot followed by more identifier.
+    return after == "." and end + 1 < len(text) and text[end + 1].isalnum()
+
+
+def _catch_all_sub(pattern: "re.Pattern", text: str) -> str:
+    """Apply a length-based catch-all, skipping public identifiers + paths."""
+    def _repl(match: "re.Match") -> str:
+        token = match.group(0)
+        if _is_public_identifier(token):
+            return token
+        if "/" in token or "\\" in token:
+            return token
+        if _path_shaped(text, match.start(), match.end()):
+            return token
+        return REDACTED
+    return pattern.sub(_repl, text)
 
 
 def scrub_secrets(text: Optional[str]) -> str:
@@ -72,8 +162,11 @@ def scrub_secrets(text: Optional[str]) -> str:
     out = _SLACK_RE.sub(REDACTED, out)
     out = _GITHUB_RE.sub(REDACTED, out)
     out = _GITHUB_PAT_RE.sub(REDACTED, out)
-    out = _HEX_RE.sub(REDACTED, out)
-    out = _B64_RE.sub(REDACTED, out)
+    # The two length-based catch-alls are the ONLY rules here that match on
+    # length rather than on a credential shape, so they are the only ones that
+    # can eat a public fact. Both run through the exemption gate.
+    out = _catch_all_sub(_HEX_RE, out)
+    out = _catch_all_sub(_B64_RE, out)
     return out
 
 

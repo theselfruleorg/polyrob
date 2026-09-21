@@ -491,12 +491,25 @@ def test_session_done_failed():
 
 
 def test_info_event_printed():
+    """C46: only the CONTENT is owner-facing."""
     rend, buf, state = _renderer(verbose=True)
-    ev = Info(type="status", content="")
+    ev = Info(type="status", content="reconnecting to the provider")
     state.update(ev)
     rend.on_event(ev)
-    assert "[info]" in buf.getvalue()
-    assert "status" in buf.getvalue()
+    assert "[info] reconnecting to the provider" in buf.getvalue()
+    # The internal event TYPE is not leaked into the transcript.
+    assert "type=status" not in buf.getvalue()
+
+
+def test_info_event_without_content_is_silent():
+    """C46: a contentless Info used to print a bare ``[info] type=<taxonomy>``
+    line that says nothing to the reader and leaks the event vocabulary. The
+    Rich renderer was already silent for it."""
+    rend, buf, state = _renderer(verbose=True)
+    ev = Info(type="agent_state", content="")
+    state.update(ev)
+    rend.on_event(ev)
+    assert buf.getvalue() == ""
 
 
 def test_unknown_event_does_not_crash():

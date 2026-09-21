@@ -15,6 +15,7 @@ import asyncio
 import logging
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, List, Optional
 
@@ -43,6 +44,14 @@ def _goal_ev(goal, outcome: str, reason: Optional[str] = None, **extra) -> None:
                 outcome=outcome, reason=reason, **extra)
     except Exception:
         pass
+
+
+def _goal_ref(goal_id: str):
+    """Minimal duck-typed stand-in for a Goal row (id only) so telemetry can be
+    emitted for a goal whose row could not be re-read. An unknown tenant is
+    reported as empty, never guessed."""
+    from types import SimpleNamespace
+    return SimpleNamespace(id=goal_id, user_id="")
 
 
 # 015 #3: greppable marker for "this run failed because the LLM/provider is
@@ -218,19 +227,20 @@ def imminent_cron_job(data_dir: str, now, headroom_sec: int) -> Optional[str]:
     except Exception:
         logger.debug("imminent-cron probe failed; dispatching", exc_info=True)
         return None
-    # 056 D1 follow-up (2026-09-19): a SCHEDULED money-class job pre-empts a running
+    # 056 D1 follow-up (2026-09-19): a SCHEDULED PRE-EMPTING job pre-empts a running
     # goal at the step boundary (`yield_for_rail`), so with yield on it need not hold
     # the board back — after the D4 stagger the four rails' headroom windows covered
     # every minute of an even hour and two goals sat `ready` for 40 min. A job mid-run
-    # holds the workspace NOW (nothing to pre-empt) and an ops-class job cannot
-    # pre-empt at all, so both still defer.
+    # holds the workspace NOW (nothing to pre-empt) and a non-pre-empting job cannot
+    # pre-empt at all, so both still defer. 057 WS-C (B7): the test is
+    # `payload.preempts` (defaulting to the money class), not the class alone.
     try:
         from core.config_policy.goal_flags import GoalFlagsMixin
         _yield_on = bool(GoalFlagsMixin.goal_yield_for_money_rail())
     except Exception:
         _yield_on = False
     for job_id, task, next_run_at, status, payload in rows or []:
-        if _yield_on and status == "scheduled" and _payload_is_money(payload):
+        if _yield_on and status == "scheduled" and _payload_preempts(payload):
             continue
         return f"{str(job_id)[:12]} {(task or '')[:40]!r} due {next_run_at}"
     return None
@@ -243,6 +253,22 @@ def _payload_is_money(payload) -> bool:
         if isinstance(payload, (str, bytes)):
             payload = json.loads(payload or "{}")
         return str((payload or {}).get("priority") or "").lower() == "money"
+    except Exception:
+        return False
+
+
+def _payload_preempts(payload) -> bool:
+    """Mirror of ``cron.jobs.job_preempts`` over the raw stored payload (057 WS-C
+    B7): explicit ``payload.preempts`` wins, else the money class."""
+    try:
+        if isinstance(payload, (str, bytes)):
+            payload = json.loads(payload or "{}")
+        payload = payload or {}
+        if "preempts" in payload:
+            from core.env import parse_bool
+            val = payload.get("preempts")
+            return val if isinstance(val, bool) else bool(parse_bool(str(val), False))
+        return _payload_is_money(payload)
     except Exception:
         return False
 
@@ -381,6 +407,24 @@ class GoalDispatcher:
         # can be GC'd mid-run (CPython drops weakly-referenced tasks), cancelling a
         # goal that "may run minutes". Cleared via done-callback.
         self._inflight: set = set()
+        #: 057 WS-C (A2): goal_id -> the asyncio.Task running it. The planner also
+        #: lives in ``_inflight`` and is NOT a workspace writer, so a rail yield
+        #: scopes its cancellation to these tasks and never kills the planner.
+        self._goal_tasks: dict = {}
+        #: 057 WS-C (A1/B8): goal_id -> the run's session id, known from dispatch
+        #: (pre-generated) rather than only after the run returns.
+        self._goal_sessions: dict = {}
+        #: 057 WS-C (A2): goal ids whose run marked the SHARED workspace busy —
+        #: the runs a rail actually has to wait for.
+        self._ws_holders: set = set()
+        #: 057 WS-C (B8): goal ids asked to stop at their step boundary for a rail
+        #: yield. Their run must not be recorded as a failure.
+        self._yield_requested: set = set()
+        #: 057 WS-C (B9): goal_id -> monotonic start, for the resume note's elapsed.
+        self._goal_started: dict = {}
+        #: 057 WS-C (A6): the deferral reason last logged, so a per-minute tick
+        #: emits ONE telemetry event per deferral EDGE, not one per tick.
+        self._defer_seen: Optional[str] = None
         #: ONE worker id per process (claim_lock); hold_inflight() scopes its hold to it.
         self._worker = f"goal-dispatch-{os.getpid()}"
         #: 031: True once the paused edge was reconciled (hold + one log line).
@@ -437,13 +481,19 @@ class GoalDispatcher:
         board.
         """
         from agents.task.constants import AutonomyConfig
+        # 057 WS-C (B11): a repeatedly pre-empted goal climbs the queue. 0 = off.
+        try:
+            ageing = int(AutonomyConfig.goal_yield_ageing())
+        except Exception:
+            ageing = 0
         if not AutonomyConfig.goal_fair_dispatch():
-            return self.board.ready(limit=slots)
+            return self.board.ready(limit=slots, yield_ageing=ageing)
         cap = AutonomyConfig.goal_per_objective_cap()
         try:
             return self.board.ready_fair(
                 limit=slots,
                 per_objective_cap=cap,
+                yield_ageing=ageing,
                 # ready_fair consults in_flight ONLY when a cap is set, so with the
                 # default cap of 0 this GROUP BY would run every tick for a value
                 # nothing reads.
@@ -532,9 +582,22 @@ class GoalDispatcher:
         except Exception:
             pass
 
-        from core.interactive_gate import is_interactive_busy
+        from core.interactive_gate import is_interactive_busy, read_turn_marker
         if is_interactive_busy():
             return 0  # a human is mid-turn; don't run a goal in the shared workspace
+        # 057 WS-C (A5, R3's two-homes class): `is_interactive_busy` is an
+        # IN-PROCESS counter, so an owner turn live in ANOTHER process (the
+        # Telegram surface, the console, a `rob` REPL) was invisible here and a
+        # goal could start writing the shared workspace underneath it. The turn
+        # marker is the cross-process fact the deploy waiter and the cron tick
+        # already read; the dispatcher now reads the same one.
+        _turn = read_turn_marker()
+        if _turn is not None:
+            self._defer("owner_turn",
+                        "goal dispatch deferred: a live owner turn (%s)"
+                        % (str(_turn.get("kind") or "?") if isinstance(_turn, dict)
+                           else "?"))
+            return 0
 
         lock = None
         if self.lock_path:
@@ -608,19 +671,45 @@ class GoalDispatcher:
                     os.path.dirname(self.board.db_path), datetime.now(),
                     AutonomyConfig.goal_dispatch_cron_headroom_sec())
                 if _imminent:
-                    logger.info("goal dispatch deferred (%d ready): cron job %s",
-                                len(ready), _imminent)
+                    # 057 WS-C (A6): a deferral was journald-only, so nothing
+                    # could count how often the headroom rule held the board.
+                    self._defer(f"headroom:{_imminent.split()[0]}",
+                                "goal dispatch deferred (%d ready): cron job %s"
+                                % (len(ready), _imminent),
+                                goal=ready[0], ready=len(ready))
                     return 0
+            # Past every gate: the next deferral is a NEW edge worth an event.
+            self._defer_seen = None
             ttl = AutonomyConfig.goal_claim_ttl_sec()
             worker = self._worker
             dispatched = 0
+            _pre_on = False
+            try:
+                _pre_on = bool(AutonomyConfig.goal_preflight_enabled())
+            except Exception:
+                _pre_on = False
             for g in ready:
+                # 057 WS-C (B10) / 056 WS5 (2b): do not START work a due rail
+                # will pre-empt. The headroom rule bounds the start by a FIXED
+                # window and knows nothing about how long THIS goal takes.
+                if _pre_on:
+                    _blocker = self._preflight_blocker(g, datetime.now())
+                    if _blocker:
+                        self._defer(f"preflight:{_blocker}",
+                                    "goal %s not claimed: it would run into rail %s"
+                                    % (g.id[:8], _blocker), goal=g)
+                        continue
                 claimed = self.board.claim(g.id, worker, ttl_seconds=ttl)
                 if claimed is None:
                     continue  # another worker won the race
                 t = asyncio.create_task(self._run_goal(claimed))
                 self._inflight.add(t)
                 t.add_done_callback(self._inflight.discard)
+                # 057 WS-C (A2): remember WHICH task is this goal's run, so a rail
+                # yield can cancel goal runs only and leave the planner alone.
+                self._goal_tasks[claimed.id] = t
+                t.add_done_callback(
+                    lambda _t, _gid=claimed.id: self._forget_goal_task(_gid))
                 dispatched += 1
             # Fire-and-forget: the ticker doesn't block on goal completion (goals may
             # run minutes). The runs self-report via record_success/failure + self-wake.
@@ -636,6 +725,45 @@ class GoalDispatcher:
                 pass
             if lock is not None:
                 lock.release()
+
+    def _preflight_blocker(self, goal: Goal, now) -> Optional[str]:
+        """The pre-empting job this goal would run into, or None (057 WS-C B10).
+
+        Fail-open in every direction: an unreadable cron store or telemetry db
+        answers None, so a broken probe can never stop the board."""
+        try:
+            from agents.task.constants import AutonomyConfig
+            from agents.task.goals.preflight import crossing_rail
+            payload = goal.payload or {}
+            steps = int(payload.get("max_steps")
+                        or AutonomyConfig.goal_default_max_steps())
+            return crossing_rail(
+                goal.id, steps,
+                data_dir=os.path.dirname(self.board.db_path), now=now,
+                fallback_step_sec=AutonomyConfig.goal_preflight_step_sec(),
+                max_run_sec=AutonomyConfig.goal_max_run_seconds())
+        except Exception:
+            logger.debug("preflight skipped for %s", goal.id, exc_info=True)
+            return None
+
+    def _defer(self, reason: str, log_line: str, *, goal=None, **attrs) -> None:
+        """Log a dispatch deferral and emit it ONCE per deferral edge (057 WS-C A6).
+
+        The dispatcher ticks every 60 s, so emitting per tick would bury the
+        event log under a stalled minute. The event fires when the REASON
+        changes (and again after the next successful dispatch clears it), which
+        is the transition an operator actually wants to see.
+        """
+        if self._defer_seen == reason:
+            logger.debug(log_line)
+            return
+        self._defer_seen = reason
+        logger.info(log_line)
+        try:
+            _goal_ev(goal if goal is not None else _goal_ref(""), "deferred",
+                     reason=reason, **attrs)
+        except Exception:
+            logger.debug("deferral telemetry failed", exc_info=True)
 
     async def _heartbeat_claim(self, goal_id: str, worker: str, ttl: int) -> None:
         """Keep a long-running goal's claim alive (F8).
@@ -679,41 +807,217 @@ class GoalDispatcher:
             logger.debug("prior-artifact lookup skipped for %s", goal.id, exc_info=True)
             return []
 
-    async def hold_inflight(self, reason: str) -> List[str]:
-        """031: cancel every run this process owns (goal runs + planner runs),
-        wait for them to unwind, then return their board rows to ``ready`` (no
-        failure increment). The owner's chat session is never in ``_inflight``."""
-        tasks = [t for t in list(self._inflight) if not t.done()]
+    def _elapsed(self, goal_id: str) -> Optional[float]:
+        """Seconds this run has been going, or None when the clock is unknown."""
+        started = self._goal_started.get(goal_id)
+        if started is None:
+            return None
+        try:
+            return round(max(0.0, time.monotonic() - started), 2)
+        except Exception:
+            return None
+
+    def _forget_goal_task(self, goal_id: str) -> None:
+        """Drop a finished run's bookkeeping (057 WS-C A2). Never raises."""
+        self._goal_tasks.pop(goal_id, None)
+        self._ws_holders.discard(goal_id)
+
+    @staticmethod
+    def _attach_artifacts(goal: Goal, session_id: Optional[str]) -> None:
+        """Attribute a run's artefacts to its goal (fail-open, sync).
+
+        057 WS-C (A1): called from the run's ``finally`` so a CANCELLED run — a
+        rail yield, an owner pause, the wall-clock cap — keeps the evidence it
+        produced and the retry's ``_prior_artifacts`` can find it. Must stay
+        synchronous and never raise: it runs while a CancelledError is unwinding.
+        """
+        if not session_id:
+            return
+        try:
+            from core.artifacts import get_artifact_ledger
+            get_artifact_ledger().attach_goal(goal.user_id, session_id, goal.id)
+        except Exception:
+            logger.debug("artifact goal attribution skipped for %s", goal.id,
+                         exc_info=True)
+
+    async def hold_inflight(self, reason: str, *, goals_only: bool = False,
+                            goal_ids: Optional[List[str]] = None,
+                            reason_kind: str = "pause") -> List[str]:
+        """031: cancel the runs this process owns, wait for them to unwind, then
+        return their board rows to ``ready`` (no failure increment). The owner's
+        chat session is never in ``_inflight``.
+
+        An owner PAUSE cancels everything, including the planner (the default).
+        057 WS-C (A2): a rail YIELD passes ``goals_only=True`` (and optionally an
+        explicit ``goal_ids``) — the planner is not a workspace writer, it is not
+        a board row, and cancelling it killed it SILENTLY, so a yield must never
+        touch it. ``reason_kind`` (``pause`` | ``rail``) rides into the board
+        event so "why was this row held" is queryable.
+        """
+        if goal_ids is not None:
+            want = [str(gid) for gid in goal_ids]
+            tasks = [t for t in (self._goal_tasks.get(g) for g in want)
+                     if t is not None and not t.done()]
+        elif goals_only:
+            # Nothing tracked to cancel (a restart, a run this process never
+            # owned): cancel no task and keep the legacy hold scope — every
+            # `running` row claimed by THIS worker. The planner is still spared.
+            want = None
+            tasks = [t for t in self._goal_tasks.values() if not t.done()]
+        else:
+            want = None
+            tasks = [t for t in list(self._inflight) if not t.done()]
         for t in tasks:
             t.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         try:
-            return self.board.hold_running(worker=self._worker, reason=reason)
+            return self.board.hold_running(worker=self._worker, reason=reason,
+                                           goal_ids=want, reason_kind=reason_kind)
         except Exception:
             logger.warning("hold_inflight: board hold failed", exc_info=True)
             return []
 
+    def _yield_targets(self) -> List[str]:
+        """The goal ids a rail yield should pre-empt (057 WS-C A2).
+
+        Prefer the runs that actually hold the SHARED workspace — that is the
+        contention a rail is waiting on. With none recorded (the server's
+        per-session workspaces), fall back to every live goal run. The planner is
+        never a target: it is not a workspace writer and not a board row."""
+        live = [gid for gid, t in list(self._goal_tasks.items()) if not t.done()]
+        holders = [gid for gid in live if gid in self._ws_holders]
+        return holders or live
+
+    async def _request_step_boundary_stop(self, goal_ids: List[str]) -> None:
+        """057 WS-C (B8): ask each run to stop at its NEXT step boundary.
+
+        ``orchestrator.cancel()`` sets the cooperative flag the run loop already
+        checks (``run_loop.py`` ``if self._cancelled``), so the step in flight
+        finishes and its state is saved. Fail-open per goal: a session we cannot
+        reach simply gets the hard cancel after the grace."""
+        for gid in goal_ids:
+            sid = self._goal_sessions.get(gid)
+            if not sid:
+                continue
+            try:
+                orch = self.task_agent.get_orchestrator(sid)
+                cancel = getattr(orch, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            except Exception:
+                logger.debug("step-boundary stop request failed for %s", gid,
+                             exc_info=True)
+
     async def yield_for_rail(self, job) -> List[str]:
-        """056 WS5 (D1): a due MONEY cron job pre-empts this process's running goal
-        runs — `hold_inflight` (cancel at the step boundary, rows back to `ready`,
-        no failure increment) plus a `resume_note` so the goal knows why it
-        restarts and where its own artefacts are. Returns the held goal ids."""
+        """056 WS5 (D1): a due pre-empting cron job pre-empts this process's running
+        goal runs — the rows go back to ``ready`` with no failure increment plus a
+        ``resume_note`` so the goal knows why it restarts and where its own
+        artefacts are. Returns the held goal ids.
+
+        057 WS-C:
+          - the hold is SCOPED to goal runs (never the planner, A2);
+          - with ``GOAL_YIELD_GRACE_SEC`` > 0 the runs are first asked to stop at
+            their next step boundary and only hard-cancelled if they overrun the
+            grace (B8), so a nearly-finished step is not thrown away;
+          - the yield is emitted to the durable event log as
+            ``goal_run yielded`` with the job, the session and the step (A2) —
+            until now a yield existed only in goals.db and no status surface
+            could count it.
+        """
         jid = str(getattr(job, "id", "") or "")
         jtask = str(getattr(job, "task", "") or "")[:40]
-        held = await self.hold_inflight(f"money rail {jid} ({jtask}) due")
+        targets = self._yield_targets()
+        reason = f"rail {jid} ({jtask}) due"
+        from core.config_policy.goal_flags import GoalFlagsMixin as _GF
+        grace = 0
+        try:
+            grace = int(_GF.goal_yield_grace_sec())
+        except Exception:
+            grace = 0
+        if grace > 0 and targets:
+            self._yield_requested.update(targets)
+            await self._request_step_boundary_stop(targets)
+            tasks = [t for t in (self._goal_tasks.get(g) for g in targets)
+                     if t is not None and not t.done()]
+            if tasks:
+                try:
+                    await asyncio.wait(tasks, timeout=grace)
+                except Exception:
+                    logger.debug("yield grace wait failed", exc_info=True)
+        try:
+            held = await self.hold_inflight(reason, goals_only=True,
+                                            goal_ids=targets or None,
+                                            reason_kind="rail")
+        finally:
+            self._yield_requested.difference_update(targets)
         from datetime import datetime as _dt
         stamp = _dt.utcnow().strftime("%H:%MZ")
         for gid in held:
+            sid = self._goal_sessions.get(gid)
             try:
                 self.board.merge_payload(gid, {
-                    "resume_note": (f"Yielded at {stamp} because the money rail {jtask} "
-                                    f"({jid[:8]}) came due; this is a RESTART — read what "
-                                    f"you already wrote to disk before redoing anything.")})
+                    "resume_note": self._resume_note(gid, jtask, jid, stamp)})
+                if sid:
+                    self.board.stamp_session(gid, sid)
                 self.board._event(gid, "yielded", {"job_id": jid, "task": jtask})
             except Exception:
                 logger.debug("yield note failed for %s", gid, exc_info=True)
+            try:
+                _goal_ev(self.board.get(gid) or _goal_ref(gid), "yielded",
+                         reason=jid, job_task=jtask, session_id=sid or "",
+                         step=self._current_step(sid), grace_sec=grace)
+            except Exception:
+                logger.debug("yield telemetry failed for %s", gid, exc_info=True)
         return held
+
+    def _current_step(self, session_id: Optional[str]) -> Optional[int]:
+        """Best-effort step number of a live run (057 WS-C A2 telemetry).
+
+        Read off the resident orchestrator's main agent the same way
+        ``_extract_chat_reply`` does. ``None`` when the session is gone or the
+        attribute is absent — an unknown step is reported as unknown, never 0."""
+        if not session_id:
+            return None
+        try:
+            orch = self.task_agent.get_orchestrator(session_id)
+            agent = next(iter(orch.agents.values()), None) if getattr(
+                orch, "agents", None) else None
+            n = getattr(getattr(agent, "state", None), "n_steps", None)
+            return int(n) if n is not None else None
+        except Exception:
+            return None
+
+    def _resume_note(self, goal_id: str, jtask: str, jid: str, stamp: str) -> str:
+        """The note a yielded goal restarts with (057 WS-C B9).
+
+        Carries the STEP it reached, the elapsed budget and its own artefacts —
+        `resume_note` was written and read nowhere until 057; it is now prepended
+        to the run task by ``build_goal_run_task``."""
+        sid = self._goal_sessions.get(goal_id)
+        step = self._current_step(sid)
+        started = self._goal_started.get(goal_id)
+        elapsed = None
+        if started is not None:
+            try:
+                elapsed = int(max(0.0, time.monotonic() - started))
+            except Exception:
+                elapsed = None
+        bits = [f"Yielded at {stamp} because the rail {jtask} ({jid[:8]}) came due; "
+                f"this is a RESTART — read what you already wrote to disk before "
+                f"redoing anything."]
+        if step is not None:
+            bits.append(f"You had reached step {step}.")
+        if elapsed is not None:
+            bits.append(f"That attempt ran {elapsed}s.")
+        try:
+            arts = self._prior_artifacts(self.board.get(goal_id)) if self.board.get(goal_id) else []
+        except Exception:
+            arts = []
+        if arts:
+            names = ", ".join(f"{n} ({b} bytes)" for n, b in arts[:5])
+            bits.append(f"Already on disk from earlier attempts: {names}.")
+        return " ".join(bits)
 
     async def _run_goal(self, goal: Goal) -> None:
         """Run one claimed goal on the task-agent core, then record + self-wake."""
@@ -749,6 +1053,8 @@ class GoalDispatcher:
             if _shared_ws:
                 from core.interactive_gate import mark_busy
                 mark_busy()
+                self._ws_holders.add(goal.id)
+            self._goal_started[goal.id] = time.monotonic()
             _goal_ev(goal, "started")
             # 019 P2: tell the owner an autonomous run STARTED (not just completed/
             # digest). Rides the one delivery rail (dedup + caps); posture-gated
@@ -780,6 +1086,7 @@ class GoalDispatcher:
                     mark_idle()
                 except Exception:
                     logger.debug("mark_idle after start-window cancel failed", exc_info=True)
+            self._ws_holders.discard(goal.id)
             raise
         try:
             payload = goal.payload or {}
@@ -828,6 +1135,10 @@ class GoalDispatcher:
                         objective = parent
                 except Exception:
                     objective = None
+            # 057 WS-C (B9): the restart note leads the task body unconditionally
+            # (it was written and read nowhere), and with GOAL_RESUME_SAME_SESSION
+            # on it ALSO rides in as a SYSTEM_NOTE on the resumed session.
+            _resume_note = (payload or {}).get("resume_note")
             request = {
                 "task": build_goal_run_task(goal, objective,
                                             workspace_root=_deliverables_root(),
@@ -839,6 +1150,17 @@ class GoalDispatcher:
                 "temperature": 0.0,
                 "goal_id": goal.id,
             }
+            if _resume_note:
+                # Consume it: a note left on the payload would tell a LATER,
+                # un-pre-empted run that it had been cut short.
+                try:
+                    self.board.merge_payload(goal.id, {"resume_note": None})
+                except Exception:
+                    logger.debug("resume-note clear failed for %s", goal.id,
+                                 exc_info=True)
+                if AutonomyConfig.goal_resume_same_session() and goal.session_id:
+                    request["resume_session_id"] = goal.session_id
+                    request["resume_note"] = _resume_note
             # 044 T20: a goal carrying `payload.group` SERVICES a room — the run
             # session IS the room's bound session (PUBLIC profile + room toolset,
             # applied by bind_chat_surface), and its task is the room's ledger
@@ -897,6 +1219,24 @@ class GoalDispatcher:
             # the finally cancels the claim heartbeat, so reclaim_stale can recover the slot.
             _max_run = AutonomyConfig.goal_max_run_seconds()
             run = None
+            # 057 WS-C (A1): pre-generate the session id for EVERY goal run (the
+            # room path already did) so the `finally` below can attribute this
+            # run's artefacts even when it is CANCELLED — a rail yield, an owner
+            # pause or the wall-clock cap. Only when this task_agent's
+            # create_session actually accepts one; a narrow fake keeps the id the
+            # run reports back.
+            _pre_sid = _room_sid or request.get("resume_session_id")
+            if _pre_sid is None:
+                try:
+                    from agents.task.runtime.run_as_session import create_session_accepts
+                    if create_session_accepts(self.task_agent.create_session, "session_id"):
+                        import uuid as _uuid2
+                        _pre_sid = str(_uuid2.uuid4())
+                        request["session_id"] = _pre_sid
+                except Exception:
+                    _pre_sid = None
+            if _pre_sid:
+                self._goal_sessions[goal.id] = _pre_sid
             try:
                 run = await asyncio.wait_for(
                     _run_task_to_outcome(
@@ -906,6 +1246,14 @@ class GoalDispatcher:
                     timeout=_max_run,
                 )
             finally:
+                # 057 WS-C (A1): attribute the artefacts HERE, not after the
+                # wait_for. `attach_goal` used to sit below, so a cancelled run
+                # (yield / pause / cap) kept none of its evidence and the retry's
+                # `_prior_artifacts` found nothing — "a pre-emption that discards
+                # work is a bug, not a policy" (057 §2.4). Sync + fail-open, so it
+                # is safe inside a finally that is unwinding a CancelledError.
+                self._attach_artifacts(
+                    goal, getattr(run, "session_id", None) or _pre_sid)
                 # 044 T20 fix round 1 (Important 5): close the room's books even
                 # when the run is CANCELLED by the wall-clock cap and never
                 # returns an outcome — otherwise the next tick re-answers every
@@ -918,22 +1266,22 @@ class GoalDispatcher:
                         self.task_agent, payload,
                         session_id=getattr(run, "session_id", None) or _room_sid,
                         up_to_ts=_room_read_at)
+            # 057 WS-C (B8): the run ended because a rail asked it to stop at its
+            # step boundary. That is a PRE-EMPTION, not an outcome: `yield_for_rail`
+            # owns the board row (back to `ready`, no failure increment), so this
+            # path must record nothing — recording would feed the circuit breaker
+            # for work the agent was told to put down.
+            if goal.id in self._yield_requested:
+                logger.info("goal %s stopped at its step boundary for a rail yield",
+                            goal.id)
+                return
             session_id = run.session_id
             if session_id is None:
                 _g = self.board.record_failure(goal.id, error="create_session returned no id")
                 await self._maybe_escalate_blocked(_g)
                 return
-            # Attribute this run's artifacts to the goal BEFORE any exit branch, so a
-            # run that failed (out of steps, blocked, refused) keeps the evidence it
-            # really produced. 46 goals died on "ran out of steps" last week and each
-            # retry then restarted blind against a workspace whose files it could no
-            # longer attribute. Fail-open: bookkeeping never fails a finished run.
-            try:
-                from core.artifacts import get_artifact_ledger
-                get_artifact_ledger().attach_goal(goal.user_id, session_id, goal.id)
-            except Exception:
-                logger.debug("artifact goal attribution skipped for %s", goal.id,
-                             exc_info=True)
+            # (artefact attribution moved into the wait_for's `finally` above —
+            # 057 WS-C A1: a cancelled run must keep the evidence it produced.)
             # FIX 4: which of this goal's GRANTED tools never actually registered.
             # Read once, while the orchestrator is still resident, and carried into
             # both exits below — a tool-starved run must say so instead of failing
@@ -1141,6 +1489,10 @@ class GoalDispatcher:
                 recorded_success = True
                 _goal_ev(goal, "done", session_id=session_id,
                          spend_usd=run.spend_usd, steps=run.steps,
+                         # 057 WS-C (B10): the pre-flight's ONLY input. Without a
+                         # runtime on the terminal event there is nothing to take
+                         # a p95 of, and the estimate can only ever be a guess.
+                         duration_sec=self._elapsed(goal.id),
                          artifacts=len(run.artifacts),
                          user_messages=len(run.user_messages),
                          verified=run.verified)
@@ -1171,6 +1523,12 @@ class GoalDispatcher:
                     (not judge_on or run.verified == "verified"):
                 await self._self_wake(goal, session_id, result_record)
         except Exception as e:
+            # 057 WS-C (B8): same rule as the clean-exit path — a run torn down for
+            # a rail yield is never recorded as this goal's failure.
+            if goal.id in self._yield_requested:
+                logger.info("goal %s ended for a rail yield (%s)", goal.id,
+                            type(e).__name__)
+                return
             logger.error("goal %s run failed: %s", goal.id, e, exc_info=True)
             # 015 #3: a permanent LLM/provider death (OpenRouter 402 →
             # LLMPermanentError → "ALL LLM PROVIDERS EXHAUSTED") gets the
@@ -1180,7 +1538,9 @@ class GoalDispatcher:
             if _is_llm_provider_exhausted(e):
                 error_text = f"{LLM_EXHAUSTED_MARKER}: {error_text}"[:2000]
                 block_kind_hint = "provider_outage"
-            _goal_ev(goal, "failed", reason=error_text[:200], session_id=session_id)
+            _goal_ev(goal, "failed", reason=error_text[:200], session_id=session_id,
+                     steps=int(getattr(run, "steps", 0) or 0),
+                     duration_sec=self._elapsed(goal.id))
             try:
                 _g = self.board.record_failure(goal.id, error=error_text, session_id=session_id)
                 # T2.1 Task-3 review fix (finding #1, CRITICAL): this path also
@@ -1211,6 +1571,8 @@ class GoalDispatcher:
             if _shared_ws:
                 from core.interactive_gate import mark_idle
                 mark_idle()
+            self._ws_holders.discard(goal.id)
+            self._goal_started.pop(goal.id, None)
 
     async def _evaluate_acceptance(self, checks: list, goal: Goal,
                                    session_id: Optional[str], run) -> list:
@@ -1373,6 +1735,16 @@ class GoalDispatcher:
                 if inherited:
                     return inherited
         base = default_goal_tools()  # posture-aware (WS-8)
+        # 057 WS-A: a named rig (payload.rig, else AUTONOMOUS_RIG_DEFAULT) narrows
+        # the default; an explicit payload.tools above still wins verbatim.
+        try:
+            from core.config_policy.rigs import resolve_rig_tools
+            rigged = resolve_rig_tools(payload, base)
+            if rigged is not None and list(rigged) != list(base):
+                logger.info("goal %s: rig narrows the toolset to %s", goal.id, rigged)
+                return list(rigged)
+        except Exception as e:  # fail-open to the wide default
+            logger.debug("goal %s: rig resolution failed (%s); using default", goal.id, e)
         # Proposal 009 (2026-07-14): a goal with no tools payload whose own text names a
         # capability ("Publish ... X thread" → twitter) resolves it at dispatch time instead
         # of starving — the night-1 battle-test failure mode for legacy/self-created rows.

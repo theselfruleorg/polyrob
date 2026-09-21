@@ -1,6 +1,6 @@
 # API Package - HTTP API Layer
 
-_Last reviewed: 2026-06-30. For the authoritative architecture see ../AGENTS.md; for env flags see ../docs/CONFIGURATION.md._
+_Last reviewed: 2026-09-21. For the authoritative architecture see ../AGENTS.md; for env flags see ../docs/CONFIGURATION.md._
 
 ## Overview
 
@@ -124,14 +124,19 @@ Returns system health status and metrics:
 ```json
 {
   "status": "healthy",
-  "service": "rob-platform",
+  "service": "polyrob",
   "metrics": {
-    "active_updates": 5,
-    "semaphore_available": 45,
-    "bot_initialized": true
+    "bot_initialized": true,
+    "active_sessions": 3,
+    "session_capacity": 20
   }
 }
 ```
+
+`status` is `healthy` or `degraded` (503). It is derived from two signals that
+are actually written: whether the lifespan finished building the bot, and how
+many sessions the agent holds against its capacity. `active_sessions` is `null`
+— never `0` — when the agent cannot be read (B6).
 
 ### Authentication (`/api/auth/*`)
 
@@ -209,13 +214,16 @@ Content-Type: application/json
 
 {
   "task": "Your task description here",
-  "user_id": "user_identifier",
-  "model": "gpt-5",
-  "provider": "openai",
   "max_steps": 50,
   "tools": ["browser", "filesystem"]
 }
 ```
+
+⚠️ A `user_id` in the body is IGNORED — the tenant comes from the authenticated
+request, never from the payload (trusting it let any caller act as another
+tenant). `model`/`provider` are optional; when omitted the session resolves the
+operator's configured provider (`DEFAULT_PROVIDER`, else the first provider with
+a key). There is no `gpt-5`/`openai` default.
 
 Response:
 ```json
@@ -223,10 +231,16 @@ Response:
   "ok": true,
   "session_id": "uuid",
   "task": "Your task...",
-  "state": "running",
-  "webview_url": "https://your-domain.example/session/uuid"
+  "status": "running",
+  "model": "…",
+  "tools": ["browser", "filesystem"],
+  "webview_url": "https://your-domain.example/session/uuid",
+  "message": "Session created and started successfully"
 }
 ```
+
+There is no `state` field; the field is `status` (`SessionResponse` in
+`api/models.py`).
 
 #### Cancel Session
 ```http
@@ -272,11 +286,17 @@ GET /api/task/metrics
 GET /api/task/capabilities
 ```
 
-#### Upload to Session Workspace / List Documents
+#### Session Workspace Files
 ```http
-POST /api/task/sessions/{session_id}/workspace/upload
+POST /api/task/sessions/{session_id}/workspace/upload   # multipart: file=@…
+GET  /api/task/sessions/{session_id}/workspace/{path}   # download ONE file
 GET  /api/task/sessions/{session_id}/documents
 ```
+
+The download route is the URI A2A artifacts point at. It is tenant-scoped and
+confined to the session workspace: an absolute path, any `..` segment and any
+symlinked component are refused, and the file is served as an attachment with
+`nosniff` + a locked-down CSP (agent-authored content is never rendered inline).
 
 See `TASK_API_DOCS.md` for the full, authoritative path list (`task_http_api.py` mounts under the
 `/task` prefix, so the app-level paths are `/api/task/...`).
@@ -361,37 +381,46 @@ GET /api/payments/pricing
 GET /api/pricing/models
 ```
 
-Response:
+Response (shape per `api/pricing_endpoints.py`; `models` is a LIST, and the
+model set is whatever this build's registry prices):
 ```json
 {
-  "models": {
-    "gpt-5": {
-      "input_cost_per_1k": 0.005,
-      "output_cost_per_1k": 0.02
-    },
-    "claude-sonnet-4-5": {
-      "input_cost_per_1k": 0.003,
-      "output_cost_per_1k": 0.015
+  "pricing_model": "token-based",
+  "credit_value_usd": 0.01,
+  "markup": 2.0,
+  "models": [
+    {
+      "name": "<model id>",
+      "provider": "<provider>",
+      "input_price_per_1M": 3.0,
+      "output_price_per_1M": 15.0,
+      "cached_price_per_1M": 0.3,
+      "examples": {"small": {"credits": 1, "user_cost_usd": 0.01}}
     }
-  }
+  ]
 }
 ```
+
+`GET /api/pricing/calculator?model=…&input_tokens=…&output_tokens=…` returns the
+cost for one call. A model with no published pricing is **404** — it used to
+answer `200` with `{"error": "..."}`, which every status-checking client read as
+a success.
 
 ### Admin API (`/api/admin/*`)
 
 Requires admin authentication.
 
-#### Generate API Key
-```http
-POST /api/admin/generate-key
-X-Admin-Token: <admin_token>
-```
+#### API keys
+There is no admin key-minting route. `POST /api/admin/generate-key` was deleted
+in 2026-08: it returned a token but never wrote the `api_keys` table, so the key
+could never authenticate. Self-service keys live at `POST /api/auth/api-keys`.
 
 #### User Management
 ```http
-GET /api/admin/users
-GET /api/admin/users/{user_id}
-PUT /api/admin/users/{user_id}/tier
+GET  /api/admin/users
+GET  /api/admin/users/{user_id}
+POST /api/admin/users/{user_id}/tier
+POST /api/admin/users/{user_id}/role
 ```
 
 #### System Stats
@@ -428,13 +457,19 @@ GET  /api/x402/payment-history/{wallet_address}  # payment history for a wallet
   "pricing": {
     "per_request_usd": 0.01,
     "minimum_purchase_usd": 0,
-    "supported_assets": ["usdc", "usdt", "eth"],
-    "supported_chains": ["base", "ethereum"]
+    "supported_assets": ["usdc"],
+    "supported_chains": ["base", "base-sepolia"]
   },
   "payment_address": "0x...",
   "facilitator": "Direct payment"
 }
 ```
+
+⚠️ `supported_assets` / `supported_chains` are DERIVED from the asset registry
+(`core/payments/assets.py`, rows on the `facilitator` rail) — they are not a
+hand-kept list. The per-request x402 rail settles USDC and nothing else; the
+older `["usdc","usdt","eth"]` / `["base","ethereum"]` claim invited payments
+nothing could ever match to a request.
 
 ### A2A Protocol (`/a2a/*`, `/.well-known/*`)
 
@@ -450,6 +485,9 @@ POST /a2a/message/stream         # SSE streaming
 GET  /a2a/tasks/{task_id}/stream # SSE streaming for a task
 POST /a2a/tasks/resubscribe      # resubscribe to a task stream
 ```
+
+`tasks/resubscribe` takes its parameters in the BODY (`{"id": "<taskId>", "historyLength": N}`) and returns SSE. It has no
+JSON-RPC form: calling it on `/a2a/rpc` answers 501 naming this route.
 
 ### EIP-8004 Trustless Agents (`/eip8004/*`)
 
@@ -480,11 +518,29 @@ JWT tokens contain:
 
 ### API Key Authentication
 
-Alternative authentication via API key:
+Self-service keys minted at `POST /api/auth/api-keys`:
 
 ```http
-X-API-KEY: <api_key>
+X-API-KEY: rob_xxx...
 ```
+
+The validator is registered UNCONDITIONALLY (`api/api_key_auth.py`), so a key
+works whether or not `API_SECRET`/`ADMIN_TOKEN` is set. ⚠️ MINTING a key still
+requires the account system: `POST /api/auth/api-keys` answers **503** with the
+remedy (`ENABLE_AUTH=true` + a database, then restart) when it is off.
+
+### Operator Service Token
+
+`API_AUTH_TOKEN` is a machine-to-machine OPERATOR credential, sent as its own
+header:
+
+```http
+X-Service-Token: <API_AUTH_TOKEN>
+```
+
+It carries the role `service`: full feature access and no per-request 402, but
+it is **NOT an admin** — `/api/admin/*` refuses it. Sending it as `X-API-KEY`
+still works for one release and logs a one-time deprecation warning.
 
 ### Wallet Authentication (SIWE)
 
@@ -537,19 +593,13 @@ class MessageResponse(BaseModel):
     agent_id: Optional[str] = None
 ```
 
-### SessionCreateRequest
-```python
-class SessionCreateRequest(BaseModel):
-    user_id: str                                  # required
-    task: str                                     # required
-    model: Optional[str] = "gpt-5"
-    provider: Optional[str] = "openai"
-    tools: Optional[List[str]] = []               # default: empty list
-    max_steps: Optional[int] = 50
-    temperature: Optional[float] = 0.0
-    use_vision: Optional[bool] = True
-    session_config: Optional[Dict[str, Any]] = None
-```
+### Session creation body
+
+There is no `SessionCreateRequest` model — it was deleted (2026-09-21). It had
+no endpoint (`POST /api/task/sessions` reads a raw dict) and no importer, so it
+was a schema nobody validated against that published `model="gpt-5"` /
+`provider="openai"` defaults the live path stopped using. See "Create Session"
+above for the body the endpoint actually reads.
 
 ## Middleware
 
@@ -601,9 +651,17 @@ API_RATE_LIMIT_RPM=60
 API_RATE_LIMIT_RPH=1000
 API_RATE_LIMIT_BURST=10
 
-# Concurrency
-MAX_CONCURRENT_UPDATES=50
+# Autonomy loops (see "Workers" below)
+API_AUTONOMY_RUNTIME=true
 ```
+
+### Workers
+
+`polyrob serve --workers N` (N > 1) is REFUSED while `API_AUTONOMY_RUNTIME` is
+on: every worker would start its own cron / goal / curator / settlement
+runtime on the same data dir, and two settlement watchers can double-apply a
+payment. Run the loops in exactly one process — start the extra workers with
+`API_AUTONOMY_RUNTIME=false`.
 
 ## Error Handling
 
@@ -641,8 +699,13 @@ uvicorn api.app:get_app --host 0.0.0.0 --port 9000 --reload --factory
 
 ### Production
 ```bash
-uvicorn api.app:get_app --host 0.0.0.0 --port 9000 --workers 4 --factory
+polyrob serve --host 0.0.0.0 --port 9000
 ```
+
+⚠️ `--workers`/`UVICORN_WORKERS` above 1 is REFUSED while the autonomy loops
+are on (see **Workers** above) — on EVERY launch path, `polyrob serve` and
+`python main.py` alike. To run more than one worker, start the extra processes
+with `API_AUTONOMY_RUNTIME=false` and keep the loops in exactly one.
 
 ## Integration with Core Platform
 

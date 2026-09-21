@@ -608,7 +608,11 @@ def _require_activity_access(request: Request) -> None:
         state = getattr(request, "state", None)
         user_id = getattr(state, "user_id", None)
         tier = getattr(state, "tier", None)
-        is_admin = bool(getattr(state, "is_admin", False))
+        # ⚠️ The ROLE through the one predicate, not the cached boolean alone —
+        # see webgate.request_is_admin. A request whose identity was populated
+        # outside this process's auth middleware carries a role and no flag,
+        # and reading only the flag denied a real admin with a 404.
+        is_admin = webgate.request_is_admin(request)
         if is_admin or tier == "admin" or (user_id and user_id == webgate.local_owner_id()):
             return
         raise HTTPException(status_code=404, detail="Activity stream disabled")
@@ -669,15 +673,9 @@ def _cold_backfill(limit: int) -> List[Dict[str, Any]]:
     return events[-limit:]
 
 
-@router.get("/api/activity/backfill")
-async def activity_backfill(request: Request, limit: int = 200) -> JSONResponse:
-    _require_activity_access(request)
-    try:
-        limit = max(1, min(int(limit), 1000))
-    except (TypeError, ValueError):
-        limit = 200
-    hub = get_hub()
-    events = hub.recent(limit)
-    if not events:
-        events = _cold_backfill(limit)
-    return JSONResponse({"events": events})
+# 043 A30: `GET /api/activity/backfill` is DELETED — it answered the deleted
+# `/activity` page and no console script has called it since. The cold window is
+# read through `GET /api/webgate/log` (`webview/worklog_api.py`), which calls
+# `_cold_backfill` above directly and scopes the result to ONE tenant; the
+# route returned the CROSS-TENANT stream behind an owner/admin check, which is
+# a wider answer than any surviving screen asks for.

@@ -46,6 +46,14 @@ class CronScheduleAction(BaseModel):
     wake_agent: bool = Field(default=True,
                              description="If false, this tick runs without invoking the LLM "
                                          "(a $0 no-op tick). Default true = normal agent run.")
+    rig: Optional[str] = Field(default=None,
+                               description="Optional named tool rig for this job's runs: "
+                                           "'money_rail', 'social', 'research', 'ops', or 'full' "
+                                           "(everything this deploy grants an autonomous run). "
+                                           "A narrow rig ships far fewer tool schemas per step, "
+                                           "which is most of the cost of a recurring job. A rig "
+                                           "is a REQUEST, not a grant — money tools still need an "
+                                           "owner grant. Omit to use this deploy's default.")
 
 
 class CronListAction(BaseModel):
@@ -88,6 +96,17 @@ class CronJobTool(BaseTool):
             payload["deliver_target"] = params.deliver_target
         if not params.wake_agent:
             payload["wake_agent"] = False
+        if params.rig:
+            # 057 WS-A: validated here rather than on the model so an unknown
+            # name is REFUSED with the valid list, not stored and silently
+            # ignored at dispatch three hours later.
+            from core.config_policy.rigs import is_rig, rig_names
+            if not is_rig(params.rig):
+                return ActionResult(
+                    error=f"Unknown tool rig '{params.rig}'. Valid rigs: "
+                          f"{', '.join(rig_names())}.",
+                    include_in_memory=True)
+            payload["rig"] = params.rig.strip().lower()
         try:
             job = self._resolve_service().schedule(
                 task=params.task, schedule_spec=params.schedule,

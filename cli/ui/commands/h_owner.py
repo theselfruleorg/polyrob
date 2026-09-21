@@ -11,8 +11,8 @@ primitives the other seats call —
 - owner pause (031): ``core.surfaces.owner_admin.pause_autonomy``/``resume_autonomy_scopes``
   (honest VERIFIED-state reporting, never a checkmark on an unproven halt);
 - asks: the goal-board asks store (``agents.task.goals.board.GoalBoard.asks``/
-  ``fulfill_ask`` at ``goals_db_path(get_data_root())`` — the CLI's
-  ``_goal_board`` resolution);
+  ``fulfill_ask`` at ``goals_db_path(admin_data_dir())`` — the CLI's
+  ``_goal_board`` resolution, over the ONE 031 deployed-home seam);
 - outbound allowlist: the pure ``_do_allow``/``_do_deny``/``_do_allowlist``
   handlers in ``cli/commands/owner.py`` over ``core.surfaces.outbound_allowlist``;
 - invoices/settle: ``modules.x402.invoicing.list_payment_requests``/
@@ -28,11 +28,12 @@ honest one-liner, never a REPL teardown.
 
 No ``from __future__ import annotations`` (kept consistent with h_finance.py).
 """
+import logging
 from typing import Optional
 
-from core.runtime_paths import data_dir_or_home
-
 from cli.ui import candy
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -40,13 +41,25 @@ from cli.ui import candy
 # ---------------------------------------------------------------------------
 
 
-def _admin_data_dir(ctx) -> str:
-    """Same home resolution as /config, /pending: the container config's
-    data_dir when present, else the resolved data home (POLYROB_DATA_DIR wins,
-    else cwd/.polyrob) — the SAME home the surface daemons and `polyrob owner`
-    read."""
-    cfg = getattr(ctx.container, "config", None) if getattr(ctx, "container", None) else None
-    return data_dir_or_home(getattr(cfg, "data_dir", None))
+def _admin_data_dir(ctx=None, *, write: "bool | None" = None) -> str:
+    """The data home this REPL owner verb acts on — the 031 deployed-home rule.
+
+    ONE seam: ``cli._admin_home.admin_data_dir`` — the same resolver every
+    ``polyrob owner`` / ``polyrob autonomy`` verb uses. ``POLYROB_DATA_DIR``
+    wins; on a box carrying a deployed instance with nothing in the shell the
+    DEPLOYED home is adopted with a note; an unreadable deployed home REFUSES.
+
+    Before C2 (2026-09-21) this read ``data_dir_or_home(config.data_dir)``, so
+    an owner verb typed in the REPL on a deployed box could pause, settle or
+    allow against ``cwd/.polyrob`` while the running daemon read
+    ``/var/lib/polyrob`` — a success line for a write nothing would ever see.
+
+    *write* declares intent for the euid guard (``True`` mutating, ``False``
+    read-only, ``None`` unknown). *ctx* is accepted and ignored: the argument
+    kept every call site unchanged, and the home has ONE answer per process.
+    """
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir(write=write)
 
 
 def _tenant(ctx) -> str:
@@ -56,13 +69,13 @@ def _tenant(ctx) -> str:
     return (getattr(ctx, "user_id", "") or "").strip() or "local"
 
 
-def _goal_board():
+def _goal_board(*, write: "bool | None" = None):
     """The SAME board resolution as ``polyrob owner``'s ``_goal_board`` and the
-    REPL's /goals handler."""
+    REPL's /goals handler — over :func:`_admin_data_dir` (C2), never
+    ``get_data_root()``, which does not apply the 031 deployed-home rule."""
     from agents.task.goals.board import GoalBoard
-    from core.runtime_config import get_data_root
     from core.runtime_paths import goals_db_path
-    return GoalBoard(goals_db_path(get_data_root()))
+    return GoalBoard(goals_db_path(_admin_data_dir(write=write)))
 
 
 def _run_owner_db(ctx, coro_factory):
@@ -118,7 +131,7 @@ def _pause_common(ctx, scopes_args, *, force_all: bool = False) -> None:
         ctx.emit(f"{candy.GUTTER}({e})", title="pause")
         return
     try:
-        res = pause_autonomy(_admin_data_dir(ctx), scopes=scopes, duration_minutes=minutes,
+        res = pause_autonomy(_admin_data_dir(write=True), scopes=scopes, duration_minutes=minutes,
                              reason="REPL /halt" if force_all else "REPL /pause", via="repl")
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(pause failed: {e})", title="pause")
@@ -155,7 +168,7 @@ def h_resume(ctx) -> None:
                  title="resume")
         return
     try:
-        res = resume_autonomy_scopes(_admin_data_dir(ctx),
+        res = resume_autonomy_scopes(_admin_data_dir(write=True),
                                      scopes=None if scopes == ("all",) else scopes, via="repl")
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(resume failed: {e})", title="resume")
@@ -180,7 +193,7 @@ def h_asks(ctx) -> None:
     tenant = _tenant(ctx)
     try:
         from agents.task.goals.board import ASK_OPEN
-        rows = [a for a in _goal_board().asks(user_id=tenant, status=ASK_OPEN)
+        rows = [a for a in _goal_board(write=False).asks(user_id=tenant, status=ASK_OPEN)
                 if (a.payload or {}).get("ask_kind") != "tool_approval"]
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(asks unavailable: {e})", title="asks")
@@ -203,12 +216,16 @@ def h_asks(ctx) -> None:
 def h_fulfill(ctx) -> None:
     """Mark an ask FULFILLED and flip its blocked goals back to ready."""
     if not ctx.args:
-        ctx.emit("usage: /fulfill <ask-id>  (see /asks)", title="fulfill")
+        ctx.emit("usage: /fulfill <ask-id> [answer…]  (see /asks)", title="fulfill")
         return
     tenant = _tenant(ctx)
     ask_id = ctx.args[0]
+    # A27: an ask is a QUESTION — the words after the id are the answer, and
+    # they ride into the unblocked goal's retry prompt (decide_ask(answer=)).
+    answer = " ".join(ctx.args[1:]).strip()
     try:
-        ok, unblocked = _goal_board().fulfill_ask(ask_id, user_id=tenant)
+        ok, unblocked = _goal_board(write=True).decide_ask(
+            ask_id, user_id=tenant, approved=True, answer=answer)
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(fulfill unavailable: {e})", title="fulfill")
         return
@@ -239,7 +256,7 @@ def h_missed(ctx) -> None:
     tenant = _tenant(ctx)
     try:
         from core.surfaces.missed import format_notice_lines, missed_notices
-        rows = missed_notices(tenant, _admin_data_dir(ctx), n)
+        rows = missed_notices(tenant, _admin_data_dir(write=False), n)
     except Exception as e:
         ctx.emit(f"{candy.GUTTER}(missed unavailable: {e})", title="missed")
         return
@@ -266,7 +283,7 @@ def h_missed(ctx) -> None:
 
 def _outbound_allowlist(ctx):
     from cli.commands.owner import _allowlist
-    return _allowlist(_admin_data_dir(ctx))
+    return _allowlist(_admin_data_dir(write=True))
 
 
 def h_allow(ctx) -> None:
@@ -331,7 +348,24 @@ def h_allowlist(ctx) -> None:
 # /invoices and /settle — the agent's receivables (x402 invoicing)
 # ---------------------------------------------------------------------------
 
-_INVOICE_STATUSES = ("pending", "completed", "expired")
+def _invoice_statuses() -> tuple:
+    """The ONE invoice-status vocabulary (``modules.x402.invoicing``).
+
+    ⚠️ This seat carried its own three-word copy, so ``/invoices refund_due``
+    (money taken and nothing delivered) and ``/invoices settling`` answered
+    *usage* — the owner could not ask for the two states that most need asking
+    about. Imported, never re-derived; a lazy import keeps the REPL's cold
+    start off the payments module.
+    """
+    try:
+        from modules.x402.invoicing import INVOICE_STATUSES
+        return tuple(INVOICE_STATUSES)
+    except Exception:
+        # Fail-open to the legacy triple rather than raising into the REPL
+        # dispatcher: a deployment without the payments module still has to be
+        # able to type `/invoices`. Mirrors `webview/pages.py::_invoice_statuses`.
+        logger.debug("invoice status vocabulary unavailable", exc_info=True)
+        return ("pending", "completed", "expired")
 
 
 def h_invoices(ctx) -> None:
@@ -339,8 +373,9 @@ def h_invoices(ctx) -> None:
     status: Optional[str] = None
     if ctx.args:
         candidate = ctx.args[0].lower()
-        if candidate not in _INVOICE_STATUSES:
-            ctx.emit("usage: /invoices [pending|completed|expired]", title="invoices")
+        statuses = _invoice_statuses()
+        if candidate not in statuses:
+            ctx.emit(f"usage: /invoices [{'|'.join(statuses)}]", title="invoices")
             return
         status = candidate
     tenant = _tenant(ctx)

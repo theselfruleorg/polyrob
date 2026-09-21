@@ -46,6 +46,15 @@ def serve(host, port, workers):
     from cli.commands._errors import require_extra_or_exit
     require_extra_or_exit("server")
 
-    from api.server_boot import run_server
+    # B13: N workers = N autonomy runtimes on ONE data dir. The rule lives in
+    # `api.server_boot` — the launch path `main.py` (the systemd entry) shares —
+    # so a refusal the CLI enforces is not a refusal production skips. Checked
+    # here too only so the operator sees it before uvicorn is imported.
+    from api.server_boot import multiworker_refusal, run_server
+
+    refusal = multiworker_refusal(workers)
+    if refusal:
+        click.echo(refusal, err=True)
+        sys.exit(1)
 
     run_server(host=host, port=port, workers=workers)

@@ -39,11 +39,25 @@ def test_failed_is_reported_as_not_delivered():
     assert "NOT delivered" in out
 
 
-def test_fallback_is_reported_as_durable_not_instant():
-    out = _describe_route_outcome("fallback")
+def test_no_sink_is_reported_as_durable_not_instant():
+    """D21 (2026-09-21): `no_sink` is the outcome that means 'no live channel,
+    kept as a durable owner notice' — the sentence `fallback` used to carry."""
+    out = _describe_route_outcome("no_sink")
     assert out is not None
     assert "NOT delivered" not in out
     assert "durable" in out
+
+
+def test_fallback_is_now_a_send_failure():
+    """D21/D49: a live sink existed and the send FAILED — that is not delivery,
+    and the wording must say so (it used to read as a quiet success)."""
+    out = _describe_route_outcome("fallback")
+    assert "NOT delivered" in out and "FAILED" in out
+
+
+def test_queued_is_owed_not_done():
+    out = _describe_route_outcome("queued")
+    assert "still owed" in out and "NOT delivered" not in out
 
 
 def test_unknown_outcome_falls_back_to_generic_message():

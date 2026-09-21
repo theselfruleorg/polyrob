@@ -112,9 +112,24 @@ def _pricing_recipient() -> str:
     fills an empty env). /pricing is the first endpoint an external agent
     calls, so it must never say "Not configured" while every other surface
     hands out a live address. Legacy `X402_PAYMENT_ADDRESS` kept as a last
-    fallback."""
-    from modules.x402.x402_integration import resolve_treasury_address
-    return resolve_treasury_address() or os.environ.get("X402_PAYMENT_ADDRESS", "")
+    fallback.
+
+    B41: cached per process — /pricing is public and unauthenticated, and the
+    underlying resolver derives a wallet signing key on every call."""
+    from api.x402_advertisement import treasury_address
+    return treasury_address()
+
+
+def _advertised_assets():
+    """Assets the per-request x402 rail can actually settle (B22)."""
+    from api.x402_advertisement import supported_assets
+    return supported_assets()
+
+
+def _advertised_chains():
+    """Chains the per-request x402 rail can actually settle on (B22)."""
+    from api.x402_advertisement import supported_chains
+    return supported_chains()
 
 
 @router.get("/pricing")
@@ -135,8 +150,11 @@ async def get_x402_pricing():
             # Single source of truth (F12) — matches the live middleware charge.
             "per_request_usd": get_x402_price_usd(),
             "minimum_purchase_usd": 0,
-            "supported_assets": ["usdc", "usdt", "eth"],
-            "supported_chains": ["base", "ethereum"]
+            # B22: derived from the asset registry — the per-request rail
+            # settles USDC through fastapi_x402 and nothing else. The old
+            # ["usdc","usdt","eth"] list invited payments nothing could match.
+            "supported_assets": _advertised_assets(),
+            "supported_chains": _advertised_chains(),
         },
         "payment_address": recipient if recipient else "Not configured",
         "facilitator": facilitator if facilitator else "Direct payment",
@@ -469,7 +487,13 @@ async def _verify_and_settle_invoice(request_id, row, payment_header):
     from fastapi_x402 import init_x402, get_facilitator_client
     from fastapi_x402.models import PaymentRequirements
     cfg = _invoice_asset_cfg(row["chain"])
-    atomic = int(round(float(row["amount_usd"]) * (10 ** cfg.decimals)))
+    # B30: ONE derivation. The challenge the payer signed against was built by
+    # `_challenge_for_invoice` with `to_atomic_amount`; re-deriving it here as
+    # `int(round(usd * 10**decimals))` is a SECOND rounding rule, and a cent
+    # the two round differently is an authorization for a different amount
+    # than the one being settled.
+    from modules.x402.middleware import to_atomic_amount
+    atomic = to_atomic_amount(float(row["amount_usd"]), cfg.decimals)
     payment_requirements = PaymentRequirements(
         scheme="exact", network=row["chain"], maxAmountRequired=str(atomic),
         resource=f"/api/x402/requests/{request_id}/pay", description=row["purpose"],

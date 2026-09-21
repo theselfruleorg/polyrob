@@ -11,6 +11,13 @@ is what happened to the bridge, and is why `/bridge` exists.
 Both verbs QUOTE by default and need an explicit `go` to execute. Typing `go`
 is a deliberate second act, not the approval: the durable owner queue still
 applies above the autonomous ceiling, and every guard applies underneath.
+
+⚠️ D12: both helpers are ``async def`` and AWAIT the verb. They used to call
+``asyncio.run`` on the polling loop's own thread, catch the ``RuntimeError``
+and block on a thread pool's ``.result()`` — so every inbound Telegram update
+stalled for the whole quote, and any loop-affine object the rail touched
+belonged to the wrong loop (the same class of bug as the 2026-09-15
+"got Future attached to a different loop" on a free `/ban`).
 """
 from __future__ import annotations
 
@@ -18,17 +25,6 @@ import logging
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
-
-
-def _run(coro):
-    """Run *coro*, whether or not a loop is already turning under us."""
-    import asyncio
-    try:
-        return asyncio.run(coro)
-    except RuntimeError:
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-            return pool.submit(asyncio.run, coro).result()
 
 
 def _render(result, *, retry_hint: Optional[str]) -> str:
@@ -63,7 +59,7 @@ def _positive(raw: str) -> Optional[float]:
 # /launch — a token on the launchpad
 # ---------------------------------------------------------------------------
 
-def launch_reply(user_id: Optional[str], args: List[str]) -> str:
+async def launch_reply(user_id: Optional[str], args: List[str]) -> str:
     """`/launch <SYMBOL> <name…> [buy <amount>] [go]`.
 
     The launchpad quotes in the chain's NATIVE asset, so `buy` is an amount of
@@ -135,7 +131,7 @@ def launch_reply(user_id: Optional[str], args: List[str]) -> str:
                           max_spend_usd=max_spend_usd, dry_run=not execute)
     tool = LaunchpadTool()
     try:
-        result = _run(tool.launchpad_launch(params, _owner_ctx(user_id)))
+        result = await tool.launchpad_launch(params, _owner_ctx(user_id))
     except Exception as exc:
         logger.warning("launch verb failed", exc_info=True)
         return f"The launch did not run: {exc}"
@@ -157,8 +153,8 @@ def launch_reply(user_id: Optional[str], args: List[str]) -> str:
 # /deploy — a plain fixed-supply token
 # ---------------------------------------------------------------------------
 
-def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
-    """`/deploy <SYMBOL> <supply> <name…> [on <chain>] [go]`.
+async def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
+    """`/deploy <SYMBOL> <supply> <name…> [on <chain>] [decimals n] [salt <hex>] [go]`.
 
     An ordinary ERC-20 with no launchpad attached: fixed supply, minted to the
     wallet, no mint function and no owner. Deploying a token does NOT make it
@@ -168,14 +164,17 @@ def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
         return "Only the owner can deploy a token."
     if len(args) < 2:
         return ("Usage: /deploy <SYMBOL> <supply> <name…> [on <chain>] "
-                "[vanity <hex>] [go]\n"
+                "[decimals <n>] [vanity <hex>] [salt <hex>] [uri <url>] [go]\n"
                 "e.g. /deploy ROB 1000000000 Rob Coin              — quote only\n"
                 "     /deploy ROB 1e9 Rob Coin on solana uri https://x/y.json\n"
-                "     /deploy ROB 1e9 Rob Coin vanity b0b go     — mine 0xb0b…\n\n"
+                "     /deploy ROB 1e9 Rob Coin vanity b0b go     — mine 0xb0b…\n"
+                "     /deploy ROB 1e9 Rob Coin salt 0x… go       — a chosen salt\n\n"
+                "`decimals` defaults to 18 on an EVM chain and 9 on Solana — "
+                "it is baked into the token FOREVER, so set it deliberately.\n"
                 "On SOLANA the name and symbol are written ON-CHAIN and `uri` "
                 "points at the JSON that carries the LOGO. On an EVM chain "
-                "`vanity` mines an address and gives the token the SAME address "
-                "on every chain.\n\n"
+                "`vanity` mines an address and `salt` names one outright; "
+                "either gives the token the SAME address on every chain.\n\n"
                 "A fixed-supply ERC-20: the whole supply is minted to my wallet "
                 "and there is no mint function, no owner and no transfer fee. "
                 "The bytecode is an audited template and the guard checks the "
@@ -209,6 +208,33 @@ def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
             tokens = tokens[:i] + tokens[i + 2:]
             break
 
+    # C66: `salt` and `decimals` were reachable from the CLI and the agent's
+    # own action and from no chat seat, so the owner could not choose either
+    # from the one place he actually works. `decimals` is baked into the token
+    # forever; `salt` is the CREATE2 commitment that gives the same address on
+    # every chain.
+    salt = ""
+    for i, word in enumerate(tokens):
+        if word.lower() == "salt" and i + 1 < len(tokens):
+            salt = tokens[i + 1]
+            tokens = tokens[:i] + tokens[i + 2:]
+            break
+
+    decimals: Optional[int] = None
+    for i, word in enumerate(tokens):
+        if word.lower() in ("decimals", "decimal") and i + 1 < len(tokens):
+            raw = tokens[i + 1]
+            try:
+                decimals = int(raw)
+            except (TypeError, ValueError):
+                return f"`decimals` must be a whole number, got {raw!r}."
+            tokens = tokens[:i] + tokens[i + 2:]
+            break
+
+    if salt and vanity:
+        return ("Give `salt` OR `vanity`, not both — `vanity` MINES a salt to "
+                "reach an address prefix, so naming one too is ambiguous.")
+
     if len(tokens) < 2:
         return "Give me a symbol and a supply: /deploy <SYMBOL> <supply> <name…>"
     symbol = tokens[0]
@@ -232,26 +258,34 @@ def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
             from tools.defi.trade_tool import SolanaDeployTokenParams
         except Exception as exc:                   # pragma: no cover - import guard
             return f"The Solana deploy rail is unavailable: {exc}"
+        if salt:
+            return ("A Solana mint address is a keypair, not a hash of its "
+                    "code — a CREATE2 salt has nothing to commit to. Drop "
+                    "`salt`.")
         sol = SolanaDeployTokenParams(name=name, symbol=symbol, supply=supply,
-                                      decimals=9, uri=uri, max_spend_usd=25.0,
+                                      decimals=9 if decimals is None else decimals,
+                                      uri=uri, max_spend_usd=25.0,
                                       dry_run=not execute)
         try:
-            result = _run(perform_solana_deploy_token(
-                DefiTradeTool(), sol, _owner_ctx(user_id)))
+            result = await perform_solana_deploy_token(
+                DefiTradeTool(), sol, _owner_ctx(user_id))
         except Exception as exc:
             logger.warning("solana deploy verb failed", exc_info=True)
             return f"The deploy did not run: {exc}"
         hint = None if execute else (
             f"/deploy {symbol} {supply:g} {name} on solana"
+            + (f" decimals {decimals}" if decimals is not None else "")
             + (f" uri {uri}" if uri else "") + " go")
         return _render(result, retry_hint=hint)
 
+    evm_extra = {} if decimals is None else {"decimals": decimals}
     params = DeployTokenParams(chain=chain, name=name, symbol=symbol,
                                supply=supply, max_spend_usd=25.0,
-                               vanity=vanity, dry_run=not execute)
+                               vanity=vanity, salt=salt, dry_run=not execute,
+                               **evm_extra)
     try:
-        result = _run(perform_deploy_token(DefiTradeTool(), params,
-                                           _owner_ctx(user_id)))
+        result = await perform_deploy_token(DefiTradeTool(), params,
+                                            _owner_ctx(user_id))
     except Exception as exc:
         logger.warning("deploy verb failed", exc_info=True)
         return f"The deploy did not run: {exc}"
@@ -259,5 +293,7 @@ def deploy_reply(user_id: Optional[str], args: List[str]) -> str:
     hint = None if execute else (
         f"/deploy {symbol} {supply:g} {name}"
         + (f" on {chain}" if chain != "base" else "")
-        + (f" vanity {vanity}" if vanity else "") + " go")
+        + (f" decimals {decimals}" if decimals is not None else "")
+        + (f" vanity {vanity}" if vanity else "")
+        + (f" salt {salt}" if salt else "") + " go")
     return _render(result, retry_hint=hint)

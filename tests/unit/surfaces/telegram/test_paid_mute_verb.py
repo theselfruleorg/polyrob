@@ -140,8 +140,13 @@ def test_a_member_whose_room_did_not_grant_the_verb_is_refused(
         ["1h"])
     assert "member verb" in reply_text(out)
     assert "member_verbs" in reply_text(out)
-    # ⚠️ A refusal stays owner-only output: it can name a protection or a cap.
-    assert not reply_to_room(out)
+    # ⚠️ D61: THIS refusal is answered IN THE ROOM. It names only the room's own
+    # configuration — no cap, no asset, no rail state — and the member who typed
+    # the verb has to see it, or the room concludes the feature is broken (which
+    # is exactly what happened in Playground Env on 2026-09-15). Refusals that
+    # describe the PAYMENT RAIL's condition stay owner-only; see
+    # ROOM_FACING_REFUSALS.
+    assert reply_to_room(out)
 
 
 def test_an_owner_reply_mute_applies_FREE_and_never_mints_an_invoice(

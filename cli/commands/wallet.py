@@ -6,10 +6,13 @@ incident: the owner had no single place to see "what's my address / balance / wh
 one do I fund". Balances are best-effort over public RPCs (fail-open to n/a).
 
 `polyrob wallet set-cap <daily|per-tx> <usd>` (owner-UX P2 T7) is the guided,
-confirmed way to raise/lower the two money-authoritative env caps
-(`WALLET_DAILY_CAP_USD` / `AGENT_WALLET_MAX_PER_TX_USD`) — these stay
-env-authoritative; a per-user preference (`core.prefs`, ``budget.wallet_*``)
-may only tighten below the env value, never raise it.
+confirmed way to raise/lower a spend cap. C70/C69: this used to say it wrote
+"the two money-authoritative env caps" and nothing else, which stopped being
+the whole truth once the PolicyGate began re-resolving the ``budget.wallet_*``
+preferences LIVE. It now writes the PREFERENCE by default (applies with no
+restart, and the effective value is read back and printed), and `--env` writes
+the operator envelope (`WALLET_DAILY_CAP_USD` / `AGENT_WALLET_MAX_PER_TX_USD`)
+— which is what a RAISE of the daily cap, and disabling it, still require.
 """
 from __future__ import annotations
 
@@ -21,15 +24,17 @@ from pathlib import Path
 import click
 
 from cli.commands.config import _upsert_env
+from cli._admin_home import as_root_option
 from core.paths import polyrob_home
-from core.instance import resolve_owner_user_id
 from core.wallet.onchain import VENUE_CHAIN as _VENUE_CHAIN, balances as _balances
+# C60: the venue rule lived here AND in `surfaces/telegram/owner_ops.py`, each
+# with its own comment explaining the same footgun. One tuple, imported.
+from surfaces.telegram.owner_ops import _FUNDABLE_VENUES
 
-# Only these venues hold a same-chain float the agent spends directly. hyperliquid
-# (delegated signer, collateral in the master account) and polymarket (per-user proxy
-# creds) NEVER hold funds at their derived address — showing a fundable balance there
-# would re-create the fund-the-wrong-address footgun this whole change exists to kill.
-_FUNDABLE = {"treasury", "x402"}
+#: Venues that hold a same-chain float the agent spends directly. hyperliquid
+#: (delegated signer, collateral in the master account) and polymarket (per-user
+#: proxy creds) NEVER hold funds at their derived address.
+_FUNDABLE = set(_FUNDABLE_VENUES)
 
 # kind -> the env var it writes. Both are read directly by
 # core.wallet.config.load_wallet_config (env-authoritative).
@@ -214,10 +219,14 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         # The SECOND address family off the same seed (2026-08-27): the
         # operator must be able to see — and fund — the Solana address from
         # the same view, or it stays invisible until a trade fails.
+        # C30: a raising derivation used to render EXACTLY like a wallet with no
+        # Solana account at all — the line simply vanished, so an owner funding
+        # from this view had no way to tell "absent" from "broken".
+        solana_address, solana_error = None, None
         try:
             solana_address = w.solana_address
-        except Exception:
-            solana_address = None
+        except Exception as exc:
+            solana_error = f"{type(exc).__name__}: {exc}"
     except ValueError as e:
         msg = (f"agent wallet MISCONFIGURED: {e} "
                "(fix AGENT_WALLET_MASTER_SEED/AGENT_WALLET_DERIVATION or re-run `polyrob wallet init`)")
@@ -231,7 +240,7 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
     }
     payload = {"enabled": True, "network": cfg.network, "operational_venue": op,
                "address": wallet_address, "solana_address": solana_address,
-               "venues": venues, "caps": caps}
+               "solana_error": solana_error, "venues": venues, "caps": caps}
 
     if as_json:
         click.echo(_json.dumps(payload, indent=2))
@@ -254,9 +263,16 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
         elif r.get("note"):
             line += click.style(f"   ({r['note']})", fg="yellow")
         click.echo(line)
-    if solana_address:
+    if solana_error:
+        click.echo(click.style(
+            f"  {'solana':11s} UNREADABLE — the Solana account could not be "
+            f"derived ({solana_error}). This is NOT 'no Solana wallet': do not "
+            f"assume the address is absent.", fg="yellow"))
+    elif solana_address:
         sol_line = f"  {'solana':11s} {solana_address}  [solana] ←FUND for Solana trades"
         if not no_balances and cfg.network == "mainnet":
+            # C30: the balance probe swallowed every failure, so an RPC outage
+            # printed a bare address that read as "funded, amount not shown".
             try:
                 from core.wallet import solana_onchain
                 sol_bal = solana_onchain.native_balance(solana_address)
@@ -269,8 +285,10 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
                 s = f"{sol_bal:.5f}" if sol_bal is not None else "n/a"
                 u = f"{usdc_raw / 1e6:.2f}" if usdc_raw is not None else "n/a"
                 sol_line += f"   USDC={u} SOL={s}"
-            except Exception:
-                pass
+            except Exception as exc:
+                sol_line += click.style(
+                    f"   balances UNREAD ({type(exc).__name__}) — not zero",
+                    fg="yellow")
         click.echo(sol_line)
     click.echo("")
     dc = f"${caps['daily_cap_usd']:.2f}" if caps["daily_cap_usd"] is not None else "none"
@@ -295,21 +313,36 @@ def wallet_cmd(ctx: click.Context, as_json: bool, no_balances: bool):
 @click.argument("usd")
 @click.option("--yes", "-y", is_flag=True, default=False,
               help="Skip the confirmation prompt (non-interactive use).")
+@click.option("--env", "write_env", is_flag=True, default=False,
+              help="Write the OPERATOR env value instead of the owner "
+                   "preference (needs a restart; the only way to disable the "
+                   "daily cap or to RAISE the operator envelope).")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the global env-file home (test/ops only).")
-def set_cap_cmd(kind: str, usd: str, yes: bool, home_dir_opt: str | None):
+@as_root_option
+def set_cap_cmd(kind: str, usd: str, yes: bool, write_env: bool,
+                home_dir_opt: str | None):
     """Set the wallet's DAILY or PER-TX USD spend cap.
 
-    Guided, confirmed write of the money-authoritative env var — writes
-    WALLET_DAILY_CAP_USD (daily) or AGENT_WALLET_MAX_PER_TX_USD (per-tx) to
-    the GLOBAL env file (~/.polyrob/.env). Money stays env-authoritative: a
-    per-user preference may only tighten below this value, never raise it.
-    `set-cap daily none` (or off/unlimited/disabled) explicitly disables the
-    aggregate cap — the ONLY way to do so (H3, 2026-08-22): an absent env var
-    now means the finite $100/24h default, not "no cap".
+    By default this writes the OWNER PREFERENCE the live gate re-reads
+    (`budget.wallet_daily_usd` / `budget.wallet_per_tx_usd`), so it applies
+    immediately with no restart, and the effective value is read back and
+    printed. `--env` writes the operator env var instead — needed to RAISE the
+    daily envelope (the pref is min-merged and can only tighten) and to
+    disable the daily cap (`set-cap daily none`).
     """
     value_to_write = _parse_cap_arg(kind, usd)
     key = _CAP_ENV_KEY[kind]
+    from core.wallet.config import _CAP_DISABLED as _DISABLE_WORDS
+    disabling = kind == "daily" and value_to_write in _DISABLE_WORDS
+    if not write_env and disabling:
+        raise click.ClickException(
+            "a preference cannot DISABLE the daily cap — it is min-merged, so "
+            "it may only tighten. Disabling the operator envelope is an env "
+            "write:\n    polyrob wallet set-cap daily none --env")
+    if not write_env:
+        _set_cap_pref(kind, float(value_to_write), yes=yes)
+        return
     home = Path(home_dir_opt) if home_dir_opt else polyrob_home()
     path = home / ".env"
     line = f"{key}={value_to_write}"
@@ -322,8 +355,7 @@ def set_cap_cmd(kind: str, usd: str, yes: bool, home_dir_opt: str | None):
 
     _upsert_env(path, key, value_to_write, secure=True)
 
-    from core.wallet.config import _CAP_DISABLED
-    if kind == "daily" and value_to_write in _CAP_DISABLED:
+    if disabling:
         click.echo(f"Wrote {key}={value_to_write} to {path} "
                    "(daily cap DISABLED — unbounded aggregate spend).")
     else:
@@ -337,6 +369,65 @@ def set_cap_cmd(kind: str, usd: str, yes: bool, home_dir_opt: str | None):
                f"{path} at startup.")
     click.echo("  (A systemd deploy reads its own env file — e.g. "
                "/etc/polyrob/polyrob.env — set the cap there and restart the service.)")
+    click.echo(_POLICY_GATE_CAVEAT)
+
+
+def _set_cap_pref(kind: str, usd: float, *, yes: bool) -> None:
+    """C69: write the SAME ``budget.wallet_*`` preference the gate reads.
+
+    ``set-cap`` wrote ``~/.polyrob/.env`` and said "takes effect on restart",
+    while the PolicyGate re-resolves ``budget.wallet_daily_usd`` /
+    ``budget.wallet_per_tx_usd`` LIVE — two writers for one number, and the one
+    the CLI used was the one a running service does not re-read. This writes
+    the live one and then READS BACK what the gate would now enforce, so the
+    confirmation is a measurement rather than a promise (the daily pref is
+    min-merged, so a raise above the operator envelope changes nothing and the
+    read-back is what says so).
+    """
+    from core import prefs
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    from cli._admin_home import admin_data_dir
+    from core.wallet.config import effective_daily_cap_usd, effective_max_per_tx_usd
+
+    pref_key = ("budget.wallet_daily_usd" if kind == "daily"
+                else "budget.wallet_per_tx_usd")
+    try:
+        home_dir, tenant = admin_data_dir(write=True), admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
+
+    click.echo(f"About to set {pref_key} = {usd:g} for tenant {tenant}")
+    if not yes and not click.confirm("Proceed?", default=False):
+        click.echo("Aborted — no changes written.")
+        return
+    ok, err = prefs.write_preference(home_dir, tenant, pref_key, float(usd))
+    if not ok:
+        raise click.ClickException(err)
+
+    if kind == "daily":
+        effective = effective_daily_cap_usd(tenant, home_dir)
+        shown = "disabled" if effective is None else f"${effective:.2f}"
+    else:
+        effective = effective_max_per_tx_usd(tenant, home_dir)
+        shown = f"${effective:.2f}"
+    label = "daily cap" if kind == "daily" else "per-transaction cap"
+    click.echo(click.style(
+        f"Wrote the {label} preference ({pref_key}={usd:g}); it applies LIVE — "
+        f"no restart.", fg="green"))
+    click.echo(f"Effective {label} now: {shown}")
+    if effective is not None and abs(float(effective) - float(usd)) > 1e-9:
+        if kind == "daily":
+            click.echo(click.style(
+                "  ⚠ the preference did NOT take the value you asked for: the "
+                "daily cap is min-merged with the operator env value, so it can "
+                "only TIGHTEN. To raise the envelope:\n"
+                "      polyrob wallet set-cap daily <usd> --env    (then restart)",
+                fg="yellow"))
+        else:
+            click.echo(click.style(
+                "  ⚠ the per-transaction ceiling is clamped to the daily cap, so "
+                "it stopped below what you asked for. Raise the daily cap first.",
+                fg="yellow"))
     click.echo(_POLICY_GATE_CAVEAT)
 
 
@@ -569,6 +660,7 @@ def _seed_from_system_env_files() -> str:
               help="Override the wallet meta dir (test/ops only).")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the global env-file home (test/ops only).")
+@as_root_option
 def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     """Create the agent's wallet in one command (or import an existing one).
 
@@ -602,7 +694,16 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
     if mnemonic and raw_seed:
         raise click.ClickException("use --from-mnemonic OR --from-seed, not both")
     home = _P(home_dir_opt) if home_dir_opt else polyrob_home()
-    data_dir = _P(data_dir_opt) if data_dir_opt else None
+    # C8: the write-once derivation scheme (`meta.json`) went to whatever
+    # `derivation.write_scheme_once` resolved on its own — in a shell with no
+    # POLYROB_DATA_DIR that is a CWD-relative `.polyrob`, so the scheme the
+    # RUNNING service later resolves was pinned in a tree it never reads, and a
+    # bip44 wallet could silently resolve as legacy = a different address.
+    if data_dir_opt:
+        data_dir = _P(data_dir_opt)
+    else:
+        from cli._admin_home import admin_data_dir
+        data_dir = _P(admin_data_dir(write=True))
     run_wallet_init_flow(mnemonic=mnemonic or None, raw_seed=raw_seed or None, home=home,
                          assume_yes=yes, data_dir=data_dir)
 
@@ -610,6 +711,23 @@ def wallet_init_cmd(mnemonic, raw_seed, yes, data_dir_opt, home_dir_opt):
 # ---------------------------------------------------------------------------
 # 037 — cross-chain bridge (owner seat)
 # ---------------------------------------------------------------------------
+
+def _admin_home(*, write: "bool | None" = None) -> str:
+    """The data home every money read/write on this seat acts on (the 031 rule)."""
+    from cli._admin_home import admin_data_dir
+    return admin_data_dir(write=write)
+
+
+def _admin_tenant(user_id=None) -> str:
+    """The tenant every money view on this seat scopes to — the ONE resolver."""
+    if user_id:
+        return user_id
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
+
 
 def _bridge_chain_key(chain_id):
     """The registry key for a chain id ON A BRIDGE ROW, or ``None``.
@@ -680,14 +798,16 @@ def wallet_book(user_id):
     """
     import asyncio
 
-    from core.instance import resolve_owner_user_id
-    from core.runtime_paths import resolve_data_home
     from core.surfaces.inbox_render import render_book
     from tools.defi.book import read_book
 
-    uid = user_id or resolve_owner_user_id()
+    # C10: `resolve_data_home()` never applies the server default, so in an SSH
+    # shell with no POLYROB_DATA_DIR the book was read from a tree the service
+    # never writes and rendered a clean, empty, WRONG book. Same seam as every
+    # other owner verb.
+    uid = _admin_tenant(user_id)
     try:
-        body = asyncio.run(read_book(uid, str(resolve_data_home())))
+        body = asyncio.run(read_book(uid, _admin_home(write=False)))
     except Exception as exc:
         raise click.ClickException(
             f"the book could not be read ({exc}). That is UNKNOWN, not a clean "
@@ -704,10 +824,12 @@ def wallet_bridges(user_id):
     dismiss: the send landed and the arrival was not measured before the
     deadline. Never re-send one — a re-sent bridge pays twice.
     """
-    from core.instance import resolve_owner_user_id
     from core.wallet import bridge_guard
 
-    uid = user_id or resolve_owner_user_id()
+    # C9: same home rule as the book — an in-flight bridge is money in motion,
+    # and reading the wrong store answers "none in flight" over a real one.
+    uid = _admin_tenant(user_id)
+    _admin_home(write=False)   # adopt/refuse the deployed home before reading
     try:
         rows = bridge_guard.open_bridges(uid)
     except Exception as exc:
@@ -718,13 +840,23 @@ def wallet_bridges(user_id):
         click.echo("No bridges awaiting confirmation.")
         return
     click.echo(f"{len(rows)} bridge(s) awaiting confirmation:")
+    import datetime as _dt
     for r in rows:
-        import datetime as _dt
-        when = _dt.datetime.utcfromtimestamp(float(r["created_at"])).strftime("%Y-%m-%d %H:%MZ")
+        # C61: `r["created_at"]` / `r["request_id"]` were unguarded index reads
+        # and `utcfromtimestamp` is deprecated (3.12 warns) — one row missing a
+        # stamp took the WHOLE in-flight listing down with a KeyError, and that
+        # is the one listing that must never fail to print.
+        try:
+            when = _dt.datetime.fromtimestamp(
+                float(r.get("created_at") or 0),
+                tz=_dt.timezone.utc).strftime("%Y-%m-%d %H:%MZ")
+        except (TypeError, ValueError):
+            when = "time unknown"
         usd = "" if r.get("amount_usd") is None else f" ${float(r['amount_usd']):,.2f}"
         dest = _chain_name(r.get("dest_chain_id"))
-        click.echo(f"  {r['id']}  [{r['state']}]{usd}  -> {dest}  {when}")
-        click.echo(f"     relay request: {r['request_id']}")
+        click.echo(f"  {r.get('id') or '(no id)'}  [{r.get('state') or '?'}]{usd}"
+                   f"  -> {dest}  {when}")
+        click.echo(f"     relay request: {r.get('request_id') or 'unknown'}")
         # The hash is the ORIGIN send, so the link is the ORIGIN explorer.
         link = _tx_link(r.get("origin_chain_id"), r.get("tx_ref"))
         if link:
@@ -747,7 +879,9 @@ def wallet_bridges(user_id):
 @click.option("--token-out", default="native", show_default=True,
               help="Destination asset: 'native', or a token PINNED in the chain "
                    "registry ('weth'/'usdc' where that chain has one). An "
-                   "arbitrary address is refused.")
+                   "arbitrary address is refused. ⚠️ v1 bridges NATIVE→NATIVE: "
+                   "anything else is refused by the verb, not silently swapped.")
+@as_root_option
 def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
     """Bridge NATIVE value between chains: polyrob wallet bridge solana robinhood 0.5
 
@@ -762,7 +896,6 @@ def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
     THE ARRIVAL by measuring the destination balance.
     """
     import asyncio
-    from types import SimpleNamespace
 
     from tools.defi.bridge_verb import perform_bridge
     from tools.defi.trade_tool import BridgeParams, DefiTradeTool
@@ -770,15 +903,20 @@ def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
     params = BridgeParams(from_chain=from_chain, to_chain=to_chain, amount=amount,
                           token_out=token_out, dry_run=not execute)
     tool = DefiTradeTool()
+    # C63: the confirmation below said "bridge N native from -> to" regardless
+    # of --token-out, so an operator who asked for usdc on the far side typed
+    # "yes" to a sentence describing a different transaction.
+    _asset = (token_out or "native").strip().lower()
 
     if execute and not yes:
         click.echo(click.style(
-            f"About to bridge {amount} native {from_chain} -> {to_chain}. "
-            f"This moves real funds and cannot be undone.", fg="yellow"))
+            f"About to bridge {amount} native {from_chain} -> {_asset} on "
+            f"{to_chain}. This moves real funds and cannot be undone.",
+            fg="yellow"))
         click.confirm("Proceed?", abort=True)
 
     # The CLI IS the owner seat, so there is no forged-turn context to pass.
-    ctx = SimpleNamespace(user_id=resolve_owner_user_id(), role="owner", is_sub_agent=False)
+    ctx = _owner_ctx()
     result = asyncio.run(perform_bridge(tool, params, ctx))
     if getattr(result, "error", None):
         raise click.ClickException(result.error)
@@ -805,9 +943,19 @@ def wallet_bridge(from_chain, to_chain, amount, execute, yes, token_out):
 # ---------------------------------------------------------------------------
 
 def _owner_ctx():
-    """The CLI IS the owner seat, so there is no forged-turn context to pass."""
+    """The CLI IS the owner seat, so there is no forged-turn context to pass.
+
+    ⚠️ The tenant is ``_admin_tenant()`` — the deployed-env-aware resolver every
+    money VIEW on this seat already uses — NOT the bare
+    ``core.instance.resolve_owner_user_id``. On a deployed box systemd exports
+    ``POLYROB_OWNER_USER_ID`` and an owner's SSH shell does not, so the two
+    answer different tenants: the spend would be RECORDED under one bucket and
+    the ledger, the caps and ``polyrob wallet book`` would read another. That is
+    the 033 tenantless-``wallet_spend`` defect (a confident ``$0.00`` over 114
+    real rows) in a new place. Off a deployed box the two are identical.
+    """
     from types import SimpleNamespace
-    return SimpleNamespace(user_id=resolve_owner_user_id(), role="owner", is_sub_agent=False,
+    return SimpleNamespace(user_id=_admin_tenant(), role="owner", is_sub_agent=False,
                            metadata={})
 
 
@@ -830,7 +978,9 @@ def _echo_result(result, *, what: str):
 @click.argument("supply", type=float)
 @click.argument("name", nargs=-1, required=True)
 @click.option("--chain", default="base", show_default=True)
-@click.option("--decimals", type=int, default=18, show_default=True)
+@click.option("--decimals", type=int, default=None,
+              help="Decimal places. Default 18 on an EVM chain (the ERC-20 "
+                   "norm), 9 on Solana (SOL's own). Solana's ceiling is 9.")
 @click.option("--max-usd", type=float, default=25.0, show_default=True,
               help="The most this deployment may cost. It sends nothing, so "
                    "this bounds the GAS FEE.")
@@ -844,13 +994,15 @@ def _echo_result(result, *, what: str):
 @click.option("--uri", default="",
               help="SOLANA only: URI of a JSON metadata file "
                    "({name,symbol,description,image}). This is where the LOGO "
-                   "comes from; without it the token shows with no picture.")
+                   "comes from; without it the token shows with no picture. "
+                   "An EVM deploy REFUSES it rather than dropping it.")
 @click.option("--execute", is_flag=True, default=False,
               help="Actually broadcast. Without it this simulates, asserts the "
                    "produced bytecode against the pinned template, and reports "
                    "the address it WOULD land at.")
 @click.option("--yes", is_flag=True, default=False,
               help="Skip the typed confirmation.")
+@as_root_option
 def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
                         vanity, salt, uri, execute, yes):
     """Deploy a fixed-supply token: polyrob wallet deploy-token ROB 1e9 Rob Coin
@@ -876,8 +1028,29 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
     from tools.defi.trade_tool import DefiTradeTool, DeployTokenParams
 
     label = " ".join(name)
+    is_solana = str(chain).strip().lower() == "solana"
 
-    if str(chain).strip().lower() == "solana":
+    # C35: `--decimals` defaulted to 18 and the Solana branch silently did
+    # `min(decimals, 9)`, so `--decimals 18` on Solana produced a 9-decimal
+    # mint and said nothing; and `--uri` was accepted on an EVM deploy and
+    # dropped on the floor, so a token deployed with a logo had none. A flag
+    # that cannot be honoured is REFUSED, and a default that differs by chain
+    # is resolved from the chain, not from a literal.
+    if decimals is None:
+        decimals = 9 if is_solana else 18
+    elif is_solana and decimals > 9:
+        raise click.ClickException(
+            f"--decimals {decimals} is above Solana's ceiling of 9 (supply x "
+            f"10**decimals must fit in a u64). Pass --decimals 9 or lower; "
+            f"this used to be clamped silently, which produced a token with "
+            f"different decimals from the one you asked for.")
+    if uri and not is_solana:
+        raise click.ClickException(
+            "--uri is SOLANA only: an EVM ERC-20 carries no metadata URI, so "
+            "there is nowhere for this to go. It used to be accepted and "
+            "dropped — a launch with no logo that reported success.")
+
+    if is_solana:
         from tools.defi.spl_deploy_verb import perform_solana_deploy_token
         from tools.defi.trade_tool import SolanaDeployTokenParams
 
@@ -893,7 +1066,7 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
             click.confirm("Proceed?", abort=True)
         sol_params = SolanaDeployTokenParams(
             name=label, symbol=symbol, supply=supply, uri=uri,
-            decimals=min(int(decimals), 9), max_spend_usd=max_usd,
+            decimals=int(decimals), max_spend_usd=max_usd,
             dry_run=not execute)
         result = asyncio.run(perform_solana_deploy_token(
             DefiTradeTool(), sol_params, _owner_ctx()))
@@ -937,6 +1110,7 @@ def wallet_deploy_token(symbol, supply, name, chain, decimals, max_usd,
                    "prices the opening buy and reports.")
 @click.option("--yes", is_flag=True, default=False,
               help="Skip the typed confirmation.")
+@as_root_option
 def wallet_launch(symbol, name, buy, creator_tax_bps, logo, desc, twitter,
                   site, max_usd, execute, yes):
     """Launch a token on the Pons launchpad: polyrob wallet launch ROB Rob Coin
@@ -994,6 +1168,13 @@ def wallet_curve(token, buy, sell):
     from tools.launchpad.tool import LaunchpadTool, QuoteParams, StatusParams
 
     tool = LaunchpadTool()
+    # C36: `side="buy" if buy > 0 else "sell"` meant `--buy 1 --sell 500` priced
+    # a BUY and said nothing about the sell — the quote answered a question the
+    # operator did not ask, in the one place a wrong side is a wrong trade.
+    if buy > 0 and sell > 0:
+        raise click.ClickException(
+            "pass --buy OR --sell, not both: a curve quote has ONE side, and "
+            "the sell used to be silently ignored.")
     if buy > 0 or sell > 0:
         params = QuoteParams(token=token, side="buy" if buy > 0 else "sell",
                              amount=buy if buy > 0 else sell)
@@ -1002,6 +1183,253 @@ def wallet_curve(token, buy, sell):
         result = asyncio.run(
             tool.launchpad_status(StatusParams(token=token), _owner_ctx()))
     _echo_result(result, what="curve read")
+
+
+# ---------------------------------------------------------------------------
+# E6 / E7 / E9 (2026-09-21): three capability planes that existed only as agent
+# actions. Each is a THIN consumer of the SAME tool method the agent calls —
+# never a second implementation, so no gate, refusal or proof can differ
+# between the terminal and the agent.
+#
+# ⚠️ No new TOP-LEVEL group: 043 cut the CLI to 30 names and pinned it there.
+# ---------------------------------------------------------------------------
+
+@wallet_cmd.command("claim")
+@click.argument("token")
+@click.option("--max-usd", type=float, default=1.0, show_default=True,
+              help="The most this may cost. A claim RECEIVES; it sends "
+                   "nothing, so this bounds the gas fee.")
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this reads the escrow and "
+                   "reports what would arrive.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the typed confirmation.")
+@as_root_option
+def wallet_claim(token, max_usd, execute, yes):
+    """Claim the creator fees a token you launched has earned.
+
+    E6: `launchpad_status` told its reader to "run launchpad_claim", which is
+    an AGENT action name — there was no owner seat for it at all, and 13.6 ETH
+    of creator tax sat in an escrow nobody could reach from a terminal.
+
+    ⚠️ The escrow credits an ADDRESS, not a token: ONE claim collects what
+    every token this wallet launched has earned. Naming a token here only tells
+    the tool which curve to read the escrow address from — there is no
+    parameter through which the claim can be aimed elsewhere.
+    """
+    import asyncio
+
+    from tools.launchpad.tool import ClaimParams, LaunchpadTool
+
+    if execute and not yes:
+        click.echo(click.style(
+            f"About to claim the creator fees owed to this wallet (read from "
+            f"{token}'s curve escrow). This broadcasts a transaction.",
+            fg="yellow"))
+        click.confirm("Proceed?", abort=True)
+    params = ClaimParams(token=token, max_spend_usd=max_usd, dry_run=not execute)
+    result = asyncio.run(LaunchpadTool().launchpad_claim(params, _owner_ctx()))
+    _echo_result(result, what="claim")
+
+
+@wallet_cmd.group("nft")
+def wallet_nft():
+    """Non-fungibles this wallet holds: look, send, revoke an approval.
+
+    ⚠️ Enumeration needs an indexer (ALCHEMY_API_KEY). Without one the read
+    SAYS it could not look — an empty list would read as "you own nothing",
+    which is a different fact.
+    """
+
+
+@wallet_nft.command("list")
+@click.option("--chain", default="base", show_default=True)
+@click.option("--address", default=None,
+              help="Address to inspect (default: this agent's own wallet).")
+def wallet_nft_list(chain, address):
+    """What this wallet holds on CHAIN."""
+    import asyncio
+
+    from tools.defi.data_tool import DefiDataTool, NftHoldingsParams
+
+    result = asyncio.run(DefiDataTool().nft_holdings(
+        NftHoldingsParams(chain=chain, address=address), _owner_ctx()))
+    _echo_result(result, what="holdings read")
+
+
+@wallet_nft.command("info")
+@click.argument("contract")
+@click.argument("token_id", type=int)
+@click.option("--chain", default="base", show_default=True)
+def wallet_nft_info(contract, token_id, chain):
+    """Owner, metadata and approvals for ONE token."""
+    import asyncio
+
+    from tools.defi.data_tool import DefiDataTool, NftInfoParams
+
+    result = asyncio.run(DefiDataTool().nft_info(
+        NftInfoParams(chain=chain, contract=contract, token_id=token_id),
+        _owner_ctx()))
+    _echo_result(result, what="token read")
+
+
+@wallet_nft.command("transfer")
+@click.argument("contract")
+@click.argument("token_id", type=int)
+@click.argument("to")
+@click.option("--chain", default="base", show_default=True)
+@click.option("--standard", type=click.Choice(["erc721", "erc1155"]),
+              default="erc721", show_default=True,
+              help="Say which — guessing encodes a call the contract may misread.")
+@click.option("--amount", type=int, default=1, show_default=True,
+              help="Quantity, erc1155 only (an erc721 is unique).")
+@click.option("--max-usd", type=float, default=25.0, show_default=True,
+              help="Ceiling for the transaction FEE. ⚠️ It does NOT bound what "
+                   "you are sending — an NFT has no reliable price.")
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this simulates and reports.")
+@click.option("--yes", is_flag=True, default=False,
+              help="Skip the typed confirmation.")
+@as_root_option
+def wallet_nft_transfer(contract, token_id, to, chain, standard, amount,
+                        max_usd, execute, yes):
+    """Send a token. IRREVERSIBLE, and ALWAYS owner-approved.
+
+    ⚠️ Every gate the agent meets applies here unchanged — this verb is in
+    `spend_lane.ALWAYS_OWNER_APPROVED_VERBS`, so no autonomous-spend ceiling
+    can ever exempt it. The CLI is the owner seat; it does not bypass a gate,
+    it satisfies one.
+    """
+    import asyncio
+
+    from tools.defi.trade_tool import DefiTradeTool, NftTransferParams
+
+    if execute and not yes:
+        click.echo(click.style(
+            f"About to send {contract} #{token_id} to {to} on {chain}. A "
+            f"transfer cannot be undone and an NFT has no price this can cap.",
+            fg="yellow"))
+        click.confirm("Proceed?", abort=True)
+    result = asyncio.run(DefiTradeTool().nft_transfer(
+        NftTransferParams(chain=chain, contract=contract, token_id=token_id,
+                          to=to, standard=standard, amount=amount,
+                          max_spend_usd=max_usd, dry_run=not execute),
+        _owner_ctx()))
+    _echo_result(result, what="transfer")
+
+
+@wallet_nft.command("revoke")
+@click.argument("contract")
+@click.argument("operator")
+@click.option("--chain", default="base", show_default=True)
+@click.option("--max-usd", type=float, default=5.0, show_default=True)
+@click.option("--execute", is_flag=True, default=False,
+              help="Actually broadcast. Without it this simulates and reports.")
+@as_root_option
+def wallet_nft_revoke(contract, operator, chain, max_usd, execute):
+    """Retire an operator's blanket approval over a collection (risk-reducing)."""
+    import asyncio
+
+    from tools.defi.trade_tool import DefiTradeTool, NftRevokeParams
+
+    result = asyncio.run(DefiTradeTool().nft_revoke_approval(
+        NftRevokeParams(chain=chain, contract=contract, operator=operator,
+                        max_spend_usd=max_usd, dry_run=not execute),
+        _owner_ctx()))
+    _echo_result(result, what="revoke")
+
+
+@wallet_cmd.group("dapp")
+def wallet_dapp():
+    """Web-dapp wallet sessions: what is connected, and how to end one."""
+
+
+def _dapp_store(*, write: "bool | None" = None):
+    """The durable dapp-session store under the ADMIN home, or ``None``.
+
+    A read never CREATES the store: an absent file means no session was ever
+    connected on this box, and saying so beats materialising a db to answer
+    "none".
+
+    *write* is the 057 WS-G euid declaration and is passed straight to the
+    admin-home seam: ``revoke`` MUTATES the shared home, so it must refuse a
+    root run rather than only warn (a root-owned row is what the service later
+    meets as "attempt to write a readonly database").
+    """
+    import os as _os
+
+    from core.dapp_session_store import DappSessionStore
+    from core.runtime_paths import data_home_db_path
+    db = data_home_db_path("dapp_sessions.db", data_dir=_admin_home(write=write))
+    if not _os.path.exists(db):
+        return None
+    return DappSessionStore(db)
+
+
+@wallet_dapp.command("list")
+@click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
+@click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
+def wallet_dapp_list(user_id, as_json):
+    """Every dapp wallet session this tenant has connected, newest first."""
+    tenant = _admin_tenant(user_id)
+    store = _dapp_store(write=False)
+    rows = [] if store is None else store.list_for_tenant(tenant)
+    if as_json:
+        click.echo(_json.dumps(
+            [{"session_id": r.session_id, "revoked": r.revoked,
+              "created_at": r.created_at, "updated_at": r.updated_at,
+              "envelope": r.envelope} for r in rows], indent=2, default=str))
+        return
+    if not rows:
+        from cli.ui.candy import empty
+        click.echo(empty("dapp wallet sessions",
+                         f"tenant {tenant} has never connected one"))
+        return
+    for r in rows:
+        env = r.envelope or {}
+        spent = float(env.get("spent_usd") or 0.0)
+        budget = float(env.get("session_budget_usd") or 0.0)
+        state = "REVOKED" if (r.revoked or env.get("revoked")) else "live record"
+        click.echo(f"  {r.session_id}  [{state}]  {env.get('chain') or '?'}  "
+                   f"{env.get('address') or 'address unknown'}")
+        click.echo(f"     spent ${spent:.4f} of ${budget:.2f} · "
+                   f"signed {len(env.get('sent') or [])} · "
+                   f"refused {len(env.get('refused') or [])}")
+
+
+@wallet_dapp.command("revoke")
+@click.argument("session_id")
+@click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
+@as_root_option
+def wallet_dapp_revoke(session_id, user_id):
+    """Revoke a dapp wallet session's durable record.
+
+    ⚠️ This flips the RECORD. A bridge still live inside a running agent
+    process holds its own in-memory envelope, and the agent's own
+    `dapp_disconnect` is what ends that one immediately — say so rather than
+    implying the page is cut off this instant.
+    """
+    tenant = _admin_tenant(user_id)
+    store = _dapp_store(write=True)
+    if store is None:
+        raise click.ClickException(
+            "there is no dapp-session store on this box, so there is nothing "
+            "to revoke. That is 'never connected', not 'revoked'.")
+    row = store.get(session_id, user_id=tenant)
+    if row is None:
+        raise click.ClickException(
+            f"no dapp session {session_id!r} for tenant {tenant} "
+            f"(`polyrob wallet dapp list` shows the ids).")
+    if row.revoked:
+        click.echo(click.style(f"{session_id} was already revoked.", fg="yellow"))
+        return
+    store.mark_revoked(session_id)
+    click.echo(click.style(f"revoked the dapp session record {session_id}.",
+                           fg="green"))
+    click.echo(click.style(
+        "  a bridge still live in a running agent process keeps its in-memory "
+        "envelope until that session ends — ask the agent to run "
+        "`dapp_disconnect` to cut it off now.", dim=True))
 
 
 # ---------------------------------------------------------------------------
@@ -1045,17 +1473,22 @@ def _require_known_chain(chain: str) -> str:
     return chain
 
 
-def _require_evm_address(address: str) -> str:
-    address = (address or "").strip().lower()
-    ok = address.startswith("0x") and len(address) == 42
-    if ok:
-        try:
-            int(address[2:], 16)
-        except ValueError:
-            ok = False
-    if not ok:
-        raise click.ClickException(f"{address!r} is not an EVM token address")
-    return address
+def _require_address(chain: str, address: str) -> str:
+    """The canonical form of *address* on *chain* — the ONE normalizer.
+
+    C13: this lower-cased the argument and checked only "0x + 40 hex", so a
+    mis-typed mixed-case address whose EIP-55 checksum does not verify was
+    accepted and FROZEN into an asset row that denominates money; and a Solana
+    address, having already passed the chain check one line above, was rejected
+    here as "not an EVM token address" — which reads as "your address is wrong"
+    for an address that is right. ``core.wallet.addresses.normalize_for_chain``
+    owns both rules, per family, and refuses rather than assuming a family.
+    """
+    from core.wallet.addresses import normalize_for_chain
+    try:
+        return normalize_for_chain(chain, (address or "").strip())
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
 
 
 @wallet_asset.command("add")
@@ -1072,6 +1505,7 @@ def _require_evm_address(address: str) -> str:
 @click.option("--verify", is_flag=True,
               help="read decimals()/symbol() on-chain ONCE and freeze them")
 @click.pass_context
+@as_root_option
 def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
                      min_amount, liquidity_floor, verify):
     """Pin an asset the treasury may be paid in.
@@ -1085,7 +1519,7 @@ def wallet_asset_add(ctx, asset_id, chain, address, decimals, symbol,
                                       verify_on_chain)
 
     chain = _require_known_chain(chain)
-    address = _require_evm_address(address)
+    address = _require_address(chain, address)
 
     if verify:
         decimals, symbol = verify_on_chain(chain, address,
@@ -1149,10 +1583,29 @@ wallet_cmd.add_command(lp_cmd)
 
 
 @wallet_cmd.command("overview")
+@click.option("--user", "user_id", default=None, help="Tenant id (default: this identity).")
 @click.option("--json", "as_json", is_flag=True)
-def wallet_overview(as_json):
+def wallet_overview(user_id, as_json):
     """Shared wallet identities, cached balances, limits and unresolved sends."""
     from dataclasses import asdict
-    from core.wallet.view import wallet_view, render_wallet
-    view = wallet_view(resolve_owner_user_id())
-    click.echo(__import__("json").dumps(asdict(view)) if as_json else render_wallet(view))
+
+    from core.wallet.view import render_wallet, wallet_view
+    # C29: the view resolved its own home, so on a deployed box it read a tree
+    # the service never writes — and a PermissionError on that tree escaped as
+    # a raw traceback rather than a sentence naming the cause and the remedy.
+    _admin_home(write=False)
+    try:
+        view = wallet_view(_admin_tenant(user_id))
+    except PermissionError as exc:
+        raise click.ClickException(
+            f"the wallet view could not be read ({exc}). That is UNKNOWN, not "
+            f"an empty wallet — on a deployed box run it as the service "
+            f"identity: sudo -u polyrob-agent polyrob wallet overview")
+    except Exception as exc:
+        raise click.ClickException(
+            f"the wallet view could not be built ({type(exc).__name__}: {exc}). "
+            f"That is UNKNOWN, not an empty wallet.")
+    # C74: `__import__("json")` — the module is already imported at the top as
+    # `_json`; the dynamic form hides the dependency from every reader and tool.
+    click.echo(_json.dumps(asdict(view), default=str) if as_json
+               else render_wallet(view))

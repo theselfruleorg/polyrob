@@ -193,13 +193,24 @@ async def test_absorb_caps_the_number_of_files_and_says_so(ws, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_absorb_is_a_no_op_when_the_flag_is_off(ws, monkeypatch):
+async def test_absorb_with_the_flag_off_names_the_files_it_did_not_read(ws, monkeypatch):
+    """D51: the flag turns off READING, never TELLING.
+
+    A silent no-op let the agent answer as though the sender had attached
+    nothing — the same silent drop the whole rail exists to end. Nothing is
+    stored and no vision block is built, but the files are named with the
+    reason.
+    """
     monkeypatch.setenv("INBOUND_MEDIA_ENABLED", "false")
     media = [Media(kind="image", ref="f1", filename="shot.png")]
     text, images = await absorb_inbound_media(
         media, ws, fetch_bytes=_fetch({"f1": _PNG}), base_text="hi")
-    assert text == "hi"
+    assert text.startswith("hi")
+    assert "shot.png" in text
+    assert "NOT read" in text
     assert images is None
+    # …and nothing was written into the workspace.
+    assert not os.path.exists(os.path.join(ws, "inbound"))
 
 
 @pytest.mark.asyncio
@@ -258,3 +269,31 @@ def test_the_api_endpoint_reads_the_shared_allowlist():
     allowlist rejected — three hand-maintained lists, two of them wrong."""
     src = open("api/task_http_api.py").read()
     assert "UPLOAD_EXTENSIONS" in src and "UPLOAD_MIME_TYPES" in src
+
+
+# --- D54/D55 --------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_the_overflow_is_NAMED_not_just_counted(ws, monkeypatch):
+    """D54: a bare count left the agent unable to say WHICH file it had not
+    read, so it could neither ask for it nor admit to the gap."""
+    monkeypatch.setenv("INBOUND_MEDIA_MAX_FILES", "1")
+    media = [Media(kind="document", ref=f"f{i}", filename=f"part{i}.pdf")
+             for i in range(3)]
+    text, _ = await absorb_inbound_media(
+        media, ws, fetch_bytes=_fetch({f"f{i}": b"%PDF-1.4 data" for i in range(3)}),
+        base_text="")
+    assert "part1.pdf" in text and "part2.pdf" in text
+    assert "2 more" in text
+
+
+def test_an_undecodable_image_format_says_so_rather_than_posing_as_a_document(ws):
+    """D55: `.heic`/`.bmp` fell through to the generic "Attached file" branch,
+    which told the agent it was a document — so it neither saw the picture nor
+    knew that it was one."""
+    rel, _ = persist_inbound_file(ws, "holiday.heic", b"ftypheic" + b"0" * 64)
+    text, images = inject_file_content(ws, rel, "what is this?")
+    assert images is None
+    assert "Attached image" in text
+    assert "CANNOT see it" in text
+    assert rel in text

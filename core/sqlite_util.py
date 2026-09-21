@@ -35,15 +35,28 @@ def init_schema(db_path: str, script: str, *, mkdir: bool = False) -> None:
     directory first (the fail-open stores that keep a ``_ready`` flag).
     Raises on failure; the caller decides whether that is fatal.
     """
+    import os
     if mkdir:
-        import os
         os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
+    fresh = not os.path.exists(db_path)
     conn = wal_connect(db_path)
     try:
         conn.executescript(script)
         conn.commit()
     finally:
         conn.close()
+    if fresh:
+        # SQLite creates a db 0644 whatever the process umask says, and the WAL
+        # `-wal`/`-shm` files copy that mode. The three service identities share
+        # the data home through the `polyrob-data` group, so a store born between
+        # deploys (prod 2026-09-20 03:31Z: 057's verdicts.db, thirty seconds AFTER
+        # the deploy's chmod g+rw pass) is unwritable by its siblings until the
+        # next deploy repairs it — "attempt to write a readonly database" in a
+        # unit that did nothing wrong. Apply the deploy's rule at birth (the ONE
+        # rule, `core.data_perms.apply_birth_mode`). An existing file's mode is
+        # an operator's and is left.
+        from core.data_perms import apply_birth_mode
+        apply_birth_mode(db_path)
 
 
 def execute_retry(db_path: str, sql: str, params: tuple = (), *, fetch: Optional[str] = None):

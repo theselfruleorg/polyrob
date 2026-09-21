@@ -34,10 +34,14 @@ class PerplexityTool(BaseTool):
         self.ssl_context = ssl.create_default_context(cafile=certifi.where())
         self.base_url = "https://api.perplexity.ai/chat/completions"
         
-        # Enable if API key is present
+        # Enable if API key is present. 057 WS-F: an absent key is a durable
+        # `missing_key` verdict warned ONCE per process — it used to warn on every
+        # construction (once per session) and leave nothing a health line could read.
         self._enabled = bool(getattr(config, 'perplexity_api_key', None))
         if not self._enabled:
-            self.logger.warning("Perplexity API key not found, service will be disabled")
+            self.note_missing_config(["PERPLEXITY_API_KEY"])
+        else:
+            self.note_config_present()
 
     @property
     def required_config(self) -> Dict[str, str]:
@@ -52,7 +56,7 @@ class PerplexityTool(BaseTool):
             # Services are automatically injected by BaseService
             # Just validate API key BEFORE registering actions
             if not self.config.perplexity_api_key or self.config.perplexity_api_key == "placeholder":
-                self.logger.warning("Perplexity API key not configured")
+                self.note_missing_config(["PERPLEXITY_API_KEY"])
                 self._enabled = False
                 # Mark service as unavailable but don't raise exception
                 from tools.base_tool import ToolStatus

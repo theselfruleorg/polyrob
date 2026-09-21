@@ -150,10 +150,16 @@ def test_daily_cap(monkeypatch):
 
 
 def test_no_sink_records_durable_owner_notice():
+    """D21/D49: no sink AT ALL is its own outcome — and still writes the notice.
+
+    It is not `fallback`: nothing refused the message, there was nowhere to
+    send it. On a local/REPL owner that is every message, so it must not spend
+    the daily cap either (see the budget test below).
+    """
     ev = _EvLog()
     c = _Container({})
     out = _deliver(c, "1", "important blocker report", event_log=ev)
-    assert out == "fallback"
+    assert out == "no_sink"
     notices = [e for e in ev.events if e["kind"] == "owner_notice"]
     assert notices and "important blocker report" in notices[0]["attrs"].get("text", "")
 
@@ -292,7 +298,7 @@ def test_routing_fail_open(monkeypatch):
 
     out = asyncio.run(maybe_deliver_autonomous_send(
         _orch(_Boom(), user_id="1"), "sess-goal", "text", event_log=_EvLog()))
-    assert out in ("failed", "fallback")
+    assert out in ("failed", "fallback", "no_sink")
     _SESSIONS.clear()
 
 

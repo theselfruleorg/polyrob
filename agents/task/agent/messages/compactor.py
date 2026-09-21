@@ -492,7 +492,9 @@ class CompactorMixin:
 			prompt = self._build_compaction_prompt(window, prior_summary=running)
 			import time as _time
 			_t0 = _time.time()
-			response = await compaction_llm.ainvoke([HumanMessage(content=prompt)])
+			# tools=None is explicit: a summarisation call never carries the step's
+			# toolset (2026-09-20: 176 stale schemas rode the compaction prompt).
+			response = await compaction_llm.ainvoke([HumanMessage(content=prompt)], tools=None)
 			# A3: meter this aux LLM call through the single deduction path (fail-open).
 			from modules.llm.aux_metering import meter_aux_llm
 			await meter_aux_llm(

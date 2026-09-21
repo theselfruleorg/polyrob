@@ -22,7 +22,8 @@ def h_prefs(ctx) -> None:
     args = list(ctx.args or [])
     full = bool(args) and args[0].lower() in ("all", "full")
     ctx.emit(
-        _prefs_reply(_tenant(ctx), _admin_data_dir(ctx), resolve_instance_id(), full=full),
+        _prefs_reply(_tenant(ctx), _admin_data_dir(write=False),
+                     resolve_instance_id(), full=full),
         title="prefs",
     )
 

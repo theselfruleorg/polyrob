@@ -31,7 +31,7 @@ def test_lock_evicted_when_session_creation_fails(monkeypatch):
 
     agent = _make_task_agent()
 
-    async def _boom(self, user_id, text, key, provider=None, model=None):
+    async def _boom(self, user_id, text, key, provider=None, model=None, temperature=None):
         raise RuntimeError("session creation failed")
 
     monkeypatch.setattr(TaskAgent, "_chat_once_locked", _boom)
@@ -53,7 +53,7 @@ def test_lock_kept_when_session_succeeds(monkeypatch):
 
     agent = _make_task_agent()
 
-    async def _ok(self, user_id, text, key, provider=None, model=None):
+    async def _ok(self, user_id, text, key, provider=None, model=None, temperature=None):
         self._chat_sessions[key] = "session-123"
         return "reply"
 

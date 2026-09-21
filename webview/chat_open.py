@@ -230,9 +230,10 @@ def chat_context(request: Request, session_id: str = "") -> dict:
     """The template's own half of the context; the frame adds the rest.
 
     ``is_owner``/``is_authenticated`` ride on ``document.body``'s data
-    attributes because that is where ``ui-utils.js::SessionStateManager.init``
-    reads them. Before this they were simply absent, and ``chat-open.js`` read
-    the absence as owner+authenticated — every viewer got an owner-capable page.
+    attributes because that is where ``static/app/chat-open.js`` reads them
+    (``ui-utils.js`` was deleted 2026-09-21). Before this they were simply
+    absent, and ``chat-open.js`` read the absence as owner+authenticated —
+    every viewer got an owner-capable page.
     """
     bound = bool(session_id)
     if not bound:

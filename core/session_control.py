@@ -17,10 +17,16 @@ class SessionControl:
     @contextmanager
     def _connect(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        fresh = not self.path.exists()
         conn = sqlite3.connect(self.path, timeout=5)
         conn.row_factory = sqlite3.Row
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS control (id INTEGER PRIMARY KEY, generation TEXT, pid INTEGER, active INTEGER, request TEXT, acknowledged TEXT)")
+            if fresh:
+                # SQLite births 0644 whatever the umask says; the shared data
+                # home needs group-write (the ONE rule, as init_schema applies).
+                from core.data_perms import apply_birth_mode
+                apply_birth_mode(self.path)
             with conn:
                 yield conn
         finally:

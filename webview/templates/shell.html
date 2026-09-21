@@ -26,6 +26,9 @@
                     FLOOR and is drawn dashed. The badge may never claim more
                     certainty than the list behind it.
     read_only       webgate.read_only()
+    owner_console   webgate.is_owner_console() — the same predicate every
+                    instance-wide write refuses on (pause/resume, the app
+                    decisions), so those controls are drawn only where they act
 #}
 <!doctype html>
 <html lang="en" data-theme-preference="{{ theme_preference(request) }}">
@@ -58,6 +61,20 @@
     <span class="mark">{{ wordmark }}</span>
     <p class="head-truth">{% if pause_headline %}{{ pause_headline }} {% endif %}{{ waiting_line }}</p>
     <button class="icon-btn" id="chats-open" type="button" aria-haspopup="dialog" aria-label="{{ t('shell.search') }}"><span class="glyph" aria-hidden="true">&#8981;</span><span class="kbd">&#8984;K</span></button>
+{%- if not read_only and owner_console %}
+    {# A2 (2026-09-21 audit): the pause headline above has always named "the
+       Pause button" / "the Resume button", and no such control existed on any
+       console screen. This IS that control — pause.js reads the live 031
+       record for its label and POSTs the existing owner seam; under read-only
+       it is absent, not disabled.
+
+       `owner_console` is `webgate.is_owner_console()`, the SAME predicate
+       `POST /api/webgate/pause` refuses on: the pause record is instance-wide,
+       so a multitenant tenant may never touch it and must not be shown a
+       button that answers 403. The Apps Stop and the Inbox's app decisions
+       read the same key. #}
+    <button class="icon-btn" id="head-pause" type="button" data-verb="pause" aria-label="{{ t('shell.pause_label') }}"><span class="glyph" aria-hidden="true">&#9208;</span><span class="kbd">{{ t('shell.pause') }}</span></button>
+{%- endif %}
 {%- if show_logout %}
     {# own_ops / multitenant only (043 §9 residue, closed 2026-09-16): the
        owner's ≤24 h session ends here. `local` has no login, so no link. #}
@@ -69,6 +86,10 @@
     <div class="banner"><span aria-hidden="true">&#128065;</span>
       <span><b>{{ t('shell.read_only.lead') }}</b> {{ t('shell.read_only.body') }}</span></div>
 {%- endif %}
+    {# A2 / A32: what the pause control answered, and the activity room's own
+       refusal — which live.js used to drop on the floor, so the console just
+       stopped updating with nothing said. #}
+    <p class="note" id="live-notice" role="status" hidden></p>
 {% block body %}{% endblock %}
   </main>
 </div>
@@ -148,6 +169,7 @@
 #}
 <div id="palette-copy" hidden
      data-unknown="{{ t('palette.unknown') }}"
+     data-reach="{{ t('palette.reach') }}"
      data-empty="{{ t('palette.empty') }}"></div>
 <script src="/static/app/palette.js" type="module"></script>
 {#
@@ -156,5 +178,17 @@
   every activity event on `document` so Work redraws itself. Words: none.
 #}
 <script src="/static/app/live.js" type="module"></script>
+{#
+  pause.js owns the head's Pause/Resume control (A2) and the `#live-notice`
+  line live.js relays the activity room's refusal onto (A32). Its own two
+  words cross here the way every other module's do — no inline script.
+#}
+<div id="shell-copy" hidden
+     data-pause="{{ t('shell.pause') }}"
+     data-resume="{{ t('shell.resume') }}"
+     data-pause_label="{{ t('shell.pause_label') }}"
+     data-pause_unreachable="{{ t('shell.pause_unreachable') }}"
+     data-live_refused="{{ t('shell.live_refused') }}"></div>
+<script src="/static/app/pause.js" type="module"></script>
 </body>
 </html>

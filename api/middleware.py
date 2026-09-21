@@ -211,9 +211,13 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
         """Process request with authentication."""
-        # Skip auth for public endpoints
-        public_paths = ["/", "/health", "/docs", "/openapi.json", "/api/auth"]
-        if request.url.path in public_paths:
+        # Skip auth for public endpoints. ONE allow-list shared with
+        # `fallback_auth_middleware` (api/auth_constants.is_public_path) — the
+        # old five EXACT strings here 401'd /api/auth/nonce, /api/x402/*,
+        # /api/pricing/*, /webhooks/* and /.well-known/agent.json the moment
+        # API_SECRET/ADMIN_TOKEN was set (B1).
+        from api.auth_constants import is_public_path
+        if is_public_path(request.url.path):
             return await call_next(request)
 
         # Get authentication credentials
@@ -403,12 +407,14 @@ class AuthenticationMiddleware(BaseHTTPMiddleware):
         """
         # Admin endpoints - check is_admin flag set by JWT middleware
         if request.url.path.startswith("/api/admin"):
-            # Use role/admin_wallet from user_info (populated from JWT)
-            from api.auth_constants import is_admin
-            return is_admin(
-                role=user_info.get("role"),
-                wallet_address=user_info.get("wallet_address")
-            )
+            # B44: read the keys `_validate_auth` actually WRITES. It emits
+            # `admin_wallet` (a bool decided at login) and never
+            # `wallet_address`, so the old `user_info.get("wallet_address")`
+            # was always None and the wallet half of the check never fired.
+            from api.auth_constants import is_admin_role
+            if user_info.get("admin_wallet"):
+                return True
+            return is_admin_role(user_info.get("role"))
 
         # Regular endpoints - check basic permissions
         required_permission = "write" if request.method in ["POST", "PUT", "DELETE"] else "read"

@@ -9,8 +9,7 @@ Printed once per data home (keyed off a ``.polyrob_welcomed`` marker) at REPL /
       Data dir: /Users/…/.polyrob
       Config: /Users/…/.polyrob/.env
       Interactive tools on: coding, git, knowledge base, memory/RAG, project-context.
-      Enable autonomy: set AUTONOMY_ENABLED=true (or run `polyrob init`). See
-        `polyrob doctor`.
+      Turn autonomy on: `polyrob autonomy on`.
 
 Autonomy is OFF by default for new local installs; this notice is how the user
 learns that (and where their data/config live) without reading the docs.
@@ -50,10 +49,10 @@ def build_first_run_notice(
         "  Interactive tools on: coding, git, knowledge base, memory/RAG, project-context."
     )
     if not autonomy_on:
-        lines.append(
-            "  Enable autonomy: set AUTONOMY_ENABLED=true (or run `polyrob init`). "
-            "See `polyrob doctor`."
-        )
+        # E18: ONE remedy, named as the verb the owner runs — not a flag he has
+        # to find a file for. Four surfaces printed four different answers to
+        # the same question.
+        lines.append("  Turn autonomy on: `polyrob autonomy on`.")
     return lines
 
 

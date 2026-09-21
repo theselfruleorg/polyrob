@@ -11,9 +11,67 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Seat-aware remedies
+# ---------------------------------------------------------------------------
+#
+# Every sentence this module returns is rendered VERBATIM by whichever seat
+# called it, and the remedies inside them were slash verbs with `here` — a
+# grammar that exists only in a chat. `polyrob owner paid show <chat>` printed
+# "set a price (/paid price mute 0.50)" and "grant with `/groups set here …`"
+# at a SHELL prompt, where neither is a command the operator can type. Same
+# defect, same fix, as `core/surfaces/inbox_render.py`'s remedy tables (C21).
+#
+# The values are format strings; the keys are the remedy, not the verb, so a
+# seat that renames a verb cannot silently lose one. A caller passes the table
+# for ITS seat; the CHAT form is the default, so Telegram is byte-identical.
+
+RemedyTable = Mapping[str, str]
+
+#: Telegram / the REPL: slash verbs, `here` for the room you are in.
+CHAT_REMEDIES: Dict[str, str] = {
+    "price": "/paid price mute 0.50",
+    "asset": "/paid asset rob",
+    "enable": "/paid enable",
+    "disable": "/paid disable",
+    "member_verbs": "/groups set here member_verbs {verbs}",
+    "max_duration": "/groups set here paid_{verb}_max_duration <e.g. 24h>",
+}
+
+#: The `polyrob` CLI. Its verbs are `polyrob owner …` and they name the room
+#: explicitly — there is no `here` at a shell prompt.
+CLI_REMEDIES: Dict[str, str] = {
+    "price": "polyrob owner paid price {chat_id} mute 0.50",
+    "asset": "polyrob owner paid asset {chat_id} rob",
+    "enable": "polyrob owner paid enable {chat_id}",
+    "disable": "polyrob owner paid disable {chat_id}",
+    "member_verbs":
+        "polyrob owner groups set {surface} {chat_id} member_verbs {verbs}",
+    "max_duration":
+        "polyrob owner groups set {surface} {chat_id} "
+        "paid_{verb}_max_duration <e.g. 24h>",
+}
+
+
+def _remedy(remedies: Optional[RemedyTable], key: str, **fields: Any) -> str:
+    """One remedy, rendered for the caller's seat. Fail-open to the chat form.
+
+    A missing key or a bad field never raises into a reply — an owner sentence
+    without its remedy is poor, an owner sentence that 500s is worse.
+    """
+    table = remedies if remedies is not None else CHAT_REMEDIES
+    spec = table.get(key) or CHAT_REMEDIES.get(key) or ""
+    try:
+        return spec.format(**fields)
+    except Exception:
+        logger.warning("room_action_admin: remedy %r unrenderable for %r",
+                       key, sorted(fields), exc_info=True)
+        return spec
 
 
 def _data_dir(container: Any) -> str:
@@ -43,15 +101,21 @@ def _set(container: Any, surface: str, chat_id: str, key: str, value) -> str:
     return "" if ok else f"❌ {msg}"
 
 
-def status(container: Any, surface: str, chat_id: str) -> str:
-    """What this room sells, at what price, in what asset."""
+def status(container: Any, surface: str, chat_id: str,
+           remedies: Optional[RemedyTable] = None) -> str:
+    """What this room sells, at what price, in what asset.
+
+    ``remedies`` is this seat's remedy table (:data:`CHAT_REMEDIES` by default,
+    :data:`CLI_REMEDIES` for ``polyrob owner paid``).
+    """
     from core.surfaces import room_actions
     label = f"{surface}:{chat_id}"
     policy = _policy(container, surface, chat_id)
     if not policy.paid_enabled:
         return (f"Paid actions are not enabled in {label}. Set a price "
-                f"(/paid price mute 0.50), an asset (/paid asset rob), then "
-                f"/paid enable.")
+                f"({_remedy(remedies, 'price', surface=surface, chat_id=chat_id)}), "
+                f"an asset ({_remedy(remedies, 'asset', surface=surface, chat_id=chat_id)}), "
+                f"then {_remedy(remedies, 'enable', surface=surface, chat_id=chat_id)}.")
     asset = policy.paid_asset or "(instance default)"
     lines = [f"Paid actions in {label} — asset {asset}"]
     for verb in room_actions.VERBS:
@@ -78,10 +142,12 @@ def status(container: Any, surface: str, chat_id: str) -> str:
               if room_actions._price_band(policy, v)[0] > 0]
     ungranted = [v for v in priced if v not in granted]
     if ungranted:
+        _grant = _remedy(remedies, "member_verbs", surface=surface,
+                         chat_id=chat_id,
+                         verbs=",".join(sorted(granted | set(ungranted))))
         lines.append(
             f"⚠️ priced but NOT grantable to members here: "
-            f"{', '.join(ungranted)} — grant with `/groups set here "
-            f"member_verbs {','.join(sorted(granted | set(ungranted)))}`")
+            f"{', '.join(ungranted)} — grant with `{_grant}`")
     open_rows = _store(container).open_offers(surface, str(chat_id))
     if open_rows:
         lines.append(f"{len(open_rows)} offer(s) awaiting payment")
@@ -89,7 +155,7 @@ def status(container: Any, surface: str, chat_id: str) -> str:
 
 
 def set_price(container: Any, surface: str, chat_id: str, verb: str,
-              usd: float) -> str:
+              usd: float, remedies: Optional[RemedyTable] = None) -> str:
     """Price one verb. An unknown verb echoes the vocabulary."""
     from core.surfaces import room_actions
     eff = room_actions.effect(verb)
@@ -102,23 +168,26 @@ def set_price(container: Any, surface: str, chat_id: str, verb: str,
         return f"❌ {usd!r} is not a price."
     if price <= 0:
         return ("❌ a price must be positive — to stop selling a verb, use "
-                "/paid disable or set the room's other verbs instead.")
+                f"{_remedy(remedies, 'disable', surface=surface, chat_id=chat_id)}"
+                " or set the room's other verbs instead.")
     err = _set(container, surface, chat_id, f"chat.paid_{eff.verb}_usd", price)
     if err:
         return err
-    dur = _max_dur_hint(eff.verb)
+    dur = _max_dur_hint(eff.verb, surface, chat_id, remedies)
     return (f"✅ {eff.verb} costs ${price:.2f} in {surface}:{chat_id}." + dur)
 
 
-def _max_dur_hint(verb: str) -> str:
+def _max_dur_hint(verb: str, surface: str = "", chat_id: str = "",
+                  remedies: Optional[RemedyTable] = None) -> str:
     """Name the duration key a priced verb also has, so an owner does not have
     to discover it. Only the verbs that TAKE a duration have one."""
     from core.surfaces import room_actions
     eff = room_actions.effect(verb)
     if eff is None or not eff.needs_duration:
         return ""
-    return (f" Longest {verb}: /groups set here paid_{verb}_max_duration <e.g. "
-            f"24h>.")
+    return " Longest {}: {}.".format(
+        verb, _remedy(remedies, "max_duration", verb=verb, surface=surface,
+                      chat_id=chat_id))
 
 
 def set_asset(container: Any, surface: str, chat_id: str, asset_id: str) -> str:
@@ -135,7 +204,8 @@ def set_asset(container: Any, surface: str, chat_id: str, asset_id: str) -> str:
                    f"({row.asset_id}) on {row.chain}.")
 
 
-def enable(container: Any, surface: str, chat_id: str) -> str:
+def enable(container: Any, surface: str, chat_id: str,
+           remedies: Optional[RemedyTable] = None) -> str:
     """Turn paid actions on.
 
     ⚠️ Refuses when nothing is priced. Enabling a room that sells nothing
@@ -147,7 +217,8 @@ def enable(container: Any, surface: str, chat_id: str) -> str:
               if room_actions._price_band(policy, v)[0] > 0]
     if not priced:
         return ("❌ nothing is priced in this room yet — set a price first "
-                "(/paid price mute 0.50), or members will just be refused.")
+                f"({_remedy(remedies, 'price', surface=surface, chat_id=chat_id)})"
+                ", or members will just be refused.")
     err = _set(container, surface, chat_id, "chat.paid_enabled", True)
     if err:
         return err
@@ -176,16 +247,30 @@ def offers(container: Any, surface: str, chat_id: str, limit: int = 10) -> str:
     return "\n".join(lines)
 
 
-def cancel(container: Any, offer_id: str, *, by: str = "owner") -> str:
+def cancel(container: Any, offer_id: str, *, by: str = "owner",
+           surface: Any = None, chat_id: Any = None) -> str:
     """Withdraw a PENDING offer.
 
     ⚠️ Refuses anything already paid. Cancelling a paid offer would take the
     money and cancel the service; that case is a credit, not a cancellation.
+
+    ⚠️ D15: ``surface``/``chat_id`` SCOPE the cancellation to one room. The
+    offer store is global, and `/paid` is reachable by a ROOM ADMIN — so
+    without the scope one room's admin could withdraw any other room's offer
+    by quoting its id, which `/paid offers` next door prints in full. Omitting
+    them is the unscoped legacy call and is reserved for the owner's own seats.
     """
     store = _store(container)
     row = store.get(offer_id)
     if row is None:
         return f"❌ unknown offer {offer_id}."
+    if surface is not None and chat_id is not None:
+        if (str(row.surface) != str(surface)
+                or str(row.chat_id) != str(chat_id)):
+            # Deliberately the SAME sentence as an unknown id: confirming that
+            # an id exists somewhere else is itself information about another
+            # room's trade.
+            return f"❌ unknown offer {offer_id}."
     if row.status != "pending":
         return (f"❌ offer {offer_id} is {row.status}, not pending — a paid "
                 f"offer cannot be cancelled, only credited.")
@@ -216,5 +301,6 @@ def render_credits(container: Any) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["cancel", "credits_owed", "disable", "enable", "offers",
+__all__ = ["CHAT_REMEDIES", "CLI_REMEDIES", "RemedyTable",
+           "cancel", "credits_owed", "disable", "enable", "offers",
            "render_credits", "set_asset", "set_price", "status"]

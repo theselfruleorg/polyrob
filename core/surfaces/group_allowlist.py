@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS group_allowlist (
 );
 """
 
+#: 057 WS-D. ``allow()`` on an existing row REWRITES the note, so dating that
+#: note by ``created_at`` would over-age it by however long the room has been
+#: allowed. Added by an idempotent ALTER (a duplicate-column error is the
+#: already-migrated case) rather than a numbered migration — this store is
+#: created on first use by every surface that touches it.
+_ALTER_UPDATED_AT = "ALTER TABLE group_allowlist ADD COLUMN updated_at REAL"
+
 
 class GroupAllowlist:
     def __init__(self, db_path: str) -> None:
@@ -32,15 +39,20 @@ class GroupAllowlist:
         if parent:
             os.makedirs(parent, exist_ok=True)
         execute_retry(self.db_path, _DDL)
+        try:
+            execute_retry(self.db_path, _ALTER_UPDATED_AT)
+        except Exception:
+            pass  # already present (or an older sqlite) — never block the store
 
     def allow(self, surface: str, chat_id: str, note: str = "") -> None:
+        now = time.time()
         execute_retry(
             self.db_path,
-            "INSERT INTO group_allowlist(surface,chat_id,note,status,created_at)"
-            " VALUES(?,?,?, 'active', ?)"
+            "INSERT INTO group_allowlist(surface,chat_id,note,status,created_at,updated_at)"
+            " VALUES(?,?,?, 'active', ?, ?)"
             " ON CONFLICT(surface,chat_id) DO UPDATE SET status='active',"
-            " note=excluded.note",
-            (surface, str(chat_id), note, time.time()),
+            " note=excluded.note, updated_at=excluded.updated_at",
+            (surface, str(chat_id), note, now, now),
         )
 
     def revoke(self, surface: str, chat_id: str) -> bool:
@@ -87,13 +99,13 @@ class GroupAllowlist:
     def list_all(self) -> List[Dict]:
         rows = execute_retry(
             self.db_path,
-            "SELECT surface, chat_id, note, status, created_at"
+            "SELECT surface, chat_id, note, status, created_at, updated_at"
             " FROM group_allowlist ORDER BY created_at DESC",
             fetch="all",
         ) or []
         return [
             {"surface": r[0], "chat_id": r[1], "note": r[2], "status": r[3],
-             "created_at": r[4]}
+             "created_at": r[4], "updated_at": r[5]}
             for r in rows
         ]
 

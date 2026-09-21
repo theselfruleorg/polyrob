@@ -31,9 +31,16 @@ work around one because a task feels urgent.
   hash dedup so you can't spam the same notification repeatedly. Four things
   are worth knowing when a send comes back suppressed:
   - **A bounded message is not a lost message.** `capped`, `rate_limited`,
-    `paused`, `fallback` and `cooldown` are all recorded durably and the owner
-    reads them with `/missed`. Say the report exists and where; do NOT keep
-    retrying the same text, and do NOT treat it as a failure of the work.
+    `paused`, `fallback`, `no_sink` and `cooldown` are all recorded durably and
+    the owner reads them with `/missed`. Say the report exists and where; do
+    NOT keep retrying the same text, and do NOT treat it as a failure of the
+    work.
+  - **`no_sink` is not a fault.** It means there was no live channel to try at
+    all — a local, REPL or headless owner, whose durable notice IS the channel.
+    It spends none of the daily cap. `fallback` is the different fact: a live
+    channel was there and REFUSED, which is worth naming.
+  - **`queued` means the message is on its way.** Another process owns the
+    delivery; it is neither delivered nor lost, so do not re-send it.
   - **`deduped` means the owner already has that exact text.** Nothing is
     pending. Only a MATERIALLY different message is worth sending.
   - **The owner-resend cooldown reads CONTENT, not a clock.** It refuses a
@@ -52,10 +59,13 @@ work around one because a task feels urgent.
   operator-set entry without going through review). `approvals.deny`
   (preference) / `POLYROB_TOOL_DENYLIST` (env) is the harder stop — actions
   you may never run at all.
-- **`/approve`** (REPL) / `polyrob approvals` (CLI) is how the OWNER manages
+- **`/gates`** (REPL) / `polyrob approvals` (CLI) is how the OWNER manages
   that gated set — `list`/`add <action>`/`remove <action>`. Adding a gate is
   always safe (tightening, no review needed); removing one queues a guarded
-  proposal instead (through the same `/pending` queue).
+  proposal instead (through the same `/pending` queue). ⚠️ `/approve <id>`
+  DECIDES one waiting item on every seat and does NOT manage gates; the two
+  used to share a name. `/gates` exists only in the REPL — on another seat,
+  say so rather than telling the owner to run it there.
 - When an approval-gated action fires interactively, the owner sees a ladder,
   not a bare yes/no: `o`=once, `s`=session (auto-approve for the rest of this
   session), `a`=always (approves now AND proposes removing the gate for

@@ -63,8 +63,61 @@ from core.secret_patterns import (
     POLYROB_KEY_RE as _POLYROB_KEY_RE,
     AWS_RE as _AWS_RE,
     JWT_RE as _JWT_RE,
+    PUBLIC_ADDRESS_RE as _PUBLIC_ADDRESS_RE,
     apply_ssot_shapes,
 )
+
+#: An EVM transaction / block hash (``0x`` + EXACTLY 64 hex) and a canonical
+#: UUID. Both are PUBLIC identifiers: a receipt hash is the proof a money verb
+#: produced, a UUID is a session / request / tool-call id. Neither is ever a
+#: credential, and a log line that masks them loses the only handle an operator
+#: has on the event he is reading.
+_TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+_UUID_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|[0-9a-fA-F]{32})$"
+)
+
+
+def _is_public_identifier(token: str) -> bool:
+    """True when *token* is a PUBLIC identifier rather than a credential shape.
+
+    ``core.secret_patterns.apply_ssot_shapes`` already exempts a public address
+    under the bare key ``token`` — and then this filter's LEGACY
+    ``token["']?\\s*[:=]`` pattern matched the very same line and masked it
+    anyway. The exemption has to be applied on BOTH layers or it is not an
+    exemption at all.
+    """
+    return bool(
+        _PUBLIC_ADDRESS_RE.match(token)
+        or _TX_HASH_RE.match(token)
+        or _UUID_RE.match(token)
+    )
+
+
+def _is_path_shaped(token: str) -> bool:
+    """True when *token* is a filesystem path, not a base64 blob.
+
+    The base64 catch-all deliberately KEEPS ``/`` in its character class (a real
+    secret can contain one, and round 3 of the A12 fix proved that dropping it
+    stops redacting real secrets). Its lookarounds stop a match beginning at an
+    ABSOLUTE path's leading ``/`` or mid-path — but a RELATIVE path of 32+
+    characters (``data/auto/local/sessions/workspace``) still matched in full,
+    so every relative session/workspace path this system logs came out masked.
+
+    The discriminator is structure: a path is many SHORT segments and most of
+    them are words. Residual, stated rather than implied: a base64 secret that
+    happens to carry two or more internal ``/`` AND two all-alphabetic segments
+    survives this net (roughly one in a few hundred). Every named credential
+    shape — PEM, Bearer, KV, ``sk-``, ``rob_``, AWS, JWT, opaque-token — runs
+    BEFORE the catch-all and is unaffected.
+    """
+    if token.count("/") < 2:
+        return False
+    segments = token.split("/")
+    if not all(seg and len(seg) <= 24 and seg.isalnum() for seg in segments):
+        return False
+    return sum(1 for seg in segments if seg.isalpha()) >= 2
 
 # The stock attribute names every logging.LogRecord carries (name, msg, args,
 # levelname, pathname, exc_text, threadName, taskName on 3.12+, ...). None of
@@ -227,7 +280,13 @@ class SecretScrubbingFilter(logging.Filter):
         return apply_ssot_shapes(text, _REDACTED)
 
     def scrub_message(self, message: str) -> str:
-        """Scrub secrets from a message string."""
+        """Scrub secrets from a message string.
+
+        The SSOT battery runs first (it carries the public-address exemption);
+        the legacy patterns then run through the SAME exemption gate, because a
+        rule that un-redacts on one layer and re-redacts on the next has not
+        exempted anything (C28, 2026-09-21).
+        """
         scrubbed = self._scrub_ssot_shapes(message)
 
         # Apply the remaining legacy patterns
@@ -236,8 +295,12 @@ class SecretScrubbingFilter(logging.Filter):
                 full_match = match.group(0)
                 if len(match.groups()) > 0:
                     secret = match.group(1)
+                    if _is_public_identifier(secret) or _is_path_shaped(secret):
+                        return full_match
                     masked_secret = self.mask_secret(secret)
                     return full_match.replace(secret, masked_secret)
+                if _is_public_identifier(full_match) or _is_path_shaped(full_match):
+                    return full_match
                 return self.mask_secret(full_match)
 
             scrubbed = pattern.sub(replace_secret, scrubbed)

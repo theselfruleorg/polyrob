@@ -26,13 +26,16 @@ def subagents():
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def subagents_info(as_json: bool):
     """Show delegation capability and limits."""
-    # Lazy import to avoid heavy tools import chain
+    # Lazy import to avoid heavy tools import chain.
+    # C58: an import failure used to answer `blocked_tools = []` — a security
+    # list rendering EMPTY when it could not be read, i.e. "a delegated child
+    # may use everything". Unknown is not empty.
+    blocked_error = None
     try:
         from tools.controller.delegation import get_blocked_child_tools
         blocked_tools = sorted(get_blocked_child_tools())
-    except Exception:
-        # Fallback if tools import fails
-        blocked_tools = []
+    except Exception as exc:
+        blocked_tools, blocked_error = None, f"{type(exc).__name__}: {exc}"
 
     info = {
         "delegation_enabled": TimeoutConfig.get_sub_agents_enabled(),
@@ -44,6 +47,7 @@ def subagents_info(as_json: bool):
         # timeout, not the sync one — report the real value.
         "async_timeout": TimeoutConfig.get_parallel_subtasks_timeout(),
         "blocked_tools": blocked_tools,
+        "blocked_tools_error": blocked_error,
     }
 
     if as_json:
@@ -56,15 +60,43 @@ def subagents_info(as_json: bool):
         click.echo(f"  Max background: {info['max_async']}")
         click.echo(f"  Sync timeout: {info['sync_timeout']}s")
         click.echo(f"  Async timeout: {info['async_timeout']}s")
-        if info['blocked_tools']:
+        if blocked_error:
+            click.echo(click.style(
+                f"  Blocked tools: UNKNOWN — the delegation policy could not be "
+                f"read ({blocked_error}). Do not read this as 'nothing is "
+                f"blocked'.", fg="yellow"))
+        elif info['blocked_tools']:
             click.echo(f"  Blocked tools: {', '.join(info['blocked_tools'])}")
+        else:
+            click.echo("  Blocked tools: none (a delegated child may use every "
+                       "loaded tool)")
 
 
 def _delegations(session_id=None, delegation_id=None):
+    """Durable background-delegation receipts for the ADMIN tenant + home.
+
+    C25: this resolved the store and the tenant from the SHELL
+    (``default_autonomy_state_db()`` + ``resolve_identity()``), so on a deployed
+    box an owner in an SSH shell read a non-existent file under a tenant the
+    service never used, and `polyrob subagents list` answered a confident "no
+    persisted background delegations" over a live table.
+    """
+    import os
+
+    from cli._admin_home import admin_data_dir
     from cli.delegation_receipts import read_delegations
-    from core.identity import resolve_identity
-    from agents.task.agent.autonomy_state import default_autonomy_state_db
-    return read_delegations(default_autonomy_state_db(), resolve_identity(), session_id, delegation_id)
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    from core.runtime_paths import data_home_db_path
+    try:
+        home, tenant = admin_data_dir(write=False), admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
+    db = data_home_db_path("autonomy_state.db", data_dir=home)
+    if not os.path.exists(db):
+        # A read never CREATES the store (the store's __init__ runs a CREATE
+        # TABLE, which would leave a decoy db behind just to answer "none").
+        return []
+    return read_delegations(db, tenant, session_id, delegation_id)
 
 
 @subagents.command("list")
@@ -76,7 +108,10 @@ def subagents_list(session_id: Optional[str], as_json: bool):
     if as_json:
         click.echo(json.dumps({"supported": True, "delegations": rows}, indent=2))
     elif not rows:
-        click.echo("No persisted background delegations. Live synchronous children are visible through /subagents.")
+        from cli.ui.candy import empty
+        click.echo(empty("persisted background delegations",
+                         "live synchronous children are visible through "
+                         "`/subagents` in the REPL"))
     else:
         for row in rows:
             click.echo(f"{row['delegation_id']}  {row['status']}  session={row['session_id']}  {row.get('goal') or ''}")

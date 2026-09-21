@@ -59,7 +59,7 @@ def test_decide_approved_wakes_the_originating_session():
         def get(self, rid):
             return _Row()
 
-        def decide_ask(self, rid, *, user_id, approved):
+        def decide_ask(self, rid, *, user_id, approved, answer=None):
             return True, "ok"
 
     wakes = []
@@ -99,7 +99,7 @@ def test_decide_rejected_never_wakes():
         def get(self, rid):
             return _Row()
 
-        def decide_ask(self, rid, *, user_id, approved):
+        def decide_ask(self, rid, *, user_id, approved, answer=None):
             return True, "ok"
 
     wakes = []
@@ -124,7 +124,7 @@ def test_decide_without_agent_still_works_sync():
         def get(self, rid):
             return None
 
-        def decide_ask(self, rid, *, user_id, approved):
+        def decide_ask(self, rid, *, user_id, approved, answer=None):
             return True, "ok"
 
     ok, _ = decide_tool_approval(_Board(), "tap-1", user_id="rob", approved=True)

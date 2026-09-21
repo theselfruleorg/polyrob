@@ -31,7 +31,7 @@ CEILINGS = {
     # (/signin, /profile, /settings, /admin*) moved to webview/posture_routes.py
     # as ONE posture table — they were seven hand-registered routes that
     # disagreed about what a denial looks like.
-    "webview/server.py": 3712,  # 043 §9: legacy index/session.html renders deleted; F-2 reads → agents/task/telemetry/
+    "webview/server.py": 3458,  # 043 A12/A29/A30: the full-tree session catalog, the per-session stats route and the four consumer-less socket emits deleted
     # S8 (2026-08-29): chat / delivery / lifecycle mixins + support helpers extracted
     # (agents/task/task_agent_{chat,delivery,lifecycle,support}.py).
     # Tightened 2026-09-08: the public session-control verbs (get_session_status /

@@ -101,6 +101,8 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		'_compaction_savings',  # B4: last-2 compaction savings ratios for anti-thrash
 		'_compaction_count',  # C2: monotonic index for pre-compaction checkpoint files
 		'_compaction_checkpoint_dir',  # C2: explicit checkpoint dir override (else pm() history dir)
+		'_recent_output_tokens',  # 057 WS-B: last-2 completion-token counts (output-scaled timeout)
+		'_last_uncached_input',   # 057 WS-B: last call's prompt tokens NOT served from cache
 	)
 
 	def __init__(
@@ -155,6 +157,12 @@ class MessageManager(TokenCounterMixin, CompactorMixin, PersistenceMixin, Filter
 		# `glm-5` recorded 'openrouter' spend it never incurred).
 		from agents.task.utils import resolve_serving_provider
 		self._provider_name = resolve_serving_provider(llm, self._model_name)
+
+		# 057 WS-B: bind session_id BEFORE the token-limit calculation — the
+		# autonomous context budget is a SESSION-CLASS clamp, and the class is
+		# read from the session id. (It is re-bound below with the rest of the
+		# constructor state; this is the earliest honest point.)
+		self.session_id = session_id
 
 		# Calculate token limits from model (SINGLE SOURCE OF TRUTH)
 		self.max_input_tokens, self.safe_input_tokens, self.completion_reserve = \

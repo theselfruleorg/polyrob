@@ -63,12 +63,28 @@ class Verb:
                  handler, not from this summary.
         aliases: Alternative invocation names (with the leading slash), for
                  names that are NOT themselves a ``_COMMANDS`` row.
+        seats:   Which seats can actually RUN this verb. Empty (the default and
+                 the overwhelming majority) means EVERY seat — the verb routes
+                 through ``_COMMANDS`` and every surface handles it. A non-empty
+                 tuple names the only seats that do, and such a row is
+                 deliberately NOT in ``_COMMANDS``: it is local to one seat.
+
+                 ⚠️ A seat-local row must be filtered OUT by any renderer for a
+                 different seat. Listing a verb the reader cannot run is a
+                 promise the surface does not keep — which is why this is a
+                 field rather than a convention. Seat names are the surface ids
+                 the tree already uses (``repl``, ``telegram``, ``console``).
     """
 
     name: str
     group: str
     help: str
     aliases: tuple[str, ...] = ()
+    seats: tuple[str, ...] = ()
+
+    def runs_on(self, seat: str) -> bool:
+        """True when ``seat`` can run this verb (no ``seats`` = every seat)."""
+        return not self.seats or seat in self.seats
 
 
 #: The one verb table. Ordered by :data:`GROUP_ORDER`, then by how a section
@@ -86,7 +102,13 @@ VERB_TABLE: tuple[Verb, ...] = (
          "Proposals I have learned, waiting for your approval"),
     Verb("/approve", "needs you", "Approve something that is waiting on you"),
     Verb("/reject", "needs you", "Discard a pending proposal"),
+    # REPL-local: the terminal is the seat where the owner sits while the agent
+    # works, so it is where "what will stop and ask me" belongs.
+    Verb("/gates", "needs you", "Which actions need your approval",
+         seats=("repl",)),
     Verb("/asks", "needs you", "What I need from you to unblock work"),
+    Verb("/missed", "needs you",
+         "Messages I could not deliver live: capped, paused, or undelivered"),
     Verb("/fulfill", "needs you",
          "Mark an ask fulfilled so its work can continue"),
     # work
@@ -106,6 +128,9 @@ VERB_TABLE: tuple[Verb, ...] = (
     Verb("/launch", "money", "Launch a token on the launchpad"),
     Verb("/deploy", "money", "Deploy a fixed-supply token"),
     Verb("/lp", "money", "Liquidity positions: inspect, quote, add, remove, or collect fees"),
+    Verb("/claim", "money", "Collect the creator fees a launchpad already owes me"),
+    Verb("/nft", "money", "Collectibles I hold: look, send one, or revoke an approval"),
+    Verb("/dapp", "money", "Web pages my wallet is connected to, and how to cut one off"),
     Verb("/paid", "money", "Paid room actions: status, pricing, and offers"),
     # control
     Verb("/cancel", "control", "Stop the task I am running now"),
@@ -123,6 +148,13 @@ VERB_TABLE: tuple[Verb, ...] = (
     Verb("/status", "look",
          "Health first, then session, goals, loops, and wallet"),
     Verb("/files", "look", "Recent files I produced"),
+    Verb("/cwd", "look", "The directory I am working in right now"),
+    # REPL-local: a per-TURN token meter. `/status` is the ONE snapshot every
+    # seat renders, and this is the other thing the terminal used to show under
+    # that name — separated so neither has to pretend to be the other.
+    Verb("/meter", "look", "This turn's meter", seats=("repl",)),
+    Verb("/contacts", "look",
+         "Who I have been writing to, and the transcript with one of them"),
     # set up
     Verb("/allow", "set up", "Allow me to message a target"),
     Verb("/deny", "set up", "Revoke a message permission"),
@@ -138,10 +170,11 @@ VERB_TABLE: tuple[Verb, ...] = (
     Verb("/mcp", "set up", "MCP servers I can use: add, remove, or test"),
     # display
     Verb("/avatar", "display", "This instance's face, traits, and voice signature"),
+    Verb("/identity", "display",
+         "My on-chain identity: register it, or update where it is published"),
     # leave
     Verb("/help", "leave", "This help, or the detail for one verb",
          aliases=("/h", "/?")),
-    Verb("/missed", "leave", "Owner messages the daily cap suppressed"),
 )
 
 
@@ -176,25 +209,45 @@ def verb_for(name: str) -> Optional[Verb]:
     return _BY_NAME.get(key.lower())
 
 
-def grouped() -> list[tuple[str, tuple[Verb, ...]]]:
+def grouped(seat: Optional[str] = None) -> list[tuple[str, tuple[Verb, ...]]]:
     """The table as ``(group, verbs)`` pairs in :data:`GROUP_ORDER`.
 
     Each group's verbs keep :data:`VERB_TABLE` order. A group with no rows is
     omitted, so a caller can render the sections directly.
+
+    ``seat`` filters to the verbs that seat can actually RUN (see
+    :attr:`Verb.seats`). ``None`` returns every row — right for a contract test
+    or an inventory, and wrong for a rendered help body, which must never list
+    a verb its reader cannot run.
     """
     out: list[tuple[str, tuple[Verb, ...]]] = []
     for group in GROUP_ORDER:
-        rows = tuple(v for v in VERB_TABLE if v.group == group)
+        rows = tuple(v for v in VERB_TABLE
+                     if v.group == group
+                     and (seat is None or v.runs_on(seat)))
         if rows:
             out.append((group, rows))
     return out
 
 
+def seat_verbs(seat: str) -> tuple[Verb, ...]:
+    """Every verb ``seat`` can run, in :data:`VERB_TABLE` order."""
+    return tuple(v for v in VERB_TABLE if v.runs_on(seat))
+
+
+#: Rows that are LOCAL to one seat and therefore absent from
+#: ``dispatcher._COMMANDS``. Derived, never hand-listed, so a new seat-local
+#: verb cannot be forgotten by the contract test.
+SEAT_LOCAL: frozenset = frozenset(v.name for v in VERB_TABLE if v.seats)
+
+
 __all__ = [
     "GROUP_ORDER",
+    "SEAT_LOCAL",
     "Verb",
     "VERB_TABLE",
     "PALETTE_EXCLUDED",
+    "seat_verbs",
     "verb_for",
     "grouped",
 ]

@@ -339,3 +339,50 @@ async def test_x_reply_refused_for_leaf(monkeypatch):
     res = await tool.x_reply(XReplyAction(in_reply_to="1234567890", text="hi"),
                              execution_context=_Ctx(role="leaf"))
     assert res.error and "blocked" in res.error.lower()
+
+
+# --- 057 WS-E: the proof rule rides with the receipt -------------------------
+
+@pytest.mark.asyncio
+async def test_x_post_result_carries_the_x_post_proof_rule(monkeypatch):
+    """A returned status URL is the proof an X post exists — and a draft is not
+    a post. That rule lives in ONE table; the result cites it."""
+    from core.rails.verification import verification_line
+    from tools.x_browser.tool import XPostAction
+    driver = FakeDriver(url="https://x.com/robbot/status/42")
+    tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
+                 driver=driver)
+    res = await tool.x_post(XPostAction(text="hello world"), execution_context=_Ctx())
+    expected = verification_line("x_post", url="https://x.com/robbot/status/42")
+    assert res.extracted_content.endswith(expected)
+    assert "only the returned URL/id proves publication" in res.extracted_content
+
+
+@pytest.mark.asyncio
+async def test_x_reply_result_carries_the_x_reply_proof_rule(monkeypatch):
+    from core.rails.verification import verification_line
+    from tools.x_browser.tool import XReplyAction
+
+    class _ReplyDriver(FakeDriver):
+        def __init__(self):
+            super().__init__(url="https://x.com/robbot/status/77")
+
+        async def reply(self, status_id, text):
+            return self._url
+
+    tool = _tool(monkeypatch, session={"handle": "robbot", "storage_state": {}},
+                 driver=_ReplyDriver())
+    res = await tool.x_reply(
+        XReplyAction(in_reply_to="https://x.com/alice/status/1234567890", text="ok"),
+        execution_context=_Ctx())
+    assert res.extracted_content.endswith(
+        verification_line("x_reply", url="https://x.com/robbot/status/77"))
+
+
+@pytest.mark.asyncio
+async def test_a_refused_post_claims_no_proof(monkeypatch):
+    from tools.x_browser.tool import XPostAction
+    tool = _tool(monkeypatch, session=None)
+    res = await tool.x_post(XPostAction(text="hi"), execution_context=_Ctx())
+    assert res.error
+    assert "proof:" not in (res.extracted_content or "")

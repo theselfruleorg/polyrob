@@ -148,3 +148,37 @@ def test_anysite_api_description_steers_to_describe():
     import inspect
     src = inspect.getsource(AnysiteTool.anysite_api)
     assert "anysite_describe" in src
+
+
+@pytest.mark.asyncio
+async def test_empty_search_with_a_long_query_names_the_query_shape(monkeypatch):
+    """Rob's evening self-review #5 (2026-09-19): `/api/twitter/search/users` returned
+    `[]` for every multi-word phrasing and 20 rows for the same theme in two words —
+    a query-shape artefact the agent read as "theme exhausted" and recorded as such.
+    An empty search answer on a >2-word query must say so, not look like no supply."""
+    tool = _tool()
+    monkeypatch.setattr("tools.anysite.tool.missing_requirement", lambda: None)
+    monkeypatch.setattr("tools.anysite.tool.ensure_configured", lambda: True)
+
+    async def fake_run(argv, **kw):
+        return AnysiteResult(stdout="[]", stderr="", exit_code=0, timed_out=False)
+
+    monkeypatch.setattr("tools.anysite.tool.run_anysite", fake_run)
+    res = await tool.anysite_api(AnysiteApiParams(
+        endpoint="/api/twitter/search/users",
+        params={"query": "indie hacker autonomous agent", "count": 20}))
+    assert res.error is None
+    out = res.extracted_content
+    assert "[]" in out and "query" in out.lower()
+    assert "2" in out and ("shorter" in out.lower() or "fewer" in out.lower())
+    assert "not" in out.lower() and "exhaust" in out.lower()
+
+    # a two-word query that is genuinely empty gets the bare answer
+    res2 = await tool.anysite_api(AnysiteApiParams(
+        endpoint="/api/twitter/search/users", params={"query": "indie hacker"}))
+    assert res2.extracted_content.strip() == "[]"
+
+    # a non-search endpoint is untouched
+    res3 = await tool.anysite_api(AnysiteApiParams(
+        endpoint="/api/linkedin/user", params={"user": "a b c d"}))
+    assert res3.extracted_content.strip() == "[]"

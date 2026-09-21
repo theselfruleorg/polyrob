@@ -72,7 +72,10 @@ def test_cron_add_says_when_no_ticker_will_run_it(env, monkeypatch):
     monkeypatch.setenv("CRON_ENABLED", "false")
     out = owner_ops.cron_reply("u1", env, ["add", "30m", "|", "check the treasury"])
     assert "Scheduled" in out
-    assert "CRON_ENABLED is off" in out
+    # D41/D72: the note names what the owner can DO. A flag name is not
+    # something he can act on from a phone.
+    assert "scheduler is switched off" in out
+    assert "polyrob autonomy on" in out
 
 
 def test_cron_add_rejects_a_bad_schedule(env):
@@ -170,15 +173,26 @@ def _bound_wallet_owner(monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "u1")
 
 def test_wallet_disabled_says_so(monkeypatch):
+    """D72: the refusal names what the OWNER can run, not the flag on its own.
+    He is usually on a phone, where a flag name is something he can act on only
+    by opening a shell."""
     monkeypatch.delenv("AGENT_WALLET_ENABLED", raising=False)
     out = owner_ops.wallet_reply(["balances"], user_id="u1")
-    assert "not enabled" in out.lower() or "unavailable" in out.lower()
+    low = out.lower()
+    assert ("i have no wallet" in low or "unavailable" in low
+            or "not enabled" in low)
+    if "i have no wallet" in low:
+        assert "polyrob config set" in low
 
 
-def test_wallet_reply_never_writes_caps(monkeypatch):
-    """Raising a cap needs the env file the RUNNING process reads plus a
-    restart, and chat must never write that file. The verb points at the
-    tightening path instead of pretending to set one."""
+def test_wallet_renders_the_caps_the_gate_will_apply(monkeypatch):
+    """D16: the caps shown are the ones the GATE re-resolves per spend, not the
+    ones the wallet singleton was CONSTRUCTED with.
+
+    Since 2026-09-18 an owner-approved per-transaction raise applies live to
+    spending — and did not appear here, on the one screen he checks to confirm
+    it landed.
+    """
     class _Cfg:
         network = "testnet"
         max_per_tx_usd = 2.0
@@ -191,10 +205,40 @@ def test_wallet_reply_never_writes_caps(monkeypatch):
         address = "0xabc"
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
+    monkeypatch.setattr("core.wallet.config.effective_max_per_tx_usd",
+                        lambda uid, home, env=None: 7.0)
+    monkeypatch.setattr("core.wallet.config.effective_daily_cap_usd",
+                        lambda uid, home, env=None: 100.0)
     out = owner_ops.wallet_reply(["balances"], user_id="u1")
-    assert "$2.00/tx" in out and "$100.00" in out
-    assert "/config set budget.wallet_daily_usd" in out
-    assert "set-cap" not in out
+    assert "$7.00/tx" in out and "$100.00" in out      # the LIVE per-tx value
+    assert "$2.00/tx" not in out                       # never the frozen one
+    # D17: the cap note names a chat verb, not an SSH session.
+    assert "/config set budget.wallet_per_tx_usd" in out
+    assert "/etc/polyrob" not in out
+
+
+def test_wallet_says_so_when_the_live_caps_cannot_be_read(monkeypatch):
+    """A cap we could not re-resolve is LABELLED, never printed as if it were
+    the live one."""
+    class _Cfg:
+        network = "testnet"
+        max_per_tx_usd = 2.0
+        daily_cap_usd = 100.0
+        per_venue_daily_cap_usd = None
+
+    class _Wallet:
+        config = _Cfg()
+        operational_venue = "treasury"
+        address = "0xabc"
+
+    def _boom(*a, **k):
+        raise RuntimeError("prefs home unreadable")
+
+    monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
+    monkeypatch.setattr("core.wallet.config.effective_max_per_tx_usd", _boom)
+    out = owner_ops.wallet_reply(["balances"], user_id="u1")
+    assert "$2.00/tx" in out
+    assert "could not re-read the live ones" in out
 
 
 def test_wallet_flags_an_unlimited_daily_cap(monkeypatch):
@@ -210,6 +254,10 @@ def test_wallet_flags_an_unlimited_daily_cap(monkeypatch):
         address = "0xabc"
 
     monkeypatch.setattr("core.wallet.factory.get_agent_wallet", lambda: _Wallet())
+    monkeypatch.setattr("core.wallet.config.effective_max_per_tx_usd",
+                        lambda uid, home, env=None: 2.0)
+    monkeypatch.setattr("core.wallet.config.effective_daily_cap_usd",
+                        lambda uid, home, env=None: None)
     out = owner_ops.wallet_reply(["balances"], user_id="u1")
     assert "UNLIMITED" in out and "catastrophic-loss ceiling" in out
 

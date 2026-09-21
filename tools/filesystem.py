@@ -176,6 +176,7 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
         # write_file can stamp it onto ActionResult.metadata["artifact_id"]
         # without a second ledger lookup.
         artifact_id = self._record_artifact(file_path)
+        receipt = self._content_receipt(expected_content)
 
         async def _verify() -> dict:
             try:
@@ -238,9 +239,32 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 }
 
         result = await _verify()
+        # 057 WS-B: bytes + digest on EVERY branch (the JSON branches reported
+        # neither), so a write receipt is uniform and never echoes content.
+        result.setdefault("size_bytes", receipt["size_bytes"])
+        result.setdefault("sha256", receipt["sha256"])
         if artifact_id:
             result["artifact_id"] = artifact_id
         return result
+
+    @staticmethod
+    def _default_read_page_lines() -> int:
+        """``AUTONOMOUS_READ_PAGE_LINES`` — lines returned for an UNPAGED read.
+        0 (default) = off: read the whole file, as before."""
+        from core.env import int_env
+        value = int_env("AUTONOMOUS_READ_PAGE_LINES", 0)
+        return value if value > 0 else 0
+
+    @staticmethod
+    def _content_receipt(content: str) -> dict:
+        """Bytes + digest for a write. 057 WS-B: a write result reports WHAT
+        landed (a length and a hash the caller can re-derive), never the content
+        — echoing it back doubles the cost of every write in the step's uncached
+        suffix and tells the model nothing it did not just send."""
+        import hashlib
+        raw = (content or "").encode("utf-8")
+        return {"size_bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest()[:16]}
 
     def _write_success_result(self, original_path: str, verification: dict):
         """Build write_file's success return (043 A18).
@@ -375,7 +399,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 if char_offset < 0:
                     raise ServiceError(f"Invalid char_offset: {char_offset}. Must be >= 0")
                 if char_offset >= total_chars:
-                    raise ServiceError(f"char_offset {char_offset} exceeds file length ({total_chars} chars)")
+                    # Past the end is an ANSWER ("there is no more"), not an
+                    # error — see the line-window branch below for why.
+                    return (f"[EOF — file has {total_chars} chars; char_offset "
+                            f"{char_offset} is past the end. Nothing more to read.]")
 
                 # Extract the requested character range
                 end_char = min(char_offset + char_limit, total_chars)
@@ -384,6 +411,27 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 # Add metadata about position
                 header = f"[chars {char_offset}-{end_char} of {total_chars}]\n"
                 return header + chunk
+
+            # 057 WS-B: a DEFAULT page for an unpaged read.
+            # `read_file` has offset/limit but no default, so an autonomous run
+            # that says "read the report" pulls the whole file into the step's
+            # uncached suffix — the largest single term in the per-call input
+            # cost. AUTONOMOUS_READ_PAGE_LINES=0 (default) = off, byte-identical.
+            #
+            # ⚠️ Applied whenever the env is set AND the request named no window
+            # at all (no offset, no limit, no char_offset/char_limit): this tool
+            # is reached from every session class and cannot distinguish them
+            # reliably, so the honest rule is "the caller did not say, and the
+            # operator set a default". An explicit limit always wins.
+            _default_page = self._default_read_page_lines()
+            if (_default_page > 0 and params.offset is None and params.limit is None
+                    and params.char_offset is None and params.char_limit is None
+                    and len(lines) > _default_page):
+                shown = lines[:_default_page]
+                numbered = ''.join(f"{i:6}|{line}" for i, line in enumerate(shown, start=1))
+                return (f"[lines 1-{_default_page} of {len(lines)} — default page "
+                        f"(AUTONOMOUS_READ_PAGE_LINES); pass offset/limit to read more]\n"
+                        + numbered)
 
             # Apply line-based offset and limit if provided
             if params.offset is not None or params.limit is not None:
@@ -394,15 +442,26 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                 if offset < 0:
                     raise ServiceError(f"Invalid offset: {params.offset}. Offset must be >= 1")
                 if offset >= len(lines):
-                    raise ServiceError(f"Offset {params.offset} exceeds file length ({len(lines)} lines)")
+                    # A page walk that steps past the end is asking "is there
+                    # more?" — the answer is "no", not a crash. As a raise this
+                    # became a RuntimeError chain, four tracebacks in the
+                    # journal and a FAILED step the model had to recover from
+                    # (prod 2026-09-20 22:41Z: offset 1040 of a 1031-line
+                    # report). A malformed window (negative) is still an error.
+                    return (f"[EOF — file has {len(lines)} lines; offset {params.offset} "
+                            f"is past the end. Nothing more to read.]")
 
                 # Extract the requested range
                 end = min(offset + limit, len(lines))
                 selected_lines = lines[offset:end]
-                content = ''.join(selected_lines)
+
+                # Name the window AND the total, as the 057 default page does,
+                # so the reader can see where the file ends before asking past it.
+                tail = " — end of file" if end >= len(lines) else ""
+                header = f"[lines {offset + 1}-{end} of {len(lines)}{tail}]\n"
 
                 # Add line number prefix for clarity
-                numbered_content = []
+                numbered_content = [header]
                 for i, line in enumerate(selected_lines, start=offset + 1):
                     numbered_content.append(f"{i:6}|{line}")
 
@@ -834,8 +893,12 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                     # Log success
                     self.logger.info(f"Successfully appended {len(processed_content)} chars to {file_path}")
 
-                    # Return just the relative path for clarity to the agent
-                    return f"Content appended to {original_path}"
+                    # 057 WS-B: name WHAT was appended (bytes + digest), never
+                    # the content — and never nothing, which is what this said.
+                    _r = self._content_receipt(processed_content)
+                    return (f"Content appended to {original_path} "
+                            f"({_r['size_bytes']} bytes, sha256:{_r['sha256']}; "
+                            f"file now {os.path.getsize(file_path)} bytes)")
 
                 except Exception as write_error:
                     self.logger.warning(f"Append attempt {retry_count+1}/{max_retries} failed: {str(write_error)}")
@@ -869,7 +932,10 @@ class FileSystem(PdfExtractionMixin, DocProcessingMixin, BaseTool):
                         raise ServiceError(f"Direct append verification failed: file size did not increase")
 
                     self.logger.info(f"Successfully appended {len(processed_content)} chars to {file_path} using direct append")
-                    return f"Content appended to {original_path}"
+                    _r = self._content_receipt(processed_content)
+                    return (f"Content appended to {original_path} "
+                            f"({_r['size_bytes']} bytes, sha256:{_r['sha256']}; "
+                            f"file now {new_size} bytes)")
                 except Exception as direct_error:
                     self.logger.error(f"Direct append failed: {str(direct_error)}")
                     raise ServiceError(f"Failed to append to file after all recovery attempts")

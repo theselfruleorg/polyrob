@@ -37,7 +37,20 @@ CEILINGS = {
     "cli/commands/autonomy.py": 0,
     # WS-J3: _console_task_agent is a fail-open SERVICE accessor (returns None
     # when the in-process TaskAgent is absent), not a vanishing status section.
-    "webview/pages.py": 8,
+    "webview/pages.py": 4,
+    # D67 (2026-09-21 interface audit): four render paths the ratchet did not
+    # scan at all. Pinned at today's count, shrink-only — a NEW log-and-forget
+    # handler in any of them now fails.
+    #
+    # `surfaces/email/surface.py` is a SEND path, not a section: its swallowed
+    # faults all return a typed `SendResult(success=False, error=...)` or leave
+    # a seed/anchor unwritten, and each now names what the caller loses at
+    # WARNING with a traceback. Seven remain log-only by contract (a surface
+    # must never raise into the loop).
+    "surfaces/email/surface.py": 7,
+    "core/goal_board_render.py": 0,
+    "surfaces/telegram/owner_ops.py": 0,
+    "core/surfaces/inbox_render.py": 0,
 }
 
 _LOG_NAMES = {"logger", "logging", "log"}

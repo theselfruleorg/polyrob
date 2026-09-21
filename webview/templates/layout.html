@@ -24,13 +24,18 @@
     <!-- Load constants first so they're available to all scripts -->
     <script src="/static/js/constants.js"></script>
 
-    <!-- Socket.IO setup with reliable fallback (de-inlined, 043 phase 5 R6) -->
-    <script src="/static/js/socketio-loader.js"></script>
+    <!--
+      A14 (2026-09-21 audit): the CDN Socket.IO loader and the highlight.js
+      CDN tag are GONE. `socketio-loader.js` reached cdn.socket.io on every
+      page load of every layout.html page and set `window.socketIOReady`,
+      which had ZERO consumers — the console's own socket loader is
+      `static/app/socket-client.js`, and it serves the vendored copy
+      same-origin. highlight.js had no consumer either. Two third-party
+      origins on the console's critical path for nothing.
+    -->
 
     <!-- Additional styles from child templates -->
     {% block head %}{% endblock %}
-    <!-- Add syntax highlighting -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
 <script src="/static/js/theme.js?v=20260916theme"></script>
 </head>
 <body {% block body_attributes %}{% endblock %}>

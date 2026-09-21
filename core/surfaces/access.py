@@ -46,6 +46,18 @@ from core.env import bool_from as _bool_from
 # else any email/telegram sender becomes an owner command-turn under POLYROB_LOCAL).
 _LOCAL_OWNER_SURFACES = {"cli", "local", "repl"}
 
+#: Network surfaces whose SENDER ADDRESS is forgeable, so no ownership evidence
+#: that rests on that address may be honoured. The ONE definition — the
+#: dispatcher imports it from here (it used to keep a private copy, and the two
+#: guarded different halves of the same rule).
+#:
+#: ⚠️ Owner-by-email is OFF in v1 because a ``From:`` header is trivially
+#: spoofed. A PAIRING row is keyed on the same forgeable address, so honouring
+#: it here would re-open exactly the hole the tier model closes: anyone who can
+#: forge a paired address would reach the obey-path as OWNER. Such a surface is
+#: correspondent-or-denied by construction.
+FORGEABLE_NETWORK_SURFACES = frozenset({"email"})
+
 
 class AccessTier(str, Enum):
     OWNER = "owner"
@@ -61,11 +73,18 @@ class AccessTier(str, Enum):
 
 
 def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
-                        *, allow_local: bool) -> bool:
+                        *, allow_local: bool, allow_pairing: bool = True) -> bool:
     """True if ``uid`` is the owner/local operator or a paired user. Fail-closed.
 
     ``allow_local`` gates the single-user local-owner bypass: it is only honoured for a
     trusted local surface (never a network surface — see ``_LOCAL_OWNER_SURFACES``).
+
+    ``allow_pairing`` gates the PAIRING branch the same way (D1). A pairing row
+    is keyed on the sender address, so on a forgeable-address surface
+    (:data:`FORGEABLE_NETWORK_SURFACES`) it is not evidence of anything: the
+    dispatcher's own forgeable-sender refusal only guarded the legacy path taken
+    with the correspondent model OFF, so with the model ON a paired address
+    became OWNER on email and reached the obey-path.
 
     ⚠️ That surface condition is INERT on an UNBOUND install: the owner principal is
     then the local tenant itself, so a uid of ``local`` is owner by PRINCIPAL on any
@@ -84,6 +103,8 @@ def _is_owner_or_paired(container: Any, uid: str, env: Mapping[str, str],
             return True
     except Exception as e:  # never let an owner-check fault grant or crash
         logger.debug("access-tier owner check failed (fail-closed): %s", e)
+    if not allow_pairing:
+        return False
     try:
         from core.pairing import PairingStore
         cfg = getattr(container, "config", None) if container else None
@@ -139,17 +160,27 @@ def is_room_owner(uid: Any, env: Optional[Mapping[str, str]] = None) -> bool:
     return _is_owner_principal(str(uid or ""), os.environ if env is None else env)
 
 
+#: Rooms whose role store could not be read, warned about once per process.
+#: An unreadable roles table denies every non-owner in that room, and the
+#: operator can only fix that once — so say it once, loudly, not per message.
+_ROLE_FAULT_WARNED: set = set()
+
+
 def _chat_role(container: Any, surface: str, chat_id: str, member_id: str) -> str:
-    """The speaker's per-chat role (044 T16). Fail-open to ``member``.
+    """The speaker's per-chat role (044 T16). Fail-CLOSED to ``blocked``.
 
     Prefers the container's registered ``group_roles`` service (installed beside
     the rest of the surface bus in ``core/surfaces/bootstrap.py``) and falls back
     to opening ``surfaces.db`` directly, because ``resolve_access_tier`` is also
     called from seats that never installed the bus.
 
-    Fail-open here means the LEAST privilege, not the most: an unreadable store
-    makes everyone a ``member``, whose line is DATA — never an ``admin``, whose
-    line is a steer.
+    ⚠️ D3: this used to answer ``member`` on any fault, which was called
+    "least privilege" — it is not. ``blocked`` is the room's ONLY per-member
+    deny, and it lives in the very store this read consults, so an unreadable
+    store turned every blocked member back into an ordinary one. The deny a room
+    owner set must survive a read fault; a member losing one turn to a warning
+    does not. The owner principal never reaches here (he is resolved before any
+    row is read), so a fault can never lock the owner out of his own room.
     """
     try:
         store = container.get_service("group_roles") if container else None
@@ -161,8 +192,15 @@ def _chat_role(container: Any, surface: str, chat_id: str, member_id: str) -> st
             store = GroupRoles(os.path.join(data_dir, "surfaces.db"))
         return store.role(surface, chat_id, member_id, is_owner=False)
     except Exception as e:
-        logger.debug("group role probe failed (reading as member): %s", e)
-        return "member"
+        key = f"{surface}:{chat_id}"
+        if key not in _ROLE_FAULT_WARNED:
+            _ROLE_FAULT_WARNED.add(key)
+            logger.warning(
+                "room %s: the per-chat role store is unreadable (%s) — every "
+                "non-owner line there is DENIED until it can be read. A "
+                "`blocked` member must not be un-blocked by a read fault.",
+                key, e)
+        return "blocked"
 
 
 def _stamp_role(identity: Any, role: str) -> None:
@@ -250,8 +288,10 @@ def resolve_access_tier(
                 return AccessTier.DENIED
             return AccessTier.GROUP_MEMBER
 
-        if _is_owner_or_paired(container, uid, src,
-                               allow_local=surface in _LOCAL_OWNER_SURFACES):
+        if _is_owner_or_paired(
+                container, uid, src,
+                allow_local=surface in _LOCAL_OWNER_SURFACES,
+                allow_pairing=surface not in FORGEABLE_NETWORK_SURFACES):
             return AccessTier.OWNER
 
         # Non-owner: routable ONLY as a known correspondent (active binding).
@@ -272,4 +312,5 @@ def resolve_access_tier(
         return AccessTier.DENIED
 
 
-__all__ = ["AccessTier", "resolve_access_tier"]
+__all__ = ["AccessTier", "FORGEABLE_NETWORK_SURFACES", "is_room_owner",
+           "resolve_access_tier"]

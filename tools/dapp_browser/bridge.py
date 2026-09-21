@@ -176,10 +176,45 @@ class WalletBridge:
             logger.warning("dapp bridge: %s", exc, exc_info=True)
             return _error(USER_REJECTED, f"the wallet could not answer: {exc}")
 
+    def _durably_revoked(self) -> bool:
+        """Has an OWNER revoked this session out of process (E9, 2026-09-21)?
+
+        ``polyrob wallet dapp revoke`` / ``/dapp revoke`` flip the durable row;
+        a bridge already armed in a running session must honour that on its
+        next request, or the owner's revoke is a note, not a stop. Mirrored
+        into the in-memory envelope once seen. An unreadable store reads as
+        "not revoked" — the in-memory flag is the primary and this is the
+        cross-process backstop; a read never creates the store.
+        """
+        session_id = getattr(self._ctx, "session_id", None)
+        if not session_id:
+            return False
+        try:
+            import os as _os
+
+            from core.dapp_session_store import (
+                default_dapp_session_store_path, get_dapp_session_store,
+            )
+            # ⚠️ `get_dapp_session_store()` runs `init_schema(..., mkdir=True)`,
+            # so calling it blind CREATES the db. This is the read half of the
+            # rail and it runs on EVERY page request, so an absent file must
+            # stay absent — an arming WRITES the row first, so "no file" is
+            # "nothing was ever armed here", never "unknown".
+            if not _os.path.exists(default_dapp_session_store_path()):
+                return False
+            row = get_dapp_session_store().get(str(session_id))
+        except Exception:
+            logger.debug("dapp bridge: durable revoke flag unreadable", exc_info=True)
+            return False
+        if row is not None and bool(row.revoked):
+            self.envelope.revoked = True
+            return True
+        return False
+
     async def _dispatch(self, method: str, params: list) -> str:
-        if self.envelope.revoked:
+        if self.envelope.revoked or self._durably_revoked():
             return _error(UNAUTHORIZED, (
-                "the agent revoked this wallet session — reconnect with "
+                "this wallet session was revoked — reconnect with "
                 "dapp_connect before asking again"))
 
         if method in ("eth_accounts", "eth_requestAccounts"):

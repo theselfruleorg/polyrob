@@ -12,8 +12,9 @@ Design constraints (Fusion-validated):
 - **Tenant-scoped** — the recipient is resolved from the *job's owner*, not from a
   free-form payload address, except where the agent is delivering to its own
   configured channel. A cron job must not be able to exfiltrate to a stranger.
-- **Fail-open** — a sink that errors (or is unconfigured) logs and returns False;
-  it NEVER fails the cron job. Delivery is best-effort reporting, not core work.
+- **Fail-open** — a sink that errors (or is unconfigured) logs and reports
+  ``failed``; it NEVER fails the cron job. Delivery is best-effort reporting,
+  not core work.
 - **Inside the budget** — callers invoke this from within the scheduler's
   ``asyncio.wait_for(runner(job), timeout=max_duration_seconds)``, so delivery I/O
   shares the per-run hard cap rather than running unbounded after a hard-cancel.
@@ -66,17 +67,50 @@ def is_silent(final: Optional[str]) -> bool:
     return bool(final) and SILENT_MARKER in final.upper()
 
 
-def delivery_outcome(final: Optional[str], ok: bool) -> str:
+#: Rail outcomes that mean "not yet", not "broken" (D45, 2026-09-21 audit).
+#: Quiet hours DEFER to the window end; dedup means the owner already has this
+#: text; the cap and the owner pause both durably record the body. None of them
+#: is a delivery FAULT, and logging all four as ``failed`` made the cron journal
+#: read as a broken rail on a working one — which is how a REAL failure stops
+#: being noticed.
+#:
+#: ``queued`` belongs here for the same reason and was the D44 rail's OWN blind
+#: spot: the five router surfaces this file now delivers through are not hosted
+#: in the agent process, so every one of their reports is handed to the durable
+#: cross-process queue — a working path that journalled as ``failed`` on every
+#: single run. (``fallback`` is deliberately ABSENT: it means a live sink was
+#: there and REFUSED, which is a fault the journal must show.)
+DEFERRED_RAIL_OUTCOMES = ("quiet_held", "deduped", "capped", "paused",
+                          "rate_limited", "queued")
+
+
+def classify_rail_outcome(outcome: Optional[str]) -> str:
+    """A ``user_delivery`` outcome -> ``sent`` | ``deferred`` | ``failed``."""
+    o = str(outcome or "")
+    if o == "sent":
+        return "sent"
+    if o in DEFERRED_RAIL_OUTCOMES:
+        return "deferred"
+    return "failed"
+
+
+def delivery_outcome(final: Optional[str], ok) -> str:
     """Classify a cron delivery for the observability log: ``suppressed`` (agent chose
-    ``[SILENT]``), ``sent`` (delivered), or ``failed`` (real send failure).
+    ``[SILENT]``), ``sent`` (delivered), ``deferred`` (held/deduped/capped/paused —
+    recorded, not lost), or ``failed`` (real send failure).
 
     The runner previously logged both a ``[SILENT]`` opt-out and a genuine send error
     as ``ok=False``, so harmless status-digest opt-outs were indistinguishable from
     broken deliveries in the journal. ``is_silent`` takes precedence because a silent
     run never attempts a send (``deliver_result`` returns False for it).
+
+    ``ok`` accepts either the legacy bool or the richer string
+    :func:`deliver_result_ex` returns.
     """
     if is_silent(final):
         return "suppressed"
+    if isinstance(ok, str):
+        return ok
     return "sent" if ok else "failed"
 
 
@@ -89,11 +123,34 @@ async def deliver_result(
     deliver_target: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> bool:
+    """Boolean shim over :func:`deliver_result_ex` (the legacy contract).
+
+    ``True`` means DELIVERED. A ``deferred`` outcome is False here on purpose:
+    the report is recorded but the owner has not read it, so the episode must
+    not be marked surfaced.
+    """
+    return await deliver_result_ex(
+        task_agent, job, final, target=target, deliver_target=deliver_target,
+        session_id=session_id) == "sent"
+
+
+async def deliver_result_ex(
+    task_agent: Any,
+    job: Any,
+    final: Optional[str],
+    *,
+    target: Optional[str],
+    deliver_target: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> str:
     """Deliver a cron job's final result to an allowlisted external sink.
 
-    Returns True on a successful send, False otherwise (unknown/blank target,
-    empty/`[SILENT]` result, sink unconfigured, or any sink exception). Never
-    raises — delivery must not fail the job.
+    Returns ``sent`` | ``deferred`` (held, deduped, capped, paused, or handed
+    to the durable cross-process queue — recorded, not lost) | ``suppressed``
+    (the agent's own ``[SILENT]`` opt-out) | ``already_told`` (the run itself
+    already delivered to the owner — tell once) | ``failed`` (unknown/blank target,
+    empty result, sink unconfigured, or any sink exception). Never raises —
+    delivery must not fail the job.
 
     ``session_id`` (Task 7, optional): when provided, a SUCCESSFUL send marks the
     episodic row for this session as ``surfaced`` (the digest builder then omits
@@ -103,16 +160,25 @@ async def deliver_result(
     that no-ops if the row doesn't exist yet (see ``cron/runner.py`` ordering).
     """
     if not target:
-        return False
+        return "failed"
     target = target.strip().lower()
     if target not in ALLOWED_TARGETS:
         logger.warning("cron delivery: target %r not in allowlist %s", target, ALLOWED_TARGETS)
-        return False
+        return "failed"
     if not final or not final.strip():
-        return False
+        return "failed"
     if is_silent(final):
         logger.info("cron delivery: job %s opted out via [SILENT]", getattr(job, "id", "?"))
-        return False
+        return "suppressed"
+    # Tell once (owner ruling 2026-09-21): when the run itself already told the
+    # owner, the `deliver` echo of its final text is a duplicate — skip it and
+    # say so. The run's send is the user_delivery row carrying THIS session id.
+    if session_id and run_already_told_owner(_event_log_for_read(),
+                                             getattr(job, "user_id", None), session_id):
+        logger.info("cron delivery: job %s already told the owner in-run — echo skipped",
+                    getattr(job, "id", "?"))
+        _mark_surfaced(session_id, getattr(job, "user_id", None))
+        return "already_told"
 
     # Security: ignore an agent-supplied explicit recipient unless an operator opted in.
     # By default, deliver only to the job owner's own channel (no exfiltration).
@@ -120,7 +186,7 @@ async def deliver_result(
         logger.info("cron delivery: ignoring explicit deliver_target (owner-only by default)")
         deliver_target = None
 
-    ok = False
+    ok: Any = False
     try:
         if target == "email":
             ok = await _deliver_email(task_agent, job, final, deliver_target)
@@ -134,10 +200,64 @@ async def deliver_result(
     except Exception as e:  # fail-open: a delivery error never fails the job
         logger.error("cron delivery to %s failed for job %s: %s",
                      target, getattr(job, "id", "?"), e, exc_info=True)
-        return False
-    if ok and session_id:
+        return "failed"
+    outcome = ok if isinstance(ok, str) else ("sent" if ok else "failed")
+    if outcome == "sent" and session_id:
         _mark_surfaced(session_id, getattr(job, "user_id", None))
-    return ok
+    return outcome
+
+
+#: How far back the tell-once check looks for the run's own send. A cron run
+#: is capped at 1800 s (`max_duration_seconds` ceiling); two hours covers it.
+ALREADY_TOLD_WINDOW_SEC = 7200
+
+
+def _event_log_for_read() -> Any:
+    """The telemetry event log, or None when it cannot be opened (fail-open)."""
+    try:
+        from core.event_log import get_event_log, event_log_enabled
+        if not event_log_enabled():
+            return None
+        return get_event_log()
+    except Exception:
+        return None
+
+
+def run_already_told_owner(event_log: Any, user_id: Optional[str],
+                           session_id: Optional[str], *,
+                           now: Optional[float] = None) -> bool:
+    """True when THIS run already delivered a message to its owner.
+
+    The evidence is a ``user_delivery`` row with the run's own ``session_id``
+    and ``outcome == sent`` from a non-cron source (the agent's ``message()`` /
+    ``send_message``); the cron echo itself carries no session id and source
+    ``cron``, so it never counts. A held/deduped/capped row is NOT a told owner.
+    An absent or unreadable log answers False — the echo then goes out exactly
+    as before this rule existed, because a store that cannot be read must never
+    silence a delivery.
+    """
+    if event_log is None or not session_id or not user_id:
+        return False
+    import time as _time
+    since = (now if now is not None else _time.time()) - ALREADY_TOLD_WINDOW_SEC
+    try:
+        rows = event_log.query(kind="user_delivery", user_id=str(user_id),
+                               since_ts=since, limit=500)
+    except Exception:
+        logger.warning("cron delivery: tell-once read failed — delivering (fail-open)",
+                       exc_info=True)
+        return False
+    for row in rows or []:
+        try:
+            if str(row.get("session_id") or "") != str(session_id):
+                continue
+            if str(row.get("source") or "") == "cron":
+                continue
+            if str((row.get("attrs") or {}).get("outcome") or "") == "sent":
+                return True
+        except Exception:
+            continue
+    return False
 
 
 def _mark_surfaced(session_id: str, user_id: Optional[str] = None) -> None:
@@ -195,11 +315,21 @@ async def _deliver_email(task_agent: Any, job: Any, final: str, deliver_target: 
 
 async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
                                   surface_id: str,
-                                  deliver_target: Optional[str]) -> bool:
-    """030 D8: deliver to any subscribed chat surface via the router shim. The
-    recipient is the job OWNER's address on that surface (owner-address
+                                  deliver_target: Optional[str]) -> str:
+    """030 D8: deliver to any subscribed chat surface — through the ONE rail.
+
+    The recipient is the job OWNER's address on that surface (owner-address
     contract); an explicit deliver_target is honored only when the operator
-    opted in (checked by the caller)."""
+    opted in (checked by the caller).
+
+    ⚠️ D44 (2026-09-21 interface audit): this used to call the router shim
+    DIRECTLY, so a slack/discord/signal/whatsapp/x cron report skipped
+    `deliver_user_message` entirely — no content dedup, no owner cap, and no
+    durable owner_notice when the send failed. A report to one of those five
+    surfaces was the only owner-bound message in the system that could vanish
+    with nothing recorded. The telegram leg below has ridden the rail since
+    §3.2; these five now do too, via `recipient_surface`.
+    """
     config, container = _config_and_container(task_agent)
     from core.surfaces.owner_address import owner_address
     addr = deliver_target or owner_address(
@@ -207,15 +337,16 @@ async def _deliver_router_surface(task_agent: Any, job: Any, final: str,
     if not addr:
         logger.info("cron delivery: no %s owner address for job %s",
                     surface_id, getattr(job, "id", "?"))
-        return False
-    router = container.get_service("message_router") if container else None
-    if router is None:
-        logger.info("cron delivery: no message_router for %s", surface_id)
-        return False
-    res = router.send_message(str(addr), final, surface_id=surface_id)
-    if hasattr(res, "__await__"):
-        res = await res
-    return bool(res)
+        return "failed"
+    from core.surfaces.user_delivery import deliver_user_message
+    outcome = await deliver_user_message(
+        container, str(getattr(job, "user_id", "") or ""), final,
+        source="cron", recipient_override=str(addr),
+        recipient_surface=surface_id)
+    if outcome != "sent":
+        logger.info("cron delivery: rail outcome=%s for job %s on %s",
+                    outcome, getattr(job, "id", "?"), surface_id)
+    return classify_rail_outcome(outcome)
 
 
 def _build_twitter_tool(config: Any, container: Any) -> Any:
@@ -266,7 +397,7 @@ async def _deliver_twitter(task_agent: Any, job: Any, final: str) -> bool:
     return True
 
 
-async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> bool:
+async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> str:
     """044 T21: deliver a cron report INTO an allowlisted room.
 
     Two rules a public room adds over an owner DM, both the SAME ones
@@ -286,20 +417,30 @@ async def _deliver_room(container: Any, job: Any, final: str, chat_id: str) -> b
         if not ok_room:
             logger.warning("cron delivery: room %s suppressed for job %s — %s",
                            chat_id, job_id, why)
-            return False
+            return "deferred"
+    # ⚠️ D44 deliberately STOPS at the room boundary. The five router surfaces
+    # above now ride `deliver_user_message` because their recipient IS the
+    # owner; a ROOM is not, and 044 T21 pinned that (the rail would dedup a
+    # public report against the owner's private DM of the same body and bound
+    # it by a budget that protects a different person). The room's own hourly
+    # cap above is its bound. What the rail WOULD have added here — a loud,
+    # recorded failure — is added inline instead.
     router = container.get_service("message_router") if container is not None else None
     if router is None:
-        logger.info("cron delivery: no message_router for room %s (job %s)",
-                    chat_id, job_id)
-        return False
+        logger.error("cron delivery: no message_router for room %s (job %s) — the "
+                     "report was NOT delivered", chat_id, job_id)
+        return "failed"
     ok = bool(await router.send_message(chat_id, scrub_secret_shapes(final or ""),
                                         "telegram"))
     if ok and caps is not None:
         caps.record_reply("telegram", chat_id)
-    return ok
+    if not ok:
+        logger.error("cron delivery: room %s refused the report for job %s — NOT "
+                     "delivered", chat_id, job_id)
+    return "sent" if ok else "failed"
 
 
-async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> bool:
+async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_target: Optional[str]) -> str:
     # Recipient + sink resolution both live on the user-delivery rail (T6): the rail
     # does its own sink lookup and records a durable owner_notice fallback when no
     # live sink exists — strictly better than the old silent early-False. We resolve
@@ -308,7 +449,7 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
     chat_id = deliver_target or _owner_telegram(task_agent, job)
     if not chat_id:
         logger.info("cron delivery: no telegram recipient for job %s", getattr(job, "id", "?"))
-        return False
+        return "failed"
 
     # 044 T21: a ROOM is not the owner's DM. The user-delivery rail below dedups
     # and caps against the OWNER's private notice budget — the wrong bound for a
@@ -327,14 +468,14 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
     _action, _extra = await resolve_proactive_send(container, "telegram", chat_id, final)
     if _action == "suppress":
         logger.info("cron delivery: suppressed (send policy) for job %s", getattr(job, "id", "?"))
-        return False
+        return "suppressed"
     if _action == "template":
         # TODO(4.x): send approved template instead of suppress
         logger.info(
             "cron delivery: send window closed; template required (job %s) — suppressing free-text",
             getattr(job, "id", "?"),
         )
-        return False
+        return "suppressed"
 
     # §3.2: the actual send rides the ONE user-delivery rail — content-hash
     # dedup + per-tenant caps (proposal 006's duplicate-spam class) and the
@@ -347,7 +488,9 @@ async def _deliver_telegram(task_agent: Any, job: Any, final: str, deliver_targe
     if outcome != "sent":
         logger.info("cron delivery: rail outcome=%s for job %s",
                     outcome, getattr(job, "id", "?"))
-    return outcome == "sent"
+    # D45: a held/deduped/capped/paused body is RECORDED, not lost. Calling it
+    # `failed` made a working rail read as a broken one in the cron journal.
+    return classify_rail_outcome(outcome)
 
 
 def _owner_email(task_agent: Any, job: Any) -> Optional[str]:

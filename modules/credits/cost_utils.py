@@ -5,7 +5,7 @@ SINGLE SOURCE OF TRUTH for cost estimation from token counts.
 All modules should import from here, not duplicate logic.
 
 This module consolidates:
-- webview/stats_service.py::_calculate_cost_from_registry (REMOVED)
+- webview/stats_service.py::_calculate_cost_from_registry (display fallback only)
 - agents/task/telemetry/service.py::_calculate_cost_from_registry (REMOVED)
 (``modules/llm/token_counter.py::estimate_cost`` does NOT delegate here — it calls
 ``model_pricing.calculate_cost`` directly with both cache token classes, because the

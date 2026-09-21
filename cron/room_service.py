@@ -50,12 +50,22 @@ def _service_jobs(cron, owner_uid: str, surface: str, chat_id: str) -> List[Any]
 
 
 def service(container: Any, owner_uid: str, surface: str, chat_id: str, *,
-            every: str = "30m", max_replies: int = 3) -> str:
+            every: str = "30m", max_replies: int = 3,
+            chat_type: str = "", thread_id: str = "") -> str:
     """Start (or, with ``every`` in ``off``/``stop``/``none``, stop) this room's
     service job. ONE verified sentence back.
 
     Idempotent per room: a second call names the job that already exists rather
     than leaving two of them answering the same chat.
+
+    ⚠️ D23: ``chat_type`` and ``thread_id`` are the REAL values of the room the
+    caller resolved, and they are persisted into the payload. This used to
+    hardcode ``"supergroup"`` and drop the thread entirely, so a service run in
+    a ``group`` or a ``channel`` bound a session key for a chat type the room
+    does not have, and a run inside a forum TOPIC answered into the group's
+    root thread instead of the topic it was servicing. An omitted
+    ``chat_type`` still falls back to ``supergroup`` — the historical value —
+    rather than guessing something new for a caller that cannot tell us.
     """
     from core.surfaces import group_admin
 
@@ -99,8 +109,11 @@ def service(container: Any, owner_uid: str, surface: str, chat_id: str, *,
         job = existing[0]
         return (f"Already servicing {label} every {job.schedule_spec} "
                 f"({job.id[:8]}). `/groups service here off` to stop.")
-    payload = {"group": {"surface": surface, "chat_id": str(chat_id),
-                         "chat_type": "supergroup"},
+    group = {"surface": surface, "chat_id": str(chat_id),
+             "chat_type": str(chat_type or "supergroup")}
+    if thread_id:
+        group["thread_id"] = str(thread_id)
+    payload = {"group": group,
                "max_replies": int(max_replies), "max_steps": 8}
     try:
         # Inside the try (Minor 9): a hand-edited overlay that cannot be parsed

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 from core.event_kinds import CRON_CANCELLED, CRON_SCHEDULED
-from cron.jobs import CronJob, CronJobStore
+from cron.jobs import CronJob, CronJobStore, default_max_duration_sec
 from cron.schedule import ScheduleError, parse_schedule
 
 logger = logging.getLogger("cron.service")
@@ -24,6 +24,8 @@ logger = logging.getLogger("cron.service")
 #: by that run is still pending, the scheduler records the attempt as deferred
 #: rather than failed (see ``cron/approval_defer.py``). A timeout with no such ask
 #: still fails.
+#: 057 WS-C (B12): kept as the documented fallback constant; the live default is
+#: ``cron.jobs.default_max_duration_sec()`` (env CRON_DEFAULT_MAX_DURATION_SEC).
 _DEFAULT_MAX_DURATION_S = 600
 
 
@@ -36,7 +38,7 @@ class CronService:
 
     def schedule(self, *, task: str, schedule_spec: str, user_id: str,
                  payload: Optional[Dict[str, Any]] = None,
-                 max_duration_seconds: int = _DEFAULT_MAX_DURATION_S,
+                 max_duration_seconds: Optional[int] = None,
                  job_id: Optional[str] = None, via: str = "") -> CronJob:
         """Validate the spec, compute the first run, and persist the job.
 
@@ -61,7 +63,9 @@ class CronService:
         job = CronJob(
             id=job_id or self._id(), task=task, schedule_spec=schedule_spec,
             user_id=user_id, next_run_at=next_run, one_shot=schedule.one_shot,
-            max_duration_seconds=max_duration_seconds,
+            max_duration_seconds=(int(max_duration_seconds)
+                                  if max_duration_seconds is not None
+                                  else default_max_duration_sec()),
             payload=payload or {}, created_at=now,
         )
         stored = self.store.add(job)

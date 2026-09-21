@@ -81,14 +81,22 @@ _MAINTYPE_KINDS = {"image": "image", "video": "video", "audio": "audio"}
 
 
 def _attachment_media(attachments: list) -> list:
-    """Normalized attachment dicts -> ``Media`` (bytes already in hand)."""
+    """Normalized attachment dicts -> ``Media``.
+
+    ⚠️ An entry with ``data=None`` is KEPT (D64): the sender attached
+    something we could not read (undecodable MIME part, or a provider that
+    lists attachments without bytes). The manifest then NAMES it and says it
+    could not be read. Dropping it made the agent answer as though the
+    attachment had never existed, which is the failure the whole media rail was
+    built to end.
+    """
     out: list = []
     for att in attachments:
-        if not isinstance(att, dict) or not att.get("data"):
+        if not isinstance(att, dict):
             continue
         mime = (att.get("mime") or "").lower()
         kind = _MAINTYPE_KINDS.get(mime.split("/", 1)[0], "document")
-        out.append(Media(kind=kind, mime=mime or None, data=att["data"],
+        out.append(Media(kind=kind, mime=mime or None, data=att.get("data") or None,
                          filename=att.get("filename")))
     return out
 
@@ -103,9 +111,15 @@ def _append_attachment_manifest(text: str, media: list) -> str:
     """
     names = []
     for m in media:
-        size_kb = len(m.data or b"") / 1024
+        label = f"{m.filename or m.kind} ({m.mime or m.kind}"
+        if not m.data:
+            # D64: named, with its reason. Never silently absent.
+            names.append(f"- {label}) — could not be read; its content is NOT "
+                         f"available, say so rather than guessing")
+            continue
+        size_kb = len(m.data) / 1024
         size = f"{size_kb:.1f}KB" if size_kb < 1024 else f"{size_kb / 1024:.1f}MB"
-        names.append(f"- {m.filename or m.kind} ({m.mime or m.kind}, {size})")
+        names.append(f"- {label}, {size})")
     listing = "\n".join(names)
     return (f"{text}\n\n[This email carried {len(media)} attachment(s):\n{listing}]"
             if text.strip() else
@@ -182,16 +196,29 @@ async def process_email(
     user_directory: Any,
     is_chitchat=None,
     now: Optional[float] = None,
+    record_dedup: bool = True,
 ) -> Optional[InboundResult]:
-    """Dedup (by Message-ID) -> identify -> route. None on redelivery / unusable msg."""
+    """Dedup (by Message-ID) -> identify -> route. None on redelivery / unusable msg.
+
+    ``record_dedup=False`` (D4, 2026-09-21 interface audit) makes the dedup
+    probe READ-ONLY: the key is recorded by the caller AFTER the message has
+    been dispatched. Recording it here marked a message handled before routing
+    could fail, so a crash between the two lost the mail permanently. The poll
+    loop passes False; every other caller keeps the legacy record-on-probe
+    behaviour.
+    """
     key = dedup_key(msg)
     if dedup is not None:
         try:
-            if dedup.seen(key, now=now):
+            probe = (dedup.seen if record_dedup
+                     else getattr(dedup, "was_seen", dedup.seen))
+            already = (probe(key, now=now) if record_dedup else probe(key))
+            if already:
                 logger.debug("email inbound: dropping redelivered message %s", key)
                 return None
         except Exception as e:  # fail-open: a dedup fault must not drop a real message
-            logger.debug("email dedup check failed (processing anyway): %s", e)
+            logger.warning("email dedup check failed (processing anyway): %s", e,
+                           exc_info=True)
 
     inbound = build_inbound_message(msg, user_directory)
     if inbound is None:

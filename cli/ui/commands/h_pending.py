@@ -12,7 +12,6 @@ decide over the SAME set — they did not, and two of the three read only the
 first of three sources.
 """
 from cli.ui.commands.registry import CommandContext
-from core.runtime_paths import data_dir_or_home
 
 
 def _h_pending(ctx: CommandContext) -> None:
@@ -42,8 +41,10 @@ def _h_pending(ctx: CommandContext) -> None:
         ctx.emit("(owner-only command — the review queue gates self-evolution)")
         return
 
-    cfg = getattr(ctx.container, "config", None) if ctx.container else None
-    home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+    # C2: the ONE owner/admin home seam (031 deployed-home rule) — the same
+    # home `polyrob owner pending` reads. Deciding is a WRITE.
+    from cli.ui.commands.h_owner import _admin_data_dir
+    home_dir = _admin_data_dir(write=None)
     instance_id = _ci.resolve_instance_id()
 
     args = list(ctx.args or [])
@@ -58,7 +59,8 @@ def _h_pending(ctx: CommandContext) -> None:
             approve=args[0].lower() != "reject", user_id=uid, home_dir=home_dir,
             instance_id=instance_id)
         if not msgs:
-            ctx.emit("no pending proposals", title="pending")
+            ctx.emit(candy.empty("pending items", "nothing is waiting on you",
+                                 yet=False), title="pending")
             return
         verb = "rejected" if args[0].lower() == "reject" else "promoted"
         ctx.emit("\n".join(msgs + [f"{ok_n} {verb}, {fail_n} failed"]), title="pending")

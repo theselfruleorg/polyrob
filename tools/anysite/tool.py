@@ -59,6 +59,32 @@ class AnysiteDescribeParams(BaseModel):
                      "'github'. Returns the matching paths only."))
 
 
+# 2026-09-19 (agent self-review #5): `/search/users` answers `[]` to a multi-word
+# query and 20 rows to the same theme in two words. The agent read the empty
+# answer as "no supply" twice and recorded a live theme as exhausted. An empty
+# search on a long query is a query-shape failure until a short phrasing has
+# also come back empty — say so on the result, where the decision is made.
+_SEARCH_HINT_MAX_WORDS = 2
+
+
+def _empty_search_hint(endpoint: str, params) -> str:
+    if "/search/" not in (endpoint or ""):
+        return ""
+    q = ""
+    try:
+        q = str((params or {}).get("query") or (params or {}).get("q") or "")
+    except Exception:  # noqa: BLE001 — a hint never fails the call
+        return ""
+    words = [w for w in q.replace(",", " ").split() if w]
+    if len(words) <= _SEARCH_HINT_MAX_WORDS:
+        return ""
+    return (f"\n(empty answer to a {len(words)}-word query — this search endpoint "
+            f"silently rejects long phrasings; retry with {_SEARCH_HINT_MAX_WORDS} words "
+            f"or fewer (e.g. '{' '.join(words[:2])}') before treating the theme as "
+            f"exhausted. An empty short query is the real 'no supply' signal; a long "
+            f"one is not.)")
+
+
 def _looks_empty(stdout) -> bool:
     """An answer with no rows. The 2026-09-18 user-search degradation returned
     `[]`/`{"data": []}` for hours, including control queries — a fact worth a
@@ -147,9 +173,11 @@ class AnysiteTool(BaseTool):
             if result.exit_code != 0:
                 _rail_probe(params.endpoint, "error", result.exit_code)
                 return self._err(f"anysite api failed (exit {result.exit_code}): {result.stderr or result.stdout}")
-            _rail_probe(params.endpoint, "empty" if _looks_empty(result.stdout) else "ok",
-                        len(result.stdout or ""))
-            return self._ok(result.stdout or "(empty response)")
+            empty = _looks_empty(result.stdout)
+            _rail_probe(params.endpoint, "empty" if empty else "ok", len(result.stdout or ""))
+            out = result.stdout or "(empty response)"
+            hint = _empty_search_hint(params.endpoint, params.params) if empty else ""
+            return self._ok(out + hint)
         except ValueError as e:
             return self._err(f"invalid argument: {e}")
         except Exception as e:

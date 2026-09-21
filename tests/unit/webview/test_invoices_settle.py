@@ -134,5 +134,10 @@ def test_invoices_without_db_is_honest_not_empty(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)  # no data-home bot.db candidates here
     client, _ = _client(monkeypatch, tmp_path, user_id="u1")
     body = client.get("/api/webgate/invoices").json()
-    assert body["count"] == 0
+    # 043 A35: an unreadable ledger is NULL, not zero — and the outstanding
+    # total it could not compute is null too, never $0.00.
+    assert body["count"] is None
+    assert body["invoices"] is None
+    assert body["outstanding_usd_total"] is None
+    assert body["outstanding_count"] is None
     assert body.get("error")

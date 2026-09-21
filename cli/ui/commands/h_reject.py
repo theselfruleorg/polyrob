@@ -8,13 +8,18 @@ manager — so ``/reject`` deliberately does NOT alias it.)
 
 Thin over the SAME primitives every seat uses, mirroring
 ``surfaces.telegram.harness``'s ``/reject`` branch so a rejection means the same
-thing everywhere:
+thing everywhere. ONE queue, ONE decider (C4, 2026-09-21):
 
-- ``all``                     → ``self_evolution.decide_all(approve=False)``
-- a ``tap-<id>`` approval ask → ``approval_queue.decide_tool_approval(approved=False)``
-- a ``<surface>:<address>``   → the correspondent registry's real reject
-- otherwise                   → ``self_evolution.reject(kind, id)`` by matched id
-- no arg + exactly one pending → that one; more than one → list them
+- listing and matching read ``approval_queue.all_pending`` — the UNION of
+  self-evolution proposals, queued tool/spend approvals and pending
+  correspondents. This handler used to read only the self-evolution third while
+  ``/pending`` beside it showed all three, so a queued spend approval could not
+  be rejected here at all and ``/reject`` with one payment waiting answered
+  "Nothing pending";
+- ``all``          → ``approval_queue.decide_all_pending(approve=False)``;
+- ``<id>``         → ``approval_queue.decide_pending(kind, id, approve=False)``
+  with the kind resolved FROM the union, never guessed;
+- no arg + exactly one pending → that one; more than one → list them.
 
 ⚠️ REACH, never policy: rejecting is the owner's own decision on his own queue —
 this verb grants no authority the pending queue did not already give him.
@@ -33,7 +38,9 @@ def _board(data_dir: str):
 def h_reject(ctx) -> None:
     """Reject one pending item (proposal / approval ask / correspondent)."""
     import core.instance as _ci
-    from core import self_evolution
+    from tools.controller.approval_queue import (
+        all_pending, decide_all_pending, decide_pending,
+    )
 
     uid = _tenant(ctx)
     # The REPL is a trusted local operator surface ({cli,local,repl}); the local
@@ -43,23 +50,32 @@ def h_reject(ctx) -> None:
                  title="reject")
         return
 
-    data_dir = _admin_data_dir(ctx)
+    data_dir = _admin_data_dir(write=None)
     instance_id = _ci.resolve_instance_id()
     args = list(ctx.args or [])
+
+    def _union():
+        return all_pending(user_id=uid, home_dir=data_dir, instance_id=instance_id)
 
     # No arg: decide the queue only when it is unambiguous, else list it — never
     # guess which item the owner meant.
     if not args:
-        items = self_evolution.list_pending(uid, home_dir=data_dir, instance_id=instance_id)
+        pending_set = _union()
+        items = pending_set.items
         if not items:
-            ctx.emit("Nothing pending — there is nothing waiting on you.", title="reject")
+            # C47: the ONE empty grammar (candy.empty), the same sentence
+            # /approve renders over the same union.
+            from cli.ui import candy
+            ctx.emit(pending_set.degraded_line()
+                     or candy.empty("items waiting on you", yet=False),
+                     title="reject")
             return
         if len(items) > 1:
             lines = [f"{len(items)} pending — say which one:"]
             for it in items:
-                idv = str(it["id"])
-                lines.append(f"  /reject {it['kind']}:{idv}" if ":" not in idv
-                             else f"  /reject {idv}")
+                lines.append(f"  /reject {it['id']}   [{it['kind']}]")
+            if pending_set.unavailable:
+                lines.append(pending_set.degraded_line())
             lines.append("All of them: /reject all")
             ctx.emit("\n".join(lines), title="reject")
             return
@@ -67,42 +83,27 @@ def h_reject(ctx) -> None:
     else:
         target = args[0]
 
-    # `/reject all` — clear the whole self-evolution queue.
+    # `/reject all` — the WHOLE union, not the self-evolution third of it.
     if target.lower() == "all":
-        ok_n, fail_n, msgs = self_evolution.decide_all(
-            False, user_id=uid, home_dir=data_dir, instance_id=instance_id)
+        ok_n, fail_n, msgs = decide_all_pending(
+            approve=False, user_id=uid, home_dir=data_dir, instance_id=instance_id)
         if not msgs:
-            ctx.emit("No pending proposals.", title="reject")
+            from cli.ui import candy
+            ctx.emit(candy.empty("items waiting on you", yet=False), title="reject")
             return
         ctx.emit("\n".join(msgs + [f"{ok_n} rejected, {fail_n} failed"]), title="reject")
         return
 
-    # A tool-approval ask is namespaced `tap-<id>` so a bare id never collides
-    # with a self-evolution proposal id.
-    from tools.controller.approval_queue import decide_tool_approval, strip_tap_prefix
-    if strip_tap_prefix(target) is not None:
-        ok, msg = decide_tool_approval(_board(data_dir), target, user_id=uid,
-                                       approved=False)
-        ctx.emit(msg if ok else f"Failed: {msg}", title="reject")
-        return
-
-    # A correspondent item's id is `<surface>:<address>`. Reject = a real
-    # tombstone that blocks a silent re-seed (matches the console + Telegram).
-    if ":" in target:
-        from surfaces.telegram.harness import _correspondent_decision
-        reply = _correspondent_decision(data_dir, target, uid, approve=False)
-        if reply is not None:
-            ctx.emit(reply, title="reject")
-            return
-
-    # Otherwise it is a self-evolution proposal id — reject (archive, recoverable).
-    items = self_evolution.list_pending(uid, home_dir=data_dir, instance_id=instance_id)
-    match = next((it for it in items if str(it["id"]) == target), None)
+    pending_set = _union()
+    match = next((it for it in pending_set.items if str(it["id"]) == target), None)
     if match is None:
-        ctx.emit(f"No pending proposal '{target}' — see /pending.", title="reject")
+        degraded = pending_set.degraded_line()
+        tail = f"\n{degraded}" if degraded else ""
+        ctx.emit(f"No pending item '{target}' — see /pending.{tail}", title="reject")
         return
-    ok, msg = self_evolution.reject(match["kind"], match["id"], user_id=uid,
-                                    home_dir=data_dir, instance_id=instance_id)
+    ok, msg = decide_pending(match["kind"], match["id"], approve=False,
+                             user_id=uid, home_dir=data_dir,
+                             instance_id=instance_id)
     ctx.emit(msg if ok else f"Failed: {msg}", title="reject")
 
 
@@ -116,8 +117,7 @@ HELP_REJECT = (
     "    /reject               with one item waiting, reject it; else list them\n"
     "\n"
     "  Rejecting a correspondent tombstones it so it cannot silently re-seed.\n"
-    "  (In this REPL /approve is the gate manager, so /reject does not pair\n"
-    "  with it — use /pending approve or /inbox to accept.)",
+    "  The counterpart is /approve <id>; /gates is where approval GATES live.",
     "`/reject` on Telegram, and the Reject action in the console's Inbox.",
 )
 

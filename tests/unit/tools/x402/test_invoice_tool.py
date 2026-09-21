@@ -160,6 +160,27 @@ def test_invoices_action_empty(monkeypatch):
     assert "No payment requests" in res.extracted_content
 
 
+def test_invoices_action_refuses_an_unknown_status_and_accepts_refund_due(monkeypatch):
+    """D11 (2026-09-21): the filter vocabulary is the ONE `INVOICE_STATUSES`
+    (refund_due and settling included); a typo is refused with the list,
+    never silently matched to nothing."""
+    seen = {}
+
+    async def fake_list(**kw):
+        seen.update(kw)
+        return []
+
+    import modules.x402.invoicing as inv
+    monkeypatch.setattr(inv, "list_payment_requests", fake_list)
+    bad = asyncio.run(X402InvoiceTool().x402_invoices(
+        InvoiceListParams(status="paid"), execution_context=_Ctx()))
+    assert bad.error and "unknown status" in bad.error and "refund_due" in bad.error
+    assert not seen  # refused before the read
+    ok = asyncio.run(X402InvoiceTool().x402_invoices(
+        InvoiceListParams(status="refund_due"), execution_context=_Ctx()))
+    assert seen.get("status") == "refund_due" and "No payment requests" in ok.extracted_content
+
+
 class _CtxWithWorkspace:
     """A test double carrying `workspace_dir` — the invoice-card render seam
     (Task 6) reads it via `getattr(execution_context, "workspace_dir", None)`."""

@@ -15,26 +15,31 @@ from modules.database.user_profiles import UserProfiles
 from modules.database.x402_tables import X402Tables
 
 
-def test_render_finance_standalone_empty_db_says_no_data(tmp_path):
-    """H14b: an empty bot.db (money tables ABSENT) must render an honest 'no data
-    yet' state — NOT a fabricated $0.00 balance sheet, and never the developer
-    'unavailable' container error."""
+def test_render_finance_standalone_empty_db_says_unknown_not_zero(tmp_path):
+    """C48 (2026-09-21): an empty bot.db (money tables ABSENT) renders ONE fact —
+    the stores could not be read, so every figure is UNKNOWN. It used to print a
+    disjunction ("no data yet … or metering is off / not yet initialized"), which
+    is three guesses printed as one answer."""
     db_path = tmp_path / "bot.db"
     sqlite3.connect(str(db_path)).close()  # valid but empty — both money legs absent
     out = render_finance(user_id="rob", days=7, db_path=str(db_path))
-    assert "unavailable" not in out.lower()
     assert "finance" in out
     assert "tenant rob" in out
-    assert "no data yet" in out.lower()
+    assert "unavailable" in out.lower()
+    assert "unknown, not zero" in out.lower()
+    assert " or " not in out.lower()   # no disjunction
     assert "$0.00" not in out          # no fabricated zero balance sheet
 
 
-def test_render_finance_standalone_no_db_says_no_data():
-    """H14a: standalone with no bot.db resolved renders honest 'no data yet',
-    not the container 'Configuration required for first initialization' error."""
+def test_render_finance_standalone_no_db_names_a_verb_not_a_flag(tmp_path):
+    """C48: standalone with no bot.db resolved says the store does not exist and
+    names the VERB that creates it — never an env flag (`X402_INVOICE_ENABLED`
+    was in this line) and never a disjunction."""
     out = render_finance(user_id="rob", days=7, db_path=None, standalone=True)
-    assert "unavailable" not in out.lower()
-    assert "no data yet" in out.lower()
+    assert "unavailable" in out.lower()
+    assert "unknown, not zero" in out.lower()
+    assert "polyrob run" in out
+    assert "X402_INVOICE_ENABLED" not in out
     assert "tenant rob" in out
 
 

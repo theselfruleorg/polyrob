@@ -84,6 +84,25 @@ def _ledger(container: Any):
     return GroupLedger(_surfaces_db(container))
 
 
+def _ledger_for_read(container: Any):
+    """The room log for a READ, or ``None`` when there is nothing to read.
+
+    ⚠️ D58: a READ never CREATES a store. ``GroupLedger.__init__`` runs its
+    DDL, so `/groups tail` on a box that has never logged a room line minted an
+    empty ``surfaces.db`` and then reported "No ledger rows" — indistinguishable
+    from a room that was genuinely silent, and a file the owner did not ask for.
+    A registered service is already open and is returned as-is.
+    """
+    svc = _service(container, "group_ledger")
+    if svc is not None:
+        return svc
+    path = _surfaces_db(container)
+    if not os.path.isfile(path):
+        return None
+    from core.surfaces.group_ledger import GroupLedger
+    return GroupLedger(path)
+
+
 def _roles(container: Any):
     svc = _service(container, "group_roles")
     if svc is not None:
@@ -125,18 +144,26 @@ def _norm_chat_id(chat_id: Any) -> str:
 
 
 def room_role(container: Any, surface: str, chat_id: str, raw_user_id: str) -> str:
-    """The sender's per-chat role for ``(surface, chat_id)`` — read-only,
-    fail-open to ``member`` (mirrors ``GroupRoles.role``'s own contract).
+    """The sender's per-chat role for ``(surface, chat_id)`` — read-only.
+
     The seam a seat needs when it has NOT gone through the routing boundary
     for THIS room (a DM using the explicit ``<surface> <chat_id>`` grammar:
     ``identity.chat_role`` is only ever stamped for a message that arrived
-    THROUGH that room — 044 T18 fix round 1, Critical 1b)."""
+    THROUGH that room — 044 T18 fix round 1, Critical 1b).
+
+    ⚠️ D3: fail-CLOSED to ``blocked``, mirroring ``GroupRoles.role``'s own
+    contract, which this delegates to. ``blocked`` is the room's only
+    per-member deny and it lives in the very store this read consults, so
+    answering ``member`` on a fault un-blocked everyone an owner had blocked.
+    """
     try:
         return _roles(container).role(surface, _norm_chat_id(chat_id), str(raw_user_id),
                                       is_owner=False)
     except Exception as e:
-        logger.debug("group_admin: room_role lookup failed (reading as member): %s", e)
-        return "member"
+        logger.warning("group_admin: room_role lookup failed for %s:%s (%s) — "
+                       "reading as blocked; a deny must survive a read fault",
+                       surface, chat_id, e)
+        return "blocked"
 
 
 def allow_here(container: Any, surface: str, chat_id: str, title: str, *,
@@ -185,11 +212,15 @@ def list_rooms(container: Any, owner_uid: str) -> str:
     lines = []
     if active:
         lines.append(f"{len(active)} room(s):")
+        from core.surfaces.room_label import render_room_line
         for r in active:
             surface, chat_id = r["surface"], r["chat_id"]
             pol = chat_policy.load(home_dir, owner_uid, surface, chat_id)
-            name = pol.name or r.get("note") or chat_id
-            lines.append(f"• {surface}:{chat_id} \"{name}\" — mode={pol.mode}")
+            # 057 WS-D: the NAME is `chat.name` (or surface:chat_id); the owner's
+            # allowlist note renders as a dated LABEL after it, never as the
+            # room's title. `polyrob owner groups allow` calls that field "Label"
+            # — three renderers promoted it to a name the room never had.
+            lines.append("• " + render_room_line(r, pol, f"mode={pol.mode}"))
     elif not left:
         return "No group chats allowed (default-DENY)."
     for r in left:
@@ -297,8 +328,17 @@ def set_role(container: Any, surface: str, chat_id: str, user_ref: str, role: st
 def tail(container: Any, surface: str, chat_id: str, n: int) -> str:
     """The last ``n`` ledger lines for this room, attributed."""
     chat_id = _norm_chat_id(chat_id)
-    rows = _ledger(container).tail(surface, chat_id, limit=max(1, int(n)))
     label = f"{surface}:{chat_id}"
+    ledger = _ledger_for_read(container)
+    if ledger is None:
+        return (f"No room log on this box yet — nothing has been recorded for "
+                f"{label} or any other room.")
+    try:
+        rows = ledger.tail(surface, chat_id, limit=max(1, int(n)))
+    except Exception as e:
+        logger.warning("group_admin: ledger tail failed for %s: %s", label, e)
+        return (f"Room log for {label}: unavailable ({type(e).__name__}: "
+                f"{str(e)[:100]}) — this is UNKNOWN, not an empty room.")
     if not rows:
         return f"No ledger rows for {label}."
     lines = [f"Last {len(rows)} line(s) in {label}:"]

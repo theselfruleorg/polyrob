@@ -64,6 +64,29 @@ class OutboundDeliveryQueue:
         )
         return inserted == 1
 
+    #: Row states in which an already-present row means the message is still on
+    #: its way (or has arrived). A ``dead`` row means the opposite: the queue
+    #: gave up on it, so a caller must NOT read the ``INSERT OR IGNORE`` no-op
+    #: as acceptance (D5, 2026-09-21 interface audit).
+    LIVE_STATES = ("pending", "inflight", "delivered")
+
+    def row_state(self, idempotency_key: str) -> Optional[str]:
+        """The state of the row under *idempotency_key*, or None if there is none.
+
+        Exists so ``enqueue`` returning False can be interpreted honestly: the
+        key already existed (still queued, or already delivered) versus the row
+        was dead-lettered and nothing will retry it.
+        """
+        row = execute_retry(
+            self.db_path,
+            "SELECT state FROM outbound_queue WHERE idempotency_key = ?",
+            (idempotency_key,), fetch="one")
+        return None if row is None else str(row["state"])
+
+    def accepted(self, idempotency_key: str) -> bool:
+        """True when a row under this key exists AND is not dead-lettered."""
+        return self.row_state(idempotency_key) in self.LIVE_STATES
+
     def claim_due(self, now: float, limit: int = 20) -> List[dict]:
         # Two-step claim under WAL: select due ids, then CAS each to 'inflight'.
         rows = execute_retry(
@@ -111,6 +134,20 @@ class OutboundDeliveryQueue:
         for r in rows:
             out[r["state"]] = r["c"]
         return out
+
+    def dead_letters(self, limit: int = 5) -> List[dict]:
+        """The most recent dead-lettered rows — a message the queue GAVE UP on.
+
+        Read-only. Surfaced by the status snapshot's ``delivery`` section (D22):
+        until 2026-09-21 ``counts()`` had no caller at all, so a dead letter was
+        a message the owner never received and no seat could name.
+        """
+        rows = execute_retry(
+            self.db_path,
+            "SELECT id, surface_id, dest, kind, attempts, last_error, updated_at "
+            "FROM outbound_queue WHERE state='dead' ORDER BY updated_at DESC LIMIT ?",
+            (int(limit),), fetch="all") or []
+        return [dict(r) for r in rows]
 
     def reclaim_inflight(self, older_than: float) -> int:
         """Restart-recovery: return long-inflight rows to 'pending' (a worker died mid-send)."""

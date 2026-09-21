@@ -111,6 +111,19 @@ class XDMAction(BaseModel):
                       description="Direct-message text.")
 
 
+def _proof(rail: str, **facts) -> str:
+    """The per-rail verification line (057 WS-E), rendered from the ONE table.
+
+    Fail-open to "" — an unavailable table must never turn a SUCCESSFUL post
+    into an error, and a silent empty line loses nothing the post already said.
+    """
+    try:
+        from core.rails.verification import verification_line
+        return verification_line(rail, **facts)
+    except Exception:
+        return ""
+
+
 def _leaf_or_forged(execution_context) -> bool:
     """True for a delegated/leaf/forged turn — never let one drive X."""
     if execution_context is None:
@@ -233,8 +246,10 @@ class XBrowserTool(BaseTool):
                 include_in_memory=True)
         finally:
             await self._run_release(release)
-        return ActionResult(extracted_content=f"posted to X: {url}",
-                            include_in_memory=True)
+        # 057 WS-E: the proof rule rides with the receipt (core/rails/verification.py).
+        return ActionResult(
+            extracted_content=f"posted to X: {url}\n{_proof('x_post', url=url)}",
+            include_in_memory=True)
 
     @BaseTool.action(
         "Reply to an existing X post (by status URL or id) from the agent's own "
@@ -274,7 +289,8 @@ class XBrowserTool(BaseTool):
         finally:
             await self._run_release(release)
         return ActionResult(
-            extracted_content=f"replied on X under status {params.status_id}: {url}",
+            extracted_content=(f"replied on X under status {params.status_id}: {url}"
+                               f"\n{_proof('x_reply', url=url)}"),
             include_in_memory=True)
 
     @BaseTool.action(

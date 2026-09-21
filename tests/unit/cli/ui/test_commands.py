@@ -223,7 +223,9 @@ async def test_exit_raises_replexit():
 
 
 @pytest.mark.asyncio
-async def test_status_plain():
+async def test_meter_plain():
+    """E16: the per-turn token meter is ``/meter`` (it was ``/status``, which on
+    every other seat names the agent-wide snapshot — one word, two objects)."""
     reg = default_registry()
     state = SessionState()
     state.model = "gemini-2.5-flash"
@@ -232,12 +234,21 @@ async def test_status_plain():
     state.tokens_out = 50
     state.step = 3
     ctx, buf = _plain_ctx(state=state, session_id="abcd1234efgh")
-    await reg.dispatch("/status", ctx)
+    await reg.dispatch("/meter", ctx)
     out = buf.getvalue()
     assert "gemini-2.5-flash" in out
     assert "100 in" in out
     step_line = next(line for line in out.splitlines() if "step" in line)
     assert "3" in step_line
+    # C45: the FULL session id — a 16-char prefix is a handle no verb takes.
+    assert "abcd1234efgh" in out
+
+
+@pytest.mark.asyncio
+async def test_status_is_the_snapshot_not_the_meter():
+    """E16: ``/status`` renders the SAME snapshot ``/doctor`` does."""
+    reg = default_registry()
+    assert reg.lookup("status").handler is reg.lookup("doctor").handler
 
 
 @pytest.mark.asyncio
@@ -1021,15 +1032,25 @@ def test_compact_still_works_after_compress_alias():
 
 
 def test_goals_not_initialized_uses_candy_grammar(monkeypatch, tmp_path):
-    # No goals.db at all -> the not-initialized empty state (GOALS_ENABLED=off hint).
-    # yet=False here (per spec) -> "no goals", not "no goals yet".
+    """E17: ONE grammar, and the remedy names a VERB, never a flag.
+
+    The old line was ``no goals — GOALS_ENABLED=off or none created``: a
+    disjunction (two different facts printed as one) whose only actionable half
+    was an env var the owner could not set from here.
+    """
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     from cli.ui.commands.handlers import _h_goals
     ctx, buf = _plain_ctx(user_id="u1")
     _h_goals(ctx)
     out = buf.getvalue()
-    assert "no goals" in out
-    assert "GOALS_ENABLED=off or none created" in out
+    assert "no goals yet" in out
+    # 2026-09-21 revalidation: the remedy used to name `/goal create`, which is
+    # not a subcommand `/goal` has (it STEERS: show|ready|pause|resume|retry|
+    # cancel), so the owner was sent to a usage line instead of a board.
+    assert "/goal create" not in out
+    assert "/trade" in out
+    assert "polyrob goals create" in out
+    assert "GOALS_ENABLED" not in out
     assert "--- goals ---" in out  # title on every emit (Wave B1)
 
 
@@ -1043,7 +1064,7 @@ def test_goals_empty_board_uses_candy_grammar(monkeypatch, tmp_path):
     _h_goals(ctx)
     out = buf.getvalue()
     assert "no goals yet" in out
-    assert "/autonomy shows loop state" in out
+    assert "/goal create" not in out and "/trade" in out
     assert "--- goals ---" in out
 
 

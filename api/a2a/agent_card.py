@@ -28,9 +28,31 @@ def _x402_price_usd() -> float:
 def _resolve_payment_address() -> str:
     """Single treasury source (W2.2): the same resolver invoices/challenges
     use (env wins, agent wallet fills an empty env — W1.1), with the legacy
-    `X402_PAYMENT_ADDRESS` env spelling kept as a last fallback."""
-    from modules.x402.x402_integration import resolve_treasury_address
-    return resolve_treasury_address() or os.environ.get("X402_PAYMENT_ADDRESS", "")
+    `X402_PAYMENT_ADDRESS` env spelling kept as a last fallback.
+
+    B41: routed through ``api.x402_advertisement.treasury_address``, which
+    caches the answer per process — this card is PUBLIC and unauthenticated,
+    and the underlying resolver derives a wallet signing key on every call."""
+    from api.x402_advertisement import treasury_address
+    return treasury_address()
+
+
+def _supported_assets() -> List[str]:
+    """Assets the per-request x402 rail can actually settle (B22)."""
+    from api.x402_advertisement import supported_assets
+    return supported_assets()
+
+
+def _supported_chains() -> List[str]:
+    """Chains the per-request x402 rail can actually settle on (B22)."""
+    from api.x402_advertisement import supported_chains
+    return supported_chains()
+
+
+def _credits_block() -> Dict[str, Any]:
+    """The pricing.credits block, honest about whether credits exist (B23)."""
+    from api.x402_advertisement import credits_block
+    return credits_block()
 
 
 class AgentSkill(BaseModel):
@@ -127,15 +149,14 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
     Returns:
         Complete AgentCard instance
     """
-    # Determine base URL
-    base_url = os.environ.get("A2A_BASE_URL")
-    if not base_url and request:
-        # Construct from request
-        scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-        host = request.headers.get("host", request.url.netloc)
-        base_url = f"{scheme}://{host}"
-
-    base_url = base_url or "http://localhost:9000"
+    # B42: the base URL is CONFIGURATION, never request-derived. `Host` and
+    # `X-Forwarded-Proto` are client-supplied, so the old construction let any
+    # anonymous caller fetch this card with `Host: evil.example` and receive a
+    # card that points the next agent's tasks — and its x402 payments — at
+    # `https://evil.example/a2a`. `A2A_BASE_URL` (else the loopback this
+    # process is bound to) is the one answer.
+    from api.base_url import base_url as resolve_base_url
+    base_url = resolve_base_url(request)
 
     # Define skills
     skills = [
@@ -264,20 +285,23 @@ def build_agent_card(request: Optional[Request] = None) -> AgentCard:
                     "EIP-3009 authorization). Settlement is handled automatically."
                 ),
                 "per_request_usd": _x402_price_usd(),
-                "supported_chains": ["base", "ethereum"],
-                "supported_assets": ["usdc", "usdt", "eth"],
+                # B22: derived from the asset registry, not a hand-kept list.
+                # The old ["usdc","usdt","eth"] / ["base","ethereum"] pair was
+                # false in both halves — the per-request rail settles USDC on
+                # Base through fastapi_x402 and nothing else, so a payer who
+                # believed the card and sent USDT or ETH paid an address that
+                # would never be matched to their request.
+                "supported_chains": _supported_chains(),
+                "supported_assets": _supported_assets(),
                 # W2.2 (2026-08-21): same resolver invoices use (env wins,
                 # wallet fills in) — the card and invoices can never disagree.
                 "payment_address": _resolve_payment_address(),
                 "facilitator": os.environ.get("X402_FACILITATOR_URL", "") or "Direct signature verification"
             }
         },
-        "credits": {
-            "enabled": True,
-            "credit_cost_usd": 0.01,
-            "session_credits": 1,
-            "description": "For registered users with pre-purchased credits"
-        }
+        # B23: observed, not declared — credits exist only when the account
+        # system AND the credit system are on (balance_manager registered).
+        "credits": _credits_block(),
     }
 
     # Instance branding: reuse the webview branding seam (POLYROB_BRAND_URL /

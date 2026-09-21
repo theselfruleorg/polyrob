@@ -94,6 +94,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("POLYROB_OWNER_USER_ID", "alice")
     monkeypatch.setenv("POLYROB_INSTANCE_ID", "rob")
     monkeypatch.delenv("POLYROB_LOCAL", raising=False)
+    # D38: `/prefs` reads `prefs_home_dir()` (the resolved DATA HOME), not the
+    # container's `config.data_dir` — the two differ on a deployed box, which is
+    # why the owner's own `/config set` appeared to work and changed nothing.
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
     return tmp_path
 
 
@@ -352,8 +356,12 @@ async def test_missed_lists_suppressed_notices(env, monkeypatch):
     log.record("owner_notice", user_id="other", source="user_delivery",
                attrs={"text": "[suppressed by daily proactive-message cap; source=x] not alice's"})
     out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
-    assert "Last 1 suppressed owner message(s)" in out
-    assert "Refresh trackrecord" in out
+    # D35: the copy names every reason a notice was held, not only the cap.
+    assert "Last 1 undelivered message(s)" in out
+    # D36: the notice is WRAPPED, never clipped — so the content is asserted
+    # against the de-wrapped text rather than a single rendered line.
+    flat = " ".join(out.split())
+    assert "Refresh trackrecord" in flat
     assert "not alice's" not in out          # tenant-scoped
     assert "delivery.daily_cap" in out      # the remedy
 
@@ -365,7 +373,7 @@ async def test_missed_empty_and_bad_arg(env, monkeypatch):
     from core.event_log import TelemetryEventLog
     TelemetryEventLog(path)
     out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
-    assert "No suppressed owner messages" in out
+    assert "No undelivered messages on record." in out
     out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed abc"))
     assert out.startswith("Usage: /missed")
 
@@ -400,3 +408,24 @@ async def test_status_leads_with_degraded_health(env, monkeypatch):
     assert lines[2].startswith("Health: DEGRADED")
     assert "credit sentinel TRIPPED for openrouter" in lines[3]
     assert "Grant defi_trade" in out and "/fulfill" in out
+
+
+@pytest.mark.asyncio
+async def test_missed_wraps_a_long_notice_instead_of_clipping_it(env, monkeypatch):
+    """D36: `/missed` exists so the owner can recover text he never received.
+
+    Clipping it at 240 characters suppressed, a second time, exactly the
+    content the verb exists to show. It now renders through the SHARED
+    `core.surfaces.missed.format_notice_lines`, which WRAPS.
+    """
+    import os
+    from core.event_log import TelemetryEventLog
+    path = os.path.join(str(env), "telemetry_events.db")
+    monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH", path)
+    body = "alpha bravo charlie delta echo foxtrot golf hotel india " * 12
+    TelemetryEventLog(path).record(
+        "owner_notice", user_id="alice", source="user_delivery",
+        attrs={"text": "[suppressed by daily proactive-message cap] " + body})
+    out = await act_on_inbound(_Agent(str(env)), _cmd("/missed", "/missed"))
+    assert "…" not in out                      # nothing was clipped
+    assert out.count("india") >= 12            # every repetition survived

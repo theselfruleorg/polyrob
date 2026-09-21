@@ -25,7 +25,7 @@ class _RaisingLLM:
     def __init__(self, exc):
         self.exc = exc
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         raise self.exc
 
 

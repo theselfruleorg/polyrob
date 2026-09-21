@@ -12,11 +12,22 @@ Binds to `127.0.0.1:9000` by default (`--host`/`--port`, or `UVICORN_HOST`/`UVIC
 at least one LLM provider key configured — see [configuration.md](configuration.md); `polyrob serve`
 exits with a clear message if none is found. `--workers` sets the uvicorn worker count (default 1).
 
+> **`--workers` above 1 needs `API_AUTONOMY_RUNTIME=false`.** Each worker
+> starts its OWN cron / goal / curator / settlement runtime on the same data
+> dir, and two settlement watchers can double-apply a payment — so `polyrob
+> serve --workers 2` refuses while the loops are on. Run the loops in exactly
+> one process and start the extra workers with `API_AUTONOMY_RUNTIME=false`.
+
 Check it's up:
 
 ```bash
 curl http://localhost:9000/health
 ```
+
+`/health` answers `200` with `{"status": "healthy", ...}` or `503` with
+`{"status": "degraded", "reason": "..."}`. Its metrics are `bot_initialized`,
+`active_sessions` and `session_capacity`; `active_sessions` is `null` — never
+`0` — when the agent cannot be read.
 
 Interactive API docs (Swagger UI) are at `http://localhost:9000/docs`.
 
@@ -60,6 +71,31 @@ Manage them with `GET /api/auth/api-keys` (list, prefixes only) and
 `DELETE /api/auth/api-keys/{key_prefix}` (revoke). `GET /api/auth/me` returns the
 caller the server resolved from whichever credential you sent — the fastest way to
 confirm auth is working.
+
+> **Minting a key needs the account system.** `POST /api/auth/api-keys` answers
+> **503** — with the remedy — on an instance where the account system is off:
+> set `ENABLE_AUTH=true`, configure a database, and restart. Wallet sign-in
+> (`/api/auth/nonce` + `/api/auth/verify`), which produces the JWT the mint
+> call needs, answers 503 the same way for the same reason.
+>
+> **Using a key never does.** Since 2026-09-21 the `rob_xxx` validator is
+> registered unconditionally, so an existing key authenticates whether or not
+> `API_SECRET` / `ADMIN_TOKEN` is set. Before that it was only mounted
+> alongside `API_SECRET`, so on a default install a freshly minted key
+> authenticated nothing.
+
+### Operator service token (not an API key)
+
+`API_AUTH_TOKEN` is the operator's own machine-to-machine credential. Send it
+as `X-Service-Token`:
+
+```
+X-Service-Token: <API_AUTH_TOKEN>
+```
+
+It carries the role `service`: it is not billed per request, and it is **not an
+admin** — `/api/admin/*` refuses it. Sending it as `X-API-KEY` still works for
+one release and logs a deprecation warning.
 
 ### 2. Bearer JWT
 
@@ -146,7 +182,7 @@ POST /api/task/sessions
   "session_id": "abc123",
   "status": "running",
   "task": "Go to github.com/trending and list the top 5 repos",
-  "model": "gpt-5",
+  "model": "<the model your config resolved>",
   "tools": ["browser", "filesystem"],
   "webview_url": "http://localhost:5050/session/abc123",
   "message": "Session created"
@@ -174,7 +210,12 @@ POST /api/task/sessions/{session_id}/messages
 }
 ```
 
-Injects a user guidance message into a running session.
+Injects a user guidance message into a running session. An optional `kind`
+must be one of `answer`, `correction`, `feedback`, `guidance` (the default),
+`question`, `steer`, `user_message`; anything else is **422**. The internal
+forged-turn kinds (`self_wake`, `delegation_result`) are refused — they mark a
+turn as machine-originated, which is what stops it auto-activating a skill or
+reaching a high-impact verb.
 
 ### Cancel a session
 
@@ -194,11 +235,18 @@ Returns the number of queued messages and the agent's current status.
 
 ```
 GET  /api/task/sessions/{session_id}/documents            # list the workspace with metadata
+GET  /api/task/sessions/{session_id}/workspace/{path}     # download ONE file
 POST /api/task/sessions/{session_id}/workspace/upload     # multipart: file=@…
 ```
 
 The upload is bounded by the same extension and MIME allow-lists the console
-uses, and both routes refuse a caller who does not own the session.
+uses, and all three routes refuse a caller who does not own the session.
+
+The download route is the URI A2A artifacts point at. It is confined to the
+session workspace — an absolute path, a `..` segment or a symlink is refused
+(400/403) — and always serves `Content-Disposition: attachment` with
+`nosniff`, so an agent-authored file can never render as a page on the API's
+own origin.
 
 ### Sessions of a user
 
@@ -214,11 +262,14 @@ their own.
 
 ```
 GET /api/task/capabilities   # models and tools this server actually offers
-GET /api/task/metrics        # live resource usage
+GET /api/task/metrics        # live resource usage — ADMIN ONLY
 ```
 
 `capabilities` is the honest answer to "which model may I ask for" — it reflects
 the keys and flags this process resolved, not a static list.
+
+`metrics` requires an admin role: it reports `users.sessions_per_user` and
+`users.top_users`, a roster of every tenant on the box with its session count.
 
 ### Streaming session events (SSE)
 
@@ -282,7 +333,16 @@ snapshot (`{phase, detail, seconds_in_state, step, call_id}`, `null` when
 unknown) describing what the agent is doing right now.
 
 `GET /a2a/tasks/{task_id}/stream` attaches to a task that already exists, and
-`POST /a2a/tasks/resubscribe` reattaches after a dropped connection.
+`POST /a2a/tasks/resubscribe` reattaches after a dropped connection — its
+parameters go in the BODY (`{"id": "<taskId>", "historyLength": N}`), per the
+spec's `TaskResubscriptionRequest`. There is no `tasks/resubscribe` JSON-RPC
+method: it delivers an SSE stream, which a JSON-RPC POST cannot return, so
+`/a2a/rpc` answers **501** naming this route.
+
+SSE frames follow the A2A shapes: a status frame is
+`{"taskId", "contextId", "kind": "status-update", "status", "final"}` and an
+artifact frame is `{"taskId", "contextId", "kind": "artifact-update",
+"artifact"}`. The SSE `event:` name is the frame's own `kind`.
 
 ### The REST task surface
 
@@ -362,7 +422,7 @@ See [skills.md](skills.md) for the format.
 
 ```
 GET  /api/pricing/models                       # public model pricing
-GET  /api/pricing/calculator                   # cost for a given usage
+GET  /api/pricing/calculator                   # cost for a given usage (404 if the model is not priced)
 GET  /api/x402/pricing                         # public: what this server charges per request
 GET  /api/x402/requests/{request_id}           # public: the 402 challenge for an agent invoice
 POST /api/x402/requests/{request_id}/pay       # public: settle that invoice via the facilitator
@@ -400,7 +460,16 @@ the master and per-venue trade flags are on and the order is within its cap. See
 
 ## ERC-8004 (Trustless Agents)
 
-Always mounted; discovery-only until `EIP8004_ENABLED`.
+Always mounted; discovery-only until `EIP8004_ENABLED`. The READ routes stay
+open (and label themselves `simulated`), but the two that WRITE —
+`POST /eip8004/reputation/feedback` and `POST /eip8004/validation/request` —
+require an authenticated caller, and the two that SIGN or adjudicate
+(`/reputation/authorize`, `/validation/respond`) require an admin role.
+
+`trustMode` in `/eip8004/registration.json` is `onchain` only when there is
+something a reader can look up: a confirmed on-chain record, or an operator
+claim carrying BOTH an agent id and a registry address. Otherwise it is
+`local`.
 
 ```
 GET  /eip8004/registration.json                   # this agent's registration file
@@ -446,7 +515,11 @@ polyrob can also act as an MCP *server* itself, so an MCP client (Claude Desktop
 POST /mcp   # JSON-RPC 2.0: initialize, tools/list, tools/call
 ```
 
-Auth is the same `X-API-KEY` / `Authorization: Bearer <jwt>` / x402 policy as A2A. v1 is read-only and exposes five tenant-scoped tools:
+Auth is `X-API-KEY` or `Authorization: Bearer <jwt>`. ⚠️ **x402 does not apply
+here** — the per-request payment rail is gated on an explicit route list
+(`/a2a/rpc`, `/a2a/message/stream`, `POST /a2a/tasks`, `/v1/chat/completions`)
+and `/mcp` is not on it, so an anonymous caller gets 401, never a 402
+challenge. v1 is read-only and exposes five tenant-scoped tools:
 
 - `rob_usage_summary` — the caller's LLM usage (cost, credits, call count)
 - `rob_goals_list` — the caller's autonomy goals
@@ -506,6 +579,38 @@ declared model. Point any OpenAI SDK at `http://localhost:9000/v1` with your pol
 > inbound credential identifying the caller to POLYROB (minted at `/api/auth/api-keys`). It is NOT
 > an LLM provider key (`OPENAI_API_KEY`, …), which is the outbound credential POLYROB spends to
 > reach a model — see [configuration.md](configuration.md).
+
+**⚠️ Single-turn.** Only the **last user message** in `messages` is executed.
+polyrob keeps its own per-session history, keyed on `user` (else your
+authenticated id), so replaying a client-side transcript would duplicate it.
+`system` messages are **not** applied — the agent's system prompt comes from
+its own identity, skills and tools. Send one new user message per call and let
+the server hold the thread.
+
+**Parameters.** `temperature` is threaded to the turn. `max_tokens`,
+`max_completion_tokens`, `top_p`, `presence_penalty` and `frequency_penalty`
+are accepted and **ignored** (output length is governed by the agent's own step
+budget, and the sampling knobs are not forwarded). These are **refused with a
+400** naming the field and the reason, rather than silently dropped:
+`tools`, `tool_choice`, `functions`, `function_call`, `response_format`,
+`stop`, `logprobs`, `top_logprobs`, `seed`, `logit_bias`, and `n` greater
+than 1.
+
+**`usage` is an estimate.** The response carries `usage.estimated: true`. The
+counts are re-computed from the request text and the reply; they exclude the
+system prompt, skills, memory recall, tool schemas and every intermediate agent
+step, so treat them as a **floor**, not a bill. Authoritative per-call cost
+lives in the instance's own usage records (`polyrob doctor`, the console's
+Money destination).
+
+**Errors use the OpenAI envelope.** Every `/v1` error — auth, validation,
+internal, and a refusal from an auth gate that never reaches the route — is
+returned as `{"error": {"message", "type", "code", "param"}}`, so an OpenAI SDK
+reports the real reason instead of "unknown error".
+
+The ONE exception is **402**: on a billed route it carries the x402 payment
+*challenge*, which a paying client parses to build its payment, so that body is
+passed through untouched.
 
 **Streaming honesty:** `stream: true` is *buffered* SSE — the agent turn runs to
 completion and the full reply arrives as one content chunk (true token streaming

@@ -143,6 +143,13 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
     steps could never finish — it only burned its retries. Empty/omitted =>
     byte-identical to before."""
     parts = []
+    # 057 WS-C (B9): `payload.resume_note` was WRITTEN by the yield path and read
+    # NOWHERE — a pre-empted goal restarted with no idea it had been pre-empted,
+    # which is most of why the retry redid work that was already on disk. It
+    # leads the task so it is the first thing the run reads.
+    resume_note = (goal.payload or {}).get("resume_note")
+    if resume_note:
+        parts.append(f"RESTART NOTE (you were pre-empted): {str(resume_note)[:1200]}")
     if objective is not None:
         parts.append(
             "STANDING OBJECTIVE (all work must advance it):\n"
@@ -184,6 +191,9 @@ def build_goal_run_task(goal: Goal, objective: Optional[Goal], *,
                 "fails now.",
                 f"- previously failed with: {str(last.get('error') or 'unknown')[:300]}",
             ]
+            owner_answer = str(unblocked.get("answer") or "").strip()
+            if owner_answer:
+                lines.append(f"- the owner answered: {owner_answer[:1000]}")
         else:
             lines = [
                 "PREVIOUS ATTEMPT (this goal was retried — address the gap, don't repeat it):",

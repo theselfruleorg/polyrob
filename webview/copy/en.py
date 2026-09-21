@@ -392,6 +392,13 @@ STRINGS = {
         "and there is no single number that combines them — there is nothing "
         "sensible to net a compute bill against."
     ),
+    # Money that was TAKEN for something never delivered. Neither income nor a
+    # pending invoice, so it belongs to neither book — and the console was the
+    # one seat that never said it, while the terminal ledger always has.
+    "money.cash.refund_due": (
+        "{amount} is owed back across {count} payment(s) Rob took and did not "
+        "deliver on. Settle or refund each one from the terminal."
+    ),
     "money.cash.runtime_title": "What it costs you to run Rob",
     "money.cash.runtime_aside": "your money, not Rob's",
     "money.cash.runtime_window": "Last {days} days",
@@ -468,6 +475,13 @@ STRINGS = {
     "agent.memory.forgotten": "I forgot that note.",
     "agent.memory.not_found": "I could not find that note.",
     "agent.memory.unavailable": "My memory is not available right now.",
+    # ⚠️ "I am not set up to remember" and "I could not read what I remember"
+    # are DIFFERENT answers, and the knowledge readers used to send the first
+    # one in the `error` field, so the console drew it as a failed read. This is
+    # the first one, and it rides in `reason` beside an honest empty list.
+    "agent.memory.not_configured": (
+        "There is no memory backend configured, so there is nothing to read here."
+    ),
 
     # ----------------------------------------------------------- the Agent screen
     # Six tabs of one screen (043 WS-AF1). Everything below the subnav is drawn
@@ -715,6 +729,10 @@ STRINGS = {
     "work.create.cron_no_schedule": "A scheduled task needs a time to run.",
     "work.create.cron_bad_schedule": "I could not read that schedule.",
     "work.create.tools_shape": "The tools must be a list of names.",
+    # 043 A44: a step budget is REFUSED, never clamped — quietly halving it
+    # produces a run that stops short for a reason nobody was told.
+    "work.create.max_steps_shape": "The step budget has to be a whole number.",
+    "work.create.max_steps_range": "The step budget has to be between 6 and 60.",
 
     "work.sub": (
         "Everything Rob has done, newest first — the work it starts itself, "
@@ -1223,3 +1241,117 @@ STRINGS.update({
 })
 
 STRINGS.update({"chats.more": "Load older chats"})
+
+# --- 2026-09-21 interface audit, section A (console) -------------------------- #
+# One block, appended: the words the findings below need. Each row names the
+# seat a person can actually reach, never a flag.
+STRINGS.update({
+    # A2 — the pause headline names a control; this is that control.
+    "shell.pause": "Pause",
+    "shell.resume": "Resume",
+    "shell.pause_label": "Pause or resume background work",
+    "shell.pause_unreachable": "The request did not reach the console.",
+    # A32 — the activity room refused this seat; say so instead of going quiet.
+    "shell.live_refused": "Live updates are not available for this seat.",
+
+    # A1 — Rob's face on Agent, read from the record the avatar store writes.
+    "agent.ov_identity_kept": "Kept. This face and this voice are permanent.",
+    "agent.ov_identity_draft": "A draft. Keep it under Identity to make it permanent.",
+    "agent.ov_identity_traits": "Traits: {traits}",
+    "agent.ov_identity_voice": "Voice: {voice}",
+    "agent.ov_identity_made": "Made {when}",
+    "agent.ov_identity_instance": "Instance {instance}",
+    "agent.ov_identity_unreadable": "There is a face here, but I could not read what it is made of.",
+    "agent.ov_identity_unreadable_why": "Why",
+
+    # A19 — the keep ceremony, which had no seat in the console at all.
+    "agent.id_keep": "Keep this face",
+    "agent.id_keep_hint": "Keeping is permanent. Nothing can change the face or the voice afterwards.",
+    "agent.id_keep_done": "Kept. This is the face from now on.",
+    "agent.id_keep_failed": "I could not keep the face.",
+    "agent.id_kept_title": "Kept for good",
+    "agent.id_kept_body": "The face and the voice are permanent. There is nothing left to decide here.",
+
+    # A26 — connected services are an inventory here, and the label says where
+    # the verbs live.
+    "agent.cap_mcp_note": (
+        "Connected services are listed here only. Add or remove one from a "
+        "terminal with polyrob, or on Telegram with /mcp."
+    ),
+
+    # A6 / A37 — a count over a partial read is a floor, and it says so.
+    "work.now.running_count_partial": "at least {count} running",
+
+    # A22 — the app registry's own verbs, which had no console caller.
+    "work.apps.kill": "Stop it",
+    "work.apps.logs": "Show the log",
+    "work.apps.logs_hide": "Hide the log",
+    "work.apps.logs_empty": "The log is empty.",
+    "work.apps.logs_unreadable": "I could not read the log.",
+    "work.apps.unreachable": "The request did not reach the console.",
+
+    # A13 / A11 — rows the tenant filter removed are named, never dropped.
+    "work.log.filtered_out": "{count} rows belong to another tenant and are not shown.",
+    "work.log.raw_switch": "Include the raw record",
+    "work.log.raw_switch_why": "Each line can then be opened exactly as it was written.",
+
+    # A44 — the create forms carry the fields the writers already accept.
+    "work.create.body_label": "Anything else it should know?",
+    "work.create.priority_label": "How important is it?",
+    "work.create.priority_hint": "A higher number is served first.",
+    "work.create.tools_label": "Which tools may it use?",
+    "work.create.tools_hint": "One name per line. Leave it empty and I choose.",
+    "work.create.max_steps_label": "How many steps may it take?",
+    "work.create.max_steps_hint": "Between 6 and 60. Leave it empty for my own default.",
+    "work.create.deliver_label": "Where should the result go?",
+    "work.create.deliver_none": "Keep it to myself",
+    "work.create.deliver_telegram": "Telegram",
+    "work.create.deliver_email": "Email",
+    "work.create.deliver_twitter": "X",
+    "work.create.deliver_target_label": "Who should receive it?",
+    "work.create.deliver_target_hint": "Leave it empty and I use the owner address I already have.",
+    "work.create.wake_agent_label": "Wake me for this run",
+
+    # A4 — the liquidity pane went blank on any refusal.
+    "money.liquidity.unreadable": "I could not read the liquidity book.",
+    "money.liquidity.unreadable_why": "Why",
+    # A35 — the outstanding total is the server's, over every row.
+    "money.invoices.truncated": "There are more invoices than the ones shown here.",
+    "money.invoices.unpriced": "{count} outstanding invoices carry no amount I could read, so they are not in that total.",
+    # A25 — Money shows what the money verbs did; it is not where they are run.
+    "money.moves.reach": (
+        "Bridging, launching and deploying run from a terminal with polyrob "
+        "wallet, or on Telegram with /bridge, /launch and /deploy. This page "
+        "shows what they did."
+    ),
+
+    # A18 — the palette off a chat screen said nothing and closed.
+    "palette.reach": "Type this into a chat to run it.",
+
+    # A27 — an ask needs an answer, not only a yes and a no.
+    "inbox.answer_label": "Your answer",
+    "inbox.answer_placeholder": "Type your answer",
+
+    # An app decision changes the whole instance, so a tenant seat may not take
+    # it. The card still SHOWS what is waiting — hiding it would be the other
+    # failure — and names the seat that can decide instead of drawing two
+    # buttons that refuse.
+    "inbox.decide_owner_console": (
+        "This one changes the whole instance, so it is decided on the owner's "
+        "own console, or with polyrob apps approve in the terminal."
+    ),
+
+    # A24 — the composer's file picker, which the README described and the
+    # template never carried.
+    "chat.attach": "Attach a file",
+    "chat.attach_sending": "Sending {name}",
+    "chat.attach_done": "{name} is in this chat's folder.",
+    "chat.attach_failed": "I could not take {name}.",
+    "chat.attach_unreachable": "The file did not reach the console.",
+
+    # E14 — a read-only console refuses owner verbs; the chat box says so.
+    "chat.read_only.verbs": (
+        "Owner commands typed here are refused too. Run them on Telegram, or "
+        "from a terminal with polyrob."
+    ),
+})

@@ -56,6 +56,30 @@ class MessageRouter:
         """
         self._room_ledger = ledger
 
+    def _queue_accepted(self, idem: str, **row) -> bool:
+        """Enqueue *row* and answer honestly whether the queue now owns it.
+
+        ``OutboundDeliveryQueue.enqueue`` is an ``INSERT OR IGNORE``, so False
+        means "a row under this key already exists". That is acceptance when
+        the existing row is pending/inflight/delivered and a LIE when it was
+        dead-lettered — the queue gave up on that body and nothing will retry
+        it (D5, 2026-09-21 interface audit; the dead-letter case is precisely
+        the one the 24h dedup then made permanent).
+        """
+        if self._queue.enqueue(idempotency_key=idem, **row):
+            return True
+        probe = getattr(self._queue, "accepted", None)
+        if not callable(probe):
+            # A queue that cannot be asked keeps the legacy contract: enqueue
+            # did not raise, so it is treated as accepted.
+            return True
+        try:
+            return bool(probe(idem))
+        except Exception as e:
+            logger.warning("outbound queue state probe failed for %s: %s",
+                           idem, e, exc_info=True)
+            return False
+
     def _record_room_reply(self, msg, surface_id, chat_id, text: str) -> None:
         """Write a DELIVERED room reply into the room log. Fail-open."""
         if self._room_ledger is None or not is_group_session_key(msg.session_key):
@@ -242,20 +266,29 @@ class MessageRouter:
                 and SurfaceConfig.outbound_queue_enabled()):
             turn = msg.stream_id or msg.session_key
             idem = f"{msg.session_key}#{turn}#{hash(scrubbed) & 0xffffffff}"
+            accepted = False
             try:
-                self._queue.enqueue(
-                    idempotency_key=idem, session_key=msg.session_key,
-                    surface_id=surface_id, dest=chat_id,
-                    payload=scrubbed, kind=str(getattr(msg.kind, "value", msg.kind)),
+                accepted = self._queue_accepted(
+                    idem, session_key=msg.session_key, surface_id=surface_id,
+                    dest=chat_id, payload=scrubbed,
+                    kind=str(getattr(msg.kind, "value", msg.kind)),
                     media=msg.media or None,  # 030 L4: media rides the queue row
                 )
             except Exception as e:  # fail-open: fall back to a direct send on a queue fault
                 logger.error("outbound enqueue failed, sending directly: %s", e)
             else:
-                if _room_gated:
-                    self._room_caps.record_reply(surface_id, chat_id)
-                self._record_room_reply(msg, surface_id, chat_id, scrubbed)
-                return True   # durable acceptance IS delivery (retried by the dispatcher)
+                if accepted:
+                    if _room_gated:
+                        self._room_caps.record_reply(surface_id, chat_id)
+                    self._record_room_reply(msg, surface_id, chat_id, scrubbed)
+                    return True  # durable acceptance IS delivery (dispatcher retries)
+                # D5: the enqueue was a no-op AND no live row stands behind the
+                # key — the previous row was dead-lettered. Reporting that as
+                # delivered is the exact lie this branch used to tell; fall
+                # through to a direct send instead.
+                logger.warning(
+                    "outbound enqueue no-op for %s (dead-lettered or unreadable row) "
+                    "— sending directly", idem)
         try:
             if msg.partial:
                 await surface.stream(msg)  # base buffers if surface can't stream
@@ -307,11 +340,35 @@ class MessageRouter:
             return False
 
     async def send_message(self, chat_id: str, text: str, surface_id: str = "telegram",
-                            media: list | None = None) -> bool:
-        """Back-compat shim for cron/delivery.py + the `message` tool. Returns True on
-        a completed direct send, OR on durable acceptance into the cross-process
-        outbound queue (see below). `media` defaults to None -> OutboundMessage(media=[]),
-        keeping today's shape byte-identical when no media is given.
+                            media: list | None = None,
+                            subject: str | None = None) -> bool:
+        """Boolean shim over :meth:`send_message_ex` (the legacy contract).
+
+        ``True`` covers BOTH a completed direct send and durable acceptance into
+        the cross-process queue. A caller that must tell those apart — the user
+        delivery rail does, because "queued" is not "the owner read it" — calls
+        ``send_message_ex`` instead.
+        """
+        return await self.send_message_ex(
+            chat_id, text, surface_id, media=media, subject=subject) != "failed"
+
+    async def send_message_ex(self, chat_id: str, text: str,
+                              surface_id: str = "telegram",
+                              media: list | None = None,
+                              subject: str | None = None) -> str:
+        """Proactive send. Returns ``"sent"`` | ``"queued"`` | ``"failed"``.
+
+        Back-compat shim for cron/delivery.py + the `message` tool. `media`
+        defaults to None -> OutboundMessage(media=[]), keeping today's shape
+        byte-identical when no media is given. ``subject`` (D70) rides as the
+        legacy ``{"subject": ...}`` media entry an email surface reads; every
+        other surface ignores it.
+
+        ``"queued"`` is the honest name for what used to be reported as a send:
+        the message was handed to the durable queue for another process to
+        deliver. The rail records that as a FALLBACK, never as ``sent``,
+        because a queued body can still dead-letter and the 24h dedup would
+        otherwise make that loss permanent (D6, 2026-09-21 interface audit).
 
         2026-08-28: a surface not hosted in THIS process (e.g. the agent daemon
         calling `surface_id="email"`, which only `polyrob-email.service` subscribes
@@ -341,6 +398,9 @@ class MessageRouter:
         with no ``success`` attribute (legacy test doubles / non-SendResult returns)
         still counts as success, preserving the pre-existing contract for callers that
         don't return a typed result."""
+        if subject:
+            # The legacy email-subject entry (never a renderable media entry).
+            media = [{"subject": str(subject)}] + list(media or [])
         surface = self._surfaces.get(surface_id)
         if surface is None:
             # 2026-08-30: this cross-process fallback is keyed on queue EXISTENCE
@@ -350,26 +410,33 @@ class MessageRouter:
             # unconditionally (bootstrap.py), so this fallback works regardless of
             # that flag's setting.
             if self._queue is not None:
+                accepted = False
                 try:
                     idem = f"direct:{surface_id}:{chat_id}#{hash(text) & 0xffffffff}"
-                    self._queue.enqueue(
-                        idempotency_key=idem, session_key=f"direct:{surface_id}:{chat_id}",
+                    accepted = self._queue_accepted(
+                        idem, session_key=f"direct:{surface_id}:{chat_id}",
                         surface_id=surface_id, dest=chat_id, payload=text,
                         kind="message", media=media or None,
                     )
                 except Exception as e:
                     logger.error("send_message: queue enqueue fallback failed: %s", e)
                 else:
-                    logger.info(
-                        "send_message: surface %s not local — enqueued for cross-process "
-                        "delivery", surface_id)
-                    return True
+                    if accepted:
+                        logger.info(
+                            "send_message: surface %s not local — enqueued for "
+                            "cross-process delivery", surface_id)
+                        return "queued"
+                    # D5: no live row stands behind the key (it dead-lettered),
+                    # and there is no local surface to fall through to.
+                    logger.warning(
+                        "send_message: enqueue no-op for %s — the queued copy was "
+                        "dead-lettered; delivery failed", idem)
             logger.warning("send_message: no surface %s registered — delivery failed", surface_id)
-            return False
+            return "failed"
         if (self._dt is not None and dead_target_registry_enabled()
                 and self._dt.is_dead(surface_id, chat_id or "")):
             logger.info("send_message: dead-target SKIP surface=%s dest=%s", surface_id, chat_id)
-            return False
+            return "failed"
         try:
             result = await surface.send(OutboundMessage(
                 session_key=f"direct:{surface_id}:{chat_id}", text=text,
@@ -377,7 +444,7 @@ class MessageRouter:
             ))
         except Exception as e:
             logger.error("send_message shim failed: %s", e, exc_info=True)
-            return False
+            return "failed"
         if getattr(result, "success", True) is False:
             if self._dt is not None and dead_target_registry_enabled():
                 reason = classify_dead_error(surface_id, getattr(result, "error", None))
@@ -399,5 +466,5 @@ class MessageRouter:
                     # kicked from must mark it left exactly as a room reply does.
                     if reason in ROOM_DEATH_REASONS and self._is_room(surface_id, chat_id):
                         self._mark_room_left(surface_id, chat_id, reason)
-            return False
-        return True
+            return "failed"
+        return "sent"

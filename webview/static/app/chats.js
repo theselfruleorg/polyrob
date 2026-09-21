@@ -79,7 +79,8 @@ export function rowNode(session, copy) {
     meta.appendChild(el("span", "val", session.created));
   }
   // 043 A32: a session whose live orchestrator runs in Rob's OWN process, not
-  // this console. GET /api/sessions annotates it `runtime:"agent"` (+owner_pid);
+  // this console. GET /api/webgate/chats — the ONE catalog since A12 deleted
+  // the full-tree /api/sessions — annotates it `runtime:"agent"` (+owner_pid);
   // the chip says so, because a row that looks ordinary hides that the console
   // can watch it but not steer it. Any other runtime ("here"/"idle"/absent)
   // renders nothing — the chip is a fact, not a decoration.

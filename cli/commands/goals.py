@@ -47,6 +47,23 @@ def _warn_if_goals_off() -> None:
     )
 
 
+def _owner_tenant(user: Optional[str] = None) -> str:
+    """The tenant a goal view or write acts on — the ONE admin resolver.
+
+    C14: the views read ``board.list(user_id=None)``, so on a multi-tenant box
+    they showed every tenant's backlog, and on a deployed box the shell's own
+    identity never matched the service's. ``admin_owner_principal`` adopts the
+    deployment's declaration, exactly as ``admin_data_dir`` adopts its home.
+    """
+    if user:
+        return user
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
+
+
 def _get_board(data_root: Optional[Path] = None) -> GoalBoard:
     """Get the GoalBoard instance for the current user."""
     from cli._admin_home import admin_data_dir
@@ -130,24 +147,60 @@ def _goal_to_dict(goal: Goal) -> dict:
 
 @goals.command("list")
 @click.option("--status", type=click.Choice(["ready", "running", "done", "blocked", "cancelled", "triage"]), help="Filter by status.")
+@click.option("--user", default=None, help="Tenant id (default: this instance's owner).")
+@click.option("-n", "limit", type=int, default=30, show_default=True,
+              help="How many of the newest goals to show (1-500).")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
-def goals_list(status: Optional[str], as_json: bool):
-    """List goals."""
+def goals_list(status: Optional[str], user: Optional[str], limit: int, as_json: bool):
+    """What is on the board, newest first, with the counts over EVERY row."""
+    # C14/E1: this called `board.list(user_id=None)` — the DISPATCHER's order
+    # (`priority DESC, created_at ASC LIMIT 100`) used as a VIEW. On the 409-row
+    # prod board that window was the OLDEST 100 rows and held none of the live
+    # legs, so the seat told its owner there was no trading work while ten
+    # cycles had run. `list_recent` is the view; `status_counts` is the whole
+    # board, so the header can never be a window's arithmetic.
     board = _get_board()
-    goals_list = board.list(user_id=None, status=status)
+    tenant = _owner_tenant(user)
+    want = max(1, min(500, int(limit)))
+    statuses = (status,) if status else None
+    rows = board.list_recent(user_id=tenant, statuses=statuses, limit=want + 1)
+    more = max(0, len(rows) - want)
+    rows = rows[:want]
+    try:
+        counts = board.status_counts(user_id=tenant)
+    except Exception as exc:                      # never a silent zero
+        counts, counts_err = {}, f"{type(exc).__name__}: {exc}"
+    else:
+        counts_err = None
     _warn_if_goals_off()
 
     if as_json:
-        click.echo(json.dumps([_goal_to_dict(g) for g in goals_list], indent=2))
+        click.echo(json.dumps({"user_id": tenant, "goals": [_goal_to_dict(g) for g in rows],
+                               "more": more, "counts": counts,
+                               "counts_error": counts_err}, indent=2))
         return
 
-    if not goals_list:
-        click.echo("No goals found.")
+    if counts_err:
+        click.echo(click.style(
+            f"board counts unavailable ({counts_err}) — the list below is a "
+            f"window, and how much it leaves out is UNKNOWN.", fg="yellow"))
+    else:
+        summary = ", ".join(f"{v} {k}" for k, v in sorted(counts.items()))
+        click.echo(click.style(
+            f"board — tenant {tenant}: {summary or 'no goals'}", dim=True))
+
+    if not rows:
+        from cli.ui.candy import empty
+        click.echo(empty("goals" + (f" with status {status}" if status else ""),
+                         "nothing is on this tenant's board"))
         return
 
-    for g in goals_list:
+    for g in rows:
         click.echo(_format_goal(g))
         click.echo()
+    if more:
+        click.echo(click.style(f"({more} more not shown — -n to raise the window)",
+                               dim=True))
 
 
 @goals.command("show")
@@ -183,8 +236,6 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
                   tools: Optional[str], acceptance: Optional[str], objective_id: Optional[str],
                   force: bool, as_json: bool):
     """Create a new goal."""
-    from core.identity import resolve_identity
-
     board = _get_board()
     status = STATUS_TRIAGE if triage else STATUS_READY
 
@@ -196,7 +247,7 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
 
     try:
         goal = board.create(
-            user_id=resolve_identity(),
+            user_id=_owner_tenant(),
             title=title,
             body=body,
             priority=priority,
@@ -227,8 +278,6 @@ def goals_create(title: str, body: str, priority: int, parent: Optional[str], tr
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_ready(goal_id: str, as_json: bool):
     """Mark a triage/blocked goal as ready."""
-    from core.identity import resolve_identity
-
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -241,7 +290,7 @@ def goals_ready(goal_id: str, as_json: bool):
                    f"goal is {goal.status}, only triage/blocked goals can be marked ready")
         sys.exit(1)
 
-    success = board.update_status(goal_id, STATUS_READY, user_id=resolve_identity())
+    success = board.update_status(goal_id, STATUS_READY, user_id=_owner_tenant())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -258,8 +307,6 @@ def goals_ready(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_pause(goal_id: str, as_json: bool):
     """Pause a goal (move to blocked status)."""
-    from core.identity import resolve_identity
-
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -271,7 +318,7 @@ def goals_pause(goal_id: str, as_json: bool):
         click.echo(click.style("[polyrob] WARNING: ", fg="yellow") +
                    "goal is currently running — pause may not take effect immediately")
 
-    success = board.update_status(goal_id, STATUS_BLOCKED, user_id=resolve_identity())
+    success = board.update_status(goal_id, STATUS_BLOCKED, user_id=_owner_tenant())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -288,8 +335,6 @@ def goals_pause(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_resume(goal_id: str, as_json: bool):
     """Resume a paused/blocked goal."""
-    from core.identity import resolve_identity
-
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -302,7 +347,7 @@ def goals_resume(goal_id: str, as_json: bool):
                    f"goal is {goal.status}, only blocked goals can be resumed")
         sys.exit(1)
 
-    success = board.update_status(goal_id, STATUS_READY, user_id=resolve_identity())
+    success = board.update_status(goal_id, STATUS_READY, user_id=_owner_tenant())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -353,8 +398,6 @@ def goals_cancel(goal_id: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def goals_retry(goal_id: str, as_json: bool):
     """Retry a blocked/failed goal (resets failures)."""
-    from core.identity import resolve_identity
-
     board = _get_board()
     goal = board.get(goal_id)
 
@@ -369,7 +412,7 @@ def goals_retry(goal_id: str, as_json: bool):
 
     # Reset to ready and clear failures
     success = board.update_status(goal_id, STATUS_READY, reset_failures=True,
-                                  user_id=resolve_identity())
+                                  user_id=_owner_tenant())
     if success:
         if as_json:
             updated = board.get(goal_id)
@@ -424,7 +467,6 @@ def objective():
               help="Ties this objective to a data/streams/streams.yaml entry.")
 @click.option("--force", is_flag=True, help="Bypass near-duplicate rejection.")
 def objective_add(title, body, priority, success_criteria, goal_budget, stream_id, force):
-    from core.identity import resolve_identity
     board = _get_board()
     payload = {}
     if success_criteria:
@@ -434,7 +476,7 @@ def objective_add(title, body, priority, success_criteria, goal_budget, stream_i
     if stream_id:
         payload["stream_id"] = stream_id
     try:
-        o = board.create_objective(user_id=resolve_identity(), title=title, body=body,
+        o = board.create_objective(user_id=_owner_tenant(), title=title, body=body,
                                    priority=priority, force=force,
                                    payload=payload or None)
     except DuplicateGoalError as e:
@@ -449,9 +491,8 @@ def objective_add(title, body, priority, success_criteria, goal_budget, stream_i
 @click.argument("objective_id")
 def objective_show(objective_id):
     """Show one objective: criteria, budget use, and its live children."""
-    from core.identity import resolve_identity
     board = _get_board()
-    user_id = resolve_identity()
+    user_id = _owner_tenant()
     o = board.get(objective_id)
     # GoalBoard.get() has no tenant filter (it is a plain SELECT by id), so a
     # known-id lookup must reject another tenant's row here rather than leak
@@ -491,9 +532,8 @@ def objective_show(objective_id):
 @objective.command("list")
 @click.option("--status", type=click.Choice(["active", "paused", "done", "dropped"]))
 def objective_list(status):
-    from core.identity import resolve_identity
     board = _get_board()
-    user_id = resolve_identity()
+    user_id = _owner_tenant()
     objs = board.objectives(user_id=user_id, status=status)
     if not objs:
         click.echo("No objectives.")
@@ -514,9 +554,8 @@ def _objective_status_cmd(name, target):
     @objective.command(name)
     @click.argument("objective_id")
     def _cmd(objective_id):
-        from core.identity import resolve_identity
         ok = _get_board().set_objective_status(objective_id, target,
-                                               user_id=resolve_identity())
+                                               user_id=_owner_tenant())
         if ok:
             click.echo(click.style("[polyrob] ", fg="green") + f"Objective {objective_id} -> {target}")
         else:
@@ -532,12 +571,18 @@ _objective_status_cmd("drop", "dropped")
 
 @goals.command("edit")
 @click.argument("goal_id")
-@click.option("--title")
-@click.option("--body")
-@click.option("--priority", type=int)
-@click.option("--tools", help="Comma-separated tool ids.")
-@click.option("--acceptance", help="What 'done' must prove.")
+@click.option("--title", help="Replace the one-line title.")
+@click.option("--body", help="Replace the instructions the run is given.")
+@click.option("--priority", type=int, help="1-10; higher is served first in a pass.")
+@click.option("--tools", help="Comma-separated tool ids this goal may use. "
+                              "⚠️ This is an OPERATOR GRANT: a money verb "
+                              "listed here is reachable on an autonomous run.")
+@click.option("--acceptance", help="What 'done' must prove (ids / paths / urls).")
 def goals_edit(goal_id, title, body, priority, tools, acceptance):
+    """Change a goal's title, body, priority, toolset or acceptance test.
+
+    A terminal goal (done / cancelled) is never edited — re-create it instead.
+    """
     board = _get_board()
     patch = {}
     if acceptance is not None:
@@ -556,16 +601,23 @@ def goals_edit(goal_id, title, body, priority, tools, acceptance):
 
 
 @goals.command("tree")
-def goals_tree():
-    """Objectives with their goals; orphan goals at the end."""
+@click.option("--user", default=None, help="Tenant id (default: this instance's owner)")
+def goals_tree(user: Optional[str]):
+    """Objectives with their goals; orphan goals at the end.
+
+    Reads ``objectives()`` + ``list_recent()`` (newest first), never
+    ``board.list`` — the dispatcher's priority order showed the OLDEST rows
+    and hid every recent leg (2026-08-29; pinned by the parity ratchet).
+    """
     board = _get_board()
+    tenant = _owner_tenant(user)
     _TREE_LIMIT = 500
-    everything = board.list(limit=_TREE_LIMIT)
-    truncated = len(everything) >= _TREE_LIMIT
-    objectives = [g for g in everything if g.kind == KIND_OBJECTIVE]
+    objectives = board.objectives(user_id=tenant)
+    recent = board.list_recent(user_id=tenant, limit=_TREE_LIMIT)
+    truncated = len(recent) >= _TREE_LIMIT
     by_parent = {}
     orphans = []
-    for g in everything:
+    for g in recent:
         if g.kind != KIND_GOAL:
             continue
         if g.parent_id:
@@ -578,6 +630,13 @@ def goals_tree():
         note = f"  outcome: {outcome}" if outcome else ("  [no outcome]" if g.status == "done" else "")
         click.echo(f"  - {click.style(g.id, fg='cyan')} [{g.status}] {g.title}{note}")
 
+    if not objectives and not orphans:
+        # A blank answer is the one thing a board view may never give: it reads
+        # identically to "the command did nothing". The ONE empty grammar.
+        from cli.ui.candy import empty
+        click.echo(empty("objectives or goals",
+                         f"nothing is on tenant {tenant}'s board"))
+        return
     for o in objectives:
         click.echo(f"{click.style(o.id, fg='cyan')} [{o.status}] "
                    f"{click.style(o.title, bold=True)}")
@@ -588,6 +647,12 @@ def goals_tree():
         for g in orphans:
             _leaf(g)
     if truncated:
+        # The remedy must be reachable: `goals list` is capped at 500 too, so
+        # "the full set" was a promise no verb here keeps. Narrowing IS the
+        # honest answer, and `status_counts` (printed by `goals list`) is the
+        # arithmetic over EVERY row.
         click.echo(click.style(
-            f"(first {_TREE_LIMIT} rows — truncated; use `goals list --json` for the full set)",
+            f"(the newest {_TREE_LIMIT} rows — older goals are not shown; narrow "
+            f"with `polyrob goals list --status <status>`, whose header counts "
+            f"every row on the board)",
             fg="yellow"))

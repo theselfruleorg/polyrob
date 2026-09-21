@@ -52,6 +52,23 @@ _RETENTION_NOTE = "retention is bounded (14 days / 2000 rows per chat)"
 _MAX_LIMIT = 200
 
 
+def _channel_proof() -> str:
+    """057 WS-E: cite the ONE verification table instead of restating it.
+
+    This prose — "Telegram never echoes a bot's own posts back, so the send
+    receipt IS the confirmation" — lived ONLY here, in two copies, inside a
+    read action. The rail that needs it is the SEND path, which never read it.
+    Now both render the same row (`core/rails/verification.py`), so there is one
+    sentence to keep true.
+    """
+    try:
+        from core.rails.verification import GUIDE_PATH, verification_line
+        line = verification_line("telegram_channel")
+        return f"{line} (full table: {GUIDE_PATH})" if line else ""
+    except Exception:
+        return ""
+
+
 def _data_dir(controller) -> Optional[str]:
     from core.runtime_paths import container_data_home
     return container_data_home(getattr(controller, "container", None))
@@ -87,8 +104,8 @@ def register_room_read_action(controller) -> None:
             default=None,
             description=("Which allowlisted room to read: the chat id, "
                          "'surface:chat_id', or a distinctive fragment of its "
-                         "title. Omit to list the rooms you are in with their "
-                         "line counts."))
+                         "name or of the owner's label for it. Omit to list the "
+                         "rooms you are in with their line counts."))
         limit: int = Field(
             default=50,
             description="How many of the most recent lines to return (1-200).")
@@ -125,16 +142,39 @@ def register_room_read_action(controller) -> None:
                                   "allow here). Nothing to read.",
                 include_in_memory=True)
 
+        # 057 WS-D: a room's NAME is `chat.name` and nothing else; the owner's
+        # allowlist `note` is a dated LABEL that renders AFTER the name. Before
+        # this, a note typed once as a reminder came back as the room's title
+        # and the agent reasoned about it as a fact Telegram had told it.
+        from core.surfaces import chat_policy as _chat_policy
+        from core.surfaces.room_label import render_room_line, room_name
+
+        _policies = {}
+
+        def _policy(r):
+            key = (r["surface"], r["chat_id"])
+            if key not in _policies:
+                try:
+                    _policies[key] = _chat_policy.load_for_chat(
+                        home, r["surface"], r["chat_id"])
+                except Exception:
+                    _policies[key] = None
+            return _policies[key]
+
         def _title(r):
-            return r.get("note") or f"{r['surface']}:{r['chat_id']}"
+            """The room's NAME only — never the owner's label."""
+            return room_name(r, _policy(r))
+
+        def _line(r, extra=None):
+            return "• " + render_room_line(r, _policy(r), extra)
 
         def _room_list(lines_seen=None):
             out = ["rooms you are in (owner-allowlisted):"]
             for r in rooms:
-                seen = ""
+                seen = None
                 if lines_seen is not None:
-                    seen = f" — {lines_seen.get((r['surface'], r['chat_id']), 0)} lines captured"
-                out.append(f"• {r['surface']}:{r['chat_id']} \"{_title(r)}\"{seen}")
+                    seen = f"{lines_seen.get((r['surface'], r['chat_id']), 0)} lines captured"
+                out.append(_line(r, seen))
             return out
 
         want = (params.room or "").strip()
@@ -151,16 +191,15 @@ def register_room_read_action(controller) -> None:
                     f"{body}\nsource: the local room ledger — every line the "
                     f"harness captured for each allowlisted room "
                     f"({_RETENTION_NOTE}); NOT a live Telegram history fetch. "
-                    f"A room with 0 lines is not a broken room: Telegram never "
-                    f"echoes a bot's OWN posts back, so a channel only you post "
-                    f"to stays at 0 — the send receipt is the delivery "
-                    f"confirmation. Read again with room=<chat_id or title "
-                    f"fragment>."),
+                    f"A room with 0 lines is not a broken room — see the proof "
+                    f"rule below. Read again with room=<chat_id, name or label "
+                    f"fragment>.\n{_channel_proof()}"),
                 include_in_memory=True)
 
         matches = [r for r in rooms
                    if want in (r["chat_id"], f"{r['surface']}:{r['chat_id']}")
-                   or want.lower() in _title(r).lower()]
+                   or want.lower() in _title(r).lower()
+                   or want.lower() in str(r.get("note") or "").lower()]
         if not matches:
             return ActionResult(
                 extracted_content=(
@@ -169,8 +208,7 @@ def register_room_read_action(controller) -> None:
                     + "\n".join(_room_list())),
                 include_in_memory=True)
         if len(matches) > 1:
-            listed = "\n".join(f"• {r['surface']}:{r['chat_id']} \"{_title(r)}\""
-                               for r in matches)
+            listed = "\n".join(_line(r) for r in matches)
             return ActionResult(
                 extracted_content=(
                     f"room_read: '{want}' matches more than one room — "
@@ -186,8 +224,8 @@ def register_room_read_action(controller) -> None:
         rows = GroupLedger(f"{home}/surfaces.db").tail(
             room["surface"], room["chat_id"], since_ts=since_ts, limit=limit)
 
-        header = (f"room: {room['surface']}:{room['chat_id']} "
-                  f"\"{_title(room)}\" — {len(rows)} line(s), newest last")
+        header = ("room: " + render_room_line(
+            room, _policy(room), f"{len(rows)} line(s), newest last"))
         source = (f"source: the local room ledger — every line the harness "
                   f"captured for this allowlisted room ({_RETENTION_NOTE}); "
                   f"NOT a live Telegram history fetch — lines sent while the "
@@ -195,10 +233,8 @@ def register_room_read_action(controller) -> None:
         if not rows:
             lines = ["(no lines captured in this window — the room has been "
                      "quiet, or the lines are older than the ledger retains. "
-                     "NOTE: Telegram never delivers a bot's OWN posts back as "
-                     "updates, so an empty ledger says nothing about whether "
-                     "your posts rendered — the send receipt is the delivery "
-                     "confirmation; lines appear here only when OTHERS write.)"]
+                     "Lines appear here only when OTHERS write.)",
+                     _channel_proof()]
         else:
             lines = [_render_line(r) for r in rows]
         footer = ("read-only: this action never posts. Reply via "

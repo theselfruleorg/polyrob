@@ -33,7 +33,11 @@ KV_RE = re.compile(
     r"(?i)(?<![A-Za-z0-9])"
     r"((?:[A-Za-z0-9]+[_-])*"
     r"(?:api[_-]?key|apikey|secret|client_secret|password|passwd|"
-    r"access[_-]?token|auth[_-]?token|token|authorization|bearer))"
+    r"access[_-]?token|auth[_-]?token|token|authorization|bearer|"
+    # 2026-09-21 revalidation: the wallet-shaped keys were never claimed, so
+    # `private_key=0x…`, `WALLET_PRIVATE_KEY=…`, `mnemonic=…` survived every
+    # scrubber verbatim while `secret=…` was caught.
+    r"private[_-]?key|privatekey|mnemonic|seed[_-]?phrase|passphrase|keystore))"
     r"(\s*[=:]\s*)"
     r"(['\"]?)([^\s'\"]{6,})\3"
 )

@@ -67,12 +67,17 @@ router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 def kb_api_enabled() -> bool:
     """Whether the KB HTTP API is mounted (default OFF).
 
-    Uses the project's shared ``_bool_env`` parser (falsey-set semantics:
+    Uses the project's shared boolean-env parser (falsey-set semantics:
     none/off/false/0/no/'' = off), so the flag behaves consistently with the
     rest of POLYROB's env flags.
+
+    B33: read from ``core.env`` — the lowest tier that owns this rule — not
+    from ``agents.task.constants._bool_env``. The api tier importing a private
+    helper out of the agents tier is a layering edge the ratchet only tolerates
+    because it is old.
     """
-    from agents.task.constants import _bool_env
-    return _bool_env("KB_API_ENABLED", False)
+    from core.env import bool_env
+    return bool_env("KB_API_ENABLED", False)
 
 
 # ---------------------------------------------------------------------------

@@ -229,6 +229,23 @@ async def get_user_permissive(request: Request) -> str:
 # ---------------------------------------------------------------------------
 
 
+def optional_container():
+    """The process container, or ``None`` when one was never built.
+
+    ``DependencyContainer.get_instance()`` RAISES ``ValueError("Configuration
+    required for first initialization")`` on a process whose lifespan never
+    ran — so every `if not container:` guard in this tier was unreachable and
+    the caller got a 500 traceback instead of the 503 the guard was written to
+    produce. "The services are not up" is a configuration state, not a fault.
+    """
+    from core.container import DependencyContainer
+
+    try:
+        return DependencyContainer.get_instance()
+    except Exception:
+        return None
+
+
 def require_service(name: str, *, missing: str, unavailable: str = "Service unavailable"):
     """The registered service *name*, or a 503 naming what is missing.
 
@@ -236,9 +253,7 @@ def require_service(name: str, *, missing: str, unavailable: str = "Service unav
     getter carried by hand (mcp, polymarket). *missing* is the detail when the
     container is up but the service is not registered.
     """
-    from core.container import DependencyContainer
-
-    container = DependencyContainer.get_instance()
+    container = optional_container()
     if not container:
         raise HTTPException(status_code=503, detail=unavailable)
     service = container.get_service(name)

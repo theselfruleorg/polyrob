@@ -18,7 +18,6 @@ def finance(days: int, user: Optional[str]) -> None:
     """Balance sheet: income, spend, pending invoices, net — plus runtime cost."""
     import os
     from core.bootstrap import setup_project_path, setup_sqlite_compat, load_env
-    from core.identity import resolve_identity
     from cli.ui.commands.h_finance import render_finance
 
     setup_project_path()
@@ -31,26 +30,25 @@ def finance(days: int, user: Optional[str]) -> None:
     except Exception:
         pass
 
-    uid = (user or resolve_identity() or "").strip() or "local"
+    # C26: `resolve_identity()` reads the SHELL's environment, so on a deployed
+    # box (systemd exports the owner binding, an SSH shell carries none) the
+    # sheet resolved tenant "local" and rendered a confident $0.00 over the
+    # agent's real books. The ONE admin resolver adopts the deployment's.
+    if user:
+        uid = user.strip() or "local"
+    else:
+        from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+        try:
+            uid = (admin_owner_principal() or "").strip() or "local"
+        except AmbiguousDataHome as exc:
+            raise click.ClickException(str(exc))
 
     # H14a: resolve the live bot.db so `finance` works standalone (no DI container) —
     # otherwise build_ledger's container lookup raises and the sheet renders the
     # developer-speak "unavailable" line on every run. DB_PATH wins, else the CLI
     # data-home layout.
-    def _bot_db_path():
-        env_db = os.getenv("DB_PATH")
-        if env_db and os.path.isfile(env_db):
-            return env_db
-        try:
-            from core.bootstrap import _resolve_cli_data_home
-            from core.db_manifest import candidate_sqlite_dbs
-            data_home, _, _ = _resolve_cli_data_home()
-            for p in candidate_sqlite_dbs(data_home):
-                if p.name == "bot.db" and p.is_file():
-                    return str(p)
-        except Exception:
-            pass
-        return None
+    # C26 / 2026-09-21: ONE resolver shared with `polyrob doctor`.
+    from cli._admin_home import admin_bot_db_path as _bot_db_path
 
     # standalone=True: this Click command has no DI container, so if no bot.db is
     # resolved render_finance renders an honest "no data yet" sheet rather than

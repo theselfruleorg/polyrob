@@ -52,10 +52,33 @@ def require_owner_or_admin(request: Request) -> bool:
 
     /reputation/authorize signs an EIP-712 payload with the AGENT'S private key,
     so it must never be callable anonymously (it would be a signing oracle).
+
+    B20: decide from ``role`` via the ONE admin predicate
+    (``core.constants.is_admin_role``, re-exported by ``api.auth_constants``),
+    not from ``request.state.is_admin`` — that flag is a SECOND truth, written
+    by only some of the auth paths, so an owner-login session (role="owner")
+    authenticated through a path that never set it was refused, and any future
+    path that sets it without a role would be admitted.
     """
-    if not getattr(request.state, "is_admin", False):
+    from api.auth_constants import is_admin_role
+
+    if not is_admin_role(getattr(request.state, "role", None)):
         raise HTTPException(status_code=403, detail="Admin access required")
     return True
+
+
+async def require_authenticated(request: Request) -> str:
+    """Any authenticated caller (B20).
+
+    ``/reputation/feedback`` and ``/validation/request`` WRITE to the local
+    registries and were reachable anonymously — anyone on the internet could
+    stuff an agent's feedback list or its pending-validation queue. They are
+    not admin operations (a client submits its own feedback), so the gate is
+    authentication, not privilege.
+    """
+    from api.dependencies import get_user_permissive
+
+    return await get_user_permissive(request)
 
 
 def get_reputation_manager() -> ReputationManager:
@@ -197,7 +220,10 @@ class SubmitFeedbackBody(BaseModel):
     proofOfPayment: Optional[Dict[str, str]] = Field(None, description="x402 payment proof")
 
 
-@router.post("/reputation/feedback", dependencies=[Depends(require_eip8004_enabled)])
+@router.post(
+    "/reputation/feedback",
+    dependencies=[Depends(require_eip8004_enabled), Depends(require_authenticated)],
+)
 async def submit_feedback(
     body: SubmitFeedbackBody,
     manager: ReputationManager = Depends(get_reputation_manager),
@@ -317,7 +343,10 @@ class ValidationRequestBody(BaseModel):
     requestData: Dict[str, Any] = Field(..., description="Data to validate")
 
 
-@router.post("/validation/request", dependencies=[Depends(require_eip8004_enabled)])
+@router.post(
+    "/validation/request",
+    dependencies=[Depends(require_eip8004_enabled), Depends(require_authenticated)],
+)
 async def request_validation(
     body: ValidationRequestBody,
     manager: ValidationManager = Depends(get_validation_manager),

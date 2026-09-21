@@ -16,28 +16,44 @@ def _render(ctx, text: str, *, title: str) -> None:
     ctx.emit(text, title=title)
 
 
-def h_launch(ctx) -> None:
+def _uid(ctx) -> str:
+    """The REPL session's tenant — ONE rule, imported (C75).
+
+    This module carried three byte-identical copies of
+    ``(ctx.user_id or "").strip() or "local"``; ``h_owner._tenant`` is the
+    canonical one every other REPL money verb already calls, so a change to
+    what "this tenant" means cannot reach two of the three.
+    """
+    from cli.ui.commands.h_owner import _tenant
+    return _tenant(ctx)
+
+
+async def h_launch(ctx) -> None:
     """REPL handler: /launch <SYMBOL> <name…> [buy <amount>] [go]."""
     from surfaces.telegram import token_ops
+    from cli.ui.commands.h_money_verbs import _awaited
 
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
     args = list(getattr(ctx, "args", None) or [])
-    _render(ctx, token_ops.launch_reply(uid, args), title="launch")
+    _render(ctx, await _awaited(token_ops.launch_reply(_uid(ctx), args)),
+            title="launch")
 
 
-def h_deploy(ctx) -> None:
+async def h_deploy(ctx) -> None:
     """REPL handler: /deploy <SYMBOL> <supply> <name…> [on <chain>] [go]."""
     from surfaces.telegram import token_ops
+    from cli.ui.commands.h_money_verbs import _awaited
 
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
     args = list(getattr(ctx, "args", None) or [])
-    _render(ctx, token_ops.deploy_reply(uid, args), title="deploy")
+    _render(ctx, await _awaited(token_ops.deploy_reply(_uid(ctx), args)),
+            title="deploy")
 
 
-def h_lp(ctx):
+async def h_lp(ctx):
     from surfaces.telegram.lp_ops import lp_reply
-    uid = (getattr(ctx, "user_id", "") or "").strip() or "local"
-    _render(ctx, lp_reply(uid, list(getattr(ctx, "args", None) or [])), title="liquidity")
+    from cli.ui.commands.h_money_verbs import _awaited
+    _render(ctx, await _awaited(lp_reply(_uid(ctx),
+                                         list(getattr(ctx, "args", None) or []))),
+            title="liquidity")
 
 
 def register(reg, Command) -> None:

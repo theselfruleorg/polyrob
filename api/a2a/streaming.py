@@ -20,7 +20,7 @@ from fastapi.responses import StreamingResponse
 from api.a2a.models import (
     A2ATask, A2ATaskState, A2ATaskStatus, A2AMessage,
     TaskStatusUpdateEvent, TaskArtifactUpdateEvent,
-    JSONRPCResponse, SendMessageRequest
+    JSONRPCResponse, SendMessageRequest, TaskResubscriptionRequest
 )
 from api.a2a.task_handler import A2ATaskHandler
 from api.dependencies import get_user_permissive
@@ -52,10 +52,8 @@ async def task_event_stream(
     # Send initial status
     try:
         task = await handler.get_task(task_id, history_length)
-        event = TaskStatusUpdateEvent(
-            task=task,
-            final=A2ATaskState.is_terminal(task.status.state)
-        )
+        event = TaskStatusUpdateEvent.from_task(
+            task, final=A2ATaskState.is_terminal(task.status.state))
         yield _format_sse_event(event)
 
         # If already terminal, we're done
@@ -80,9 +78,13 @@ async def task_event_stream(
     user_id = session_info.get("user_id")
     feed_dir = pm().get_subdir(task_id, "feed", user_id=user_id)
 
-    # Track seen files to avoid duplicates
+    # Track seen files to avoid duplicates. B9: the terminal set is DERIVED
+    # from the one status map (it used to be a hand-kept copy that included the
+    # non-existent "error" and omitted nothing usefully) — a status added to
+    # SessionStatus can no longer be terminal here and non-terminal there.
     seen_files = set()
-    terminal_states = {"completed", "failed", "cancelled", "error"}
+    from api.a2a.task_handler import TERMINAL_SESSION_STATUSES
+    terminal_states = TERMINAL_SESSION_STATUSES
     last_status = None
 
     # Poll for updates
@@ -112,10 +114,9 @@ async def task_event_stream(
 
                                 # Refresh full task status
                                 task = await handler.get_task(task_id, history_length=0)
-                                event = TaskStatusUpdateEvent(
-                                    task=task,
-                                    final=A2ATaskState.is_terminal(task.status.state)
-                                )
+                                event = TaskStatusUpdateEvent.from_task(
+                                    task,
+                                    final=A2ATaskState.is_terminal(task.status.state))
                                 yield _format_sse_event(event)
 
                                 if event.final:
@@ -135,7 +136,7 @@ async def task_event_stream(
                                         "text": f"Awaiting owner approval for '{action_name}'"}]
                             )
                             yield _format_sse_event(
-                                TaskStatusUpdateEvent(task=task, final=False)
+                                TaskStatusUpdateEvent.from_task(task, final=False)
                             )
 
                         elif event_type == "approval_resolved":
@@ -149,7 +150,7 @@ async def task_event_stream(
                                         "text": f"Approval {decision} for '{action_name}'"}]
                             )
                             yield _format_sse_event(
-                                TaskStatusUpdateEvent(task=task, final=False)
+                                TaskStatusUpdateEvent.from_task(task, final=False)
                             )
 
                         # Step/action events as status updates
@@ -162,14 +163,15 @@ async def task_event_stream(
                                     role="agent",
                                     parts=[{"kind": "text", "text": message_text}]
                                 )
-                                event = TaskStatusUpdateEvent(task=task, final=False)
+                                event = TaskStatusUpdateEvent.from_task(task, final=False)
                                 yield _format_sse_event(event)
 
                         # Artifact events
                         elif event_type in ["file_created", "artifact"]:
-                            artifact_event = _build_artifact_event(task_id, data)
+                            artifact_event = _build_artifact_event(
+                                task_id, data, context_id=task.contextId)
                             if artifact_event:
-                                yield _format_sse_event(artifact_event, event_type="artifact")
+                                yield _format_sse_event(artifact_event)
 
                     except Exception as e:
                         logger.warning(f"Error parsing feed file {event_file}: {e}")
@@ -182,7 +184,7 @@ async def task_event_stream(
                     # Send final event
                     task = await handler.get_task(task_id)
                     yield _format_sse_event(
-                        TaskStatusUpdateEvent(task=task, final=True)
+                        TaskStatusUpdateEvent.from_task(task, final=True)
                     )
                     return
 
@@ -200,13 +202,16 @@ async def task_event_stream(
 
 def _format_sse_event(
     event_data,
-    event_type: str = "message"
+    event_type: str = "message",
+    request_id=None,
 ) -> str:
     """Format data as SSE event string.
 
     Args:
         event_data: Event data (Pydantic model or dict)
-        event_type: SSE event type
+        event_type: SSE event type; ``"message"`` defers to the frame's own
+            spec ``kind`` (``status-update`` / ``artifact-update``)
+        request_id: JSON-RPC id to echo, when the stream was opened by one
 
     Returns:
         SSE formatted string
@@ -216,16 +221,26 @@ def _format_sse_event(
     else:
         data = event_data
 
-    # Wrap in JSON-RPC response format
-    response = JSONRPCResponse(result=data)
+    # B27: the SSE `event:` name carries the frame's SPEC kind, so a client
+    # that routes on the event name and one that routes on `result.kind` agree.
+    # (It used to be the literal "message" for every status frame.)
+    kind = data.get("kind") if isinstance(data, dict) else None
+    if event_type == "message" and kind:
+        event_type = kind
+
+    # Wrap in JSON-RPC response format. `id` is carried through so a frame can
+    # be correlated with the request that opened the stream when the caller
+    # supplied one (JSON-RPC 2.0 requires the member to be present).
+    response = JSONRPCResponse(result=data, id=request_id)
 
     return f"event: {event_type}\ndata: {json.dumps(response.dict())}\n\n"
 
 
-def _format_sse_error(message: str) -> str:
+def _format_sse_error(message: str, request_id=None) -> str:
     """Format error as SSE event string."""
     response = JSONRPCResponse(
-        error={"code": -32603, "message": message}
+        error={"code": -32603, "message": message},
+        id=request_id,
     )
     return f"event: error\ndata: {json.dumps(response.dict())}\n\n"
 
@@ -254,7 +269,8 @@ def _extract_event_text(event_type: str, data: dict) -> Optional[str]:
 
 def _build_artifact_event(
     task_id: str,
-    data: dict
+    data: dict,
+    context_id: Optional[str] = None,
 ) -> Optional[TaskArtifactUpdateEvent]:
     """Build artifact update event from feed data.
 
@@ -289,7 +305,8 @@ def _build_artifact_event(
         metadata=data
     )
 
-    return TaskArtifactUpdateEvent(taskId=task_id, artifact=artifact)
+    return TaskArtifactUpdateEvent(
+        taskId=task_id, contextId=context_id, artifact=artifact)
 
 
 @router.post("/message/stream")
@@ -305,17 +322,12 @@ async def stream_message(
     from core.container import DependencyContainer
     from api.payment_verification import verify_payment_for_request, payment_required_response
 
-    # Get authenticated user (use user_id set by middleware, not raw payer_address)
-    user_id = getattr(request.state, 'user_id', None)
-    if not user_id or user_id == 'api_user':
-        # Fallback for x402 if middleware didn't set user_id
-        if getattr(request.state, 'payment_method', None) == 'x402':
-            from core.identity import generate_user_id_from_wallet
-            payer_address = getattr(request.state, 'payer_address', None)
-            if payer_address:
-                user_id = generate_user_id_from_wallet(payer_address)
-    if not user_id or user_id == 'api_user':
-        raise HTTPException(status_code=401, detail="Authentication required")
+    # B28: the ONE permissive auth policy, not a fourth inlined copy. The
+    # hand-rolled block here drifted from `get_user_permissive`: it never
+    # accepted an API-key session (`request.state.authenticated` with no JWT),
+    # so a machine caller holding a valid rob_xxx key was 401'd on the stream
+    # while the same key worked on every other A2A route.
+    user_id = await get_user_permissive(request)
 
     container = DependencyContainer.get_instance()
     handler = A2ATaskHandler(container)
@@ -397,9 +409,8 @@ async def stream_task_events(
 
 @router.post("/tasks/resubscribe")
 async def resubscribe_to_task(
-    task_id: str,
-    historyLength: Optional[int] = None,
-    request: Request = None
+    body: TaskResubscriptionRequest,
+    request: Request,
 ):
     """Resubscribe to task events after connection loss.
 
@@ -408,11 +419,20 @@ async def resubscribe_to_task(
 
     This is the A2A protocol's recommended method for
     handling network interruptions.
+
+    B26: the parameters arrive in the BODY (``{"id", "historyLength"}``, the
+    spec's ``TaskResubscriptionRequest``). They used to be bare function
+    arguments on a POST with no body model, which FastAPI reads as QUERY
+    parameters — so a spec-conformant client POSTing the documented body got
+    422 on a missing `task_id` query string.
     """
     from core.container import DependencyContainer
 
     container = DependencyContainer.get_instance()
     handler = A2ATaskHandler(container)
+
+    task_id = body.id
+    historyLength = body.historyLength
 
     # Authenticate and enforce ownership before re-subscribing to task events.
     user_id = await get_user_permissive(request)
@@ -446,5 +466,5 @@ async def resubscribe_to_task(
 
 async def _single_event_stream(task: A2ATask) -> AsyncGenerator[str, None]:
     """Generator for single final event (for terminal tasks)."""
-    event = TaskStatusUpdateEvent(task=task, final=True)
+    event = TaskStatusUpdateEvent.from_task(task, final=True)
     yield _format_sse_event(event)

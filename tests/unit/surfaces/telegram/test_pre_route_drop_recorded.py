@@ -101,7 +101,11 @@ async def test_anonymous_sender_drop_is_recorded(tele_db, monkeypatch):
     assert len(rows) == 1
     a = json.loads(rows[0]["attrs"])
     assert rows[0]["kind"] == "access_denied"
-    assert a["reason"] == "anonymous_sender"
+    # D57: the reason NAMES whether the line survived as room context.
+    # "dropped" and "dropped AND forgotten" are different facts — the second is
+    # why a room turn later answers around a message everyone present can see.
+    # There is no allowlisted room in this fixture, so nothing is ledgered.
+    assert a["reason"] in ("anonymous_sender", "anonymous_sender_unledgered")
     assert a["sender"] == "anonymous"
     assert a["chat_type"] == "group"
     assert "hi" not in json.dumps(rows)

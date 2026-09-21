@@ -242,6 +242,27 @@ def _split_snippets(raw: str) -> list:
     return out
 
 
+def _goal_session_id(g):
+    """The session a goal is (or was) RUNNING in, or ``None``.
+
+    043 A7: Work › Now draws running goals from the board and live actors from
+    the live reader, and without this key it cannot tell that the two are the
+    same run — so one goal appeared twice, once as a goal and once as a
+    session. The board stamps the id on the row (``stamp_session``); older rows
+    carry it in the payload instead, under either of two names. ``None`` means
+    "no session recorded", never "no session".
+    """
+    direct = getattr(g, "session_id", None)
+    if direct:
+        return str(direct)
+    payload = getattr(g, "payload", None) or {}
+    for key in ("session_id", "run_session_id", "origin_session_id"):
+        value = payload.get(key) if isinstance(payload, dict) else None
+        if value:
+            return str(value)
+    return None
+
+
 def _goal_dict(g) -> dict:
     return {
         "id": g.id,
@@ -252,6 +273,7 @@ def _goal_dict(g) -> dict:
         "created_at": g.created_at,
         "completed_at": g.completed_at,
         "result": g.result,
+        "session_id": _goal_session_id(g),
     }
 
 
@@ -290,6 +312,13 @@ def _provider_model():
         return (None, None)
 
 
+#: Where the owner actually pauses and resumes from a console page. The pause
+#: headline renders on EVERY page, so this names the one control that is on
+#: every page — the shell header — rather than a button on a screen the reader
+#: may not be looking at (043 A2).
+PAUSE_CONTROL_HINT = "Pause/Resume in the header"
+
+
 def _pause_headline() -> str:
     """The ONE pause sentence, for the console's own verbs (043 W11).
 
@@ -305,9 +334,14 @@ def _pause_headline() -> str:
     """
     try:
         from core.status_render import pause_headline_from
+        # 043 A2: the hint must name a control that EXISTS. It used to say
+        # "the Resume button" / "the Pause button" on a shell that had neither,
+        # so the one always-visible sentence on every console page pointed at
+        # nothing. The pause control lives in the shell header, on every
+        # destination — so that is what it names.
         return pause_headline_from(owner_admin.pause_state(_data_dir()).to_dict(),
-                                   resume_hint="the Resume button",
-                                   pause_hint="the Pause button")
+                                   resume_hint=PAUSE_CONTROL_HINT,
+                                   pause_hint=PAUSE_CONTROL_HINT)
     except Exception:
         logger.debug("pause headline unavailable", exc_info=True)
         return ""
@@ -526,7 +560,7 @@ async def api_pfp_generate(request: Request):
                       attrs={"action": "generate", "outcome": "created"})
         return JSONResponse({"ok": True, "meta": meta})
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)})
+        return _pfp_refusal(str(e))
 
 
 @router.post("/api/pfp/randomize", dependencies=webgate.MUTATION_DEPS)
@@ -545,8 +579,7 @@ async def api_pfp_randomize(request: Request):
     try:
         meta = load_pfp_meta(home, instance_id)
         if meta is not None and store.is_locked(meta):
-            return JSONResponse({"ok": False,
-                                 "message": "the identity is kept — setup happens once"})
+            return _pfp_refusal("the identity is kept — setup happens once")
         try:
             current = core_config(load_frozen_config(meta)) if meta else default_config()
         except Exception:
@@ -563,7 +596,20 @@ async def api_pfp_randomize(request: Request):
                       attrs={"action": "randomize", "what": what})
         return JSONResponse({"ok": True, "meta": new_meta})
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)})
+        return _pfp_refusal(str(e))
+
+
+def _pfp_refusal(message: str) -> JSONResponse:
+    """A refused avatar write, as a REFUSAL (043 A19).
+
+    These three routes answered every refusal with HTTP 200 and ``ok: false``,
+    and the one caller derived success from the status code — so "the identity
+    is kept, setup happens once" rendered as a successful re-roll. A 409 is the
+    honest shape (the request conflicts with a state that is one-way), and the
+    body carries both ``ok`` and ``error`` so a caller reading either is right.
+    """
+    return JSONResponse({"ok": False, "error": message, "message": message},
+                        status_code=409)
 
 
 @router.post("/api/pfp/keep", dependencies=webgate.MUTATION_DEPS)
@@ -578,9 +624,9 @@ async def api_pfp_keep(request: Request):
                       attrs={"action": "keep", "outcome": "locked"})
         return JSONResponse({"ok": True, "meta": meta})
     except FileNotFoundError:
-        return JSONResponse({"ok": False, "message": "no avatar to keep — generate first"})
+        return _pfp_refusal("no avatar to keep — generate one first")
     except Exception as e:
-        return JSONResponse({"ok": False, "message": str(e)})
+        return _pfp_refusal(str(e))
 
 
 def _empty_ledger(user_id: str, days: int) -> dict:
@@ -605,10 +651,12 @@ def _empty_ledger(user_id: str, days: int) -> dict:
             "llm_api_cost_usd": 0.0, "credits_spent": 0.0, "llm_calls": 0,
             "wallet_spend_usd": 0.0, "wallet_payments": 0, "settled_payments": 0,
             "pending_invoices_usd": 0.0, "pending_invoices": 0,
+            "refund_due_usd": 0.0, "refund_due_count": 0,
             "costs_available": False, "inbound_available": False,
             "wallet_metering": "error",
             "treasury": {"income_usd": 0.0, "spend_usd": 0.0, "pending_usd": 0.0,
-                         "pending_count": 0, "balance_usd": None, "net_usd": 0.0,
+                         "pending_count": 0, "refund_due_usd": 0.0, "refund_due_count": 0,
+                         "balance_usd": None, "net_usd": 0.0,
                          "available": False},
             "runtime": {"spend_window_usd": 0.0, "spend_total_usd": 0.0,
                         "calls_window": 0, "calls_total": 0,
@@ -1013,13 +1061,15 @@ async def api_preferences_patch(request: Request):
     the local webview posture has no auth, so a confirmed wholesale-replace of
     a GUARDED list key (``approvals.require``/``approvals.deny``) could
     silently DROP a pref-added gate — bypassing the ``remove_entry`` owner
-    review flow every other surface enforces (``/approve remove``, the
+    review flow every other surface enforces (``/gates remove``, the
     agent-callable ``preferences`` action). So for a list-typed guarded key,
     the new value is diffed against the CURRENT pref list: additions TIGHTEN
     policy and still apply directly (same trust level as any other guarded
     confirm); any REMOVED entry is instead queued as one
     ``propose_pref_change(op="remove_entry", ...)`` per entry (mirrors
-    ``/approve remove`` — the owner reviews it via ``/pending``). A pure
+    ``/gates remove`` — the owner reviews it via ``/inbox``; the older
+    ``/approve list|add|remove`` spelling survives as an alias, but ``/approve``
+    on its own DECIDES a queued item now, so prose must name ``/gates``). A pure
     addition (no entry removed) or a scalar guarded key is unaffected and
     keeps the existing direct-apply, 200 response."""
     user_id = _effective_user_id(request)
@@ -1123,28 +1173,25 @@ def _webgate_correspondent_registry():
 
 @router.get("/api/webgate/pending")
 async def api_pending(request: Request):
-    """The tenant's pending items: self-evolution proposals (identity/skills/
-    contract/pref changes) via ``core.self_evolution``, PLUS (T10 parity with
-    ``polyrob owner pending``) queued tool-approval asks
-    (``tools.controller.approval_queue.list_pending_tool_approvals``) and
-    pending correspondent bindings (``cli.commands.owner._pending_correspondent_items``
-    — reused, not reimplemented). Read-only. Any one collector failing degrades
-    to an empty contribution rather than a 500 for the whole aggregate."""
-    kw = _pending_kwargs(request)
-    items = self_evolution.list_pending(kw["user_id"], home_dir=kw["home_dir"],
-                                        instance_id=kw["instance_id"])
-    try:
-        from tools.controller.approval_queue import list_pending_tool_approvals
-        items = items + list_pending_tool_approvals(_webgate_goal_board(), kw["user_id"])
-    except Exception:
-        logger.debug("api_pending: tool-approval collector failed", exc_info=True)
-    try:
-        from cli.commands.owner import _pending_correspondent_items
-        items = items + _pending_correspondent_items(_webgate_correspondent_registry(),
-                                                      kw["user_id"])
-    except Exception:
-        logger.debug("api_pending: correspondent collector failed", exc_info=True)
-    return JSONResponse({"user_id": kw["user_id"], "items": items})
+    """The tenant's pending items — the SAME body the Inbox renders (043 A8/E2).
+
+    ⚠️ This endpoint used to run its own three collectors and swallow each
+    failure into an empty contribution, so a locked approval store read as
+    "nothing is waiting" on the one screen whose whole job is to say what IS.
+    It now delegates to :func:`webview.inbox.build_inbox` — the composer the
+    Inbox page and the REPL's ``/inbox`` already share — so the two seats can
+    no longer disagree about what needs the owner.
+
+    The legacy keys are kept (``user_id``, ``items``) and joined by the
+    composer's own honest-state fields: ``unreadable_sources`` names every
+    store that REFUSED, ``sources`` carries each one's reason, ``count`` counts
+    decisions only and ``uncertain`` says the count is a floor.
+    """
+    from webview.inbox import build_inbox
+    user_id = _effective_user_id(request)
+    body = build_inbox(user_id)
+    body["user_id"] = user_id
+    return JSONResponse(body)
 
 
 @router.get("/api/webgate/pending/{kind}/{item_id}")
@@ -1245,8 +1292,23 @@ async def api_pending_reject(request: Request, kind: str, item_id: str):
 #: exactly the four the C3 decision granted).
 _WEBGATE_GOAL_VERBS = ("pause", "resume", "retry", "cancel")
 
-#: Valid invoice status filters (same set as the CLI/REPL/Telegram listings).
-_INVOICE_STATUSES = ("pending", "completed", "expired")
+def _invoice_statuses() -> tuple:
+    """The ONE invoice-status vocabulary (``modules.x402.invoicing``).
+
+    ⚠️ This was a hand-written ``("pending", "completed", "expired")``, and the
+    store grew three more real states: ``settling`` (claimed, the facilitator
+    in flight), ``settled_no_tx`` and ``refund_due`` (money taken, nothing
+    delivered). A console asking for one of them got a 400 naming three
+    statuses as if they were all there were — so the owner could not list the
+    rows they most need to see. Resolved lazily so the console still boots
+    where the payments module is absent.
+    """
+    try:
+        from modules.x402.invoicing import INVOICE_STATUSES
+        return tuple(INVOICE_STATUSES)
+    except Exception:
+        logger.debug("invoice status vocabulary unavailable", exc_info=True)
+        return ("pending", "completed", "expired")
 
 
 def _owner_console_required(what: str = "the pause controls") -> None:
@@ -1255,8 +1317,12 @@ def _owner_console_required(what: str = "the pause controls") -> None:
     in ``api_config_set``: an authenticated multitenant TENANT must never halt
     (or resume) the whole instance's autonomy, decide another principal's app, or
     re-roll the instance's own identity. ``what`` names the refused control so
-    the message is specific instead of always saying "pause"."""
-    if webgate.posture() not in ("local", "own_ops"):
+    the message is specific instead of always saying "pause".
+
+    The predicate is ``webgate.is_owner_console()`` — shared with the shell, so
+    a control is DRAWN exactly where it can be used (2026-09-21 audit: the head
+    Pause button rendered for a multitenant tenant and answered 403)."""
+    if not webgate.is_owner_console():
         raise HTTPException(
             status_code=403,
             detail=f"{what} require the owner console (local/own_ops posture)")
@@ -1413,9 +1479,13 @@ async def api_goal_verb(request: Request, goal_id: str, verb: str):
     user_id = _effective_user_id(request)
     from agents.task.goals.board import KIND_GOAL
     board = _webgate_goal_board()
-    mine = [g for g in board.list(user_id=user_id, limit=1000)
-            if g.kind == KIND_GOAL]
-    goal = next((g for g in mine if g.id == goal_id), None)
+    # 043 A5 / E21: ``board.list`` is the dispatcher's priority-ordered CLAIM
+    # queue and is forbidden as a view — resolving an id inside a 1000-row
+    # window meant the 1001st goal simply did not exist to this verb. ``get``
+    # is the id lookup; the tenant is asserted here and again on the write.
+    goal = board.get(goal_id, user_id=user_id)
+    if goal is not None and goal.kind != KIND_GOAL:
+        goal = None  # an ask/objective id is not a goal id
     if goal is None:
         return JSONResponse(
             {"ok": False, "message": f"no goal {goal_id} for this tenant"},
@@ -1493,6 +1563,31 @@ async def _with_owner_money_db(coro_factory):
     return await _with_bot_db(coro_factory)
 
 
+#: How far the outstanding-total scan reads. The total is over EVERY pending
+#: row, but a scan still needs a ceiling; past it the answer says so rather than
+#: reporting a smaller number as if it were the whole one.
+_OUTSTANDING_SCAN_LIMIT = 5000
+
+
+def _outstanding_total(rows) -> tuple:
+    """``(total_usd, unpriced_rows)`` over the tenant's PENDING invoices.
+
+    A row whose amount cannot be read is COUNTED, never treated as zero —
+    ``unpriced_rows`` is what makes the caller render a dash instead of a
+    confident figure.
+    """
+    total, unpriced = 0.0, 0
+    for row in (rows or []):
+        raw = (row or {}).get("amount_usd")
+        if raw is None:
+            raw = (row or {}).get("amount")
+        try:
+            total += float(raw)
+        except (TypeError, ValueError):
+            unpriced += 1
+    return round(total, 6), unpriced
+
+
 def _invoicing_off_note():
     """The ONE feature-off note (``modules.x402.invoicing_note``), or None
     while the settlement watcher is enabled."""
@@ -1508,26 +1603,54 @@ async def api_invoices(request: Request, status: str = ""):
     carries an ``error`` field (030 D4)."""
     user_id = _effective_user_id(request)
     status_f = (status or "").strip().lower() or None
-    if status_f is not None and status_f not in _INVOICE_STATUSES:
+    statuses = _invoice_statuses()
+    if status_f is not None and status_f not in statuses:
         return JSONResponse(
-            {"error": f"status must be one of {', '.join(_INVOICE_STATUSES)}"},
+            {"error": f"status must be one of {', '.join(statuses)}"},
             status_code=400)
+
+    page_limit = 50
 
     async def _list(db):
         from modules.x402.invoicing import list_payment_requests
-        return await list_payment_requests(user_id=user_id, status=status_f,
-                                           limit=50, db=db)
+        rows = await list_payment_requests(user_id=user_id, status=status_f,
+                                           limit=page_limit, db=db)
+        # 043 A35: the OUTSTANDING total is computed over EVERY pending row, not
+        # over the page. The console used to sum the 50 rows it happened to be
+        # sent and print the result as "outstanding" — a figure that silently
+        # stopped growing at the 51st invoice, which is exactly the size at
+        # which the number starts to matter.
+        pending = await list_payment_requests(user_id=user_id, status="pending",
+                                              limit=_OUTSTANDING_SCAN_LIMIT, db=db)
+        return rows, pending
 
     try:
-        ok, rows = await _with_owner_money_db(_list)
+        ok, result = await _with_owner_money_db(_list)
     except Exception as exc:
-        return JSONResponse({"user_id": user_id, "invoices": [], "count": 0,
+        return JSONResponse({"user_id": user_id, "invoices": None, "count": None,
+                             "outstanding_usd_total": None,
+                             "outstanding_count": None, "truncated": False,
                              "error": f"{type(exc).__name__}: {exc}"[:200]})
     if not ok:
-        return JSONResponse({"user_id": user_id, "invoices": [], "count": 0,
-                             "error": str(rows)})
-    return JSONResponse({"user_id": user_id, "invoices": rows,
-                         "count": len(rows), "note": _invoicing_off_note()})
+        return JSONResponse({"user_id": user_id, "invoices": None, "count": None,
+                             "outstanding_usd_total": None,
+                             "outstanding_count": None, "truncated": False,
+                             "error": str(result)})
+    rows, pending = result
+    total, unpriced = _outstanding_total(pending)
+    return JSONResponse({
+        "user_id": user_id, "invoices": rows, "count": len(rows),
+        # ⚠️ ``None``, never 0.0, when a pending row carried no readable
+        # amount: a total that quietly drops a row is worse than no total.
+        "outstanding_usd_total": (None if unpriced else total),
+        "outstanding_count": len(pending),
+        "outstanding_unpriced": unpriced,
+        # The LIST is a page; the totals above are not. ``truncated`` says the
+        # list is short, so the page never reads as the whole ledger.
+        "truncated": len(rows) >= page_limit,
+        "error": None,
+        "note": _invoicing_off_note(),
+    })
 
 
 @router.post("/api/webgate/invoices/{request_id}/settle", dependencies=webgate.MUTATION_DEPS)
@@ -1593,10 +1716,15 @@ async def api_doctor(request: Request):
     resolution, so the page can never contradict itself again (P0-4).
     """
     env = dict(os.environ)
+    checks_error = None
     try:
         checks = doctor_report(env, local_absent_means_on=False)
-    except Exception:
-        checks = []
+    except Exception as e:
+        # 2026-09-21: this used to be `checks = []` — a confident "nothing to
+        # report" over a report that could not be built. Name the fault.
+        checks = None
+        checks_error = f"{type(e).__name__}: {e}"
+        logger.warning("api_doctor: doctor_report failed — %s", checks_error, exc_info=True)
     provider, model = _provider_model()
     rob_local = local_flag_on(env, absent_means_on=False)
     # 2026-08-28 status SSOT: the same snapshot Telegram /status renders — for
@@ -1632,6 +1760,7 @@ async def api_doctor(request: Request):
                   "lines": [f"Health: unavailable ({unbound_reason})"]}
         return JSONResponse(_doctor_payload(
             checks, health, status_lines, env, provider, model, rob_local,
+            checks_error=checks_error,
             unbound_reason=unbound_reason))
     try:
         from core.status_snapshot import build_status_snapshot
@@ -1648,14 +1777,19 @@ async def api_doctor(request: Request):
         health = {"overall": "unavailable", "items": [], "unverified": [],
                   "lines": [f"Health: unavailable ({type(e).__name__}: {str(e)[:120]})"]}
     return JSONResponse(_doctor_payload(
-        checks, health, status_lines, env, provider, model, rob_local))
+        checks, health, status_lines, env, provider, model, rob_local,
+        checks_error=checks_error))
 
 
 def _doctor_payload(checks, health, status_lines, env, provider, model, rob_local,
-                    *, unbound_reason: str = "") -> dict:
-    """The ONE doctor body, so the bound and unbound answers cannot drift apart."""
+                    *, unbound_reason: str = "", checks_error: str = None) -> dict:
+    """The ONE doctor body, so the bound and unbound answers cannot drift apart.
+
+    ``checks`` is ``None`` (never ``[]``) when the report could not be built;
+    ``checks_error`` then carries the reason."""
     return {
         "checks": checks,
+        "checks_error": checks_error,
         "health": health,
         "status_lines": status_lines,
         "instance_id": resolve_instance_id(),
@@ -1675,16 +1809,15 @@ def _doctor_payload(checks, health, status_lines, env, provider, model, rob_loca
     }
 
 
-# --- page routes (render the template; data fetched client-side via the API) - #
-
-# 043 phase 5 (§9): the WEBVIEW_UI switch is removed and the new console is the
-# ONLY console. /pending is the one surviving webgate PAGE (it carries the shared
-# _page_context and is the console's approve/reject-quarantine surface), so it
-# registers as a normal route now rather than behind the deleted legacy switch.
-@router.get("/pending", response_class=HTMLResponse)
-async def pending_page(request: Request):
-    return _TEMPLATES.TemplateResponse(request, "pending.html",
-                                      _page_context(request))
+# --- page routes ------------------------------------------------------------ #
+#
+# There are none. 043 A21/E3: ``/pending`` was the last surviving webgate PAGE,
+# and it sat OUTSIDE the five-destination information architecture — no nav link
+# reached it, its reader was the weaker one this module used to carry, and its
+# English was inline in a template nothing else rendered. The decision it
+# offered is the Inbox's decision, made through the Inbox's composer and the
+# Inbox's deciders. The page, its template and its script are deleted; this
+# module is now purely the ``/api/webgate/*`` readers and writers.
 
 
 __all__ = ["router"]

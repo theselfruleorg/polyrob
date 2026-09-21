@@ -379,6 +379,12 @@ export class Transcript {
     const url = `/api/session/${encodeURIComponent(this.sessionId)}/messages`;
     try {
       const res = await postJson(url, { text, kind: 'comment', metadata: {} }, { fetcher: this.fetcher });
+      // A16: a leading owner verb is handled by the console's own verb plane
+      // (`console_commands.maybe_handle_console_command`) and answered inline
+      // as `command_reply` — it never reaches the agent, so no feed event ever
+      // arrives for it. Nothing rendered that field, so `/halt` typed into the
+      // chat box acted and then looked exactly like a message that vanished.
+      this._commandNote(res && res.body);
       // A32: a 409 is not a failure — the session is live in Rob's OWN process,
       // not this console, so the console cannot steer it from here. Render the
       // honest "live in the agent" line (with owner_pid + a retry hint), NEVER a
@@ -412,6 +418,29 @@ export class Transcript {
       notice.setAttribute('role', 'status'); this.thread.appendChild(notice);
     }
     notice.textContent = message;
+  }
+
+  /**
+   * A16 — the inline answer to an owner verb typed into the chat box.
+   *
+   * `console_commands.maybe_handle_console_command` runs `/halt`, `/pending`,
+   * `/status` and friends on the SHARED owner-verb plane and answers
+   * `{"success": true, "command_reply": "…"}`; the verb never reaches the
+   * agent, so no feed event is ever written for it. Rendered as a `.note` in
+   * the thread — NOT a `.turn-rob`/`.said` bubble, because the console
+   * answered, not the agent. Each verb leaves its own answer rather than
+   * replacing the previous one.
+   */
+  _commandNote(body) {
+    if (!this.thread || !body) return null;
+    const reply = typeof body.command_reply === 'string' ? body.command_reply.trim() : '';
+    if (!reply) return null;
+    const note = el('p', 'note');
+    note.dataset.commandReply = '1';
+    note.setAttribute('role', 'status');
+    note.textContent = reply;
+    this.thread.appendChild(note);
+    return note;
   }
 
   _errorNotice(body) {

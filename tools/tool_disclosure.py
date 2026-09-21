@@ -48,6 +48,50 @@ class ToolStatus:
     remedy: str = ""     # the channel that unblocks it — never empty for gated/loadable
 
 
+#: 057 WS-A — display tool id -> (verdict kind, the remedy channel). A tool whose
+#: CREDENTIALS this deploy has already had rejected is rendered
+#: ``gated:credentials-rejected`` even though it is loaded, for the same reason
+#: the browser rail is: a tool that refuses 100% of its calls is not loaded, it
+#: is gated, and the catalog must say so with the remedy rather than let the run
+#: discover it by failing and then misreport the cause.
+#:
+#: This is what makes ``STABLE_AUTONOMOUS_TOOLSET`` honest: the requested toolset
+#: stops flipping on a 900 s TTL (which cost a cold prompt cache every time), and
+#: the rejection is told HERE instead of by silently removing the tool.
+CREDENTIAL_GATED_TOOLS = {
+    "email": ("smtp", "SMTP credentials were rejected (535). The owner must fix "
+                      "GMAIL_* / EMAIL_* credentials, or switch EMAIL_PROVIDER to "
+                      "agentmail. Do not retry this rail until then — say so and "
+                      "use another channel."),
+    "twitter": ("twitter_api", "the X API refused this account (402 — credits). "
+                               "The owner must top up, or the browser rail "
+                               "(x_browser) carries the post instead."),
+}
+
+
+def _credential_verdict_status(display_id: str) -> Optional["ToolStatus"]:
+    """``gated:credentials-rejected`` when a live verdict says this rail's
+    credentials were refused, else None. Fail-open (an unreadable verdict store
+    must never gate a working tool)."""
+    row = CREDENTIAL_GATED_TOOLS.get(display_id)
+    if row is None:
+        return None
+    kind, remedy = row
+    try:
+        if kind == "smtp":
+            # Only the SMTP transport can have SMTP credentials rejected; an
+            # AgentMail inbox is unaffected by a 535 on the legacy rail.
+            from core.config_policy.capability_toggles import email_provider
+            if email_provider() != "smtp":
+                return None
+        from core.credential_verdicts import DEFAULT_TTL_BY_KIND, rejected_within
+        if not rejected_within(kind, DEFAULT_TTL_BY_KIND.get(kind, 900.0)):
+            return None
+    except Exception:
+        return None
+    return ToolStatus(display_id, "gated", "credentials-rejected", remedy)
+
+
 def _container_has_tool(container, display_id: str) -> bool:
     """Whether the container can serve *display_id* — the same three probes
     ``load_tools_from_container`` uses (name, ``{name}_tool``, browser via
@@ -97,6 +141,12 @@ def resolve_tool_status(
             return ToolStatus(
                 display, "gated", "custody-no-browser",
                 f"browser rail: {rail.line()}")
+
+    # 057 WS-A: a rejected-credential verdict outranks `loaded` for the same
+    # reason the browser rail does — see _credential_verdict_status.
+    _verdict = _credential_verdict_status(display)
+    if _verdict is not None:
+        return _verdict
 
     if display in loaded_ids:
         return ToolStatus(display, "loaded")

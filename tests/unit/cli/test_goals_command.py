@@ -64,7 +64,10 @@ def test_goals_list_renders_cancelled_goal_without_crashing(tmp_path):
 
     runner = CliRunner()
     with patch.object(G, "_get_board", return_value=board):
-        result = runner.invoke(G.goals, ["list"], env={"POLYROB_DATA_DIR": str(tmp_path)})
+        # `goals list` is tenant-scoped since C14 (it was `user_id=None` =
+        # every tenant on the box, in the dispatcher's priority order).
+        result = runner.invoke(G.goals, ["list", "--user", "u1"],
+                               env={"POLYROB_DATA_DIR": str(tmp_path)})
 
     assert result.exit_code == 0, result.output
     assert "cancelled" in result.output.lower()

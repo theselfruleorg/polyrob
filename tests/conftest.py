@@ -232,6 +232,32 @@ def _isolate_path_manager():
 
 
 @pytest.fixture(autouse=True)
+def _tests_are_not_a_deployed_box(tmp_path, monkeypatch):
+    """The suite runs as a DEV CHECKOUT, wherever it runs.
+
+    ``core/admin_data_home.py`` reads the box's deployment evidence — the env
+    file ``/etc/polyrob/polyrob.env`` and the ``polyrob*.service`` units — to
+    pick the owner tenant, the deployed data home and (via the WS-G root guard
+    in ``cli/_admin_home.py``) to REFUSE mutating owner verbs typed as root.
+    On a deployed box's maintenance clone (sitting beside that env file, run as
+    root) 80 CLI verb tests refused with the remedy text instead of exercising
+    their verb, and the keys test resolved tenant ``rob`` from the deployed env
+    (2026-09-21). Every seat under test points at ``tmp_path``, so the suite
+    never touches the shared home: point the evidence at an EMPTY tmp tree so
+    every box looks like a dev checkout. The guard's own tests patch
+    ``_deployed_box`` / ``_deployment_evidence`` back themselves. Fail-open on
+    import."""
+    try:
+        import core.admin_data_home as _adh
+        empty = tmp_path / "_no_deploy"
+        monkeypatch.setattr(_adh, "DEPLOYED_ENV_FILE", str(empty / "polyrob.env"))
+        monkeypatch.setattr(_adh, "UNIT_DIRS", (str(empty / "units"),))
+    except Exception:
+        pass
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _isolate_wallet_audit_sink(tmp_path, monkeypatch):
     """Keep the wallet PolicyGate/AgentWallet — and the durable audit sink they
     read real trailing-24h spend from — OUT of the developer's real data home,
@@ -442,6 +468,43 @@ def _isolate_telemetry_event_log(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEMETRY_EVENT_LOG_PATH",
                        str(tmp_path / "telemetry_events.db"))
     yield
+
+
+@pytest.fixture(autouse=True)
+def _restore_container_singleton():
+    """Restore ``DependencyContainer._instance`` after every test.
+
+    A test that builds a ``TaskAgent(config=…, container=…)`` (or calls
+    ``get_instance(config)``) left the process-wide singleton behind, so every
+    LATER test that read ``get_instance()`` got that test's double — the
+    2026-09-21 doctor-endpoint flake was exactly this: a leaked container made
+    ``build_ledger``'s wallet leg run and mint a telemetry store between the two
+    halves of one comparison. Save/restore (never blanket-None) keeps a
+    module-scoped container a test set up on purpose."""
+    from core.container import DependencyContainer
+    before = DependencyContainer._instance
+    yield
+    DependencyContainer._instance = before
+
+
+@pytest.fixture(autouse=True)
+def _isolate_credential_verdicts(tmp_path, monkeypatch):
+    """Keep the external-rail verdict store OUT of the developer's real data home.
+
+    057 WS-F made ``core.credential_verdicts`` durable (``verdicts.db`` under the
+    data home). A test that records a rejected SMTP login or an X-API 402 would
+    otherwise write a REAL verdict into ``~/.polyrob`` and suppress the
+    developer's own email/X rails for the next 15 minutes. The module also caches
+    its schema-init per path and keeps a fail-open fallback dict, so both are
+    reset around every test.
+    """
+    # A SUBDIRECTORY: a stray file planted directly in ``tmp_path`` is visible to
+    # every test that walks its own tmp dir (the knowledge-inventory suite does).
+    monkeypatch.setenv("VERDICTS_DB_PATH", str(tmp_path / "_verdicts" / "verdicts.db"))
+    from core import credential_verdicts as _cv
+    _cv._reset_for_tests()
+    yield
+    _cv._reset_for_tests()
 
 
 @pytest.fixture(autouse=True)

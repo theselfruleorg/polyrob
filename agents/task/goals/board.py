@@ -566,16 +566,33 @@ class GoalBoard:
                 self._event(gid, "requeued_on_boot", {"reason": reason})
         return n
 
-    def hold_running(self, *, worker: str, reason: str) -> List[str]:
+    def hold_running(self, *, worker: str, reason: str,
+                     goal_ids: Optional[List[str]] = None,
+                     reason_kind: str = "pause") -> List[str]:
         """031 owner pause: return THIS worker's running goals to ``ready`` with the
         claim cleared and NO failure increment — a pause is not the goal's fault.
         Scoped to ``claim_lock=worker`` so a second process's runs are untouched
-        (it holds its own on its next tick)."""
-        rows = execute_retry(
-            self.db_path,
-            "SELECT id FROM goals WHERE status='running' AND kind='goal' AND claim_lock=?",
-            (worker,), fetch="all",
-        ) or []
+        (it holds its own on its next tick).
+
+        057 WS-C (A2): ``goal_ids`` scopes the hold further — a rail yield cancels
+        only the runs holding the workspace, so it must return only THOSE rows to
+        ``ready`` (returning a still-running goal would double-dispatch it). An
+        EMPTY list holds nothing; ``None`` (the default) keeps the pause shape.
+        ``reason_kind`` is ``pause`` or ``rail``; it rides in the ``held`` event's
+        payload so "why was this row held" is queryable. ``held_by_pause`` is
+        still emitted alongside for one release (its only reader today is
+        ``tests/unit/agents/task/goals/test_board_hold.py``).
+        """
+        if goal_ids is not None and not goal_ids:
+            return []
+        sql = ("SELECT id FROM goals WHERE status='running' AND kind='goal' "
+               "AND claim_lock=?")
+        params: tuple = (worker,)
+        if goal_ids is not None:
+            marks = ",".join("?" for _ in goal_ids)
+            sql += f" AND id IN ({marks})"
+            params = params + tuple(str(g) for g in goal_ids)
+        rows = execute_retry(self.db_path, sql, params, fetch="all") or []
         held: List[str] = []
         for r in rows:
             rc = execute_retry(
@@ -586,8 +603,42 @@ class GoalBoard:
             )
             if rc == 1:
                 held.append(r["id"])
+                self._event(r["id"], "held",
+                            {"reason": str(reason)[:200], "reason_kind": str(reason_kind)})
+                # Legacy alias, kept for ONE release (grep before removing).
                 self._event(r["id"], "held_by_pause", {"reason": str(reason)[:200]})
         return held
+
+    def stamp_session(self, goal_id: str, session_id: Optional[str]) -> bool:
+        """057 WS-C (B9): record the session a run used WITHOUT a terminal write.
+
+        ``record_success``/``record_failure`` COALESCE the session id in, so a goal
+        that was yielded (neither) had no session to resume into. Never clears an
+        existing id."""
+        if not session_id:
+            return False
+        return bool(execute_retry(
+            self.db_path,
+            "UPDATE goals SET session_id=? WHERE id=?", (str(session_id), goal_id)))
+
+    def yield_count(self, goal_id: str) -> int:
+        """057 WS-C (B11): how many times this goal was pre-empted for a rail.
+
+        Read from the durable ``goal_events`` ledger rather than a payload counter,
+        so it cannot drift from the events the status surface renders."""
+        try:
+            row = execute_retry(
+                self.db_path,
+                "SELECT COUNT(*) AS n FROM goal_events WHERE goal_id=? AND kind='yielded'",
+                (goal_id,), fetch="one")
+        except Exception:
+            return 0
+        if not row:
+            return 0
+        try:
+            return int(row["n"])
+        except (KeyError, TypeError, IndexError):
+            return int(row[0])
 
     def unblock(self, goal_id: str, *, user_id: str, rationale: str = "") -> bool:
         """§5.3: requeue a ``blocked`` goal with a rationale (symmetric to
@@ -1393,18 +1444,103 @@ class GoalBoard:
         except (KeyError, TypeError, IndexError):
             return int(row[0]) if row else 0
 
-    def ready(self, *, limit: int = 10) -> List[Goal]:
-        """Ready goals across all tenants, highest priority first (dispatcher feed)."""
+    def ready(self, *, limit: int = 10, yield_ageing: int = 0) -> List[Goal]:
+        """Ready goals across all tenants, highest priority first (dispatcher feed).
+
+        057 WS-C (B11): ``yield_ageing`` > 0 adds ``yield_count x yield_ageing``
+        to the ordering priority, so a goal that has been PRE-EMPTED repeatedly
+        climbs instead of queueing behind fresh work forever (prod 2026-09-19:
+        one goal yielded 6 times in a night). ``0`` (the default) keeps the
+        original query byte-for-byte — the correlated count never runs."""
+        if int(yield_ageing) > 0:
+            rows = execute_retry(
+                self.db_path,
+                """SELECT * FROM goals g WHERE g.status='ready' AND g.claim_lock IS NULL
+                    AND g.kind='goal'
+                    ORDER BY (g.priority + ? * (SELECT COUNT(*) FROM goal_events e
+                        WHERE e.goal_id = g.id AND e.kind='yielded')) DESC,
+                        g.created_at LIMIT ?""",
+                (int(yield_ageing), int(limit)), fetch="all",
+            ) or []
+            return self._drop_held([Goal.from_row(r) for r in rows])
         rows = execute_retry(
             self.db_path,
             """SELECT * FROM goals WHERE status='ready' AND claim_lock IS NULL AND kind='goal'
                 ORDER BY priority DESC, created_at LIMIT ?""",
             (int(limit),), fetch="all",
         ) or []
-        return [Goal.from_row(r) for r in rows]
+        return self._drop_held([Goal.from_row(r) for r in rows])
+
+    # --- hold-by-open-ask (intel inbox 2026-09-16, evidence 2026-09-12) -----------
+    #
+    # `owner_queue` names the goal a tool approval blocks in the ask's
+    # ``blocks_goal_ids`` and `decide_ask` RE-ARMS it on approval — but nothing
+    # held the goal while the ask was OPEN: a run that ends "waiting on the
+    # owner" is a failed run, the goal goes straight back to ``ready``, and the
+    # dispatcher served it again (7 re-fires in 75 min, ~$0.42, an overclaim the
+    # judge had to reject, and a ping per run). The hold lives in the ready
+    # selection so every caller (dispatcher, `ready_fair`, the planner's view)
+    # sees the same board. Fail-open: an unreadable ask set holds nothing.
+
+    def _held_by_open_ask(self) -> Dict[str, str]:
+        """goal_id -> ask_id for every goal an OPEN ask names (all tenants; goal
+        ids are unique, so a foreign ask can only name its own goals)."""
+        rows = execute_retry(
+            self.db_path,
+            "SELECT id, payload FROM goals WHERE kind=? AND status=? "
+            "AND payload LIKE '%blocks_goal_ids%'",
+            (KIND_ASK, ASK_OPEN), fetch="all",
+        ) or []
+        held: Dict[str, str] = {}
+        for r in rows:
+            try:
+                ids = (json.loads(r["payload"] or "{}") or {}).get("blocks_goal_ids") or []
+            except (ValueError, TypeError):
+                continue
+            for gid in ids:
+                if gid:
+                    held.setdefault(str(gid), str(r["id"]))
+        return held
+
+    def _drop_held(self, goals: List[Goal]) -> List[Goal]:
+        if not goals:
+            return goals
+        try:
+            held = self._held_by_open_ask()
+        except Exception:
+            logger.debug("hold-by-ask read failed (fail-open: nothing held)", exc_info=True)
+            return goals
+        if not held:
+            return goals
+        kept: List[Goal] = []
+        for g in goals:
+            ask_id = held.get(g.id)
+            if ask_id is None:
+                kept.append(g)
+                continue
+            try:
+                self._note_hold(g.id, ask_id)
+            except Exception:
+                logger.debug("held_by_ask event skipped", exc_info=True)
+        return kept
+
+    def _note_hold(self, goal_id: str, ask_id: str) -> None:
+        """ONE ``held_by_ask`` event per (goal, ask) — a durable, legible reason
+        the goal is not moving, without a row per dispatcher tick."""
+        row = execute_retry(
+            self.db_path,
+            "SELECT 1 FROM goal_events WHERE goal_id=? AND kind='held_by_ask' "
+            "AND json_extract(payload,'$.ask_id')=? LIMIT 1",
+            (goal_id, ask_id), fetch="one")
+        if row is not None:
+            return
+        self._event(goal_id, "held_by_ask", {"ask_id": ask_id})
+        logger.info("goal %s held: open owner ask %s names it (served again on a decision)",
+                    goal_id[:12], ask_id[:12])
 
     def ready_fair(self, *, limit: int, per_objective_cap: int = 0,
-                   in_flight: Optional[Dict[str, int]] = None) -> List[Goal]:
+                   in_flight: Optional[Dict[str, int]] = None,
+                   yield_ageing: int = 0) -> List[Goal]:
         """Ready goals, round-robined across objectives instead of globally ordered.
 
         ``ready()`` sorts the WHOLE board by ``priority DESC, created_at``, so one
@@ -1427,7 +1563,7 @@ class GoalBoard:
             return []
         counts = dict(in_flight or {})
         buckets: "OrderedDict[str, List[Goal]]" = OrderedDict()
-        for g in self.ready(limit=READY_SCAN_LIMIT):
+        for g in self.ready(limit=READY_SCAN_LIMIT, yield_ageing=yield_ageing):
             buckets.setdefault(g.parent_id or "", []).append(g)
         picked: List[Goal] = []
         taken: Dict[str, int] = {}
@@ -1748,8 +1884,15 @@ class GoalBoard:
         rows = execute_retry(self.db_path, sql, tuple(params), fetch="all") or []
         return [Goal.from_row(r) for r in rows]
 
-    def decide_ask(self, ask_id: str, *, user_id: str, approved: bool) -> tuple:
+    def decide_ask(self, ask_id: str, *, user_id: str, approved: bool,
+                   answer: Optional[str] = None) -> tuple:
         """Record an owner decision (approve or reject) on an OPEN ask.
+
+        ``answer`` is the owner's free-text reply (2026-09-21, interface audit
+        A27): it is stamped on the ask as ``payload.answer`` and, on approval,
+        carried into each dependent goal's ``payload.owner_unblocked.answer`` so
+        the retry prompt tells the run WHAT the owner said, not only THAT it
+        was unblocked. Bounded to 2000 chars; an empty answer writes nothing.
 
         Generalizes :meth:`fulfill_ask` (Task 9 / G-2 — a ``tool_approval`` ask
         needs a real reject outcome, not just fulfilled/still-open). Approving
@@ -1765,6 +1908,9 @@ class GoalBoard:
         ask = self.get(ask_id)
         payload = dict(ask.payload or {}) if ask else {}
         payload["decision"] = "approved" if approved else "rejected"
+        answer_text = (answer or "").strip()[:2000]
+        if answer_text:
+            payload["answer"] = answer_text
         new_status = ASK_FULFILLED if approved else ASK_REJECTED
         rc = execute_retry(
             self.db_path,
@@ -1785,6 +1931,8 @@ class GoalBoard:
                 dep = self.get(gid)
                 dep_payload = dict(dep.payload or {}) if dep else {}
                 dep_payload["owner_unblocked"] = {"ts": now, "ask_id": ask_id}
+                if answer_text:
+                    dep_payload["owner_unblocked"]["answer"] = answer_text
                 # T2.1 final-review Fix 1: an ask-fulfillment unblock is also an
                 # owner reset — clear the stale block_kind (see unblock()'s
                 # docstring for the full rationale). provider_requeues /

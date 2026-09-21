@@ -26,6 +26,7 @@ const isNew = body?.dataset?.isNew === 'true' || !sessionId || sessionId === 'ne
 async function startSession(task) {
   const composer = document.getElementById('chat-composer');
   const send = document.getElementById('chat-send-btn');
+  const input = document.getElementById('chat-input');
   if (composer?.getAttribute('aria-busy') === 'true') return;
   if (send) send.disabled = true;
   if (composer) composer.setAttribute('aria-busy', 'true');
@@ -36,6 +37,19 @@ async function startSession(task) {
     // misleading "Invalid token" refusal the owner used to see here.
     const resp = await postJson('/api/task/sessions', { task, auto_start: true });
     const data = resp.body || {};
+    // A17: an owner verb typed on the COLD OPEN is answered inline by the same
+    // verb plane a bound chat uses — it makes no session, so there is nothing
+    // to navigate to. Before this the create route turned `/halt` into a TASK:
+    // the console spun up a session whose job was to think about the word
+    // "/halt" while nothing halted.
+    if (typeof data.command_reply === 'string' && data.command_reply.trim()) {
+      const status = document.getElementById('chat-create-status');
+      if (status) status.textContent = data.command_reply.trim();
+      if (input) input.value = '';
+      if (send) send.disabled = false;
+      if (composer) composer.removeAttribute('aria-busy');
+      return;
+    }
     if (!resp.ok || !data.session_id) throw new Error(serverAnswer(data, composer?.dataset.unreachable));
     window.location.assign(`/c/${encodeURIComponent(data.session_id)}`);
   } catch (err) {

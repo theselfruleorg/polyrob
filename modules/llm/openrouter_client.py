@@ -24,7 +24,7 @@ from core.config import BotConfig
 # circular import — llm_client_registry only imports openrouter_client lazily,
 # inside function bodies, never at module level).
 from modules.llm.llm_client_registry import get_default_model
-from modules.llm.openrouter_routing import apply_provider_routing  # OPENROUTER_PROVIDER_SORT (2026-09-19)
+from modules.llm.openrouter_reasoning import apply_request_extras  # PROVIDER_SORT + REASONING_MAX_TOKENS
 
 logger = logging.getLogger(__name__)
 
@@ -565,7 +565,7 @@ class OpenRouterClient(LLMClient):
                 'temperature': temp
             }
 
-            apply_provider_routing(request_params)
+            apply_request_extras(request_params, self, max_tokens_value)
             self.logger.debug(f"{self._PROVIDER_LABEL} API request: model={self.model_type}, max_tokens={max_tokens_value}")
 
             self.last_response = await self._client.chat.completions.create(**request_params)
@@ -724,7 +724,7 @@ class OpenRouterClient(LLMClient):
 
             self.logger.info(f"[_generate_with_tools] Starting API request: model={self.model_type}, tools={len(tools) if tools else 0}, messages={len(formatted_messages)}")
 
-            apply_provider_routing(request_params)
+            apply_request_extras(request_params, self, max_tokens_value)
             api_start = time.time()
             response = await self._client.chat.completions.create(**request_params)
             api_duration = time.time() - api_start

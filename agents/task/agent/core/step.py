@@ -126,6 +126,37 @@ from agents.task.telemetry.service_detect import (  # noqa: E402
 )
 
 
+def _screenshot_on_browser_only() -> bool:
+	"""``AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY`` (057 WS-B) — capture a screenshot
+	only on a step where the browser was actually used. Default OFF.
+
+	Why it matters: ``browser`` is in ``AUTONOMOUS_MODE_TOOLS``, so every
+	autonomous session holds a browser context and ``get_state`` captured a
+	screenshot on every step — including the large majority that never touch a
+	page. The 2026-09-19 fix stopped SENDING the image; the capture still ran."""
+	from core.env import bool_env
+	return bool_env("AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY", False)
+
+
+def _should_capture_screenshot(agent: Any, use_vision: bool) -> bool:
+	"""Whether THIS step captures a browser screenshot.
+
+	``use_vision`` off => never, as before. On, and the flag off => always, as
+	before. On, and the flag on => only when the browser was actually used
+	recently (``_has_active_browser_usage``: a ``browser_*`` action among the
+	recent actions, or a real URL on the last observed state). Fail-OPEN: if the
+	usage probe raises, capture — a missing screenshot on a page-driving step is
+	a worse failure than an unnecessary one."""
+	if not use_vision:
+		return False
+	if not _screenshot_on_browser_only():
+		return True
+	try:
+		return bool(agent._has_active_browser_usage())
+	except Exception:  # pragma: no cover - defensive
+		return True
+
+
 def _is_fatal_step_error(error_str: str, billing_failover_enabled: bool) -> bool:
 	"""Classify a step-loop exception as fatal (halt immediately) vs recoverable.
 
@@ -411,7 +442,18 @@ class StepMixin:
 					# FIX (Dec 2025): Only capture screenshots when vision is enabled
 					# This saves ~100-200ms per step for non-vision tasks
 					# Pass use_vision flag to control screenshot capture
-					state = await browser_context.get_state(capture_screenshot=self.use_vision)
+					#
+					# 057 WS-B: `browser` is in AUTONOMOUS_MODE_TOOLS, so a browser
+					# context exists on EVERY autonomous session — including the ~90%
+					# of steps that never touch a page — and a screenshot was captured
+					# on each one. The 09-19 fix skipped sending the IMAGE; the capture
+					# itself still ran. Under AUTONOMOUS_SCREENSHOT_ON_BROWSER_ONLY,
+					# capture only when the browser was ACTUALLY used recently
+					# (_has_active_browser_usage: a browser_* action in the recent
+					# actions, or a real URL on the last state). Default OFF =>
+					# byte-identical.
+					state = await browser_context.get_state(
+						capture_screenshot=_should_capture_screenshot(self, self.use_vision))
 
 					# Apply page content truncation early for token safety
 					if hasattr(state, 'page_content') and state.page_content:

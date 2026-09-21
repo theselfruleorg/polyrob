@@ -61,6 +61,14 @@ const COPY = {
   ov_report_link: "See the full report",
   ov_unverified: "I could not check these: {sources}",
   ov_identity_no_avatar: "Rob has no face yet.",
+  ov_identity_kept: "Kept. This face and this voice are permanent.",
+  ov_identity_draft: "A draft. Keep it under Identity to make it permanent.",
+  ov_identity_traits: "Traits: {traits}",
+  ov_identity_voice: "Voice: {voice}",
+  ov_identity_made: "Made {when}",
+  ov_identity_instance: "Instance {instance}",
+  ov_identity_unreadable: "There is a face here, but I could not read what it is made of.",
+  ov_identity_unreadable_why: "Why",
   ov_posture_title: "What Rob is allowed to do",
   ov_posture_aside: "four rules",
   ov_axis_local_title: "Treat this machine as yours alone",
@@ -256,14 +264,50 @@ describe("Overview health leads and is honest", () => {
 });
 
 describe("Overview face and connected read from the doctor + pfp", () => {
-  it("shows a face image when the avatar exists, a plain line when it does not", () => {
+  // A1 (2026-09-21 audit): the face used to be read from `description` /
+  // `tagline` — two keys `modules/pfp/store` has never written — so an
+  // instance WITH a face was told it had none, beside its own rendered face.
+  // These pin the record's REAL keys and, just as importantly, the three
+  // answers being different facts.
+  const RECORD = {
+    instance_id: "polyrob", created_at: "2026-07-19T10:00:00+00:00",
+    locked: false, traits: { tier: 2, eyes: "round" },
+    voice: { pitch: 1.0219, rate: 0.98 },
+  };
+
+  it("draws the face from traits and voice, and says it is a draft", () => {
     const yes = root();
-    renderFace(yes, { name: "rob", description: "a trader" }, COPY);
+    expect(renderFace(yes, RECORD, COPY)).toBe("face");
     expect(yes.querySelector("img")).toBeTruthy();
+    expect(yes.textContent).toContain("A draft.");
+    expect(yes.textContent).toContain("tier 2, eyes round");
+    expect(yes.textContent).toContain("pitch 1.02");   // rounded, not 1.0219
+    expect(yes.textContent).toContain("2026-07-19");
+    expect(yes.textContent).toContain("polyrob");
+    expect(yes.textContent).not.toContain("no face yet");
+  });
+
+  it("says KEPT when the record is locked — the one-way state", () => {
+    const r = root();
+    expect(renderFace(r, { ...RECORD, locked: true }, COPY)).toBe("face");
+    expect(r.textContent).toContain("permanent");
+    expect(r.textContent).not.toContain("A draft.");
+  });
+
+  it("only a 404 is 'no face yet'", () => {
     const no = root();
-    renderFace(no, { error: "404" }, COPY);
+    expect(renderFace(no, { error: "404" }, COPY)).toBe("no_face");
     expect(no.querySelector("img")).toBeNull();
     expect(no.textContent).toContain("Rob has no face yet.");
+  });
+
+  it("a failed read is UNREADABLE with its reason, never 'no face yet'", () => {
+    for (const bad of [{ error: "500" }, {}, null]) {
+      const r = root();
+      expect(renderFace(r, bad, COPY)).toBe("unreadable");
+      expect(r.textContent).not.toContain("Rob has no face yet.");
+      expect(r.querySelector("img")).toBeNull();
+    }
   });
 
   it("connected shows the models and where memory is kept, or a dash", () => {

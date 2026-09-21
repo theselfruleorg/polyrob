@@ -14,24 +14,44 @@ since removing loosens policy it queues a guarded ``propose_pref_change``
 (Task 3's review queue) instead of writing immediately — apply with
 ``polyrob owner promote pref_change approvals.require --user <uid>``.
 
-Data-home resolution mirrors ``polyrob config set``'s per-user-preference
-path (``core.runtime_paths.resolve_runtime_paths``, overridable via the
-hidden ``--home`` option, test/ops only).
+Data-home resolution is the ONE admin seam
+(``cli/_admin_home.py::admin_data_dir`` — the 031 rule, which adopts the
+DEPLOYED home when the shell declares none), overridable via the hidden
+``--home`` option (test/ops only). The tenant is
+``core.admin_data_home.admin_owner_principal()``.
 """
 from __future__ import annotations
 
 import click
 
 from core.prefs import load_preferences, propose_pref_change, write_preference
-from cli._admin_home import admin_data_dir
+from cli._admin_home import admin_data_dir, as_root_option
 from tools.controller.approval import effective_approval_state
 
 
-def _default_home_dir() -> str:
+def _default_home_dir(write: "bool | None" = None) -> str:
     """The DEPLOYED data home (cli/_admin_home.py, the 031 rule) — the approval set is
     the daemon's; resolving the shell-local home here wrote to /root/.polyrob on prod
     and printed success (the same class as the recorded `delivery.daily_cap` defect)."""
-    return admin_data_dir()
+    return admin_data_dir(write=write)
+
+
+def _tenant(user_id: "str | None") -> str:
+    """The tenant whose preference row this verb reads or writes.
+
+    C23: every verb here defaulted to the LITERAL ``"local"``. On a box with a
+    bound owner the gate is enforced under that owner's tenant, so
+    ``polyrob approvals add`` wrote a row the running Controller never read and
+    reported a gate that did not exist. ``admin_owner_principal`` is the ONE
+    resolver, and it adopts the deployment's declaration.
+    """
+    if user_id:
+        return user_id
+    from core.admin_data_home import AmbiguousDataHome, admin_owner_principal
+    try:
+        return admin_owner_principal()
+    except AmbiguousDataHome as exc:
+        raise click.ClickException(str(exc))
 
 
 @click.group("approvals")
@@ -42,21 +62,26 @@ def approvals():
 
 
 @approvals.command("list")
-@click.option("--user", "user_id", default="local",
-              help="Tenant user id (default: local)")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id (default: this instance's owner)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
 @click.option("--json", "as_json", is_flag=True, help="Print machine-readable JSON.")
 def list_cmd(user_id, home_dir_opt, as_json):
     """Show the effective gated-action set: per-entry source + provider."""
-    home_dir = home_dir_opt or _default_home_dir()
+    home_dir = home_dir_opt or _default_home_dir(write=False)
+    user_id = _tenant(user_id)
     gates, provider = effective_approval_state(user_id, home_dir)
     if as_json:
         import json
-        click.echo(json.dumps({"gates": gates, "provider": provider}, indent=2))
+        click.echo(json.dumps({"gates": gates, "provider": provider,
+                               "user_id": user_id}, indent=2))
         return
+    click.echo(click.style(f"approvals — tenant {user_id}", dim=True))
     if not gates:
-        click.echo("no approval gates configured")
+        from cli.ui.candy import empty
+        click.echo(empty("approval gates configured",
+                         "every action runs without a tap", yet=False))
     else:
         click.echo(f"{len(gates)} approval gate(s):")
         for action in sorted(gates):
@@ -72,17 +97,19 @@ def list_cmd(user_id, home_dir_opt, as_json):
 
 @approvals.command("add")
 @click.argument("action")
-@click.option("--user", "user_id", default="local",
-              help="Tenant user id (default: local)")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id (default: this instance's owner)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
+@as_root_option
 def add_cmd(action, user_id, home_dir_opt):
     """Add ACTION to approvals.require (safe union — tightens policy only).
 
     ACTION is not validated against the live tool registry (unreachable from
     the CLI context) — any non-empty name is accepted; double-check spelling.
     """
-    home_dir = home_dir_opt or _default_home_dir()
+    home_dir = home_dir_opt or _default_home_dir(write=True)
+    user_id = _tenant(user_id)
     action = action.strip()
     if not action:
         raise click.ClickException("ACTION must not be empty")
@@ -95,7 +122,8 @@ def add_cmd(action, user_id, home_dir_opt):
     if not ok:
         raise click.ClickException(err)
     click.echo(
-        f"Added '{action}' to approvals.require (gate registered). "
+        f"Added '{action}' to approvals.require for tenant {user_id} "
+        f"(gate registered). "
         "Note: this action name is not validated against the live tool "
         "registry — that check is skipped from the CLI context; make sure "
         "it's spelled correctly."
@@ -104,10 +132,11 @@ def add_cmd(action, user_id, home_dir_opt):
 
 @approvals.command("remove")
 @click.argument("action")
-@click.option("--user", "user_id", default="local",
-              help="Tenant user id (default: local)")
+@click.option("--user", "user_id", default=None,
+              help="Tenant user id (default: this instance's owner)")
 @click.option("--home", "home_dir_opt", default=None, hidden=True,
               help="Override the preferences data home (test/ops only)")
+@as_root_option
 def remove_cmd(action, user_id, home_dir_opt):
     """Queue removal of ACTION from approvals.require for owner review.
 
@@ -120,7 +149,8 @@ def remove_cmd(action, user_id, home_dir_opt):
     stores WHICH entry to drop and the promote recomputes against the CURRENT
     list, so a gate added between propose and promote survives.
     """
-    home_dir = home_dir_opt or _default_home_dir()
+    home_dir = home_dir_opt or _default_home_dir(write=True)
+    user_id = _tenant(user_id)
     action = action.strip()
     if not action:
         raise click.ClickException("ACTION must not be empty")

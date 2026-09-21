@@ -107,10 +107,18 @@ function verbButton(label, verb, id, extra) {
 export function runningGoalEntry(goal, copy, nowMs, readOnly) {
   const entry = el("div", "entry is-running");
   entry.dataset.goalId = String((goal && goal.id) || "");
+  // A7: the live reader and the board both name the session a goal runs in, so
+  // a live SESSION row for the same session is not drawn twice.
+  const sid = String((goal && goal.session_id) || "");
+  if (sid) entry.dataset.sessionId = sid;
   entry.appendChild(el("h3", "entry-title", (goal && goal.title) || ""));
+  // `since` is the live reader's own start clock (`started_at`); `created_at`
+  // is the board's. Started beats created — a goal queued yesterday and picked
+  // up a minute ago has been RUNNING a minute.
+  const startedAt = (goal && (goal.since != null ? goal.since : goal.created_at));
   entry.appendChild(el("p", "entry-body",
     format(copy && copy.elapsed_started,
-           { elapsed: elapsed(since(goal && goal.created_at, nowMs), copy) })));
+           { elapsed: elapsed(since(startedAt, nowMs), copy) })));
   if (!readOnly) {
     const actions = el("div", "entry-actions");
     actions.appendChild(verbButton(copy && copy.stop, "cancel", goal && goal.id));
@@ -243,14 +251,26 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
 
   const goals = (data && data.goals) || [];
   const counts = (data && data.counts) || {};
-  const runningGoals = goals.filter((g) => g.status === "running");
   const workers = (runningData && runningData.running) || [];
   const queued = goals.filter((g) => QUEUED.includes(g.status));
   const blocked = goals.filter((g) => g.status === "blocked");
-  // The live reader (/api/webgate/live): cron runs + live sessions. A goal it
-  // also names is already drawn above from the board, so it is not repeated.
   const live = opts.live || null;
-  const goalSessions = new Set(runningGoals.map((g) => String(g.session_id || "")));
+
+  // A6: what is RUNNING comes from the live reader, which queries
+  // `status='running'` over the whole board. The goals reader is
+  // `GoalBoard.list_recent` — a newest-first WINDOW (30 rows by default), so a
+  // run older than the window simply vanished from Now while the head line,
+  // which counts un-windowed, kept saying it was there. The board is still the
+  // fallback when the live reader could not answer: a window is a better
+  // answer than a blank.
+  const liveGoals = live && Array.isArray(live.goals) ? live.goals : null;
+  const runningGoals = liveGoals !== null
+    ? liveGoals : goals.filter((g) => g.status === "running");
+
+  // The live reader's cron runs + live sessions. A session a running goal
+  // already names is not drawn twice (A7 — both sides carry `session_id` now).
+  const goalSessions = new Set(
+    runningGoals.map((g) => String((g && g.session_id) || "")).filter(Boolean));
   const cronRuns = (live && live.cron) || [];
   const sessions = ((live && live.sessions) || [])
     .filter((row) => !goalSessions.has(String(row.session_id || "")));
@@ -274,16 +294,24 @@ export function renderNowNext(ctx, data, runningData, copy, opts = {}) {
     ctx.running.appendChild(unreadableEntry(runningData.error, copy));
   }
   // …and so is every live source that could not be read (a missing store on a
-  // fresh install is a fact, not a zero).
-  const liveReasons = Object.keys(liveUnreadable)
-    .map((k) => `${k}: ${liveUnreadable[k]}`);
+  // fresh install is a fact, not a zero). The reader reports `unreadable` as a
+  // list of source names, and reported it as a name→reason map before; both are
+  // rendered rather than one silently ignored.
+  const liveReasons = Array.isArray(liveUnreadable)
+    ? liveUnreadable.map((s) => String(s))
+    : Object.keys(liveUnreadable).map((k) => `${k}: ${liveUnreadable[k]}`);
   if (live && live.error) liveReasons.push(String(live.error));
   if (liveReasons.length && ctx.running) {
     ctx.running.appendChild(unreadableEntry(liveReasons.join("; "), copy,
                                             "live_unreadable", "live_unreadable_why"));
   }
   if (ctx.runningAside) {
-    ctx.runningAside.textContent = format(copy && copy.running_count, { count: total });
+    // A37: a count over a PARTIAL read is a floor, not a total. Say "at least
+    // N" rather than a confident number the reader itself does not stand by.
+    const partial = Boolean((live && live.partial) || liveReasons.length);
+    ctx.runningAside.textContent = format(
+      copy && (partial ? copy.running_count_partial : copy.running_count),
+      { count: total });
   }
 
   // Next.

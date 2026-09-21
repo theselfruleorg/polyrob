@@ -21,10 +21,25 @@ Handler-function style (like ``tests/unit/cli/test_h_config.py``): a real
 (``container.config.data_dir``) so preferences never touch the real ``data/``
 tree, and ``ctx.emit`` is monkeypatched to capture output.
 """
+
+import pytest
 from types import SimpleNamespace
 
 from core.prefs import load_preferences
 from cli.ui.commands.registry import CommandContext
+
+
+@pytest.fixture(autouse=True)
+def _data_home_is_tmp(tmp_path, monkeypatch):
+    """C2 (2026-09-21): the REPL's owner/identity homes resolve through the ONE
+    seam (``core.runtime_paths.prefs_home_dir`` / ``cli._admin_home``), not the
+    container's ``config.data_dir`` — which was the shadow tree the preference
+    WRITERS never used. These tests hand the handler ``tmp_path`` through the
+    container, so point the resolved data home at the SAME directory; without
+    it a write test would land in the developer's real data home.
+    """
+    monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+
 
 
 def _ctx(tmp_path, args=None, *, orchestrator=None, user_id="u1"):

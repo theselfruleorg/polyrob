@@ -6,7 +6,10 @@ def test_request_parses_minimal_openai_body():
     assert req.model == "gpt-4"
     assert req.messages[-1].content == "hi"
     assert req.stream is False
-    assert req.temperature == 0.7
+    # B18: an unsent temperature is None ("the caller did not ask"), not a
+    # fabricated 0.7. The old default was never forwarded anywhere, so it
+    # described nothing; an explicit value is now threaded to the agent turn.
+    assert req.temperature is None
 
 
 def test_request_accepts_stream_flag():

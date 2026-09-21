@@ -31,6 +31,7 @@
  * Tabs are wired by work-now.js (the one Work subnav), so this only fills the
  * Apps pane.
  */
+import { postJson, serverAnswer } from "./http.js";
 
 /** The copy the server handed over, as a plain object. */
 export function copyFrom(node) {
@@ -96,9 +97,28 @@ const STATUS_WORD = {
   failed: "status_failed", stopped: "status_stopped", paused: "status_paused",
 };
 
+//: The statuses whose app is RUNNING, so Stop and the log are real verbs on it.
+//: A pending or stopped row has nothing to stop and no log to show; drawing
+//: the buttons there would be two controls that can only refuse.
+const RUNNING_STATUSES = new Set(["live", "unhealthy"]);
+
 /** One app service: its name (linked when it has a public URL), its plain
- *  state, where it is, and an Open it for a reachable one. */
-export function appEntry(app, copy) {
+ *  state, where it is, and an Open it for a reachable one. A live or unhealthy
+ *  app also carries Stop and Show the log (A22) — the two registry verbs that
+ *  had no console caller at all, so an unhealthy app could be seen and not
+ *  touched.
+ *
+ *  The log is a READ and is offered on every posture. Stop is a WRITE, and
+ *  ⚠️ `apps_routes._decide` refuses it for every multitenant caller (an app
+ *  decision is instance-wide, like the pause record), so it is drawn only when
+ *  `opts.canDecide` — the server's own `webgate.is_owner_console()`, handed
+ *  over on the copy node — as well as not read-only. A button that is always
+ *  there and always answers 403 is a seat lying about its reach.
+ *  `canDecide` defaults to TRUE when a caller omits it: this is a pure render
+ *  function and the seat, not the renderer, is what knows the posture. */
+export function appEntry(app, copy, opts = {}) {
+  const readOnly = Boolean(opts.readOnly);
+  const canDecide = opts.canDecide === undefined ? true : Boolean(opts.canDecide);
   const status = (app && app.status) || "";
   const cls = STATUS_CLASS[status];
   const entry = el("div", cls ? `entry ${cls}` : "entry");
@@ -123,9 +143,27 @@ export function appEntry(app, copy) {
   if (app && app.pending_reason) {
     entry.appendChild(el("p", "entry-meta", String(app.pending_reason)));
   }
-  if (app && app.public_url) {
+  const running = RUNNING_STATUSES.has(status);
+  if ((app && app.public_url) || running) {
     const actions = el("div", "entry-actions");
-    actions.appendChild(linkOut(copy && copy.online_open, app.public_url));
+    if (app && app.public_url) {
+      actions.appendChild(linkOut(copy && copy.online_open, app.public_url));
+    }
+    if (running) {
+      const logs = el("button", "btn btn-quiet", (copy && copy.logs) || "");
+      logs.type = "button";
+      logs.dataset.appVerb = "logs";
+      logs.dataset.slug = String((app && app.slug) || "");
+      logs.setAttribute("aria-expanded", "false");
+      actions.appendChild(logs);
+      if (!readOnly && canDecide) {
+        const kill = el("button", "btn btn-quiet", (copy && copy.kill) || "");
+        kill.type = "button";
+        kill.dataset.appVerb = "kill";
+        kill.dataset.slug = String((app && app.slug) || "");
+        actions.appendChild(kill);
+      }
+    }
     entry.appendChild(actions);
   }
   return entry;
@@ -133,7 +171,7 @@ export function appEntry(app, copy) {
 
 /** Online — the app_services registry. A failed read is dashed with its reason;
  *  an empty registry is a plain notice. */
-export function onlineSection(appsData, copy) {
+export function onlineSection(appsData, copy, opts = {}) {
   const apps = (appsData && appsData.apps) || [];
   const failed = Boolean(appsData && appsData.error);
   const section = el("div", "section");
@@ -150,7 +188,7 @@ export function onlineSection(appsData, copy) {
   } else if (!apps.length) {
     ledger.appendChild(noticeEntry(copy && copy.online_empty));
   } else {
-    apps.forEach((a) => ledger.appendChild(appEntry(a, copy)));
+    apps.forEach((a) => ledger.appendChild(appEntry(a, copy, opts)));
   }
   section.appendChild(ledger);
   return section;
@@ -166,8 +204,9 @@ export function publishedSection(published, artifactsData, copy) {
   head.appendChild(el("h2", "section-title", (copy && copy.published_title) || ""));
   head.appendChild(el("span", "section-aside", (copy && copy.published_aside) || ""));
   section.appendChild(head);
-  if (artifactsData && artifactsData.error) {
-    section.appendChild(unreadableEntry(artifactsData.error, copy,
+  if (!artifactsRead(artifactsData)) {
+    section.appendChild(unreadableEntry(
+      (artifactsData && artifactsData.error) || "", copy,
       "published_unreadable", "published_unreadable_why"));
     return section;
   }
@@ -217,8 +256,9 @@ export function madeSection(made, artifactsData, copy) {
   head.appendChild(el("h2", "section-title", (copy && copy.made_title) || ""));
   head.appendChild(el("span", "section-aside", (copy && copy.made_aside) || ""));
   section.appendChild(head);
-  if (artifactsData && artifactsData.error) {
-    section.appendChild(unreadableEntry(artifactsData.error, copy,
+  if (!artifactsRead(artifactsData)) {
+    section.appendChild(unreadableEntry(
+      (artifactsData && artifactsData.error) || "", copy,
       "made_unreadable", "made_unreadable_why"));
     return section;
   }
@@ -272,29 +312,44 @@ export function emptyState(copy) {
 }
 
 /**
+ * Has the artifact ledger actually been READ?
+ *
+ * ⚠️ A3 (2026-09-21 audit): asked with no `session_id`, the ledger endpoint
+ * used to answer `{"artifacts": [], "error": null}` — an empty list dressed as
+ * an answer — and this tab rendered "Nothing built" over a tenant's real
+ * artifacts. The endpoint now answers `{"artifacts": null, "error":
+ * "session-scoped"}`, and `artifacts: null` is treated as NOT READ on its own,
+ * so a null with no error text still cannot become a confident empty.
+ */
+export function artifactsRead(data) {
+  if (!data || data.error) return false;
+  return Array.isArray(data.artifacts);
+}
+
+/**
  * Draw the Apps tab. `appsData` is the /api/webgate/apps body, `artifactsData`
  * the /api/webgate/artifacts body. Returns which answer it drew ("empty" |
  * "apps"), for tests. The empty state fires ONLY when every store answered and
- * every one was empty — a store that errored is named, never swept into "nothing
- * built".
+ * every one was empty — a store that errored, or answered `null`, is named,
+ * never swept into "nothing built".
  */
-export function renderApps(root, appsData, artifactsData, copy) {
+export function renderApps(root, appsData, artifactsData, copy, opts = {}) {
   appsData ||= { error: copy?.online_unreadable || "—" };
   artifactsData ||= { error: copy?.made_unreadable || "—" };
   root.replaceChildren();
   const apps = (appsData && appsData.apps) || [];
-  const arts = (artifactsData && artifactsData.artifacts) || [];
-  const appsFailed = !appsData || Boolean(appsData.error);
-  const artsFailed = !artifactsData || Boolean(artifactsData.error);
+  const artsOk = artifactsRead(artifactsData);
+  const arts = artsOk ? artifactsData.artifacts : [];
+  const appsFailed = !appsData || Boolean(appsData.error) || !Array.isArray(appsData.apps);
   const published = arts.filter((a) => a && a.url);
   const made = arts.filter((a) => a && !a.url);
 
   if (!apps.length && !published.length && !made.length
-      && !appsFailed && !artsFailed) {
+      && !appsFailed && artsOk) {
     root.appendChild(emptyState(copy));
     return "empty";
   }
-  root.appendChild(onlineSection(appsData, copy));
+  root.appendChild(onlineSection(appsData, copy, opts));
   root.appendChild(publishedSection(published, artifactsData, copy));
   root.appendChild(madeSection(made, artifactsData, copy));
   return "apps";
@@ -311,6 +366,29 @@ async function getJson(url, fetcher) {
 
 export const loadApps = (f) => getJson("/api/webgate/apps", f);
 export const loadArtifacts = (f) => getJson("/api/webgate/artifacts", f);
+export const loadAppLogs = (slug, f) =>
+  getJson(`/api/webgate/apps/${encodeURIComponent(slug)}/logs`, f);
+
+// --- mutations -------------------------------------------------------------- #
+// A22. One verb, one existing route, and the row says back exactly what the
+// supervisor answered — `kill` is the owner's own seam (`core.app_service.
+// owner_ops.kill`), not a second stop path.
+
+/** Stop one app. Returns `{ok, message}`; a refusal is the server's sentence. */
+export async function killApp(slug, copy, opts = {}) {
+  try {
+    const { ok, body } = await postJson(
+      `/api/webgate/apps/${encodeURIComponent(slug)}/kill`, undefined,
+      { fetcher: opts.fetcher });
+    const message = serverAnswer(body, (copy && copy.unreachable) || "");
+    const accepted = body && Object.prototype.hasOwnProperty.call(body, "ok")
+      ? Boolean(body.ok) : Boolean(ok);
+    return { ok: accepted, message };
+  } catch (err) {
+    console.error("[work-apps] the stop did not reach the console", err);
+    return { ok: false, message: (copy && copy.unreachable) || "" };
+  }
+}
 
 // --- wiring ----------------------------------------------------------------- #
 // Tab switching is owned by work-now.js (the one Work subnav). This only fills
@@ -322,6 +400,12 @@ function bind() {
   const pane = document.getElementById("work-apps");
   if (!copyNode || !pane) return;
   const copy = copyFrom(copyNode);
+  const readOnly = copy.read_only === "1";
+  // ⚠️ An app decision is INSTANCE-wide, so `apps_routes._decide` refuses every
+  // multitenant caller. The seat's posture crosses on the copy node the way
+  // every other server fact does; a missing attribute is read as NOT the owner
+  // console, because drawing a refusing button is the failure being closed.
+  const canDecide = copy.owner_console === "1";
   const state = document.getElementById("work-apps-state");
 
   let pending = false;
@@ -334,9 +418,55 @@ function bind() {
         loadApps().catch(failed), loadArtifacts().catch(failed),
       ]);
       if (state) state.hidden = true;
-      renderApps(pane, apps, artifacts, copy);
+      renderApps(pane, apps, artifacts, copy, { readOnly, canDecide });
     } finally { pending = false; }
   }
+
+  // A22: Stop and the log, by delegation, so a redraw never leaves a dead
+  // listener behind. The log is a READ and is offered on every posture; Stop
+  // is a write and is drawn only where it can act.
+  pane.addEventListener("click", async (ev) => {
+    const btn = ev.target.closest("button[data-app-verb]");
+    if (!btn) return;
+    const entry = btn.closest(".entry");
+    const slug = btn.dataset.slug || "";
+    if (btn.dataset.appVerb === "logs") {
+      let pre = entry && entry.querySelector("pre[data-logs]");
+      if (pre) {
+        const open = pre.hidden;
+        pre.hidden = !open;
+        btn.setAttribute("aria-expanded", String(open));
+        btn.textContent = open ? (copy.logs_hide || "") : (copy.logs || "");
+        return;
+      }
+      btn.disabled = true;
+      const body = await loadAppLogs(slug).catch(
+        (err) => ({ error: String(err && err.message) }));
+      pre = el("pre");
+      pre.dataset.logs = "1";
+      const text = body && typeof body.logs === "string" ? body.logs : "";
+      pre.textContent = (body && body.error) ? (copy.logs_unreadable || "")
+        : (text.trim() ? text : (copy.logs_empty || ""));
+      if (entry) entry.appendChild(pre);
+      btn.setAttribute("aria-expanded", "true");
+      btn.textContent = copy.logs_hide || "";
+      btn.disabled = false;
+      return;
+    }
+    if (btn.dataset.appVerb === "kill") {
+      btn.disabled = true;
+      const { ok, message } = await killApp(slug, copy);
+      if (entry) {
+        let line = entry.querySelector(".entry-answer");
+        if (!line) { line = el("p", "entry-meta entry-answer"); entry.appendChild(line); }
+        line.textContent = message || "";
+        line.dataset.ok = ok ? "true" : "false";
+      }
+      if (ok) refresh();
+      else btn.disabled = false;
+    }
+  });
+
   if (state) { state.textContent = copy.loading || ""; state.hidden = false; }
   document.addEventListener('polyrob:tick', refresh);
   refresh();

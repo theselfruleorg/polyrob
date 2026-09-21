@@ -114,12 +114,31 @@ export function buildFiles(tree, artifacts) {
   }
   const ready = arts.map((a) => ({
     name: String((a && a.path) || '').split('/').pop() || String((a && a.path) || ''),
+    // A23: the workspace-relative path, kept so a deliverable can be OPENED,
+    // not only named. The ledger's `path` is what `/workspace/file?path=`
+    // takes, so nothing here reconstructs one.
+    path: String((a && a.path) || ''),
     kind: a && a.kind,
     verdict: a && a.verdict,
     url: a && a.url,
     id: a && a.id,
   }));
   return { ready, working, given };
+}
+
+/**
+ * The read URL for one workspace-relative path, or `''` when either half is
+ * missing — an anchor with no target is a link that looks live and is not.
+ *
+ * ⚠️ A23: the whole per-session read family (`workspace/file`, `serve`,
+ * screenshots, stats) had NO console caller. `workpane.js` carried each row's
+ * `path` and emitted no `href`, so the pane could list what a chat made and
+ * open none of it.
+ */
+export function fileHref(sessionId, path) {
+  if (!sessionId || !path) return '';
+  return `/api/session/${encodeURIComponent(sessionId)}/workspace/file`
+    + `?path=${encodeURIComponent(path)}`;
 }
 
 /**
@@ -161,13 +180,23 @@ export function unreadableEntry(sentence) {
 }
 
 /** One Files row: the value (name), and — for a deliverable — its verdict in
- *  the `.why` slot. Returns a DOM node; nothing here builds HTML from a string. */
-function fileRow(name, why, verdict) {
+ *  the `.why` slot. With an `href` the name is a LINK to the file's own read
+ *  route (A23); without one it stays plain text, never a dead anchor. Returns
+ *  a DOM node; nothing here builds HTML from a string. */
+function fileRow(name, why, verdict, href) {
   const row = el('tr');
   if (verdict) row.dataset.verdict = String(verdict);
   const cell = el('td', 'what');
   cell.dataset.label = '';
-  cell.appendChild(el('span', 'val', name));
+  if (href) {
+    const link = el('a', 'val', name);
+    link.href = href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    cell.appendChild(link);
+  } else {
+    cell.appendChild(el('span', 'val', name));
+  }
   if (why) cell.appendChild(el('span', 'why', why));
   row.appendChild(cell);
   row.appendChild(el('td'));
@@ -187,6 +216,9 @@ export function renderFiles(root, state, data, copy) {
   root.replaceChildren();
   const tree = data && data.tree;
   const artifacts = data && data.artifacts;
+  // A23: every row that names a workspace file links to its own read route.
+  const sessionId = (data && data.sessionId) || '';
+  const hrefFor = (path) => fileHref(sessionId, path);
   const treeUnreadable = Boolean(
     data && (data.treeUnreadable || tree === null || (tree && tree.error)),
   );
@@ -230,7 +262,7 @@ export function renderFiles(root, state, data, copy) {
   if (treeUnreadable) {
     root.appendChild(unreadableEntry(copy && copy.files_tree_unreadable));
     tier('tier_ready', 'tier_ready_why', buildFiles(null, artifacts).ready,
-      (a) => fileRow(a.name, verdictLabel(a.verdict, copy), a.verdict));
+      (a) => fileRow(a.name, verdictLabel(a.verdict, copy), a.verdict, hrefFor(a.path)));
     flush();
     if (state) state.hidden = true;
     return 'partial';
@@ -244,8 +276,10 @@ export function renderFiles(root, state, data, copy) {
   if (artsUnreadable) {
     root.appendChild(unreadableEntry(copy && copy.files_ledger_unreadable));
     const built = buildFiles(tree, null); // empty ledger → working = every non-inbound file
-    tier('tier_folder', 'tier_folder_why', built.working, (f) => fileRow(f.name, ''));
-    tier('tier_given', 'tier_given_why', built.given, (f) => fileRow(f.name, ''));
+    tier('tier_folder', 'tier_folder_why', built.working,
+      (f) => fileRow(f.name, '', null, hrefFor(f.path)));
+    tier('tier_given', 'tier_given_why', built.given,
+      (f) => fileRow(f.name, '', null, hrefFor(f.path)));
     flush();
     if (state) state.hidden = true;
     return 'partial';
@@ -263,11 +297,11 @@ export function renderFiles(root, state, data, copy) {
   }
   if (state) state.hidden = true;
   tier('tier_ready', 'tier_ready_why', built.ready,
-    (a) => fileRow(a.name, verdictLabel(a.verdict, copy), a.verdict));
+    (a) => fileRow(a.name, verdictLabel(a.verdict, copy), a.verdict, hrefFor(a.path)));
   tier('tier_working', 'tier_working_why', built.working,
-    (f) => fileRow(f.name, ''));
+    (f) => fileRow(f.name, '', null, hrefFor(f.path)));
   tier('tier_given', 'tier_given_why', built.given,
-    (f) => fileRow(f.name, ''));
+    (f) => fileRow(f.name, '', null, hrefFor(f.path)));
   flush();
   return 'rows';
 }
@@ -335,6 +369,7 @@ async function loadFiles(sessionId, filesRoot, stateNode, copy) {
     artifacts: arts ? arts.artifacts : null,
     treeUnreadable: tree === null || Boolean(tree && tree.error),
     artifactsUnreadable,
+    sessionId,
   }, copy);
 }
 

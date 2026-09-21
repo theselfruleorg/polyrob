@@ -44,7 +44,6 @@ ALLOWLISTED_PROVIDER_AWARE_FILES = frozenset({
     # of agents/task/utils.py into the LLM layer — behaviour table, not a list.
     "modules/llm/usage_extract.py",
     "agents/task/agent/core/model_introspection.py",  # provider display names
-    "webview/stats_service.py",           # usage display grouping
 })
 
 

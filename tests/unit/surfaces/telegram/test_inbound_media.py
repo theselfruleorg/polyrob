@@ -96,3 +96,69 @@ def test_an_animated_sticker_is_not_labelled_as_an_image():
     assert items[0].filename.endswith(".webm")
     items = extract_media(_update({"sticker": {"file_id": "s3"}}))
     assert items[0].filename.endswith(".webp")
+
+
+# ---------------------------------------------------------------------------
+# D52 / D76 — a failure is named, and the caption field has a reader
+# ---------------------------------------------------------------------------
+
+def test_a_failed_absorb_names_the_files_it_lost():
+    """D52: `absorb_for_session` swallowed the fault and returned the message
+    exactly as it arrived, so the owner's file vanished with no trace anywhere
+    he could see — the silent-drop class the whole media rail exists to end."""
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import _absorb_failure_text
+
+    out = _absorb_failure_text(
+        "have a look",
+        [Media(kind="image", ref="f1", filename="chart.png")],
+        RuntimeError("disk full"))
+    assert out.startswith("have a look")
+    assert "chart.png" in out
+    assert "could NOT store" in out
+    assert "do not act as though you have read them" in out
+
+
+def test_a_failed_absorb_with_no_caption_is_still_not_empty():
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import _absorb_failure_text
+
+    out = _absorb_failure_text(
+        "", [Media(kind="document", ref="f1", filename="report.pdf")],
+        RuntimeError("boom"))
+    assert out.strip() and "report.pdf" in out
+
+
+def test_a_caption_the_turn_already_carries_is_never_repeated():
+    """D76: on Telegram a caption is ALREADY promoted to the message text, so
+    re-stating it would put the owner's own sentence in front of the model
+    twice."""
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import _with_captions
+
+    media = [Media(kind="image", ref="f1", filename="a.png",
+                   caption="what is this?")]
+    out = _with_captions("[attached a.png]", media, "what is this?")
+    assert out == "[attached a.png]"
+
+
+def test_a_caption_the_turn_lost_is_carried_through():
+    """The field now HAS a reader, for the shapes where the caption is the only
+    place the words survive."""
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import _with_captions
+
+    media = [Media(kind="image", ref="f1", filename="a.png",
+                   caption="the third quarter, annotated")]
+    out = _with_captions("[attached a.png]", media, "")
+    assert "the third quarter, annotated" in out
+
+
+def test_duplicate_captions_across_an_album_are_said_once():
+    from core.surfaces.media import Media
+    from surfaces.telegram.media import _with_captions
+
+    media = [Media(kind="image", ref="f1", filename="a.png", caption="both"),
+             Media(kind="image", ref="f2", filename="b.png", caption="both")]
+    out = _with_captions("[attached 2]", media, "")
+    assert out.count("both") == 1

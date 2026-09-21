@@ -68,6 +68,20 @@ class AmbiguousDataHome(RuntimeError):
     """
 
 
+class DeployedEnvUnreadable(AmbiguousDataHome):
+    """The deployment's env file EXISTS but this process cannot read it.
+
+    The prod shape (2026-09-20 07:32Z): ``/etc/polyrob/polyrob.env`` is root
+    0600 because it holds secrets, and an owner verb run as the service user
+    under ``sudo`` gets EACCES. Reading that as "nothing declared" made
+    ``admin_instance_id`` fall back to the ``polyrob`` default and write a
+    promoted owner-facts doc into ``identity/polyrob/…`` — a tree the running
+    service never reads — while reporting "no pending doc". Unreadable is
+    "cannot tell", so the verb refuses and names the remedy; CLI seams re-raise
+    it as a ``click.ClickException``.
+    """
+
+
 @dataclass(frozen=True)
 class DataHomeResolution:
     #: the home to act on ("" only when *ambiguous*)
@@ -108,6 +122,9 @@ def deployed_env_value(key: str) -> Optional[str]:
     try:
         with open(DEPLOYED_ENV_FILE, encoding="utf-8", errors="replace") as fh:
             raw = fh.read()
+    except PermissionError:
+        # The file is there and this euid may not read it: NOT "undeclared".
+        raise DeployedEnvUnreadable(_unreadable_remedy(key))
     except OSError:
         return None
     found: Optional[str] = None
@@ -122,6 +139,14 @@ def deployed_env_value(key: str) -> Optional[str]:
         if value:
             found = value
     return found
+
+
+def _unreadable_remedy(key: str) -> str:
+    return (f"{DEPLOYED_ENV_FILE} exists but is not readable by this user, so {key} "
+            f"cannot be read from the deployment and will NOT be guessed. Pass the "
+            f"service's identity explicitly: sudo -u polyrob-agent env "
+            f"POLYROB_DATA_DIR=<data home> POLYROB_INSTANCE_ID=<id> "
+            f"POLYROB_OWNER_USER_ID=<owner> polyrob … (values from that env file).")
 
 
 def _deployed_data_dir() -> Optional[str]:

@@ -42,6 +42,25 @@ def _get_container():
     return DependencyContainer.get_instance()
 
 
+def _chat_once_accepts(param: str, agent) -> bool:
+    """Whether the agent's ``chat_once`` takes ``param`` (B18).
+
+    Feature-detected rather than assumed: the seam lives in the agents tier and
+    gains parameters over time. A ``**kwargs``-taking implementation counts as
+    accepting anything.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(agent.chat_once)
+    except (TypeError, ValueError):
+        return False
+    if param in sig.parameters:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD
+               for p in sig.parameters.values())
+
+
 def _last_user_text(req: ChatCompletionRequest) -> str:
     for m in reversed(req.messages):
         if m.role == "user" and (m.content or "").strip():
@@ -96,7 +115,26 @@ async def chat_completions(
     request: Request,
     user_id: str = Depends(get_user_id),
 ):
+    """One agent turn, in OpenAI's shape.
+
+    ⚠️ SINGLE-TURN (B18): only the LAST user message runs. POLYROB keeps its
+    own per-session history keyed on `user`/`user_id`, so replaying a
+    client-side transcript would duplicate it; `system` messages are NOT
+    applied — the agent's system prompt comes from its own identity and skills.
+    Documented in `docs/guide/api.md`.
+    """
     await verify_payment_for_request(request, cost_credits=1)  # raises 402 if unpaid
+
+    # B18: refuse a parameter we cannot honour, with the reason, instead of
+    # dropping it. A caller who sent `tools` or `response_format` and got prose
+    # back had no way to tell the instruction was discarded.
+    unsupported = body.unsupported_fields()
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=("unsupported request parameter(s) — "
+                    + body.unsupported_reason()),
+        )
 
     text = _last_user_text(body)
     if not text:
@@ -115,9 +153,27 @@ async def chat_completions(
     response_id = f"chatcmpl-{int(time.time()*1000)}"
     created = int(time.time())
 
+    # B18: `temperature` used to be parsed and then never passed anywhere — a
+    # caller asking for temperature=0 got the agent's default sampling and no
+    # sign the request had been dropped. Thread it when the chat seam accepts
+    # one; refuse with the reason when it does not.
+    chat_kwargs = {}
+    if body.temperature is not None:
+        if _chat_once_accepts("temperature", agent):
+            chat_kwargs["temperature"] = body.temperature
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=("unsupported request parameter(s) — 'temperature': this "
+                        "build's agent chat seam does not accept a per-request "
+                        "temperature; omit the field to use the agent's "
+                        "configured sampling"),
+            )
+
     async def _run_chat() -> str:
         reply = await agent.chat_once(
-            user_id=user_id, text=text, chat_id=chat_id, provider=provider, model=model,
+            user_id=user_id, text=text, chat_id=chat_id, provider=provider,
+            model=model, **chat_kwargs,
         )
         return str(reply or "")
 

@@ -1,5 +1,4 @@
 import logging
-import time
 from typing import Dict, Any, Optional, List, Union
 import smtplib
 import ssl
@@ -24,11 +23,72 @@ from tools.base_tool import BaseTool, ToolStatus
 from tools.controller.types import ActionResult
 
 
-# Process-wide memory of rejected SMTP logins, keyed (server, port, user); see
-# EmailTool._test_smtp_connection. 15 min = at most ~4 bad logins/hour per process
-# instead of one per minute plus one per session.
-SMTP_AUTH_BACKOFF_SEC = 900
-_SMTP_AUTH_FAILURES: Dict[tuple, float] = {}
+# Memory of rejected SMTP logins. 057 WS-F moved it into the DURABLE core-tier
+# verdict store: the backoff now survives a restart and is shared by the three
+# service units, instead of each process re-discovering the same 535. The TTL
+# constant lives in the store (it was a magic 900 duplicated across a layering
+# boundary); this name is kept because it is the tool's published contract.
+from core.credential_verdicts import SMTP_TTL_SEC as SMTP_AUTH_BACKOFF_SEC  # noqa: E402
+
+
+def smtp_verdict_key(server: Any, port: Any, user: Any, secret: Any = None) -> str:
+    """The ONE verdict key for an SMTP rail: ``server:port:user``, plus a
+    ``#<digest>`` of the password when one is given. The digest is a change
+    detector (`core.credential_verdicts.credential_digest`, never a reveal): a
+    verdict belongs to the credential that earned it, so a NEW app password has
+    no standing verdict and is probed on the first start after the fix instead
+    of waiting out a hold that now grows to six hours."""
+    base = f"{server}:{port}:{user or ''}"
+    if secret:
+        from core.credential_verdicts import credential_digest
+        return f"{base}#{credential_digest(secret)}"
+    return base
+
+
+class _SmtpAuthFailures:
+    """Back-compat dict view over the verdict store, keyed ``(server, port, user)``.
+
+    ``_SMTP_AUTH_FAILURES`` used to be a real dict; it is kept as a delegator so
+    the historical call/test shape (``get``/``pop``/``[k] =``/``clear``/truthiness)
+    keeps working over the durable store. It is NOT a full Mapping — nothing ever
+    iterated it.
+    """
+
+    @staticmethod
+    def _key(key) -> str:
+        return smtp_verdict_key(*key) if isinstance(key, tuple) else str(key)
+
+    def get(self, key, default=None):
+        from core.credential_verdicts import verdict
+        v = verdict("smtp", self._key(key))
+        return default if v is None else v.last_seen
+
+    def pop(self, key, default=None):
+        from core.credential_verdicts import clear_rejection
+        prev = self.get(key, default)
+        clear_rejection("smtp", self._key(key))
+        return prev
+
+    def __setitem__(self, key, _value) -> None:
+        from core.credential_verdicts import record_rejection
+        record_rejection("smtp", self._key(key), code="535")
+
+    def __contains__(self, key) -> bool:
+        return self.get(key) is not None
+
+    def __len__(self) -> int:
+        from core.credential_verdicts import active
+        return len(active("smtp"))
+
+    def __bool__(self) -> bool:
+        return len(self) > 0
+
+    def clear(self) -> None:
+        from core.credential_verdicts import clear_kind
+        clear_kind("smtp")
+
+
+_SMTP_AUTH_FAILURES = _SmtpAuthFailures()
 
 
 def smtp_credentials_rejected() -> bool:
@@ -58,6 +118,9 @@ class EmailTool(BaseTool):
     # (tests build via object.__new__) resolve to the legacy smtp path.
     provider = "smtp"
     agentmail = None
+    # 057 WS-F: the IMAP half can be ready while SMTP is refused (class attribute
+    # so a partially-constructed tool resolves it too).
+    _imap_ready = False
     
     @property
     def required_services(self) -> Dict[str, str]:
@@ -94,6 +157,87 @@ class EmailTool(BaseTool):
             from tools.email_providers.agentmail import AgentMailClient
             self.agentmail = AgentMailClient(_os.environ.get("AGENTMAIL_API_KEY", ""))
 
+    # --- 057 WS-F: the two halves of an email rail are independent -------------
+    # A rejected SMTP login must not stop INBOUND mail. Before WS-F the email
+    # surface called ``ensure_initialized()`` on every 60 s poll, which ran the
+    # SMTP probe, which failed, which logged an ERROR — 1,439 lines/day on prod —
+    # and dragged IMAP polling down with a send-side credential problem.
+
+    def _smtp_key(self) -> str:
+        """This rail's verdict key — server, port, user AND the password digest."""
+        return smtp_verdict_key(self.smtp_server, self.smtp_port,
+                                self.config.gmail_email, self.config.gmail_app_password)
+
+    def _smtp_verdict(self):
+        """The live SMTP auth verdict for THIS rail, or None."""
+        try:
+            from core.credential_verdicts import verdict
+            v = verdict("smtp", self._smtp_key())
+            return v if (v is not None and v.live) else None
+        except Exception:
+            return None
+
+    def _smtp_verdict_refusal(self) -> Optional[str]:
+        """The refusal text for a live verdict — no network probe, with the remedy."""
+        v = self._smtp_verdict()
+        if v is None:
+            return None
+        from core.credential_verdicts import duration_text, since_text
+        return (
+            f"SMTP connection test failed: login rejected since {since_text(v)} "
+            f"({v.code or '535'}, bad credentials; {v.count} rejection(s)); in backoff "
+            f"for another {duration_text(v.remaining_sec)} — fix the app password to "
+            f"clear it (a changed password is probed on the next start)")
+
+    def _warn_smtp_verdict_once(self, refusal: str) -> None:
+        """One WARNING per process per outage, instead of an ERROR per call."""
+        v = self._smtp_verdict()
+        try:
+            from core.credential_verdicts import warn_once
+            fresh = warn_once("smtp", self._smtp_key(),
+                              episode=(v.first_seen if v else None))
+        except Exception:
+            fresh = True
+        if fresh:
+            self.logger.warning("%s", refusal)
+        else:
+            self.logger.debug("%s", refusal)
+
+    async def initialize(self) -> None:
+        """Full init (SMTP included). Refuses QUIETLY while an auth verdict is live.
+
+        The refusal happens BEFORE ``BaseTool.initialize`` so a dead SMTP rail
+        costs one WARNING per process, not one ERROR per caller (the email
+        surface, every session start, every cron delivery).
+        """
+        if not self._initialized and self.provider == "smtp":
+            refusal = self._smtp_verdict_refusal()
+            if refusal:
+                self._warn_smtp_verdict_once(refusal)
+                self._status = ToolStatus.FAILED
+                self._error_message = refusal
+                raise ToolError(refusal)
+        await super().initialize()
+
+    async def ensure_smtp(self) -> None:
+        """Ensure the SEND half is usable. Same meaning as ``ensure_initialized``."""
+        await self.ensure_initialized()
+
+    async def ensure_imap(self) -> None:
+        """Ensure the RECEIVE half is usable — NEVER probes SMTP.
+
+        Inbound mail needs credentials and a connection, not a send handshake,
+        so a 535 on the send side leaves polling alone.
+        """
+        if self._initialized or self._imap_ready:
+            return
+        if self.provider == "agentmail":
+            await self.ensure_initialized()
+            return
+        if not all([self.config.gmail_email, self.config.gmail_app_password]):
+            raise ConfigurationError("Email credentials not configured")
+        self._imap_ready = True
+
     async def _initialize(self) -> None:
         """Initialize email service."""
         try:
@@ -126,51 +270,54 @@ class EmailTool(BaseTool):
     async def _test_smtp_connection(self) -> None:
         """Test SMTP connection.
 
-        A rejected login (535) is remembered process-wide for
-        ``SMTP_AUTH_BACKOFF_SEC``: the tool still fails closed, but from memory,
-        instead of re-sending bad credentials to the provider on every surface
-        poll and every session start (5,071 rejected Gmail logins in 24 h,
-        2026-09-18). Transient errors are never cached; a success clears it.
+        A rejected login (535) is remembered in the DURABLE verdict store for
+        ``SMTP_AUTH_BACKOFF_SEC`` (057 WS-F): the tool still fails closed, but
+        from memory — and now ACROSS restarts and across the three service units
+        that share the data dir — instead of re-sending bad credentials to the
+        provider on every surface poll and every session start (5,071 rejected
+        Gmail logins in 24 h, 2026-09-18). Transient errors are never cached; a
+        success clears the verdict.
         """
-        key = (self.smtp_server, self.smtp_port, self.config.gmail_email)
-        failed_at = _SMTP_AUTH_FAILURES.get(key)
-        if failed_at is not None:
-            elapsed = time.monotonic() - failed_at
-            if elapsed < SMTP_AUTH_BACKOFF_SEC:
-                raise ToolError(
-                    f"SMTP connection test failed: login rejected {int(elapsed)}s ago "
-                    f"(535, bad credentials); in backoff for another "
-                    f"{int(SMTP_AUTH_BACKOFF_SEC - elapsed)}s — fix the app password to clear it")
+        key = self._smtp_key()
+        refusal = self._smtp_verdict_refusal()
+        if refusal:
+            self._warn_smtp_verdict_once(refusal)
+            raise ToolError(refusal)
         try:
             context = ssl.create_default_context()
             server = smtplib.SMTP(self.smtp_server, self.smtp_port)
             server.starttls(context=context)
             server.login(self.config.gmail_email, self.config.gmail_app_password)
             server.quit()
-            _SMTP_AUTH_FAILURES.pop(key, None)
             try:
-                from core.credential_verdicts import clear_rejection
-                clear_rejection("smtp", f"{self.smtp_server}:{self.smtp_port}")
+                # A working login means the RAIL is up: drop every smtp verdict,
+                # including one an old (since-replaced) password earned.
+                from core.credential_verdicts import clear_kind
+                clear_kind("smtp")
             except Exception:
                 pass
             self.logger.info("SMTP connection test successful")
         except smtplib.SMTPAuthenticationError as e:
-            _SMTP_AUTH_FAILURES[key] = time.monotonic()
+            fresh = True
             try:
                 from core.credential_verdicts import record_rejection
-                record_rejection("smtp", f"{self.smtp_server}:{self.smtp_port}")
+                fresh = record_rejection(
+                    "smtp", key, code="535",
+                    remedy=("fix the app password (GMAIL_APP_PASSWORD) or switch "
+                            "EMAIL_PROVIDER=agentmail")).count == 1
             except Exception:
                 pass
             # 056 WS4/WS9: a durable, layering-safe fact for the status snapshot
-            # (core cannot import tools) — rendered as a health WARN with the remedy.
-            try:
-                from core.event_log import get_event_log, event_log_enabled
-                if event_log_enabled():
-                    get_event_log().record(
-                        "email_auth_rejected", user_id="", source="email",
-                        server=str(self.smtp_server), account=str(self.config.gmail_email or "")[:3] + "…")
-            except Exception:
-                pass
+            # (core cannot import tools) — rendered as a health WARN with the
+            # remedy. 057 WS-F: emitted once per OUTAGE (a fresh verdict), not
+            # once per rejected login — 105 identical events in 24 h said nothing
+            # the first one did not.
+            if fresh:
+                from core.event_log import emit
+                emit("email_auth_rejected", source="email", attrs={
+                    "server": str(self.smtp_server),
+                    "account": str(self.config.gmail_email or "")[:3] + "…",
+                    "code": "535"})
             raise ToolError(f"SMTP connection test failed: {e}")
         except Exception as e:
             raise ToolError(f"SMTP connection test failed: {e}")
@@ -212,19 +359,44 @@ class EmailTool(BaseTool):
             self.smtp_connection.login(self.config.gmail_email, self.config.gmail_app_password)
             
         except smtplib.SMTPAuthenticationError as e:
+            # D30: the LIVE send path rejected the credential. Only the
+            # `test_connection` probe used to write a verdict, so on a box whose
+            # first SMTP contact is a real send (every headless deploy) the 535
+            # was re-discovered on every send, no status seat could name it, and
+            # `effective_autonomous_tools` never dropped the email tool.
+            self._record_smtp_rejection(e)
             raise AuthenticationError(f"SMTP authentication failed: {str(e)}")
         except Exception as e:
             raise APIError(f"SMTP connection failed: {str(e)}")
+
+    def _record_smtp_rejection(self, exc: BaseException) -> None:
+        """Write the durable 535 verdict for THIS rail. Fail-open."""
+        try:
+            from core.credential_verdicts import record_rejection
+            v = record_rejection(
+                "smtp", self._smtp_key(), code="535",
+                remedy=("fix the app password (GMAIL_APP_PASSWORD) or switch "
+                        "EMAIL_PROVIDER=agentmail"))
+            if v.count == 1:
+                from core.event_log import emit
+                emit("email_auth_rejected", source="email", attrs={
+                    "server": str(self.smtp_server),
+                    "account": str(self.config.gmail_email or "")[:3] + "…",
+                    "code": "535"})
+        except Exception:
+            self.logger.warning("SMTP rejection verdict not recorded (%s) — the "
+                                "outage will not show on a status surface", exc,
+                                exc_info=True)
 
     async def _connect_imap(self) -> None:
         """Establish IMAP connection."""
         try:
             # Connect to IMAP server
             self.imap_connection = imaplib.IMAP4_SSL(self.imap_server)
-            
+
             # Login
             self.imap_connection.login(self.config.gmail_email, self.config.gmail_app_password)
-            
+
         except imaplib.IMAP4.error as e:
             raise AuthenticationError(f"IMAP authentication failed: {str(e)}")
         except Exception as e:
@@ -315,7 +487,7 @@ class EmailTool(BaseTool):
         Raises:
             APIError: If sending fails
         """
-        await self.ensure_initialized()
+        await self.ensure_smtp()
 
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")
@@ -471,11 +643,14 @@ class EmailTool(BaseTool):
         if owner_email:
             owner_targets["email"] = owner_email
 
-        home_dir = None
-        if self.container is not None:
-            cfg = getattr(self.container, "config", None)
-            from core.runtime_paths import data_dir_or_home
-            home_dir = data_dir_or_home(getattr(cfg, "data_dir", None))
+        # D19: the IDENTITY axis — `core.runtime_paths.prefs_home_dir()`, the ONE
+        # home every preference WRITER resolves. This used to read the container's
+        # `config.data_dir`, which on a server is `<data_home>/data`: a shadow no
+        # seat ever writes to, so the owner could set `outbound.policy` or
+        # `outbound.daily_send_cap` from any surface and this path kept reading
+        # the env default. Same fix as `message_send._pref_home_dir` (C10).
+        from core.runtime_paths import prefs_home_dir
+        home_dir = prefs_home_dir() if self.container is not None else None
         policy, domains = resolve_outbound_policy(user_id, "email", home_dir=home_dir)
 
         tier = resolve_target_tier(surface="email", target=params.to, user_id=user_id,
@@ -486,6 +661,34 @@ class EmailTool(BaseTool):
                 error=("target not on owner allowlist; ask the owner to run "
                        f"`polyrob owner allow email {params.to}`"),
                 include_in_memory=True)
+
+        # D9 (2026-09-21 interface audit): the 031 owner pause, the SAME probe
+        # `perform_message_send` applies. This escape-hatch send had none, so
+        # `/pause pings`, `/pause social` and even `/pause all` left an
+        # autonomous goal or cron session free to keep emailing. The gate is
+        # BEFORE the cap/seed/send rail, so a paused send creates no
+        # correspondent binding and burns no cap slot either.
+        from tools.controller.message_send import message_pause_refusal
+        pause_refusal = message_pause_refusal(execution_context, None, tier=tier)
+        if pause_refusal is not None:
+            self.logger.info("email_send refused by owner pause: %s (%s)",
+                             params.to, pause_refusal)
+            return ActionResult(error=pause_refusal, include_in_memory=True)
+
+        # D66: scrub secret SHAPES out of the body and subject before anything
+        # else looks at them. `MessageRouter.publish` does this for every routed
+        # send; this tool owns its own SMTP connection and bypassed the router,
+        # so it was the ONE outbound path that could mail a key out verbatim.
+        #
+        # ⚠️ Scrubbed HERE, above the cooldown gate, so `body` is the ONE string
+        # the gate hashes, the conversation store records and SMTP sends. Two
+        # spellings of the body make the hashes unmatchable, which does not
+        # loosen the gate — it kills it while it still looks present.
+        from core.secret_scrub import scrub_secret_shapes
+        body = scrub_secret_shapes(params.body or "")
+        subject = scrub_secret_shapes(params.subject or "")
+        if body != (params.body or "") or subject != (params.subject or ""):
+            self.logger.warning("email_send: redacted a secret shape before delivery")
 
         # 2026-08-29: this escape-hatch send bypassed the same owner-resend
         # cooldown the generic `message` tool enforces (tools/controller/
@@ -501,7 +704,7 @@ class EmailTool(BaseTool):
                 # this, and the gate compares content hashes. Passing
                 # subject+body made the hashes unmatchable, which does not
                 # loosen the gate, it kills it while it still looks present.
-                text=params.body)
+                text=body)
             if cooldown_refusal is not None:
                 return cooldown_refusal
         except Exception:
@@ -556,7 +759,7 @@ class EmailTool(BaseTool):
                     include_in_memory=True)
 
         try:
-            message_id = await self.send_email_ex(params.to, params.subject, params.body)
+            message_id = await self.send_email_ex(params.to, subject, body)
         except Exception as e:
             return ActionResult(error=f"send failed: {e}", include_in_memory=True)
 
@@ -565,10 +768,19 @@ class EmailTool(BaseTool):
                 if store is None:
                     store = self.container.get_service("conversation_store")
                 if store is not None:
-                    store.record_outbound(user_id, "email", params.to, params.body,
-                                          session_id=session_id)
+                    # D31: the minted Message-ID was DROPPED here, so the
+                    # transcript could not be threaded and a reply's
+                    # In-Reply-To had nothing to match.
+                    store.record_outbound(user_id, "email", params.to, body,
+                                          mid=(str(message_id) if message_id else None),
+                                          subject=subject, session_id=session_id)
             except Exception as e:
-                self.logger.debug(f"email_send conversation record skipped: {e}")
+                self.logger.warning("email_send conversation record skipped for %s: "
+                                    "%s — this outbound is missing from the "
+                                    "transcript", params.to, e, exc_info=True)
+            if message_id and tier != "owner":
+                self._seed_thread_anchor(params.to, str(message_id), user_id,
+                                         session_id)
 
         # T6: first-contact report — AFTER a successful send+record.
         # Only report for open-tier sends (allowlisted/supervised sends to known
@@ -576,9 +788,40 @@ class EmailTool(BaseTool):
         if first_contact and tier == "open":
             await notify_first_contact(self.container, user_id, session_id, "email", params.to)
 
+        # 057 WS-E: the per-rail proof rule rides WITH the receipt, from the ONE
+        # table (core/rails/verification.py). Fail-open to "": an unavailable
+        # table must never turn a SUCCESSFUL send into an error.
+        try:
+            from core.rails.verification import verification_line
+            _proof = verification_line("email", message_id=message_id)
+        except Exception:
+            _proof = ""
         return ActionResult(
-            extracted_content=f"email[{tier}] -> {params.to} OK (message-id {message_id})",
+            extracted_content=(f"email[{tier}] -> {params.to} OK "
+                               f"(message-id {message_id})"
+                               + (f"\n{_proof}" if _proof else "")),
             include_in_memory=True)
+
+    def _seed_thread_anchor(self, address: str, mid: str, user_id: str,
+                            session_id: str) -> None:
+        """Bind this outbound Message-ID to the sending session (D31).
+
+        Without the anchor a reply's ``In-Reply-To`` resolves against nothing,
+        so a second session talking to the same address is ambiguous and the
+        reply is quarantined. Fail-soft: never affects a completed send.
+        """
+        try:
+            registry = (self.container.get_service("correspondent_registry")
+                        if self.container else None)
+            if registry is None or not hasattr(registry, "seed_thread_anchor"):
+                return
+            registry.seed_thread_anchor(
+                surface="email", address=address, thread_id=mid,
+                session_id=session_id, user_id=user_id)
+        except Exception as e:
+            self.logger.warning("email_send thread-anchor seed skipped for %s: %s "
+                                "— a reply may not route back", address, e,
+                                exc_info=True)
 
     async def read_emails(
         self,
@@ -601,7 +844,7 @@ class EmailTool(BaseTool):
         Raises:
             APIError: If reading fails
         """
-        await self.ensure_initialized()
+        await self.ensure_imap()   # 057 WS-F: inbound never waits on the SMTP probe
 
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")
@@ -638,7 +881,19 @@ class EmailTool(BaseTool):
             emails = []
             for num in message_nums:
                 try:
-                    _, msg_data = self.imap_connection.fetch(num, '(RFC822)')
+                    # D4 (same rule as `surfaces/email/fetchers.py`): a READ
+                    # must not consume the mailbox. `(RFC822)` sets `\Seen` as
+                    # a side effect of the FETCH, and the email SURFACE's
+                    # inbound queue IS the UNSEEN set — so one agent-side
+                    # `read_emails` marked every waiting message read and the
+                    # surface never routed it. `BODY.PEEK[]` returns the same
+                    # bytes and touches no flag; `mark_as_read` stays the ONE
+                    # place a message is marked.
+                    #
+                    # The server answers `BODY.PEEK[]` with a `BODY[]` tag, but
+                    # imaplib's literal parse is positional — `msg_data[0][1]`
+                    # is the raw message either way.
+                    _, msg_data = self.imap_connection.fetch(num, '(BODY.PEEK[])')
                     email_body = msg_data[0][1]
                     email_message = email.message_from_bytes(email_body)
                     
@@ -708,6 +963,12 @@ class EmailTool(BaseTool):
             except Exception as e:
                 self.logger.error(f"Error processing email {mid}: {e}")
                 continue
+            # D26: the managed inbox dropped attachments entirely, so a read of
+            # an AgentMail message looked like a mail with nothing attached.
+            # ONE normalizer with the IMAP path (`{filename, mime, data}`); an
+            # entry whose bytes the provider did not include keeps `data=None`
+            # and is reported as unreadable rather than vanishing (D64).
+            from tools.email_providers.agentmail import normalize_agentmail_attachments
             emails.append({
                 'id': mid,
                 'subject': full.get('subject') or '',
@@ -715,6 +976,8 @@ class EmailTool(BaseTool):
                 'date': full.get('timestamp') or '',
                 'content': full.get('extracted_text') or full.get('text') or '',
                 'html_content': full.get('html') or '',
+                'attachments': normalize_agentmail_attachments(
+                    full.get('attachments')),
             })
         return emails
 
@@ -731,7 +994,7 @@ class EmailTool(BaseTool):
         Raises:
             APIError: If operation fails
         """
-        await self.ensure_initialized()
+        await self.ensure_imap()   # 057 WS-F: inbound never waits on the SMTP probe
         
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")
@@ -761,7 +1024,7 @@ class EmailTool(BaseTool):
         Raises:
             APIError: If deletion fails
         """
-        await self.ensure_initialized()
+        await self.ensure_imap()   # 057 WS-F: inbound never waits on the SMTP probe
         
         if not self._enabled:
             raise ConfigurationError("Email service is not enabled")

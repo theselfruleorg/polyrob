@@ -31,6 +31,7 @@ def test_pause_active_for_reads_record(tmp_path, monkeypatch):
 
 def test_main_suppresses_non_critical_while_paused(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("POLYROB_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("OPS_ALERT_STATE_DIR", str(tmp_path / "state"))  # dedup marker stays in tmp
     (tmp_path / "AUTONOMY_PAUSE.json").write_text(json.dumps({"paused": True, "scopes": ["all"]}))
     m = _load()
     monkeypatch.setattr(m, "send", lambda text: (_ for _ in ()).throw(AssertionError("must not send")))

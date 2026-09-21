@@ -33,7 +33,12 @@ def test_an_allowed_room_is_reported_with_its_name_and_mode(tmp_path, monkeypatc
     # `allow_here`/`set_mode` never touch `surfaces.db` (only the allowlist and
     # a `chat.*` overlay file) — the room ledger/caps store genuinely doesn't
     # exist yet, so this also covers Important 2's guarded shape.
-    assert sec.data["rooms"] == [
+    rooms = sec.data["rooms"]
+    # 057 WS-D: the allowlist note is a dated LABEL beside the name, never the
+    # title — `allow_here` wrote the same string to both homes, so they agree here.
+    label = rooms[0].pop("label")
+    assert label.startswith('label: "The Public Den" (set 20')
+    assert rooms == [
         {"surface": "telegram", "chat_id": "-1", "name": "The Public Den",
          "mode": "active", "replies_today": 0, "ledger_rows": 0, "last_write": None,
          "note": "surfaces.db absent"},

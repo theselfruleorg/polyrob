@@ -223,20 +223,42 @@ def build_registration_file(
         logger.debug("eip8004: could not read the on-chain record", exc_info=True)
 
     onchain_enabled = os.environ.get("EIP8004_ONCHAIN_ENABLED", "false").lower() == "true"
-    trust_mode = "onchain" if (verified or onchain_enabled) else "local"
+
+    # B16: `trustMode: onchain` is a claim a reader CAN CHECK — it says "look me
+    # up in a registry". So it may only be emitted when there is something to
+    # look up: a verified record, or an operator claim that carries BOTH the
+    # agentId and the registry address. `EIP8004_ONCHAIN_ENABLED=true` with
+    # neither configured used to say "onchain" and then emit NO registrations[]
+    # block at all — an unresolvable claim, which is worse than "local".
+    operator_claim = bool(
+        onchain_enabled and config.agent_id and config.identity_registry_address
+    )
+    verified_complete = bool(
+        verified and verified.get("agent_id") and verified.get("registry")
+    )
+    if verified and not verified_complete:
+        # A record missing its agentId or registry is not evidence of a
+        # registration — fall back to `local` rather than claim what it cannot
+        # substantiate.
+        logger.warning(
+            "eip8004: on-chain record is incomplete (agent_id/registry missing) "
+            "— reporting trustMode=local"
+        )
+        verified = None
+    trust_mode = "onchain" if (verified_complete or operator_claim) else "local"
 
     registrations = []
-    if verified:
+    if verified_complete:
         registrations.append(Registration(
             agentId=int(verified["agent_id"]),
             agentRegistry=(f"eip155:{verified.get('chain_id', config.chain_id)}:"
-                           f"{verified['registry']}"),
+                           f"{verified.get('registry')}"),
             # ⚠️ "verified", not "operator": this one is backed by a transaction
             # this code signed, broadcast and confirmed.
             attestation="verified",
         ))
 
-    if (not verified) and onchain_enabled and config.agent_id and config.identity_registry_address:
+    if (not verified_complete) and operator_claim:
         # L11: EIP8004_ONCHAIN_ENABLED + agent_id/identity_registry_address are
         # operator-supplied env config, not proof of an on-chain transaction — no
         # code in this repo ever signs/broadcasts an Identity Registry registration.

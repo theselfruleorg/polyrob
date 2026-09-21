@@ -124,7 +124,7 @@ def test_an_ask_is_decided_on_the_goal_board(client, inbox, monkeypatch):
     calls = []
 
     class FakeBoard:
-        def decide_ask(self, ask_id, *, user_id, approved):
+        def decide_ask(self, ask_id, *, user_id, approved, answer=None):
             calls.append((ask_id, user_id, approved))
             return (True, 2)
 
@@ -142,7 +142,7 @@ def test_an_asks_decision_says_what_it_actually_freed(client, inbox, monkeypatch
     """"1 goals" is the tell that a count was pasted into a sentence rather than
     written into one."""
     class FakeBoard:
-        def decide_ask(self, ask_id, *, user_id, approved):
+        def decide_ask(self, ask_id, *, user_id, approved, answer=None):
             return (True, unblocked)
 
     monkeypatch.setattr(inbox, "_goal_board", lambda: FakeBoard())

@@ -14,13 +14,28 @@ from cli.ui import candy
 from modules.credits.unified_ledger import build_ledger, ledger_availability_note
 
 
+#: What an UNKNOWN amount renders as. A figure that was never read is not zero.
+_UNKNOWN = "—"
+
+
 def _money(value) -> str:
-    """Render a USD amount honestly: sub-cent-but-nonzero shows 4dp so a real
-    $0.0003 spend never collapses to a $0.00 lie (L10); everything else 2dp."""
+    """Render a USD amount honestly.
+
+    Three distinct answers, never merged (C49):
+      * a real amount           -> ``$12.34`` (sub-cent-but-nonzero keeps 4dp so
+        a real $0.0003 spend never collapses to a ``$0.00`` lie, L10);
+      * a measured zero         -> ``$0.00``;
+      * ``None`` / unparseable  -> ``—``. It used to render ``$0.00``, which is
+        the confident-zero this whole surface exists to refuse: "I did not read
+        this" and "this is zero" are different facts and the owner acts on them
+        differently.
+    """
+    if value is None:
+        return _UNKNOWN
     try:
-        v = float(value or 0.0)
-    except Exception:
-        v = 0.0
+        v = float(value)
+    except (TypeError, ValueError):
+        return _UNKNOWN
     if v != 0 and abs(v) < 0.01:
         return f"${v:.4f}"
     return f"${v:.2f}"
@@ -80,11 +95,15 @@ def render_finance_text(ledger: dict, *, days: int, user_id: str) -> str:
     costs_ok = bool(ledger.get("costs_available", True))
     inbound_ok = bool(ledger.get("inbound_available", True))
     if not costs_ok and not inbound_ok:
+        # C48: not "no data yet, or metering off, or not initialized" — a
+        # disjunction is three guesses printed as one answer. BOTH money stores
+        # refused this read, so the honest word is unavailable, with whatever
+        # reason the ledger itself carries.
         return "\n".join([
             header,
             "",
-            f"{candy.GUTTER}no data yet — the agent hasn't recorded any money "
-            "activity, or metering is off / not yet initialized.",
+            f"{candy.GUTTER}unavailable — I could not read either money store, "
+            "so income and runtime cost are UNKNOWN, not zero.",
             f"{candy.GUTTER}({note})" if note else "",
         ]).rstrip()
 
@@ -127,6 +146,21 @@ def render_finance_text(ledger: dict, *, days: int, user_id: str) -> str:
     # "balance" (<=7 chars) shifted every pre-existing row's value column by
     # 4 spaces, breaking byte-identical rendering when available is True.
     cap_line = candy.kv_lines([("today's cap", _cap_headroom_value(ledger))])
+    # Money we TOOK and did not deliver on. It is never netted into `income`
+    # (`INCOME_STATUSES` excludes `refund_due`) and it is a liability, so it
+    # leads with the warning rather than sitting in the row block. Rendered
+    # only when there IS one — a permanent "$0.00 owed" row trains the eye to
+    # skip the line that matters. Its OWN `kv_lines` scope for the same reason
+    # `today's cap` has one: folding a 12-char label into `treasury_rows`
+    # re-pads every row above it.
+    refund_line = ""
+    if t_available and int(t.get("refund_due_count") or 0) > 0:
+        refund_line = (f"{candy.GUTTER}⚠ refund owed: "
+                       f"{_money(t.get('refund_due_usd'))} across "
+                       f"{int(t.get('refund_due_count'))} settled payment(s) "
+                       f"I did not deliver on — "
+                       f"`polyrob owner invoices --status refund_due` lists "
+                       f"them (`/invoices refund_due` in chat)")
 
     if r_available:
         r_window = float(r.get("spend_window_usd") or 0.0)
@@ -147,6 +181,8 @@ def render_finance_text(ledger: dict, *, days: int, user_id: str) -> str:
     if treasury_reason:
         lines.append(f"{candy.GUTTER}{treasury_reason}")
     lines.append(candy.kv_lines(treasury_rows))
+    if refund_line:
+        lines.append(refund_line)
     lines.append(cap_line)
     lines += ["", f"{candy.GUTTER}Runtime cost (owner-funded compute)"]
     if runtime_reason:
@@ -159,6 +195,33 @@ def render_finance_text(ledger: dict, *, days: int, user_id: str) -> str:
         "(invoices: polyrob owner invoices · settle: polyrob owner settle <id>)",
     ]
     return "\n".join(lines)
+
+
+def ledger_standalone(user_id: str, *, days: int = 7, db_path: str = None,
+                      include_balances: bool = False) -> dict:
+    """``build_ledger`` for a process with NO DI container (the CLI seats).
+
+    Opens ``db_path`` (the live ``bot.db``) for the duration of the build and
+    closes it; with no path the ledger's legs render unavailable rather than
+    raise. Shared by ``/finance``, ``polyrob finance`` and ``polyrob doctor``
+    (2026-09-21) so the three cannot read three different stores."""
+    from core.async_bridge import run_coroutine_sync
+
+    async def _build():
+        if db_path:
+            from pathlib import Path
+            from modules.database.connection import DatabaseConnection
+            db = DatabaseConnection(Path(db_path))
+            await db.connect()
+            try:
+                return await build_ledger(user_id, days=max(1, int(days)), db=db,
+                                          include_balances=include_balances)
+            finally:
+                await db.close()
+        return await build_ledger(user_id, days=max(1, int(days)),
+                                  include_balances=include_balances)
+
+    return run_coroutine_sync(_build()) or {}
 
 
 def render_finance(*, user_id: str, days: int = 7, db_path: str = None,
@@ -182,32 +245,22 @@ def render_finance(*, user_id: str, days: int = 7, db_path: str = None,
         # No bot.db resolved and no DI container: this is a fresh install that has
         # never recorded money activity (H14a). Say so honestly — don't crash into
         # the container's "Configuration required for first initialization" error.
+        # C48: one fact, not a disjunction, and no flag name — the money store
+        # does not exist under this data home, which is exactly what a tree
+        # that has never run the agent looks like.
         return "\n".join([
             f"finance — last {int(days)} days (tenant {user_id})",
             "",
-            f"{candy.GUTTER}no data yet — the agent hasn't recorded any money "
-            "activity, or it has not run yet.",
-            f"{candy.GUTTER}(run the agent once; income needs X402_INVOICE_ENABLED)",
+            f"{candy.GUTTER}unavailable — there is no money store under this "
+            "data home yet, so every figure here is UNKNOWN, not zero.",
+            f"{candy.GUTTER}it is created the first time the agent runs: "
+            "`polyrob run \"hello\"`.",
         ])
     try:
-        from core.async_bridge import run_coroutine_sync
-
-        async def _build():
-            # CLI /finance is a DISPLAY surface (mirrors the webview Finance
-            # page) -> opt into the two balance probes.
-            if db_path:
-                from pathlib import Path
-                from modules.database.connection import DatabaseConnection
-                db = DatabaseConnection(Path(db_path))
-                await db.connect()
-                try:
-                    return await build_ledger(user_id, days=max(1, int(days)), db=db,
-                                              include_balances=True)
-                finally:
-                    await db.close()
-            return await build_ledger(user_id, days=max(1, int(days)), include_balances=True)
-
-        ledger = run_coroutine_sync(_build()) or {}
+        # CLI /finance is a DISPLAY surface (mirrors the webview Finance
+        # page) -> opt into the two balance probes.
+        ledger = ledger_standalone(user_id, days=days, db_path=db_path,
+                                   include_balances=True) or {}
     except Exception as e:
         return f"{candy.GUTTER}finance unavailable ({e})"
 

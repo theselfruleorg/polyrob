@@ -51,6 +51,13 @@ def render_journey(*, user_id: str, since_label: str = "7d",
     authored = [e for e in entries if e.kind == "skill"]
     changes = [e for e in entries if e.kind == "self_modification"]
     ledger_entry = next((e for e in entries if e.kind == "ledger"), None)
+    # ⚠️ This renderer shows FOUR of the kinds `build_recap` produces and drops
+    # the rest. A settled payment we did not deliver on is money owed to
+    # somebody — the owner is notified about it when it happens, so a window
+    # that contains one may not read as if it did not. Counted from the SSOT
+    # kind, never a literal.
+    from core.event_kinds import PAYMENT_REFUND_DUE
+    refunds = [e for e in entries if e.kind == PAYMENT_REFUND_DUE]
 
     lines: List[str] = [f"journey — {scope}"]
 
@@ -73,6 +80,9 @@ def render_journey(*, user_id: str, since_label: str = "7d",
     lines.append("")
     lines.append(ledger_entry.text if ledger_entry else
                  "Income: no money activity recorded yet")
+    if refunds:
+        lines.append(f"{candy.GUTTER}⚠ {len(refunds)} refund owed in this window "
+                     f"— `polyrob owner invoices --status refund_due`")
 
     # Learned — authored skills
     lines.append("")

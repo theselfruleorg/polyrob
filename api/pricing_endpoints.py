@@ -1,8 +1,9 @@
 """Pricing transparency API endpoints."""
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from typing import Dict, Any
 import logging
+import uuid
 
 # Import pricing from credits module (SINGLE SOURCE OF TRUTH)
 from modules.credits.pricing import pricing as _pricing_config
@@ -68,22 +69,44 @@ async def cost_calculator(
     output_tokens: int,
     cached_tokens: int = 0
 ):
-    """Calculate cost for specific usage."""
+    """Calculate cost for specific usage.
+
+    B43: a failure answers a real error STATUS. It used to return HTTP 200 with
+    `{"error": "..."}` — a price calculator whose failure looks like a success
+    to every status-checking client, carrying the raw exception text as the
+    body. An unknown/unpriced model is a 404; anything else is a 500 with a
+    reference, never the exception.
+    """
     from modules.llm.model_registry import calculate_cost
+
+    if input_tokens < 0 or output_tokens < 0 or cached_tokens < 0:
+        raise HTTPException(status_code=400, detail="Token counts must be >= 0")
 
     try:
         api_cost = calculate_cost(model, input_tokens, output_tokens, cached_tokens)
         credits, user_cost = _pricing_config.calculate_credits_from_api_cost(api_cost)
-
-        return {
-            "model": model,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cached_tokens": cached_tokens,
-            "api_cost_usd": round(api_cost, 6),
-            "markup": _pricing_config.MARKUP,
-            "credits": credits,
-            "user_cost_usd": round(user_cost, 6)
-        }
+    except (KeyError, LookupError, ValueError) as e:
+        logger.info("pricing calculator: model %r not priced (%s)", model, e)
+        raise HTTPException(
+            status_code=404,
+            detail=(f"No pricing is published for model {model!r}. "
+                    "See GET /api/pricing/models for the priced set."),
+        )
     except Exception as e:
-        return {"error": str(e)}
+        ref = uuid.uuid4().hex[:12]
+        logger.error("pricing calculator failed (ref %s): %s", ref, e, exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Price calculation failed (reference {ref})",
+        )
+
+    return {
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
+        "api_cost_usd": round(api_cost, 6),
+        "markup": _pricing_config.MARKUP,
+        "credits": credits,
+        "user_cost_usd": round(user_cost, 6)
+    }

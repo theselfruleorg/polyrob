@@ -85,6 +85,11 @@ def _templates() -> Jinja2Templates:
     env.env.globals["theme_preference"] = theme_preference
     env.env.globals["show_avatar"] = show_avatar
     env.env.globals["t"] = t
+    # The ONE upload allowlist (A24): the bound-session composer's picker
+    # renders `accept=` from the same list the /workspace/upload endpoint
+    # enforces. Without this global the destinations' env rendered no accept.
+    from core.surfaces.inbound_attachments import upload_accept_attribute
+    env.env.globals["upload_accept"] = upload_accept_attribute()
     return env
 
 
@@ -102,6 +107,29 @@ def _read_only() -> bool:
         return bool(webgate.read_only())
     except Exception:
         logger.debug("read-only probe failed", exc_info=True)
+        return False
+
+
+def _owner_console() -> bool:
+    """Is this seat the OWNER's console? Every instance-wide control asks first.
+
+    ⚠️ Three controls refuse a multitenant caller inside their handler —
+    pause/resume (the 031 record is instance-wide), the app decisions
+    (`apps_routes._decide`) and the Inbox's app-kind approve/reject
+    (`inbox._decide`) — and all three were DRAWN on ``read_only`` alone. An
+    authenticated tenant therefore saw a Pause button on all five destinations,
+    a Stop on every live app and Approve/Reject on every app card, each of
+    which answers 403 on the click. One predicate,
+    ``webgate.is_owner_console()``, now decides both the refusal and the draw;
+    it rides into the client modules on their copy nodes as
+    ``data-owner_console``.
+
+    Fail-CLOSED: a probe that cannot run draws no instance-wide control.
+    """
+    try:
+        return bool(webgate.is_owner_console())
+    except Exception:
+        logger.debug("owner-console probe failed", exc_info=True)
         return False
 
 
@@ -216,8 +244,10 @@ def _compose_inbox(user_id: str) -> dict:
 def _no_tenant_summary(refusal: str) -> dict:
     """An Inbox with no tenant to read for: every source UNKNOWN, nothing zero."""
     from core.surfaces.inbox import SOURCE_LABELS, compose, unreadable_item
-    return compose([unreadable_item(name) for name in SOURCE_LABELS],
-                   {name: f"unreadable({refusal})" for name in SOURCE_LABELS})
+    from webview.inbox import with_source_reasons
+    return with_source_reasons(
+        compose([unreadable_item(name) for name in SOURCE_LABELS],
+                {name: f"unreadable({refusal})" for name in SOURCE_LABELS}))
 
 
 def _inbox_summary(request: Request) -> dict:
@@ -321,20 +351,26 @@ def _wordmark() -> str:
         return "polyrob"
 
 
-def _live_count(request: Request) -> int:
-    """How many things are IN PROGRESS for the shell's tenant — running goals,
-    running cron jobs and live sessions (``_live_body``). 0 when the tenant
-    cannot be named or a store cannot be read: the head line then says only
-    "running", which is true; it never claims a count it did not measure."""
+def _live_count(request: Request) -> tuple:
+    """``(count, partial)`` — things IN PROGRESS for the shell's tenant.
+
+    ``count`` is running goals + running cron jobs + live sessions
+    (``_live_body``). ``partial`` is 043 A37: when a whole store could not be
+    read the number is a FLOOR, and the head line must say ``N+`` rather than
+    ``N``. ``(0, True)`` when the tenant cannot be named or the probe itself
+    fails — the head line then says only "running", which is true, and never
+    claims a count it did not measure.
+    """
     try:
         user_id, _refusal = _tenant(request)
         if not user_id:
-            return 0
+            return (0, True)
         body = _live_body(str(user_id), webgate.data_dir(), _sessions_root())
-        return int(body.get("count") or 0)
+        raw = body.get("count")
+        return (int(raw or 0), bool(body.get("partial")) or raw is None)
     except Exception:
         logger.debug("live count probe failed", exc_info=True)
-        return 0
+        return (0, True)
 
 
 def _headline(request: Request) -> str:
@@ -344,9 +380,12 @@ def _headline(request: Request) -> str:
     headline = _pause_headline()
     if headline != t("shell.state.running"):
         return headline
-    busy = _live_count(request)
+    busy, partial = _live_count(request)
     if busy > 0:
-        return t("shell.state.running_busy", count=busy)
+        # ``N+`` when a store refused: the count is a floor, and a bare number
+        # over an unread store is the confident figure this frame refuses.
+        return t("shell.state.running_busy",
+                 count=(f"{busy}+" if partial else busy))
     return headline
 
 
@@ -367,6 +406,7 @@ def _shell_context(request: Request, current: str) -> dict:
         "inbox_aria": aria,
         "inbox_partial": partial,
         "read_only": _read_only(),
+        "owner_console": _owner_console(),
         "show_logout": _show_logout(),
     }
 
@@ -401,9 +441,27 @@ _ACTION_WORDS = {
 _ACTION_VERB = {"approve": "decide", "reject": "reject", "fulfill": "fulfill"}
 
 
-def _card(item: dict) -> dict:
-    """One rendered card: the item, plus the words and the routes for its verbs."""
+def _card(item: dict, *, owner_console: bool = True) -> dict:
+    """One rendered card: the item, plus the words and the routes for its verbs.
+
+    ⚠️ An app decision is INSTANCE-wide, so ``inbox._decide`` refuses it for
+    every multitenant caller. Drawing Approve/Reject there anyway is a card
+    whose only two buttons answer 403 — so when *owner_console* is false an
+    app card carries NO verbs and one sentence saying where the decision is
+    taken. The item is still SHOWN: what is waiting is a fact for any seat,
+    and hiding it would be the opposite failure.
+
+    ``owner_console`` defaults to True so the pure renderer keeps its old
+    behaviour for a caller that does not know the posture; the page passes the
+    real ``webgate.is_owner_console()``.
+    """
+    from webview.inbox import _APP_KINDS  # the ONE list of instance-wide kinds
     kind = item.get("kind") or ""
+    if kind in _APP_KINDS and not owner_console:
+        row = dict(item)
+        row["rendered_actions"] = []
+        row["decide_elsewhere"] = t("inbox.decide_owner_console")
+        return row
     actions = []
     for i, action in enumerate(item.get("actions") or ()):
         key = _ACTION_WORDS.get((kind, action), f"inbox.action.{action}")
@@ -460,9 +518,12 @@ def _shared_refusal(body: dict, refused: list) -> str:
     never WHY, which is the actionable half. Only shown when every refusal
     shares one reason: five different failures do not collapse into a sentence,
     and inventing one would be the confident answer this page refuses.
+
+    043 A36: this used to slice the composer's prose here, at the render site —
+    an undeclared parser in a function whose job is wording. The parse lives
+    ONCE in ``webview.inbox.source_reasons`` and this reads the typed mapping.
     """
-    sources = body.get("sources") or {}
-    reasons = {str(sources.get(name) or "")[len("unreadable("):-1]
+    reasons = {str((body.get("source_reasons") or {}).get(name) or "")
                for name in refused}
     reasons.discard("")
     if len(reasons) != 1:
@@ -480,8 +541,10 @@ def _inbox_context(request: Request) -> dict:
     from core.surfaces.inbox import SOURCE_LABELS
     ctx.update({
         "partial_reason": _shared_refusal(body, refused),
-        "items": [_card(i) for i in body.get("items") or ()],
-        "not_blocking": [_card(i) for i in body.get("not_blocking") or ()],
+        "items": [_card(i, owner_console=ctx["owner_console"])
+                  for i in body.get("items") or ()],
+        "not_blocking": [_card(i, owner_console=ctx["owner_console"])
+                         for i in body.get("not_blocking") or ()],
         "inbox_count": count,
         "inbox_uncertain": uncertain,
         "pill_class": pill_class,
@@ -628,56 +691,56 @@ async def api_creations(request: Request):
 def _moves_body(user_id: str) -> dict:
     """Recent wallet_spend moves for *user_id* — the middle tier of Money › Moves.
 
-    Reads the SAME ``telemetry_events`` rows the status snapshot's creations and
-    collectibles sections read, tenant-scoped, newest first. Creation verbs are
-    excluded here because they are their own tier (``/api/webgate/creations``);
-    an explorer link rides only when the event carries BOTH a chain and a tx.
+    ⚠️ 043 A33 (closed 2026-09-21): this reader used to carry its OWN SQL over
+    ``telemetry_events``. ``core.status_snapshot.moves_section`` is the ONE
+    reader of that ledger — the same rows the status snapshot renders on every
+    other seat — so a query here was a second answer to one question, free to
+    drift from the terminal's. The console now renders that section and only
+    RESHAPES it for the pane.
 
-    Honest states: an unreadable store is NAMED (``unavailable``), never a
-    confident empty list; an unparseable row is COUNTED (``unreadable_rows``),
-    never silently dropped — the same rule the snapshot keeps.
+    What the reshape does, and why each part is not the section's job:
+
+    * creation verbs are dropped, because Money › Moves draws them as their own
+      tier (``/api/webgate/creations``) and would otherwise draw each twice;
+    * the keys are the pane's (``amount_usd`` / ``counterparty``), which the
+      money module and its tests read.
+
+    Honest states are the section's, unchanged: an unreadable store is NAMED
+    (``unavailable``) and ``moves`` is ``None``, never a confident empty list;
+    an unparseable row is COUNTED (``unreadable_rows``), never dropped.
 
     ⚠️ The event carries no "who decided" lane today (annex A36), so this reader
     does not fabricate one; the console names that gap rather than guessing.
     """
-    import json as _json
-
-    from core.status_snapshot import CREATION_VERBS, _rows, _telemetry_db_path
-    from core.wallet.chains import explorer_url
-    try:
-        rows = _rows(
-            _telemetry_db_path(webgate.data_dir()),
-            "SELECT ts, attrs FROM telemetry_events WHERE kind='wallet_spend' "
-            "AND user_id=? ORDER BY ts DESC LIMIT 100",
-            (str(user_id),))
-    except Exception as exc:
-        return {"moves": None, "unreadable_rows": 0,
-                "unavailable": f"{type(exc).__name__}: {exc}"[:200]}
+    from core.status_snapshot import (CREATION_VERBS, STATE_UNAVAILABLE,
+                                      _guarded, moves_section)
+    # `limit` is the section's OUTPUT window; creations are removed after it, so
+    # ask for the whole 400-row read and cap the pane's own list below. A
+    # smaller limit here would silently shorten the list by however many
+    # creations the window happened to contain.
+    sec = _guarded("moves", moves_section, str(user_id), webgate.data_dir(),
+                   limit=400)
+    if sec.state == STATE_UNAVAILABLE:
+        return {"moves": None, "unreadable_rows": sec.data.get("unreadable_rows", 0),
+                "unavailable": (sec.reason or "unavailable")[:200]}
     out = []
-    unreadable = 0
-    for row in rows:
-        try:
-            attrs = _json.loads(row.get("attrs") or "{}")
-        except Exception:
-            unreadable += 1
-            continue
-        action = str(attrs.get("action") or "")
-        if action in CREATION_VERBS:
+    for item in sec.data.get("moves") or ():
+        if item.get("action") in CREATION_VERBS:
             continue  # creations are their own tier
-        chain = attrs.get("chain")
-        tx = attrs.get("result_ref")
-        url = explorer_url(chain, "tx", str(tx)) if (chain and tx) else None
         out.append({
-            "action": action,
-            "amount_usd": attrs.get("amount_usd"),
-            "chain": chain,
-            "counterparty": attrs.get("counterparty"),
-            "asset": attrs.get("asset"),
-            "tx": tx,
-            "url": url,
-            "ts": row.get("ts"),
+            "action": item.get("action"),
+            "amount_usd": item.get("usd"),
+            "chain": item.get("chain"),
+            "counterparty": item.get("to"),
+            "asset": item.get("asset"),
+            "tx": item.get("tx"),
+            "url": item.get("url"),
+            "ts": item.get("ts"),
         })
-    return {"moves": out, "unreadable_rows": unreadable, "unavailable": None}
+        if len(out) >= 100:
+            break
+    return {"moves": out, "unreadable_rows": sec.data.get("unreadable_rows", 0),
+            "unavailable": None}
 
 
 @api_router.get("/api/webgate/moves")
@@ -853,13 +916,16 @@ def _skills_section(user_id: str) -> dict:
     """The SkillManager catalog + per-tenant reuse stats (the SAME read
     ``webview/knowledge.py`` does). ``on`` is whether the skill is in the active
     catalog; ``last_used`` is the real ``last_used_at`` from the usage store."""
-    catalog, usage, error = [], {}, None
+    catalog, usage, error, usage_error = [], {}, None, None
     try:
         from modules.skills.skill_usage import get_skill_usage_store
         rows = get_skill_usage_store(webgate.data_dir()).list_authored(user_id=user_id)
         usage = {r["skill_id"]: r for r in rows}
-    except Exception:
-        usage = {}
+    except Exception as exc:
+        # ⚠️ 043 A10: this used to become ``{}``, which every row then rendered
+        # as "never used" and "0 loads" — a measurement, not the absence of
+        # one. The reason rides out so the panel can dash those two columns.
+        usage, usage_error = {}, f"{type(exc).__name__}: {exc}"[:200]
     try:
         from agents.task.agent.skill_manager import get_skill_manager
         sm = get_skill_manager()
@@ -876,7 +942,8 @@ def _skills_section(user_id: str) -> dict:
             })
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"[:200]
-    return {"items": catalog, "error": error}
+    return {"items": (None if error else catalog), "error": error,
+            "usage_error": usage_error}
 
 
 def _mcp_section() -> dict:
@@ -910,6 +977,10 @@ def _profiles_section() -> dict:
     resolves."""
     import yaml as _yaml
     items, error = [], None
+    #: 043 A10: a profile file that will not parse is COUNTED, never silently
+    #: skipped. "Rob has three helpers" over a directory of five, two of them
+    #: broken, is the same confident answer an unreadable store gives.
+    unreadable_rows = 0
     try:
         from agents.task.agent.profile_registry import get_profiles_dir
         from agents.task.config import AgentProfileModel
@@ -922,13 +993,16 @@ def _profiles_section() -> dict:
                        else _yaml.safe_load(f.read_text()))
                 model = AgentProfileModel(**raw)
             except Exception:
+                unreadable_rows += 1
+                logger.debug("profile %s could not be parsed", f, exc_info=True)
                 continue
             items.append({"id": model.id, "kind": "helper",
                           "what": model.description or model.name,
                           "on": True, "source": "profile", "last_used": None})
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"[:200]
-    return {"items": items, "error": error}
+    return {"items": (None if error else items), "error": error,
+            "unreadable_rows": unreadable_rows}
 
 
 def _capabilities_body(user_id: str) -> dict:
@@ -1227,6 +1301,31 @@ def _as_priority(raw, default: int = 5) -> int:
     return max(1, min(10, value))
 
 
+#: The step budget a goal run may be given, matching the agent-callable
+#: ``goal_create`` tool's own bounds (``tools/goal_tools.py``, 056 WS5). Omitted
+#: means the dispatcher default.
+MAX_STEPS_MIN, MAX_STEPS_MAX = 6, 60
+
+
+def _as_max_steps(raw):
+    """``(value, error)`` for an optional step budget.
+
+    ⚠️ REFUSED rather than clamped. A priority is a preference, so silently
+    pulling 99 down to 10 loses nothing; a step budget is what the owner
+    believes the run will cost, and quietly halving it produces a run that
+    stops short for a reason the owner was never told.
+    """
+    if raw in (None, ""):
+        return (None, None)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return (None, t("work.create.max_steps_shape"))
+    if not (MAX_STEPS_MIN <= value <= MAX_STEPS_MAX):
+        return (None, t("work.create.max_steps_range"))
+    return (value, None)
+
+
 @router.post("/api/webgate/goals", dependencies=webgate.MUTATION_DEPS,
              response_class=JSONResponse, name="api_goal_create")
 async def api_goal_create(request: Request):
@@ -1246,6 +1345,10 @@ async def api_goal_create(request: Request):
                                   and all(isinstance(x, str) for x in tools)):
         return JSONResponse({"ok": False, "message": t("work.create.tools_shape")},
                             status_code=400)
+    max_steps, steps_error = _as_max_steps(body.get("max_steps"))
+    if steps_error:
+        return JSONResponse({"ok": False, "message": steps_error},
+                            status_code=400)
     try:
         goal = create_goal(
             _webgate_goal_board(), user_id=user_id, title=title,
@@ -1253,6 +1356,10 @@ async def api_goal_create(request: Request):
             priority=_as_priority(body.get("priority")),
             tools=tools,
             acceptance=(str(body["acceptance"]) if body.get("acceptance") else None),
+            # The dispatcher reads ``payload.max_steps``; ``extra_payload`` is
+            # the owner-create helper's own seam for exactly this, so no new
+            # parameter and no second writer.
+            extra_payload=({"max_steps": max_steps} if max_steps else None),
         )
     except DuplicateGoalError as exc:
         return JSONResponse({"ok": False, "message": t("work.create.goal_duplicate"),

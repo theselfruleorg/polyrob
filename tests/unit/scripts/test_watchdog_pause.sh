@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # 031 T14: the maint/intel watchdog neither nudges nor relaunches while paused.
 set -euo pipefail
+# NEVER let this test reach the real ops_alert.py: with no ALERT_CMD the watchdog
+# falls through to the prod env and pings the OWNER (it did, 2026-09-20 11:39Z —
+# "polyrob-test-nope-session loop is down … missing.sh is missing").
+export ALERT_CMD=/bin/true
 tmp="$(mktemp -d)"
 echo '{"paused": true, "scopes": ["oversight"]}' > "$tmp/AUTONOMY_PAUSE.json"
 POLYROB_DATA_DIR="$tmp" STATE_DIR="$tmp/state" SESSION=polyrob-test-nope-session \

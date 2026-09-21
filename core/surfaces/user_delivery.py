@@ -55,8 +55,14 @@ NOTICE_MARKERS = (
 )
 
 #: Outcomes that spent a slot of the rate/cap budget. ``fallback`` is included
-#: because the rail DID try and did durably record; it must not become free
-#: retry headroom.
+#: because a LIVE sink was there and the send failed against it: the rail did
+#: real work and must not become free retry headroom.
+#:
+#: ``no_sink`` is deliberately absent (D49, 2026-09-21 interface audit). On a
+#: local/REPL/headless owner there is no sink at ALL, so every message takes
+#: that branch — charging the daily cap for it would exhaust the budget without
+#: one message ever being attempted, and the owner would be capped out of a
+#: channel they were never on.
 _CONSUMED_OUTCOMES = ("sent", "fallback")
 
 #: Outcomes that prove the text actually REACHED the user. Dedup keys on this,
@@ -77,6 +83,21 @@ _DELIVERED_OUTCOMES = ("sent",)
 PRIORITY_CRITICAL = "critical"
 PRIORITY_NORMAL = "normal"
 PRIORITY_LOW = "low"
+
+#: A lane that is neither gated by the owner budget nor counted against it.
+#:
+#: D20 (2026-09-21 interface audit): the `message` tool books its owner-tier
+#: sends onto this rail's ledger (C5) so the window is honest, but it is gated
+#: by its OWN 2h owner-resend cooldown and the outbound policy — not by the
+#: daily cap. Recording those rows in the `normal` lane meant an unbounded
+#: producer could spend the whole budget that only OTHER producers can be
+#: denied for, which is the same shape C1 removed for the critical lane. A lane
+#: that cannot be denied must not be able to deny others, so `exempt` skips the
+#: gates for itself AND is dropped from the counted window.
+PRIORITY_EXEMPT = "exempt"
+
+#: Lanes the daily cap and the hourly rate limit neither gate nor count.
+_UNBUDGETED_LANES = (PRIORITY_CRITICAL, PRIORITY_EXEMPT)
 
 #: Sources whose messages are safety-bearing: the owner learning that autonomy
 #: STOPPED is never optional, so these bypass the daily cap and the hourly rate
@@ -104,6 +125,12 @@ _CRITICAL_SOURCES = frozenset({
     "goal_blocked",      # agents/task/goals/escalation.py — a stopped goal's need
     "payment_unmatched", # modules/x402/settlement_watcher.py — unexpected on-chain
                          # money the owner must reconcile (rare, always owner-actionable)
+    # modules/x402/x402_integration.py::mark_payment_refund_due — a machine
+    # payment that SETTLED and whose work then failed downstream. The agent owes
+    # a stranger money back, and the obligation only grows while nobody acts on
+    # it, so it belongs beside `payment_unmatched` rather than in a bucket the
+    # daily cap can drop. Rare by construction, and always owner-actionable.
+    "payment_refund_due",
     # 035 P0-2: core/self_evolution.py::NOTIFY_SOURCE — "I've proposed N change(s)
     # to how I work, approve to make them stick". This used to ride the default
     # ``self_evolution`` source, i.e. the LIFECYCLE bucket below, shared with
@@ -168,7 +195,8 @@ def resolve_priority(source: str, priority: Optional[str]) -> str:
     Deriving from source means the credit sentinel needed no call-site change —
     it already sends with ``source="credit_sentinel"``.
     """
-    if priority in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW):
+    if priority in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW,
+                    PRIORITY_EXEMPT):
         return priority
     if str(source or "") in _CRITICAL_SOURCES:
         return PRIORITY_CRITICAL
@@ -296,12 +324,14 @@ def _default_event_log():
 def _record(event_log: Any, user_id: str, session_id: Optional[str], source: str,
             outcome: str, content_hash: str, text: Optional[str] = None,
             attachments: Optional[list] = None,
-            lane: Optional[str] = None) -> None:
+            lane: Optional[str] = None, extra: Optional[dict] = None) -> None:
     if event_log is None:
         return
     try:
         attrs = {"outcome": outcome, "content_hash": content_hash,
                  "lane": lane or resolve_priority(source, None)}
+        if extra:
+            attrs.update(extra)
         if text is not None:
             attrs["text"] = str(text)[:500]
         if attachments:
@@ -310,7 +340,11 @@ def _record(event_log: Any, user_id: str, session_id: Optional[str], source: str
         event_log.record(DELIVERY_EVENT_KIND, user_id=str(user_id or ""),
                          session_id=str(session_id or ""), source=source, attrs=attrs)
     except Exception:
-        pass
+        # D47: this row IS the rail's audit trail and its cap memory. Losing it
+        # silently is how a gate stops gating and no seat can say why.
+        logger.warning("user_delivery: attempt record failed (outcome=%s source=%s) "
+                       "— this send is missing from the rail's ledger",
+                       outcome, source, exc_info=True)
 
 
 def _event_lane(event: dict) -> str:
@@ -321,7 +355,7 @@ def _event_lane(event: dict) -> str:
     """
     attrs = event.get("attrs") or {}
     lane = attrs.get("lane")
-    if lane in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW):
+    if lane in (PRIORITY_CRITICAL, PRIORITY_NORMAL, PRIORITY_LOW, PRIORITY_EXEMPT):
         return str(lane)
     return resolve_priority(str(event.get("source") or ""), None)
 
@@ -338,8 +372,73 @@ def _budgeted(events: list) -> list:
     nine approval prompts consumed the owner's whole 30-slot budget — the
     agent's own voice got one send that day and was capped fifteen times that
     week. A lane that cannot be denied must not be able to deny others.
+
+    D20 extends the same rule to the ``exempt`` lane (the `message` tool's own
+    bookkeeping rows), for the same reason.
     """
-    return [e for e in events if _event_lane(e) != PRIORITY_CRITICAL]
+    return [e for e in events if _event_lane(e) not in _UNBUDGETED_LANES]
+
+
+def _count(event_log: Any, *, since_ts: float, user_id: str,
+           attrs_in: Optional[dict] = None, attrs_not_in: Optional[dict] = None,
+           sources_in=None, sources_not_in=None) -> Optional[int]:
+    """Count matching ``user_delivery`` rows — in SQL when the store can (D48).
+
+    A store without ``count_where`` (an in-memory test double) is counted in
+    Python over its ``query`` window, which is what every caller used to do.
+    Returns None when the count could not be taken at all, so the caller fails
+    OPEN (send) rather than gating on a number it does not have.
+    """
+    counter = getattr(event_log, "count_where", None)
+    if callable(counter):
+        try:
+            return counter(kind=DELIVERY_EVENT_KIND, user_id=user_id,
+                           since_ts=since_ts, attrs_in=attrs_in,
+                           attrs_not_in=attrs_not_in, sources_in=sources_in,
+                           sources_not_in=sources_not_in)
+        except Exception:
+            logger.warning("user_delivery: count_where failed, counting in memory",
+                           exc_info=True)
+    try:
+        rows = event_log.query(kind=DELIVERY_EVENT_KIND, user_id=user_id,
+                               since_ts=since_ts, limit=1000)
+    except Exception:
+        logger.warning("user_delivery: window query failed (fail-open)", exc_info=True)
+        return None
+    n = 0
+    for e in rows:
+        attrs = e.get("attrs") or {}
+        src = str(e.get("source") or "")
+        if sources_in is not None and src not in sources_in:
+            continue
+        if sources_not_in is not None and src in sources_not_in:
+            continue
+        ok = True
+        for name, values in (attrs_in or {}).items():
+            if attrs.get(name) not in values:
+                ok = False
+                break
+        for name, values in (attrs_not_in or {}).items():
+            value = attrs.get(name)
+            if value is not None and value in values:
+                ok = False
+                break
+        if ok:
+            n += 1
+    return n
+
+
+def _budget_count_filters() -> dict:
+    """``EventLog.count_where`` kwargs selecting exactly what :func:`_budgeted`
+    keeps — the SQL twin of that predicate, so the two can never disagree about
+    what the daily cap counts.
+
+    The lane is stamped on every row this module writes; ``sources_not_in``
+    covers the legacy rows written before the stamp existed, which
+    :func:`_event_lane` classifies from the source alone.
+    """
+    return {"attrs_not_in": {"lane": _UNBUDGETED_LANES},
+            "sources_not_in": tuple(sorted(_CRITICAL_SOURCES))}
 
 
 #: Outcomes that already wrote a marked ``owner_notice`` for their body. A
@@ -347,7 +446,8 @@ def _budgeted(events: list) -> list:
 #: ``/missed`` shows five entries, and filling them with one repeated body is
 #: the failure C3 just removed. ``sent``/``deduped``/``quiet_held`` are absent
 #: on purpose: none of them wrote a notice, so none of them may suppress one.
-_NOTICE_OUTCOMES = ("capped", "paused", "fallback", "rate_limited", "cooldown")
+_NOTICE_OUTCOMES = ("capped", "paused", "fallback", "rate_limited", "cooldown",
+                    "no_sink")
 
 
 def _notice_already_written(event_log: Any, user_id: str, content_hash: str,
@@ -360,18 +460,16 @@ def _notice_already_written(event_log: Any, user_id: str, content_hash: str,
     written every time; only the recovery entry is deduplicated.
 
     Fail-open to False: a query fault costs a duplicate notice, never a lost one.
+
+    D48: counted in SQL. The previous ``limit=1000`` window silently truncated
+    on a busy tenant, so the check stopped working exactly when the noise it
+    guards against was worst.
     """
-    try:
-        recent = event_log.query(kind=DELIVERY_EVENT_KIND, user_id=str(user_id or ""),
-                                 since_ts=now - _dedup_hours() * 3600, limit=1000)
-    except Exception:
-        return False
-    for e in recent:
-        attrs = e.get("attrs") or {}
-        if (attrs.get("content_hash") == content_hash
-                and attrs.get("outcome") in _NOTICE_OUTCOMES):
-            return True
-    return False
+    n = _count(event_log, user_id=str(user_id or ""),
+               since_ts=now - _dedup_hours() * 3600,
+               attrs_in={"content_hash": (content_hash,),
+                         "outcome": _NOTICE_OUTCOMES})
+    return bool(n)
 
 
 def _maybe_notice(event_log: Any, user_id: str, source: str, text: str, *,
@@ -397,25 +495,40 @@ def _maybe_notice(event_log: Any, user_id: str, source: str, text: str, *,
     if content_hash and _notice_already_written(
             event_log, user_id, content_hash, now if now is not None else time.time()):
         return
-    _record_notice(event_log, user_id, text)
+    _record_notice(event_log, user_id, text, content_hash=content_hash)
 
 
-def _record_notice(event_log: Any, user_id: str, text: str) -> None:
+def _record_notice(event_log: Any, user_id: str, text: str, *,
+                   content_hash: Optional[str] = None) -> None:
     """Durable fallback (extends push_owner_message's owner_notice, T4-04):
     visible via `polyrob telemetry` and rolled into the digest. The notice must
     outlive a disabled telemetry flag — same guarantee the original
-    ``_record_owner_notice`` gave — so it falls back to the raw event log."""
+    ``_record_owner_notice`` gave — so it falls back to the raw event log.
+
+    ``content_hash`` is stamped on the row (D50) so ``core.surfaces.missed`` can
+    tell a notice whose body was LATER delivered from one the owner still has
+    not seen, without re-hashing a truncated copy of the text.
+    """
     if event_log is None:
         try:
             from core.event_log import get_event_log
             event_log = get_event_log()
         except Exception:
+            logger.warning("user_delivery: no event log for the owner notice — "
+                           "this undelivered message is not recoverable via /missed",
+                           exc_info=True)
             return
+    attrs = {"text": str(text)[:2000]}
+    if content_hash:
+        attrs["content_hash"] = str(content_hash)
     try:
         event_log.record(OWNER_NOTICE, user_id=str(user_id or ""),
-                         source="user_delivery", attrs={"text": str(text)[:2000]})
+                         source="user_delivery", attrs=attrs)
     except Exception:
-        pass
+        # D47: the notice IS the recovery channel for a message the owner never
+        # received. Losing it silently loses the message twice.
+        logger.warning("user_delivery: owner notice record failed — an undelivered "
+                       "message will not appear in /missed", exc_info=True)
 
 
 def resolve_telegram_recipient(container: Any, user_id: str) -> Optional[str]:
@@ -446,9 +559,44 @@ def resolve_telegram_recipient(container: Any, user_id: str) -> Optional[str]:
 _resolve_recipient = resolve_telegram_recipient
 
 
+#: Subject line for an owner notice delivered over email, by producer source.
+#: D70: every notice used to arrive as "Re: your message" — a reply header on
+#: something that answers nothing, so the owner's mail client threaded a cron
+#: report under an unrelated conversation and the subject said nothing about
+#: what had happened.
+_NOTICE_SUBJECT_BY_SOURCE = {
+    "cron": "scheduled run result",
+    "digest": "daily digest",
+    "approval": "approval needed",
+    "payment_approval": "payment approval needed",
+    "pending_approval": "changes waiting for your approval",
+    "goal_blocked": "a goal is blocked",
+    "credit_sentinel": "autonomy stopped (credits)",
+    "halt": "autonomy halted",
+    "security": "security notice",
+    "tx_execution": "transaction notice",
+    "payment_unmatched": "unmatched payment",
+    "payment_refund_due": "refund owed on a settled payment",
+    "agent_send": "message from your agent",
+    "self_evolution": "agent update",
+    "lifecycle": "run status",
+}
+
+
+def notice_subject(source: str) -> str:
+    """The email subject for a rail notice from *source*.
+
+    An unknown source gets the generic-but-honest form rather than a "Re:"
+    that claims to answer something.
+    """
+    label = _NOTICE_SUBJECT_BY_SOURCE.get(str(source or ""))
+    return f"[POLYROB] {label}" if label else f"[POLYROB] {source or 'notice'}"
+
+
 async def deliver_user_message(container: Any, user_id: str, text: str, *,
                                source: str = "agent", session_id: Optional[str] = None,
                                recipient_override: Optional[str] = None,
+                               recipient_surface: Optional[str] = None,
                                attachments: Optional[list] = None,
                                priority: Optional[str] = None,
                                event_log: Any = ...) -> str:
@@ -456,8 +604,20 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
 
     Returns an outcome string: ``sent`` | ``deduped`` | ``rate_limited`` |
     ``capped`` (suppressed by the daily cap, durably recorded as an
-    owner_notice — 019 #2) | ``fallback`` (durably recorded, no live sink /
-    send failed) | ``empty``. Never raises.
+    owner_notice — 019 #2) | ``queued`` (the body was handed to the durable
+    cross-process queue; delivery is still OWED, so it is never ``sent``, but
+    it is not a fault either) | ``fallback`` (a live sink was there and the
+    send FAILED — durably recorded) | ``no_sink`` (no sink existed at all: the
+    durable owner_notice IS the channel on a local/REPL/headless owner, so it
+    spends no budget — D21/D49) | ``empty``. Never raises.
+
+    ⚠️ ``queued`` and ``fallback`` share ONE recorded row outcome
+    (``fallback``), because the budget question — did the rail do real work? —
+    has the same answer for both. They differ only in what the CALLER is told.
+
+    ``recipient_surface`` (D44) names the surface ``recipient_override``
+    addresses. It defaults to ``telegram``, which is what every pre-existing
+    caller meant, so an omitted value is byte-identical.
 
     EVERY outcome now records the body on its attempt row, so "what did it try
     to tell me" and "what did it actually tell me" are both answerable; and
@@ -529,13 +689,13 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # --- the rail's memory (fail-open when the event log is unavailable) ----
     try:
         if event_log is not None:
-            recent = event_log.query(kind=DELIVERY_EVENT_KIND, user_id=uid,
-                                     since_ts=now - _dedup_hours() * 3600, limit=1000)
-            consumed = [e for e in recent
-                        if (e.get("attrs") or {}).get("outcome") in _CONSUMED_OUTCOMES]
-            delivered = [e for e in recent
-                         if (e.get("attrs") or {}).get("outcome") in _DELIVERED_OUTCOMES]
-            if any((e.get("attrs") or {}).get("content_hash") == h for e in delivered):
+            # D48: every window below is a COUNT, not a 1000-row fetch — the old
+            # window truncated on a busy tenant, so the gates under-counted
+            # exactly when traffic was highest.
+            _window = now - _dedup_hours() * 3600
+            if _count(event_log, user_id=uid, since_ts=_window,
+                      attrs_in={"content_hash": (h,),
+                                "outcome": _DELIVERED_OUTCOMES}):
                 # The owner HAS this text, so no notice — but the attempt row
                 # carries the body (C2): 383 of 383 deduped rows in prod held a
                 # NULL text, which made "what did it try to tell me" unanswerable.
@@ -563,14 +723,22 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                     logger.debug("user_delivery: quiet hold record failed",
                                  exc_info=True)
                 return "quiet_held"
-            # C1: only traffic the cap can DENY is counted against it.
-            day = _budgeted([e for e in consumed if e.get("ts", 0) >= now - 86400])
+            # C1/D20: only traffic the cap can DENY is counted against it.
+            _budget = dict(_budget_count_filters())
+            _budget["attrs_in"] = {"outcome": _CONSUMED_OUTCOMES}
+            day = _count(event_log, user_id=uid, since_ts=now - 86400, **_budget)
+            if day is None:
+                day = 0  # fail-open: an uncountable window never denies a send
             allowance = effective_cap_for_priority(
                 effective_daily_cap(uid, _home_dir), lane)
             _lc_cap = _lifecycle_daily_cap()
-            if lane != PRIORITY_CRITICAL and source in _LIFECYCLE_SOURCES and _lc_cap > 0:
-                lifecycle_day = [e for e in day if e.get("source") in _LIFECYCLE_SOURCES]
-                if len(lifecycle_day) >= _lc_cap:
+            if lane not in _UNBUDGETED_LANES and source in _LIFECYCLE_SOURCES and _lc_cap > 0:
+                lifecycle_day = _count(
+                    event_log, user_id=uid, since_ts=now - 86400,
+                    sources_in=tuple(sorted(_LIFECYCLE_SOURCES)),
+                    attrs_in={"outcome": _CONSUMED_OUTCOMES},
+                    attrs_not_in=_budget["attrs_not_in"]) or 0
+                if lifecycle_day >= _lc_cap:
                     _maybe_notice(
                         event_log, uid, source,
                         f"[suppressed by daily proactive-message cap; "
@@ -579,7 +747,7 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                     _record(event_log, uid, session_id, source, "capped", h,
                             text=body, attachments=attachments, lane=lane)
                     return "capped"
-            if lane != PRIORITY_CRITICAL and len(day) >= allowance:
+            if lane not in _UNBUDGETED_LANES and day >= allowance:
                 # 019 #2: a capped message must not be silently lost — unlike
                 # its siblings ("fallback" writes a durable owner_notice,
                 # "quiet_held" persists held_text), "capped" used to drop the
@@ -594,9 +762,9 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
                 _record(event_log, uid, session_id, source, "capped", h,
                         text=body, attachments=attachments, lane=lane)
                 return "capped"
-            hour = [e for e in day if e.get("ts", 0) >= now - 3600]
-            if lane != PRIORITY_CRITICAL and \
-                    len(hour) >= effective_rate_per_hour(uid, _home_dir):
+            hour = _count(event_log, user_id=uid, since_ts=now - 3600, **_budget) or 0
+            if lane not in _UNBUDGETED_LANES and \
+                    hour >= effective_rate_per_hour(uid, _home_dir):
                 # C2: the owner did NOT receive this. Its sibling `capped`
                 # has written a marked owner_notice since 019 #2; this branch
                 # never did, so 18 rate-limited messages were readable only by
@@ -633,11 +801,15 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
     # Legacy (OWNER_SURFACE unset) is byte-compatible: one telegram target,
     # telegram_sink preferred. With OWNER_SURFACE set, the chain is primary +
     # fallback; a CRITICAL-lane notice broadcasts to every configured surface.
-    sent = False
+    # D6/D21/D49: three distinct answers, not two. ``sent`` = a live sink took
+    # it; ``queued`` = the durable cross-process queue took it (delivery is
+    # still owed, so it may never be recorded as ``sent``); ``no_sink`` = there
+    # was no sink to try at all.
+    best = "no_sink"
     try:
         from core.surfaces.owner_address import owner_address, owner_surface_order
         if recipient_override:
-            targets = [("telegram", str(recipient_override))]
+            targets = [(str(recipient_surface or "telegram"), str(recipient_override))]
         else:
             targets = []
             for _sid in owner_surface_order():
@@ -652,56 +824,105 @@ async def deliver_user_message(container: Any, user_id: str, text: str, *,
             except Exception:
                 tg_sink = router = None
 
-        async def _send_one(_sid: str, _addr: str) -> bool:
+        async def _send_one(_sid: str, _addr: str) -> str:
+            """``"sent"`` | ``"queued"`` | ``"failed"`` | ``"no_sink"``."""
             sink = tg_sink if (_sid == "telegram" and tg_sink is not None) else router
             if sink is None:
-                return False
+                return "no_sink"
             kwargs = {} if _sid == "telegram" and sink is tg_sink else {"surface_id": _sid}
+            # D70: an email notice is not a reply, so it must not arrive with a
+            # "Re:" subject. The subject rides as the legacy media entry every
+            # other surface ignores.
+            if _sid == "email":
+                kwargs["subject"] = notice_subject(source)
+            # A router that can tell "sent" from "queued" is asked for the
+            # distinction; any other sink keeps the boolean contract.
+            _ex = getattr(sink, "send_message_ex", None)
+            send = _ex if callable(_ex) else sink.send_message
+
+            def _attempt(text_):
+                """Call the sink, shedding ONE optional kwarg at a time.
+
+                Order matters: ``subject`` is a nicety, ``surface_id`` is the
+                ROUTING. Shedding both at once — which the pre-existing
+                two-step fallback did — delivers a message addressed to email
+                over the default surface instead.
+                """
+                for drop in ((), ("subject",), ("subject", "surface_id")):
+                    kw = {k: v for k, v in kwargs.items() if k not in drop}
+                    try:
+                        return send(_addr, text_, **kw)
+                    except TypeError:
+                        continue
+                return sink.send_message(_addr, text_)
+
             if send_attachments:
                 try:
-                    res = sink.send_message(_addr, send_body,
-                                            media=send_attachments, **kwargs)
+                    res = send(_addr, send_body, media=send_attachments, **kwargs)
                 except TypeError:
                     # pre-QW-1 sink shape (no media kwarg): the attachment cannot
                     # ride, so send the FULL body — a gist pointing at a file the
                     # owner will never receive is worse than a long message.
-                    try:
-                        res = sink.send_message(_addr, body, **kwargs)
-                    except TypeError:
-                        res = sink.send_message(_addr, body)
+                    res = _attempt(body)
             else:
-                try:
-                    res = sink.send_message(_addr, body, **kwargs)
-                except TypeError:
-                    res = sink.send_message(_addr, body)
+                res = _attempt(body)
             if hasattr(res, "__await__"):
                 res = await res
-            return bool(res)
+            if isinstance(res, str):
+                return res if res in ("sent", "queued", "failed") else "failed"
+            return "sent" if res else "failed"
 
+        #: better-to-worse; the rail reports the BEST answer any target gave.
+        _RANK = {"sent": 3, "queued": 2, "failed": 1, "no_sink": 0}
         broadcast = lane == PRIORITY_CRITICAL and len(targets) > 1
         for _sid, _addr in targets:
-            ok = await _send_one(_sid, _addr)
-            sent = sent or ok
-            if sent and not broadcast:
+            outcome = await _send_one(_sid, _addr)
+            if _RANK[outcome] > _RANK[best]:
+                best = outcome
+            if best == "sent" and not broadcast:
                 break
     except Exception as e:
-        logger.debug("user_delivery: send failed: %s", e)
-        sent = False
+        # D47: a raise here means NOTHING was delivered and the rail is about to
+        # fall back. A debug line made that invisible in the journal.
+        logger.warning("user_delivery: send path raised (%s) — falling back to a "
+                       "durable notice", e, exc_info=True)
+        best = "failed"
 
-    if sent:
+    if best == "sent":
         # C7: all 527 `sent` rows in prod held a NULL text, so no surface could
         # answer "what did you actually tell me" — only failures were legible.
         _record(event_log, uid, session_id, source, "sent", h, text=body,
                 attachments=send_attachments, lane=lane)
         return "sent"
+    if best == "queued":
+        # D6: durable acceptance is NOT delivery. Recording it as `sent` made
+        # the 24h dedup refuse the retry after the queued copy dead-lettered,
+        # so neither attempt ever reached the owner. No owner_notice: the body
+        # is on its way and a /missed entry for it would be noise.
+        #
+        # The ROW stays `fallback` — the rail did real work and must spend a
+        # budget slot for it (`_CONSUMED_OUTCOMES`) — but the RETURN is
+        # `queued`, because the caller's two questions are different ones. A
+        # cron report handed to the cross-process queue used to come back as
+        # `fallback` and be journalled `failed`, which is the "a working rail
+        # reads as a broken one" class D45 set out to end; nothing else in the
+        # tree keys on the literal.
+        _record(event_log, uid, session_id, source, "fallback", h, text=body,
+                attachments=attachments, lane=lane, extra={"queued": True})
+        return "queued"
     # Durable fallback — the message is never silently lost. Marker-prefixed
     # (A7 / A40) like the cap/pause notices, so `/missed` can read it too —
     # before this it carried NO marker at all and was unreadable there.
     _maybe_notice(event_log, uid, source, f"[undelivered; source={source}] {body}",
                   content_hash=h, now=now)
-    _record(event_log, uid, session_id, source, "fallback", h, text=body,
+    # D21/D49: `no_sink` is its own outcome. "There was no channel to try" and
+    # "the channel was there and refused" are different facts, and only the
+    # second is evidence of a delivery FAULT. `no_sink` spends no budget (see
+    # _CONSUMED_OUTCOMES) because on a local owner it is every message.
+    outcome = "no_sink" if best == "no_sink" else "fallback"
+    _record(event_log, uid, session_id, source, outcome, h, text=body,
             attachments=attachments, lane=lane)
-    return "fallback"
+    return outcome
 
 
 async def release_quiet_held(container: Any, *, event_log: Any = ...,

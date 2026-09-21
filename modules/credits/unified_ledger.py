@@ -38,6 +38,13 @@ async def _resolve_db(db=None):
     if db is not None:
         return db
     from core.container import DependencyContainer
+    # 2026-09-21: `get_instance()` RAISES when no container was ever built, so
+    # every container-less seat (`polyrob doctor`, the recap, a bare CLI) saw
+    # "could not verify: money (ValueError: Configuration required …)" — an
+    # unreadable ledger over a store it never tried to open. No container is
+    # simply no db here; the legs then render unavailable, never a raise.
+    if DependencyContainer._instance is None:
+        return None
     return DependencyContainer.get_instance().get_service("database_manager")
 
 
@@ -50,6 +57,14 @@ def _policy_gate():
     try:
         from core.wallet.factory import get_policy_gate
         return get_policy_gate()
+    except ImportError:
+        # A base install without the `crypto` extra has no wallet BY DESIGN, so
+        # this is not a warn-worthy condition (2026-09-21). It used to warn, and
+        # on `polyrob doctor` — a read-only verb — that single warning was enough
+        # to materialise `<cwd>/.polyrob/logs/` on a machine that had never run
+        # the agent. The caps block degrades to all-`None` either way.
+        logger.debug("ledger: no wallet support installed; caps block unavailable")
+        return None
     except Exception:
         logger.warning("ledger: policy gate unavailable for caps block", exc_info=True)
         return None
@@ -126,11 +141,19 @@ def _wallet_leg(user_id: str, days: int) -> Dict[str, Any]:
         # widen into the platform-wide spend aggregate (cross-tenant leak)
         return {"wallet_spend_usd": 0.0, "wallet_payments": 0, "wallet_metering": "disabled"}
     try:
-        from core.event_log import get_event_log, event_log_enabled
+        from core.event_log import event_log_enabled, open_event_log
         if not event_log_enabled():
             return {"wallet_spend_usd": 0.0, "wallet_payments": 0,
                     "wallet_metering": "disabled"}
-        events = get_event_log().query(
+        # A READ never creates the store (2026-09-21): `get_event_log()` ran the
+        # DDL and minted an empty telemetry_events.db in whatever home the
+        # ledger resolved — which is also how `polyrob doctor` and the console's
+        # doctor came to disagree mid-request. No file = no spend recorded yet.
+        log = open_event_log()
+        if log is None:
+            return {"wallet_spend_usd": 0.0, "wallet_payments": 0,
+                    "wallet_metering": "on"}
+        events = log.query(
             kind="wallet_spend", user_id=user_id,
             since_ts=time.time() - days * 86400, limit=1000,
         )
@@ -168,17 +191,28 @@ async def _inbound_leg(database, user_id: str, days: int) -> Dict[str, Any]:
                WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'pending'""",
             (user_id, user_id),
         )
+        # D11 (2026-09-21): money we TOOK and must give back is neither income nor
+        # pending — it is its own line, or the ledger reads richer than it is.
+        refund = await database.fetch_one(
+            """SELECT COALESCE(SUM(amount_usd), 0) AS usd, COUNT(*) AS n
+               FROM x402_payment_requests
+               WHERE (user_id = ? OR json_extract(metadata, '$.tenant_id') = ?) AND status = 'refund_due'""",
+            (user_id, user_id),
+        )
         return {
             "income_usd": round(float(settled.get("usd") or 0), 6) if settled else 0.0,
             "settled_payments": int(settled.get("n") or 0) if settled else 0,
             "pending_invoices_usd": round(float(pending.get("usd") or 0), 6) if pending else 0.0,
             "pending_invoices": int(pending.get("n") or 0) if pending else 0,
+            "refund_due_usd": round(float(refund.get("usd") or 0), 6) if refund else 0.0,
+            "refund_due_count": int(refund.get("n") or 0) if refund else 0,
             "inbound_available": True,
         }
     except Exception:
         logger.warning("ledger: x402 inbound leg unavailable", exc_info=True)
         return {"income_usd": 0.0, "settled_payments": 0,
                 "pending_invoices_usd": 0.0, "pending_invoices": 0,
+                "refund_due_usd": 0.0, "refund_due_count": 0,
                 "inbound_available": False}
 
 
@@ -225,6 +259,7 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
     inbound = (await _inbound_leg(database, user_id, days)) if database is not None else {
         "income_usd": 0.0, "settled_payments": 0,
         "pending_invoices_usd": 0.0, "pending_invoices": 0,
+        "refund_due_usd": 0.0, "refund_due_count": 0,
         "inbound_available": False}
     wallet = _wallet_leg(user_id, days)
 
@@ -240,6 +275,8 @@ async def build_ledger(user_id: str, *, days: int = 7, include_balances: bool = 
         "spend_usd": wallet["wallet_spend_usd"],
         "pending_usd": inbound["pending_invoices_usd"],
         "pending_count": inbound["pending_invoices"],
+        "refund_due_usd": inbound.get("refund_due_usd", 0.0),
+        "refund_due_count": inbound.get("refund_due_count", 0),
         "balance_usd": None,
         "net_usd": round(income_usd - wallet["wallet_spend_usd"], 6),
         # H14b: availability must reflect BOTH legs this block depends on, not
@@ -318,6 +355,9 @@ def format_ledger(ledger: Dict[str, Any]) -> str:
              f"    spend:    ${t['spend_usd']:.4f}",
              f"    pending:  ${t['pending_usd']:.4f} across {t['pending_count']} open invoice(s)",
              f"    net:      ${t['net_usd']:+.4f}"]
+    if t.get("refund_due_count"):
+        lines.append(f"    ⚠ refund owed: ${t['refund_due_usd']:.4f} across "
+                     f"{t['refund_due_count']} settled payment(s) we did not deliver on")
     if t["balance_usd"] is not None:
         lines.append(f"    balance:  ${t['balance_usd']:.4f}")
     lines += ["  Runtime cost (owner-funded compute)",

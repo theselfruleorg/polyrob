@@ -10,8 +10,13 @@ Two honest-state rules this endpoint keeps:
 
 1. A session with no recorded artifacts is an empty list, NOT an error — the
    agent that wrote nothing is a fact, not a failure.
-2. A ledger the endpoint cannot READ is named (``error`` is set), never dropped
-   into a confident empty list.
+2. A ledger the endpoint cannot READ is named (``error`` is set) AND its
+   ``artifacts`` is ``null``, never a confident empty list. ⚠️ An empty LIST is
+   the sentence "this session produced nothing"; ``null`` is "I did not look"
+   / "I could not look". Work › Apps drew the first over real files for weeks
+   (043 A3) because a call with no ``session_id`` answered ``[]``.
+3. A call with no ``session_id`` is REFUSED, not answered: this ledger is
+   session-scoped, so ``{"artifacts": null, "error": "session-scoped"}``.
 
 Tenant scoping is :func:`webview.pages._effective_user_id`, which 403s an
 unbound own_ops console and a multitenant caller with no identity — so this
@@ -39,7 +44,10 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
     user_id = _effective_user_id(request)
 
     if not session_id:
-        return JSONResponse({"artifacts": [], "error": None})
+        # No session named → there is nothing this reader can answer. Saying
+        # "no artifacts" here is the confident zero A3 recorded: Work › Apps
+        # rendered "Nothing built" over a session tree full of files.
+        return JSONResponse({"artifacts": None, "error": "session-scoped"})
 
     try:
         from agents.task.path import pm
@@ -53,7 +61,7 @@ async def api_artifacts(request: Request, session_id: Optional[str] = None) -> J
         rows = ledger.list_for_session(str(user_id), clean_id)
     except Exception:
         logger.warning("artifact ledger read failed for session %s", session_id, exc_info=True)
-        return JSONResponse({"artifacts": [], "error": "unreadable"})
+        return JSONResponse({"artifacts": None, "error": "unreadable"})
 
     artifacts = []
     for art in rows:

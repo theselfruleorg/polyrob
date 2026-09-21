@@ -259,8 +259,14 @@ class PlainRenderer(Renderer):
             pass
 
         elif isinstance(event, Info):
-            content_str = f" {event.content}" if event.content else ""
-            self._write(f"[info] type={event.type}{content_str}")
+            # C46: an Info event with no content used to print its internal
+            # event TYPE and nothing else — a bare `[info] type=agent_state`
+            # that says nothing to the reader and leaks the event taxonomy into
+            # the transcript. Only the content is owner-facing; a contentless
+            # Info is silent, exactly as the Rich renderer treats it.
+            content = (event.content or "").strip()
+            if content:
+                self._write(f"[info] {content}")
 
         else:
             # Fallback for any future subtypes

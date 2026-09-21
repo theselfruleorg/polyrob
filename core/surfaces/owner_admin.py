@@ -266,13 +266,59 @@ def pending_correspondent_items(registry: Any, tenant: str) -> List[Dict[str, An
     return items
 
 
+def _deployed_owner_principal() -> "str | None":
+    """The owner principal the DEPLOYED env file declares, or ``None``.
+
+    C33 (2026-09-21): ``owner_access_summary`` read the process environment and
+    nothing else, so ``polyrob owner show`` typed in an SSH shell on the
+    production box — where systemd exports the binding and the shell does not —
+    reported "(unbound)" over a box that has answered to that owner for months.
+    Same defect class, same remedy, as the 031 data home and the 035 P0-3
+    instance/tenant axes: adopt what the RUNNING SERVICE reads when the shell
+    declares nothing; never guess, and never rewrite an unsafe value.
+
+    Fail-open to ``None``: an unreadable deployment env file is "cannot tell",
+    which the caller renders as unbound-with-a-reason, never as a binding.
+    """
+    from core.admin_data_home import deployed_env_value
+    from core.instance import is_safe_tenant_id
+    for key in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID"):
+        try:
+            declared = (deployed_env_value(key) or "").strip()
+        except Exception:
+            return None
+        if declared and is_safe_tenant_id(declared):
+            return declared
+    return None
+
+
 def owner_access_summary() -> Dict[str, Any]:
+    """Who this instance answers to, and on which surfaces.
+
+    ``owner_source`` names WHERE the binding came from: ``"env"`` (this shell /
+    this process), ``"deployed"`` (read from the deployment's own env file
+    because the shell declared nothing) or ``"none"``. The flags are always the
+    process's own — an owner verb runs with the env it was given, and claiming
+    the deployment's flag values for a locally-run check would be a second lie.
+    """
+    import os
+
     from core.instance import resolve_owner_principal
     from core.surfaces.config import SurfaceConfig
+    # STRICT: report only an EXPLICITLY-bound owner (None = running on the
+    # auto-derived instance-id default), so the summary reflects real config.
+    principal = resolve_owner_principal(default_to_instance=False)
+    source = "env" if principal else "none"
+    if not principal and not any(
+            (os.environ.get(k) or "").strip()
+            for k in ("POLYROB_OWNER_USER_ID", "BOT_OWNER_USER_ID",
+                      "SURFACE_SUPER_ADMIN_USER_IDS")):
+        deployed = _deployed_owner_principal()
+        if deployed:
+            principal, source = deployed, "deployed"
     return {
-        # STRICT: report only an EXPLICITLY-bound owner (None = running on the
-        # auto-derived instance-id default), so the summary reflects real config.
-        "owner_principal": resolve_owner_principal(default_to_instance=False),
+        "owner_principal": principal,
+        "owner_source": source,
         "correspondent_access_enabled": SurfaceConfig.correspondent_access_enabled(),
         "require_approval": SurfaceConfig.correspondent_require_approval(),
         "max_new_correspondents_per_day": SurfaceConfig.correspondent_max_new_per_day(),

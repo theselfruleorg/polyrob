@@ -101,9 +101,43 @@ def _collectors() -> dict:
     }
 
 
+#: How the composer spells a source that refused: ``unreadable(<why>)``.
+_UNREADABLE = "unreadable("
+
+
+def source_reasons(body: dict) -> dict:
+    """``{source: reason}`` for every source that REFUSED — the typed field.
+
+    ⚠️ 043 A36: the reason is the actionable half of "I could not read the
+    spend approvals", and every seat that wanted it was slicing the composer's
+    own prose (``sources[name][len("unreadable("):-1]``) at its render site. A
+    string index in a template-facing function is a parser nobody declared. The
+    parse now happens ONCE, here, next to the format it parses, and every seat
+    reads a mapping.
+
+    A source that answered is absent from the mapping (not present with an
+    empty reason) — "it read fine" and "it refused for a reason I could not
+    extract" are different facts, and the second keeps its entry with an empty
+    string.
+    """
+    out = {}
+    for name, state in (body.get("sources") or {}).items():
+        text = str(state or "")
+        if not text.startswith(_UNREADABLE):
+            continue
+        out[name] = text[len(_UNREADABLE):-1] if text.endswith(")") else ""
+    return out
+
+
+def with_source_reasons(body: dict) -> dict:
+    """Stamp :func:`source_reasons` onto a composed Inbox *body*, in place."""
+    body["source_reasons"] = source_reasons(body)
+    return body
+
+
 def build_inbox(user_id: str) -> dict:
     """The composed Inbox for *user_id* over this console's five stores."""
-    return _compose_inbox(user_id, _collectors())
+    return with_source_reasons(_compose_inbox(user_id, _collectors()))
 
 
 # --- tenant ----------------------------------------------------------------- #
@@ -197,15 +231,35 @@ def _unblocked_text(unblocked: int) -> str:
     return t("inbox.ask.decided", count=unblocked)
 
 
-def _decide(request: Request, kind: str, item_id: str, *, approved: bool) -> dict:
+#: How much of an owner's answer is kept on the ask. Long enough for a real
+#: answer ("use the staging key, it is in 1Password under X"), bounded because
+#: it is written into a JSON payload the dispatcher reads on every claim.
+ANSWER_MAX_CHARS = 2000
+
+
+# ⚠️ There is exactly ONE writer of an ask's answer, and it is
+# ``GoalBoard.decide_ask(answer=...)`` — it stamps ``payload.answer`` on the ask
+# and ``payload.owner_unblocked.answer`` on each dependent goal inside the same
+# tenant-scoped CAS as the decision. A console-side ``merge_payload`` fallback
+# lived here until 2026-09-21 with no caller left; a second writer for one field
+# is how the ask and the goal come to disagree about what the owner said.
+
+
+def _decide(request: Request, kind: str, item_id: str, *, approved: bool,
+            answer: str = "") -> dict:
     user_id = _tenant(request)
     if kind in _APP_KINDS:
         from webview.pages import _owner_console_required
         _owner_console_required(t("inbox.owner_console"))
         ok, msg = _decide_app(item_id, user_id, approved)
     elif kind in _ASK_KINDS:
-        ok, unblocked = _goal_board().decide_ask(item_id, user_id=user_id,
-                                                 approved=approved)
+        board = _goal_board()
+        # A27: the owner's answer rides INTO the decision (board.decide_ask
+        # stamps payload.answer on the ask and owner_unblocked.answer on each
+        # dependent goal, so the retry prompt renders what the owner said).
+        ok, unblocked = board.decide_ask(
+            item_id, user_id=user_id, approved=approved,
+            answer=" ".join(str(answer or "").split())[:ANSWER_MAX_CHARS])
         msg = t("inbox.ask.gone") if not ok else _unblocked_text(unblocked)
     else:
         kw = {"user_id": user_id, "home_dir": _data_dir(),
@@ -235,16 +289,35 @@ async def api_inbox(request: Request):
     return JSONResponse(body)
 
 
+async def _answer_text(request: Request) -> str:
+    """The optional ``{"answer": "<text>"}`` an ask's decision may carry.
+
+    Every decide/reject/fulfill accepts it and only an ASK records it; a body
+    that is absent, empty or not an object is simply no answer, never a 400 —
+    the decision is the thing being made, and refusing it over a malformed
+    optional field would lose the decision too.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return ""
+    if not isinstance(body, dict):
+        return ""
+    return str(body.get("answer") or "")
+
+
 @router.post("/api/webgate/inbox/{kind}/{item_id}/decide",
              dependencies=webgate.MUTATION_DEPS)
 async def api_inbox_decide(request: Request, kind: str, item_id: str):
-    return JSONResponse(_decide(request, kind, item_id, approved=True))
+    return JSONResponse(_decide(request, kind, item_id, approved=True,
+                                answer=await _answer_text(request)))
 
 
 @router.post("/api/webgate/inbox/{kind}/{item_id}/reject",
              dependencies=webgate.MUTATION_DEPS)
 async def api_inbox_reject(request: Request, kind: str, item_id: str):
-    return JSONResponse(_decide(request, kind, item_id, approved=False))
+    return JSONResponse(_decide(request, kind, item_id, approved=False,
+                                answer=await _answer_text(request)))
 
 
 @router.post("/api/webgate/inbox/{kind}/{item_id}/fulfill",
@@ -256,4 +329,5 @@ async def api_inbox_fulfill(request: Request, kind: str, item_id: str):
     a 400."""
     if kind not in _ASK_KINDS:
         raise HTTPException(status_code=400, detail=t("inbox.fulfill.refused"))
-    return JSONResponse(_decide(request, kind, item_id, approved=True))
+    return JSONResponse(_decide(request, kind, item_id, approved=True,
+                                answer=await _answer_text(request)))

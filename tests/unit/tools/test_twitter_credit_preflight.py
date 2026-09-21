@@ -102,3 +102,81 @@ async def test_other_errors_do_not_set_the_verdict():
     with pytest.raises(Exception):
         await t._make_request(lambda: None, "users")
     assert not cv.rejected_within("twitter_api", 3600)
+
+
+# --- 057 WS-F: the 402 becomes a DURABLE, visible verdict ---------------------
+
+@pytest.mark.asyncio
+async def test_a_402_emits_one_durable_x_api_rejected_event(monkeypatch):
+    """Prod logged 317 "402" lines in 24 h and emitted NO event, so no status
+    surface could show the rail was dead. The event fires per OUTAGE."""
+    events = []
+    import core.event_log as evl
+    monkeypatch.setattr(evl, "emit", lambda kind, **kw: events.append((kind, kw)))
+    t = _tool()
+
+    async def _exec(func, *a, **kw):
+        raise _HTTPErr(402)
+    t._execute_request = _exec
+
+    for _ in range(3):
+        with pytest.raises(Exception):
+            await t._make_request(lambda: None, "users")
+    assert [k for k, _ in events] == ["x_api_rejected"]
+    attrs = events[0][1]["attrs"]
+    assert attrs["code"] == "402"
+    assert attrs["endpoint"] == "users"
+    assert attrs["fallback"] == "x_browser.x_post"
+    assert "developer.x.com" in attrs["remedy"]
+
+
+@pytest.mark.asyncio
+async def test_the_402_log_line_is_one_warning_per_outage(caplog):
+    t = _tool()
+
+    async def _exec(func, *a, **kw):
+        raise _HTTPErr(402)
+    t._execute_request = _exec
+    with caplog.at_level(logging.DEBUG, logger="tw-preflight-test"):
+        for _ in range(4):
+            with pytest.raises(Exception):
+                await t._make_request(lambda: None, "users")
+    warns = [r for r in caplog.records
+             if r.levelname == "WARNING" and "402" in r.getMessage()]
+    errors = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert len(warns) == 1, f"one WARNING per outage, got {len(warns)}"
+    assert errors == [], "a known-dead rail is not an ERROR per call"
+
+
+@pytest.mark.asyncio
+async def test_the_verdict_survives_a_restart():
+    t = _tool()
+
+    async def _exec(func, *a, **kw):
+        raise _HTTPErr(402)
+    t._execute_request = _exec
+    with pytest.raises(Exception):
+        await t._make_request(lambda: None, "users")
+    # a new process: the in-memory caches are gone, the store is not
+    cv._FALLBACK.clear()
+    cv._WARNED.clear()
+    cv._READY.clear()
+    assert _tool()._credit_preflight_refusal() is not None
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_names_since_and_the_fallback_rail():
+    cv.record_rejection("twitter_api", "users", code="402")
+    refusal = _tool()._credit_preflight_refusal()
+    assert "since" in refusal
+    assert "x_browser.x_post" in refusal
+    assert "developer.x.com" in refusal
+
+
+def test_the_refusal_result_carries_a_structured_fallback_field():
+    """The hint is a FIELD, not only prose — but nothing auto-invokes it."""
+    r = _tool().create_action_result(error="Error posting: X API credits depleted (402 …)")
+    assert r.metadata["fallback"] == "x_browser.x_post"
+    assert r.metadata["rail"] == "x_api" and r.metadata["code"] == "402"
+    ok = _tool().create_action_result(extracted_content="fine")
+    assert ok.metadata is None

@@ -71,8 +71,6 @@ app_state = {
     "container": None,
     "config": None,
     "logger": None,
-    "active_updates": set(),  # Track active update IDs
-    "update_semaphore": None,  # Limit concurrent updates
 }
 
 # Background task for periodic cleanup
@@ -164,12 +162,10 @@ async def lifespan(app: FastAPI):
         app_state["bot"] = bot
         app_state["container"] = bot.container
 
-        # Initialize update semaphore to limit concurrent processing
-        # This prevents resource exhaustion from too many simultaneous updates
-        # Increased from 5 to 50 for better concurrency handling
-        max_concurrent = int(os.environ.get("MAX_CONCURRENT_UPDATES", "50"))
-        app_state["update_semaphore"] = asyncio.Semaphore(max_concurrent)
-        logger.info(f"Initialized update semaphore with {max_concurrent} concurrent updates limit")
+        # NOTE (B6, 2026-09-21): the `update_semaphore` built here was NEVER
+        # acquired anywhere, and `active_updates` was never added to — so the
+        # limiter bounded nothing and /health could only ever say "healthy".
+        # Both were deleted rather than left as a limiter-shaped decoy.
 
         # x402 is now handled via fastapi-x402 middleware (no custom handler needed)
 
@@ -212,6 +208,19 @@ async def lifespan(app: FastAPI):
         # failing to build never blocks the others.
         autonomy_handles = None
         if api_autonomy_runtime_enabled():
+            # B13: N uvicorn workers = N autonomy runtimes on ONE data dir.
+            # The settlement watcher's dedup lock is in-process only, so two
+            # runtimes race the same `settlement_scan` checkpoint. `polyrob
+            # serve` refuses workers>1 with API_AUTONOMY_RUNTIME on; log the
+            # same rule here for the `python main.py` / direct-uvicorn path,
+            # which has no CLI to refuse at.
+            if int(os.environ.get("UVICORN_WORKERS", "1") or 1) > 1:
+                logger.critical(
+                    "UVICORN_WORKERS>1 with the autonomy runtime ENABLED: every "
+                    "worker starts its own cron/goal/curator/settlement loops on "
+                    "the same data dir. Set API_AUTONOMY_RUNTIME=false on the "
+                    "multi-worker processes and run the loops in exactly one."
+                )
             from core.autonomy_runtime import start_autonomy
             autonomy_data_dir = getattr(bot.container.config, "data_dir", "data")
             autonomy_handles = start_autonomy(
@@ -309,6 +318,42 @@ async def lifespan(app: FastAPI):
         logger.info("FastAPI application shutdown complete")
 
 
+def _as_int(value):
+    """``value`` as an int, or ``None`` when it is not a number.
+
+    Used by ``/health``: an unreadable metric renders as unknown, never as a
+    confident 0 and never as a TypeError that turns a liveness probe into 500.
+    """
+    if isinstance(value, bool) or value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+#: One-shot latch for the X-API-KEY→X-Service-Token deprecation notice (B4).
+_SERVICE_TOKEN_HEADER_WARNED = False
+
+
+def _warn_service_token_header_once(logger) -> None:
+    """Log the service-token header rename ONCE per process.
+
+    A per-request WARN on a machine-to-machine credential floods the journal;
+    a silent rename strands the operator on a header that will stop working.
+    """
+    global _SERVICE_TOKEN_HEADER_WARNED
+    if _SERVICE_TOKEN_HEADER_WARNED:
+        return
+    _SERVICE_TOKEN_HEADER_WARNED = True
+    logger.warning(
+        "The operator service token was sent as X-API-KEY. That spelling is "
+        "DEPRECATED and is removed in the next release — send it as "
+        "X-Service-Token instead. (X-API-KEY remains the header for "
+        "self-service rob_xxx API keys.)"
+    )
+
+
 async def fallback_auth_middleware(request: Request, call_next):
     """Fallback authentication for development when middleware not loaded.
 
@@ -319,15 +364,14 @@ async def fallback_auth_middleware(request: Request, call_next):
     logger = app_state.get("logger") or logging.getLogger(__name__)
     path = request.url.path
 
-    # Skip auth for health check, root, docs, test, and auth endpoints.
-    # NOTE: "/" must be matched EXACTLY — as a startswith() prefix it matches
+    # Skip auth for the documented-public surfaces. ONE allow-list, shared with
+    # AuthenticationMiddleware (api/auth_constants.is_public_path) — B1. "/" is
+    # matched EXACTLY inside that helper: as a startswith() prefix it matches
     # every path and would short-circuit the entire fallback (auth bypass).
-    # NOTE: "/api/x402/requests" (the payable-invoice challenge + pay routes) must be
-    # anonymous — a third-party payer has no POLYROB account. Payment authenticity is
-    # enforced cryptographically by the facilitator, not by this gate.
-    public_paths = ["/health", "/api/test-auth", "/api/auth", "/docs", "/redoc",
-                    "/openapi.json", "/api/x402/requests", "/api/x402/pricing"]
-    if path == "/" or any(path.startswith(p) for p in public_paths):
+    # "/api/x402/*" must be anonymous — a third-party payer has no POLYROB
+    # account; payment authenticity is enforced cryptographically, not here.
+    from api.auth_constants import is_public_path
+    if is_public_path(path):
         return await call_next(request)
 
     # Only apply fallback auth if proper middleware not loaded
@@ -350,7 +394,9 @@ async def fallback_auth_middleware(request: Request, call_next):
                 }
             )
 
-        # Check X-API-KEY, Authorization Bearer headers, and auth_token cookie
+        # Check X-Service-Token (canonical), X-API-KEY (deprecated),
+        # Authorization Bearer headers, and the auth_token cookie.
+        service_header = request.headers.get("X-Service-Token")
         auth_header = request.headers.get("X-API-KEY")
         bearer_header = request.headers.get("Authorization")
         cookie_token = request.cookies.get("auth_token")
@@ -358,12 +404,20 @@ async def fallback_auth_middleware(request: Request, call_next):
         provided_token = None
         is_jwt_token = False
 
-        logger.debug(f"🔑 Auth headers for {path}: X-API-KEY={bool(auth_header)}, Authorization={bool(bearer_header)}, Cookie={bool(cookie_token)}")
+        logger.debug(
+            f"🔑 Auth headers for {path}: X-Service-Token={bool(service_header)}, "
+            f"X-API-KEY={bool(auth_header)}, Authorization={bool(bearer_header)}, "
+            f"Cookie={bool(cookie_token)}")
 
-        if auth_header:
+        if service_header:
+            provided_token = service_header
+            is_jwt_token = service_header.count('.') == 2
+        elif auth_header:
             provided_token = auth_header
             # Also check if X-API-KEY contains a JWT
             is_jwt_token = auth_header.count('.') == 2
+            if not is_jwt_token and api_token and auth_header == api_token:
+                _warn_service_token_header_once(logger)
             logger.debug(f"🔑 Using X-API-KEY header, is_jwt={is_jwt_token}")
         elif bearer_header and bearer_header.startswith("Bearer "):
             provided_token = bearer_header[7:]  # Remove "Bearer " prefix
@@ -382,7 +436,8 @@ async def fallback_auth_middleware(request: Request, call_next):
                 status_code=401,
                 content={
                     "error": "Missing authentication",
-                    "detail": "Provide X-API-KEY header, Authorization: Bearer token, or auth_token cookie"
+                    "detail": ("Provide X-Service-Token (operator service token), "
+                               "Authorization: Bearer token, or auth_token cookie")
                 }
             )
 
@@ -451,21 +506,26 @@ async def fallback_auth_middleware(request: Request, call_next):
                 content={"error": "Invalid API key"}
             )
 
-        # Set authenticated user context for API key auth.
-        # C4 fix: role="admin" must be set alongside tier="admin" — the admin
-        # bypass in verify_payment_for_request reads `role` (via
-        # extract_admin_info), not `tier`. Before this fix, a valid
-        # API_AUTH_TOKEN request had tier="admin" but role defaulted to
-        # 'user', so it fell through to an unconditional 402.
+        # Set the authenticated context for the operator SERVICE token.
+        #
+        # B4 (2026-09-21): this used to set role="admin", which made an
+        # undocumented env var (`API_AUTH_TOKEN`) a full admin credential —
+        # every /api/admin route, every tenant's data. The token is a
+        # machine-to-machine operator credential, so it now carries its OWN
+        # role: `service`. It keeps tier="admin" (full feature access, no
+        # per-request 402 — see payment_verification's service branch) but
+        # `is_admin` is False, so admin routes refuse it.
         from api.auth_state import set_auth_state
+        from api.auth_constants import SERVICE_ROLE
         set_auth_state(
             request.state,
             user_id="authenticated_api_user",
             tier="admin",
-            role="admin",
+            role=SERVICE_ROLE,
             payment_method=None,
             authenticated=True,
         )
+        request.state.is_admin = False
 
     return await call_next(request)
 
@@ -506,6 +566,13 @@ def create_app() -> FastAPI:
         "Content-Type",
         "Authorization",
         "X-API-KEY",
+        # B4 (revalidation): the CANONICAL operator service-token header. It
+        # was renamed from X-API-KEY without being added here, so a browser
+        # client sending it failed CORS preflight and could never reach the
+        # API at all — the old spelling worked and the new one did not.
+        "X-Service-Token",
+        # The x402 payment header a browser payer sends on a gated route.
+        "X-PAYMENT",
         "X-Requested-With",
         "X-Admin-Token",
         "Cache-Control",
@@ -520,6 +587,16 @@ def create_app() -> FastAPI:
     # the request. Registering it last made it outermost and shadowed the DB-backed
     # rob_xxx API-key validator (self-service keys were rejected before it ran).
     app.middleware("http")(fallback_auth_middleware)
+
+    # B2: the self-service `rob_xxx` API-key validator is registered
+    # UNCONDITIONALLY — it used to live only inside AuthenticationMiddleware,
+    # which is mounted only when API_SECRET/ADMIN_TOKEN is set, so on the
+    # default deployment a minted key authenticated nothing while the agent
+    # card recommended it. Registered right AFTER the fallback so it sits one
+    # layer outside it and runs FIRST; it only ever ADDS an identity, never
+    # refuses, so mounting it cannot break a request that worked before.
+    from api.api_key_auth import APIKeyAuthMiddleware
+    app.add_middleware(APIKeyAuthMiddleware)
 
     app.add_middleware(
         CORSMiddleware,
@@ -602,8 +679,18 @@ def create_app() -> FastAPI:
     # Global exception handlers
     @app.exception_handler(StarletteHTTPException)
     async def custom_http_exception_handler(request: Request, exc: StarletteHTTPException):
-        """Handle HTTP exceptions globally."""
+        """Handle HTTP exceptions globally.
+
+        B18: a `/v1` path gets the OpenAI error envelope instead of POLYROB's
+        `{"error": ...}` — an OpenAI SDK client parses `error.message`/`.type`
+        and reports "unknown error" on anything else.
+        """
         logger.error(f"HTTP exception: {exc.detail} | Path: {request.url.path}")
+        from api.openai_compat.errors import (
+            is_openai_compat_path, openai_error_response,
+        )
+        if is_openai_compat_path(request.url.path):
+            return openai_error_response(exc.status_code, exc.detail)
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": exc.detail}
@@ -613,6 +700,14 @@ def create_app() -> FastAPI:
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
         """Handle validation errors globally."""
         logger.error(f"Validation error: {exc.errors()} | Path: {request.url.path}")
+        from api.openai_compat.errors import (
+            is_openai_compat_path, openai_error_response,
+        )
+        if is_openai_compat_path(request.url.path):
+            return openai_error_response(
+                400, "Invalid request body", code="invalid_request_error",
+                details=exc.errors(),
+            )
         return JSONResponse(
             status_code=422,
             content={"error": "Validation failed", "details": exc.errors()}
@@ -658,11 +753,15 @@ def create_app() -> FastAPI:
         )
 
 
-        # Clean up active updates if present
-        if hasattr(request.state, 'update_id'):
-            app_state["active_updates"].discard(request.state.update_id)
-
         # Return a proper error response
+        from api.openai_compat.errors import (
+            is_openai_compat_path, openai_error_response,
+        )
+        if is_openai_compat_path(request.url.path):
+            return openai_error_response(
+                500, f"Internal server error (ref {error_id})",
+                code="internal_error",
+            )
         return JSONResponse(
             status_code=500,
             content={
@@ -678,22 +777,61 @@ def create_app() -> FastAPI:
     # Health check endpoint with metrics
     @app.get("/health")
     async def health_check():
-        """Health check endpoint with system metrics."""
-        active_count = len(app_state.get("active_updates", set()))
-        semaphore_available = app_state["update_semaphore"]._value if app_state.get("update_semaphore") else 0
+        """Liveness + readiness, derived from signals that are actually written.
+
+        B6: this used to key `degraded` off ``app_state["active_updates"]``, a
+        set NOTHING ever added to, and report ``semaphore_available`` from a
+        semaphore nothing ever acquired — so the endpoint could only ever say
+        `healthy`, including while the bot had failed to build. The honest
+        signals are: did the lifespan finish building the bot, and how many
+        sessions is the agent actually holding? A session count that cannot be
+        read renders ``None`` (unknown), never 0.
+        """
+        bot_initialized = app_state.get("bot") is not None
+
+        active_sessions = None
+        session_capacity = None
+        try:
+            container = app_state.get("container")
+            agent = container.get_agent("task_agent") if container else None
+            if agent is not None:
+                # Coerced INSIDE the guard: a metric that is not a number is
+                # unknown, not a crash. Comparing a non-int capacity below
+                # raised a TypeError the `except` never saw, and the liveness
+                # probe answered 500 — the one status a probe must never
+                # invent (2026-09-21 revalidation).
+                active_sessions = _as_int(agent.active_session_count())
+                session_capacity = _as_int(
+                    getattr(agent, "max_sessions_in_memory", None))
+        except Exception as e:  # never let a metric read fail the probe
+            logger.debug("health: session count unavailable: %s", e)
+            active_sessions = session_capacity = None
+
+        if not bot_initialized:
+            status = "degraded"
+            reason = "bot not initialized"
+        elif (active_sessions is not None and session_capacity
+                and active_sessions >= session_capacity):
+            status = "degraded"
+            reason = "session capacity reached"
+        else:
+            status = "healthy"
+            reason = None
 
         health_status = {
-            "status": "healthy" if active_count < 40 else "degraded",
+            "status": status,
             "service": "polyrob",
             "metrics": {
-                "active_updates": active_count,
-                "semaphore_available": semaphore_available,
-                "bot_initialized": app_state.get("bot") is not None
-            }
+                "bot_initialized": bot_initialized,
+                # None = could not be read (agent absent), never a confident 0.
+                "active_sessions": active_sessions,
+                "session_capacity": session_capacity,
+            },
         }
+        if reason:
+            health_status["reason"] = reason
 
-        # Set appropriate status code
-        status_code = 200 if health_status["status"] == "healthy" else 503
+        status_code = 200 if status == "healthy" else 503
         return JSONResponse(content=health_status, status_code=status_code)
 
     # Mount Task API router on canonical path only
@@ -879,8 +1017,15 @@ def create_app() -> FastAPI:
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"Error processing chat message: {e}", exc_info=True)
-                raise HTTPException(status_code=500, detail=str(e))
+                # B43: never echo the exception text — it can carry a data-dir
+                # path, a SQL fragment or a provider connection string. The
+                # traceback is logged; the caller gets a reference.
+                ref = f"error_{int(time.time() * 1000)}"
+                logger.error("Chat message failed (ref %s): %s", ref, e, exc_info=True)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Chat message failed (reference {ref})",
+                )
 
         # Legacy endpoint redirect
         @app.post("/api/message", response_model=MessageResponse)
@@ -896,20 +1041,23 @@ def create_app() -> FastAPI:
     # it minted a token but never wrote the api_keys table, so the key could
     # never authenticate. Self-service keys live at /api/auth/api-keys.
 
-    @app.get("/api/test-auth")
-    async def test_auth(x_api_key: Optional[str] = Header(None)):
-        """Test endpoint to verify API key authentication."""
-        api_token = os.environ.get("API_AUTH_TOKEN")
-
-        return {
-            "authenticated": bool(x_api_key and api_token and x_api_key == api_token),
-            "has_key": bool(x_api_key),
-            "auth_configured": bool(api_token),
-            "message": "Authentication test endpoint"
-        }
+    # NOTE: the old public GET /api/test-auth endpoint was deleted (B4,
+    # 2026-09-21). It was an unauthenticated ORACLE: it reported whether a
+    # service token was configured at all, and confirmed a guessed token as
+    # `authenticated: true` with no rate limit and no audit trail. There is no
+    # replacement — a caller learns their credential works by using it.
 
     from api.request_limits import RequestBodyLimitMiddleware
     app.add_middleware(RequestBodyLimitMiddleware)
+
+    # B18 (revalidation): the OpenAI error envelope must cover refusals that
+    # never reach a route. The exception handlers above only see a route's
+    # errors; AuthenticationMiddleware's 401, the fallback gate's 401/503 and
+    # the body-limit 413 each return their own JSONResponse, so an OpenAI SDK
+    # client got `{"error": "<string>"}` and reported "unknown error".
+    # Registered LAST = OUTERMOST, so it wraps every other middleware.
+    from api.openai_compat.errors import OpenAICompatErrorMiddleware
+    app.add_middleware(OpenAICompatErrorMiddleware)
     return app
 
 # Factory function for uvicorn

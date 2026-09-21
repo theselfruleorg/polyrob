@@ -7,7 +7,7 @@ from modules.memory.task.task_context_manager import TaskContextManager
 class _StubLLM:
     def __init__(self, reply="SYNTH SUMMARY", fail=False):
         self.reply, self.fail, self.calls = reply, fail, []
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, **kwargs):
         self.calls.append(messages)
         if self.fail:
             raise RuntimeError("down")

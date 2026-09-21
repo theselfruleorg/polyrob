@@ -778,3 +778,18 @@ def test_the_marker_remembers_which_cron_job_a_session_runs():
     assert am.cron_job_for_session("s-g1") is None
     assert am.cron_job_for_session(None) is None
     assert am.goal_for_session("s-c1") is None
+
+
+def test_decide_tool_approval_carries_the_owner_answer(board):
+    """A27 (2026-09-21): `/approve <id> <text>` on a tool-approval ask keeps
+    the owner's words on the ask and on the unblocked goal's stamp."""
+    from tools.controller.approval_queue import decide_tool_approval
+    g = board.create(user_id="rob", title="Post the launch thread")
+    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?")
+    board.claim(g.id, "w", ttl_seconds=60); board.record_failure(g.id, error="which key?")
+    a = board.create_ask(user_id="rob", what="Which key?", blocks_goal_ids=[g.id])
+    ok, msg = decide_tool_approval(board, a.id, user_id="rob", approved=True,
+                                   answer=" the sandbox key ")
+    assert ok, msg
+    assert board.get(a.id).payload["answer"] == "the sandbox key"
+    assert board.get(g.id).payload["owner_unblocked"]["answer"] == "the sandbox key"

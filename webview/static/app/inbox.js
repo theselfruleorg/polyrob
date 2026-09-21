@@ -34,14 +34,30 @@ export function decisionUrl(kind, id, verb) {
 }
 
 /**
+ * The owner's typed answer for one card, or `''` when the card has no box.
+ *
+ * A27: only an ASK renders one. The value is read at CLICK time, not at bind
+ * time, so what is sent is what is on screen when the decision is made.
+ */
+export function answerFor(card) {
+  const box = card && card.querySelector('input[data-answer]');
+  return box ? String(box.value || '').trim() : '';
+}
+
+/**
  * POST one decision. Returns `{ok, message}` — never throws, because a thrown
  * error on a click is a button that did nothing with no explanation.
  * `fallback` is the server-rendered sentence for a transport failure.
+ *
+ * A27: `answer` rides on the SAME decision, as `{"answer": "<text>"}`. The
+ * endpoint records it only for an ask and treats a missing or empty one as no
+ * answer — so an app approval sends no body and behaves exactly as before.
  */
-export async function decide(kind, id, verb, { fetcher, fallback } = {}) {
+export async function decide(kind, id, verb, { fetcher, fallback, answer } = {}) {
   try {
+    const payload = answer ? { answer } : undefined;
     const { ok, status, body } = await postJson(
-      decisionUrl(kind, id, verb), undefined, { fetcher });
+      decisionUrl(kind, id, verb), payload, { fetcher });
     if (body && typeof body.message === 'string') {
       return { ok: Boolean(body.ok), message: body.message };
     }
@@ -68,6 +84,14 @@ export function applyResult(card, result) {
   if (result.ok) {
     const actions = card.querySelector('.entry-actions');
     if (actions) actions.remove();
+    // A27: the answer box goes with the buttons it rode on. Leaving it behind
+    // would invite a second answer nothing would carry.
+    const box = card.querySelector('input[data-answer]');
+    if (box) {
+      const label = card.querySelector(`label[for="${box.id}"]`);
+      if (label) label.remove();
+      box.remove();
+    }
     card.dataset.decided = 'true';
   }
   return line;
@@ -86,7 +110,8 @@ function bind() {
       buttons.forEach((b) => { b.disabled = true; });
       const result = await decide(button.dataset.kind, button.dataset.id,
                                   button.dataset.verb,
-                                  { fallback: copy.unreachable });
+                                  { fallback: copy.unreachable,
+                                    answer: answerFor(card) });
       applyResult(card, result);
       if (!result.ok) buttons.forEach((b) => { b.disabled = false; });
     });

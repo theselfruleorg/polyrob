@@ -68,6 +68,46 @@ def _episodes(user_id: str, since_ts: Optional[float]) -> List[Dict[str, Any]]:
     return recent_episodes(user_id, since_ts)
 
 
+#: How many suppressed owner messages the digest quotes in full; the rest are counted.
+MISSED_MAX_LINES = 8
+#: How many rows to read back — bounded, the window filter runs on top.
+MISSED_READ_LIMIT = 40
+
+
+def _missed(user_id: str, data_dir: Optional[str], n: int) -> List[Dict[str, Any]]:
+    """Seam: the cap-/pause-suppressed owner notices (`core/surfaces/missed.py`).
+    Raises on an unreadable store — the caller renders the reason."""
+    from core.surfaces.missed import missed_notices
+    from core.runtime_paths import effective_data_home
+    return missed_notices(user_id, data_dir or str(effective_data_home()), n=n)
+
+
+def _missed_lines(user_id: str, data_dir: Optional[str], since_ts: float) -> List[str]:
+    """The 'Missed owner messages' section. `user_delivery.py` suppresses a
+    capped/paused owner message ON THE PROMISE that it is rolled into the
+    digest; until 2026-09-20 no digest path read them back (195/196 suppressed
+    over 8 days never reached the owner). Window-bounded, oldest first,
+    kind-tagged, capped at MISSED_MAX_LINES with the remainder counted. An
+    unreadable store is NAMED — 'none' must never mean 'could not tell'."""
+    try:
+        rows = _missed(user_id, data_dir, MISSED_READ_LIMIT)
+    except Exception as e:  # noqa: BLE001 — render the reason, never a silent blank
+        return [f"• Missed owner messages: unreadable ({type(e).__name__}: {str(e)[:120]})"]
+    inwin = [r for r in rows if float(r.get("ts") or 0) >= since_ts]
+    if not inwin:
+        return ["• Missed owner messages: none"]
+    inwin.sort(key=lambda r: float(r.get("ts") or 0))
+    out = [f"• Missed owner messages ({len(inwin)}) — held by the send cap or a pause, "
+           f"rolled up here:"]
+    for r in inwin[:MISSED_MAX_LINES]:
+        stamp = time.strftime("%m-%d %H:%M", time.gmtime(float(r.get("ts") or 0)))
+        text = " ".join(str(r.get("text") or "").split())[:160]
+        out.append(f"   - {stamp}Z [{r.get('kind') or 'undelivered'}] {text}")
+    if len(inwin) > MISSED_MAX_LINES:
+        out.append(f"   … and {len(inwin) - MISSED_MAX_LINES} more (`/missed` shows them)")
+    return out
+
+
 def _health_lines(user_id: str, data_dir: Optional[str]) -> List[str]:
     """Seam kept module-level for test monkeypatching (like ``_ledger``)."""
     try:
@@ -156,6 +196,7 @@ async def compose_digest(user_id: str, *, days: int = 1,
             lines.append(f"   - {title}")
     else:
         lines.append("• Pending approvals: none")
+    lines.extend(_missed_lines(user_id, data_dir, since_ts))
     # QW-3 (proposal 021): hand the owner the console — WEBVIEW_PUBLIC_URL
     # unset (no public console) keeps the digest byte-identical.
     try:
